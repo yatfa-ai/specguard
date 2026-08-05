@@ -25,14 +25,7 @@
           Only the SHA-256 digest is stored. Copy this now — reloading this page will not show it again.
         <% end %>
 
-        <div class="flex items-center gap-2">
-          <code data-copy-text-target="source"
-                class="min-w-0 flex-1 overflow-x-auto rounded-md border border-app-border-light bg-app-surface-raised px-3 py-2 font-mono text-sm text-app-content"><%= @revealed_token %></code>
-          <%= render UI::ButtonComponent.new(variant: :secondary, type: "button",
-                                             data: { action: "copy-text#copy" }) do %>
-            <span data-copy-text-target="label">Copy</span>
-          <% end %>
-        </div>
+        <%= render UI::CopyableCodeComponent.new do %><%= @revealed_token %><% end %>
 
         <p class="text-xs text-app-muted">
           Use it as <code>Authorization: Bearer &lt;token&gt;</code> against
@@ -54,14 +47,7 @@
 
         <div class="space-y-2">
           <p class="section-label text-app-content-secondary">Try it</p>
-          <div class="flex items-center gap-2">
-            <code data-copy-text-target="source"
-                  class="min-w-0 flex-1 overflow-x-auto rounded-md border border-app-border-light bg-app-surface-raised px-3 py-2 font-mono text-sm text-app-content">curl -H "Authorization: Bearer &lt;token&gt;" <%= api_v1_repository_url %></code>
-            <%= render UI::ButtonComponent.new(variant: :secondary, type: "button",
-                                               data: { action: "copy-text#copy" }) do %>
-              <span data-copy-text-target="label">Copy</span>
-            <% end %>
-          </div>
+          <%= render UI::CopyableCodeComponent.new do %>curl -H "Authorization: Bearer &lt;token&gt;" <%= api_v1_repository_url %><% end %>
           <p class="text-xs text-app-muted">
             <code>&lt;token&gt;</code> is a placeholder — substitute the key you copied when you minted
             it. SpecGuard cannot show an existing key again, only mint a new one.
