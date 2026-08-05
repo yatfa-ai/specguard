@@ -1,0 +1,86 @@
+<% content_for :title, "#{@repository.github_full_name} · SpecGuard" %>
+
+<%= render UI::PageComponent.new do %>
+  <%= render UI::BreadcrumbComponent.new(items: [
+        { label: "Repositories", href: repositories_path },
+        { label: @repository.github_full_name }
+      ]) %>
+
+  <%= render UI::PageHeaderComponent.new(
+        title: @repository.github_full_name,
+        subtitle: "Registered #{time_ago_in_words(@repository.created_at)} ago."
+      ) do |header| %>
+    <% header.with_actions do %>
+      <%= render UI::ButtonComponent.new(variant: :ghost, href: @repository.github_url) { "View on GitHub" } %>
+      <%= button_to "Remove", repository_path(@repository), method: :delete,
+                    class: UI::ButtonComponent.classes(variant: :danger, size: :md),
+                    form: { data: { turbo_confirm: "Remove #{@repository.github_full_name} and all of its data?" } } %>
+    <% end %>
+  <% end %>
+
+  <% if @revealed_token.present? %>
+    <%= render UI::PanelComponent.new(title: "Your new API key") do %>
+      <div class="space-y-3" data-controller="copy-text">
+        <%= render UI::AlertComponent.new(tone: :warning, title: "Shown once") do %>
+          Only the SHA-256 digest is stored. Copy this now — reloading this page will not show it again.
+        <% end %>
+
+        <div class="flex items-center gap-2">
+          <code data-copy-text-target="source"
+                class="min-w-0 flex-1 overflow-x-auto rounded-md border border-app-border-light bg-app-surface-raised px-3 py-2 font-mono text-sm text-app-content"><%= @revealed_token %></code>
+          <%= render UI::ButtonComponent.new(variant: :secondary, type: "button",
+                                             data: { action: "copy-text#copy" }) do %>
+            <span data-copy-text-target="label">Copy</span>
+          <% end %>
+        </div>
+
+        <p class="text-xs text-app-muted">
+          Use it as <code>Authorization: Bearer &lt;token&gt;</code> against
+          <code><%= api_v1_repository_url %></code>.
+        </p>
+      </div>
+    <% end %>
+  <% end %>
+
+  <div class="grid gap-4 lg:grid-cols-3">
+    <%= render UI::PanelComponent.new(title: "Overview", class: "lg:col-span-1") do %>
+      <%= render UI::DefListComponent.new(rows: [
+            ["Owner", @repository.owner_login],
+            ["Spec intents", @repository.spec_intents.count],
+            ["Test runs", @repository.test_runs.count],
+            ["Annotated", "#{@repository.annotated_ratio}%"]
+          ]) %>
+    <% end %>
+
+    <%= render UI::PanelComponent.new(title: "API keys", class: "lg:col-span-2") do |panel| %>
+      <% panel.with_actions do %>
+        <%= button_to "New API key", repository_api_keys_path(@repository),
+                      class: UI::ButtonComponent.classes(variant: :primary, size: :sm) %>
+      <% end %>
+
+      <% if @api_keys.any? %>
+        <%= render UI::TableComponent.new(columns: ["Name", "Key", "Last used", ""]) do %>
+          <% @api_keys.each do |api_key| %>
+            <tr>
+              <td class="px-3 py-2"><%= api_key.name %></td>
+              <td class="px-3 py-2 font-mono text-xs text-app-content-secondary"><%= api_key.token_hint %></td>
+              <td class="px-3 py-2 text-app-content-secondary tabular-nums">
+                <%= api_key.last_used_at ? "#{time_ago_in_words(api_key.last_used_at)} ago" : "never" %>
+              </td>
+              <td class="px-3 py-2 text-right">
+                <%= button_to "Revoke", repository_api_key_path(@repository, api_key), method: :delete,
+                              class: UI::ButtonComponent.classes(variant: :danger, size: :xs),
+                              form: { data: { turbo_confirm: "Revoke #{api_key.name}?" } } %>
+              </td>
+            </tr>
+          <% end %>
+        <% end %>
+      <% else %>
+        <%= render UI::EmptyStateComponent.new(
+              title: "No API keys",
+              description: "CI and agents need a key to reach the SpecGuard API."
+            ) %>
+      <% end %>
+    <% end %>
+  </div>
+<% end %>

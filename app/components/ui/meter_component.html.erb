@@ -1,0 +1,12 @@
+<div class="<%= wrapper_class %>">
+  <% if label.present? %>
+    <div class="flex items-center justify-between text-app-h4">
+      <span class="text-app-content-secondary"><%= label %></span>
+      <span class="tabular-nums text-app-content"><%= percent %>%</span>
+    </div>
+  <% end %>
+  <div class="h-2 w-full overflow-hidden rounded-full bg-app-neutral-surface"
+       role="meter" aria-valuenow="<%= value %>" aria-valuemin="0" aria-valuemax="<%= max %>">
+    <div class="h-full rounded-full <%= bar_class %>" style="width: <%= percent %>%"></div>
+  </div>
+</div>

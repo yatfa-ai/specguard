@@ -1,0 +1,37 @@
+<% content_for :title, "SpecGuard" %>
+
+<%= render UI::PageComponent.new do %>
+  <%= render UI::PageHeaderComponent.new(
+        title: "SpecGuard",
+        subtitle: "Semantic test telemetry and duplicate prevention, built for AI agents first."
+      ) %>
+
+  <div class="grid gap-4 lg:grid-cols-2">
+    <%= render UI::PanelComponent.new(title: "Sign in") do %>
+      <div class="space-y-4">
+        <p class="text-sm text-app-content-secondary">
+          Humans sign in with GitHub. CI and agents authenticate with a repository-scoped API key
+          instead — you can mint one once you have registered a repository.
+        </p>
+
+        <% if github_oauth_configured? %>
+          <%= button_to "Sign in with GitHub", github_auth_path,
+                        class: UI::ButtonComponent.classes(variant: :primary) %>
+        <% else %>
+          <%= render UI::AlertComponent.new(tone: :warning, title: "GitHub OAuth is not configured") do %>
+            Set <code>GITHUB_CLIENT_ID</code> and <code>GITHUB_CLIENT_SECRET</code> (or the
+            <code>github.client_id</code> / <code>github.client_secret</code> credentials) and
+            restart the app. See <code>config/initializers/omniauth.rb</code>.
+          <% end %>
+        <% end %>
+      </div>
+    <% end %>
+
+    <%= render UI::PanelComponent.new(title: "What SpecGuard answers") do %>
+      <%= render UI::DefListComponent.new(rows: [
+            ["Is this behaviour already tested?", "Prevention — /check-intent"],
+            ["Where is the suite duplicated or thin?", "Telemetry — /ingest + dashboard"]
+          ]) %>
+    <% end %>
+  </div>
+<% end %>

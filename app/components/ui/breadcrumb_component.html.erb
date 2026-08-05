@@ -1,0 +1,12 @@
+<nav class="<%= wrapper_class %>" aria-label="Breadcrumb">
+  <% items.each_with_index do |item, index| %>
+    <% if index.positive? %>
+      <span class="text-app-muted" aria-hidden="true">/</span>
+    <% end %>
+    <% if item[:href].present? && index < items.size - 1 %>
+      <%= link_to item[:label], item[:href], class: "hover:text-app-content transition-colors" %>
+    <% else %>
+      <span class="text-app-content"><%= item[:label] %></span>
+    <% end %>
+  <% end %>
+</nav>

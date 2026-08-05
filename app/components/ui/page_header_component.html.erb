@@ -1,0 +1,12 @@
+<div class="<%= wrapper_class %>">
+  <div class="min-w-0 space-y-1">
+    <%= render UI::HeadingComponent.new(level: 1, class: "text-app-content") { title } %>
+    <% if subtitle.present? %>
+      <p class="text-sm text-app-content-secondary"><%= subtitle %></p>
+    <% end %>
+    <%= content %>
+  </div>
+  <% if actions? %>
+    <div class="flex items-center gap-2 shrink-0"><%= actions %></div>
+  <% end %>
+</div>

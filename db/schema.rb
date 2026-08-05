@@ -1,0 +1,88 @@
+# This file is auto-generated from the current state of the database. Instead
+# of editing this file, please use the migrations feature of Active Record to
+# incrementally modify your database, and then regenerate this schema definition.
+#
+# This file is the source Rails uses to define your schema when running `bin/rails
+# db:schema:load`. When creating a new database, `bin/rails db:schema:load` tends to
+# be faster and is potentially less error prone than running all of your
+# migrations from scratch. Old migrations may fail to apply correctly if those
+# migrations use external dependencies or application code.
+#
+# It's strongly recommended that you check this file into your version control system.
+
+ActiveRecord::Schema[8.1].define(version: 2026_01_01_000001) do
+  # These are extensions that must be enabled in order to support this database
+  enable_extension "pg_catalog.plpgsql"
+  enable_extension "vector"
+
+  create_table "api_keys", force: :cascade do |t|
+    t.datetime "created_at", null: false
+    t.datetime "last_used_at"
+    t.string "name", default: "Default CI Key"
+    t.bigint "repository_id", null: false
+    t.string "token_digest", null: false
+    t.datetime "updated_at", null: false
+    t.index ["repository_id"], name: "index_api_keys_on_repository_id"
+    t.index ["token_digest"], name: "index_api_keys_on_token_digest", unique: true
+  end
+
+  create_table "repositories", force: :cascade do |t|
+    t.datetime "created_at", null: false
+    t.string "github_full_name", null: false
+    t.string "name", null: false
+    t.datetime "updated_at", null: false
+    t.bigint "user_id", null: false
+    t.index ["github_full_name"], name: "index_repositories_on_github_full_name", unique: true
+    t.index ["user_id"], name: "index_repositories_on_user_id"
+  end
+
+  create_table "spec_intents", force: :cascade do |t|
+    t.string "action", null: false
+    t.text "behavior", null: false
+    t.datetime "created_at", null: false
+    t.vector "embedding", limit: 1536
+    t.string "entity", null: false
+    t.string "file_path", null: false
+    t.string "layer", null: false
+    t.integer "line_number", null: false
+    t.bigint "repository_id", null: false
+    t.string "status", default: "annotated"
+    t.bigint "test_run_id"
+    t.datetime "updated_at", null: false
+    t.index ["action"], name: "index_spec_intents_on_action"
+    t.index ["embedding"], name: "index_spec_intents_on_embedding", opclass: :vector_cosine_ops, using: :hnsw
+    t.index ["entity"], name: "index_spec_intents_on_entity"
+    t.index ["repository_id", "entity", "action"], name: "index_spec_intents_on_repository_id_and_entity_and_action"
+    t.index ["repository_id", "file_path", "line_number"], name: "index_spec_intents_on_location", unique: true
+    t.index ["repository_id"], name: "index_spec_intents_on_repository_id"
+    t.index ["test_run_id"], name: "index_spec_intents_on_test_run_id"
+  end
+
+  create_table "test_runs", force: :cascade do |t|
+    t.integer "annotated_specs_count", default: 0
+    t.string "branch"
+    t.string "commit_sha", null: false
+    t.datetime "created_at", null: false
+    t.float "duration_seconds"
+    t.bigint "repository_id", null: false
+    t.integer "total_specs_count", default: 0
+    t.datetime "updated_at", null: false
+    t.index ["repository_id"], name: "index_test_runs_on_repository_id"
+  end
+
+  create_table "users", force: :cascade do |t|
+    t.string "avatar_url"
+    t.datetime "created_at", null: false
+    t.string "email"
+    t.string "github_handle", null: false
+    t.string "github_uid", null: false
+    t.datetime "updated_at", null: false
+    t.index ["github_uid"], name: "index_users_on_github_uid", unique: true
+  end
+
+  add_foreign_key "api_keys", "repositories"
+  add_foreign_key "repositories", "users"
+  add_foreign_key "spec_intents", "repositories"
+  add_foreign_key "spec_intents", "test_runs"
+  add_foreign_key "test_runs", "repositories"
+end

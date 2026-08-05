@@ -1,0 +1,26 @@
+<aside class="app-sidebar hidden shrink-0 flex-col border-r border-app-border bg-app-surface md:flex">
+  <div class="app-topbar flex items-center gap-2 border-b border-app-border px-4">
+    <span class="inline-block size-2 rounded-full bg-app-cta"></span>
+    <%= link_to "SpecGuard", root_path, class: "text-app-h3 text-app-content" %>
+  </div>
+
+  <nav class="flex-1 space-y-1 p-3">
+    <% if signed_in? %>
+      <p class="section-label px-2 py-2 text-app-content-secondary">Workspace</p>
+      <%= link_to "Repositories", repositories_path,
+                  class: "block rounded-md px-2 py-1.5 text-sm text-app-content-secondary hover:bg-app-neutral-surface hover:text-app-content" %>
+      <%= link_to "Register a repository", new_repository_path,
+                  class: "block rounded-md px-2 py-1.5 text-sm text-app-content-secondary hover:bg-app-neutral-surface hover:text-app-content" %>
+    <% else %>
+      <p class="px-2 py-2 text-sm text-app-content-secondary">
+        Sign in to register a repository and mint an API key.
+      </p>
+    <% end %>
+  </nav>
+
+  <div class="border-t border-app-border p-3">
+    <p class="section-label text-app-content-secondary">Phase 1</p>
+    <p class="mt-1 text-xs text-app-muted">Foundation, auth &amp; data model. Ingestion and the
+      duplicate-detection engine land in later phases.</p>
+  </div>
+</aside>

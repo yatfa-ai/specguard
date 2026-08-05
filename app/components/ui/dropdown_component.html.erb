@@ -1,0 +1,12 @@
+<details class="<%= wrapper_class %>">
+  <summary class="list-none cursor-pointer">
+    <% if trigger? %>
+      <%= trigger %>
+    <% else %>
+      <span class="<%= UI::ButtonComponent.classes(variant: :secondary, size: :sm) %>"><%= label %></span>
+    <% end %>
+  </summary>
+  <div class="absolute z-20 mt-2 min-w-48 <%= menu_class %> rounded-md border border-app-panel-border bg-app-surface p-1 shadow-app">
+    <%= content %>
+  </div>
+</details>

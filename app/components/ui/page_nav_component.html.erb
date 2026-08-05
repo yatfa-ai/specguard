@@ -1,0 +1,7 @@
+<nav class="<%= wrapper_class %>">
+  <% items.each do |item| %>
+    <%= link_to item[:label], item[:href],
+                class: "-mb-px border-b-2 px-1 py-2 text-app-h4 transition-colors #{item_class(item)}",
+                aria: { current: item[:current] ? "page" : nil } %>
+  <% end %>
+</nav>

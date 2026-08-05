@@ -1,0 +1,8 @@
+<dl class="<%= wrapper_class %>">
+  <% rows.each do |term, description| %>
+    <div class="flex items-baseline justify-between gap-4 py-2">
+      <dt class="section-label text-app-content-secondary"><%= term %></dt>
+      <dd class="text-sm text-app-content tabular-nums text-right"><%= description %></dd>
+    </div>
+  <% end %>
+</dl>
