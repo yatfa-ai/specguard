@@ -141,4 +141,105 @@ RSpec.describe "Repository registration and API keys", type: :request do
 
     expect(response).to have_http_status(:not_found)
   end
+
+  describe "renaming a repository" do
+    it "updates the name without touching keys, runs or intents" do
+      repository = create_repository(user: User.last, github_full_name: "acme/billing-servce")
+      repository.api_keys.create!(name: "CI")
+      repository.test_runs.create!(commit_sha: "a" * 40, branch: "main")
+      create_spec_intent(repository: repository)
+
+      patch repository_path(repository), params: { repository: { github_full_name: "acme/billing-service" } }
+
+      expect(response).to redirect_to(repository_path(repository))
+      expect(repository.reload.github_full_name).to eq("acme/billing-service")
+
+      # The entire point of the feature: renaming keeps everything the Remove workaround destroys.
+      expect(repository.api_keys.count).to eq(1)
+      expect(repository.test_runs.count).to eq(1)
+      expect(repository.spec_intents.count).to eq(1)
+    end
+
+    it "re-derives the display name and normalizes a pasted GitHub URL" do
+      repository = create_repository(user: User.last, github_full_name: "acme/old-name")
+
+      patch repository_path(repository),
+            params: { repository: { github_full_name: "https://github.com/acme/renamed.git" } }
+
+      expect(repository.reload.github_full_name).to eq("acme/renamed")
+      expect(repository.name).to eq("renamed")
+    end
+
+    it "re-renders the edit form when the new name is not org/repo" do
+      repository = create_repository(user: User.last)
+
+      patch repository_path(repository), params: { repository: { github_full_name: "nonsense" } }
+
+      expect(response).to have_http_status(:unprocessable_content)
+      expect(response.body).to include("must look like org/repo")
+      expect(repository.reload.github_full_name).to eq("acme/billing-service")
+
+      # The rejected input belongs in the form field only. The breadcrumb and title identify
+      # the record, so they must still name the repository as it is actually stored.
+      expect(response.body).to include("acme/billing-service")
+    end
+
+    it "rejects a name already taken by another user rather than raising" do
+      create_repository(user: create_user(github_uid: "9999", github_handle: "someone-else"),
+                        github_full_name: "other/repo")
+      repository = create_repository(user: User.find_by(github_uid: "1001"))
+
+      patch repository_path(repository), params: { repository: { github_full_name: "other/repo" } }
+
+      expect(response).to have_http_status(:unprocessable_content)
+      expect(repository.reload.github_full_name).to eq("acme/billing-service")
+    end
+
+    it "accepts a save that leaves the name unchanged" do
+      repository = create_repository(user: User.last)
+
+      patch repository_path(repository), params: { repository: { github_full_name: "acme/billing-service" } }
+
+      expect(response).to redirect_to(repository_path(repository))
+      expect(flash[:notice]).not_to include("Renamed")
+    end
+
+    it "confirms the rename in the flash when the name actually changed" do
+      repository = create_repository(user: User.last, github_full_name: "acme/billing-servce")
+
+      patch repository_path(repository), params: { repository: { github_full_name: "acme/billing-service" } }
+
+      expect(flash[:notice]).to eq("Renamed to acme/billing-service.")
+    end
+
+    it "links to the rename form from the repository page" do
+      repository = create_repository(user: User.last)
+
+      get repository_path(repository)
+
+      expect(response.body).to include(edit_repository_path(repository))
+    end
+
+    it "renders the rename form" do
+      repository = create_repository(user: User.last)
+
+      get edit_repository_path(repository)
+
+      expect(response).to have_http_status(:ok)
+      expect(response.body).to include('name="repository[github_full_name]"')
+    end
+
+    it "does not let a user rename another user's repository" do
+      other = create_repository(user: create_user(github_uid: "9999", github_handle: "someone-else"),
+                                github_full_name: "other/repo")
+
+      patch repository_path(other), params: { repository: { github_full_name: "acme/stolen" } }
+
+      expect(response).to have_http_status(:not_found)
+      expect(other.reload.github_full_name).to eq("other/repo")
+
+      get edit_repository_path(other)
+      expect(response).to have_http_status(:not_found)
+    end
+  end
 end

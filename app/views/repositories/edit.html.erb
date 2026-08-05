@@ -1,0 +1,21 @@
+<%# On the 422 re-render the rejected input is already assigned (and normalized) onto
+    @repository, so anything that *identifies* the record — title, breadcrumb — must read the
+    persisted value instead. Only the form field itself should echo what the user typed. %>
+<% persisted_name = @repository.github_full_name_was %>
+<% content_for :title, "Rename #{persisted_name} · SpecGuard" %>
+
+<%= render UI::PageComponent.new do %>
+  <%= render UI::BreadcrumbComponent.new(items: [
+        { label: "Repositories", href: repositories_path },
+        { label: persisted_name, href: repository_path(@repository) },
+        { label: "Rename" }
+      ]) %>
+
+  <%= render UI::PageHeaderComponent.new(
+        title: "Rename repository",
+        subtitle: "Corrects the name only — API keys, test runs and spec intents are kept."
+      ) %>
+
+  <%= render "form", repository: @repository, submit_label: "Save changes",
+                     cancel_href: repository_path(@repository) %>
+<% end %>
