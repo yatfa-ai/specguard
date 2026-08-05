@@ -3,7 +3,7 @@
 require "rails_helper"
 
 RSpec.describe "Repository registration and API keys", type: :request do
-  before { sign_in_via_github }
+  before { @user = sign_in_via_github }
 
   it "registers a GitHub repository for the signed-in user" do
     expect {
@@ -11,7 +11,7 @@ RSpec.describe "Repository registration and API keys", type: :request do
     }.to change(Repository, :count).by(1)
 
     repository = Repository.last
-    expect(repository.user).to eq(User.last)
+    expect(repository.user).to eq(@user)
     expect(response).to redirect_to(repository_path(repository))
   end
 
@@ -23,8 +23,7 @@ RSpec.describe "Repository registration and API keys", type: :request do
   end
 
   it "shows a newly created API key exactly once" do
-    post repositories_path, params: { repository: { github_full_name: "acme/billing-service" } }
-    repository = Repository.last
+    repository = register_repository
 
     post repository_api_keys_path(repository)
     follow_redirect!
@@ -46,7 +45,7 @@ RSpec.describe "Repository registration and API keys", type: :request do
   end
 
   it "shows the endpoint and a copyable curl snippet with no flash present" do
-    repository = create_repository(user: User.last)
+    repository = create_repository(user: @user)
 
     get repository_path(repository)
 
@@ -56,7 +55,7 @@ RSpec.describe "Repository registration and API keys", type: :request do
   end
 
   it "reports 'not connected' while no API key has ever been used" do
-    repository = create_repository(user: User.last)
+    repository = create_repository(user: @user)
     repository.api_keys.create!(name: "CI")
 
     get repository_path(repository)
@@ -67,7 +66,7 @@ RSpec.describe "Repository registration and API keys", type: :request do
   end
 
   it "reports the last request once any API key has been used" do
-    repository = create_repository(user: User.last)
+    repository = create_repository(user: @user)
     repository.api_keys.create!(name: "Idle")
     repository.api_keys.create!(name: "CI").touch_last_used!
 
@@ -78,8 +77,7 @@ RSpec.describe "Repository registration and API keys", type: :request do
   end
 
   it "offers a name field when minting a key, and shows when each key was created" do
-    post repositories_path, params: { repository: { github_full_name: "acme/billing-service" } }
-    repository = Repository.last
+    repository = register_repository
     repository.api_keys.create!(name: "Staging")
 
     get repository_path(repository)
@@ -90,8 +88,7 @@ RSpec.describe "Repository registration and API keys", type: :request do
   end
 
   it "names a new API key from the form field" do
-    post repositories_path, params: { repository: { github_full_name: "acme/billing-service" } }
-    repository = Repository.last
+    repository = register_repository
 
     expect {
       post repository_api_keys_path(repository), params: { api_key: { name: "Staging" } }
@@ -105,8 +102,7 @@ RSpec.describe "Repository registration and API keys", type: :request do
   end
 
   it "falls back to the default name when the name field is left blank" do
-    post repositories_path, params: { repository: { github_full_name: "acme/billing-service" } }
-    repository = Repository.last
+    repository = register_repository
 
     post repository_api_keys_path(repository), params: { api_key: { name: "" } }
 
@@ -114,8 +110,7 @@ RSpec.describe "Repository registration and API keys", type: :request do
   end
 
   it "falls back to the default name when no params are sent at all" do
-    post repositories_path, params: { repository: { github_full_name: "acme/billing-service" } }
-    repository = Repository.last
+    repository = register_repository
 
     post repository_api_keys_path(repository)
 
@@ -123,8 +118,7 @@ RSpec.describe "Repository registration and API keys", type: :request do
   end
 
   it "revokes an API key" do
-    post repositories_path, params: { repository: { github_full_name: "acme/billing-service" } }
-    repository = Repository.last
+    repository = register_repository
     post repository_api_keys_path(repository)
     api_key = ApiKey.last
 
@@ -144,7 +138,7 @@ RSpec.describe "Repository registration and API keys", type: :request do
 
   describe "renaming a repository" do
     it "updates the name without touching keys, runs or intents" do
-      repository = create_repository(user: User.last, github_full_name: "acme/billing-servce")
+      repository = create_repository(user: @user, github_full_name: "acme/billing-servce")
       repository.api_keys.create!(name: "CI")
       repository.test_runs.create!(commit_sha: "a" * 40, branch: "main")
       create_spec_intent(repository: repository)
@@ -161,7 +155,7 @@ RSpec.describe "Repository registration and API keys", type: :request do
     end
 
     it "re-derives the display name and normalizes a pasted GitHub URL" do
-      repository = create_repository(user: User.last, github_full_name: "acme/old-name")
+      repository = create_repository(user: @user, github_full_name: "acme/old-name")
 
       patch repository_path(repository),
             params: { repository: { github_full_name: "https://github.com/acme/renamed.git" } }
@@ -171,7 +165,7 @@ RSpec.describe "Repository registration and API keys", type: :request do
     end
 
     it "re-renders the edit form when the new name is not org/repo" do
-      repository = create_repository(user: User.last)
+      repository = create_repository(user: @user)
 
       patch repository_path(repository), params: { repository: { github_full_name: "nonsense" } }
 
@@ -187,7 +181,7 @@ RSpec.describe "Repository registration and API keys", type: :request do
     it "rejects a name already taken by another user rather than raising" do
       create_repository(user: create_user(github_uid: "9999", github_handle: "someone-else"),
                         github_full_name: "other/repo")
-      repository = create_repository(user: User.find_by(github_uid: "1001"))
+      repository = create_repository(user: @user)
 
       patch repository_path(repository), params: { repository: { github_full_name: "other/repo" } }
 
@@ -196,7 +190,7 @@ RSpec.describe "Repository registration and API keys", type: :request do
     end
 
     it "accepts a save that leaves the name unchanged" do
-      repository = create_repository(user: User.last)
+      repository = create_repository(user: @user)
 
       patch repository_path(repository), params: { repository: { github_full_name: "acme/billing-service" } }
 
@@ -205,7 +199,7 @@ RSpec.describe "Repository registration and API keys", type: :request do
     end
 
     it "confirms the rename in the flash when the name actually changed" do
-      repository = create_repository(user: User.last, github_full_name: "acme/billing-servce")
+      repository = create_repository(user: @user, github_full_name: "acme/billing-servce")
 
       patch repository_path(repository), params: { repository: { github_full_name: "acme/billing-service" } }
 
@@ -213,7 +207,7 @@ RSpec.describe "Repository registration and API keys", type: :request do
     end
 
     it "links to the rename form from the repository page" do
-      repository = create_repository(user: User.last)
+      repository = create_repository(user: @user)
 
       get repository_path(repository)
 
@@ -221,7 +215,7 @@ RSpec.describe "Repository registration and API keys", type: :request do
     end
 
     it "renders the rename form" do
-      repository = create_repository(user: User.last)
+      repository = create_repository(user: @user)
 
       get edit_repository_path(repository)
 
