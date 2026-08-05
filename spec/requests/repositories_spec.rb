@@ -40,6 +40,51 @@ RSpec.describe "Repository registration and API keys", type: :request do
     expect(response.body).not_to include(raw_token)
   end
 
+  it "offers a name field when minting a key, and shows when each key was created" do
+    post repositories_path, params: { repository: { github_full_name: "acme/billing-service" } }
+    repository = Repository.last
+    repository.api_keys.create!(name: "Staging")
+
+    get repository_path(repository)
+
+    # The control must actually post a name — a bare button is what made every key identical.
+    expect(response.body).to include('name="api_key[name]"')
+    expect(response.body).to include("Created")
+  end
+
+  it "names a new API key from the form field" do
+    post repositories_path, params: { repository: { github_full_name: "acme/billing-service" } }
+    repository = Repository.last
+
+    expect {
+      post repository_api_keys_path(repository), params: { api_key: { name: "Staging" } }
+    }.to change(ApiKey, :count).by(1)
+
+    expect(ApiKey.last.name).to eq("Staging")
+
+    # The chosen name is what makes the key distinguishable in the list and in the revoke confirm.
+    follow_redirect!
+    expect(response.body).to include("Staging")
+  end
+
+  it "falls back to the default name when the name field is left blank" do
+    post repositories_path, params: { repository: { github_full_name: "acme/billing-service" } }
+    repository = Repository.last
+
+    post repository_api_keys_path(repository), params: { api_key: { name: "" } }
+
+    expect(ApiKey.last.name).to eq("Default CI Key")
+  end
+
+  it "falls back to the default name when no params are sent at all" do
+    post repositories_path, params: { repository: { github_full_name: "acme/billing-service" } }
+    repository = Repository.last
+
+    post repository_api_keys_path(repository)
+
+    expect(ApiKey.last.name).to eq("Default CI Key")
+  end
+
   it "revokes an API key" do
     post repositories_path, params: { repository: { github_full_name: "acme/billing-service" } }
     repository = Repository.last

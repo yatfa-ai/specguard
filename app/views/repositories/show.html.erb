@@ -19,7 +19,7 @@
   <% end %>
 
   <% if @revealed_token.present? %>
-    <%= render UI::PanelComponent.new(title: "Your new API key") do %>
+    <%= render UI::PanelComponent.new(title: @revealed_token_name.present? ? "Your new API key: #{@revealed_token_name}" : "Your new API key") do %>
       <div class="space-y-3" data-controller="copy-text">
         <%= render UI::AlertComponent.new(tone: :warning, title: "Shown once") do %>
           Only the SHA-256 digest is stored. Copy this now — reloading this page will not show it again.
@@ -54,16 +54,23 @@
 
     <%= render UI::PanelComponent.new(title: "API keys", class: "lg:col-span-2") do |panel| %>
       <% panel.with_actions do %>
-        <%= button_to "New API key", repository_api_keys_path(@repository),
-                      class: UI::ButtonComponent.classes(variant: :primary, size: :sm) %>
+        <%# Inline (not .form-grid) on purpose: this lives in a panel header, so it stays one row. %>
+        <%= form_with url: repository_api_keys_path(@repository), scope: :api_key,
+                      class: "flex items-end gap-2" do |form| %>
+          <%= form.field :name, label: "Name", placeholder: "CI — main" %>
+          <%= form.submit_button "New API key", size: :sm %>
+        <% end %>
       <% end %>
 
       <% if @api_keys.any? %>
-        <%= render UI::TableComponent.new(columns: ["Name", "Key", "Last used", ""]) do %>
+        <%= render UI::TableComponent.new(columns: ["Name", "Key", "Created", "Last used", ""]) do %>
           <% @api_keys.each do |api_key| %>
             <tr>
               <td class="px-3 py-2"><%= api_key.name %></td>
               <td class="px-3 py-2 font-mono text-xs text-app-content-secondary"><%= api_key.token_hint %></td>
+              <td class="px-3 py-2 text-app-content-secondary tabular-nums">
+                <%= time_ago_in_words(api_key.created_at) %> ago
+              </td>
               <td class="px-3 py-2 text-app-content-secondary tabular-nums">
                 <%= api_key.last_used_at ? "#{time_ago_in_words(api_key.last_used_at)} ago" : "never" %>
               </td>
