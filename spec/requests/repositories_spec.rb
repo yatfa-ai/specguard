@@ -178,6 +178,10 @@ RSpec.describe "Repository registration and API keys", type: :request do
       expect(response).to have_http_status(:unprocessable_content)
       expect(response.body).to include("must look like org/repo")
       expect(repository.reload.github_full_name).to eq("acme/billing-service")
+
+      # The rejected input belongs in the form field only. The breadcrumb and title identify
+      # the record, so they must still name the repository as it is actually stored.
+      expect(response.body).to include("acme/billing-service")
     end
 
     it "rejects a name already taken by another user rather than raising" do
@@ -197,15 +201,30 @@ RSpec.describe "Repository registration and API keys", type: :request do
       patch repository_path(repository), params: { repository: { github_full_name: "acme/billing-service" } }
 
       expect(response).to redirect_to(repository_path(repository))
+      expect(flash[:notice]).not_to include("Renamed")
     end
 
-    it "renders the edit form with a rename affordance on the repository page" do
+    it "confirms the rename in the flash when the name actually changed" do
+      repository = create_repository(user: User.last, github_full_name: "acme/billing-servce")
+
+      patch repository_path(repository), params: { repository: { github_full_name: "acme/billing-service" } }
+
+      expect(flash[:notice]).to eq("Renamed to acme/billing-service.")
+    end
+
+    it "links to the rename form from the repository page" do
       repository = create_repository(user: User.last)
 
       get repository_path(repository)
+
       expect(response.body).to include(edit_repository_path(repository))
+    end
+
+    it "renders the rename form" do
+      repository = create_repository(user: User.last)
 
       get edit_repository_path(repository)
+
       expect(response).to have_http_status(:ok)
       expect(response.body).to include('name="repository[github_full_name]"')
     end

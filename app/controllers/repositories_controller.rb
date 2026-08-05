@@ -43,7 +43,7 @@ class RepositoriesController < ApplicationController
     @repository = current_repository
 
     if @repository.update(repository_params)
-      redirect_to repository_path(@repository), notice: "Renamed to #{@repository.github_full_name}."
+      redirect_to repository_path(@repository), notice: rename_notice
     else
       render :edit, status: :unprocessable_content
     end
@@ -60,5 +60,14 @@ class RepositoriesController < ApplicationController
 
   def repository_params
     params.expect(repository: [:github_full_name])
+  end
+
+  # Submitting the form unchanged is a valid save, so don't claim a rename that didn't happen.
+  def rename_notice
+    if @repository.saved_change_to_github_full_name?
+      "Renamed to #{@repository.github_full_name}."
+    else
+      "#{@repository.github_full_name} is already up to date."
+    end
   end
 end
