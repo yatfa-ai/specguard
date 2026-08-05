@@ -17,8 +17,21 @@ export default class extends Controller {
 
     if (!this.hasLabelTarget) return
 
-    const original = this.labelTarget.textContent
+    // Capture the pristine label once. Re-reading it per click would capture the
+    // confirmation text on a second click inside the window, sticking the label there.
+    this.pristineLabel ??= this.labelTarget.textContent
+
+    // A second click extends the window instead of stacking a second restore timer.
+    clearTimeout(this.restoreTimer)
     this.labelTarget.textContent = this.confirmationValue
-    setTimeout(() => { this.labelTarget.textContent = original }, 1500)
+    this.restoreTimer = setTimeout(() => {
+      this.labelTarget.textContent = this.pristineLabel
+      this.restoreTimer = null
+    }, 1500)
+  }
+
+  // Turbo can detach the element while a restore is pending; don't fire against a dead node.
+  disconnect() {
+    clearTimeout(this.restoreTimer)
   }
 }
