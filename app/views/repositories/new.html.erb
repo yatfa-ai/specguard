@@ -1,0 +1,28 @@
+<% content_for :title, "Register a repository · SpecGuard" %>
+
+<%= render UI::PageComponent.new do %>
+  <%= render UI::BreadcrumbComponent.new(items: [
+        { label: "Repositories", href: repositories_path },
+        { label: "Register" }
+      ]) %>
+
+  <%= render UI::PageHeaderComponent.new(
+        title: "Register a repository",
+        subtitle: "Use the GitHub org/repo form, e.g. acme/billing-service."
+      ) %>
+
+  <%= render UI::PanelComponent.new do %>
+    <%= form_with model: @repository do |form| %>
+      <div class="form-grid">
+        <%= form.field :github_full_name, label: "GitHub repository", full: true,
+                       placeholder: "org/repo",
+                       hint: "The full name as it appears on GitHub." %>
+      </div>
+
+      <div class="mt-4 flex items-center gap-2">
+        <%= form.submit_button "Register" %>
+        <%= render UI::ButtonComponent.new(variant: :ghost, href: repositories_path) { "Cancel" } %>
+      </div>
+    <% end %>
+  <% end %>
+<% end %>

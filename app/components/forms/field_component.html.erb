@@ -1,0 +1,10 @@
+<div class="<%= wrapper_class %>">
+  <%= form.label attribute, label_text, class: "block text-app-h4 text-app-content-secondary" %>
+  <%= input %>
+  <% if hint.present? %>
+    <p class="text-xs text-app-muted"><%= hint %></p>
+  <% end %>
+  <% errors.each do |message| %>
+    <p class="text-xs text-app-error"><%= message %></p>
+  <% end %>
+</div>

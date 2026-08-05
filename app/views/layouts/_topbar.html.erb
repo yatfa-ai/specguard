@@ -1,0 +1,18 @@
+<header class="app-topbar flex shrink-0 items-center justify-between gap-4 border-b border-app-border bg-app-surface px-4">
+  <div class="flex min-w-0 items-center gap-3">
+    <%= link_to "SpecGuard", root_path, class: "text-app-h4 text-app-content md:hidden" %>
+    <%= yield :topbar %>
+  </div>
+
+  <div class="flex items-center gap-2">
+    <%= render UI::ButtonComponent.new(variant: :ghost, size: :sm, type: "button",
+                                       data: { action: "theme#toggle" },
+                                       aria: { label: "Toggle colour theme" }) { "Theme" } %>
+
+    <% if signed_in? %>
+      <span class="hidden text-sm text-app-content-secondary sm:inline"><%= current_user.display_name %></span>
+      <%= button_to "Sign out", sign_out_path, method: :delete,
+                    class: UI::ButtonComponent.classes(variant: :secondary, size: :sm) %>
+    <% end %>
+  </div>
+</header>

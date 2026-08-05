@@ -1,0 +1,10 @@
+<div class="<%= wrapper_class %>">
+  <%= render UI::HeadingComponent.new(level: 3, class: "text-app-content") { title } %>
+  <% if description.present? %>
+    <p class="max-w-prose text-sm text-app-content-secondary"><%= description %></p>
+  <% end %>
+  <%= content %>
+  <% if action? %>
+    <div><%= action %></div>
+  <% end %>
+</div>

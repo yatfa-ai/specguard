@@ -1,0 +1,10 @@
+<% if flash[:notice].present? || flash[:alert].present? %>
+  <div class="space-y-2 px-6 pt-6">
+    <% if flash[:notice].present? %>
+      <%= render UI::AlertComponent.new(tone: :success) { flash[:notice] } %>
+    <% end %>
+    <% if flash[:alert].present? %>
+      <%= render UI::AlertComponent.new(tone: :error) { flash[:alert] } %>
+    <% end %>
+  </div>
+<% end %>

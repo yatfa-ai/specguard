@@ -1,0 +1,239 @@
+/*
+ * SpecGuard design system — inherited from yatfa (see the "SpecGuard — Design System" spec).
+ *
+ * Two non-negotiable conventions are carried over verbatim:
+ *
+ *   1. Every colour/surface is a `--app-*` custom property, exposed as an `app-`prefixed Tailwind
+ *      utility. The uniform `app-` prefix dodges DaisyUI v5's owned utilities (`primary`,
+ *      `success`, …) and Tailwind's `border` width utility with one rule. Any `*-app-*` class is,
+ *      by definition, a token reference.
+ *
+ *   2. `@theme inline` — NOT plain `@theme`. Utilities must reference `var(--app-*)` directly so
+ *      toggling `[data-theme]` recolours every utility at runtime. That is how the dark/winter
+ *      switch works without a rebuild. Do not "simplify" this to plain `@theme`.
+ */
+
+@import "tailwindcss";
+
+@plugin "daisyui" {
+  themes: dark --default, winter;
+}
+
+/* ---------------------------------------------------------------------------
+ * Tokens — dark (the default theme, OLED)
+ * ------------------------------------------------------------------------ */
+:root,
+[data-theme="dark"] {
+  --app-background: #020617;
+  --app-surface: #0f172a;
+  --app-surface-raised: #1e293b;
+
+  --app-primary: #0f172a;
+  --app-secondary: #1e293b;
+
+  --app-cta: #22c55e;
+  --app-cta-hover: #16a34a;
+
+  --app-text: #f8fafc;
+  --app-text-secondary: #94a3b8;
+  --app-text-muted: #64748b;
+
+  --app-border: #1e293b;
+  --app-border-light: #334155;
+
+  /* The panel-border trap: in dark, --app-border is byte-identical to
+     --app-surface-raised (#1E293B), so a 1px card border is literally invisible.
+     --app-panel-border + shadow-app are PANEL-SCOPED so panels read as raised
+     without blasting the global border. Do not "fix" --app-border instead. */
+  --app-panel-border: #334155;
+  --app-shadow: 0 1px 3px 0 rgb(0 0 0 / 0.45), 0 1px 2px -1px rgb(0 0 0 / 0.45);
+
+  --app-success: #22c55e;
+  --app-success-surface: rgb(34 197 94 / 0.15);
+  --app-warning: #f59e0b;
+  --app-warning-surface: rgb(245 158 11 / 0.15);
+  --app-error: #ef4444;
+  --app-error-surface: rgb(239 68 68 / 0.15);
+  --app-info: #3b82f6;
+  --app-info-surface: rgb(59 130 246 / 0.15);
+  --app-neutral-surface: rgb(148 163 184 / 0.15);
+
+  --sidebar-width: 256px;
+  --sidebar-width-collapsed: 68px;
+  --topbar-height: 56px;
+}
+
+/* ---------------------------------------------------------------------------
+ * Tokens — winter (light). EVERY --app-* token is overridden; nothing is
+ * inherited from the dark block, so no dark-only value can leak into light.
+ * ------------------------------------------------------------------------ */
+[data-theme="winter"] {
+  --app-background: #f8fafc;
+  --app-surface: #ffffff;
+  --app-surface-raised: #f1f5f9;
+
+  --app-primary: #ffffff;
+  --app-secondary: #f1f5f9;
+
+  --app-cta: #16a34a;
+  --app-cta-hover: #15803d;
+
+  --app-text: #0f172a;
+  --app-text-secondary: #475569;
+  --app-text-muted: #64748b;
+
+  --app-border: #e2e8f0;
+  --app-border-light: #cbd5e1;
+
+  --app-panel-border: #e2e8f0;
+  --app-shadow: 0 1px 3px 0 rgb(15 23 42 / 0.08), 0 1px 2px -1px rgb(15 23 42 / 0.08);
+
+  --app-success: #15803d;
+  --app-success-surface: rgb(34 197 94 / 0.12);
+  --app-warning: #b45309;
+  --app-warning-surface: rgb(245 158 11 / 0.14);
+  --app-error: #b91c1c;
+  --app-error-surface: rgb(239 68 68 / 0.12);
+  --app-info: #1d4ed8;
+  --app-info-surface: rgb(59 130 246 / 0.12);
+  --app-neutral-surface: rgb(100 116 139 / 0.12);
+}
+
+/* ---------------------------------------------------------------------------
+ * @theme inline — turn the tokens into `app-`prefixed utilities.
+ * ------------------------------------------------------------------------ */
+@theme inline {
+  --font-sans: "Plus Jakarta Sans", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+
+  --color-app-background: var(--app-background);
+  --color-app-surface: var(--app-surface);
+  --color-app-surface-raised: var(--app-surface-raised);
+
+  --color-app-primary: var(--app-primary);
+  --color-app-secondary: var(--app-secondary);
+
+  --color-app-cta: var(--app-cta);
+  --color-app-cta-hover: var(--app-cta-hover);
+
+  --color-app-content: var(--app-text);
+  --color-app-content-secondary: var(--app-text-secondary);
+  --color-app-muted: var(--app-text-muted);
+
+  --color-app-border: var(--app-border);
+  --color-app-border-light: var(--app-border-light);
+  --color-app-panel-border: var(--app-panel-border);
+
+  --color-app-success: var(--app-success);
+  --color-app-success-surface: var(--app-success-surface);
+  --color-app-warning: var(--app-warning);
+  --color-app-warning-surface: var(--app-warning-surface);
+  --color-app-error: var(--app-error);
+  --color-app-error-surface: var(--app-error-surface);
+  --color-app-info: var(--app-info);
+  --color-app-info-surface: var(--app-info-surface);
+  --color-app-neutral-surface: var(--app-neutral-surface);
+
+  --shadow-app: var(--app-shadow);
+}
+
+/* ---------------------------------------------------------------------------
+ * Typography — the 4-step ramp. Exactly one sanctioned heading ramp; colour is
+ * deliberately NOT baked in, so a heading keeps its own token colour.
+ * Never write text-xl/2xl/3xl/4xl directly — the drift lint flags it.
+ * ------------------------------------------------------------------------ */
+@utility text-app-h1 {
+  font-size: var(--text-3xl);
+  line-height: var(--text-3xl--line-height);
+  font-weight: 700;
+  letter-spacing: -0.025em;
+}
+
+@utility text-app-h2 {
+  font-size: var(--text-xl);
+  line-height: var(--text-xl--line-height);
+  font-weight: 700;
+  letter-spacing: -0.025em;
+}
+
+@utility text-app-h3 {
+  font-size: var(--text-lg);
+  line-height: var(--text-lg--line-height);
+  font-weight: 600;
+}
+
+@utility text-app-h4 {
+  font-size: var(--text-sm);
+  line-height: var(--text-sm--line-height);
+  font-weight: 600;
+}
+
+/* ---------------------------------------------------------------------------
+ * Base
+ * ------------------------------------------------------------------------ */
+@layer base {
+  html {
+    background-color: var(--app-background);
+  }
+
+  body {
+    background-color: var(--app-background);
+    color: var(--app-text);
+    font-family: var(--font-sans);
+  }
+
+  :focus-visible {
+    outline: 2px solid var(--app-cta);
+    outline-offset: 2px;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+      transition-duration: 0.01ms !important;
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      scroll-behavior: auto !important;
+    }
+  }
+}
+
+/* ---------------------------------------------------------------------------
+ * Layout conventions
+ *
+ * Full width: <main> carries NO max-width cap. Forms use .form-grid +
+ * .form-field-full rather than bespoke per-form widths.
+ * ------------------------------------------------------------------------ */
+@layer components {
+  .form-grid {
+    display: grid;
+    grid-template-columns: repeat(1, minmax(0, 1fr));
+    gap: 1rem 1.5rem;
+  }
+
+  @media (min-width: 768px) {
+    .form-grid {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+  }
+
+  .form-field-full {
+    grid-column: 1 / -1;
+  }
+
+  .section-label {
+    font-size: var(--text-xs);
+    line-height: var(--text-xs--line-height);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    opacity: 0.4;
+  }
+
+  .app-sidebar {
+    width: var(--sidebar-width);
+  }
+
+  .app-topbar {
+    height: var(--topbar-height);
+  }
+}
