@@ -44,8 +44,15 @@ RSpec.describe UI::CopyableCodeComponent, type: :component do
     expect(page.native.to_html).not_to include("&amp;lt;")
   end
 
-  it "derives the code surface from app-* tokens, never a raw palette colour" do
-    expect(described_class::CODE_CLASSES)
-      .not_to match(/(?:bg|text|border)-(?:gray|slate|red|green|blue|white|black)/)
+  it "applies the design-system code surface to the copy source" do
+    # `eq`, not `include`: this pins the rendered attribute to the single definition, so the
+    # constant and the template cannot drift apart in either direction. Consolidating the class
+    # string into one place is only safe if something checks that the one place is wired to the
+    # render. (Raw-palette colours are `lint:design_system`'s rule — `SCAN_GLOBS` already covers
+    # `app/components/**/*.rb` — so this does not restate it.)
+    render_inline(described_class.new { "payload" })
+
+    expect(page.find('code[data-copy-text-target="source"]')[:class])
+      .to eq(described_class::CODE_CLASSES)
   end
 end
