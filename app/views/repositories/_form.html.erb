@@ -1,0 +1,16 @@
+<%# Shared by `new` and `edit` — registering and renaming are the same one-field form.
+    locals: repository, submit_label, cancel_href %>
+<%= render UI::PanelComponent.new do %>
+  <%= form_with model: repository do |form| %>
+    <div class="form-grid">
+      <%= form.field :github_full_name, label: "GitHub repository", full: true,
+                     placeholder: "org/repo",
+                     hint: "The full name as it appears on GitHub." %>
+    </div>
+
+    <div class="mt-4 flex items-center gap-2">
+      <%= form.submit_button submit_label %>
+      <%= render UI::ButtonComponent.new(variant: :ghost, href: cancel_href) { "Cancel" } %>
+    </div>
+  <% end %>
+<% end %>

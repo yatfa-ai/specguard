@@ -12,6 +12,7 @@
       ) do |header| %>
     <% header.with_actions do %>
       <%= render UI::ButtonComponent.new(variant: :ghost, href: @repository.github_url) { "View on GitHub" } %>
+      <%= render UI::ButtonComponent.new(variant: :ghost, href: edit_repository_path(@repository)) { "Rename" } %>
       <%= button_to "Remove", repository_path(@repository), method: :delete,
                     class: UI::ButtonComponent.classes(variant: :danger, size: :md),
                     form: { data: { turbo_confirm: "Remove #{@repository.github_full_name} and all of its data?" } } %>
