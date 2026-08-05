@@ -10,6 +10,9 @@ class RepositoriesController < ApplicationController
   def show
     @repository = current_repository
     @api_keys = @repository.api_keys.order(created_at: :desc)
+    # The only signal that the repo ever reached the API: the newest use across every key.
+    # `nil` means no key has ever authenticated — see the "Connect this repository" panel.
+    @last_api_request_at = @repository.api_keys.maximum(:last_used_at)
     # Set by ApiKeysController#create and readable exactly once — see ApiKeysController.
     @revealed_token = flash[:revealed_api_key]
     @revealed_token_name = flash[:revealed_api_key_name]

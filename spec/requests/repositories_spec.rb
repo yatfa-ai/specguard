@@ -38,6 +38,43 @@ RSpec.describe "Repository registration and API keys", type: :request do
     # A plain reload must not show it again — the value only ever lived in the flash.
     get repository_path(repository)
     expect(response.body).not_to include(raw_token)
+
+    # ...but what the key is *for* must survive the flash, with a placeholder, never a secret.
+    expect(response.body).to include("Connect this repository")
+    expect(response.body).to include("&lt;token&gt;")
+    expect(response.body).not_to match(/sgk_[A-Za-z0-9_-]{20,}/)
+  end
+
+  it "shows the endpoint and a copyable curl snippet with no flash present" do
+    repository = create_repository(user: User.last)
+
+    get repository_path(repository)
+
+    expect(response.body).to include("Connect this repository")
+    expect(response.body).to include("GET #{api_v1_repository_url}")
+    expect(response.body).to include(%(curl -H "Authorization: Bearer &lt;token&gt;" #{api_v1_repository_url}))
+  end
+
+  it "reports 'not connected' while no API key has ever been used" do
+    repository = create_repository(user: User.last)
+    repository.api_keys.create!(name: "CI")
+
+    get repository_path(repository)
+
+    expect(repository.api_keys.maximum(:last_used_at)).to be_nil
+    expect(response.body).to include("Not connected yet")
+    expect(response.body).not_to include("Last request")
+  end
+
+  it "reports the last request once any API key has been used" do
+    repository = create_repository(user: User.last)
+    repository.api_keys.create!(name: "Idle")
+    repository.api_keys.create!(name: "CI").touch_last_used!
+
+    get repository_path(repository)
+
+    expect(response.body).to match(/Last request .+ ago\./)
+    expect(response.body).not_to include("Not connected yet")
   end
 
   it "offers a name field when minting a key, and shows when each key was created" do

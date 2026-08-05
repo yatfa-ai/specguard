@@ -42,6 +42,59 @@
     <% end %>
   <% end %>
 
+  <%# Deliberately OUTSIDE the @revealed_token gate above: the instructions have to outlive the
+      one-shot flash, or a user who reloads the page has no way to learn what the key is for. %>
+  <%= render UI::PanelComponent.new(title: "Connect this repository") do %>
+    <div class="grid gap-4 lg:grid-cols-3">
+      <div class="space-y-4 lg:col-span-2" data-controller="copy-text">
+        <div class="space-y-1">
+          <p class="section-label text-app-content-secondary">Endpoint</p>
+          <p class="font-mono text-sm break-all text-app-content">GET <%= api_v1_repository_url %></p>
+        </div>
+
+        <div class="space-y-2">
+          <p class="section-label text-app-content-secondary">Try it</p>
+          <div class="flex items-center gap-2">
+            <code data-copy-text-target="source"
+                  class="min-w-0 flex-1 overflow-x-auto rounded-md border border-app-border-light bg-app-surface-raised px-3 py-2 font-mono text-sm text-app-content">curl -H "Authorization: Bearer &lt;token&gt;" <%= api_v1_repository_url %></code>
+            <%= render UI::ButtonComponent.new(variant: :secondary, type: "button",
+                                               data: { action: "copy-text#copy" }) do %>
+              <span data-copy-text-target="label">Copy</span>
+            <% end %>
+          </div>
+          <p class="text-xs text-app-muted">
+            <code>&lt;token&gt;</code> is a placeholder — substitute the key you copied when you minted
+            it. SpecGuard cannot show an existing key again, only mint a new one.
+          </p>
+        </div>
+      </div>
+
+      <div class="space-y-4 lg:col-span-1">
+        <% if @last_api_request_at.present? %>
+          <%= render UI::StatComponent.new(
+                label: "Connection",
+                value: "Connected",
+                hint: "Last request #{time_ago_in_words(@last_api_request_at)} ago.",
+                tone: :success
+              ) %>
+        <% else %>
+          <%= render UI::StatComponent.new(
+                label: "Connection",
+                value: "Not connected yet",
+                hint: "No API key has been used.",
+                tone: :warning
+              ) %>
+        <% end %>
+
+        <%= render UI::AlertComponent.new(tone: :neutral) do %>
+          A wrong or revoked key gets <code>401 {"error":"unauthorized"}</code>, and a rejected request
+          never records a use — so a key stuck at "never" means the request never authenticated, or was
+          never sent at all.
+        <% end %>
+      </div>
+    </div>
+  <% end %>
+
   <div class="grid gap-4 lg:grid-cols-3">
     <%= render UI::PanelComponent.new(title: "Overview", class: "lg:col-span-1") do %>
       <%= render UI::DefListComponent.new(rows: [
