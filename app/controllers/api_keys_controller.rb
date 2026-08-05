@@ -10,6 +10,9 @@ class ApiKeysController < ApplicationController
     api_key = repository.api_keys.create!(name: api_key_name)
 
     flash[:revealed_api_key] = api_key.raw_token
+    # Deliberately a *second* flash value: `revealed_api_key` has to stay a bare token, because the
+    # copy-text Stimulus controller copies that element's text verbatim.
+    flash[:revealed_api_key_name] = api_key.name
     redirect_to repository_path(repository), notice: "API key created. Copy it now — it is shown only once."
   end
 

@@ -12,6 +12,7 @@ class RepositoriesController < ApplicationController
     @api_keys = @repository.api_keys.order(created_at: :desc)
     # Set by ApiKeysController#create and readable exactly once — see ApiKeysController.
     @revealed_token = flash[:revealed_api_key]
+    @revealed_token_name = flash[:revealed_api_key_name]
   end
 
   def new
