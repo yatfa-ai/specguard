@@ -51,6 +51,12 @@ gem "neighbor"
 gem "omniauth"
 gem "omniauth-github"
 gem "omniauth-rails_csrf_protection"
+# Background jobs — embedding generation is async (see docs/01-overview.md).
+# Runs in the primary database; see config/database.yml for why.
+gem "solid_queue"
+# Default embedding provider behind EmbeddingGenerator (OpenAI text-embedding-3-small, 1536-dim).
+# The interface is swappable — see app/services/embedding_generator.rb.
+gem "ruby-openai", "~> 8.3"
 
 group :development, :test do
   # Test framework

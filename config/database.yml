@@ -12,6 +12,16 @@
 # Configure Using Gemfile
 # gem "pg"
 #
+# Solid Queue runs in the PRIMARY database — there is deliberately no `queue:` database here, and
+# no multi-database (`primary:`/`queue:`) nesting in any environment. Solid Queue's installer
+# assumes the Rails 8 multi-database layout and generates a
+# `config.solid_queue.connects_to = { database: { writing: :queue } }`; that line was removed from
+# config/environments/production.rb, and its `db/queue_schema.rb` was replaced by an ordinary
+# migration, so the queue tables live in this database next to the domain tables. One database to
+# provision and back up, and `bin/rails db:prepare` sets up the queue in every environment.
+# Revisit only if queue write volume warrants its own database — that is a migration, not a
+# config change.
+#
 default: &default
   adapter: postgresql
   encoding: unicode
