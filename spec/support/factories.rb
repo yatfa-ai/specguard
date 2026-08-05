@@ -25,4 +25,19 @@ module Builders
   end
 end
 
-RSpec.configure { |config| config.include Builders }
+# Builders that go through the app over HTTP rather than straight to the model, so they are only
+# meaningful where a request is available.
+module RequestBuilders
+  # Registers a repository the way a user does — through RepositoriesController#create. Kept as a
+  # real round-trip on purpose: swapping it for `create_repository` would silently drop the callers'
+  # coverage of the create action.
+  def register_repository(full_name = "acme/billing-service")
+    post repositories_path, params: { repository: { github_full_name: full_name } }
+    Repository.find_by!(github_full_name: full_name)
+  end
+end
+
+RSpec.configure do |config|
+  config.include Builders
+  config.include RequestBuilders, type: :request
+end
