@@ -7,13 +7,18 @@ require Rails.root.join("db/migrate/20260806120000_add_created_by_user_to_api_ke
 # with no audit row — so the backfill is the only chance a pre-existing key ever gets a creator.
 # These examples call the migration's own backfill method, not a re-typed copy of its SQL.
 RSpec.describe AddCreatedByUserToApiKeys do
+  # One instance, not two: `suppress_messages` toggles `@verbose` on its *receiver* and restores it
+  # in an ensure, so suppressing on one instance while running the backfill on another suppresses
+  # nothing.
   def backfill!
-    described_class.new.suppress_messages { described_class.new.backfill_creators_from_repository_owners }
+    migration = described_class.new
+    migration.suppress_messages { migration.backfill_creators_from_repository_owners }
   end
 
   # Simulates a key minted before the column existed: attributable only through its repository.
+  # `create!` with no creator already leaves `created_by_user_id` NULL — there is no default to undo.
   def unattributed_key(repository, name: "Legacy CI")
-    repository.api_keys.create!(name: name).tap { |key| key.update_column(:created_by_user_id, nil) }
+    repository.api_keys.create!(name: name)
   end
 
   it "attributes a pre-existing key to its repository's owner" do

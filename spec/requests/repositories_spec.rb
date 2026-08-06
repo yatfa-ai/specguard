@@ -128,6 +128,24 @@ RSpec.describe "Repository registration and API keys", type: :request do
   end
 
   describe "recording who minted a key" do
+    # These read the parsed DOM rather than the raw body, because both of the obvious
+    # whole-document assertions are unsound on this page:
+    #
+    #   * `include(@user.display_name)` is satisfied by the topbar, which prints
+    #     `current_user.display_name` on every page (layouts/_topbar.html.erb:13) — so it passes
+    #     with the creator cell deleted.
+    #   * `include("Created")` is satisfied by the "Created by" header — so it passes with the
+    #     pre-existing timestamp column deleted.
+    #
+    # Scoping to the key's own row and to the header cells makes both assertions load-bearing.
+    # `find("table")` is unambiguous today: the API-keys table is the only one on this page. A
+    # second table would raise Capybara::Ambiguous here, which is a loud failure, not a silent pass.
+    def api_keys_table = Capybara.string(response.body).find("table")
+
+    def api_key_headers = api_keys_table.all("thead th").map(&:text)
+
+    def api_key_row(name) = api_keys_table.find("tbody tr", text: name)
+
     it "attributes a newly minted key to the signed-in user" do
       repository = register_repository
 
@@ -138,14 +156,20 @@ RSpec.describe "Repository registration and API keys", type: :request do
       expect(ApiKey.last.created_by_user).to eq(@user)
     end
 
-    it "names the creator against each key on the repository page" do
+    it "names the colleague who minted a key on the owner's page" do
+      # The scenario this slice exists for: a collaborator holding `keys.manage` mints a Bearer
+      # credential on someone else's repository, and the owner has to be able to tell which key
+      # is theirs before revoking anything.
       repository = create_repository(user: @user)
-      repository.api_keys.create!(name: "CI", created_by_user: @user)
+      colleague = create_user(github_uid: "4004", github_handle: "departing-dev")
+      create_membership(repository: repository, user: colleague,
+                        permissions: [RepositoryMembership::VIEW, RepositoryMembership::KEYS_MANAGE])
+      repository.api_keys.create!(name: "Shared CI", created_by_user: colleague)
 
       get repository_path(repository)
 
-      expect(response.body).to include("Created by")
-      expect(response.body).to include(@user.display_name)
+      # Deliberately *not* the signed-in user's own handle — that one is in the topbar regardless.
+      expect(api_key_row("Shared CI")).to have_text("departing-dev")
     end
 
     it "renders a fallback for a key with no recorded creator" do
@@ -155,22 +179,20 @@ RSpec.describe "Repository registration and API keys", type: :request do
       get repository_path(repository)
 
       expect(response).to have_http_status(:ok)
-      expect(response.body).to include("Unknown")
       # The rest of the row must be unaffected by the missing attribution.
-      expect(response.body).to include("Legacy CI")
-      expect(response.body).to include("Revoke")
+      expect(api_key_row("Legacy CI")).to have_text("Unknown").and have_text("Revoke")
     end
 
-    it "keeps every existing key column alongside the new one" do
+    it "adds the creator column without disturbing the existing key columns" do
       repository = create_repository(user: @user)
       repository.api_keys.create!(name: "CI", created_by_user: @user).touch_last_used!
 
       get repository_path(repository)
 
-      ["Name", "Key", "Created by", "Created", "Last used"].each do |column|
-        expect(response.body).to include(column)
-      end
-      expect(response.body).to include(ApiKey.last.token_hint)
+      # Exact and ordered, so "Created by" cannot stand in for "Created". The trailing "" is the
+      # Revoke button's unlabelled column.
+      expect(api_key_headers).to eq(["Name", "Key", "Created by", "Created", "Last used", ""])
+      expect(api_key_row("CI")).to have_text(ApiKey.last.token_hint)
     end
   end
 
