@@ -20,13 +20,31 @@
     <% if @memberships.any? %>
       <%= render UI::TableComponent.new(columns: ["Member", "Permissions", "Since", ""]) do %>
         <% @memberships.each do |membership| %>
+          <% keys_minted = @keys_minted.fetch(membership.user_id, 0) %>
           <tr>
             <td class="px-3 py-2">
-              <div class="flex items-center gap-2">
+              <div class="flex flex-wrap items-center gap-2">
                 <% if membership.user.avatar_url.present? %>
                   <%= image_tag membership.user.avatar_url, alt: "", class: "size-6 rounded-full", loading: "lazy" %>
                 <% end %>
                 <span class="text-app-content"><%= membership.user.github_handle %></span>
+                <%# Live keys this member minted, and the whole point of the badge: revoking their
+                    membership will not revoke these. Warning tone, not error — nothing is broken
+                    yet, and the owner may well want the key to survive (it is frequently what
+                    their CI authenticates with). The link goes to the panel holding the lever.
+                    Members who minted nothing render nothing at all — and so does every member
+                    when the viewer lacks `keys.manage`, because `@keys_minted` is then empty by
+                    construction (see MembershipsController#keys_minted_by). That is what keeps
+                    this link honest as well as this count: the `#api-keys` panel it points at
+                    renders under the same permission. %>
+                <% if keys_minted.positive? %>
+                  <%= link_to repository_path(@repository, anchor: "api-keys"),
+                              title: "Revoking access will not revoke these keys — review them in the API keys panel." do %>
+                    <%= render UI::BadgeComponent.new(tone: :warning) do %>
+                      <%= pluralize(keys_minted, "API key") %> minted
+                    <% end %>
+                  <% end %>
+                <% end %>
               </div>
             </td>
             <td class="px-3 py-2">
@@ -50,7 +68,7 @@
             <td class="px-3 py-2 text-right">
               <%= button_to "Revoke", repository_member_path(@repository, membership), method: :delete,
                             class: UI::ButtonComponent.classes(variant: :danger, size: :xs),
-                            form: { data: { turbo_confirm: "Revoke #{membership.user.github_handle}'s access to #{@repository.github_full_name}?" } } %>
+                            form: { data: { turbo_confirm: revoke_confirmation(@repository, membership.user.github_handle, keys_minted) } } %>
             </td>
           </tr>
         <% end %>
