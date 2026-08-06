@@ -114,7 +114,9 @@
     <% end %>
 
     <% if manage_keys %>
-      <%= render UI::PanelComponent.new(title: "API keys", class: "lg:col-span-2") do |panel| %>
+      <%# `id` is the deep-link target for the "N API keys minted" badge on the members page: that
+          badge exists to send the owner straight to the lever, which is the Revoke button below. %>
+      <%= render UI::PanelComponent.new(title: "API keys", id: "api-keys", class: "lg:col-span-2") do |panel| %>
         <% panel.with_actions do %>
           <%# Inline (not .form-grid) on purpose: this lives in a panel header, so it stays one row. %>
           <%= form_with url: repository_api_keys_path(@repository), scope: :api_key,
