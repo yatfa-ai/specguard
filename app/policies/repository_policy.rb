@@ -75,6 +75,13 @@ class RepositoryPolicy
   #
   # A non-member — including a nil user or a nil repository — may grant nothing.
   #
+  # This bounds the *set*, it does not authorize the *act*. A member holding nothing but `view` gets
+  # `["view"]` back — non-empty, yet they may not invite anyone. "May this user manage members at
+  # all" is a separate question, `can?(:members_manage)`, which the controller must ask before it
+  # renders or saves a member form — exactly as `MembershipsController#destroy` already asks it via
+  # `current_repository(:members_manage)`. Reading a non-empty result here as permission to manage
+  # members would let a view-only member start inviting people.
+  #
   # `fetch` with no default on purpose: a permission added to `RepositoryMembership::PERMISSIONS`
   # without a matching capability raises here, exactly as `can?` raises on a capability that does
   # not exist. Silently omitting it would make the new permission ungrantable forever, and nothing

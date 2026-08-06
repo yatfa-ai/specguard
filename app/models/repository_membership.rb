@@ -66,6 +66,15 @@ class RepositoryMembership < ApplicationRecord
   # console, neither of which has a grantor to name, and failing closed would break both. Naming the
   # grantor is therefore the *writer's* job: the controller that adds or edits members must set it
   # explicitly, and must not rely on this validation to notice that it forgot.
+  #
+  # AND IT MUST NAME THE RIGHT ONE. `granted_by_user` has to be derived server-side from the
+  # authenticated actor (the session's user), and must never be permitted through strong params or
+  # otherwise taken from the request body. This validation trusts the grantor it is handed — a model
+  # cannot know who made the HTTP request — so a form that permits `granted_by_user_id` lets a member
+  # holding `members.manage` submit the *owner's* id, at which point the bound below is computed
+  # against the owner's unlimited rights and every guarantee here evaporates. Worse than absent: the
+  # save reports success, and the two-step escalation this validation exists to close is reopened
+  # while the model still looks like it is defending against it.
   def grantor_holds_every_granted_permission
     return if granted_by_user.nil? || repository.nil?
 
