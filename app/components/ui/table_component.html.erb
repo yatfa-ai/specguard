@@ -1,0 +1,14 @@
+<div class="<%= wrapper_class %>">
+  <table class="w-full text-sm">
+    <% if columns.any? %>
+      <thead>
+        <tr class="border-b border-app-border">
+          <% columns.each do |column| %>
+            <th scope="col" class="px-3 py-2 text-left section-label text-app-content-secondary"><%= column %></th>
+          <% end %>
+        </tr>
+      </thead>
+    <% end %>
+    <tbody class="divide-y divide-app-border text-app-content"><%= content %></tbody>
+  </table>
+</div>

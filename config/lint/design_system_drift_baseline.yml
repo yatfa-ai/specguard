@@ -1,0 +1,14 @@
+# Design-system drift baseline — SHRINK-ONLY.
+#
+# Each number is the maximum tolerated count of live offenders for that rule. CI fails
+# when a live count grows past it. Regenerate with:
+#
+#   bin/rails lint:design_system:update_baseline
+#
+# which only ever writes a SMALLER number. FORCE=1 accepts growth, and the resulting
+# diff is something a reviewer has to sign off on.
+#
+# SpecGuard is greenfield: the baseline is 0/0/0 and should stay there.
+heading_sizes: 0
+raw_palette_colors: 0
+raw_btn: 0

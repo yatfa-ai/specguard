@@ -1,0 +1,8 @@
+<div class="<%= wrapper_class %>">
+  <code data-copy-text-target="source"
+        class="<%= code_class %>"><%= content %></code>
+  <%= render UI::ButtonComponent.new(variant: :secondary, type: "button",
+                                     data: { action: "copy-text#copy" }) do %>
+    <span data-copy-text-target="label">Copy</span>
+  <% end %>
+</div>

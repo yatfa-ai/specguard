@@ -1,0 +1,133 @@
+<% content_for :title, "#{@repository.github_full_name} · SpecGuard" %>
+
+<%= render UI::PageComponent.new do %>
+  <%= render UI::BreadcrumbComponent.new(items: [
+        { label: "Repositories", href: repositories_path },
+        { label: @repository.github_full_name }
+      ]) %>
+
+  <%= render UI::PageHeaderComponent.new(
+        title: @repository.github_full_name,
+        subtitle: "Registered #{time_ago_in_words(@repository.created_at)} ago."
+      ) do |header| %>
+    <% header.with_actions do %>
+      <%= render UI::ButtonComponent.new(variant: :ghost, href: @repository.github_url) { "View on GitHub" } %>
+      <%= render UI::ButtonComponent.new(variant: :ghost, href: edit_repository_path(@repository)) { "Rename" } %>
+      <%= button_to "Remove", repository_path(@repository), method: :delete,
+                    class: UI::ButtonComponent.classes(variant: :danger, size: :md),
+                    form: { data: { turbo_confirm: "Remove #{@repository.github_full_name} and all of its data?" } } %>
+    <% end %>
+  <% end %>
+
+  <% if @revealed_token.present? %>
+    <%= render UI::PanelComponent.new(title: @revealed_token_name.present? ? "Your new API key: #{@revealed_token_name}" : "Your new API key") do %>
+      <div class="space-y-3" data-controller="copy-text">
+        <%= render UI::AlertComponent.new(tone: :warning, title: "Shown once") do %>
+          Only the SHA-256 digest is stored. Copy this now — reloading this page will not show it again.
+        <% end %>
+
+        <%= render UI::CopyableCodeComponent.new do %><%= @revealed_token %><% end %>
+
+        <p class="text-xs text-app-muted">
+          Use it as <code>Authorization: Bearer &lt;token&gt;</code> against
+          <code><%= api_v1_repository_url %></code>.
+        </p>
+      </div>
+    <% end %>
+  <% end %>
+
+  <%# Deliberately OUTSIDE the @revealed_token gate above: the instructions have to outlive the
+      one-shot flash, or a user who reloads the page has no way to learn what the key is for. %>
+  <%= render UI::PanelComponent.new(title: "Connect this repository") do %>
+    <div class="grid gap-4 lg:grid-cols-3">
+      <div class="space-y-4 lg:col-span-2" data-controller="copy-text">
+        <div class="space-y-1">
+          <p class="section-label text-app-content-secondary">Endpoint</p>
+          <p class="font-mono text-sm break-all text-app-content">GET <%= api_v1_repository_url %></p>
+        </div>
+
+        <div class="space-y-2">
+          <p class="section-label text-app-content-secondary">Try it</p>
+          <%= render UI::CopyableCodeComponent.new do %>curl -H "Authorization: Bearer &lt;token&gt;" <%= api_v1_repository_url %><% end %>
+          <p class="text-xs text-app-muted">
+            <code>&lt;token&gt;</code> is a placeholder — substitute the key you copied when you minted
+            it. SpecGuard cannot show an existing key again, only mint a new one.
+          </p>
+        </div>
+      </div>
+
+      <div class="space-y-4 lg:col-span-1">
+        <% if @last_api_request_at.present? %>
+          <%= render UI::StatComponent.new(
+                label: "Connection",
+                value: "Connected",
+                hint: "Last request #{time_ago_in_words(@last_api_request_at)} ago.",
+                tone: :success
+              ) %>
+        <% else %>
+          <%= render UI::StatComponent.new(
+                label: "Connection",
+                value: "Not connected yet",
+                hint: "No API key has been used.",
+                tone: :warning
+              ) %>
+        <% end %>
+
+        <%= render UI::AlertComponent.new(tone: :neutral) do %>
+          A wrong or revoked key gets <code>401 {"error":"unauthorized"}</code>, and a rejected request
+          never records a use — so a key stuck at "never" means the request never authenticated, or was
+          never sent at all.
+        <% end %>
+      </div>
+    </div>
+  <% end %>
+
+  <div class="grid gap-4 lg:grid-cols-3">
+    <%= render UI::PanelComponent.new(title: "Overview", class: "lg:col-span-1") do %>
+      <%= render UI::DefListComponent.new(rows: [
+            ["Owner", @repository.owner_login],
+            ["Spec intents", @repository.spec_intents.count],
+            ["Test runs", @repository.test_runs.count],
+            ["Annotated", "#{@repository.annotated_ratio}%"]
+          ]) %>
+    <% end %>
+
+    <%= render UI::PanelComponent.new(title: "API keys", class: "lg:col-span-2") do |panel| %>
+      <% panel.with_actions do %>
+        <%# Inline (not .form-grid) on purpose: this lives in a panel header, so it stays one row. %>
+        <%= form_with url: repository_api_keys_path(@repository), scope: :api_key,
+                      class: "flex items-end gap-2" do |form| %>
+          <%= form.field :name, label: "Name", placeholder: "CI — main" %>
+          <%= form.submit_button "New API key", size: :sm %>
+        <% end %>
+      <% end %>
+
+      <% if @api_keys.any? %>
+        <%= render UI::TableComponent.new(columns: ["Name", "Key", "Created", "Last used", ""]) do %>
+          <% @api_keys.each do |api_key| %>
+            <tr>
+              <td class="px-3 py-2"><%= api_key.name %></td>
+              <td class="px-3 py-2 font-mono text-xs text-app-content-secondary"><%= api_key.token_hint %></td>
+              <td class="px-3 py-2 text-app-content-secondary tabular-nums">
+                <%= time_ago_in_words(api_key.created_at) %> ago
+              </td>
+              <td class="px-3 py-2 text-app-content-secondary tabular-nums">
+                <%= api_key.last_used_at ? "#{time_ago_in_words(api_key.last_used_at)} ago" : "never" %>
+              </td>
+              <td class="px-3 py-2 text-right">
+                <%= button_to "Revoke", repository_api_key_path(@repository, api_key), method: :delete,
+                              class: UI::ButtonComponent.classes(variant: :danger, size: :xs),
+                              form: { data: { turbo_confirm: "Revoke #{api_key.name}?" } } %>
+              </td>
+            </tr>
+          <% end %>
+        <% end %>
+      <% else %>
+        <%= render UI::EmptyStateComponent.new(
+              title: "No API keys",
+              description: "CI and agents need a key to reach the SpecGuard API."
+            ) %>
+      <% end %>
+    <% end %>
+  </div>
+<% end %>
