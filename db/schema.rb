@@ -210,6 +210,7 @@ ActiveRecord::Schema[8.1].define(version: 2026_08_06_120000) do
     t.string "github_handle", null: false
     t.string "github_uid", null: false
     t.datetime "updated_at", null: false
+    t.index ["github_handle"], name: "index_users_on_github_handle"
     t.index ["github_uid"], name: "index_users_on_github_uid", unique: true
   end
 
