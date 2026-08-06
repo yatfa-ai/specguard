@@ -47,7 +47,10 @@ Rails.application.configure do
   # config.cache_store = :mem_cache_store
 
   # Replace the default in-process and non-durable queuing backend for Active Job.
-  # config.active_job.queue_adapter = :resque
+  # Solid Queue lives in the primary database, so no `connects_to` is configured here — the
+  # installer's generated `{ database: { writing: :queue } }` was removed deliberately, because
+  # config/database.yml defines no `queue` database. See db/migrate/*_create_solid_queue_tables.rb.
+  config.active_job.queue_adapter = :solid_queue
 
   # Ignore bad email addresses and do not raise email delivery errors.
   # Set this to true and configure the email server for immediate delivery to raise delivery errors.

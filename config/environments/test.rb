@@ -47,4 +47,10 @@ Rails.application.configure do
 
   # Raise error when a before_action's only/except options reference missing actions.
   config.action_controller.raise_on_missing_callback_actions = true
+
+  # Active Job's :test adapter — jobs are recorded, not run, so specs can assert enqueueing with
+  # `have_enqueued_job` without a Solid Queue worker (or the solid_queue_* tables) in the loop.
+  # Deliberately NOT :solid_queue: that would make every enqueue a database write and make
+  # "was it enqueued?" unobservable.
+  config.active_job.queue_adapter = :test
 end
