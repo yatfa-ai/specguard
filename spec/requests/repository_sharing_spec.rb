@@ -2,8 +2,10 @@
 
 require "rails_helper"
 
-# Slice 1 of repository sharing: authorization only. There is no members-management UI yet, so
-# memberships are created directly and exercised over HTTP from the member's own session.
+# Slice 1 of repository sharing: authorization only. There is still no way to *grant* a membership
+# through the UI — add-by-handle waits on `User.resolve_by_handle` — so memberships are created
+# directly here and exercised over HTTP from the member's own session. The owner-side members page
+# (list + revoke) has its own file: spec/requests/repository_members_spec.rb.
 #
 # `sign_in_via_github(uid: ...)` drives the real OAuth callback, so calling it a second time
 # *switches* the signed-in identity — that is what makes these member-perspective specs, rather
@@ -173,7 +175,8 @@ RSpec.describe "Repository sharing", type: :request do
         remove: response.body.include?("and all of its data?"),
         new_key: response.body.include?("New API key"),
         revoke: response.body.include?(repository_api_key_path(repository, api_key)),
-        key_inventory: response.body.include?(api_key.token_hint)
+        key_inventory: response.body.include?(api_key.token_hint),
+        members: response.body.include?(repository_members_path(repository))
       }
     end
 
@@ -208,7 +211,7 @@ RSpec.describe "Repository sharing", type: :request do
       get repository_path(repository)
 
       expect(rendered_controls).to eq(
-        rename: false, remove: false, new_key: true, revoke: true, key_inventory: true
+        rename: false, remove: false, new_key: true, revoke: true, key_inventory: true, members: false
       )
     end
 
@@ -218,7 +221,7 @@ RSpec.describe "Repository sharing", type: :request do
       get repository_path(repository)
 
       expect(rendered_controls).to eq(
-        rename: false, remove: true, new_key: false, revoke: false, key_inventory: false
+        rename: false, remove: true, new_key: false, revoke: false, key_inventory: false, members: false
       )
     end
   end
