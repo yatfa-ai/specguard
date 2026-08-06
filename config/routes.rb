@@ -17,8 +17,9 @@ Rails.application.routes.draw do
   namespace :api do
     namespace :v1 do
       # The Phase-1 protected endpoint: a valid key resolves its repository, a bad key gets 401.
-      # Phase 2 (/ingest) and Phase 3 (/check-intent) mount alongside it.
+      # Phase 3 (/check-intent) mounts alongside these.
       get "repository", to: "repositories#show"
+      post "ingest", to: "ingests#create"
     end
   end
 

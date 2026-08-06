@@ -50,14 +50,57 @@ RSpec.describe TestRun do
       expect(run.annotated_ratio).to eq(100.0)
     end
 
-    it "rounds the same way the repository-wide ratio does" do
+    # Both ratios read the same counters now, so this is a real agreement rather than the old
+    # coincidence: it used to hold only because a factory fabricated a `status: "unannotated"`
+    # spec_intent, which the four NOT NULL intent columns make impossible for ingestion to write.
+    it "agrees with the repository-wide ratio it is the source of" do
       run = repository.test_runs.create!(commit_sha: "abc123", annotated_specs_count: 2,
                                          total_specs_count: 3)
-      create_spec_intent(repository: repository, line_number: 1, status: "annotated")
-      create_spec_intent(repository: repository, line_number: 2, status: "annotated")
-      create_spec_intent(repository: repository, line_number: 3, status: "unannotated")
+      create_spec_intent(repository: repository, line_number: 1, test_run: run)
+      create_spec_intent(repository: repository, line_number: 2, test_run: run)
 
-      expect(run.annotated_ratio).to eq(repository.annotated_ratio)
+      expect(run.annotated_ratio).to eq(66.7)
+      expect(repository.annotated_ratio).to eq(run.annotated_ratio)
+    end
+  end
+
+  describe "#annotated_fraction" do
+    # The unit the /ingest API reports. Kept beside #annotated_ratio deliberately: the two differ
+    # by 100×, and in a JSON body that gap is invisible until a client is already wrong by it.
+    it "is the same share as a 0-1 fraction" do
+      run = repository.test_runs.create!(commit_sha: "abc123", annotated_specs_count: 119,
+                                         total_specs_count: 142)
+
+      expect(run.annotated_fraction).to eq(0.838)
+      expect(run.annotated_ratio).to eq(83.8)
+    end
+
+    it "rounds to three decimals" do
+      run = repository.test_runs.create!(commit_sha: "abc123", annotated_specs_count: 2,
+                                         total_specs_count: 3)
+
+      expect(run.annotated_fraction).to eq(0.667)
+    end
+
+    it "is 1.0 when every counted spec was annotated" do
+      run = repository.test_runs.create!(commit_sha: "abc123", annotated_specs_count: 7,
+                                         total_specs_count: 7)
+
+      expect(run.annotated_fraction).to eq(1.0)
+    end
+
+    it "is 0.0 for a run that counted no specs" do
+      run = repository.test_runs.create!(commit_sha: "abc123")
+
+      expect(run.annotated_fraction).to eq(0.0)
+      expect(run.annotated_fraction).to be_a(Float)
+    end
+
+    it "is 0.0 when the counters were never written at all" do
+      run = repository.test_runs.create!(commit_sha: "abc123", annotated_specs_count: nil,
+                                         total_specs_count: nil)
+
+      expect(run.annotated_fraction).to eq(0.0)
     end
   end
 end
