@@ -9,10 +9,12 @@
 # (`"keys.manage"`). Asking for an unknown capability raises rather than quietly denying — a typo
 # in a controller must fail on the first request, not silently lock everyone out.
 class RepositoryPolicy
-  # Owner-only. No membership permission maps to it, so a member never passes however the row is
-  # configured. Repository rename lives here: `github_full_name` is both the repo's identity and
-  # the global unique key, so renaming stays with the owner for v1.
-  OWNER_ONLY = nil
+  # Owner-only. A distinct sentinel rather than `nil`, so that `CAPABILITIES[:owner]` is never
+  # indistinguishable from a key that isn't there — an unknown capability has to stay loud (see
+  # the `fetch` block below). No membership permission maps to it, so a member never passes however
+  # the row is configured. Repository rename lives here: `github_full_name` is both the repo's
+  # identity and the global unique key, so renaming stays with the owner for v1.
+  OWNER_ONLY = :owner_only
 
   CAPABILITIES = {
     view: RepositoryMembership::VIEW,
@@ -56,6 +58,10 @@ class RepositoryPolicy
     membership.permissions.include?(permission)
   end
 
+  private
+
+  # Deliberately private: the class's API is `owner?` / `member?` / `can?`. The row is how those are
+  # computed, not something a caller should reach through the policy to read.
   def membership
     return @membership if defined?(@membership)
 

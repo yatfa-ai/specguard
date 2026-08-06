@@ -117,6 +117,70 @@ RSpec.describe "Repository sharing", type: :request do
     end
   end
 
+  # The examples above prove every control *rejects* a member who lacks its permission. These prove
+  # the control is never offered in the first place — a "Remove" button that asks a member to
+  # confirm destroying the repository and all of its data, then dead-ends on a 403, is worse than
+  # no button at all.
+  describe "which controls repositories#show renders" do
+    let!(:api_key) { repository.api_keys.create!(name: "CI") }
+
+    # Each control, identified by a marker that only appears when it actually rendered.
+    def rendered_controls
+      {
+        rename: response.body.include?(edit_repository_path(repository)),
+        remove: response.body.include?("and all of its data?"),
+        new_key: response.body.include?("New API key"),
+        revoke: response.body.include?(repository_api_key_path(repository, api_key)),
+        key_inventory: response.body.include?(api_key.token_hint)
+      }
+    end
+
+    # The positive control, and it is load-bearing: without it every `false` below would keep
+    # passing if a label or a route were renamed out from under the markers.
+    it "renders all of them for the owner" do
+      repository
+      sign_in_via_github
+
+      get repository_path(repository)
+
+      expect(response).to have_http_status(:ok)
+      expect(rendered_controls.values).to all(be(true))
+    end
+
+    it "renders none of them for a member with only 'view'" do
+      sign_in_as_member(%w[view])
+
+      get repository_path(repository)
+
+      expect(response).to have_http_status(:ok)
+      expect(response.body).to include("acme/billing-service")
+      expect(rendered_controls.values).to all(be(false))
+    end
+
+    # The whole API keys panel is gated, not just its two buttons: key names, token hints and
+    # last-used timestamps are credential metadata, and nothing a member without `keys.manage` can
+    # act on. The endpoint documentation and connection stat stay — see the comment in show.html.erb.
+    it "renders the key controls, and only those, for a member with 'keys.manage'" do
+      sign_in_as_member(%w[view keys.manage])
+
+      get repository_path(repository)
+
+      expect(rendered_controls).to eq(
+        rename: false, remove: false, new_key: true, revoke: true, key_inventory: true
+      )
+    end
+
+    it "renders remove, and only that, for a member with 'repo.delete'" do
+      sign_in_as_member(%w[view repo.delete])
+
+      get repository_path(repository)
+
+      expect(rendered_controls).to eq(
+        rename: false, remove: true, new_key: false, revoke: false, key_inventory: false
+      )
+    end
+  end
+
   describe "a signed-in user with no membership" do
     before do
       repository

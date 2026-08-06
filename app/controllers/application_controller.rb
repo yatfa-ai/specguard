@@ -6,7 +6,7 @@ class ApplicationController < ActionController::Base
 
   default_form_builder Forms::FormBuilder
 
-  helper_method :current_user, :signed_in?, :github_oauth_configured?
+  helper_method :current_user, :signed_in?, :github_oauth_configured?, :repository_policy
 
   private
 
@@ -46,11 +46,24 @@ class ApplicationController < ActionController::Base
   end
 
   def authorize_repository!(repository, capability)
-    policy = RepositoryPolicy.new(current_user, repository)
+    policy = repository_policy(repository)
 
     raise ActiveRecord::RecordNotFound if repository.nil? || !policy.member?
     raise SpecGuard::NotAuthorized unless policy.can?(capability)
 
     repository
+  end
+
+  # Exposed to views (`helper_method` above) so a template can ask the same question the controller
+  # asked. Every control on repositories/show links to an action `current_repository` authorizes, so
+  # rendering one the viewer does not hold is an affordance that can only ever produce a 403 — and
+  # for "Remove" that means a destructive confirm dialog followed by an error page. A view is a call
+  # site of this policy like any other.
+  #
+  # Memoized per repository, and shared with `authorize_repository!` above, so a page that asks
+  # several capabilities loads the membership row once rather than once per question.
+  def repository_policy(repository = @current_repository)
+    @repository_policies ||= Hash.new { |cache, repo| cache[repo] = RepositoryPolicy.new(current_user, repo) }
+    @repository_policies[repository]
   end
 end
