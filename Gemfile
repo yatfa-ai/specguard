@@ -53,7 +53,7 @@ gem "json_schemer", "~> 2.4"
 gem "omniauth"
 gem "omniauth-github"
 gem "omniauth-rails_csrf_protection"
-# Background jobs — embedding generation is async (see docs/01-overview.md).
+# Background jobs — embedding generation runs asynchronously rather than in the request.
 # Runs in the primary database; see config/database.yml for why.
 gem "solid_queue"
 # Default embedding provider behind EmbeddingGenerator (OpenAI text-embedding-3-small, 1536-dim).

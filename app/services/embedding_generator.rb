@@ -9,8 +9,8 @@
 #   EmbeddingGenerator.call(text) # => Array<Float>, exactly DIMENSIONS long
 #
 # Anything that goes wrong with the provider — transport error, HTTP error, malformed body, a
-# vector of the wrong size — surfaces as EmbeddingGenerator::Error. Callers (the ingestion job,
-# IntentChecker) rescue one class and never see a Faraday or OpenAI exception.
+# vector of the wrong size, a non-finite element — surfaces as EmbeddingGenerator::Error. Callers
+# (the ingestion job, IntentChecker) rescue one class and never see a Faraday or OpenAI exception.
 #
 # ## Swapping the provider
 #
@@ -84,7 +84,16 @@ class EmbeddingGenerator
         raise Error, "embedding provider returned #{vector.size} dimensions, expected #{DIMENSIONS}"
       end
 
-      vector.map { |value| Float(value) }
+      vector.map do |value|
+        Float(value).tap do |float|
+          # pgvector rejects these at INSERT ("NaN not allowed in vector"), so without this the
+          # failure would surface in slice 3 as ActiveRecord::StatementInvalid — the one remaining
+          # way for something to go wrong and not arrive as an Error.
+          unless float.finite?
+            raise Error, "embedding provider returned a non-finite value (#{float})"
+          end
+        end
+      end
     rescue ArgumentError, TypeError => e
       raise Error, "embedding provider returned a non-numeric vector: #{e.message}"
     end

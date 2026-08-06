@@ -85,6 +85,23 @@ RSpec.describe EmbeddingGenerator do
       expect { described_class.call("x") }.to raise_error(described_class::Error, /non-numeric/)
     end
 
+    # Float(Float::NAN) succeeds, so NaN clears the Array, width and numeric checks. pgvector does
+    # not accept it ("NaN not allowed in vector"), so without this guard the failure would land in
+    # the ingestion job as ActiveRecord::StatementInvalid instead of as an Error.
+    it "rejects a swapped provider's NaN vector, which pgvector would refuse at INSERT" do
+      install { |_text| Array.new(1536) { Float::NAN } }
+
+      expect { described_class.call("x") }
+        .to raise_error(described_class::Error, /non-finite value/)
+    end
+
+    it "rejects a swapped provider's infinite vector" do
+      install { |_text| [ Float::INFINITY ] + Array.new(1535, 0.5) }
+
+      expect { described_class.call("x") }
+        .to raise_error(described_class::Error, /non-finite value/)
+    end
+
     it "wraps a swapped provider's transport exception rather than leaking it" do
       install { |_text| raise Faraday::ConnectionFailed, "econnrefused" }
 
