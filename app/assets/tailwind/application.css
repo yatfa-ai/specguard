@@ -13,7 +13,28 @@
  *      switch works without a rebuild. Do not "simplify" this to plain `@theme`.
  */
 
-@import "tailwindcss";
+/*
+ * `source(none)` disables Tailwind v4's automatic source detection, which otherwise scans the
+ * whole repository — including `.rb` and `.md` files. Ruby method names and ordinary English
+ * words that collide with DaisyUI component names (`select`, `table`, `link`, `badge`, `join`,
+ * `rounded`, …) would then generate CSS, so a backend-only or docs-only change silently rewrites
+ * the committed `app/assets/builds/tailwind.css` and reds `bin/rails lint:stylesheet`.
+ *
+ * The four directories below are the only places this app emits class names. Components keep
+ * their class lists as whole literal strings in constants (`UI::BadgeComponent::TONES`), which
+ * is what makes scoping safe: Tailwind matches literal text, so a name assembled by
+ * interpolation would not be detected here — or under automatic detection either. Keep writing
+ * them out in full. The `public/*.html` error pages are deliberately absent: they are
+ * self-contained and style themselves with an inline `<style>` block rather than this build.
+ *
+ * If you add a helper or decorator that emits classes from somewhere else, add ITS directory
+ * here — do not restore automatic detection.
+ */
+@import "tailwindcss" source(none);
+@source "../../views";
+@source "../../components";
+@source "../../helpers";
+@source "../../javascript";
 
 @plugin "daisyui" {
   themes: dark --default, winter;
