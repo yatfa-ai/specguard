@@ -22,11 +22,19 @@ class Repository < ApplicationRecord
   def github_url = "https://github.com/#{github_full_name}"
 
   # Share of the suite that carries an @intent annotation — the headline dashboard metric.
+  #
+  # Sourced from the most recent `TestRun`, not from `spec_intents`. Counting rows here could only
+  # ever return 100%: `spec_intents.entity/action/behavior/layer` are all NOT NULL, so an
+  # unannotated spec — which by definition has none of them — is not a row ingestion can write.
+  # Ingestion therefore *counts* unannotated specs into the run's totals and persists only the
+  # annotated ones, which makes the run's own counters the honest denominator.
   def annotated_ratio
-    total = spec_intents.count
-    return 0.0 if total.zero?
+    latest_test_run&.annotated_ratio || 0.0
+  end
 
-    (spec_intents.where(status: "annotated").count.to_f / total * 100).round(1)
+  # Ties broken by id so two runs ingested in the same instant still order deterministically.
+  def latest_test_run
+    test_runs.order(created_at: :desc, id: :desc).first
   end
 
   private

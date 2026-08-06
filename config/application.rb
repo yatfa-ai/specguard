@@ -18,6 +18,10 @@ require "action_view/railtie"
 # you've limited to :test, :development, or :production.
 Bundler.require(*Rails.groups)
 
+# Not autoloadable — it is referenced while the middleware stack is being assembled, which is
+# before the autoloaders are usable. `lib/middleware` is excluded from `autoload_lib` below.
+require_relative "../lib/middleware/json_parse_error_responder"
+
 module Specguard
   class Application < Rails::Application
     # Initialize configuration defaults for originally generated Rails version.
@@ -26,7 +30,10 @@ module Specguard
     # Please, add to the `ignore` list any other `lib` subdirectories that do
     # not contain `.rb` files, or that should not be reloaded or eager loaded.
     # Common ones are `templates`, `generators`, or `middleware`, for example.
-    config.autoload_lib(ignore: %w[assets tasks])
+    config.autoload_lib(ignore: %w[assets middleware tasks])
+
+    # Give the API one error shape. Inserted inside DebugExceptions on purpose — see the class.
+    config.middleware.insert_after ActionDispatch::DebugExceptions, JsonParseErrorResponder
 
     # Configuration for the application, engines, and railties goes here.
     #

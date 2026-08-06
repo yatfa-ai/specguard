@@ -74,7 +74,7 @@ class CreateSpecGuardTables < ActiveRecord::Migration[8.0]
       t.string  :action,   null: false, index: true
       t.text    :behavior, null: false
       t.string  :layer,    null: false              # unit|integration|request|system
-      t.string  :status,   default: "annotated"     # annotated|unannotated
+      t.string  :status,   default: "annotated"     # see note below
       t.vector  :embedding, limit: 1536             # OpenAI text-embedding-3-small
       t.timestamps
     end
@@ -103,6 +103,14 @@ class CreateSpecGuardTables < ActiveRecord::Migration[8.0]
   end
 end
 ```
+
+### A note on `spec_intents.status`
+
+The column allows `annotated|unannotated`, but only `annotated` rows are ever written: `entity`,
+`action`, `behavior` and `layer` are all NOT NULL, and an unannotated test has none of them.
+Unannotated tests are counted into `test_runs.total_specs_count` and produce no row here — which
+is why the repository-wide annotated ratio reads the latest `TestRun`'s counters rather than
+counting rows in this table. Counting rows here would return 100% for every repository, forever.
 
 ### Dependencies
 

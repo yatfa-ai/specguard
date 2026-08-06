@@ -77,10 +77,16 @@ for non-Ruby clients.
 
 ### Processing
 
-1. Create a `TestRun` (`commit_sha`, `branch`, `duration`, counts derived from `specs`).
+1. Create a `TestRun` (`commit_sha`, `branch`, `duration`, counts derived from `specs`). The counts
+   are derived server-side from `specs[]` and never read from the client.
 2. For each `annotated` spec: enqueue an `EmbeddingJob` that embeds `"{entity} {action} {behavior}"`
    and **upserts** the `spec_intent` on `(repository, file_path, line_number)`.
-3. For each `unannotated` spec: record its existence for the annotated-ratio metric (no embedding).
+3. For each `unannotated` spec: **count it, do not persist it.** It contributes to the run's
+   `total_specs` — which is the denominator of the annotated-ratio metric — and produces no
+   `spec_intent` row. There is nothing to store: `spec_intents.entity/action/behavior/layer` are
+   all NOT NULL, and an unannotated spec has none of them. A run of 2 annotated + 1 unannotated
+   spec therefore yields one `TestRun` with `total_specs: 3, annotated_specs: 2` and **two**
+   `spec_intent` rows.
 4. Return `202 Accepted` immediately; embeddings resolve asynchronously on Solid Queue.
 
 This async design means `/check-intent` may not reflect an ingestion that just landed — the
@@ -98,17 +104,31 @@ client should not treat ingest+check as a synchronous round-trip.
 }
 ```
 
+| Field | Type | Notes |
+|---|---|---|
+| `annotated_ratio` | float | **A 0–1 fraction**, not a percentage: 119/142 = `0.838`, to three decimal places. The web dashboard shows the same figure as a percentage (`83.8%`) via `TestRun#annotated_ratio`; the API deliberately reports the fraction so a client never has to guess which unit it is holding. |
+| `embedding_status` | enum | `queued` once the embedding job has been scheduled for this run's annotated specs. `pending` means the run was accepted and counted but nothing has been scheduled — the state while the embedding pipeline is not yet wired up. It is never reported as `queued` unless work was actually enqueued. |
+
 ### Errors
 
 | Status | When |
 |---|---|
-| `400` | Malformed JSON, missing required field, or an `intent` that fails JSON-Schema validation |
+| `400` | Malformed JSON, an envelope field missing or of the wrong type, or an `intent` that fails JSON-Schema validation. The body is `{"error": "bad_request", "message": …, "details": [...]}`, where every per-spec message names the offending spec by `file_path:line_number`. |
 | `401` | Missing/invalid API key |
-| `403` | Key valid but repository deactivated |
-| `422` | `commit_sha` present but a spec references a `file_path`/`line_number` already owned by a different entity without an update (rare; client should re-run) |
+
+Two further codes appeared in earlier drafts of this contract and are **not** part of it:
+
+- **`403` — "key valid but repository deactivated."** There is no deactivation concept in the
+  product: `repositories` has no such column, and no code path can produce this. Removed rather
+  than deferred; if repository deactivation is ever built, the code comes back with it.
+- **`422` — a spec whose `file_path`/`line_number` is already owned by a different entity.**
+  Unreachable from an asynchronous `202`: the endpoint answers before any `spec_intent` is
+  touched, and the write itself upserts in place (see `03-data-model.md`), so there is no
+  conflict for it to report.
 
 Ingestion is **never** a CI failure mode for missing annotations — only for malformed ones. This
-is deliberate: adoption must be opt-in and gradual.
+is deliberate: adoption must be opt-in and gradual. A run in which *every* spec is unannotated is
+a valid run and returns `202`.
 
 ---
 

@@ -6,8 +6,9 @@ and this specification live in the **`open-test-intent`** repository (vendor-neu
 is the reference implementation and first consumer.
 
 A test that carries an `@intent` is **annotated**; one that doesn't is **unannotated**. Both are
-ingested (so the annotated ratio is measurable), but only annotated tests participate in
-duplicate detection.
+reported to SpecGuard so the annotated ratio has an honest denominator, but only annotated tests
+are stored as intents and participate in duplicate detection — an unannotated test is *counted*,
+not persisted (see [`04-api-reference.md`](04-api-reference.md#processing)).
 
 ## 1. Annotation syntax
 
