@@ -33,4 +33,15 @@ class Api::BaseController < ActionController::API
     render json: { error: "unauthorized", message: "A valid Bearer API key is required." },
            status: :unauthorized
   end
+
+  # `details` carries every validation failure; `message` repeats the first so a client that reads
+  # only the two conventional keys still learns which spec is at fault.
+  def render_bad_request(details)
+    details = Array(details)
+
+    render json: { error: "bad_request",
+                   message: details.first || "The request could not be understood.",
+                   details: details },
+           status: :bad_request
+  end
 end
