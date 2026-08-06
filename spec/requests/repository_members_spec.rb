@@ -45,14 +45,18 @@ RSpec.describe "Repository members", type: :request do
       expect(response.body).not_to include("Revoke octocat")
     end
 
-    # A blank table says "loading failed" as readily as "nobody has access"; and the reason the page
-    # offers no Add control is worth stating on the page rather than only in the commit.
-    it "sees an empty state naming that add-by-handle is not available yet, not a blank table" do
+    # A blank table says "loading failed" as readily as "nobody has access"; and the empty state is
+    # where the owner picks up the one control that changes it. The inversion of slice 2b's example,
+    # which asserted the page named add-by-handle as unavailable.
+    it "sees an empty state offering the add-by-handle form, not a blank table" do
       get repository_members_path(repository)
 
       expect(response).to have_http_status(:ok)
       expect(response.body).to include("No one else has access")
-      expect(response.body).to include("not available yet")
+      expect(response.body).to include(new_repository_member_path(repository))
+      expect(response.body).not_to include("not available yet")
+      # The console is no longer the way in, so the page must not still say it is.
+      expect(response.body).not_to include("created from the console")
     end
 
     it "can revoke a member's access" do
@@ -63,6 +67,222 @@ RSpec.describe "Repository members", type: :request do
       }.to change(RepositoryMembership, :count).by(-1)
 
       expect(response).to redirect_to(repository_members_path(repository))
+    end
+  end
+
+  # Slice 2c: the grant form, and the first production call site `User.resolve_by_handle` has ever
+  # had. `new`/`create` gate at `:owner` rather than at the `members.manage` that opens the page,
+  # because revoking only de-escalates while granting escalates — see MembershipsController.
+  describe "adding a member by GitHub handle" do
+    # Exactly what the form submits. The leading "" is the hidden field every checkbox grid needs so
+    # that "nothing ticked" arrives as an empty set rather than as no parameter at all — passing the
+    # tidy array a hand-written client would send is how a spec stops exercising the real form.
+    def add_member(handle, permissions = [])
+      post repository_members_path(repository),
+           params: { membership_grant: { handle: handle, permissions: [""] + permissions } }
+    end
+
+    before do
+      repository
+      sign_in_via_github
+    end
+
+    # DoD bullet 1, end to end: the owner names a colleague, and the colleague sees the repository.
+    # The second half is slice 2a's path, asserted here because a grant that stores a row nobody
+    # gains access from closes nothing.
+    it "grants the colleague access, who then sees the repository in their own index" do
+      colleague
+
+      expect {
+        add_member("hubot", %w[view keys.manage])
+      }.to change(RepositoryMembership, :count).by(1)
+
+      expect(response).to redirect_to(repository_members_path(repository))
+      expect(RepositoryMembership.last.user).to eq(colleague)
+
+      sign_in_via_github(uid: "9999", info: { nickname: "hubot" })
+
+      get repositories_path
+      expect(response.body).to include("acme/billing-service")
+    end
+
+    # `permissions` is a `text[]`, and the trap is that mis-permitting it fails SILENTLY: a scalar
+    # `params.expect(... :permissions)` drops the array and persists `[]`, which is still a working
+    # membership. So this asserts the stored array itself — "a row was created" stays green either
+    # way, and the owner would only ever notice as "the checkboxes do nothing".
+    it "stores exactly the permissions that were ticked" do
+      colleague
+
+      add_member("hubot", %w[view keys.manage])
+
+      expect(RepositoryMembership.last.permissions).to eq(%w[view keys.manage])
+    end
+
+    # The other half of the same pair, and the reason the empty set must not be "helpfully" filled
+    # in: `view` is implied by the membership row itself (RepositoryPolicy#can?), so a member with
+    # nothing ticked can still open the repository. Force-adding "view" here would make this
+    # indistinguishable from the ticked case and hide the trap above.
+    it "stores an empty set when nothing is ticked, and that member can still open the repository" do
+      colleague
+
+      expect { add_member("hubot") }.to change(RepositoryMembership, :count).by(1)
+      expect(RepositoryMembership.last.permissions).to eq([])
+
+      sign_in_via_github(uid: "9999", info: { nickname: "hubot" })
+
+      get repository_path(repository)
+      expect(response).to have_http_status(:ok)
+    end
+
+    # `RepositoryMembership#grantor_holds_every_granted_permission` bounds a grant by what the
+    # grantor holds, and fails OPEN on a nil grantor — so a `create` that forgot to name one would
+    # write the only rows in the product that bound does not constrain. The model states this is the
+    # writer's job; this is the assertion that the writer did it.
+    it "records the signed-in owner as the grantor" do
+      colleague
+
+      add_member("hubot", %w[view])
+
+      expect(RepositoryMembership.last.granted_by_user).to eq(owner)
+    end
+
+    # And it must come from the *session*, never the request body. The validation trusts the grantor
+    # it is handed, so a form that permitted this would let a submitted id name someone with wider
+    # rights and compute the bound against theirs — a save that reports success while the escalation
+    # the validation exists to close is reopened.
+    it "ignores a grantor submitted through the form" do
+      colleague
+      impostor = create_user(github_uid: "4004", github_handle: "impostor")
+
+      post repository_members_path(repository),
+           params: { membership_grant: { handle: "hubot", permissions: [""],
+                                         granted_by_user_id: impostor.id } }
+
+      expect(RepositoryMembership.last.granted_by_user).to eq(owner)
+    end
+
+    # Two rows legitimately share a recycled handle (see sessions_spec). Picking one would silently
+    # grant a private repository to a stranger, which is the whole reason `resolve_by_handle` returns
+    # a four-way answer instead of a User.
+    it "refuses an ambiguous handle without creating a row, and names how many accounts share it" do
+      create_user(github_uid: "9999", github_handle: "hubot")
+      create_user(github_uid: "8888", github_handle: "hubot")
+
+      expect { add_member("hubot", %w[view]) }.not_to change(RepositoryMembership, :count)
+
+      expect(response).to have_http_status(:unprocessable_content)
+      expect(response.body).to include("2 accounts share the handle hubot")
+    end
+
+    # The anti-collapse control, and the reason it is a matrix rather than five separate examples:
+    # each of those would still pass if the *other* four sentences were rendered alongside its own.
+    # Distinctness is the property `User::Resolution` exists to protect — "nobody holds that handle"
+    # and "that is not a handle" send the owner to fix entirely different things — so it is asserted
+    # directly. The last two are RepositoryMembership's own messages, surfaced rather than restated.
+    it "answers each refusal with its own sentence and never another's" do
+      create_user(github_uid: "7777", github_handle: "twin")
+      create_user(github_uid: "6666", github_handle: "twin")
+      create_membership(repository: repository, user: colleague)
+
+      refusals = {
+        "ghost" => "Nobody has signed into SpecGuard as ghost yet",
+        "The Octocat" => "That is not a GitHub handle",
+        "twin" => "2 accounts share the handle twin",
+        "octocat" => "User already owns this repository",
+        "hubot" => "User already has a membership on this repository"
+      }
+
+      refusals.each do |handle, own_message|
+        expect { add_member(handle, %w[view]) }.not_to change(RepositoryMembership, :count)
+
+        expect(response).to have_http_status(:unprocessable_content), "#{handle} was not refused"
+        expect(response.body).to include(own_message)
+        (refusals.values - [own_message]).each do |other_message|
+          expect(response.body).not_to include(other_message)
+        end
+      end
+    end
+
+    # A rejected submission re-renders, so the owner does not retype a handle and re-tick a grid to
+    # fix one word. A redirect would lose both.
+    it "re-renders the form with what was typed and ticked" do
+      add_member("ghost", %w[keys.manage])
+
+      expect(response.body).to include(%(value="ghost"))
+      expect(response.body).to match(/value="keys\.manage"[^>]*checked/)
+      # The negative half: a grid that rendered every box checked would pass the line above.
+      expect(response.body).not_to match(/value="repo\.delete"[^>]*checked/)
+    end
+
+    it "offers the form from the members page" do
+      get repository_members_path(repository)
+      expect(response.body).to include(new_repository_member_path(repository))
+
+      get new_repository_member_path(repository)
+      expect(response).to have_http_status(:ok)
+      # Every permission is offered: under an owner, `grantable_permissions` is the full set.
+      RepositoryMembership::PERMISSIONS.each { |permission| expect(response.body).to include(permission) }
+    end
+  end
+
+  # Granting escalates where revoking de-escalates, so this holder administers the page and is
+  # refused the form — and, per the same gated-affordance discipline as repositories#show, is never
+  # offered a control that could only ever 403.
+  describe "who may grant access" do
+    def attempt_grant
+      post repository_members_path(repository),
+           params: { membership_grant: { handle: "dependabot", permissions: %w[view] } }
+    end
+
+    let(:third_party) { create_user(github_uid: "8888", github_handle: "dependabot") }
+
+    before { third_party }
+
+    context "a member holding 'members.manage'" do
+      before do
+        create_membership(repository: repository, user: colleague, permissions: %w[view members.manage])
+        sign_in_via_github(uid: "9999")
+      end
+
+      it "gets 403 on the form and the grant, and is offered no Add control" do
+        get new_repository_member_path(repository)
+        expect(response).to have_http_status(:forbidden)
+
+        expect { attempt_grant }.not_to change(RepositoryMembership, :count)
+        expect(response).to have_http_status(:forbidden)
+
+        get repository_members_path(repository)
+        expect(response).to have_http_status(:ok)
+        expect(response.body).not_to include(new_repository_member_path(repository))
+      end
+    end
+
+    context "a member with only 'view'" do
+      before do
+        create_membership(repository: repository, user: colleague, permissions: %w[view])
+        sign_in_via_github(uid: "9999")
+      end
+
+      it "gets 403 on the form and the grant" do
+        get new_repository_member_path(repository)
+        expect(response).to have_http_status(:forbidden)
+
+        expect { attempt_grant }.not_to change(RepositoryMembership, :count)
+        expect(response).to have_http_status(:forbidden)
+      end
+    end
+
+    # 404 rather than 403: the repository's existence stays hidden from a non-member here too.
+    context "a signed-in user with no membership" do
+      before { sign_in_via_github(uid: "7777") }
+
+      it "gets 404 on the form and the grant" do
+        get new_repository_member_path(repository)
+        expect(response).to have_http_status(:not_found)
+
+        expect { attempt_grant }.not_to change(RepositoryMembership, :count)
+        expect(response).to have_http_status(:not_found)
+      end
     end
   end
 

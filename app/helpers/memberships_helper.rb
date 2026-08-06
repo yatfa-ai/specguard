@@ -1,6 +1,24 @@
 # frozen_string_literal: true
 
 module MembershipsHelper
+  # What each stored permission string actually buys, for the add-a-member checkbox grid. The raw
+  # strings are the labels — they are what the members table renders and what the API will name — so
+  # this is the sentence underneath, not a prettier name that would make the two pages disagree.
+  #
+  # `view` is described as the thing it does NOT decide, because it doesn't: membership itself grants
+  # access to the repository (see RepositoryPolicy#can?), so a member with every box unticked can
+  # still open it. Describing it as "can open the repository" would tell the owner that unticking it
+  # locks the colleague out, which is the one thing it cannot do.
+  PERMISSION_DESCRIPTIONS = {
+    RepositoryMembership::VIEW => "Open the repository. Implied by membership — a member can " \
+                                  "always reach it, ticked or not.",
+    RepositoryMembership::KEYS_MANAGE => "See, mint and revoke this repository's API keys.",
+    RepositoryMembership::MEMBERS_MANAGE => "See who has access, and revoke it.",
+    RepositoryMembership::REPO_DELETE => "Delete the repository, and every key, run and intent on it."
+  }.freeze
+
+  def permission_description(permission) = PERMISSION_DESCRIPTIONS.fetch(permission)
+
   # Both halves of the same disclosure: what the owner is told *before* they revoke someone, and
   # what they are told *after*. They live together because they make the same claim about the same
   # number, and a fix applied to only one of them is a contradiction the owner reads in sequence.
