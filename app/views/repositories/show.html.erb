@@ -104,13 +104,92 @@
   <% manage_keys = repository_policy.can?(:keys_manage) %>
 
   <div class="grid gap-4 lg:grid-cols-3">
-    <%= render UI::PanelComponent.new(title: "Overview", class: manage_keys ? "lg:col-span-1" : "lg:col-span-3") do %>
-      <%= render UI::DefListComponent.new(rows: [
-            ["Owner", @repository.owner_login],
-            ["Spec intents", @repository.spec_intents.count],
-            ["Test runs", @repository.test_runs.count],
-            ["Annotated", "#{@repository.annotated_ratio}%"]
-          ]) %>
+    <%# Suite truth, not an adoption headline. Two rules hold this panel together:
+        1. the ratio never appears without the denominator it was computed over, and
+        2. the count SpecGuard *cannot* see gets its own line, because that is the number the
+           project's goals ask for and it was previously nowhere on this page.
+        Every figure is read off the one already-loaded TestRun row, so this stays O(1) whether the
+        suite has 3 tests or 20,000 — no per-spec aggregation.
+
+        Outside the `manage_keys` gate on purpose, and it must stay there: this is the same class of
+        information as the connection-health stat above. A `view` member legitimately needs to know
+        how much of the suite SpecGuard can actually see, and nothing here is credential metadata. %>
+    <%= render UI::PanelComponent.new(title: "Overview", id: "overview",
+                                      class: manage_keys ? "lg:col-span-1" : "lg:col-span-3") do %>
+      <div class="space-y-4">
+        <%= render UI::DefListComponent.new(rows: [
+              ["Owner", @repository.owner_login],
+              ["Test runs", number_with_delimiter(@repository.test_runs.count)]
+            ]) %>
+
+        <% if @latest_test_run.nil? %>
+          <%# "Never ingested" is not "measured zero". Rendering `0%` here — which is what
+              `Repository#annotated_ratio` returns by contract — makes a repository whose CI has
+              never reported byte-identical to one that reported and found no annotations. The
+              distinction is drawn here, on `@latest_test_run` presence, and NOT by loosening the
+              model to return nil. %>
+          <%= render UI::EmptyStateComponent.new(
+                title: "No CI run has reported yet",
+                description: "SpecGuard cannot say how much of this suite it can see until CI posts a run to /ingest. " \
+                             "Until then there is no coverage figure to show — not a coverage figure of zero."
+              ) %>
+        <% else %>
+          <% total_specs = @latest_test_run.total_specs_count.to_i %>
+          <% annotated_specs = @latest_test_run.annotated_specs_count.to_i %>
+          <% invisible_specs = total_specs - annotated_specs %>
+
+          <%# Real counts, not `(annotated_ratio, 100)`. The component computes the percentage
+              itself, and passing the counts puts the true denominator into `aria-valuemax` for
+              free — the accessible markup carries the same honesty the visible text does. %>
+          <%= render UI::MeterComponent.new(value: annotated_specs, max: total_specs, label: "Annotated") %>
+
+          <%= render UI::DefListComponent.new(rows: [
+                ["Tests in suite", number_with_delimiter(total_specs)],
+                ["Carrying an @intent", number_with_delimiter(annotated_specs)],
+                ["Not visible to SpecGuard", number_with_delimiter(invisible_specs)]
+              ]) %>
+
+          <% if total_specs.zero? %>
+            <%# A run that reported no tests divides by zero into a tidy 0%, which reads exactly
+                like a suite with no annotations. Say which one it is. %>
+            <p class="text-xs text-app-muted">
+              The latest run reported no tests at all, so there is nothing to take a share of. The
+              0% above describes that run, not this suite.
+            </p>
+          <% else %>
+            <p class="text-xs text-app-muted">
+              <%= @latest_test_run.annotated_ratio %>% — <%= number_with_delimiter(annotated_specs) %>
+              of <%= number_with_delimiter(total_specs) %> tests carry an @intent.
+              <% if invisible_specs.zero? %>
+                Every test in the suite is visible to SpecGuard.
+              <% else %>
+                SpecGuard cannot see the other <%= number_with_delimiter(invisible_specs) %>
+                <%= "test".pluralize(invisible_specs) %>.
+              <% end %>
+            </p>
+          <% end %>
+
+          <%# Name the run behind the figures: they come from the latest run only, so a stale run
+              is a stale denominator and the reader has to be able to see that for themselves. %>
+          <p class="text-xs text-app-muted">
+            Measured on <span class="font-mono"><%= @latest_test_run.commit_sha.first(7) %></span><%= " (#{@latest_test_run.branch})" if @latest_test_run.branch.present? %>,
+            <%= time_ago_in_words(@latest_test_run.created_at) %> ago.
+          </p>
+        <% end %>
+
+        <%# NOT a test count, and never beside the suite figures unlabelled. This counts the intent
+            rows SpecGuard has stored and can search; it is structurally 0 until the embedding
+            pipeline ships, because ingestion writes no spec_intents row yet (pinned by
+            spec/requests/api/v1/ingest_spec.rb). Sitting unlabelled above a non-zero "Annotated"
+            it read as a second, contradictory description of the same suite. %>
+        <%= render UI::DefListComponent.new(rows: [
+              ["Searchable intents", number_with_delimiter(@repository.spec_intents.count)]
+            ]) %>
+        <p class="text-xs text-app-muted">
+          Annotated tests SpecGuard has stored for search — not a count of tests in the suite, and
+          not the denominator of anything above. Ingestion does not write these yet.
+        </p>
+      </div>
     <% end %>
 
     <% if manage_keys %>

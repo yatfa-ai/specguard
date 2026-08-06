@@ -205,6 +205,135 @@ RSpec.describe "Repository registration and API keys", type: :request do
     expect(response).to have_http_status(:not_found)
   end
 
+  describe "the Overview panel's suite figures" do
+    # Scoped to the panel rather than the whole document, because the page is full of numbers and
+    # prose that would satisfy a bare `response.body` match. `#overview` is the panel's own id.
+    def overview_panel = Capybara.string(response.body).find("#overview")
+
+    it "shows the suite denominator and the tests SpecGuard cannot see" do
+      repository = create_repository(user: @user)
+      # 3 specs, 2 annotated — so 1 test is invisible to SpecGuard, and 66.7% is the ratio.
+      repository.test_runs.create!(commit_sha: "feedfacecafe0001", branch: "main",
+                                   total_specs_count: 3, annotated_specs_count: 2)
+
+      get repository_path(repository)
+
+      panel = overview_panel
+      # The denominator, which was stored and API-returned but rendered nowhere before this.
+      expect(panel).to have_text("Tests in suite 3", normalize_ws: true)
+      expect(panel).to have_text("Carrying an @intent 2", normalize_ws: true)
+      # The number the whole panel exists for: what SpecGuard *cannot* see.
+      expect(panel).to have_text("Not visible to SpecGuard 1", normalize_ws: true)
+      # ...and the ratio never appears without the denominator it was computed over.
+      expect(panel).to have_text("66.7% — 2 of 3 tests carry an @intent.", normalize_ws: true)
+      expect(panel).to have_text("SpecGuard cannot see the other 1 test.", normalize_ws: true)
+    end
+
+    it "puts the real counts into the meter's accessible markup, not (ratio, 100)" do
+      repository = create_repository(user: @user)
+      repository.test_runs.create!(commit_sha: "feedfacecafe0002", total_specs_count: 3,
+                                   annotated_specs_count: 2)
+
+      get repository_path(repository)
+
+      # `aria-valuemax="100"` would mean the component was handed the percentage and the suite size
+      # never reached the accessibility tree — the same omission, one layer down.
+      meter = overview_panel.find("[role='meter']")
+      expect(meter["aria-valuemax"]).to eq("3.0")
+      expect(meter["aria-valuenow"]).to eq("2.0")
+    end
+
+    it "names the run the figures were measured on" do
+      repository = create_repository(user: @user)
+      repository.test_runs.create!(commit_sha: "feedfacecafe0003", branch: "release/2.1",
+                                   total_specs_count: 3, annotated_specs_count: 2)
+
+      get repository_path(repository)
+
+      # A stale run is a stale denominator, so the reader has to be able to see which run it is.
+      expect(overview_panel).to have_text("Measured on feedfac (release/2.1)", normalize_ws: true)
+    end
+
+    it "reads the newest run, not the first one ingested" do
+      repository = create_repository(user: @user)
+      repository.test_runs.create!(commit_sha: "0ld", total_specs_count: 100, annotated_specs_count: 1)
+      repository.test_runs.create!(commit_sha: "new", total_specs_count: 3, annotated_specs_count: 2)
+
+      get repository_path(repository)
+
+      expect(overview_panel).to have_text("Tests in suite 3", normalize_ws: true)
+      expect(overview_panel).not_to have_text("Tests in suite 100", normalize_ws: true)
+    end
+
+    it "shows an empty state — never 0% — for a repository whose CI has never reported" do
+      repository = create_repository(user: @user)
+
+      get repository_path(repository)
+
+      panel = overview_panel
+      expect(panel).to have_text("No CI run has reported yet", normalize_ws: true)
+      # The defect this replaces: never-ingested rendered byte-identically to measured-zero.
+      expect(panel).to have_no_text("0%", normalize_ws: true)
+      expect(panel).to have_no_css("[role='meter']")
+    end
+
+    it "distinguishes a run that measured zero annotations from one that never happened" do
+      repository = create_repository(user: @user)
+      repository.test_runs.create!(commit_sha: "feedfacecafe0004", total_specs_count: 3,
+                                   annotated_specs_count: 0)
+
+      get repository_path(repository)
+
+      panel = overview_panel
+      # This repository genuinely has 0% — and says so with its denominator attached.
+      expect(panel).to have_text("0.0% — 0 of 3 tests carry an @intent.", normalize_ws: true)
+      expect(panel).to have_text("SpecGuard cannot see the other 3 tests.", normalize_ws: true)
+      expect(panel).to have_no_text("No CI run has reported yet", normalize_ws: true)
+    end
+
+    it "says so when the run itself reported no tests, rather than showing a vacuous 0%" do
+      repository = create_repository(user: @user)
+      repository.test_runs.create!(commit_sha: "feedfacecafe0005", total_specs_count: 0,
+                                   annotated_specs_count: 0)
+
+      get repository_path(repository)
+
+      # 0/0 divides into a tidy 0% that reads exactly like "a suite with no annotations".
+      expect(overview_panel).to have_text("reported no tests at all", normalize_ws: true)
+    end
+
+    it "labels the spec-intent count as a search index, not as a share of the suite" do
+      repository = create_repository(user: @user)
+      repository.test_runs.create!(commit_sha: "feedfacecafe0006", total_specs_count: 3,
+                                   annotated_specs_count: 2)
+
+      get repository_path(repository)
+
+      # Ingestion writes no spec_intents row yet, so this is structurally 0 — and a bare
+      # "Spec intents: 0" sitting above "Annotated: 66.7%" was two contradictory descriptions of
+      # the same suite.
+      panel = overview_panel
+      expect(panel).to have_text("Searchable intents 0", normalize_ws: true)
+      expect(panel).to have_text("not a count of tests in the suite", normalize_ws: true)
+      expect(panel).to have_no_text("Spec intents", normalize_ws: true)
+    end
+
+    it "stays visible to a member who cannot manage keys" do
+      owner = create_user(github_uid: "7007", github_handle: "repo-owner")
+      repository = create_repository(user: owner, github_full_name: "acme/shared-service")
+      create_membership(repository: repository, user: @user)
+      repository.test_runs.create!(commit_sha: "feedfacecafe0007", total_specs_count: 3,
+                                   annotated_specs_count: 2)
+
+      get repository_path(repository)
+
+      # Suite coverage is the same class of information as the connection-health stat: a `view`
+      # member needs it, and none of it is credential metadata.
+      expect(overview_panel).to have_text("Not visible to SpecGuard 1", normalize_ws: true)
+      expect(response.body).not_to include("api-keys")
+    end
+  end
+
   describe "renaming a repository" do
     it "updates the name without touching keys, runs or intents" do
       repository = create_repository(user: @user, github_full_name: "acme/billing-servce")
