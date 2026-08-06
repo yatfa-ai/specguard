@@ -17,6 +17,19 @@ RSpec.describe "GitHub sign-in", type: :request do
     expect { sign_in_via_github }.not_to change(User, :count)
   end
 
+  # `github_handle` carries no uniqueness constraint on purpose: a recycled GitHub handle can
+  # legitimately collide with an existing row's, and a constraint would turn that into a 500 in the
+  # sign-in path for the innocent second person. Ambiguity is reported by `User.resolve_by_handle`.
+  it "signs a second user in when their handle collides with an existing row's" do
+    sign_in_via_github(uid: "1001", info: { nickname: "octocat" })
+
+    expect { sign_in_via_github(uid: "2002", info: { nickname: "octocat" }) }.to change(User, :count).by(1)
+
+    expect(response).to redirect_to(repositories_path)
+    expect(User.where(github_handle: "octocat").pluck(:github_uid)).to contain_exactly("1001", "2002")
+    expect(User.resolve_by_handle("octocat")).to be_ambiguous
+  end
+
   it "signs the user out again" do
     sign_in_via_github
 

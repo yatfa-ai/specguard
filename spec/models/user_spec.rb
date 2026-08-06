@@ -59,4 +59,100 @@ RSpec.describe User do
       expect(owners_key.reload.created_by_user).to eq(owner)
     end
   end
+
+  describe "handle normalization" do
+    it "stores a mixed-case, padded handle in canonical form" do
+      user = create_user(github_handle: "  Octocat  ")
+
+      expect(user.reload.github_handle).to eq("octocat")
+    end
+
+    it "normalizes the handle taken from a GitHub identity" do
+      user = described_class.from_github_omniauth(
+        OmniAuth::AuthHash.new(auth.to_hash.deep_merge("info" => { "nickname" => "Octocat" }))
+      )
+
+      expect(user.reload.github_handle).to eq("octocat")
+    end
+
+    it "leaves a blank handle blank so the presence validation still fires" do
+      user = described_class.new(github_uid: "1001", github_handle: "   ")
+
+      expect(user).not_to be_valid
+      expect(user.errors[:github_handle]).to be_present
+    end
+  end
+
+  describe ".resolve_by_handle" do
+    it "resolves a handle regardless of the case and padding the caller typed" do
+      user = create_user(github_handle: "Octocat")
+
+      ["OCTOCAT", "octocat", " Octocat ", "OctoCat"].each do |typed|
+        resolution = described_class.resolve_by_handle(typed)
+
+        expect(resolution).to be_found, "expected #{typed.inspect} to resolve, got #{resolution.status}"
+        expect(resolution.user).to eq(user)
+        expect(resolution.match_count).to eq(1)
+      end
+    end
+
+    it "reports a handle nobody holds as not found, without raising" do
+      create_user(github_handle: "octocat")
+
+      resolution = described_class.resolve_by_handle("nobody-here")
+
+      expect(resolution).to be_not_found
+      expect(resolution).not_to be_ambiguous
+      expect(resolution.user).to be_nil
+      expect(resolution.match_count).to eq(0)
+    end
+
+    it "reports a blank or malformed handle as not found rather than matching anything" do
+      create_user(github_handle: "octocat")
+
+      ["", "   ", nil, "octo/cat", "a" * 40].each do |typed|
+        resolution = described_class.resolve_by_handle(typed)
+
+        expect(resolution).to be_not_found, "expected #{typed.inspect} to be not_found, got #{resolution.status}"
+        expect(resolution.user).to be_nil
+      end
+    end
+
+    # `from_github_omniauth` falls back to the display name when `nickname` is blank, so a row can
+    # hold a string GitHub never issued as a login. Sign-in must keep working (decision b), but such
+    # a value is not an identity anyone can be invited by — resolving it must not hand back the row.
+    it "does not resolve a handle the fallback chain manufactured" do
+      user = described_class.from_github_omniauth(
+        OmniAuth::AuthHash.new(auth.to_hash.deep_merge("info" => { "nickname" => "", "name" => "The Octocat" }))
+      )
+
+      expect(user.reload.github_handle).to eq("the octocat")
+      expect(described_class.resolve_by_handle("The Octocat")).to be_not_found
+      expect(described_class.resolve_by_handle("the octocat")).to be_not_found
+    end
+
+    # A row holds whatever handle its owner had at their last sign-in, so a recycled GitHub handle
+    # can legitimately sit on two rows. Picking one would grant access to the wrong person.
+    context "when a recycled handle sits on two rows" do
+      let!(:renamer) { create_user(github_uid: "1001", github_handle: "octocat") }
+      let!(:claimant) { create_user(github_uid: "2002", github_handle: "Octocat") }
+
+      it "keeps both rows — the collision is legal, not a validation error" do
+        expect(renamer).to be_persisted
+        expect(claimant).to be_persisted
+        expect(described_class.where(github_handle: "octocat").count).to eq(2)
+      end
+
+      it "reports ambiguity instead of picking a row" do
+        resolution = described_class.resolve_by_handle("OCTOCAT")
+
+        expect(resolution).to be_ambiguous
+        expect(resolution).not_to be_found
+        expect(resolution.match_count).to eq(2)
+        expect(resolution.user).to be_nil
+        expect(resolution.user).not_to eq(renamer)
+        expect(resolution.user).not_to eq(claimant)
+      end
+    end
+  end
 end
