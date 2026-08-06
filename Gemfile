@@ -47,6 +47,8 @@ end
 gem "view_component"
 # pgvector support for ActiveRecord (vector column type + nearest_neighbors)
 gem "neighbor"
+# JSON Schema (draft-07) validation for the vendored OpenTestIntent contract
+gem "json_schemer", "~> 2.4"
 # GitHub OAuth for human sign-in
 gem "omniauth"
 gem "omniauth-github"

@@ -23,6 +23,35 @@ module Builders
       }.merge(attrs)
     )
   end
+
+  # --- /api/v1/ingest request bodies -------------------------------------------------------
+  # Built as plain hashes rather than through the model, on purpose: these describe the *wire*
+  # contract, and a builder that went through SpecIntent would encode the model's rules instead
+  # of the envelope's — which is exactly the pair this endpoint has to keep separate.
+
+  def ingest_payload(commit_sha: "a1b2c3d", specs: [annotated_spec], **attrs)
+    { commit_sha: commit_sha, specs: specs }.merge(attrs)
+  end
+
+  # `behavior` is deliberately over the schema's 15-character floor; shorten it in a caller to
+  # exercise the 400 path.
+  def annotated_spec(file_path: "spec/models/invoice_spec.rb", line_number: 12, **intent)
+    {
+      file_path: file_path,
+      line_number: line_number,
+      status: "annotated",
+      intent: {
+        entity: "Invoice",
+        action: "finalize",
+        behavior: "locks the line items once the invoice is finalized",
+        layer: "unit"
+      }.merge(intent)
+    }
+  end
+
+  def unannotated_spec(file_path: "spec/models/user_spec.rb", line_number: 12)
+    { file_path: file_path, line_number: line_number, status: "unannotated", intent: nil }
+  end
 end
 
 # Builders that go through the app over HTTP rather than straight to the model, so they are only
