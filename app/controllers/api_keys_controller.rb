@@ -6,7 +6,7 @@ class ApiKeysController < ApplicationController
   # Reveal-once: the raw token is put in the flash for exactly the redirect that follows, and is
   # never persisted anywhere. Only the SHA-256 digest reaches the database.
   def create
-    repository = current_repository
+    repository = current_repository(:keys_manage)
     api_key = repository.api_keys.create!(name: api_key_name)
 
     flash[:revealed_api_key] = api_key.raw_token
@@ -17,7 +17,7 @@ class ApiKeysController < ApplicationController
   end
 
   def destroy
-    repository = current_repository
+    repository = current_repository(:keys_manage)
     repository.api_keys.find(params[:id]).destroy!
 
     redirect_to repository_path(repository), notice: "API key revoked."

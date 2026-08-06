@@ -4,6 +4,12 @@
 # rename their GitHub handle and must still resolve to the same row.
 class User < ApplicationRecord
   has_many :repositories, dependent: :destroy
+  # Both sides of the membership declare `dependent: :destroy`; dropping either one leaves the
+  # foreign key to fail on destroy.
+  has_many :repository_memberships, dependent: :destroy
+  # Repositories shared *with* this user — deliberately separate from `repositories`, which stays
+  # "repositories this user owns" and is what RepositoriesController#index still lists.
+  has_many :member_repositories, through: :repository_memberships, source: :repository
 
   validates :github_uid, presence: true, uniqueness: true
   validates :github_handle, presence: true

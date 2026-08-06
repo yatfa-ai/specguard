@@ -11,11 +11,19 @@
         subtitle: "Registered #{time_ago_in_words(@repository.created_at)} ago."
       ) do |header| %>
     <% header.with_actions do %>
+      <%# A shared repository is reachable by members, so every control here is gated on the same
+          capability the controller will demand. Rendering one the viewer does not hold could only
+          ever produce a 403 — and "Remove" would ask them to confirm destroying the repository and
+          all of its data first. `repository_policy` is ApplicationController's, exposed to views. %>
       <%= render UI::ButtonComponent.new(variant: :ghost, href: @repository.github_url) { "View on GitHub" } %>
-      <%= render UI::ButtonComponent.new(variant: :ghost, href: edit_repository_path(@repository)) { "Rename" } %>
-      <%= button_to "Remove", repository_path(@repository), method: :delete,
-                    class: UI::ButtonComponent.classes(variant: :danger, size: :md),
-                    form: { data: { turbo_confirm: "Remove #{@repository.github_full_name} and all of its data?" } } %>
+      <% if repository_policy.can?(:owner) %>
+        <%= render UI::ButtonComponent.new(variant: :ghost, href: edit_repository_path(@repository)) { "Rename" } %>
+      <% end %>
+      <% if repository_policy.can?(:repo_delete) %>
+        <%= button_to "Remove", repository_path(@repository), method: :delete,
+                      class: UI::ButtonComponent.classes(variant: :danger, size: :md),
+                      form: { data: { turbo_confirm: "Remove #{@repository.github_full_name} and all of its data?" } } %>
+      <% end %>
     <% end %>
   <% end %>
 
@@ -82,8 +90,18 @@
     </div>
   <% end %>
 
+  <%# The API keys panel is a `keys.manage` surface end to end: both of its controls (mint, revoke)
+      demand the permission, and the table itself is credential metadata — key names, token hints,
+      and when each key last authenticated. So a member without `keys.manage` gets neither.
+
+      That is the deliberate line on this page: controls and credential metadata are gated, the
+      endpoint documentation and connection-health stat above are not. A `view` member legitimately
+      needs to know whether CI is reaching this repository, and nothing in that panel says anything
+      about a key. The owner holds every capability, so their page is unchanged. %>
+  <% manage_keys = repository_policy.can?(:keys_manage) %>
+
   <div class="grid gap-4 lg:grid-cols-3">
-    <%= render UI::PanelComponent.new(title: "Overview", class: "lg:col-span-1") do %>
+    <%= render UI::PanelComponent.new(title: "Overview", class: manage_keys ? "lg:col-span-1" : "lg:col-span-3") do %>
       <%= render UI::DefListComponent.new(rows: [
             ["Owner", @repository.owner_login],
             ["Spec intents", @repository.spec_intents.count],
@@ -92,41 +110,43 @@
           ]) %>
     <% end %>
 
-    <%= render UI::PanelComponent.new(title: "API keys", class: "lg:col-span-2") do |panel| %>
-      <% panel.with_actions do %>
-        <%# Inline (not .form-grid) on purpose: this lives in a panel header, so it stays one row. %>
-        <%= form_with url: repository_api_keys_path(@repository), scope: :api_key,
-                      class: "flex items-end gap-2" do |form| %>
-          <%= form.field :name, label: "Name", placeholder: "CI — main" %>
-          <%= form.submit_button "New API key", size: :sm %>
-        <% end %>
-      <% end %>
-
-      <% if @api_keys.any? %>
-        <%= render UI::TableComponent.new(columns: ["Name", "Key", "Created", "Last used", ""]) do %>
-          <% @api_keys.each do |api_key| %>
-            <tr>
-              <td class="px-3 py-2"><%= api_key.name %></td>
-              <td class="px-3 py-2 font-mono text-xs text-app-content-secondary"><%= api_key.token_hint %></td>
-              <td class="px-3 py-2 text-app-content-secondary tabular-nums">
-                <%= time_ago_in_words(api_key.created_at) %> ago
-              </td>
-              <td class="px-3 py-2 text-app-content-secondary tabular-nums">
-                <%= api_key.last_used_at ? "#{time_ago_in_words(api_key.last_used_at)} ago" : "never" %>
-              </td>
-              <td class="px-3 py-2 text-right">
-                <%= button_to "Revoke", repository_api_key_path(@repository, api_key), method: :delete,
-                              class: UI::ButtonComponent.classes(variant: :danger, size: :xs),
-                              form: { data: { turbo_confirm: "Revoke #{api_key.name}?" } } %>
-              </td>
-            </tr>
+    <% if manage_keys %>
+      <%= render UI::PanelComponent.new(title: "API keys", class: "lg:col-span-2") do |panel| %>
+        <% panel.with_actions do %>
+          <%# Inline (not .form-grid) on purpose: this lives in a panel header, so it stays one row. %>
+          <%= form_with url: repository_api_keys_path(@repository), scope: :api_key,
+                        class: "flex items-end gap-2" do |form| %>
+            <%= form.field :name, label: "Name", placeholder: "CI — main" %>
+            <%= form.submit_button "New API key", size: :sm %>
           <% end %>
         <% end %>
-      <% else %>
-        <%= render UI::EmptyStateComponent.new(
-              title: "No API keys",
-              description: "CI and agents need a key to reach the SpecGuard API."
-            ) %>
+
+        <% if @api_keys.any? %>
+          <%= render UI::TableComponent.new(columns: ["Name", "Key", "Created", "Last used", ""]) do %>
+            <% @api_keys.each do |api_key| %>
+              <tr>
+                <td class="px-3 py-2"><%= api_key.name %></td>
+                <td class="px-3 py-2 font-mono text-xs text-app-content-secondary"><%= api_key.token_hint %></td>
+                <td class="px-3 py-2 text-app-content-secondary tabular-nums">
+                  <%= time_ago_in_words(api_key.created_at) %> ago
+                </td>
+                <td class="px-3 py-2 text-app-content-secondary tabular-nums">
+                  <%= api_key.last_used_at ? "#{time_ago_in_words(api_key.last_used_at)} ago" : "never" %>
+                </td>
+                <td class="px-3 py-2 text-right">
+                  <%= button_to "Revoke", repository_api_key_path(@repository, api_key), method: :delete,
+                                class: UI::ButtonComponent.classes(variant: :danger, size: :xs),
+                                form: { data: { turbo_confirm: "Revoke #{api_key.name}?" } } %>
+                </td>
+              </tr>
+            <% end %>
+          <% end %>
+        <% else %>
+          <%= render UI::EmptyStateComponent.new(
+                title: "No API keys",
+                description: "CI and agents need a key to reach the SpecGuard API."
+              ) %>
+        <% end %>
       <% end %>
     <% end %>
   </div>

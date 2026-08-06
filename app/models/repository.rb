@@ -9,6 +9,10 @@ class Repository < ApplicationRecord
   has_many :api_keys, dependent: :destroy
   has_many :test_runs, dependent: :destroy
   has_many :spec_intents, dependent: :destroy
+  has_many :repository_memberships, dependent: :destroy
+  # Everyone granted access who is *not* the owner. The owner is `user` and holds every permission
+  # implicitly, so they never appear here.
+  has_many :members, through: :repository_memberships, source: :user
 
   before_validation :normalize_full_name
   before_validation :derive_name

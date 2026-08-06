@@ -10,7 +10,7 @@
 #
 # It's strongly recommended that you check this file into your version control system.
 
-ActiveRecord::Schema[8.1].define(version: 2026_08_05_000001) do
+ActiveRecord::Schema[8.1].define(version: 2026_08_06_000001) do
   # These are extensions that must be enabled in order to support this database
   enable_extension "pg_catalog.plpgsql"
   enable_extension "vector"
@@ -34,6 +34,16 @@ ActiveRecord::Schema[8.1].define(version: 2026_08_05_000001) do
     t.bigint "user_id", null: false
     t.index ["github_full_name"], name: "index_repositories_on_github_full_name", unique: true
     t.index ["user_id"], name: "index_repositories_on_user_id"
+  end
+
+  create_table "repository_memberships", force: :cascade do |t|
+    t.datetime "created_at", null: false
+    t.text "permissions", default: [], null: false, array: true
+    t.bigint "repository_id", null: false
+    t.datetime "updated_at", null: false
+    t.bigint "user_id", null: false
+    t.index ["repository_id"], name: "index_repository_memberships_on_repository_id"
+    t.index ["user_id", "repository_id"], name: "index_repository_memberships_on_user_and_repository", unique: true
   end
 
   create_table "solid_queue_blocked_executions", force: :cascade do |t|
@@ -203,6 +213,8 @@ ActiveRecord::Schema[8.1].define(version: 2026_08_05_000001) do
 
   add_foreign_key "api_keys", "repositories"
   add_foreign_key "repositories", "users"
+  add_foreign_key "repository_memberships", "repositories"
+  add_foreign_key "repository_memberships", "users"
   add_foreign_key "solid_queue_blocked_executions", "solid_queue_jobs", column: "job_id", on_delete: :cascade
   add_foreign_key "solid_queue_claimed_executions", "solid_queue_jobs", column: "job_id", on_delete: :cascade
   add_foreign_key "solid_queue_failed_executions", "solid_queue_jobs", column: "job_id", on_delete: :cascade
