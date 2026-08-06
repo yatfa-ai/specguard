@@ -53,12 +53,91 @@ RSpec.describe EmbeddingGenerator do
     it "does not memoize the default, so a reloaded class is never left stale" do
       described_class.provider = nil
 
-      expect(described_class.provider).to equal(described_class.provider)
+      described_class.provider
+
       expect(described_class.instance_variable_get(:@provider)).to be_nil
     end
   end
 
+  # The guarantees the class documents belong to the interface, not to OpenAIProvider. Installing a
+  # misbehaving provider is the only way to prove that — a well-behaved one passes either way.
+  describe "guarantees that survive the swap" do
+    def install(&body)
+      described_class.provider = Class.new { define_singleton_method(:call, &body) }
+    end
+
+    it "rejects a swapped provider's wrong-width vector — 3072 would corrupt the HNSW index" do
+      install { |_text| Array.new(3072) { 0.5 } }
+
+      expect { described_class.call("x") }
+        .to raise_error(described_class::Error, /returned 3072 dimensions, expected 1536/)
+    end
+
+    it "rejects a swapped provider's non-Array return" do
+      install { |_text| nil }
+
+      expect { described_class.call("x") }.to raise_error(described_class::Error, /returned no vector/)
+    end
+
+    it "rejects a swapped provider's non-numeric vector" do
+      install { |_text| Array.new(1536, "nope") }
+
+      expect { described_class.call("x") }.to raise_error(described_class::Error, /non-numeric/)
+    end
+
+    it "wraps a swapped provider's transport exception rather than leaking it" do
+      install { |_text| raise Faraday::ConnectionFailed, "econnrefused" }
+
+      expect { described_class.call("x") }
+        .to raise_error(described_class::Error, /embedding provider failed: econnrefused/)
+    end
+
+    it "wraps any exception class, not just the ones the default provider knows about" do
+      install { |_text| raise KeyError, "no such key" }
+
+      expect { described_class.call("x") }.to raise_error(described_class::Error, /no such key/)
+    end
+
+    it "lets a provider's own Error through unwrapped, keeping its more specific message" do
+      install { |_text| raise EmbeddingGenerator::Error, "provider is not configured" }
+
+      expect { described_class.call("x") }
+        .to raise_error(described_class::Error, "provider is not configured")
+    end
+
+    it "returns floats even when a swapped provider hands back integers" do
+      install { |_text| Array.new(1536, 1) }
+
+      expect(described_class.call("x")).to all(be_a(Float))
+    end
+
+    it "asks the installed provider whether it is configured, not OpenAI" do
+      # A local embedder that needs no key at all must not report false just because OPENAI_API_KEY
+      # is unset — slice 3's job and IntentChecker guard on this predicate.
+      keyless = Class.new do
+        def self.call(text) = Array.new(EmbeddingGenerator::DIMENSIONS, 0.0)
+      end
+      described_class.provider = keyless
+
+      with_api_key(nil) { expect(described_class).to be_configured }
+    end
+
+    it "reports not-configured when the installed provider says so" do
+      unconfigured = Class.new do
+        def self.call(text) = Array.new(EmbeddingGenerator::DIMENSIONS, 0.0)
+        def self.configured? = false
+      end
+      described_class.provider = unconfigured
+
+      with_api_key("sk-set-but-irrelevant") { expect(described_class).not_to be_configured }
+    end
+  end
+
   describe "configuration" do
+    # The suite installs the deterministic stub for every example; these are about the default
+    # provider, so put it back.
+    before { described_class.provider = described_class::OpenAIProvider }
+
     it "reads the API key from ENV first" do
       with_api_key("sk-from-env") do
         expect(described_class::OpenAIProvider.api_key).to eq("sk-from-env")
@@ -90,17 +169,22 @@ RSpec.describe EmbeddingGenerator do
     end
   end
 
-  describe "provider failures" do
+  describe "the default provider" do
     let(:client) { instance_double(OpenAI::Client) }
 
     around do |example|
       with_api_key("sk-test") { example.run }
     end
 
-    before { allow(OpenAI::Client).to receive(:new).and_return(client) }
+    before do
+      # Exercise the real production path — the interface with OpenAIProvider installed — rather
+      # than reaching past the seam to OpenAIProvider.call.
+      described_class.provider = described_class::OpenAIProvider
+      allow(OpenAI::Client).to receive(:new).and_return(client)
+    end
 
     def expect_error(matching)
-      expect { described_class::OpenAIProvider.call("some text") }
+      expect { described_class.call("some text") }
         .to raise_error(described_class::Error, matching)
     end
 
@@ -149,13 +233,13 @@ RSpec.describe EmbeddingGenerator do
       embedding = Array.new(1536) { |i| i / 1536.0 }
       allow(client).to receive(:embeddings).and_return({ "data" => [ { "embedding" => embedding } ] })
 
-      expect(described_class::OpenAIProvider.call("some text")).to eq(embedding)
+      expect(described_class.call("some text")).to eq(embedding)
     end
 
     it "sends the configured model and the caller's text" do
       allow(client).to receive(:embeddings).and_return({ "data" => [ { "embedding" => Array.new(1536, 0.0) } ] })
 
-      described_class::OpenAIProvider.call("Order checkout")
+      described_class.call("Order checkout")
 
       expect(client).to have_received(:embeddings)
         .with(parameters: { model: "text-embedding-3-small", input: "Order checkout" })

@@ -2,7 +2,7 @@
 
 # Turns a string into an embedding vector. The whole duplicate-detection engine rests on this:
 # ingestion embeds "{entity} {action} {behavior}" for every intent, and /check-intent embeds the
-# proposed one and compares (docs/05-duplicate-detection.md).
+# proposed one and compares.
 #
 # ## Contract
 #
@@ -22,6 +22,9 @@
 #
 # Callers are unaffected — they only ever say `EmbeddingGenerator.call(text)`. This is the seam the
 # suite uses to install a deterministic stub (spec/support/embedding_generator.rb).
+#
+# The guarantees above hold *across* the seam: width validation, error wrapping and `configured?`
+# live on this class, not in any provider, so swapping the provider cannot void them.
 #
 # ## Credentials
 #
@@ -52,12 +55,38 @@ class EmbeddingGenerator
       @provider || OpenAIProvider
     end
 
+    # The guarantees in the contract above belong to the *interface*, not to any one provider —
+    # DIMENSIONS is fixed by the column, so validating inside OpenAIProvider would have guarded
+    # only against a misbehaving OpenAI and not against a misbehaving provider.
     def call(text)
-      provider.call(text)
+      validate(provider.call(text))
+    rescue Error
+      raise # already ours: keep the provider's more specific message.
+    rescue StandardError => e
+      raise Error, "embedding provider failed: #{e.message}"
     end
 
+    # Delegated, so a provider needing no credentials at all (a local Ollama embedder) reports the
+    # truth instead of OpenAI's answer. A provider that does not implement the predicate has
+    # nothing to configure, so it is ready by definition.
     def configured?
-      OpenAIProvider.configured?
+      provider.respond_to?(:configured?) ? provider.configured? : true
+    end
+
+    private
+
+    def validate(vector)
+      unless vector.is_a?(Array)
+        raise Error, "embedding provider returned no vector (got #{vector.class})"
+      end
+
+      unless vector.size == DIMENSIONS
+        raise Error, "embedding provider returned #{vector.size} dimensions, expected #{DIMENSIONS}"
+      end
+
+      vector.map { |value| Float(value) }
+    rescue ArgumentError, TypeError => e
+      raise Error, "embedding provider returned a non-numeric vector: #{e.message}"
     end
   end
 
@@ -96,12 +125,14 @@ class EmbeddingGenerator
       @text = text
     end
 
+    # Returns the raw vector. Width and element types are the interface's business
+    # (EmbeddingGenerator.validate) so that every provider is held to them, not just this one.
     def call
       unless self.class.configured?
         raise Error, "embedding provider is not configured — set OPENAI_API_KEY (or credentials openai.api_key)"
       end
 
-      validate(fetch)
+      fetch
     end
 
     private
@@ -110,22 +141,9 @@ class EmbeddingGenerator
       response = client.embeddings(parameters: { model: self.class.model, input: @text })
       response.dig("data", 0, "embedding")
     rescue Faraday::Error, ::OpenAI::Error => e
-      # Deliberately not re-raising the transport exception: callers rescue EmbeddingGenerator::Error.
+      # A narrower rescue than the interface's, kept for the better message. Deliberately not
+      # re-raising the transport exception: callers rescue EmbeddingGenerator::Error.
       raise Error, "embedding provider failed: #{e.message}"
-    end
-
-    def validate(vector)
-      unless vector.is_a?(Array)
-        raise Error, "embedding provider returned no vector (got #{vector.class})"
-      end
-
-      unless vector.size == DIMENSIONS
-        raise Error, "embedding provider returned #{vector.size} dimensions, expected #{DIMENSIONS}"
-      end
-
-      vector.map { |value| Float(value) }
-    rescue ArgumentError, TypeError => e
-      raise Error, "embedding provider returned a non-numeric vector: #{e.message}"
     end
 
     def client

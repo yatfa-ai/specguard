@@ -11,8 +11,9 @@ default: &default
 development:
   <<: *default
 
-test:
-  <<: *default
+# No `test:` block on purpose: the test environment is pinned to ActiveJob's `:test` adapter
+# (config/environments/test.rb), so Solid Queue never runs there and dispatcher/worker settings
+# for it could never take effect. Generator residue, removed rather than left as dead config.
 
 production:
   <<: *default

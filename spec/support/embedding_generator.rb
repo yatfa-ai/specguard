@@ -12,8 +12,8 @@ require "digest"
 #     vector is derived from SHA-256 of the input, so it depends on nothing but the string.
 #   * **Different text in, different vector out** — distinct inputs give distinct seeds.
 #
-# Phase 3's IntentChecker specs assert concrete similarity scores against the thresholds in
-# docs/05-duplicate-detection.md (0.88 duplicate / 0.75 partial). Those assertions are only
+# Phase 3's IntentChecker specs assert concrete similarity scores against the duplicate-detection
+# thresholds (0.88 duplicate / 0.75 partial). Those assertions are only
 # meaningful because this mapping is stable — if it ever became run-dependent, threshold specs
 # would flake rather than fail, which is worse. Treat "same string → same vector" as part of the
 # contract of this file and do not "improve" it with anything non-reproducible.
