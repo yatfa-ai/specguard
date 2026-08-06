@@ -103,18 +103,25 @@ RSpec.describe User do
 
       expect(resolution).to be_not_found
       expect(resolution).not_to be_ambiguous
+      expect(resolution).not_to be_malformed
       expect(resolution.user).to be_nil
       expect(resolution.match_count).to eq(0)
     end
 
-    it "reports a blank or malformed handle as not found rather than matching anything" do
+    # "that is not a GitHub handle" and "nobody has signed in with that handle" are different facts,
+    # and a caller that cannot tell them apart gives the wrong advice: an owner who pasted a profile
+    # URL would be told to go ask their colleague to re-authenticate.
+    it "reports a query that is not handle-shaped as malformed, distinctly from not found" do
       create_user(github_handle: "octocat")
 
-      ["", "   ", nil, "octo/cat", "a" * 40].each do |typed|
+      ["", "   ", nil, "octo/cat", "octo cat", "https://github.com/octocat", "-octocat", "a" * 40].each do |typed|
         resolution = described_class.resolve_by_handle(typed)
 
-        expect(resolution).to be_not_found, "expected #{typed.inspect} to be not_found, got #{resolution.status}"
+        expect(resolution).to be_malformed, "expected #{typed.inspect} to be malformed, got #{resolution.status}"
+        expect(resolution).not_to be_not_found
+        expect(resolution).not_to be_found
         expect(resolution.user).to be_nil
+        expect(resolution.match_count).to eq(0)
       end
     end
 
@@ -127,8 +134,9 @@ RSpec.describe User do
       )
 
       expect(user.reload.github_handle).to eq("the octocat")
-      expect(described_class.resolve_by_handle("The Octocat")).to be_not_found
-      expect(described_class.resolve_by_handle("the octocat")).to be_not_found
+      expect(described_class.resolve_by_handle("The Octocat")).to be_malformed
+      expect(described_class.resolve_by_handle("the octocat")).to be_malformed
+      expect(described_class.resolve_by_handle("the octocat")).not_to be_found
     end
 
     # A row holds whatever handle its owner had at their last sign-in, so a recycled GitHub handle
