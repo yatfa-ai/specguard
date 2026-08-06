@@ -15,7 +15,7 @@ class Api::V1::IngestsController < Api::BaseController
       test_run_id: test_run.id,
       total_specs: test_run.total_specs_count,
       annotated_specs: test_run.annotated_specs_count,
-      # A 0–1 fraction, per docs/04-api-reference.md. The dashboard renders the same number as a
+      # A 0–1 fraction, per the SpecGuard API Reference. The dashboard renders the same number as a
       # percentage via `TestRun#annotated_ratio`; the API and the UI differ in unit on purpose,
       # so neither side has to guess which one it is holding.
       annotated_ratio: test_run.annotated_fraction,

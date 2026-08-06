@@ -4,7 +4,7 @@ module Ingest
   # One `POST /api/v1/ingest` request body, validated in two independent layers:
   #
   #   1. The **envelope** — run metadata and the shape of each entry in `specs[]`. This is
-  #      SpecGuard's own contract (docs/04-api-reference.md) and is deliberately separate from (2):
+  #      SpecGuard's own contract (see the SpecGuard API Reference) and is deliberately separate from (2):
   #      the platform owns the transport, `open-test-intent` owns the annotation.
   #   2. Each annotated spec's **intent**, against the vendored OpenTestIntent JSON Schema.
   #
