@@ -3,8 +3,20 @@
 class RepositoriesController < ApplicationController
   before_action :require_authentication
 
+  # Both are per-card questions asked by repositories/index, once per repository in the list.
+  helper_method :owns_repository?, :key_count_visible?
+
+  # Everything the viewer can open: what they own, plus what has been shared with them. Kept as one
+  # relation rather than `owned + shared`, because concatenating two Arrays orders them
+  # owned-then-shared and silently loses the alphabetical order the page is sorted by.
+  #
+  # No `.distinct`: RepositoryMembership rejects a row for the owner outright
+  # (`user_is_not_the_owner`), so the two sides cannot overlap. A defensive uniq here would mask
+  # that invariant breaking rather than let it fail loudly.
   def index
-    @repositories = current_user.repositories.order(:github_full_name)
+    @repositories = Repository.where(user_id: current_user.id)
+                              .or(Repository.where(id: current_user.repository_memberships.select(:repository_id)))
+                              .order(:github_full_name)
   end
 
   def show
@@ -59,6 +71,31 @@ class RepositoriesController < ApplicationController
   end
 
   private
+
+  # `user_id` is already loaded on the record, so this asks nothing of the database.
+  def owns_repository?(repository)
+    repository.user_id == current_user&.id
+  end
+
+  # The index card must not hand a member more key information than repositories#show is willing to
+  # give them: that page gates the whole API keys panel — names, hints, last-used — behind
+  # `keys.manage`, so a bare count on the card would leak past the same line.
+  #
+  # Deliberately *not* `repository_policy(repository).can?(:keys_manage)`. That helper memoizes per
+  # repository but loads its membership with a `find_by`, so asking it once per card costs one query
+  # per shared card. `shared_permissions` below is the same answer in a single query.
+  def key_count_visible?(repository)
+    return true if owns_repository?(repository)
+
+    Array(shared_permissions[repository.id]).include?(RepositoryMembership::KEYS_MANAGE)
+  end
+
+  # `repository_id => permissions` for every membership the viewer holds, loaded in one query and
+  # memoized for the request — so the answer above costs the same whether the list has one shared
+  # card or fifty.
+  def shared_permissions
+    @shared_permissions ||= current_user.repository_memberships.pluck(:repository_id, :permissions).to_h
+  end
 
   def repository_params
     params.expect(repository: [:github_full_name])

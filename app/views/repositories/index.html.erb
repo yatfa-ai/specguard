@@ -3,7 +3,7 @@
 <%= render UI::PageComponent.new do %>
   <%= render UI::PageHeaderComponent.new(
         title: "Repositories",
-        subtitle: "Every repository you have registered with SpecGuard."
+        subtitle: "Repositories you have registered, and those shared with you."
       ) do |header| %>
     <% header.with_actions do %>
       <%= render UI::ButtonComponent.new(variant: :primary, href: new_repository_path) { "Register a repository" } %>
@@ -15,9 +15,24 @@
       <% @repositories.each do |repository| %>
         <%= render UI::CardComponent.new(href: repository_path(repository)) do %>
           <div class="space-y-2">
-            <%= render UI::HeadingComponent.new(level: 3, class: "text-app-content") { repository.github_full_name } %>
+            <div class="flex items-start justify-between gap-2">
+              <%= render UI::HeadingComponent.new(level: 3, class: "text-app-content min-w-0") { repository.github_full_name } %>
+              <%# The list now mixes owned and shared repositories, and nothing else on the card
+                  distinguishes them — which matters because `show` offers a destructive Remove to a
+                  member holding `repo.delete`. The owner login is the same one `show` names in its
+                  Overview panel. %>
+              <% unless owns_repository?(repository) %>
+                <%= render UI::BadgeComponent.new(tone: :info, class: "shrink-0") { "Shared · #{repository.owner_login}" } %>
+              <% end %>
+            </div>
             <div class="flex items-center gap-2">
-              <%= render UI::BadgeComponent.new(tone: :neutral) { pluralize(repository.api_keys.size, "key") } %>
+              <%# The key count is credential information, and `show` gates every bit of it behind
+                  `keys.manage` (see the API keys panel there). A count on this card would hand a
+                  `view`-only member more than the page it links to is willing to. The intent count
+                  is not credential information and stays for everyone. %>
+              <% if key_count_visible?(repository) %>
+                <%= render UI::BadgeComponent.new(tone: :neutral) { pluralize(repository.api_keys.size, "key") } %>
+              <% end %>
               <%= render UI::BadgeComponent.new(tone: :info) { pluralize(repository.spec_intents.size, "intent") } %>
             </div>
           </div>
