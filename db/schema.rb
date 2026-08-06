@@ -10,18 +10,20 @@
 #
 # It's strongly recommended that you check this file into your version control system.
 
-ActiveRecord::Schema[8.1].define(version: 2026_08_06_000001) do
+ActiveRecord::Schema[8.1].define(version: 2026_08_06_120000) do
   # These are extensions that must be enabled in order to support this database
   enable_extension "pg_catalog.plpgsql"
   enable_extension "vector"
 
   create_table "api_keys", force: :cascade do |t|
     t.datetime "created_at", null: false
+    t.bigint "created_by_user_id"
     t.datetime "last_used_at"
     t.string "name", default: "Default CI Key"
     t.bigint "repository_id", null: false
     t.string "token_digest", null: false
     t.datetime "updated_at", null: false
+    t.index ["created_by_user_id"], name: "index_api_keys_on_created_by_user_id"
     t.index ["repository_id"], name: "index_api_keys_on_repository_id"
     t.index ["token_digest"], name: "index_api_keys_on_token_digest", unique: true
   end
@@ -91,6 +93,7 @@ ActiveRecord::Schema[8.1].define(version: 2026_08_06_000001) do
   end
 
   add_foreign_key "api_keys", "repositories"
+  add_foreign_key "api_keys", "users", column: "created_by_user_id"
   add_foreign_key "repositories", "users"
   add_foreign_key "repository_memberships", "repositories"
   add_foreign_key "repository_memberships", "users"

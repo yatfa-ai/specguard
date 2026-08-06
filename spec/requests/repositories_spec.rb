@@ -127,6 +127,53 @@ RSpec.describe "Repository registration and API keys", type: :request do
     }.to change(ApiKey, :count).by(-1)
   end
 
+  describe "recording who minted a key" do
+    it "attributes a newly minted key to the signed-in user" do
+      repository = register_repository
+
+      post repository_api_keys_path(repository), params: { api_key: { name: "Staging" } }
+
+      # Revoking is a hard delete with no audit row, so attribution recorded here is the only
+      # attribution there will ever be.
+      expect(ApiKey.last.created_by_user).to eq(@user)
+    end
+
+    it "names the creator against each key on the repository page" do
+      repository = create_repository(user: @user)
+      repository.api_keys.create!(name: "CI", created_by_user: @user)
+
+      get repository_path(repository)
+
+      expect(response.body).to include("Created by")
+      expect(response.body).to include(@user.display_name)
+    end
+
+    it "renders a fallback for a key with no recorded creator" do
+      repository = create_repository(user: @user)
+      repository.api_keys.create!(name: "Legacy CI")
+
+      get repository_path(repository)
+
+      expect(response).to have_http_status(:ok)
+      expect(response.body).to include("Unknown")
+      # The rest of the row must be unaffected by the missing attribution.
+      expect(response.body).to include("Legacy CI")
+      expect(response.body).to include("Revoke")
+    end
+
+    it "keeps every existing key column alongside the new one" do
+      repository = create_repository(user: @user)
+      repository.api_keys.create!(name: "CI", created_by_user: @user).touch_last_used!
+
+      get repository_path(repository)
+
+      ["Name", "Key", "Created by", "Created", "Last used"].each do |column|
+        expect(response.body).to include(column)
+      end
+      expect(response.body).to include(ApiKey.last.token_hint)
+    end
+  end
+
   it "does not expose another user's repository" do
     other = create_repository(user: create_user(github_uid: "9999", github_handle: "someone-else"),
                               github_full_name: "other/repo")

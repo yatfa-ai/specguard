@@ -11,6 +11,12 @@ class User < ApplicationRecord
   # "repositories this user owns" and is what RepositoriesController#index still lists.
   has_many :member_repositories, through: :repository_memberships, source: :repository
 
+  # `:nullify`, NOT `:destroy` — an API key belongs to the repository, not to whoever minted it.
+  # A collaborator's key is frequently the credential the owner's CI authenticates with, so deleting
+  # the collaborator must degrade the key to "unknown creator", never revoke it.
+  has_many :created_api_keys, class_name: "ApiKey", foreign_key: :created_by_user_id,
+                              dependent: :nullify, inverse_of: :created_by_user
+
   validates :github_uid, presence: true, uniqueness: true
   validates :github_handle, presence: true
 
