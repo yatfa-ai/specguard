@@ -7,7 +7,7 @@ class ApiKeysController < ApplicationController
   # never persisted anywhere. Only the SHA-256 digest reaches the database.
   def create
     repository = current_repository(:keys_manage)
-    api_key = repository.api_keys.create!(name: api_key_name)
+    api_key = repository.api_keys.create!(name: api_key_name, created_by_user: current_user)
 
     flash[:revealed_api_key] = api_key.raw_token
     # Deliberately a *second* flash value: `revealed_api_key` has to stay a bare token, because the

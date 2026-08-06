@@ -21,7 +21,9 @@ class RepositoriesController < ApplicationController
 
   def show
     @repository = current_repository(:view)
-    @api_keys = @repository.api_keys.order(created_at: :desc)
+    # `includes` because the table names the creator of every row — without it, listing keys is
+    # one user query per key.
+    @api_keys = @repository.api_keys.includes(:created_by_user).order(created_at: :desc)
     # The only signal that the repo ever reached the API: the newest use across every key.
     # `nil` means no key has ever authenticated — see the "Connect this repository" panel.
     @last_api_request_at = @repository.api_keys.maximum(:last_used_at)

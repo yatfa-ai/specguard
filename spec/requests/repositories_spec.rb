@@ -127,6 +127,75 @@ RSpec.describe "Repository registration and API keys", type: :request do
     }.to change(ApiKey, :count).by(-1)
   end
 
+  describe "recording who minted a key" do
+    # These read the parsed DOM rather than the raw body, because both of the obvious
+    # whole-document assertions are unsound on this page:
+    #
+    #   * `include(@user.display_name)` is satisfied by the topbar, which prints
+    #     `current_user.display_name` on every page (layouts/_topbar.html.erb:13) — so it passes
+    #     with the creator cell deleted.
+    #   * `include("Created")` is satisfied by the "Created by" header — so it passes with the
+    #     pre-existing timestamp column deleted.
+    #
+    # Scoping to the key's own row and to the header cells makes both assertions load-bearing.
+    # `find("table")` is unambiguous today: the API-keys table is the only one on this page. A
+    # second table would raise Capybara::Ambiguous here, which is a loud failure, not a silent pass.
+    def api_keys_table = Capybara.string(response.body).find("table")
+
+    def api_key_headers = api_keys_table.all("thead th").map(&:text)
+
+    def api_key_row(name) = api_keys_table.find("tbody tr", text: name)
+
+    it "attributes a newly minted key to the signed-in user" do
+      repository = register_repository
+
+      post repository_api_keys_path(repository), params: { api_key: { name: "Staging" } }
+
+      # Revoking is a hard delete with no audit row, so attribution recorded here is the only
+      # attribution there will ever be.
+      expect(ApiKey.last.created_by_user).to eq(@user)
+    end
+
+    it "names the colleague who minted a key on the owner's page" do
+      # The scenario this slice exists for: a collaborator holding `keys.manage` mints a Bearer
+      # credential on someone else's repository, and the owner has to be able to tell which key
+      # is theirs before revoking anything.
+      repository = create_repository(user: @user)
+      colleague = create_user(github_uid: "4004", github_handle: "departing-dev")
+      create_membership(repository: repository, user: colleague,
+                        permissions: [RepositoryMembership::VIEW, RepositoryMembership::KEYS_MANAGE])
+      repository.api_keys.create!(name: "Shared CI", created_by_user: colleague)
+
+      get repository_path(repository)
+
+      # Deliberately *not* the signed-in user's own handle — that one is in the topbar regardless.
+      expect(api_key_row("Shared CI")).to have_text("departing-dev")
+    end
+
+    it "renders a fallback for a key with no recorded creator" do
+      repository = create_repository(user: @user)
+      repository.api_keys.create!(name: "Legacy CI")
+
+      get repository_path(repository)
+
+      expect(response).to have_http_status(:ok)
+      # The rest of the row must be unaffected by the missing attribution.
+      expect(api_key_row("Legacy CI")).to have_text("Unknown").and have_text("Revoke")
+    end
+
+    it "adds the creator column without disturbing the existing key columns" do
+      repository = create_repository(user: @user)
+      repository.api_keys.create!(name: "CI", created_by_user: @user).touch_last_used!
+
+      get repository_path(repository)
+
+      # Exact and ordered, so "Created by" cannot stand in for "Created". The trailing "" is the
+      # Revoke button's unlabelled column.
+      expect(api_key_headers).to eq(["Name", "Key", "Created by", "Created", "Last used", ""])
+      expect(api_key_row("CI")).to have_text(ApiKey.last.token_hint)
+    end
+  end
+
   it "does not expose another user's repository" do
     other = create_repository(user: create_user(github_uid: "9999", github_handle: "someone-else"),
                               github_full_name: "other/repo")

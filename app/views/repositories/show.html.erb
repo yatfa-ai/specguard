@@ -122,11 +122,15 @@
         <% end %>
 
         <% if @api_keys.any? %>
-          <%= render UI::TableComponent.new(columns: ["Name", "Key", "Created", "Last used", ""]) do %>
+          <%= render UI::TableComponent.new(columns: ["Name", "Key", "Created by", "Created", "Last used", ""]) do %>
             <% @api_keys.each do |api_key| %>
               <tr>
                 <td class="px-3 py-2"><%= api_key.name %></td>
                 <td class="px-3 py-2 font-mono text-xs text-app-content-secondary"><%= api_key.token_hint %></td>
+                <td class="px-3 py-2 text-app-content-secondary">
+                  <%# Keys minted before attribution existed, or whose creator was deleted, read "Unknown". %>
+                  <%= api_key.created_by_user&.display_name || "Unknown" %>
+                </td>
                 <td class="px-3 py-2 text-app-content-secondary tabular-nums">
                   <%= time_ago_in_words(api_key.created_at) %> ago
                 </td>

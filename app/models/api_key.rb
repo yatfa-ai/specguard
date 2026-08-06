@@ -13,6 +13,12 @@ class ApiKey < ApplicationRecord
 
   belongs_to :repository
 
+  # Who minted the key, recorded at create time — attribution is not recoverable afterwards, since
+  # revoking a key deletes the row outright. `optional` on purpose: a key outlives the person who
+  # minted it (see `User has_many :created_api_keys, dependent: :nullify`), and keys minted before
+  # this column existed, or through any non-UI path, legitimately have no creator.
+  belongs_to :created_by_user, class_name: "User", optional: true
+
   # Populated on create only. `nil` on every record loaded from the database.
   attr_reader :raw_token
 
