@@ -16,6 +16,11 @@
 # member minted: the page and the confirm dialog before the click, the flash after it. The
 # judgement stays with the owner, who holds the actual lever in the API keys panel; what this
 # closes is their having no way to know they need to pull it.
+#
+# That disclosure is gated on `keys.manage`, NOT on the `members.manage` that gates the page —
+# see `keys_minted_by`. The two permissions are independent, so "who can reach this repository"
+# and "how many credentials exist on it" are separate questions and this page may only answer the
+# first to a viewer who holds only `members.manage`.
 class MembershipsController < ApplicationController
   before_action :require_authentication
 
@@ -53,7 +58,7 @@ class MembershipsController < ApplicationController
     if revoked_own_access
       redirect_to repositories_path, notice: "You no longer have access to #{repository.github_full_name}."
     else
-      redirect_to repository_members_path(repository), notice: revoke_notice(handle, keys_minted)
+      redirect_to repository_members_path(repository), notice: helpers.revoke_notice(handle, keys_minted)
     end
   end
 
@@ -66,22 +71,28 @@ class MembershipsController < ApplicationController
   # Scoped through `repository.api_keys`, so it can never read another repository's keys, and it
   # counts what is *live*: revoking a key deletes the row, so a member whose keys have all been
   # revoked drops out of the hash entirely and reads as zero.
+  #
+  # The `keys.manage` gate is the load-bearing line, and it lives HERE rather than at the two call
+  # sites for the same reason `current_repository` resolves and authorizes together: a caller that
+  # forgets it is a leak, and both callers need it. `members.manage` and `keys.manage` are
+  # independent permissions, so a viewer can hold this page without holding any right to key
+  # metadata — and `RepositoriesController#key_count_visible?` already states the rule this obeys:
+  # "repositories#show gates the whole API keys panel behind `keys.manage`, so a bare count would
+  # leak past the same line." A count on *this* page is the same count. An empty hash makes every
+  # surface downstream degrade to the zero-key wording, which is exactly right: a viewer who may
+  # not know the number should be told nothing, not told less.
+  #
+  # This also keeps the badge's deep link honest. It points at `#api-keys` on repositories#show,
+  # a panel that renders only under the same `keys.manage` — so gating on anything wider would
+  # render an affordance that lands on a page where the panel, the anchor and the Revoke button
+  # it promises all do not exist.
+  #
+  # `repository_policy` is memoized per repository and already populated by `current_repository`
+  # above, so this asks the database nothing.
   def keys_minted_by(repository, user_ids)
+    return {} unless repository_policy(repository).can?(:keys_manage)
     return {} if user_ids.empty?
 
     repository.api_keys.where(created_by_user_id: user_ids).group(:created_by_user_id).count
-  end
-
-  # Revoking a membership deliberately leaves that member's API keys authenticating — see
-  # `User has_many :created_api_keys, dependent: :nullify`, and the request spec that locks the
-  # behaviour in. The owner already holds the lever (Revoke, in the API keys panel); what they
-  # lacked was any signal that it needs pulling. Zero-key members keep the original one-sentence
-  # notice verbatim rather than being told about a consequence that did not happen.
-  def revoke_notice(handle, keys_minted)
-    return "Revoked #{handle}'s access." if keys_minted.zero?
-
-    "Revoked #{handle}'s access. #{helpers.pluralize(keys_minted, "API key")} they minted " \
-      "#{keys_minted == 1 ? "is" : "are"} still live — review " \
-      "#{keys_minted == 1 ? "it" : "them"} in the API keys panel."
   end
 end

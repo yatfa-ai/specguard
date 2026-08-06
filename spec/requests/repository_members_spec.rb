@@ -165,7 +165,10 @@ RSpec.describe "Repository members", type: :request do
       get repository_members_path(repository)
 
       expect(response.body).to include("hubot")
-      expect(response.body).not_to include("minted")
+      # Matched as the badge's shape rather than the bare word "minted", which any future copy — or
+      # a repository named `acme/minted-*` — could reintroduce, turning this control into a false
+      # failure about something it was never asserting.
+      expect(response.body).not_to match(/\d+ API keys? minted/)
       # The original one-sentence question, verbatim.
       expect(response.body).to include("Revoke hubot&#39;s access to acme/billing-service?")
       expect(response.body).not_to include("keep authenticating")
@@ -228,6 +231,119 @@ RSpec.describe "Repository members", type: :request do
       expect(response.parsed_body.dig("repository", "full_name")).to eq("acme/billing-service")
       # The key survived intact; only its attribution is at risk, and only if the *user* is deleted.
       expect(repository.api_keys.exists?(key.id)).to be(true)
+    end
+  end
+
+  # `members.manage` and `keys.manage` are independent entries in RepositoryMembership::PERMISSIONS,
+  # so this viewer is legitimate and reachable: they administer *who* can reach the repository and
+  # hold no right whatsoever to its credential metadata. Every example above runs as the owner, who
+  # holds both — which is why the whole block stays green whatever the disclosure is gated on. This
+  # is the pair that can actually tell the difference.
+  #
+  # The rule being obeyed is already written down one controller over, in
+  # `RepositoriesController#key_count_visible?`: repositories#show gates the entire API keys panel
+  # behind `keys.manage`, "so a bare count on the card would leak past the same line". A count on
+  # this page is the same count, and it must answer this viewer the same way.
+  describe "the key count and the 'keys.manage' line" do
+    let(:third_party) { create_user(github_uid: "8888", github_handle: "dependabot") }
+
+    before do
+      create_membership(repository: repository, user: third_party, permissions: %w[view keys.manage])
+      repository.api_keys.create!(name: "CI — main", created_by_user: third_party)
+      repository.api_keys.create!(name: "CI — release", created_by_user: third_party)
+    end
+
+    # The defect this block exists for: the viewer can revoke dependabot, and must be able to see
+    # that dependabot is there — but "two credentials exist on this repository" is not theirs to
+    # learn, on this page any more than on repositories#index.
+    context "a viewer holding 'members.manage' but not 'keys.manage'" do
+      before do
+        create_membership(repository: repository, user: colleague, permissions: %w[view members.manage])
+        sign_in_via_github(uid: "9999")
+      end
+
+      it "administers the member without being told how many keys exist" do
+        get repository_members_path(repository)
+
+        expect(response).to have_http_status(:ok)
+        expect(response.body).to include("dependabot")
+        expect(response.body).not_to match(/\d+ API keys? minted/)
+      end
+
+      # The same answer this viewer already gets one page over, asserted here so the two pages are
+      # pinned to each other rather than merely happening to agree today. Matched against the
+      # index's own badge copy — `pluralize(count, "key")`, not this page's "API key" — because a
+      # regex borrowed from the members page would never match there and would pass vacuously.
+      it "is refused the same count on the repositories index" do
+        get repositories_path
+
+        expect(response.body).to include("acme/billing-service")
+        expect(response.body).not_to match(/\b\d+ keys?\b/)
+      end
+
+      it "sees the original confirm question, with no sentence about surviving keys" do
+        get repository_members_path(repository)
+
+        expect(response.body).to include("Revoke dependabot&#39;s access to acme/billing-service?")
+        expect(response.body).not_to include("keep authenticating")
+      end
+
+      # The flash is an imperative, so leaking it here is worse than leaking the badge: it would
+      # tell this viewer to go review keys in a panel they cannot open. They get today's copy.
+      it "gets the original notice after revoking, not an instruction it cannot follow" do
+        membership = RepositoryMembership.find_by!(user: third_party, repository: repository)
+
+        delete repository_member_path(repository, membership)
+
+        expect(flash[:notice]).to eq("Revoked dependabot's access.")
+        expect(flash[:notice]).not_to include("API keys panel")
+      end
+
+      # What the badge promises has to exist at the other end of the link. It does not for this
+      # viewer — which is the reason the badge is withheld rather than merely unlinked.
+      it "cannot open the panel the badge would have pointed at" do
+        get repository_path(repository)
+
+        expect(response).to have_http_status(:ok)
+        expect(response.body).not_to include(%(id="api-keys"))
+      end
+    end
+
+    # The positive control, and the reason the gate is `can?(:keys_manage)` rather than `owner?`.
+    # Without this example, restricting the disclosure to the owner would pass every assertion
+    # above — a member who holds both permissions is entitled to the count and would silently
+    # stop receiving it.
+    context "a viewer holding both 'members.manage' and 'keys.manage'" do
+      before do
+        create_membership(repository: repository, user: colleague,
+                          permissions: %w[view keys.manage members.manage])
+        sign_in_via_github(uid: "9999")
+      end
+
+      it "sees the count, the confirm warning and the flash, exactly as the owner does" do
+        get repository_members_path(repository)
+
+        expect(response.body).to include("2 API keys minted")
+        expect(response.body).to include(
+          "The 2 API keys they minted will keep authenticating until you revoke them."
+        )
+
+        delete repository_member_path(repository, RepositoryMembership.find_by!(user: third_party,
+                                                                               repository: repository))
+
+        expect(flash[:notice]).to eq(
+          "Revoked dependabot's access. 2 API keys they minted are still live — " \
+          "review them in the API keys panel."
+        )
+      end
+
+      # The badge's deep link, from this viewer's session: the panel and its anchor really are
+      # reachable for anyone the badge is shown to.
+      it "can open the panel the badge points at" do
+        get repository_path(repository)
+
+        expect(response.body).to include(%(id="api-keys"))
+      end
     end
   end
 

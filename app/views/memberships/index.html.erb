@@ -32,7 +32,11 @@
                     membership will not revoke these. Warning tone, not error — nothing is broken
                     yet, and the owner may well want the key to survive (it is frequently what
                     their CI authenticates with). The link goes to the panel holding the lever.
-                    Members who minted nothing render nothing at all. %>
+                    Members who minted nothing render nothing at all — and so does every member
+                    when the viewer lacks `keys.manage`, because `@keys_minted` is then empty by
+                    construction (see MembershipsController#keys_minted_by). That is what keeps
+                    this link honest as well as this count: the `#api-keys` panel it points at
+                    renders under the same permission. %>
                 <% if keys_minted.positive? %>
                   <%= link_to repository_path(@repository, anchor: "api-keys"),
                               title: "Revoking access will not revoke these keys — review them in the API keys panel." do %>
