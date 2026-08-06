@@ -183,6 +183,85 @@ RSpec.describe "Repository registration and API keys", type: :request do
       expect(api_key_row("Legacy CI")).to have_text("Unknown").and have_text("Revoke")
     end
 
+    # The marker for a creator who no longer holds access. Its own describe rather than more
+    # examples above, because every one of these needs the same two-people-and-a-revocation setup.
+    describe "a key whose creator has since lost access" do
+      # Counts the SELECTs a block issues, so "no per-row query" is asserted rather than eyeballed.
+      # Schema reads and cached repeats are excluded: neither is work this page chose to do.
+      def count_queries
+        count = 0
+        subscriber = ActiveSupport::Notifications.subscribe("sql.active_record") do |_, _, _, _, payload|
+          count += 1 unless payload[:cached] || payload[:name].in?(["SCHEMA", "TRANSACTION"])
+        end
+        yield
+        count
+      ensure
+        ActiveSupport::Notifications.unsubscribe(subscriber)
+      end
+
+      # A colleague who minted a key and whose membership was then destroyed — reachable on main
+      # today: MembershipsController#destroy touches no api_keys row, so the key outlives the
+      # access it was minted under.
+      def revoked_colleague(repository, handle:, uid:, key_name:)
+        colleague = create_user(github_uid: uid, github_handle: handle)
+        membership = create_membership(repository: repository, user: colleague,
+                                       permissions: [RepositoryMembership::VIEW,
+                                                     RepositoryMembership::KEYS_MANAGE])
+        repository.api_keys.create!(name: key_name, created_by_user: colleague)
+        membership.destroy!
+        colleague
+      end
+
+      it "names the ex-colleague and marks the key their revoked access left behind" do
+        repository = create_repository(user: @user)
+        revoked_colleague(repository, handle: "revoked-dev", uid: "5005", key_name: "Their CI")
+
+        get repository_path(repository)
+
+        # The handle still has to be there — the marker is added to the attribution, not swapped
+        # in for it. Without the handle the owner cannot tell *whose* key they are about to revoke.
+        expect(api_key_row("Their CI")).to have_text("revoked-dev")
+        expect(api_key_row("Their CI")).to have_text("no longer has access")
+      end
+
+      it "marks neither the owner's key, a current member's key, nor an unattributed one" do
+        repository = create_repository(user: @user)
+        current = create_user(github_uid: "6006", github_handle: "current-dev")
+        create_membership(repository: repository, user: current,
+                          permissions: [RepositoryMembership::VIEW, RepositoryMembership::KEYS_MANAGE])
+        repository.api_keys.create!(name: "Owner CI", created_by_user: @user)
+        repository.api_keys.create!(name: "Member CI", created_by_user: current)
+        repository.api_keys.create!(name: "Legacy CI")
+
+        get repository_path(repository)
+
+        # Four creator states, and they must stay four. The owner holds access implicitly and has
+        # no membership row, so reading the marker off "has a membership" alone would mark them.
+        expect(api_key_row("Owner CI")).to have_no_text("no longer has access")
+        expect(api_key_row("Member CI")).to have_no_text("no longer has access")
+        # A NULL creator is a legacy key or a deleted account, never an ex-member — saying they
+        # were revoked would be the page asserting something it does not know.
+        expect(api_key_row("Legacy CI")).to have_text("Unknown")
+        expect(api_key_row("Legacy CI")).to have_no_text("no longer has access")
+      end
+
+      it "asks about membership once for the whole table, not once per key" do
+        repository = create_repository(user: @user)
+        revoked_colleague(repository, handle: "revoked-dev", uid: "5005", key_name: "Their CI")
+
+        get repository_path(repository)
+        baseline = count_queries { get repository_path(repository) }
+
+        # Distinct creators as well as more rows: a per-row membership lookup would grow with
+        # either, and one that memoized per user would still grow with the second person.
+        revoked_colleague(repository, handle: "other-dev", uid: "5006", key_name: "Other CI")
+        3.times { |i| repository.api_keys.create!(name: "Owner CI #{i}", created_by_user: @user) }
+
+        expect(count_queries { get repository_path(repository) }).to eq(baseline)
+        expect(api_key_row("Other CI")).to have_text("no longer has access")
+      end
+    end
+
     it "adds the creator column without disturbing the existing key columns" do
       repository = create_repository(user: @user)
       repository.api_keys.create!(name: "CI", created_by_user: @user).touch_last_used!

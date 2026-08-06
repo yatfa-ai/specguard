@@ -134,7 +134,24 @@
                 <td class="px-3 py-2 font-mono text-xs text-app-content-secondary"><%= api_key.token_hint %></td>
                 <td class="px-3 py-2 text-app-content-secondary">
                   <%# Keys minted before attribution existed, or whose creator was deleted, read "Unknown". %>
-                  <%= api_key.created_by_user&.display_name || "Unknown" %>
+                  <% creator = api_key.created_by_user %>
+                  <div class="flex flex-wrap items-center gap-2">
+                    <span><%= creator&.display_name || "Unknown" %></span>
+                    <%# The durable half of the warning the members page gives at the moment of
+                        revocation: revoking a membership does not revoke the keys that member
+                        minted, so this row still authenticates. Warning tone, matching what the
+                        members page chose for the same fact — nothing is broken, and the owner may
+                        well want the key to survive; what they must not do is mistake it for a
+                        current colleague's. Renders only for a viewer who also holds
+                        `members.manage` — see RepositoriesController#access_holder_ids. %>
+                    <% if former_member?(creator) %>
+                      <%= render UI::BadgeComponent.new(
+                            tone: :warning,
+                            title: "#{creator.display_name} no longer has access to this repository, " \
+                                   "but this key still authenticates until it is revoked."
+                          ) { "no longer has access" } %>
+                    <% end %>
+                  </div>
                 </td>
                 <td class="px-3 py-2 text-app-content-secondary tabular-nums">
                   <%= time_ago_in_words(api_key.created_at) %> ago

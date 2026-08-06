@@ -3,8 +3,9 @@
 class RepositoriesController < ApplicationController
   before_action :require_authentication
 
-  # Both are per-card questions asked by repositories/index, once per repository in the list.
-  helper_method :owns_repository?, :key_count_visible?
+  # The first two are per-card questions asked by repositories/index, once per repository in the
+  # list. The third is a per-row question asked by repositories/show, once per API key.
+  helper_method :owns_repository?, :key_count_visible?, :former_member?
 
   # Everything the viewer can open: what they own, plus what has been shared with them. Kept as one
   # relation rather than `owned + shared`, because concatenating two Arrays orders them
@@ -30,6 +31,7 @@ class RepositoriesController < ApplicationController
     # Set by ApiKeysController#create and readable exactly once — see ApiKeysController.
     @revealed_token = flash[:revealed_api_key]
     @revealed_token_name = flash[:revealed_api_key_name]
+    @access_holder_ids = access_holder_ids
   end
 
   def new
@@ -97,6 +99,48 @@ class RepositoriesController < ApplicationController
   # card or fifty.
   def shared_permissions
     @shared_permissions ||= current_user.repository_memberships.pluck(:repository_id, :permissions).to_h
+  end
+
+  # The user ids that currently hold access to `@repository`: every membership row, plus the owner
+  # (who never has one — see RepositoryMembership#user_is_not_the_owner). One query for the whole
+  # table, the same single-query discipline as `shared_permissions` above and as
+  # `MembershipsController#keys_minted_by`; `includes(:created_by_user)` has already loaded the
+  # creators themselves, so the keys panel asks nothing further per row.
+  #
+  # `pluck(:user_id)` rather than `@repository.members`, because ids are all the caller compares
+  # and loading the User rows would be strictly more work for a strictly worse answer.
+  #
+  # `nil` — NOT an empty Set — when the viewer may not be told, and that distinction is the whole
+  # safety of this method: an empty set reads as "nobody holds access", which would mark *every*
+  # creator a former member. `former_member?` fails closed on the nil.
+  #
+  # The gate is `members.manage`, not the `keys.manage` that gates the panel this feeds, because
+  # "does this person still have access" is a membership question. `MembershipsController#keys_minted_by`
+  # already ruled on this exact collision in the opposite direction — the members page withholds a
+  # key count from a `members.manage`-only viewer — and this is that rule applied symmetrically. A
+  # member holding only `keys.manage` therefore sees the creator cell exactly as it read before this
+  # existed: told nothing, rather than told less. The owner holds every capability, so their page
+  # always shows it.
+  #
+  # `repository_policy` is memoized and already populated by `current_repository` in `show`, so the
+  # gate itself costs no query.
+  def access_holder_ids
+    return nil unless repository_policy.can?(:members_manage)
+
+    @repository.repository_memberships.pluck(:user_id).to_set << @repository.user_id
+  end
+
+  # A key's creator who no longer holds access — the durable half of the warning SPGD-113 gives at
+  # the moment of revocation. Revoking a membership deliberately does not revoke the keys that
+  # member minted (see `User has_many :created_api_keys, dependent: :nullify`), so this row is still
+  # a live credential and this page is where the owner holds the lever.
+  #
+  # A `nil` creator is NOT this: it is a legacy key or a deleted account, and it reads "Unknown".
+  # Conflating the two would have the page assert that a deleted user was revoked, which is false.
+  def former_member?(user)
+    return false if user.nil? || @access_holder_ids.nil?
+
+    @access_holder_ids.exclude?(user.id)
   end
 
   def repository_params
