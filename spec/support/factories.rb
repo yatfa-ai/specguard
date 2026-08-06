@@ -11,6 +11,12 @@ module Builders
     user.repositories.create!(github_full_name: github_full_name)
   end
 
+  # Shares an existing repository with a user who does not own it. `permissions` are the stored
+  # strings, e.g. %w[view keys.manage] — see RepositoryMembership::PERMISSIONS.
+  def create_membership(repository:, user:, permissions: [RepositoryMembership::VIEW])
+    RepositoryMembership.create!(repository: repository, user: user, permissions: permissions)
+  end
+
   def create_spec_intent(repository:, file_path: "spec/models/invoice_spec.rb", line_number: 12, **attrs)
     repository.spec_intents.create!(
       {

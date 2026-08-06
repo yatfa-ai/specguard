@@ -38,5 +38,9 @@ module Specguard
 
     # Don't generate system test files.
     config.generators.system_tests = nil
+
+    # A repository member who lacks one specific permission gets 403, not 404: they can already see
+    # the repository, so hiding it would be a lie. Non-members still raise RecordNotFound -> 404.
+    config.action_dispatch.rescue_responses["SpecGuard::NotAuthorized"] = :forbidden
   end
 end

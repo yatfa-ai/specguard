@@ -8,7 +8,7 @@ class RepositoriesController < ApplicationController
   end
 
   def show
-    @repository = current_repository
+    @repository = current_repository(:view)
     @api_keys = @repository.api_keys.order(created_at: :desc)
     # The only signal that the repo ever reached the API: the newest use across every key.
     # `nil` means no key has ever authenticated — see the "Connect this repository" panel.
@@ -32,15 +32,17 @@ class RepositoriesController < ApplicationController
     end
   end
 
+  # Rename is owner-only. `github_full_name` is both the repository's identity and the globally
+  # unique key, so no membership permission grants it — a member with `view` gets 403 here.
   def edit
-    @repository = current_repository
+    @repository = current_repository(:owner)
   end
 
   # Renaming is a pure metadata change: api_keys, test_runs and spec_intents are keyed by
   # repository_id, so none of them are touched. That is the whole point — the alternative
   # (Remove + re-register) destroys every key and all telemetry.
   def update
-    @repository = current_repository
+    @repository = current_repository(:owner)
 
     if @repository.update(repository_params)
       redirect_to repository_path(@repository), notice: rename_notice
@@ -50,7 +52,7 @@ class RepositoriesController < ApplicationController
   end
 
   def destroy
-    repository = current_repository
+    repository = current_repository(:repo_delete)
     repository.destroy!
 
     redirect_to repositories_path, notice: "Removed #{repository.github_full_name}."
