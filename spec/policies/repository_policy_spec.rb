@@ -79,4 +79,46 @@ RSpec.describe RepositoryPolicy do
     expect { policy_for(owner).can?(:launch_missiles) }
       .to raise_error(ArgumentError, /launch_missiles/)
   end
+
+  # The bound RepositoryMembership validates a grant against, and the set a future add/edit-member
+  # form renders its checkboxes from.
+  describe "#grantable_permissions" do
+    it "lets the owner grant every permission there is" do
+      expect(policy_for(owner).grantable_permissions).to match_array(RepositoryMembership::PERMISSIONS)
+    end
+
+    it "bounds a member by what they hold themselves" do
+      create_membership(repository: repository, user: teammate, permissions: %w[view members.manage])
+
+      expect(policy_for(teammate).grantable_permissions).to match_array(%w[view members.manage])
+    end
+
+    # `view` comes from the membership, not from the string, so a row that omits it may still
+    # delegate it — otherwise the grant rule and `can?` would disagree about the same person.
+    it "includes 'view' for a member whose row does not store it" do
+      create_membership(repository: repository, user: teammate, permissions: %w[keys.manage])
+
+      expect(policy_for(teammate).grantable_permissions).to match_array(%w[view keys.manage])
+    end
+
+    it "gives a member with no permissions nothing beyond 'view'" do
+      create_membership(repository: repository, user: teammate, permissions: [])
+
+      expect(policy_for(teammate).grantable_permissions).to eq(%w[view])
+    end
+
+    it "lets a non-member — and a nil user or repository — grant nothing" do
+      expect(policy_for(stranger).grantable_permissions).to be_empty
+      expect(described_class.new(nil, repository).grantable_permissions).to be_empty
+      expect(described_class.new(stranger, nil).grantable_permissions).to be_empty
+    end
+
+    # A permission added to PERMISSIONS with no matching capability must not silently become
+    # ungrantable forever; it fails as loudly as an unknown capability does in `can?`.
+    it "raises rather than skipping a permission that maps to no capability" do
+      stub_const("RepositoryMembership::PERMISSIONS", RepositoryMembership::PERMISSIONS + %w[repo.transfer])
+
+      expect { policy_for(owner).grantable_permissions }.to raise_error(KeyError)
+    end
+  end
 end

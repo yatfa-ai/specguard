@@ -37,6 +37,14 @@ class User < ApplicationRecord
   has_many :created_api_keys, class_name: "ApiKey", foreign_key: :created_by_user_id,
                               dependent: :nullify, inverse_of: :created_by_user
 
+  # `:nullify` for the same reason as `created_api_keys`, one step further: a membership is somebody
+  # *else's* access. Deleting the person who granted it must forget who granted it, never revoke the
+  # colleague who was granted it — and it must not be confused with `repository_memberships` above,
+  # which is this user's own access and does go away with them.
+  has_many :granted_repository_memberships, class_name: "RepositoryMembership",
+                                            foreign_key: :granted_by_user_id,
+                                            dependent: :nullify, inverse_of: :granted_by_user
+
   before_validation :normalize_github_handle
 
   validates :github_uid, presence: true, uniqueness: true

@@ -15,12 +15,16 @@ class RepositoryMembership < ApplicationRecord
 
   belongs_to :user
   belongs_to :repository
+  # Optional, and the validation below fails open on nil — see `grantor_holds_every_granted_permission`.
+  belongs_to :granted_by_user, class_name: "User", optional: true,
+                               inverse_of: :granted_repository_memberships
 
   before_validation :normalize_permissions
 
   validates :user_id, uniqueness: { scope: :repository_id, message: "already has a membership on this repository" }
   validate :permissions_are_known
   validate :user_is_not_the_owner
+  validate :grantor_holds_every_granted_permission
 
   private
 
@@ -41,5 +45,47 @@ class RepositoryMembership < ApplicationRecord
     return unless repository.user_id == user_id
 
     errors.add(:user, "already owns this repository")
+  end
+
+  # Nobody may grant access they do not themselves hold.
+  #
+  # Without this, `members.manage` ("add/remove collaborators, edit permissions") is a lever to
+  # every other permission: its holder can write `repo.delete` onto their own row and then destroy
+  # the owner's repository, taking every API key, test run and spec intent with it through
+  # `Repository`'s `dependent: :destroy`. Two steps, and until now no gate at either.
+  #
+  # The bound comes from `RepositoryPolicy#grantable_permissions` rather than being re-derived from
+  # the permission strings here, so "what a grant may contain" and "what a membership yields" stay
+  # one rule instead of two that drift. That also means the grantor's rights are read from the
+  # *persisted* row: a member editing their own membership is measured against what they hold now,
+  # not against what this save is trying to give them, so a grant cannot bootstrap itself.
+  #
+  # FAILS OPEN on a nil grantor. A row saved without one persists exactly as it did before this
+  # column existed — the same "legacy rows read Unknown" semantics already accepted for
+  # `api_keys.created_by_user_id`. Memberships are written today only by the spec builders and the
+  # console, neither of which has a grantor to name, and failing closed would break both. Naming the
+  # grantor is therefore the *writer's* job: the controller that adds or edits members must set it
+  # explicitly, and must not rely on this validation to notice that it forgot.
+  #
+  # AND IT MUST NAME THE RIGHT ONE. `granted_by_user` has to be derived server-side from the
+  # authenticated actor (the session's user), and must never be permitted through strong params or
+  # otherwise taken from the request body. This validation trusts the grantor it is handed — a model
+  # cannot know who made the HTTP request — so a form that permits `granted_by_user_id` lets a member
+  # holding `members.manage` submit the *owner's* id, at which point the bound below is computed
+  # against the owner's unlimited rights and every guarantee here evaporates. Worse than absent: the
+  # save reports success, and the two-step escalation this validation exists to close is reopened
+  # while the model still looks like it is defending against it.
+  def grantor_holds_every_granted_permission
+    return if granted_by_user.nil? || repository.nil?
+
+    # Intersected with PERMISSIONS so an unknown value is reported once, by `permissions_are_known`,
+    # rather than twice under two different explanations ("unknown" and "you don't hold it").
+    ungrantable = (permissions & PERMISSIONS) - RepositoryPolicy.new(granted_by_user, repository).grantable_permissions
+    return if ungrantable.empty?
+
+    errors.add(
+      :permissions,
+      "includes #{'permission'.pluralize(ungrantable.size)} the grantor does not hold: #{ungrantable.join(', ')}"
+    )
   end
 end
