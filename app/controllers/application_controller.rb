@@ -6,7 +6,7 @@ class ApplicationController < ActionController::Base
 
   default_form_builder Forms::FormBuilder
 
-  helper_method :current_user, :signed_in?, :github_oauth_configured?
+  helper_method :current_user, :signed_in?, :github_oauth_configured?, :repository_policy
 
   private
 
@@ -28,7 +28,42 @@ class ApplicationController < ActionController::Base
     redirect_to root_path, alert: "Sign in with GitHub to continue."
   end
 
-  def current_repository
-    @current_repository ||= current_user.repositories.find(params[:repository_id] || params[:id])
+  # Resolves the repository named in the URL *and* authorizes the current action against it, in one
+  # call, because every caller needs both and separating them invites a call site that forgets the
+  # second. `capability` is a key of RepositoryPolicy::CAPABILITIES.
+  #
+  # The two failure shapes are deliberate:
+  #   - not a member of the repository -> 404. Its existence stays hidden, exactly as it was when
+  #     this method scoped `.find` to `current_user.repositories`.
+  #   - a member without this particular permission -> 403. They can already see the repository, so
+  #     404 would be a lie.
+  # The lookup is memoized; the authorization deliberately is not. Memoizing the *result* would
+  # mean a second call with a different capability silently reused the first call's verdict.
+  def current_repository(capability)
+    @current_repository ||= Repository.find_by(id: params[:repository_id] || params[:id])
+
+    authorize_repository!(@current_repository, capability)
+  end
+
+  def authorize_repository!(repository, capability)
+    policy = repository_policy(repository)
+
+    raise ActiveRecord::RecordNotFound if repository.nil? || !policy.member?
+    raise SpecGuard::NotAuthorized unless policy.can?(capability)
+
+    repository
+  end
+
+  # Exposed to views (`helper_method` above) so a template can ask the same question the controller
+  # asked. Every control on repositories/show links to an action `current_repository` authorizes, so
+  # rendering one the viewer does not hold is an affordance that can only ever produce a 403 — and
+  # for "Remove" that means a destructive confirm dialog followed by an error page. A view is a call
+  # site of this policy like any other.
+  #
+  # Memoized per repository, and shared with `authorize_repository!` above, so a page that asks
+  # several capabilities loads the membership row once rather than once per question.
+  def repository_policy(repository = @current_repository)
+    @repository_policies ||= Hash.new { |cache, repo| cache[repo] = RepositoryPolicy.new(current_user, repo) }
+    @repository_policies[repository]
   end
 end
