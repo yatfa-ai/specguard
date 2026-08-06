@@ -138,10 +138,20 @@
           <% annotated_specs = @latest_test_run.annotated_specs_count.to_i %>
           <% invisible_specs = total_specs - annotated_specs %>
 
-          <%# Real counts, not `(annotated_ratio, 100)`. The component computes the percentage
-              itself, and passing the counts puts the true denominator into `aria-valuemax` for
-              free — the accessible markup carries the same honesty the visible text does. %>
-          <%= render UI::MeterComponent.new(value: annotated_specs, max: total_specs, label: "Annotated") %>
+          <%# A run reporting no tests has no share to display: 0/0 renders as a tidy `0%` headline
+              that reads exactly like a real suite measured at zero annotations — the same
+              conflation the never-ingested branch above refuses, one state over. So the meter is
+              suppressed rather than drawn against an empty denominator, and the counts plus the
+              sentence below carry it. (It is also a degenerate meter: `aria-valuemax` equal to
+              `aria-valuemin` announces a scale a screen reader cannot place a value on.) %>
+          <% measured_tests = total_specs.positive? %>
+
+          <% if measured_tests %>
+            <%# Real counts, not `(annotated_ratio, 100)`. The component computes the percentage
+                itself, and passing the counts puts the true denominator into `aria-valuemax` for
+                free — the accessible markup carries the same honesty the visible text does. %>
+            <%= render UI::MeterComponent.new(value: annotated_specs, max: total_specs, label: "Annotated") %>
+          <% end %>
 
           <%= render UI::DefListComponent.new(rows: [
                 ["Tests in suite", number_with_delimiter(total_specs)],
@@ -149,14 +159,7 @@
                 ["Not visible to SpecGuard", number_with_delimiter(invisible_specs)]
               ]) %>
 
-          <% if total_specs.zero? %>
-            <%# A run that reported no tests divides by zero into a tidy 0%, which reads exactly
-                like a suite with no annotations. Say which one it is. %>
-            <p class="text-xs text-app-muted">
-              The latest run reported no tests at all, so there is nothing to take a share of. The
-              0% above describes that run, not this suite.
-            </p>
-          <% else %>
+          <% if measured_tests %>
             <p class="text-xs text-app-muted">
               <%= @latest_test_run.annotated_ratio %>% — <%= number_with_delimiter(annotated_specs) %>
               of <%= number_with_delimiter(total_specs) %> tests carry an @intent.
@@ -166,6 +169,12 @@
                 SpecGuard cannot see the other <%= number_with_delimiter(invisible_specs) %>
                 <%= "test".pluralize(invisible_specs) %>.
               <% end %>
+            </p>
+          <% else %>
+            <p class="text-xs text-app-muted">
+              The latest run reported no tests at all, so there is no share to take and no coverage
+              figure to show — not a coverage figure of zero. That is a fact about this run, not
+              about the suite.
             </p>
           <% end %>
 

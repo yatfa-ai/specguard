@@ -298,8 +298,17 @@ RSpec.describe "Repository registration and API keys", type: :request do
 
       get repository_path(repository)
 
-      # 0/0 divides into a tidy 0% that reads exactly like "a suite with no annotations".
-      expect(overview_panel).to have_text("reported no tests at all", normalize_ws: true)
+      # 0/0 divides into a tidy 0% that reads exactly like "a suite with no annotations", so the
+      # meter is suppressed here the same way it is for a never-ingested repo — asserting the
+      # absence, not just the presence of the sentence that explains it.
+      panel = overview_panel
+      expect(panel).to have_text("reported no tests at all", normalize_ws: true)
+      expect(panel).to have_no_text("0%", normalize_ws: true)
+      expect(panel).to have_no_css("[role='meter']")
+      # ...while the counts themselves still render: "the run measured nothing" is a fact worth
+      # stating, and it is not the same as "no run has reported".
+      expect(panel).to have_text("Tests in suite 0", normalize_ws: true)
+      expect(panel).to have_no_text("No CI run has reported yet", normalize_ws: true)
     end
 
     it "labels the spec-intent count as a search index, not as a share of the suite" do
