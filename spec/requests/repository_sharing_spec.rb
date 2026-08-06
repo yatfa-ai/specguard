@@ -66,13 +66,45 @@ RSpec.describe "Repository sharing", type: :request do
       expect(response).to have_http_status(:forbidden)
     end
 
-    # Slice 2 (members management UI + shared-repo index) is where this changes. Until then a
-    # shared repository is reachable by URL but is not listed for the member.
-    it "does not yet see the shared repository in their index" do
+    # Slice 1 listed only owned repositories, so a shared one was reachable by URL and on no page
+    # the member could get to. Slice 2a is where that changes — this is slice 1's own tripwire,
+    # inverted.
+    it "sees the shared repository in their index, linking to it" do
       get repositories_path
 
       expect(response).to have_http_status(:ok)
-      expect(response.body).not_to include("acme/billing-service")
+      expect(response.body).to include("acme/billing-service")
+      expect(response.body).to include(%(href="#{repository_path(repository)}"))
+    end
+
+    # Decision (a). Without it the member cannot tell a shared repository from one of their own,
+    # and repositories#show offers a member holding `repo.delete` a destructive Remove on it.
+    it "sees the owner's login on the shared card" do
+      get repositories_path
+
+      expect(response.body).to include("Shared · acme")
+    end
+
+    # Decision (b). repositories#show gates every scrap of key metadata — names, hints, last-used —
+    # behind `keys.manage`, so the card must not hand this member a key count the page it links to
+    # would refuse them. The intent count is not credential information and stays.
+    it "sees no key count on the shared card, but still sees the intent count" do
+      repository.api_keys.create!(name: "CI")
+      create_spec_intent(repository: repository)
+
+      get repositories_path
+
+      expect(response.body).not_to include("1 key")
+      expect(response.body).to include("1 intent")
+    end
+
+    # Decision (d). "Every repository you have registered" stopped being true the moment shared
+    # repositories appeared in this list — the member registered none of them.
+    it "sees a subtitle that admits the list is not all their own registrations" do
+      get repositories_path
+
+      expect(response.body).to include("shared with you")
+      expect(response.body).not_to include("Every repository you have registered")
     end
   end
 
@@ -90,6 +122,16 @@ RSpec.describe "Repository sharing", type: :request do
       expect {
         delete repository_api_key_path(repository, repository.api_keys.last)
       }.to change { repository.api_keys.count }.by(-1)
+    end
+
+    # The positive control for the suppression above: the key count is gated on the permission, not
+    # on the card being shared. Without this, dropping the badge entirely would still pass.
+    it "sees the key count on the shared card" do
+      repository.api_keys.create!(name: "CI")
+
+      get repositories_path
+
+      expect(response.body).to include("1 key")
     end
   end
 
@@ -205,6 +247,15 @@ RSpec.describe "Repository sharing", type: :request do
       expect { delete repository_path(repository) }.not_to change(Repository, :count)
       expect(response).to have_http_status(:not_found)
     end
+
+    # Existence stays hidden on the index too, not just on the record's own URL.
+    it "sees an empty index rather than the repository" do
+      get repositories_path
+
+      expect(response).to have_http_status(:ok)
+      expect(response.body).not_to include("acme/billing-service")
+      expect(response.body).to include("No repositories yet")
+    end
   end
 
   describe "the owner" do
@@ -235,6 +286,64 @@ RSpec.describe "Repository sharing", type: :request do
       get repository_path(repository)
 
       expect(response).to have_http_status(:ok)
+    end
+  end
+
+  describe "the owner's index" do
+    before do
+      repository
+      sign_in_via_github
+    end
+
+    # The union must not double-count. It cannot today — RepositoryMembership rejects a row for the
+    # owner — so this pins that invariant rather than a `.distinct` papering over its absence. Two
+    # members, not one: a join-based union fans an owned repository out to one row *per* membership,
+    # which a single membership row hides.
+    it "lists an owned repository exactly once, however many members hold it" do
+      %w[9999 8888].each_with_index do |uid, index|
+        create_membership(repository: repository,
+                          user: create_user(github_uid: uid, github_handle: "someone-else-#{index}"),
+                          permissions: RepositoryMembership::PERMISSIONS)
+      end
+
+      get repositories_path
+
+      expect(response.body.scan(%(href="#{repository_path(repository)}")).size).to eq(1)
+    end
+
+    # The other half of decision (a): the badge marks *shared*, so it must be absent when it isn't.
+    it "renders no owner badge on a repository it owns" do
+      get repositories_path
+
+      expect(response.body).to include("acme/billing-service")
+      expect(response.body).not_to include("Shared ·")
+    end
+
+    # The other half of decision (b): the owner holds every capability, so their card is unchanged.
+    it "still sees both the key and the intent count" do
+      repository.api_keys.create!(name: "CI")
+      create_spec_intent(repository: repository)
+
+      get repositories_path
+
+      expect(response.body).to include("1 key")
+      expect(response.body).to include("1 intent")
+    end
+  end
+
+  # The index is a union of two sets, and its failure mode is an implementation that concatenates
+  # them: `owned + shared` is an Array, so `.order` no longer applies and the page silently becomes
+  # owned-then-shared. These two names are chosen so alphabetical and concatenated order disagree.
+  describe "how the index orders owned and shared repositories" do
+    it "sorts across both, rather than listing the owned one first" do
+      member = sign_in_via_github(uid: "9999")
+      create_repository(user: member, github_full_name: "zz/owned")
+      create_membership(repository: create_repository(user: owner, github_full_name: "aa/shared"), user: member)
+
+      get repositories_path
+
+      expect(response.body).to include("zz/owned").and include("aa/shared")
+      expect(response.body.index("aa/shared")).to be < response.body.index("zz/owned")
     end
   end
 end
