@@ -86,4 +86,104 @@ RSpec.describe RepositoryMembership do
     expect { owner.destroy! }.to change(described_class, :count).by(-1)
     expect(Repository.count).to eq(0)
   end
+
+  # Nobody may grant access they do not hold themselves. Without this, `members.manage` is a lever
+  # to every other permission — grant yourself `repo.delete`, then destroy the owner's repository.
+  describe "the bound on what a grantor may grant" do
+    let(:newcomer) { create_user(github_uid: "5555", github_handle: "newcomer") }
+    let(:stranger) { create_user(github_uid: "7777", github_handle: "nobody") }
+
+    # A colleague brought in to onboard the team: they may manage members, and nothing more.
+    def onboarder
+      teammate.tap do
+        create_membership(repository: repository, user: teammate, permissions: %w[view members.manage])
+      end
+    end
+
+    it "refuses a permission the grantor does not hold, naming it" do
+      membership = described_class.new(repository: repository, user: newcomer,
+                                       permissions: %w[view repo.delete], granted_by_user: onboarder)
+
+      expect(membership).not_to be_valid
+      expect(membership.errors[:permissions].join).to include("repo.delete")
+    end
+
+    # The escalation this validation exists to stop: `members.manage` means "edit permissions", and
+    # the row a member can edit includes their own.
+    it "refuses a member escalating their own row" do
+      grantor = onboarder
+      own_membership = described_class.find_by!(user: grantor, repository: repository)
+
+      own_membership.granted_by_user = grantor
+      own_membership.permissions = %w[view members.manage repo.delete]
+
+      expect(own_membership).not_to be_valid
+      expect(own_membership.errors[:permissions].join).to include("repo.delete")
+      expect(own_membership.reload.permissions).to match_array(%w[view members.manage])
+    end
+
+    it "allows delegation within the grantor's own rights" do
+      membership = described_class.create!(repository: repository, user: newcomer,
+                                          permissions: %w[view members.manage], granted_by_user: onboarder)
+
+      expect(membership).to be_persisted
+      expect(RepositoryPolicy.new(newcomer, repository)).to be_can(:members_manage)
+    end
+
+    # Membership implies `view`, so a grantor whose row omits the string still holds the capability.
+    it "allows a grantor whose own row omits 'view' to grant 'view'" do
+      create_membership(repository: repository, user: teammate, permissions: %w[members.manage])
+
+      membership = described_class.new(repository: repository, user: newcomer,
+                                       permissions: %w[view], granted_by_user: teammate)
+
+      expect(membership).to be_valid
+    end
+
+    it "lets the owner grant anything, including the permissions that are the point of this rule" do
+      membership = described_class.create!(repository: repository, user: newcomer,
+                                          permissions: described_class::PERMISSIONS, granted_by_user: owner)
+
+      expect(membership.permissions).to match_array(described_class::PERMISSIONS)
+    end
+
+    it "refuses every permission from a grantor who is not a member at all" do
+      membership = described_class.new(repository: repository, user: newcomer,
+                                       permissions: %w[view], granted_by_user: stranger)
+
+      expect(membership).not_to be_valid
+      expect(membership.errors[:permissions].join).to include("view")
+    end
+
+    # Fail OPEN: a row saved with no grantor persists exactly as it did before this column existed,
+    # which is what keeps the console, the seeds and `create_membership` working unchanged.
+    it "persists a row with no grantor, however privileged the grant" do
+      membership = create_membership(repository: repository, user: newcomer, permissions: %w[repo.delete])
+
+      expect(membership).to be_persisted
+      expect(membership.granted_by_user).to be_nil
+    end
+
+    # An unknown value is one mistake and gets one explanation, not "unknown" plus "you don't hold it".
+    it "reports an unknown permission once, as unknown" do
+      membership = described_class.new(repository: repository, user: newcomer,
+                                       permissions: %w[launch.missiles], granted_by_user: onboarder)
+
+      expect(membership).not_to be_valid
+      expect(membership.errors[:permissions].size).to eq(1)
+      expect(membership.errors[:permissions].join).to include("unknown")
+    end
+
+    # Deleting the grantor forgets who granted it; it must never revoke the colleague's access.
+    it "keeps the grant when the grantor is deleted, and forgets the grantor" do
+      grantor = onboarder
+      membership = described_class.create!(repository: repository, user: newcomer,
+                                          permissions: %w[view], granted_by_user: grantor)
+
+      grantor.destroy!
+
+      expect(membership.reload.granted_by_user_id).to be_nil
+      expect(repository.reload.members).to eq([newcomer])
+    end
+  end
 end

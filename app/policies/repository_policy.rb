@@ -24,6 +24,12 @@ class RepositoryPolicy
     owner: OWNER_ONLY
   }.freeze
 
+  # CAPABILITIES read backwards, for the permissions a membership row can actually store. `:owner`
+  # is excluded because OWNER_ONLY is a sentinel rather than a storable string — inverting it would
+  # put a non-permission on the left-hand side of a map whose whole job is to translate stored
+  # permissions.
+  CAPABILITY_BY_PERMISSION = CAPABILITIES.except(:owner).invert.freeze
+
   attr_reader :user, :repository
 
   def initialize(user, repository)
@@ -56,6 +62,25 @@ class RepositoryPolicy
     return true if permission == RepositoryMembership::VIEW
 
     membership.permissions.include?(permission)
+  end
+
+  # What this user may hand to somebody else: the bound `RepositoryMembership` validates a grant
+  # against, and the set an "add/edit member" form should render checkboxes from — so the grid
+  # offers only what the save will accept, rather than options that are rejected on submit.
+  #
+  # Derived from `can?` rather than read off the row, which is what keeps the answer honest for a
+  # member whose row omits "view": membership itself grants view (see `can?`), so they may delegate
+  # it. Deriving it here from the stored strings instead would make "what a grant may contain" and
+  # "what a membership yields" two rules that can drift.
+  #
+  # A non-member — including a nil user or a nil repository — may grant nothing.
+  #
+  # `fetch` with no default on purpose: a permission added to `RepositoryMembership::PERMISSIONS`
+  # without a matching capability raises here, exactly as `can?` raises on a capability that does
+  # not exist. Silently omitting it would make the new permission ungrantable forever, and nothing
+  # would say so.
+  def grantable_permissions
+    RepositoryMembership::PERMISSIONS.select { |permission| can?(CAPABILITY_BY_PERMISSION.fetch(permission)) }
   end
 
   private
