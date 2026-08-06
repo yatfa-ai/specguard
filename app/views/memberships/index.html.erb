@@ -1,0 +1,73 @@
+<% content_for :title, "Members · #{@repository.github_full_name} · SpecGuard" %>
+
+<%= render UI::PageComponent.new do %>
+  <%= render UI::BreadcrumbComponent.new(items: [
+        { label: "Repositories", href: repositories_path },
+        { label: @repository.github_full_name, href: repository_path(@repository) },
+        { label: "Members" }
+      ]) %>
+
+  <%= render UI::PageHeaderComponent.new(
+        title: "Members",
+        subtitle: "Who can reach #{@repository.github_full_name}, and what they hold."
+      ) do |header| %>
+    <% header.with_actions do %>
+      <%= render UI::ButtonComponent.new(variant: :ghost, href: repository_path(@repository)) { "Back to repository" } %>
+    <% end %>
+  <% end %>
+
+  <%= render UI::PanelComponent.new(title: "Shared with", body_class: @memberships.any? ? "p-0" : "p-4") do %>
+    <% if @memberships.any? %>
+      <%= render UI::TableComponent.new(columns: ["Member", "Permissions", "Since", ""]) do %>
+        <% @memberships.each do |membership| %>
+          <tr>
+            <td class="px-3 py-2">
+              <div class="flex items-center gap-2">
+                <% if membership.user.avatar_url.present? %>
+                  <%= image_tag membership.user.avatar_url, alt: "", class: "size-6 rounded-full", loading: "lazy" %>
+                <% end %>
+                <span class="text-app-content"><%= membership.user.github_handle %></span>
+              </div>
+            </td>
+            <td class="px-3 py-2">
+              <%# The stored permission set, verbatim. `view` is implied by the membership itself
+                  (see RepositoryPolicy#can?), so a row can legitimately store none at all — the
+                  footnote below says so rather than this cell inventing a permission nobody
+                  granted. %>
+              <% if membership.permissions.any? %>
+                <div class="flex flex-wrap items-center gap-1">
+                  <% membership.permissions.each do |permission| %>
+                    <%= render UI::BadgeComponent.new(tone: :neutral) { permission } %>
+                  <% end %>
+                </div>
+              <% else %>
+                <span class="text-xs text-app-muted">none stored</span>
+              <% end %>
+            </td>
+            <td class="px-3 py-2 text-app-content-secondary tabular-nums">
+              <%= time_ago_in_words(membership.created_at) %> ago
+            </td>
+            <td class="px-3 py-2 text-right">
+              <%= button_to "Revoke", repository_member_path(@repository, membership), method: :delete,
+                            class: UI::ButtonComponent.classes(variant: :danger, size: :xs),
+                            form: { data: { turbo_confirm: "Revoke #{membership.user.github_handle}'s access to #{@repository.github_full_name}?" } } %>
+            </td>
+          </tr>
+        <% end %>
+      <% end %>
+    <% else %>
+      <%= render UI::EmptyStateComponent.new(
+            title: "No one else has access",
+            description: "Only #{@repository.owner_login} can reach this repository. Adding a colleague " \
+                         "by GitHub handle is not available yet — memberships are created from the console " \
+                         "for now, and this page is where you take one away."
+          ) %>
+    <% end %>
+  <% end %>
+
+  <p class="max-w-prose text-xs text-app-muted">
+    The owner of a repository is never listed here: they hold every permission implicitly and cannot
+    be revoked. Opening the repository is implied by membership, so a member can always reach it
+    even when no <code>view</code> permission is stored on their row.
+  </p>
+<% end %>

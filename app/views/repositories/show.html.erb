@@ -16,6 +16,9 @@
           ever produce a 403 — and "Remove" would ask them to confirm destroying the repository and
           all of its data first. `repository_policy` is ApplicationController's, exposed to views. %>
       <%= render UI::ButtonComponent.new(variant: :ghost, href: @repository.github_url) { "View on GitHub" } %>
+      <% if repository_policy.can?(:members_manage) %>
+        <%= render UI::ButtonComponent.new(variant: :ghost, href: repository_members_path(@repository)) { "Members" } %>
+      <% end %>
       <% if repository_policy.can?(:owner) %>
         <%= render UI::ButtonComponent.new(variant: :ghost, href: edit_repository_path(@repository)) { "Rename" } %>
       <% end %>
