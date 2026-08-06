@@ -12,6 +12,13 @@
         subtitle: "Who can reach #{@repository.github_full_name}, and what they hold."
       ) do |header| %>
     <% header.with_actions do %>
+      <%# Gated on the capability MembershipsController#new will demand, the same discipline
+          repositories/show.html.erb follows: this page is reachable by any `members.manage` holder,
+          and granting is owner-only, so an ungated Add here would offer them a control that can
+          only ever 403. %>
+      <% if repository_policy.can?(:owner) %>
+        <%= render UI::ButtonComponent.new(href: new_repository_member_path(@repository)) { "Add member" } %>
+      <% end %>
       <%= render UI::ButtonComponent.new(variant: :ghost, href: repository_path(@repository)) { "Back to repository" } %>
     <% end %>
   <% end %>
@@ -74,12 +81,19 @@
         <% end %>
       <% end %>
     <% else %>
+      <%# The description stays true for a `members.manage` holder, who reaches this page and cannot
+          grant: it says what sharing does, and only the owner is handed the control that does it. %>
       <%= render UI::EmptyStateComponent.new(
             title: "No one else has access",
             description: "Only #{@repository.owner_login} can reach this repository. Adding a colleague " \
-                         "by GitHub handle is not available yet — memberships are created from the console " \
-                         "for now, and this page is where you take one away."
-          ) %>
+                         "by their GitHub handle puts it in their repository list too."
+          ) do |empty| %>
+        <% if repository_policy.can?(:owner) %>
+          <% empty.with_action do %>
+            <%= render UI::ButtonComponent.new(href: new_repository_member_path(@repository)) { "Add member" } %>
+          <% end %>
+        <% end %>
+      <% end %>
     <% end %>
   <% end %>
 

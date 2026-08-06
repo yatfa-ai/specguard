@@ -12,10 +12,10 @@ Rails.application.routes.draw do
   resources :repositories, only: %i[index new create show edit update destroy] do
     resources :api_keys, only: %i[create destroy]
     # `/repositories/:repository_id/members` reads as the thing it lists (people), while the
-    # controller is named for the row it actually manipulates (RepositoryMembership). Index and
-    # destroy only: adding and editing a member are one checkbox grid, and both wait on
-    # `User.resolve_by_handle`, which does not exist yet.
-    resources :members, only: %i[index destroy], controller: "memberships"
+    # controller is named for the row it actually manipulates (RepositoryMembership). No `edit`
+    # /`update` yet: editing an existing member's permissions is the same checkbox grid `new`
+    # renders, and lands as its own slice.
+    resources :members, only: %i[index new create destroy], controller: "memberships"
   end
 
   # --- Machine auth: Bearer API key ---------------------------------------------
