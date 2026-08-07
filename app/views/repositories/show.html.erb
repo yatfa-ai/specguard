@@ -645,6 +645,62 @@
                     items: trajectory_branch_choices(@repository, @trajectory_branches, @suite_trajectory.branch),
                     class: "flex-wrap"
                   ) %>
+              <%# == The branches the row could not carry
+                  The row above is cut to eight; the controller already holds up to five hundred, out
+                  of the same one query. Without this the page counts the rest at the reader in a
+                  sentence and hands them no way to name one — and `?branch=` is a mechanism nothing
+                  rendered on this page mentions, so the only route to a hidden branch was to write
+                  the URL by hand. The rule two comments up is exactly the one that breaks: a reader
+                  cannot ask for a branch they were never told exists, and being told a COUNT is not
+                  being told a name.
+
+                  Deliberately OUTSIDE the <nav> above rather than appended to it. That row is the
+                  eight-item primary control and its size is a promise about what a row of links can
+                  carry; five hundred links inside it would keep the markup tidy and destroy the
+                  thing the cut was for.
+
+                  `UI::DropdownComponent` is details/summary — keyboard-reachable and Escape-closable
+                  with no JS, and no new component. It costs no query: `@trajectory_branches` is
+                  already loaded, already ordered, and every field these links need is on the rows. %>
+              <% if (branch_menu = trajectory_branch_menu_choices(@repository, @trajectory_branches, @suite_trajectory.branch)) %>
+                <div id="suite-trajectory-branch-menu">
+                  <%= render UI::DropdownComponent.new(
+                        label: trajectory_branch_menu_label(@trajectory_branches),
+                        align: :left
+                      ) do %>
+                    <%# Bounded in HEIGHT, never in CONTENT: past the trunk's neighbours this scrolls
+                        rather than dropping entries, because an overflow menu that overflows is the
+                        defect one level down. %>
+                    <ul class="max-h-64 overflow-y-auto">
+                      <% branch_menu.each do |choice| %>
+                        <li>
+                          <%# `aria-current` is carried here as well as in the row. The drawn branch
+                              is pulled into the row by `trajectory_shown_branches`, so it is named
+                              twice on this page, and a menu that marked none of its entries current
+                              would tell a screen reader the opposite of what the row says.
+
+                              NOT truncated, unlike the row. This menu is the only place a hidden
+                              branch is named at all, and this slice exists because a branch you
+                              cannot name is a branch you cannot ask for — `feature/some-long-desc…`
+                              in the one control meant to end that problem gives back part of what
+                              the menu bought. The box above is `absolute` and `min-w-48` is a floor,
+                              not a ceiling, so it grows to fit at no cost to the layout; `max-w-sm`
+                              plus `break-all` keeps a pathological name wrapping inside the panel
+                              instead of running off the viewport. A `title` tooltip was the other
+                              way and is worse: it is hover-only, so the keyboard reader this
+                              control is built for never receives it. %>
+                          <%= link_to choice[:label], choice[:href],
+                                      class: "block max-w-sm break-all rounded px-2 py-1 " \
+                                             "text-app-h4 text-app-content-secondary " \
+                                             "hover:bg-app-neutral-surface hover:text-app-content " \
+                                             "aria-[current=page]:text-app-content",
+                                      aria: { current: choice[:current] ? "page" : nil } %>
+                        </li>
+                      <% end %>
+                    </ul>
+                  <% end %>
+                </div>
+              <% end %>
               <p class="text-xs text-app-muted" id="suite-trajectory-branches-basis">
                 Only this panel follows the branch you pick — it is anchored on that branch's newest
                 run and reads back <%= Repository::TRAJECTORY_LIMIT %> runs from there.
