@@ -559,9 +559,13 @@ RSpec.describe "Repository sharing", type: :request do
   # per-card question — `shared_permissions` is one query "whether the list has one shared card or
   # fifty" — so the new read is held to the same footing.
   describe "what naming the owner costs the index per shared card" do
-    # Deliberately counts only reads of `users`, not every SELECT. The page has other per-card
-    # queries that predate this (the intent count), so a total would be a moving target that fails
-    # for reasons this example is not about, and would quietly encode those counts as intended.
+    # Deliberately counts only reads of `users`, not every SELECT, so this example fails for the
+    # one reason it is about — the owner name — and not for a cost some other card question grew.
+    # It used to say the page had per-card queries it could not help but include in a total; that
+    # is no longer true. The intent count it named is gone (the card reads suite size off the
+    # preloaded newest run), and the key count that outlived it is grouped for the whole page too,
+    # under its own guard in the block below. Reducing per table is now a matter of keeping each
+    # example's failure legible, not of stepping around costs nobody was watching.
     def user_table_queries(&) = captured_sql(&).grep(/from "users"/i).size
 
     it "reads the users table no more often for three shared cards than for one" do
@@ -585,6 +589,54 @@ RSpec.describe "Repository sharing", type: :request do
       # The positive control: without it this would keep passing if the badge stopped rendering.
       expect(response.body).to include("Shared · owner-0").and include("Shared · owner-1")
       expect(user_table_queries { get repositories_path }).to eq(baseline)
+    end
+  end
+
+  # The key count is the index's other per-card question, and the one the guard above deliberately
+  # cannot see. It gets its own, on the same footing: one query for the page, however long the list.
+  describe "what counting API keys costs the index per card" do
+    # Reduces on reads of `api_keys` for the same reason the block above reduces on `users` — each
+    # example watches the one table its own subject can move. A per-card `.size` on an unpreloaded
+    # association issues the COUNTs itself, so removing it removes the events `captured_sql` sees;
+    # there is nothing here that a total would catch and this does not.
+    def api_key_queries(&) = captured_sql(&).grep(/from "api_keys"/i).size
+
+    it "reads the api_keys table no more often for three cards than for one" do
+      member = sign_in_via_github(uid: "9999", info: { nickname: "hubot" })
+      create_membership(repository: repository, user: member, permissions: %w[view keys.manage])
+      repository.api_keys.create!(name: "CI")
+
+      get repositories_path
+      baseline = api_key_queries { get repositories_path }
+
+      # Each extra card gets a *different* number of keys, so the control below proves every card
+      # was handed its own figure. A grouped count that mapped rows to the wrong repository would
+      # still issue exactly one query and pass an assertion that only counted queries.
+      %w[2002 3003].each_with_index do |uid, index|
+        other = create_repository(user: create_user(github_uid: uid, github_handle: "owner-#{index}"),
+                                  github_full_name: "org#{index}/service")
+        (index + 2).times { |n| other.api_keys.create!(name: "CI-#{n}") }
+        create_membership(repository: other, user: member, permissions: %w[view keys.manage])
+      end
+
+      get repositories_path
+
+      # The positive control: without it this would keep passing if the badge stopped rendering.
+      expect(response.body).to include("1 key").and include("2 keys").and include("3 keys")
+      expect(api_key_queries { get repositories_path }).to eq(baseline)
+    end
+
+    # The one way grouping could change what a card *says*: a grouped count has no row at all for
+    # a repository with no keys, where the association call it replaced answered 0. "No keys yet"
+    # is a real state the badge has always spelled out, and it must survive the reader change.
+    it "still reads '0 keys' on a card whose repository has none" do
+      member = sign_in_via_github(uid: "9999", info: { nickname: "hubot" })
+      create_membership(repository: repository, user: member, permissions: %w[view keys.manage])
+
+      get repositories_path
+
+      expect(repository.api_keys).to be_empty
+      expect(response.body).to include("0 keys")
     end
   end
 
