@@ -1312,7 +1312,29 @@ RSpec.describe "Repository suite-size trajectory", type: :request do
       expect(trajectory_panel).to have_css("#suite-trajectory-chart")
       expect(trajectory_panel).to have_no_css("#suite-trajectory-runtime-chart")
       expect(runtime_basis).to have_text("1 of the 2 plotted runs reported one, and a trajectory " \
-                                         "needs two", normalize_ws: true)
+                                         "needs 2", normalize_ws: true)
+    end
+
+    # The count above reads correctly whether it is counted off `timed` or typed in as a literal,
+    # because with a threshold of two the shortfall branch can only be reached by exactly one timed
+    # run. That makes the assertion above unable to fail on the thing most likely to be wrong — so
+    # this moves the threshold and asks the same sentence again. A hard-coded "1 … needs two" prints
+    # a FALSE count here: two runs reported a clock, and the sentence explaining the shortfall would
+    # say one did.
+    it "counts the shortfall off the timed runs rather than assuming the threshold is two" do
+      stub_const("SuiteTrajectory::MINIMUM_POINTS", 3)
+      repository = create_repository(user: @user)
+      timed_run(repository, "aaaaaaa1111", seconds: nil, total: 1_000, at: 3.days.ago)
+      timed_run(repository, "bbbbbbb2222", seconds: 40.2, total: 1_020, at: 2.days.ago)
+      timed_run(repository, "ccccccc3333", seconds: 74.25, total: 1_047, at: 1.hour.ago)
+
+      get repository_path(repository)
+
+      expect(trajectory_panel).to have_no_css("#suite-trajectory-runtime-chart")
+      # Split from the threshold word deliberately: the COUNT is the half that can state a falsehood
+      # about the cohort, so it is pinned on its own and a failure here names which half drifted.
+      expect(runtime_basis).to have_text("2 of the 3 plotted runs reported one", normalize_ws: true)
+      expect(runtime_basis).to have_text("a trajectory needs 3", normalize_ws: true)
     end
 
     it "says so plainly when no plotted run reported a clock at all" do

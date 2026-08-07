@@ -51,7 +51,14 @@ class SuiteTrajectory
 
   # Two points, because one point is not a trajectory and drawing it as a line would be drawing a
   # flat one — the single shape that asserts a stable suite while measuring nothing of the sort.
-  def plottable? = plotted.size >= 2
+  #
+  # Named rather than spelled `2` at each site because the captions REPORT this threshold back to the
+  # reader ("a trajectory needs 2"), and the sentence explaining why someone is being shown less than
+  # they expected is the last place that should be able to disagree with the rule it is explaining.
+  MINIMUM_POINTS = 2
+
+  # Whether the suite-size line has the points to be a line at all.
+  def plottable? = plotted.size >= MINIMUM_POINTS
 
   # Reported a count but not a measurement. Withheld for the reason the Overview withholds its
   # delta against one: a zero here describes the report, not the suite.
@@ -199,7 +206,7 @@ class SuiteTrajectory
   # Two points, for the reason `plottable?` wants two — and asked separately, because `plottable?`
   # does not imply it. A cohort of thirty runs of which one reported a clock is a plottable suite
   # size and not a trajectory of anything else.
-  def runtime_plottable? = timed.size >= 2
+  def runtime_plottable? = timed.size >= MINIMUM_POINTS
 
   # On the line for size, off it for time: reported no clock at all. Not a fault and not a zero —
   # the client sent nothing, so there is nothing to plot and nothing to infer from the absence.

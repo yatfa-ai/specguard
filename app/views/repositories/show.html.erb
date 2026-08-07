@@ -754,7 +754,6 @@
             <%# Every figure the caption states is counted off the same object the line is drawn
                 from, so the two cannot disagree — the count of points, the count withheld, and the
                 axis bounds all come from `SuiteTrajectory`. %>
-            <% size_formatter, size_point_formatter = trajectory_size_formatters %>
             <%= render UI::SparklineComponent.new(
                   id: "suite-trajectory-chart",
                   points: trajectory_points,
@@ -768,8 +767,8 @@
                            "The vertical axis spans that range and does not start at zero, so the " \
                            "slope is the size of the change and not its share of the suite.",
                   columns: ["Run", "Tests in suite", "Ingested"],
-                  formatter: size_formatter,
-                  point_formatter: size_point_formatter
+                  formatter: trajectory_size_formatter,
+                  point_formatter: trajectory_size_point_formatter
                 ) %>
 
             <%# What the line covers, in the register the Overview's basis line uses: a series is a
@@ -934,9 +933,16 @@
                   none of the <%= @suite_trajectory.plotted.size %> plotted
                   <%= "run".pluralize(@suite_trajectory.plotted.size) %> reported one.
                 <% else %>
-                  1 of the <%= @suite_trajectory.plotted.size %> plotted
+                  <%# Counted off `timed`, not typed in. The `else` can only be reached with exactly
+                      one timed run TODAY, because the threshold happens to be two — so a literal
+                      "1" would read correctly and lie the moment the threshold moved, in the one
+                      sentence whose whole job is explaining a shortfall. The threshold itself comes
+                      off the rule for the same reason. %>
+                  <%= @suite_trajectory.timed.size %> of the
+                  <%= @suite_trajectory.plotted.size %> plotted
                   <%= "run".pluralize(@suite_trajectory.plotted.size) %> reported one, and a
-                  trajectory needs two.
+                  trajectory needs
+                  <%= SuiteTrajectory::MINIMUM_POINTS %>.
                 <% end %>
                 A single wall clock drawn as a line is a flat one, which says this suite takes as
                 long as it always did — a claim one measurement cannot support.
