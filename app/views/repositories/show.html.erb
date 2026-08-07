@@ -630,14 +630,22 @@
             the operands. So it says what they are instead.
 
             Above the table rather than below it: it is a precondition for reading the rows, not a
-            note about them. %>
+            note about them. And carried to the table by `aria-describedby` below, because "above"
+            is only a position a reader who arrives from above benefits from — a screen-reader user
+            jumping to the table lands on the header row and would read exactly the time-ordered
+            column of numbers this paragraph exists to stop them subtracting.
+
+            No conditional on the wiring: this caption and that table are both inside this
+            `@recent_test_runs.any?` branch and cannot render apart. The empty state below renders
+            no table at all, so there is nothing there to point at a missing id. %>
         <p class="text-xs text-app-muted mb-3" id="recent-runs-basis">
           One history across every branch CI reports from, interleaved, newest first — so two
           consecutive rows are routinely two different branches. They are not a series, and the
           difference between two of these test counts is not a change in the suite. Suite growth is
           measured on the Overview panel above, and only against the previous run on the same branch.
         </p>
-        <%= render UI::TableComponent.new(columns: ["Commit", "Branch", "Tests", "Duration", "Annotated", "Ingested"]) do %>
+        <%= render UI::TableComponent.new(columns: ["Commit", "Branch", "Tests", "Duration", "Annotated", "Ingested"],
+                                          describedby: "recent-runs-basis") do %>
           <% @recent_test_runs.each do |test_run| %>
             <tr>
               <td class="px-3 py-2 font-mono text-xs text-app-content"><%= test_run.commit_sha.first(7) %></td>

@@ -344,6 +344,27 @@ RSpec.describe "Repository recent runs", type: :request do
       expect(caption.text).to include("not a change in the suite")
     end
 
+    # The caption is only a precondition for readers who meet it on the way to the rows. This pins
+    # the association that carries it to a reader who arrives at the table directly — without it
+    # the paragraph above is, for them, not on the page at all.
+    #
+    # The other half of the seam's contract — that a table with no caption to point at emits no
+    # attribute AT ALL, rather than `aria-describedby=""` — is pinned at the component, in
+    # spec/components/ui/table_component_spec.rb: both branches are reachable there without
+    # dragging the API-keys panel's fixtures into this file.
+    it "points the table at the caption, so a reader landing on the rows still gets it" do
+      repository = create_repository(user: @user)
+      repository.test_runs.create!(commit_sha: "wiredup", branch: "main", total_specs_count: 5)
+
+      get repository_path(repository)
+
+      table = runs_panel.find("table")
+      expect(table[:"aria-describedby"]).to eq("recent-runs-basis")
+      # The id has to resolve, or the attribute is a reference to nothing — which announces exactly
+      # as much as having no attribute while looking, in the markup, like the defect is fixed.
+      expect(caption[:id]).to eq(table[:"aria-describedby"])
+    end
+
     it "does not caption an empty state, which has no rows to explain" do
       repository = create_repository(user: @user)
 

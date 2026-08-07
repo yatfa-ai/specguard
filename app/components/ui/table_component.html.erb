@@ -1,5 +1,5 @@
 <div class="<%= wrapper_class %>">
-  <table class="w-full text-sm">
+  <table <%= tag.attributes(table_attributes) %>>
     <% if columns.any? %>
       <thead>
         <tr class="border-b border-app-border">
