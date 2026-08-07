@@ -133,6 +133,7 @@ here is the response with **no** parameter.
       "annotated_ratio": 0.25,
       "duration_seconds": 74.25,
       "shard_count": 4,
+      "timed_shard_count": 4,
       "suite_size_measured": true,
       "ingested_at": "2026-08-07T11:01:58Z"
     },
@@ -144,6 +145,7 @@ here is the response with **no** parameter.
       "annotated_ratio": 0.29,
       "duration_seconds": 11.5,
       "shard_count": 0,
+      "timed_shard_count": 0,
       "suite_size_measured": true,
       "ingested_at": "2026-08-07T10:44:03Z"
     }
@@ -287,10 +289,20 @@ Before differencing two rows, check both:
   the shards recorded *so far*, so differencing an in-flight sharded run against a complete one
   reports a deletion no commit made. Equal counts is the same rule `TestRun#assembled_like?`
   applies on the dashboard.
+- `timed_shard_count` — how many of those shards reported a **duration**. This is the denominator
+  of the row's own `duration_seconds`, which on a sharded run is the MAX over the shards that
+  *reported* — not over `shard_count`. A shard's timing is nullable and a cancelled or timed-out
+  job usually is the slowest one, so four timed shards at a 600s wall clock and four shards whose
+  two slowest went silent at 180s carry an identical `shard_count` and an identical
+  `suite_size_measured`: differencing them on `duration_seconds` alone reports a 70% speedup that
+  is entirely telemetry loss. `0` — never `null`, never absent — when nothing was timed, and `0`
+  for the shardless corpus, where there were no parts to time.
 
-Deliberately **not** a `shards` sub-block like `latest_run` carries. The preload that makes this
-window cheap primes the shard *count* alone, so per-shard cost figures on ten rows would be ten
-extra queries — and `assembled_like?` reads the count, not the costs. The full cost figures stay on
+`machine_seconds` is deliberately **not** here, and neither is a `shards` sub-block like
+`latest_run` carries. A client differencing two rows needs to know they were assembled from the
+same number of parts and over how much of them each figure was measured — not what each part cost.
+The preload that makes this window cheap takes both counts in one grouped aggregate; anything
+further (`machine_seconds`) would be one extra query per row. The full cost figures stay on
 `latest_run`, which is one row.
 
 `history_window` is the contract, as tokens rather than prose:

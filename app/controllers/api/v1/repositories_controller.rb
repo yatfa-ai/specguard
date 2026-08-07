@@ -264,29 +264,43 @@ class Api::V1::RepositoriesController < Api::BaseController
     history_runs.map { |run| serialized_history_row(run) }
   end
 
-  # What the human panel's row carries, plus the two composition facts that say whether the row may
-  # be differenced against its neighbour.
+  # What the human panel's row carries, plus the composition facts that say whether the row may be
+  # differenced against its neighbour AND what each figure on it was measured over.
   #
-  # SHARD COUNT ONLY — deliberately not a `shards` sub-block like `serialized_shards` above builds
-  # for the latest run. `TestRun#preload_shard_count`'s comment is explicit that the preload seam
-  # "primes the COUNT alone and never the whole `shard_totals` tuple", so `timed_shard_count` and
-  # `machine_seconds` remain one `pick` per instance: a slice-8-style block on ten history rows is
-  # ten extra queries. Of the two remedies open here, this takes the first — restrict the rows to
-  # the cheaply-preloadable count — because the second (a grouped preload covering the whole tuple)
-  # needs a new model method this slice does not have the mandate to add, and because a client
-  # differencing two rows needs to know they were assembled from the same number of parts, not what
-  # each part cost. `TestRun#assembled_like?` decides that same question on shard-count
-  # equality alone, so this serves exactly what that rule reads. The per-run cost figures stay
-  # available in full on `latest_run`, which is one row and pays one `pick` for them.
+  # TWO COUNTS AND NO COST FIGURE — deliberately not the whole `shards` sub-block
+  # `serialized_shards` builds for the latest run. `machine_seconds` stays off the row on the
+  # argument this comment has always made: a client differencing two rows needs to know they were
+  # assembled from the same number of parts, not what each part cost, and the per-run cost figures
+  # stay available in full on `latest_run`, which is one row and pays one `pick` for them.
+  #
+  # `timed_shard_count` is the exception that argument never covered, and it is not "what a part
+  # cost" — it is THE DENOMINATOR OF A FIGURE THIS ROW ALREADY SERVES. `duration_seconds` on a
+  # sharded run is the MAX over the shards that REPORTED, so its coverage is the timed count and
+  # never `shard_count`; a row serving the numerator beside the wrong denominator lets a client
+  # difference four timed shards (MAX 600s) against four shards whose two slowest were cancelled
+  # (MAX 180s) — identical `shard_count`, identical `suite_size_measured` — and report a 70%
+  # speedup produced entirely by telemetry loss. That is the same honesty gap `serialized_shards`'
+  # `coverage` block exists to close: a figure whose coverage is inferred from a neighbour.
+  #
+  # `shard_count` is the right denominator for `total_specs` — a SUM over the shards RECORDED — and
+  # is served for that reason; `TestRun#assembled_like?` decides differenceability on shard-count
+  # equality alone, so this still serves exactly what that rule reads. The two counts are served
+  # FLAT and side by side rather than under a `coverage:` sub-object, because the row is otherwise
+  # flat and there are only two of them to keep straight.
+  #
+  # Both are cheap here only because `ShardCountPreloading` primes both from ONE grouped aggregate
+  # over the whole window (see `history_runs`). Anything further down `shard_totals` —
+  # `machine_seconds`, `MAX(updated_at)` — is still one `pick` per row, which is the concrete
+  # reason as well as the semantic one that this row stops at the two counts.
   #
   # `suite_size_measured` is `TestRun#suite_size_measured?` — a run that reported zero tests has a
   # count but not a measurement, and a difference taken against it describes the report rather than
   # the suite. Serialized as the boolean rather than left for the client to re-derive from
   # `total_specs`, so the endpoint and the panel cannot drift on what "measured" means.
   #
-  # Counts and booleans, never prose: `TestRun#delivery_description` words this same shard fact in
-  # English for the panel, and `serialized_shards` above already settled that a machine-readable
-  # client cannot act on a sentence without parsing it.
+  # Counts and booleans, never prose: `TestRun#delivery_description` and `#wall_clock_coverage`
+  # word these same shard facts in English for the panel, and `serialized_shards` above already
+  # settled that a machine-readable client cannot act on a sentence without parsing it.
   def serialized_history_row(run)
     {
       commit_sha: run.commit_sha,
@@ -303,6 +317,11 @@ class Api::V1::RepositoriesController < Api::BaseController
       annotated_ratio: annotated_ratio_for(run),
       duration_seconds: run.duration_seconds,
       shard_count: run.shard_count,
+      # A really-counted `0`, never absent and never null, on a run whose shards all went silent —
+      # that run's `duration_seconds` was measured over nothing, and it is exactly the row a client
+      # most needs to refuse to difference. A shardless run serves `0` beside a `shard_count` of
+      # `0`, unchanged in meaning: there were no parts, so there were none to time.
+      timed_shard_count: run.timed_shard_count,
       suite_size_measured: run.suite_size_measured?,
       ingested_at: run.created_at.iso8601
     }
@@ -317,12 +336,14 @@ class Api::V1::RepositoriesController < Api::BaseController
   # Materialized once and memoized: `show` reads it twice (the window's `returned`, then the rows)
   # and must not pay for it twice.
   #
-  # One grouped `COUNT(*)` for the whole window primes `shard_count` on every row — see
-  # `ShardCountPreloading`, shared with the human panel that asks the same question of the same
-  # rows. So `history` costs two queries at ten rows and the same two at one, instead of one `pick`
-  # per row. A narrowed window primes identically: `preload_shard_counts` keys off the ids it is
-  # handed and does not care how they were selected, so `?branch=` costs the same two queries at
-  # thirty rows.
+  # ONE grouped aggregate for the whole window primes BOTH of the row's counts on every row —
+  # `COUNT(*)` for `shard_count` and `COUNT(duration_seconds)` for `timed_shard_count`, two columns
+  # of the same `GROUP BY` rather than two queries — see `ShardCountPreloading`, shared with the
+  # human panel, which asks the same question of the same rows and reads only the first of the two
+  # facts the aggregate carries. So `history` costs two queries at ten rows and the same two at one,
+  # instead of one `pick` per row. A narrowed window primes identically: `preload_shard_counts` keys
+  # off the ids it is handed and does not care how they were selected, so `?branch=` costs the same
+  # two queries at thirty rows.
   #
   # The branch predicate is passed INTO the model call, and that placement is the whole feature. The
   # `WHERE` and the `LIMIT` have to be one query: bounding first and filtering the result is what
