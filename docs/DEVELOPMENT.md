@@ -69,7 +69,7 @@ flash. That is what makes the reveal-once UI honest rather than cosmetic.
 
 ```sh
 curl -H "Authorization: Bearer sgk_..." http://localhost:3000/api/v1/repository
-# => {"repository":{...},"api_key":{...},"latest_run":{...},"history_window":{...},"history":[...]}
+# => {"repository":{...},"api_key":{...},"latest_run":{...},"history_window":{...},"history":[...],"branches_window":{...},"branches":[...]}
 
 curl -H "Authorization: Bearer nope" http://localhost:3000/api/v1/repository
 # => 401 {"error":"unauthorized",...}
@@ -84,8 +84,10 @@ that. Every figure is read off the same rows `repositories#show` renders from
 so the API and the dashboard cannot name different commits for the same repository.
 
 Takes one optional query parameter, `?branch=`, which narrows `history` — and only `history` — to a
-single branch. See [`history`](#history--how-the-suite-grew-without-differencing-two-polls) below.
-The body shown here is the response with **no** parameter.
+single branch. The names you may put in it are served in
+[`branches`](#branches--which-names-branch-may-take), which is why they are two blocks and not one.
+See [`history`](#history--how-the-suite-grew-without-differencing-two-polls) below. The body shown
+here is the response with **no** parameter.
 
 ```json
 {
@@ -145,6 +147,18 @@ The body shown here is the response with **no** parameter.
       "suite_size_measured": true,
       "ingested_at": "2026-08-07T10:44:03Z"
     }
+  ],
+  "branches_window": {
+    "order": "run_count_desc,last_run_at_desc,name_asc",
+    "tie_break_served": false,
+    "run_count_limit": 30,
+    "walk_limit": 500,
+    "walk_cut": false,
+    "returned": 2
+  },
+  "branches": [
+    { "name": "main", "run_count": 1, "run_count_capped": false },
+    { "name": "spike/extract-billing", "run_count": 1, "run_count_capped": false }
   ]
 }
 ```
@@ -162,14 +176,17 @@ reported" from a real zero, because a client cannot tell them apart after the fa
 | `latest_run.shards` | the run was assembled from **one shard or none** — the entire unsharded corpus. There is no composition to disambiguate: one shard's MAX *is* its SUM. The key is always present. |
 | `latest_run.shards.machine_seconds` | not one shard reported a timing. `0.0` would assert the suite was free. |
 | `history[].branch` / `.duration_seconds` / `.annotated_ratio` | exactly what the same-named `latest_run` field means. A history row is the same row `latest_run` serializes, minus the per-shard cost figures. |
+| `branches` | **never `null`** — `[]` instead, by the list rule below. No field on a row is nullable either: a row exists because a branch has runs, so `name`, `run_count` and `run_count_capped` are always present. |
+| `branches_window` | **never `null`**, and served on every request — with or without `?branch=`, and including one whose `branches` came back empty. Its fields are bounds on the walk, which are facts about how SpecGuard looked rather than about what it found, so there is no state in which they are unknown. |
 
-**`history` is the one exception, and it is a list rather than a block.** It is `[]` — never
-`null` — for a repository whose CI has never reported. The rule above exists because a zeroed
-*block* asserts measurements nobody took: a `latest_run` of zeros claims a run happened and found
-nothing. An empty *list* asserts nothing of the kind — "no runs" is exactly what zero rows means,
-and it is the same answer you get after filtering a populated history down to a branch that never
-ran. Nulling it would force every consumer to handle two spellings of the empty case before it
-could iterate. `latest_run` stays `null` in that same response; the two are consistent, not in
+**The two lists are the exception, and they are lists rather than blocks.** `history` and
+`branches` are each `[]` — never `null` — for a repository whose CI has never reported. The rule
+above exists because a zeroed *block* asserts measurements nobody took: a `latest_run` of zeros
+claims a run happened and found nothing. An empty *list* asserts nothing of the kind — "no runs" is
+exactly what zero rows means, and it is the same answer you get after filtering a populated history
+down to a branch that never ran, or after cataloguing a repository whose every run named no branch.
+Nulling either would force every consumer to handle two spellings of the empty case before it could
+iterate. `latest_run` stays `null` in that same response; all three are consistent, not in
 conflict.
 
 `annotated_ratio` is the **0–1 fraction**, the same unit `POST /api/v1/ingest` answers with — never
@@ -223,7 +240,8 @@ what you received cannot work, because the bound was already spent before you sa
 repository whose CI reports on every PR, the ten most recent runs are routinely all feature
 branches, so `history.filter(r => r.branch === "main")` returns `[]` while `main` holds thirty runs
 in the same table — and there is no cursor to reach past the window. `?branch=main` puts the
-predicate in the same query as the bound, which is the only way to get a series.
+predicate in the same query as the bound, which is the only way to get a series. The name to put in
+it comes from [`branches`](#branches--which-names-branch-may-take), not from `history`.
 
 ```sh
 curl -H "Authorization: Bearer sgk_..." \
@@ -302,6 +320,85 @@ thousand, and there is no cursor to continue. `returned == limit` is how you lea
 at least `limit` times and this is the tail — the inference you would otherwise draw wrongly from a
 full array. If you hit it on a narrowed window, you have thirty runs of that branch and there is
 more behind them.
+
+#### `branches` — which names `?branch=` may take
+
+`?branch=` needs a name and, before this block existed, nothing in the response gave you one. The
+only branch names a client ever saw were the per-row `branch` values in `history` — and unfiltered
+that array is the ten-row *interleaved* window described above, which on a repository whose CI
+reports on every PR is routinely ten `feature/*` rows with the trunk nowhere in it. **To filter you
+need a name; the only place to read a name was the one window that systematically hides the one you
+want.**
+
+Guessing does not converge either: an unknown branch and a real branch that has simply never run
+both answer `history: []` with `"branch"` echoing your ask, byte for byte. There is no signal to
+probe against. `branches` is that signal — it is the set of names `?branch=` can match, and nothing
+outside it will ever return a row.
+
+It is served on **every** request, with or without `?branch=`, for the reason the dashboard's
+Suite-growth panel gives for loading its selector unconditionally: the client that needs the list
+most is the one that has not selected anything yet.
+
+```json
+"branches": [
+  { "name": "main", "run_count": 30, "run_count_capped": true },
+  { "name": "spike/extract-billing", "run_count": 4, "run_count_capped": false }
+]
+```
+
+| Field | Meaning |
+| --- | --- |
+| `name` | A branch that has runs. Pass it back as `?branch=` verbatim. |
+| `run_count` | How many runs it holds, **capped** at `branches_window.run_count_limit`. |
+| `run_count_capped` | `true` when the count *stopped* at that cap rather than finishing. `run_count: 30, run_count_capped: true` means *at least* thirty. |
+
+**The cap is a boolean beside the number, never a `"30+"` string.** The dashboard renders exactly
+that caption; a client comparing two branches would have to strip the `+` before it could subtract,
+and a count that stopped is a different fact from a count that finished. Both are served, and
+neither is spelled into the other. `run_count` stops there because that is how far
+`?branch=`'s own window reaches — counting a trunk's forty thousand runs would answer a question no
+endpoint here asks.
+
+**Runs that reported no branch are absent.** `null` means *"the client did not say"*, and the
+anonymous runs of every machine are not one branch — offering them a name here would offer a name
+`?branch=` deliberately refuses to match. They still appear in the unfiltered `history`.
+
+`branches_window` carries the bounds, on the same tokens-not-prose rule as `history_window`:
+
+| Field | Meaning |
+| --- | --- |
+| `order` | `"run_count_desc,last_run_at_desc,name_asc"` — most history first, ties to the branch pushed to most recently, then to its name. |
+| `tie_break_served` | `false`. The middle key is not a field on a row, so **read the array in the order it arrived** — two branches with equal counts carry nothing that says which the server put first. |
+| `run_count_limit` | Where each row's `run_count` stops counting: `30`. |
+| `walk_limit` | How many branches SpecGuard walks: `500`. |
+| `walk_cut` | `true` when the walk **may have stopped short** — the list is a prefix, and a branch's absence from it is not evidence that branch has no runs. See below. |
+| `returned` | How many rows this response carries. Can exceed `walk_limit` by one when `?branch=` pinned a branch the walk did not reach, which is why it is not a substitute for `walk_cut`. |
+
+**`walk_cut` is the one you must not ignore.** The walk is *name-ordered* — it asks the index for
+the next branch alphabetically — so past `walk_limit` what you hold is an **alphabetical prefix** of
+the repository, and "most history first" is an ordering over the branches SpecGuard reached rather
+than over the branches there are. On a repository with 2,900 `feature/*` branches, the five hundred
+walked are `feature/000…`, and `main` — with a hundred runs — is not among them. Under
+`walk_cut: true`, **a branch's absence from this list is not evidence that it has no runs**; ask for
+it with `?branch=` anyway. Under `walk_cut: false` the list is every branch that has a run.
+
+**The two directions are not equally sharp, and the asymmetry is deliberate.** `walk_cut` is
+derived by comparing what the walk returned against `walk_limit` with `>=`, so a repository holding
+*exactly* `walk_limit` branches reports `true` although the walk reached every one of them. That
+direction over-warns by design — its cost is a client re-probing a branch with `?branch=` that was
+already in the list, which answers correctly — and the same derivation runs behind the dashboard's
+own panel. `walk_cut: false` carries no such slack: it is reached only by returning fewer rows than
+the bound, so it means the walk finished and the list is complete.
+
+Bounded that way, and not near the size of a display list, on purpose: the dashboard shows eight
+branches, and cutting the *walk* anywhere near eight would hand the history sort an arbitrary
+alphabetical prefix and drop the trunk out of the very ordering that exists to keep it in. That
+display bound is not applied here — a JSON array has no row of links to fit.
+
+**`?branch=` and `branches` agree inside one response.** A branch you filtered on is pinned into the
+walk's result, so a body that serves thirty `main` rows in `history` cannot omit `main` from
+`branches` even past `walk_limit`. Pinning cannot invent one: a branch with no runs drops out here
+exactly as it answers `[]` there.
 
 ## The design system
 

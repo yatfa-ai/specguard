@@ -50,7 +50,9 @@ class Api::V1::RepositoriesController < Api::BaseController
       },
       latest_run: serialized_latest_run,
       history_window: serialized_history_window,
-      history: serialized_history
+      history: serialized_history,
+      branches_window: serialized_branches_window,
+      branches: serialized_branches
     }
   end
 
@@ -331,6 +333,125 @@ class Api::V1::RepositoriesController < Api::BaseController
     @history_runs ||= preload_shard_counts(
       current_repository.recent_test_runs(limit: history_limit, branch: requested_branch).to_a
     )
+  end
+
+  # The contract the `branches` catalogue is served under, on the same rule `history_window`
+  # follows: the facts that decide how the array below may be read, as tokens rather than as the
+  # sentences the human panel prints beneath its selector.
+  #
+  # THIS BLOCK IS WHY THE CATALOGUE IS TWO KEYS AND NOT ONE. The endpoint already established the
+  # shape — an array beside the window it arrived through — and a catalogue that hid its bounds
+  # inside its own rows would leave a client no place to learn that the list stops.
+  #
+  # `walk_limit` and `walk_cut` are the load-bearing pair, and they exist for the same reason
+  # `branch_scope` does. `Repository#branch_histories` walks at most `Repository::BRANCH_HISTORY_LIMIT`
+  # branches, and that walk is NAME-ORDERED by construction — it asks the index for the next branch
+  # alphabetically — so past the bound the result is an alphabetical PREFIX of the repository, and
+  # "most history first" is an ordering over the branches it reached rather than over the branches
+  # there are. On a repository past the bound the trunk can be missing from a list that otherwise
+  # looks complete, and a client with no way to detect that would read "`main` is not here" as
+  # "`main` has no runs" — the exact inversion `Repository::BRANCH_HISTORY_LIMIT` documents.
+  # `RepositoriesHelper#trajectory_listing_basis` says this to a reader in English; a machine client
+  # cannot act on a sentence, so it is served as a bound and a boolean.
+  #
+  # `walk_cut` IS DERIVED WITH `>=`, NOT `==`, copied from `RepositoriesHelper#trajectory_walk_cut?`
+  # rather than re-reasoned: a pinned branch is added to the walk's result, so a cut walk can hand
+  # back MORE rows than its own bound. That is also why `returned` is not a substitute for this
+  # flag — `returned` can exceed `walk_limit`, and comparing the two is the derivation that breaks.
+  #
+  # `run_count_limit` is where each row's `run_count` STOPS COUNTING, and it belongs on the window
+  # because it is one fact about the whole block, while `run_count_capped` is per-row because
+  # whether a given branch reached it is a fact about that branch. Read off `Repository`'s own
+  # constant rather than off `SINGLE_BRANCH_HISTORY_LIMIT` above, which happens to hold the same
+  # number for an unrelated reason: that one is a bound this controller CHOOSES between for
+  # `history`, and this one is the model's own `runs:` default, which the catalogue takes as given.
+  #
+  # `tie_break_served: false`, the same admission `history_window` makes and for the same effect.
+  # The order is `run_count` desc, then the branch's last run desc, then its name — and the middle
+  # key is not a field on a row here. So the ordering is NOT reproducible from what a client holds:
+  # two branches with equal counts carry nothing that says which the server put first. The array's
+  # own order is the answer rather than a rendering of one, which is also why nothing below
+  # re-sorts it.
+  def serialized_branches_window
+    {
+      order: "run_count_desc,last_run_at_desc,name_asc",
+      tie_break_served: false,
+      run_count_limit: Repository::TRAJECTORY_LIMIT,
+      walk_limit: Repository::BRANCH_HISTORY_LIMIT,
+      walk_cut: branch_histories.length >= Repository::BRANCH_HISTORY_LIMIT,
+      returned: branch_histories.length
+    }
+  end
+
+  # The branch names this repository has runs on — the half of `?branch=` that makes the other half
+  # usable, and the only key on this endpoint that answers "what may I ask for?".
+  #
+  # WITHOUT IT `?branch=` IS UNREACHABLE BY ANY CLIENT THAT DOES NOT ALREADY KNOW THE ANSWER. The
+  # only branch names an API client ever sees otherwise are the per-row `branch` values in
+  # `history`, and unfiltered that array is the ten-row INTERLEAVED window `history_window` warns
+  # about — on a repository whose CI reports on every PR, all ten rows are routinely `feature/*` and
+  # the trunk never appears in it. So learning a name required reading the one window that
+  # systematically hides the name most clients want. Guessing gives no feedback either: an unknown
+  # branch and an idle branch both answer `history: []` with the ask echoed back, byte for byte, so
+  # a client cannot converge by probing. The human panel makes exactly this argument for itself —
+  # *"a reader cannot ask for a branch they were never told exists"* — and loads its choices whether
+  # or not a branch was asked for. This is served under the same rule, for the same reason: the
+  # client that needs it most is the one that has not selected anything yet.
+  #
+  # ONE BOUNDED QUERY, and specifically not a `SELECT DISTINCT branch` over the whole run history,
+  # which is the O(history) scan `Repository#branch_histories` documents at length for refusing. The
+  # walk costs one index descent per BRANCH and none per run, so this key's cost follows branch
+  # cardinality — which does not grow without bound — rather than the history, which does.
+  #
+  # SERVED IN THE MODEL'S ORDER, NEVER RE-SORTED. `branch_histories` returns most-history-first with
+  # an explicit tie-break, and re-sorting here would make the array's order a rendering rather than
+  # the answer — the mistake `tie_break_served: false` exists to keep this endpoint from making.
+  #
+  # NOT CUT TO A DISPLAY SIZE. `RepositoriesHelper::TRAJECTORY_BRANCH_CHOICES` cuts the human
+  # selector to eight, and that number is about what a row of links can carry before it stops being
+  # a way to find a branch. A JSON array has no such limit, and leaking a display bound into a
+  # machine response would drop branches for a reason that does not apply to the reader.
+  #
+  # `branch IS NULL` runs are ABSENT, which the walk gives for free (see `BRANCH_HISTORY_SQL`). A
+  # `null` branch is "the client did not say" — the meaning `latest_run.branch` and
+  # `serialized_history_row` both pin — and the anonymous runs of every machine are not one branch.
+  # Offering them a name here would offer a name `requested_branch` deliberately refuses to match.
+  def serialized_branches
+    branch_histories.map do |history|
+      {
+        name: history.name,
+        # CAPPED at `run_count_limit`, and the cap is its own boolean rather than a rendered
+        # `"30+"`. The human panel words it that way in a caption; this endpoint's standing rule is
+        # tokens a client can compare rather than a caption it would have to read, and a client that
+        # had to strip a `+` before comparing two counts would be parsing English again. The pair is
+        # also the honest reading: the query STOPPED counting at the window the trajectory reaches,
+        # so `run_count: 30, run_count_capped: true` says "at least thirty" without inventing a
+        # figure nothing counted to, and `false` says the number is exact.
+        run_count: history.run_count,
+        run_count_capped: history.capped?
+      }
+    end
+  end
+
+  # The catalogue's rows, memoized: `show` reads them twice — once for the window's `returned` and
+  # `walk_cut`, once for the array — and a second walk would double the key's cost for nothing.
+  #
+  # `Repository#branch_histories`' DEFAULTS ARE TAKEN AS GIVEN, and no bound is restated here. Both
+  # numbers this response discloses are read straight off `Repository`, so the catalogue cannot come
+  # to claim a bound the walk did not apply. It is also why this controller binds no third constant:
+  # `Repository::BRANCH_HISTORY_LIMIT` (branches) and `Repository::TRAJECTORY_LIMIT` (runs) are two
+  # different quantities already, `SINGLE_BRANCH_HISTORY_LIMIT` above is a third reading of the
+  # second, and a locally-named fourth would say a word this file already uses for something else.
+  #
+  # `pinned:` CARRIES THE REQUESTED BRANCH, so a client that filtered on a branch can find that
+  # branch in the same response that filtered on it. The walk's bound is alphabetical, so past it a
+  # response could otherwise serve thirty `main` rows in `history` while omitting `main` from the
+  # list of branches that have runs — one body contradicting itself. Pinning cannot invent a branch:
+  # `WHERE tail.run_count > 0` drops a pinned name with no runs behind it, which is the same answer
+  # an unknown `?branch=` gets in `history` and the correct one here. `Array(pinned).compact` in the
+  # model makes the unfiltered case (`[nil]`) the same call as passing nothing.
+  def branch_histories
+    @branch_histories ||= current_repository.branch_histories(pinned: [requested_branch])
   end
 
   # The 0–1 FRACTION, matching what `/ingest` answered for this same run — never the 0–100
