@@ -1198,6 +1198,162 @@ RSpec.describe "Repository members", type: :request do
     end
   end
 
+  # Slice: the reader for `repository_memberships.granted_by_user_id`. The column has been written
+  # on every web save since the grantor bound landed and rendered nowhere, so until now nothing in
+  # the suite proved the stored attribution was ever legible to the owner.
+  describe "who set a member's permissions" do
+    before { repository }
+
+    # The cell is asserted against the ROW it belongs to, not against the whole body: the signed-in
+    # viewer's handle is in the topbar on every one of these pages, so a page-wide `include` would
+    # pass on the chrome and a page-wide `not_to include` would fail on it. `drop(1)` discards
+    # everything before the first `<tr>` — the chrome, and the `<thead>` row, whose tag carries a
+    # class and so is not a split point. `>handle<` then matches only the member-name span
+    # (`<span class="text-app-content">hubot</span>`); the grantor cell renders its text on its own
+    # line, so it can never be mistaken for a row's subject.
+    def member_row(handle)
+      row = response.body.split("<tr>").drop(1).find { |chunk| chunk.include?(">#{handle}<") }
+      raise "no member row for #{handle} in the rendered table" if row.nil?
+
+      row
+    end
+
+    # EVERY statement the request issues, unfiltered — deliberately, and the deliberation is worth
+    # recording because the first version of this helper filtered on `FROM "users"` and that filter
+    # was a lie. The members query eager-loads (`:user` is in both `includes` and `joins`, and the
+    # raw `order` string references `users`), so it reads `FROM "repository_memberships"` and never
+    # matched; the only query on the page that did match was the `current_user` lookup, which is one
+    # per request by construction. The count it compared was therefore `1 == 1`, and would have
+    # stayed `1 == 1` with the grantor cell deleted outright.
+    #
+    # An unfiltered count is the measurement that matches the claim below, which is about growth:
+    # dropping `:granted_by_user` from the controller's `includes` takes this example from 5
+    # statements to 7 — one lazy `users` SELECT per member — so the comparison genuinely fails.
+    #
+    # What it does NOT catch, measured rather than assumed: a switch from eager_load to preload.
+    # That adds exactly ONE statement to every render regardless of member count, so both sides of
+    # the comparison move together and the count stays flat. Detecting the query SHAPE is a
+    # different job from counting, and the example does it separately, on the statement itself.
+    def request_queries
+      queries = []
+      subscriber = ActiveSupport::Notifications.subscribe("sql.active_record") do |_, _, _, _, payload|
+        queries << payload[:sql].to_s if payload[:name] != "SCHEMA"
+      end
+      yield
+      queries
+    ensure
+      ActiveSupport::Notifications.unsubscribe(subscriber)
+    end
+
+    # Criterion 1. `MembershipsController#update` re-stamps the grantor from the session on every
+    # save, so this column holds who LAST SET the row — while the "Since" cell beside it prints
+    # `created_at`, which an edit does not move. A header claiming original authorship would let a
+    # reader fuse the two into "hubot was added by alice three days ago" when alice only narrowed
+    # hubot's permissions this morning, so the wording is asserted, not just the value.
+    it "names the column for what it holds rather than claiming original authorship" do
+      create_membership(repository: repository, user: colleague)
+      sign_in_via_github
+
+      get repository_members_path(repository)
+
+      expect(response).to have_http_status(:ok)
+      expect(response.body).to include("Permissions set by")
+      expect(response.body).not_to include("Added by")
+      expect(response.body).not_to include("Granted by")
+    end
+
+    # Criterion 2. A nil grantor is an ordinary state, not an edge case: every row written before
+    # the column existed, every console- and spec-built row (this one), and every row whose grantor
+    # account was later deleted. Migration 20260806150000 declined to backfill precisely because
+    # naming the owner would be "a fabricated audit trail, which is worse than an honest NULL" —
+    # so the second assertion is the point of the example, not a decoration on the first.
+    it "reads Unknown for a row with no grantor, and never names the owner in its place" do
+      membership = create_membership(repository: repository, user: colleague)
+      expect(membership.granted_by_user).to be_nil
+
+      sign_in_via_github
+
+      get repository_members_path(repository)
+
+      expect(member_row("hubot")).to include("Unknown")
+      expect(member_row("hubot")).not_to include("octocat")
+    end
+
+    # Criteria 4 and 5, end to end and in one example because either half alone is satisfiable by a
+    # decoration: a `members.manage` colleague — not the owner — adds a third party through the real
+    # add door, and the table then names that colleague on the row they created, for a viewer who is
+    # not the owner either. A cell that hardcoded `@repository.user` would pass every other example
+    # in this block and fail here.
+    it "names the members.manage colleague who granted the row, to a viewer who is not the owner" do
+      create_user(github_uid: "8888", github_handle: "dependabot")
+      create_membership(repository: repository, user: colleague, permissions: %w[view members.manage])
+      # The nickname has to be passed alongside the uid: the callback refreshes the handle from the
+      # payload, and the mock's default nickname is the owner's — signing in as uid 9999 without it
+      # would rename the colleague to `octocat` and make the assertions below unfalsifiable.
+      sign_in_via_github(uid: "9999", info: { nickname: "hubot" })
+
+      post repository_members_path(repository),
+           params: { membership_grant: { handle: "dependabot", permissions: ["", "view"] } }
+      expect(response).to redirect_to(repository_members_path(repository))
+
+      get repository_members_path(repository)
+
+      expect(response).to have_http_status(:ok)
+      expect(member_row("dependabot")).to include("hubot")
+      expect(member_row("dependabot")).not_to include("octocat")
+      # The colleague's own row was built by the spec builder, which names no grantor — the two
+      # states render side by side in one table.
+      expect(member_row("hubot")).to include("Unknown")
+    end
+
+    # Criterion 3, held to the standard `MembershipsController#keys_minted_by` sets for the cell two
+    # columns over. Distinct grantors on purpose: three rows sharing one grantor would be collapsed
+    # by the per-request query cache, and a lazily-loaded `membership.granted_by_user` would still
+    # look like a single query.
+    it "fetches the grantors with the members, not once per member" do
+      add_member = lambda do |uid, handle|
+        member = create_user(github_uid: uid, github_handle: handle)
+        grantor = create_user(github_uid: "7#{uid}", github_handle: "grantor-of-#{handle}")
+        # `update_column` because this grantor holds no membership of their own — which is exactly
+        # what a row looks like once the colleague who granted it has since been revoked, and is not
+        # reachable through the controller in a single request.
+        create_membership(repository: repository, user: member)
+          .update_column(:granted_by_user_id, grantor.id)
+      end
+
+      add_member.call("9999", "hubot")
+      sign_in_via_github
+
+      baseline = request_queries { get repository_members_path(repository) }
+
+      # Non-vacuity, and it has to witness THE GRANTOR — not merely that some SQL ran. This is what
+      # a filter on `FROM "users"` failed to give: the members table is fetched by exactly one
+      # statement, and that statement is the one carrying the grantor join, so the count compared
+      # below is a count that saw the thing it is policing.
+      #
+      # It is also the ONLY assertion here that pins the query shape. A switch from eager_load to
+      # preload leaves the growth comparison below completely flat (one extra statement on both
+      # renders, measured, not assumed), so without this line that regression would land green.
+      # `granted_by_users_` is the alias Rails derives for the second `users` table in the eager
+      # load; if the grantor ever arrives some other way, this fails loudly rather than passing on
+      # a stale assumption about how it is fetched.
+      member_fetches = baseline.grep(/FROM "repository_memberships"/)
+      expect(member_fetches.size).to eq(1)
+      expect(member_fetches.first).to match(/LEFT OUTER JOIN "users" "granted_by_users_/)
+      expect(member_row("hubot")).to include("grantor-of-hubot")
+
+      add_member.call("8888", "dependabot")
+      add_member.call("6666", "renovate")
+
+      three_rows = request_queries { get repository_members_path(repository) }
+
+      expect(member_row("renovate")).to include("grantor-of-renovate")
+      # Two more rows, two more distinct grantors, and not one more statement ANYWHERE in the
+      # request — the whole page's cost is flat in the number of members.
+      expect(three_rows.size).to eq(baseline.size)
+    end
+  end
+
   describe "a signed-out visitor" do
     it "is sent to sign in rather than shown the list" do
       create_membership(repository: repository, user: colleague)
