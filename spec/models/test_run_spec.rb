@@ -165,6 +165,131 @@ RSpec.describe TestRun do
     end
   end
 
+  # Whether a run's `total_specs_count` may be differenced against another run's. Both predicates
+  # ask one question of one side of that subtraction — *is this a measurement of the whole suite?*
+  # — and the Overview withholds its delta unless both sides answer yes.
+  #
+  # Runs are built through `Ingest::RunRecorder` wherever sharding is the point, not with
+  # `test_run_shards.create!`. The whole defect these guard against is a shape the RECORDER
+  # produces — `total_specs_count` re-derived as the SUM over the shards recorded so far — so a
+  # fixture that writes the row and its shards by hand can build a half-delivered run that agrees
+  # with itself in ways a real one never does, and the guard would be tested against fiction.
+  describe "comparing one run's suite size against another's" do
+    def ingest(shard_id:, ci_run_id:, total:, commit_sha: "abc1230000", branch: "main")
+      Ingest::RunRecorder.record(
+        repository,
+        { commit_sha: commit_sha, branch: branch, ci_run_id: ci_run_id,
+          total_specs_count: total, annotated_specs_count: 0, duration_seconds: 1.0 },
+        shard_id: shard_id
+      )
+    end
+
+    describe "#suite_size_measured?" do
+      it "is true for a run that counted tests" do
+        expect(repository.test_runs.create!(commit_sha: "abc123", total_specs_count: 1)).to be_suite_size_measured
+      end
+
+      # The panel already words this state — "reported no tests at all… a fact about this run, not
+      # about the suite" — and a delta taken against it would contradict that sentence two lines
+      # above where it is printed.
+      it "is false for a run that reported no tests" do
+        expect(repository.test_runs.create!(commit_sha: "abc123", total_specs_count: 0))
+          .not_to be_suite_size_measured
+      end
+
+      # The column is nullable (default `0`, no `null: false`). A NULL is "nothing was reported",
+      # which is the answer a reported zero already gets — not a suite of unknown size that a
+      # difference may be taken against.
+      it "is false for a run whose count is NULL, not a whole suite of growth" do
+        run = repository.test_runs.create!(commit_sha: "abc123", total_specs_count: 0)
+        run.update_columns(total_specs_count: nil)
+
+        expect(run.reload).not_to be_suite_size_measured
+      end
+    end
+
+    describe "#assembled_like?" do
+      # The entire unsharded corpus: written once, never re-derived, always comparable.
+      it "is true for two runs that each arrived whole" do
+        a = repository.test_runs.create!(commit_sha: "aaa111", total_specs_count: 10)
+        b = repository.test_runs.create!(commit_sha: "bbb222", total_specs_count: 12)
+
+        expect(a).to be_assembled_like(b)
+      end
+
+      it "is true for two runs assembled from the same number of shards" do
+        4.times { |i| ingest(shard_id: i.to_s, ci_run_id: "gha-1", total: 5_000) }
+        4.times { |i| ingest(shard_id: i.to_s, ci_run_id: "gha-2", total: 5_010, commit_sha: "def4560000") }
+
+        yesterday, today = repository.test_runs.order(:id).to_a
+
+        expect(today).to be_assembled_like(yesterday)
+        expect(today.total_specs_count - yesterday.total_specs_count).to eq(40)
+      end
+
+      # The state the whole guard exists for, built the only way it actually occurs: shard 0 of
+      # four has POSTed and the other three are still running. `latest_test_run` picks this row up
+      # the instant it lands, because `created_at` is stamped by that first POST.
+      it "is false while a sharded run is still arriving" do
+        4.times { |i| ingest(shard_id: i.to_s, ci_run_id: "gha-1", total: 5_000) }
+        ingest(shard_id: "0", ci_run_id: "gha-2", total: 5_010, commit_sha: "def4560000")
+
+        yesterday, in_flight = repository.test_runs.order(:id).to_a
+
+        expect(in_flight.shard_count).to eq(1)
+        expect(yesterday.shard_count).to eq(4)
+        expect(in_flight).not_to be_assembled_like(yesterday)
+        # What the Overview would have printed without the guard, stated so the number is on the
+        # record rather than implied: a deletion of three quarters of the suite that no commit made.
+        expect(in_flight.total_specs_count - yesterday.total_specs_count).to eq(-14_990)
+      end
+
+      # The persistent form. A job cancelled after two of four shards leaves a half-sized row in
+      # the history forever, and the NEXT complete run would read the missing half as growth.
+      it "is false against a run that was cancelled part-way through" do
+        2.times { |i| ingest(shard_id: i.to_s, ci_run_id: "gha-1", total: 5_000) }
+        4.times { |i| ingest(shard_id: i.to_s, ci_run_id: "gha-2", total: 5_000, commit_sha: "def4560000") }
+
+        cancelled, complete = repository.test_runs.order(:id).to_a
+
+        expect(complete).not_to be_assembled_like(cancelled)
+        expect(complete.total_specs_count - cancelled.total_specs_count).to eq(10_000)
+      end
+
+      # A laptop `bundle exec rspec` sitting beside a sharded CI run. Both may well be complete,
+      # but nothing in the payload says so — `Ingest::Payload` accepts a shard *index* and never a
+      # total — so the honest answer is that they are not known to be the same measurement.
+      it "is false for an unsharded run against a sharded one" do
+        4.times { |i| ingest(shard_id: i.to_s, ci_run_id: "gha-1", total: 5_000) }
+        laptop = repository.test_runs.create!(commit_sha: "def456", branch: "main", total_specs_count: 20_000)
+
+        expect(laptop).not_to be_assembled_like(repository.test_runs.find_by(ci_run_id: "gha-1"))
+      end
+    end
+
+    # The phrase a sentence names a run's composition by when two runs disagree. Zero shards is not
+    # "0 reports" — it is a run that arrived whole, and wording it as a count of parts would read
+    # as a delivery that lost all of them.
+    describe "#delivery_description" do
+      it "says a run arrived whole when it recorded no shards" do
+        expect(repository.test_runs.create!(commit_sha: "abc123").delivery_description)
+          .to eq("reported in one piece")
+      end
+
+      it "counts the parts, singular at one" do
+        ingest(shard_id: "0", ci_run_id: "gha-1", total: 5_000)
+
+        expect(repository.test_runs.last.delivery_description).to eq("assembled from 1 shard report")
+      end
+
+      it "counts the parts, plural above one" do
+        4.times { |i| ingest(shard_id: i.to_s, ci_run_id: "gha-1", total: 5_000) }
+
+        expect(repository.test_runs.last.delivery_description).to eq("assembled from 4 shard reports")
+      end
+    end
+  end
+
   # The database half of the run-identity invariant. `Ingest::RunRecorder` looks a run up before
   # inserting, but a lookup and an insert are two statements and four shards POST at once — the
   # index is what makes the loser of that race an exception to rescue rather than a second row

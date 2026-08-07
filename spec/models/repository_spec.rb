@@ -147,6 +147,151 @@ RSpec.describe Repository do
     end
   end
 
+  describe "#previous_test_run_on_branch" do
+    it "returns the newest earlier run on the same branch" do
+      repository = create_repository
+      repository.test_runs.create!(commit_sha: "oldest", branch: "main", created_at: 3.days.ago)
+      repository.test_runs.create!(commit_sha: "middle", branch: "main", created_at: 2.days.ago)
+      latest = repository.test_runs.create!(commit_sha: "latest", branch: "main", created_at: 1.day.ago)
+
+      expect(repository.previous_test_run_on_branch(latest).commit_sha).to eq("middle")
+    end
+
+    it "excludes the run it was asked about" do
+      repository = create_repository
+      only = repository.test_runs.create!(commit_sha: "only", branch: "main")
+
+      expect(repository.previous_test_run_on_branch(only)).to be_nil
+    end
+
+    # The whole reason this method exists. `test_runs` is one interleaved history across every
+    # branch — the "Recent runs" panel lists it that way — so the row immediately before the latest
+    # is routinely a different branch, and a delta taken against it reports a change no commit made.
+    it "does not reach across to a run on another branch" do
+      repository = create_repository
+      repository.test_runs.create!(commit_sha: "trunk", branch: "main", total_specs_count: 1000,
+                                   created_at: 2.days.ago)
+      feature = repository.test_runs.create!(commit_sha: "featur", branch: "feature/x",
+                                             total_specs_count: 20, created_at: 1.day.ago)
+
+      expect(repository.previous_test_run_on_branch(feature)).to be_nil
+    end
+
+    # `Ingest::Payload` writes `branch` through `.presence` and accepts a body without one, so this
+    # is a live state. Matching `branch IS NULL` would pool every anonymous run from every branch
+    # and every machine into one fictional history — "SpecGuard does not know where this came from"
+    # is not a branch two runs can share.
+    it "declines to compare runs that named no branch" do
+      repository = create_repository
+      repository.test_runs.create!(commit_sha: "anon01", branch: nil, created_at: 2.days.ago)
+      anonymous = repository.test_runs.create!(commit_sha: "anon02", branch: nil, created_at: 1.day.ago)
+
+      expect(repository.previous_test_run_on_branch(anonymous)).to be_nil
+    end
+
+    it "is nil for a repository that has never ingested a run" do
+      expect(create_repository.previous_test_run_on_branch(nil)).to be_nil
+    end
+
+    # The same tie-break `latest_test_run` and `recent_test_runs` share. Both halves of it are
+    # pinned, and they fail to different mutations — verified, because the obvious single example
+    # pins neither on its own. Asked about the LATEST run, a bare `id != run.id` happens to return
+    # the right row, so only the `created_at` half is under test here; the example below asks about
+    # a run that is not the latest, which is where a set-exclusion and a strict ordering diverge.
+    it "breaks a same-instant tie on id, matching #latest_test_run" do
+      repository = create_repository
+      at = 1.hour.ago
+      repository.test_runs.create!(commit_sha: "older0", branch: "main", created_at: 2.hours.ago)
+      repository.test_runs.create!(commit_sha: "first0", branch: "main", created_at: at)
+      second = repository.test_runs.create!(commit_sha: "second", branch: "main", created_at: at)
+
+      expect(repository.latest_test_run).to eq(second)
+      # `created_at <` alone would skip the twin entirely and answer "older0".
+      expect(repository.previous_test_run_on_branch(second).commit_sha).to eq("first0")
+    end
+
+    # "Previous" is strictly EARLIER in the ordering, not merely "some other run". Asked about the
+    # older twin, a `WHERE id != run.id` would answer with `second` — a run ingested *after* it —
+    # and report the suite's growth backwards. Nothing on the page asks this today (the controller
+    # only ever passes the latest run), so this is the example that holds the contract while that
+    # remains true.
+    it "returns a strictly earlier run, never the newer half of a same-instant pair" do
+      repository = create_repository
+      at = 1.hour.ago
+      repository.test_runs.create!(commit_sha: "older0", branch: "main", created_at: 2.hours.ago)
+      first = repository.test_runs.create!(commit_sha: "first0", branch: "main", created_at: at)
+      repository.test_runs.create!(commit_sha: "second", branch: "main", created_at: at)
+
+      expect(repository.previous_test_run_on_branch(first).commit_sha).to eq("older0")
+    end
+
+    # The ORDER BY's half of the same tie-break, which the two examples above cannot reach: they
+    # leave only one candidate at the tied instant, so the sort never has to choose. With three
+    # runs at one instant the sort does choose, and `created_at: :desc` alone leaves that choice
+    # UNSPECIFIED — Postgres returns the lowest id here, which is the oldest of the three and two
+    # rows away from the one the Recent-runs table prints directly beneath the latest.
+    it "orders the tied candidates by id too, not only the boundary" do
+      repository = create_repository
+      at = 1.hour.ago
+      repository.test_runs.create!(commit_sha: "tie_a", branch: "main", created_at: at)
+      repository.test_runs.create!(commit_sha: "tie_b", branch: "main", created_at: at)
+      newest = repository.test_runs.create!(commit_sha: "tie_c", branch: "main", created_at: at)
+
+      expect(repository.latest_test_run).to eq(newest)
+      expect(repository.previous_test_run_on_branch(newest).commit_sha).to eq("tie_b")
+      expect(repository.recent_test_runs.second.commit_sha).to eq("tie_b")
+    end
+
+    it "ignores another repository's runs on the same branch" do
+      repository = create_repository
+      other = create_repository(user: create_user(github_uid: "2002", github_handle: "hubot"),
+                                github_full_name: "acme/ledger")
+      other.test_runs.create!(commit_sha: "foreig", branch: "main", created_at: 2.days.ago)
+      mine = repository.test_runs.create!(commit_sha: "mine00", branch: "main", created_at: 1.day.ago)
+
+      expect(repository.previous_test_run_on_branch(mine)).to be_nil
+    end
+
+    # Criterion 6, measured HERE rather than only through the page. The request-level version of
+    # this measures a whole render against another whole render, and a control that walks the same
+    # code path is contaminated by any mutation that inflates both sides equally — verified: an
+    # implementation that ignores its argument and re-reads `latest_test_run` costs one extra query
+    # in *both* the with-comparison and the no-comparison renders, so their difference is still 1
+    # and a page-level assertion stays green. This counts the method itself, where there is nothing
+    # else in the block to hide behind.
+    describe "what it costs to ask" do
+      def count_queries
+        count = 0
+        subscriber = ActiveSupport::Notifications.subscribe("sql.active_record") do |_, _, _, _, payload|
+          count += 1 unless payload[:cached] || payload[:name].in?(["SCHEMA", "TRANSACTION"])
+        end
+        yield
+        count
+      ensure
+        ActiveSupport::Notifications.unsubscribe(subscriber)
+      end
+
+      it "is one query when there is a branch to look along" do
+        repository = create_repository
+        repository.test_runs.create!(commit_sha: "before", branch: "main", created_at: 2.days.ago)
+        latest = repository.test_runs.create!(commit_sha: "latest", branch: "main", created_at: 1.day.ago)
+
+        # One. Not one plus a re-read of the run the caller already handed over.
+        expect(count_queries { repository.previous_test_run_on_branch(latest) }).to eq(1)
+      end
+
+      it "is no query at all when there is nothing to compare" do
+        repository = create_repository
+        anonymous = repository.test_runs.create!(commit_sha: "anon00", branch: nil)
+
+        # The guard returns before touching the database, so a repository whose CI sends no branch
+        # pays nothing for a comparison it will never be shown.
+        expect(count_queries { repository.previous_test_run_on_branch(anonymous) }).to eq(0)
+        expect(count_queries { repository.previous_test_run_on_branch(nil) }).to eq(0)
+      end
+    end
+  end
+
   it "takes its api keys, runs and intents with it when destroyed" do
     repository = create_repository
     repository.api_keys.create!

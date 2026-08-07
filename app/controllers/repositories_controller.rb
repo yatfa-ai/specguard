@@ -40,6 +40,24 @@ class RepositoriesController < ApplicationController
     # annotations. Deliberately not `Repository#annotated_ratio`, which cannot express that
     # difference (it floors at 0.0 by contract — see spec/models/repository_spec.rb).
     @latest_test_run = @repository.latest_test_run
+    # The one figure on that panel read off *two* rows: the run the suite size is compared against,
+    # so a size can be reported as a change and not only as a level. Passed the already-loaded
+    # latest run rather than looking it up again, so this costs exactly one query — and none at all
+    # when there is nothing to compare (no run, or a run that named no branch: the model returns
+    # early, see Repository#previous_test_run_on_branch).
+    #
+    # `nil` is load-bearing here too, and in three different ways the panel has to keep apart: no
+    # run at all, a run that reported no branch, and a run that is the first on its branch. Every
+    # one of them is "no delta" and only the first is the never-ingested empty state — so the view
+    # decides between them on `@latest_test_run` and `@latest_test_run.branch`, never by treating a
+    # nil here as one undifferentiated absence.
+    #
+    # A row here is a *candidate*, not a comparison. Finding one is necessary and not sufficient:
+    # the view still asks whether each side measured a suite at all and whether the two were
+    # assembled from the same number of shards, because a run's count is the SUM over the shards
+    # recorded so far and differencing an in-flight sharded run against a complete one reports a
+    # deletion no commit made. See `TestRun#suite_size_measured?` / `#assembled_like?`.
+    @previous_test_run = @repository.previous_test_run_on_branch(@latest_test_run)
     # The tail of that same append-only history for the "Recent runs" panel. Bounded at ten rows by
     # the model, so this stays O(1) no matter how long CI has been reporting. It shares
     # `latest_test_run`'s ordering by construction, so the run named on the Overview panel above is
