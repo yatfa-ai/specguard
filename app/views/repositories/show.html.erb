@@ -170,9 +170,9 @@
               since a run with no `ci_run_id` records no shards at all — keeps the single row
               unchanged, because for it the MAX and the SUM are the same number. %>
           <% shard_count = @latest_test_run.shard_count %>
-          <% cost_rows = if @latest_test_run.sharded?
+          <% cost_rows = if @latest_test_run.multi_shard?
                            [["Wall clock (slowest of #{shard_count} shards)", test_run_duration(@latest_test_run)],
-                            ["Machine time (all #{shard_count} added up)", test_run_machine_time(@latest_test_run)]]
+                            ["Machine time (#{@latest_test_run.machine_seconds_coverage})", test_run_machine_time(@latest_test_run)]]
                          else
                            [["Total runtime", test_run_duration(@latest_test_run)]]
                          end %>
@@ -207,21 +207,35 @@
               bill. The count is worded as shard *reports* rather than as CI jobs on purpose — the
               unique index that deduplicates a redelivered shard is partial (`WHERE shard_id IS NOT
               NULL`), so a client that shards without naming its slices contributes one row per
-              delivery, and this figure counts rows. %>
-          <% if @latest_test_run.sharded? %>
-            <% untimed_shards = shard_count - @latest_test_run.timed_shard_count %>
+              delivery, and this figure counts rows.
+
+              What the machine time IS gets said once, in the branch that is true — not asserted as
+              a complete total and then walked back a clause later. A lead sentence claiming the
+              figure is what the suite cost, followed by a caveat saying it is a floor, leaves the
+              reader deciding which of the two to believe; that is the same overclaim this panel
+              exists to retire, one level down from "Total runtime" over a MAX. %>
+          <% if @latest_test_run.multi_shard? %>
+            <% untimed_shards = @latest_test_run.untimed_shard_count %>
+            <% timed_shards = @latest_test_run.timed_shard_count %>
             <p class="text-xs text-app-muted">
               Assembled from <%= shard_count %> shard reports — what SpecGuard recorded, which is
               not necessarily <%= shard_count %> distinct CI jobs if a shard did not name itself.
-              The wall clock is the slowest single shard, which is what a reader waited; the
-              machine time is those <%= shard_count %> added together, which is what the suite
-              cost.
-              <% if untimed_shards == shard_count %>
-                None of them reported a timing, so there is no machine time to add up.
-              <% elsif untimed_shards.positive? %>
-                <%= untimed_shards %> of them reported no timing, so the machine time is a floor
-                rather than a total — the real cost is higher by however long those
-                <%= "shard".pluralize(untimed_shards) %> took.
+              The wall clock is the slowest single shard, which is what a reader waited.
+              <% if untimed_shards.zero? %>
+                The machine time is those <%= shard_count %> added together, which is what the
+                suite cost.
+              <% elsif timed_shards.zero? %>
+                Not one of them reported a timing, so there is no machine time to add up — this
+                run's cost is unknown, not zero.
+              <% else %>
+                <%# Count-neutral determiner. `pluralize` inflects the noun but not the words
+                    around it, and one silent shard — a cancelled or timed-out CI job — is the
+                    likeliest way this branch is ever reached, so the singular is the reading that
+                    matters most. %>
+                Only <%= timed_shards %> of them reported a timing, so the machine time adds up
+                those <%= timed_shards %> and is a floor rather than a total — the real cost is
+                higher by however long the <%= untimed_shards %>
+                silent <%= "shard".pluralize(untimed_shards) %> took.
               <% end %>
             </p>
           <% end %>

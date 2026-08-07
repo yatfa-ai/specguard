@@ -73,13 +73,23 @@ class TestRun < ApplicationRecord
   # Whether there is a composition to disambiguate at all. One shard's MAX *is* its SUM, and zero
   # shards have neither, so both render exactly as they always have — no second figure, no wording
   # change, on the whole existing corpus.
-  def sharded? = shard_count > 1
+  #
+  # Named for the count and not for the provenance: a one-shard run *is* sharded in the sense of
+  # having come from a sharded client, and a predicate called `sharded?` that answers false for it
+  # would be read as "did this run come from CI at all" and be wrong on every single-shard run.
+  # This asks the narrower question the panel actually has — is there more than one part to
+  # explain — so its name says that and nothing wider.
+  def multi_shard? = shard_count > 1
 
   # How many of those shards reported a duration. `test_run_shards.duration_seconds` is nullable
   # and `Ingest::Payload` accepts nil explicitly, so a shard with no timing is an ordinary state
   # rather than a fault — and the gap between this and `shard_count` is exactly how much of the
   # machine time is missing.
   def timed_shard_count = shard_totals[1]
+
+  # How many reported nothing — the size of the hole in the SUM below, and the number any surface
+  # apologising for a partial machine time has to name.
+  def untimed_shard_count = shard_count - timed_shard_count
 
   # SUM over the shards' durations, or nil when not one of them reported a timing. SQL's SUM skips
   # nulls and returns NULL over an empty set, which is the distinction wanted here: nil means "no
@@ -103,6 +113,17 @@ class TestRun < ApplicationRecord
 
     label = humanized_seconds(machine_seconds)
     machine_seconds_partial? ? "at least #{label}" : label
+  end
+
+  # The figure's own denominator, carried by the label that names it rather than left to a caveat
+  # further down the page. A label is the most prominent claim a number wears, so "all 4 added up"
+  # over a SUM of three is the same overclaim as "Total runtime" over a MAX — this defect one
+  # level down, and stating the partial count in the caption below does not undo it. The complete
+  # case is the only one allowed to say "all".
+  def machine_seconds_coverage
+    return "all #{shard_count} added up" unless machine_seconds_partial?
+
+    "#{timed_shard_count} of #{shard_count} added up"
   end
 
   private

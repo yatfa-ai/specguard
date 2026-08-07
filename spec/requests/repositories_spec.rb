@@ -548,6 +548,14 @@ RSpec.describe "Repository registration and API keys", type: :request do
         # shard is partial (`WHERE shard_id IS NOT NULL`), so an unnamed shard contributes one row
         # per delivery — a shard count is not a count of distinct CI jobs and must not claim to be.
         expect(panel).to have_text("not necessarily 4 distinct CI jobs", normalize_ws: true)
+        # The whole sentence, not a fragment of it. This is the one branch entitled to say the
+        # figure is what the suite cost, and asserting only the phrase "added together" would pass
+        # just as happily if the claim were emitted unconditionally — which is how it shipped
+        # beside a floor once already.
+        expect(panel).to have_text(
+          "The machine time is those 4 added together, which is what the suite cost.",
+          normalize_ws: true
+        )
       end
 
       # `test_run_shards.duration_seconds` is nullable and `Ingest::Payload` accepts nil
@@ -561,16 +569,49 @@ RSpec.describe "Repository registration and API keys", type: :request do
         get repository_path(repository)
 
         panel = overview_panel
-        expect(panel).to have_text("Machine time (all 4 added up) at least 2m 15s", normalize_ws: true)
-        expect(panel).to have_no_text("Machine time (all 4 added up) 2m 15s", normalize_ws: true)
-        expect(panel).to have_text("1 of them reported no timing", normalize_ws: true)
-        expect(panel).to have_text("floor rather than a total", normalize_ws: true)
+        # The LABEL carries the denominator, because a label is the most prominent claim a number
+        # wears. "all 4 added up" over a SUM of three is this ticket's own defect one level down:
+        # a coverage asserted in the loudest place on the row and retracted in the quietest.
+        expect(panel).to have_text("Machine time (3 of 4 added up) at least 2m 15s", normalize_ws: true)
+        expect(panel).to have_no_text("all 4 added up", normalize_ws: true)
+        expect(panel).to have_no_text("Machine time (3 of 4 added up) 2m 15s", normalize_ws: true)
+        # And the prose says the figure is partial ONCE, in the branch that is true — it must not
+        # also assert the complete claim, in this or any other wording.
+        expect(panel).to have_text(
+          "Only 3 of them reported a timing, so the machine time adds up those 3 and is a floor " \
+          "rather than a total — the real cost is higher by however long the 1 silent shard took.",
+          normalize_ws: true
+        )
+        expect(panel).to have_no_text("which is what the suite cost", normalize_ws: true)
+        # `pluralize` inflects the noun and nothing around it, so the singular reading is the one
+        # that breaks — and one silent shard, a cancelled or timed-out CI job, is the likeliest
+        # way this branch is ever reached.
+        expect(panel).to have_no_text("silent shards", normalize_ws: true)
         # The wall clock is untouched: it is a MAX over the shards that *did* report, and 60.0s of
         # it is a complete fact regardless of what the silent shard cost.
         expect(panel).to have_text("Wall clock (slowest of 4 shards) 1m", normalize_ws: true)
         # An incomplete measurement is still a measurement — muting it would file it under
         # "nothing was reported", which is the state one example below.
         expect(panel).to have_css("dd span:not(.text-app-muted)", text: "at least 2m 15s")
+      end
+
+      # The plural side of the same branch, which nothing exercised before: `pluralize` exists only
+      # to handle plurality, and a branch whose sole example supplies 1 tests the inflection it
+      # never performs.
+      it "words the shortfall in the plural when more than one shard reported no timing" do
+        repository = create_repository(user: @user)
+        sharded_run(repository, [60.0, nil, nil, 45.0], commit_sha: "feedfacecafe0027")
+
+        get repository_path(repository)
+
+        panel = overview_panel
+        expect(panel).to have_text("Machine time (2 of 4 added up) at least 1m 45s", normalize_ws: true)
+        expect(panel).to have_text(
+          "Only 2 of them reported a timing, so the machine time adds up those 2 and is a floor " \
+          "rather than a total — the real cost is higher by however long the 2 silent shards took.",
+          normalize_ws: true
+        )
+        expect(panel).to have_no_text("which is what the suite cost", normalize_ws: true)
       end
 
       it "reports no machine time at all when not one shard reported a timing" do
@@ -580,13 +621,19 @@ RSpec.describe "Repository registration and API keys", type: :request do
         get repository_path(repository)
 
         panel = overview_panel
-        expect(panel).to have_text("Machine time (all 4 added up) not reported", normalize_ws: true)
+        expect(panel).to have_text("Machine time (0 of 4 added up) not reported", normalize_ws: true)
         # Never `0.0s`: four shards that added up to nothing and four shards that said nothing are
         # different runs, and SQL's SUM over an all-null column returns NULL precisely so they stay
         # different here.
-        expect(panel).to have_no_text("Machine time (all 4 added up) 0.0s", normalize_ws: true)
+        expect(panel).to have_no_text("Machine time (0 of 4 added up) 0.0s", normalize_ws: true)
         expect(panel).to have_no_text("at least", normalize_ws: true)
-        expect(panel).to have_text("None of them reported a timing", normalize_ws: true)
+        expect(panel).to have_no_text("all 4 added up", normalize_ws: true)
+        expect(panel).to have_text(
+          "Not one of them reported a timing, so there is no machine time to add up — this run's " \
+          "cost is unknown, not zero.",
+          normalize_ws: true
+        )
+        expect(panel).to have_no_text("which is what the suite cost", normalize_ws: true)
         expect(panel).to have_css("dd span.text-app-muted", text: "not reported")
       end
 
@@ -599,6 +646,7 @@ RSpec.describe "Repository registration and API keys", type: :request do
         get repository_path(repository)
 
         panel = overview_panel
+        # "all 2" is earned here — both shards reported, so the label's coverage claim is true.
         expect(panel).to have_text("Machine time (all 2 added up) 0.0s", normalize_ws: true)
         expect(panel).to have_no_text("Machine time (all 2 added up) not reported", normalize_ws: true)
         expect(panel).to have_css("dd span:not(.text-app-muted)", text: "0.0s")
