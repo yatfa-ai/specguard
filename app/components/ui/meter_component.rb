@@ -1,6 +1,11 @@
 # frozen_string_literal: true
 
-# A labelled progress bar (used by the dashboard's annotated-ratio surface in Phase 4).
+# A labelled progress bar.
+#
+# Pass the real counts (`value: annotated, max: total`), not `(percentage, 100)`: the component
+# computes `percent` itself, and the raw counts are what land in `aria-valuenow`/`aria-valuemax`,
+# so the accessible markup carries the denominator instead of a bare share. Its one consumer is
+# the repository dashboard's suite-coverage block (app/views/repositories/show.html.erb).
 class UI::MeterComponent < ApplicationComponent
   TONES = {
     cta: "bg-app-cta",

@@ -27,6 +27,13 @@ class RepositoriesController < ApplicationController
     # The only signal that the repo ever reached the API: the newest use across every key.
     # `nil` means no key has ever authenticated — see the "Connect this repository" panel.
     @last_api_request_at = @repository.api_keys.maximum(:last_used_at)
+    # Every suite figure on the Overview panel is read off this one row — suite size, annotated
+    # count, and the difference between them. `nil` is load-bearing and means *never ingested*,
+    # which the panel renders as an empty state rather than as `0%`; a repository whose CI has
+    # never reported must not look identical to one that reported and genuinely found no
+    # annotations. Deliberately not `Repository#annotated_ratio`, which cannot express that
+    # difference (it floors at 0.0 by contract — see spec/models/repository_spec.rb).
+    @latest_test_run = @repository.latest_test_run
     # Set by ApiKeysController#create and readable exactly once — see ApiKeysController.
     @revealed_token = flash[:revealed_api_key]
     @revealed_token_name = flash[:revealed_api_key_name]
