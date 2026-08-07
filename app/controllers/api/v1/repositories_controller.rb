@@ -22,6 +22,20 @@ class Api::V1::RepositoriesController < Api::BaseController
   # bound and not the first page of a pagination contract there is no cursor to continue.
   HISTORY_LIMIT = 10
 
+  # The bound when `?branch=` narrowed the window, which is DEEPER than the unfiltered one and is
+  # the same depth `RepositoriesController` gives the human suite-size chart.
+  #
+  # Ten interleaved rows and ten rows of one branch are not the same amount of history. Unfiltered,
+  # ten rows is a sample of what CI has been doing lately; filtered, it is the series itself, and
+  # ten runs of a busy repository is an afternoon — `Repository::TRAJECTORY_LIMIT` documents that
+  # reasoning where it was first made. Read off that constant rather than restated as `30`, so the
+  # API's series and the dashboard's chart cannot come to disagree about how far back "the history"
+  # reaches.
+  #
+  # `history_window.limit` serves whichever of the two applied, so no client has to know this rule
+  # exists to know which bound it got.
+  BRANCH_HISTORY_LIMIT = Repository::TRAJECTORY_LIMIT
+
   def show
     render json: {
       repository: {
@@ -46,6 +60,15 @@ class Api::V1::RepositoriesController < Api::BaseController
   # must not serialize byte-identically to one that ran and genuinely found an empty suite; that is
   # the conflation the Overview panel refuses too (see RepositoriesController#show).
   # `Repository#annotated_ratio` cannot express the difference, which is why this reads the run.
+  #
+  # NOT RE-ANCHORED BY `?branch=`. This names the repository's newest run and keeps naming it under
+  # every request; only `history` narrows. A client filtering the history has asked a question about
+  # a series, not for a different latest run, and re-anchoring would silently change the meaning of
+  # four blocks (`latest_run`, `shards`, and the `history[0] == latest_run` identity the tie-break
+  # examples pin) to answer one. The consequence is worth stating because it is the one surprise
+  # here: under `?branch=main` on a repository whose newest run is on `feature/x`, `history[0]` is
+  # a `main` row and `latest_run` is the `feature/x` one, and they are *supposed* to differ.
+  # `history_window.branch_scope` is what says so.
   def serialized_latest_run
     test_run = current_repository.latest_test_run
 
@@ -125,22 +148,40 @@ class Api::V1::RepositoriesController < Api::BaseController
   # cannot act on a sentence. Shipping the rows without these three facts would re-create that
   # panel's original defect one layer down, for a client that has no caption to fall back on.
   #
-  # `branch_scope` is the load-bearing one. `Repository#recent_test_runs` is the interleaved
-  # history across EVERY branch CI reports from, so `history[0]` and `history[1]` are routinely two
-  # different branches and the difference between their `total_specs` is not a change in the suite.
-  # A client that wants a series filters on the per-row `branch` itself; this block is what tells
-  # it that it must.
+  # `branch_scope` is the load-bearing one. Unfiltered, `Repository#recent_test_runs` is the
+  # interleaved history across EVERY branch CI reports from, so `history[0]` and `history[1]` are
+  # routinely two different branches and the difference between their `total_specs` is not a change
+  # in the suite. A client that wants a series asks for one with `?branch=`; a client that does not
+  # filters on the per-row `branch` itself, and this block is what tells it that it must.
+  #
+  # `branch_scope` and `branch` are TWO keys rather than one interpolated token (`"branch:main"`),
+  # on this block's own rule: a client compares `branch_scope` against a fixed vocabulary it can
+  # hard-code, and reads the name out of `branch` without parsing. A token carrying the name would
+  # be neither — every client would have to `start_with?` its way back to the two facts.
+  #
+  # `branch` IS ALWAYS SERVED, `null` when the window was not narrowed — the same key-always-present
+  # rule `latest_run.shards` argues for itself above. A client tests one thing rather than
+  # distinguishing an absent key from a null one, and the pair reads the same way in every response.
+  # It restates what the SERVER filtered on, which is not always what the client sent: a non-String
+  # or blank `?branch=` is no filter at all, and echoing the raw param would tell a client its
+  # filter applied when it did not.
   #
   # `returned` beside `limit` rather than either alone: `returned == limit` is how a client learns
-  # the suite has run at least ten times and this is the tail, not the whole history — the
+  # the suite has run at least `limit` times and this is the tail, not the whole history — the
   # inference it would otherwise draw wrongly from a full array.
+  #
+  # `limit` reports WHICH BOUND APPLIED, not a constant. A narrowed window is bounded at
+  # `BRANCH_HISTORY_LIMIT` and an unfiltered one at `HISTORY_LIMIT`, and serving the applied bound is
+  # what keeps `returned == limit` meaning the same thing under both — a client that had to know the
+  # rule to interpret the number would be reading a caption again.
   #
   # `order` NAMES BOTH KEYS, because the second one is load-bearing and is not served. The rows are
   # ordered `(created_at, id) DESC` — `Repository#recent_test_runs`' ordering, tie-break included —
   # and `ingested_at_desc` alone would invite exactly the re-sort the serializer refuses to do
   # itself: two runs ingested in the same instant carry the same `ingested_at`, so a client sorting
   # on that field alone scrambles the very pair the tie-break exists to order, and can disagree with
-  # `latest_run` about which commit is newest.
+  # `latest_run` about which commit is newest. Narrowing the window does not re-sort it; the branch
+  # predicate rides along with the same `ORDER BY`.
   #
   # `tie_break_served: false` is the honest half of that. The tie-break key is the ingest sequence —
   # the runs table's own id — and this endpoint does not serialize it on a row, here or on
@@ -152,10 +193,50 @@ class Api::V1::RepositoriesController < Api::BaseController
     {
       order: "ingested_at_desc,ingest_sequence_desc",
       tie_break_served: false,
-      branch_scope: "all_branches",
-      limit: HISTORY_LIMIT,
+      branch_scope: requested_branch ? "single_branch" : "all_branches",
+      branch: requested_branch,
+      limit: history_limit,
       returned: history_runs.length
     }
+  end
+
+  # The branch the client asked to narrow `history` to, or `nil` for "do not narrow it".
+  #
+  # THE FIRST REQUEST PARAMETER READ ANYWHERE IN `Api::V1` (`git grep "params\[" app/controllers/api`
+  # found none before this), so the two guards below are the pattern rather than local caution.
+  #
+  # `is_a?(String)` FIRST, and it is not defensive noise: `?branch[]=main` parses to an Array and
+  # `?branch[a]=b` to `ActionController::Parameters`, neither of which answers `.presence` the way
+  # this reads it — an unguarded `params[:branch].presence` turns a malformed query string into a
+  # 500 on an authenticated GET. Anything that is not a String is treated as no filter, which is the
+  # same answer an absent param gets.
+  #
+  # `.presence` SECOND, which is what makes `?branch=` mean "no filter" rather than
+  # `WHERE branch = ''` — and, critically, keeps any input at all from reaching a
+  # `WHERE branch IS NULL`. `branch` is nullable and an anonymous run is an ordinary live state, so
+  # NULL is "the client did not say" (the meaning `serialized_history_row` pins) and not a branch
+  # anyone can ask for. `Repository#recent_test_runs` makes the same guard on its own side; this one
+  # is here so the model is never handed a blank in the first place.
+  #
+  # No validation branch and no 400: an unknown branch is not a malformed request, it is a request
+  # whose answer is zero rows. See `serialized_history` for why `[]` is the right answer and a
+  # substituted branch's rows would be the dangerous one.
+  #
+  # Memoized with `defined?` rather than `||=`, because `nil` is the common answer and `||=` would
+  # re-read the params on every call.
+  def requested_branch
+    return @requested_branch if defined?(@requested_branch)
+
+    raw = params[:branch]
+    @requested_branch = raw.is_a?(String) ? raw.presence : nil
+  end
+
+  # Which bound applies, decided in ONE place so the window's `limit` and the query's `LIMIT` cannot
+  # come apart. A response stating a bound it did not apply is worse than either bound alone: the
+  # client's `returned == limit` test — its only signal that there is more history behind the
+  # window — would answer about a number nothing enforced.
+  def history_limit
+    requested_branch ? BRANCH_HISTORY_LIMIT : HISTORY_LIMIT
   end
 
   # `[]` — not `null` — for a repository whose CI has never reported, which is the one place this
@@ -167,6 +248,16 @@ class Api::V1::RepositoriesController < Api::BaseController
   # gets after filtering a populated history down to a branch that never ran. Nulling it would
   # instead force every consumer to distinguish two spellings of the empty case before it could
   # iterate.
+  #
+  # AND IT IS THE ANSWER AN UNKNOWN `?branch=` GETS — never a fallback to the unfiltered window,
+  # never another branch's rows. The human suite-size panel does fall back to its current anchor
+  # when it is handed a branch it does not recognise, which is right for a page: the page renders a
+  # visible notice beside the chart saying so. A JSON client has no notice. One that asked for
+  # `main` and silently received `feature/x` rows would compute a growth series for the wrong
+  # branch and have nothing in the body to detect it with — a two-branch error exactly as invisible
+  # as the 0–1/0–100 ratio confusion `annotated_ratio_for` guards against below. So the ask is
+  # restated in `history_window.branch`, `returned` says `0`, and the client can tell "that branch
+  # has no runs" from "here is some other branch" because the second never happens.
   def serialized_history
     history_runs.map { |run| serialized_history_row(run) }
   end
@@ -197,9 +288,13 @@ class Api::V1::RepositoriesController < Api::BaseController
   def serialized_history_row(run)
     {
       commit_sha: run.commit_sha,
-      # Per-row, and non-negotiable: this is the field a client filters on to turn the interleaved
-      # history `history_window.branch_scope` warns about into an actual series. `null` keeps its
-      # `latest_run` meaning — "the client did not say" — and an anonymous run belongs to no series.
+      # Per-row, and non-negotiable: this is the field that turns the interleaved history
+      # `history_window.branch_scope` warns about into an actual series. It stays served under
+      # `?branch=` too, where every row carries the same value — a client should be able to read a
+      # row's branch off the row rather than off the window it arrived in, and a narrowed window's
+      # rows are otherwise indistinguishable from an unfiltered window that happened to be uniform.
+      # `null` keeps its `latest_run` meaning — "the client did not say" — and an anonymous run
+      # belongs to no series, which is why no `?branch=` value can select one.
       branch: run.branch,
       total_specs: run.total_specs_count,
       annotated_specs: run.annotated_specs_count,
@@ -223,9 +318,19 @@ class Api::V1::RepositoriesController < Api::BaseController
   # One grouped `COUNT(*)` for the whole window primes `shard_count` on every row — see
   # `ShardCountPreloading`, shared with the human panel that asks the same question of the same
   # rows. So `history` costs two queries at ten rows and the same two at one, instead of one `pick`
-  # per row.
+  # per row. A narrowed window primes identically: `preload_shard_counts` keys off the ids it is
+  # handed and does not care how they were selected, so `?branch=` costs the same two queries at
+  # thirty rows.
+  #
+  # The branch predicate is passed INTO the model call, and that placement is the whole feature. The
+  # `WHERE` and the `LIMIT` have to be one query: bounding first and filtering the result is what
+  # returns zero `main` rows on a repository whose ten newest runs are all feature branches, which
+  # is precisely what a client was left to do before this. `Repository#recent_test_runs` carries
+  # the rest of that argument, and the index it relies on.
   def history_runs
-    @history_runs ||= preload_shard_counts(current_repository.recent_test_runs(limit: HISTORY_LIMIT).to_a)
+    @history_runs ||= preload_shard_counts(
+      current_repository.recent_test_runs(limit: history_limit, branch: requested_branch).to_a
+    )
   end
 
   # The 0–1 FRACTION, matching what `/ingest` answered for this same run — never the 0–100

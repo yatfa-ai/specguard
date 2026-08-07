@@ -342,8 +342,34 @@ class Repository < ApplicationRecord
   #
   # Bounded by `limit` rather than paginated: this is a history of *runs*, so ten rows is ten rows
   # whether the suite holds three tests or twenty thousand.
-  def recent_test_runs(limit: 10)
-    test_runs.order(created_at: :desc, id: :desc).limit(limit)
+  #
+  # == `branch:` — the filter has to be IN this query, not applied to its result
+  #
+  # Unfiltered, this is the interleaved history across every branch CI reports from, and the panel
+  # that renders it disclaims being a series in those words. A caller that wants a series has to
+  # narrow it — and narrowing it *afterwards* cannot work, because the bound is already spent. On a
+  # repository whose CI reports on every PR, the last ten runs repository-wide are routinely all
+  # feature branches, so `recent_test_runs.select { it.branch == "main" }` returns `[]` while `main`
+  # holds thirty runs in this same table. The `WHERE` therefore rides along with the `LIMIT`, and
+  # `index_test_runs_on_repository_id_and_branch_and_created_at` (db/schema.rb) is the index that
+  # makes the narrowed walk stop at `limit` rows rather than scan.
+  #
+  # `.present?` and not `.nil?`, deliberately, and it is the same guard `suite_size_trajectory` and
+  # `previous_test_run_on_branch` make above: a blank branch means "no filter", and must never reach
+  # `WHERE branch = ''` or — far worse — `WHERE branch IS NULL`. `branch` is nullable and
+  # `Ingest::Payload` writes `.presence`, so anonymous runs are an ordinary live state, and matching
+  # NULL would pool every one of them, from every branch and every machine, into a single fictional
+  # history. "SpecGuard does not know where this run came from" is not a branch, so it is not
+  # selectable here.
+  #
+  # A branch that never ran returns zero rows rather than falling back to the unfiltered window.
+  # That is the honest answer and the only safe one for a caller that asked for a named series:
+  # substituting another branch's rows would hand back a growth curve for the wrong branch, with
+  # nothing in the result to say so.
+  def recent_test_runs(limit: 10, branch: nil)
+    scope = test_runs
+    scope = scope.where(branch: branch) if branch.present?
+    scope.order(created_at: :desc, id: :desc).limit(limit)
   end
 
   private

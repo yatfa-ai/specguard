@@ -83,6 +83,10 @@ that. Every figure is read off the same rows `repositories#show` renders from
 (`Repository#latest_test_run` and `#recent_test_runs`, which share an ordering tie-break included),
 so the API and the dashboard cannot name different commits for the same repository.
 
+Takes one optional query parameter, `?branch=`, which narrows `history` — and only `history` — to a
+single branch. See [`history`](#history--how-the-suite-grew-without-differencing-two-polls) below.
+The body shown here is the response with **no** parameter.
+
 ```json
 {
   "repository": {
@@ -114,6 +118,7 @@ so the API and the dashboard cannot name different commits for the same reposito
     "order": "ingested_at_desc,ingest_sequence_desc",
     "tie_break_served": false,
     "branch_scope": "all_branches",
+    "branch": null,
     "limit": 10,
     "returned": 2
   },
@@ -206,12 +211,55 @@ of its own documentation forbidding, because two runs are only comparable under 
 cannot see. `history` serves the rows themselves, plus the facts that decide whether any two of
 them may be differenced at all.
 
-**`history` is not a series.** `history_window.branch_scope` is `all_branches`, and it means what
-it says: these are the repository's runs interleaved across every branch CI reports from, so
-`history[0]` and `history[1]` are routinely two different branches and the difference between their
-`total_specs` is **not** a change in the suite. The dashboard's Recent-runs panel carries that same
-warning as a caption under its heading; a machine client has no caption, so the fact is structural
-here — every row carries its own `branch`, and a client that wants a series filters on it first.
+**`history` is not a series — until you ask for one.** By default `history_window.branch_scope` is
+`all_branches`, and it means what it says: these are the repository's runs interleaved across every
+branch CI reports from, so `history[0]` and `history[1]` are routinely two different branches and
+the difference between their `total_specs` is **not** a change in the suite. The dashboard's
+Recent-runs panel carries that same warning as a caption under its heading; a machine client has no
+caption, so the fact is structural here — every row carries its own `branch`.
+
+**Do not filter the array client-side. Ask the server.** `?branch=` is not a convenience: filtering
+what you received cannot work, because the bound was already spent before you saw it. On a
+repository whose CI reports on every PR, the ten most recent runs are routinely all feature
+branches, so `history.filter(r => r.branch === "main")` returns `[]` while `main` holds thirty runs
+in the same table — and there is no cursor to reach past the window. `?branch=main` puts the
+predicate in the same query as the bound, which is the only way to get a series.
+
+```sh
+curl -H "Authorization: Bearer sgk_..." \
+  "http://localhost:3000/api/v1/repository?branch=main"
+```
+
+| Request | `branch_scope` | `branch` | `limit` | `history` holds |
+| --- | --- | --- | --- | --- |
+| no `branch` param | `"all_branches"` | `null` | `10` | the interleaved tail across every branch |
+| `?branch=` (blank) | `"all_branches"` | `null` | `10` | identical to the above — blank means *no filter* |
+| `?branch=main` | `"single_branch"` | `"main"` | `30` | only `main`'s runs, newest first |
+| `?branch=never-ran` | `"single_branch"` | `"never-ran"` | `30` | `[]` |
+| `?branch[]=main` (non-string) | `"all_branches"` | `null` | `10` | `200`, unfiltered — the filter did not apply |
+
+Four things worth knowing before you use it:
+
+- **A narrowed window reaches further back — 30 rows, not 10.** Ten interleaved rows is a sample of
+  what CI has been doing lately; ten rows of *one* branch is an afternoon, and the question a series
+  answers is what the suite has done over a month. It is the same depth the dashboard's suite-size
+  chart uses. `limit` always reports **which bound actually applied**, so you never have to know
+  this rule to read `returned == limit`.
+- **An unknown branch returns `[]`, never a substituted branch's rows.** The dashboard falls back to
+  its current anchor for a branch it does not recognise and renders a visible notice saying so; you
+  have no notice. Silently receiving `feature/x` rows after asking for `main` would be a growth
+  series computed for the wrong branch with nothing in the body to detect it. `history_window.branch`
+  restates what the server filtered on, so `[]` with `"branch": "main"` means *`main` has no runs* —
+  not *your filter was ignored*. Compare it against what you sent.
+- **`latest_run` is not re-anchored.** It names the repository's newest run under every request;
+  only `history` narrows. So under `?branch=main` on a repository whose newest run is on
+  `feature/x`, `history[0]` is a `main` row and `latest_run` is the `feature/x` one — they are
+  *supposed* to differ, and `branch_scope` is what says so. The `history[0] == latest_run` identity
+  below holds for the **unfiltered** window.
+- **Runs that reported no branch are unselectable.** `branch` is nullable and ingest accepts a body
+  without it, so `null` means *"the client did not say"* — a different fact from any branch name.
+  No `?branch=` value matches those rows, because pooling every anonymous run from every branch and
+  every machine into one "series" would be fiction. They still appear in the unfiltered window.
 
 Before differencing two rows, check both:
 
@@ -231,23 +279,29 @@ extra queries — and `assembled_like?` reads the count, not the costs. The full
 
 | Field | Meaning |
 | --- | --- |
-| `order` | `"ingested_at_desc,ingest_sequence_desc"` — **both** keys. Rows are ordered by ingest time descending, ties broken by ingest sequence descending. |
+| `order` | `"ingested_at_desc,ingest_sequence_desc"` — **both** keys. Rows are ordered by ingest time descending, ties broken by ingest sequence descending. Unchanged by `?branch=`: the predicate rides along with the same `ORDER BY` rather than re-sorting anything. |
 | `tie_break_served` | `false`. The second ordering key is **not** a field on a row, so the ordering is not reproducible from what you hold — see below. |
-| `branch_scope` | `"all_branches"`. The array was never filtered to one branch. |
-| `limit` | The bound, currently `10`. |
+| `branch_scope` | `"all_branches"` when the window was not narrowed, `"single_branch"` when `?branch=` applied. A token to compare, not a caption to parse. |
+| `branch` | The branch the server filtered on, or `null` when it did not. Always present. It restates what the **server** did, which is not always what you sent — a blank or non-string `?branch=` is no filter, and this key is how you find that out. |
+| `limit` | The bound **actually applied**: `10` unfiltered, `30` narrowed. |
 | `returned` | How many rows this response actually carries. |
+
+`branch_scope` and `branch` are two keys rather than one token like `"branch:main"` on purpose: you
+compare the scope against a fixed vocabulary you can hard-code, and read the name out of `branch`
+without parsing. A token carrying the name would be neither.
 
 **Read the array in the order it arrived.** Two runs ingested in the same instant carry the same
 `ingested_at`, and the key that orders them — the ingest sequence — is not served on a row, here or
 on `latest_run`. So a client that re-sorts on `ingested_at` alone scrambles exactly those pairs and
-can end up disagreeing with `latest_run` about which commit is newest. `history[0]` is the same row
-as `latest_run` **always**, including the same-instant case; re-sorting is the one way to break
-that.
+can end up disagreeing with `latest_run` about which commit is newest. In the **unfiltered** window
+`history[0]` is the same row as `latest_run` **always**, including the same-instant case; re-sorting
+is the one way to break that. (Under `?branch=` the two legitimately differ — see above.)
 
 `limit` is a bound, not a page: ten rows is ten rows whether the suite holds three tests or twenty
-thousand, and there is no cursor to continue. `returned == limit` is how you learn the suite has
-run at least ten times and this is the tail — the inference you would otherwise draw wrongly from a
-full array.
+thousand, and there is no cursor to continue. `returned == limit` is how you learn the suite has run
+at least `limit` times and this is the tail — the inference you would otherwise draw wrongly from a
+full array. If you hit it on a narrowed window, you have thirty runs of that branch and there is
+more behind them.
 
 ## The design system
 
