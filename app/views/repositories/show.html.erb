@@ -525,7 +525,7 @@
                   stays at the list's inherited `text-app-muted`: it is the label, not a value. %>
               <ul id="shard-distribution" class="flex flex-wrap gap-x-3 gap-y-1 text-xs text-app-muted tabular-nums">
                 <% @latest_test_run.shard_distribution_labels.each do |name, duration, size, per_spec| %>
-                  <li class="inline-flex items-baseline gap-x-1.5">
+                  <li class="flex items-baseline gap-x-1.5">
                     <span><%= name %></span>
                     <span class="text-app-content-secondary"><%= duration %></span>
                     <%# The denominator, never omitted: a duration with no count beside it is the

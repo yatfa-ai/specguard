@@ -399,12 +399,18 @@ class TestRun < ApplicationRecord
   # incidental** — the same kind of fact `#some_shard_untimed?` records about its own vacuous
   # false. `duration_seconds: :desc` is **NULLS FIRST** in Postgres, so on a run carrying a silent
   # shard the head of this list is the shard that reported *nothing*, and `#longest_shard_label`
-  # below would name it as the longest while `#shard_duration_labels` printed it at the top of the
-  # distribution. Unreachable today because the gate's `!some_shard_untimed?` condition is exactly
-  # the statement that no such row exists — but all three of these readers are public and none of
-  # them re-checks it, so a future caller that skipped the gate would be handed an untimed row
-  # wearing the word "longest". Call them from anywhere else and either keep the gate or order
-  # `NULLS LAST` first.
+  # below would name it as the longest while `#shard_distribution_labels` printed it at the top of
+  # the distribution. Unreachable today because the gate's `!some_shard_untimed?` condition is
+  # exactly the statement that no such row exists — but this method and EVERY public reader derived
+  # from it below re-check nothing, so a future caller that skipped the gate would be handed an
+  # untimed row wearing the word "longest". Call any of them from anywhere else and either keep the
+  # gate or order `NULLS LAST` first.
+  #
+  # That enumeration is stated as a rule and not as a count on purpose. It read "all three of these
+  # readers" until this slice, which was true when it was written and false the moment
+  # `#shard_spec_counts` and `#shard_seconds_per_spec` were added below — the one paragraph that
+  # bounds the ungated exposure understating it by two, in the commit that widened it. A rule the
+  # next reader has to satisfy cannot rot the way a tally does.
   def shard_durations
     @shard_durations ||= test_run_shards.order(duration_seconds: :desc, id: :asc)
                                         .pluck(:shard_id, :duration_seconds, :total_specs_count)
@@ -534,10 +540,18 @@ class TestRun < ApplicationRecord
   #
   # The fourth element is `nil` — never a formatted zero — for a shard with no denominator, and the
   # third states that absence in words. See `#shard_size_label`.
+  #
+  # Zipped against `#shard_seconds_per_spec` rather than re-derived per row, so *which shards have
+  # a cost per test* is decided in exactly one place. An earlier draft called a private
+  # `#shard_seconds_per_spec_label` that repeated the `seconds.nil? || !spec_count.to_i.positive?`
+  # test, which put the same load-bearing predicate behind two surfaces — this list and the spread
+  # comparison — free to drift apart into a row showing a rate for a shard the spread excluded,
+  # with each half independently green. The alignment `#shard_seconds_per_spec` promises (nils kept
+  # in place, not compacted) is what makes the zip safe, and this is the caller it was promised to.
   def shard_distribution_labels
-    shard_durations.map do |shard_id, seconds, spec_count|
+    shard_durations.zip(shard_seconds_per_spec).map do |(shard_id, seconds, spec_count), rate|
       [shard_label(shard_id), humanized_seconds(seconds), shard_size_label(spec_count),
-       shard_seconds_per_spec_label(seconds, spec_count)]
+       rate && humanized_seconds_per_spec(rate)]
     end
   end
 
@@ -751,14 +765,6 @@ class TestRun < ApplicationRecord
     return "no tests reported" unless count.positive?
 
     "#{ActiveSupport::NumberHelper.number_to_delimited(count)} #{"test".pluralize(count)}"
-  end
-
-  # One shard's cost per test, or `nil` when it has no denominator — the view renders nothing there
-  # and `#shard_size_label` above has already said why.
-  def shard_seconds_per_spec_label(seconds, spec_count)
-    return nil if seconds.nil? || !spec_count.to_i.positive?
-
-    humanized_seconds_per_spec(seconds / spec_count)
   end
 
   # A per-test cost, in the unit that keeps it legible.
