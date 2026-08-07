@@ -866,21 +866,14 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
         .to eq([named.commit_sha])
     end
 
-    # AC5. This is the first request parameter read anywhere in `Api::V1`, so the shapes a query
-    # string can legally parse into are worth pinning rather than assuming. `?branch[]=main` is an
-    # Array and `?branch[a]=b` is an `ActionController::Parameters`; neither is a String, and an
-    # unguarded `.presence` on either is a 500 on an authenticated GET.
-    #
-    # A non-String is treated as no filter — the same answer an absent param gets — rather than a
-    # 400, because there is nothing here for a client to correct that a missing param would not
-    # equally have. `branch => nil` in the window is what says the filter did not apply, so the
-    # response is not silently claiming to have honoured a request it dropped.
-    [
-      ["an array", { branch: ["main"] }],
-      ["a nested hash", { branch: { a: "b" } }],
-      ["an array of hashes", { branch: [{ a: "b" }] }]
-    ].each do |shape, query|
-      it "answers 200 rather than 500 when branch arrives as #{shape}" do
+    # AC5. The three shapes a query string can legally parse into that are not a branch name are
+    # listed ONCE, in `spec/support/shared_examples/malformed_branch_param.rb`, and the human
+    # suite-trajectory panel runs the same list against the same guard
+    # (`RequestedBranchParam#requested_branch`). What is local here is only how this surface SAYS
+    # it dropped the ask: `branch => nil` and `branch_scope => "all_branches"` in the window, so the
+    # response is not silently claiming to have honoured a request it ignored.
+    describe "a branch parameter that is not a branch name" do
+      def expect_branch_param_treated_as_no_ask(query)
         branch_starved_repository
 
         body = get_repository(query: query)
@@ -890,6 +883,8 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
                                                   "limit" => 10)
         expect(body["history"].length).to eq(10)
       end
+
+      it_behaves_like "a surface that treats a malformed branch parameter as no ask"
     end
 
     # AC7. A client that filtered the history has not asked for a different latest run. Compared
