@@ -10,7 +10,7 @@ class RepositoriesController < ApplicationController
 
   # The first four are per-card questions asked by repositories/index, once per repository in the
   # list. The fifth is a per-row question asked by repositories/show, once per API key.
-  helper_method :owns_repository?, :key_count_visible?, :api_key_count, :latest_suite_size, :former_member?
+  helper_method :owns_repository?, :key_count_visible?, :api_key_count, :latest_run, :former_member?
 
   # Everything the viewer can open: what they own, plus what has been shared with them. Kept as one
   # relation rather than `owned + shared`, because concatenating two Arrays orders them
@@ -233,7 +233,7 @@ class RepositoriesController < ApplicationController
     ids.nil? ? false : ids.exclude?(user.id)
   end
 
-  # Suite size for one card, or `nil` when this repository's CI has never reported.
+  # The run one card reports from, or `nil` when this repository's CI has never reported.
   #
   # `nil` is load-bearing and means *never ingested*, which the card renders as its own state
   # rather than as `0 tests` — a repository CI has never posted a run for must not read identically
@@ -241,12 +241,21 @@ class RepositoriesController < ApplicationController
   # `@latest_test_run` presence, and the reason this is not `Repository#annotated_ratio`, which
   # floors at 0.0 by contract and cannot express it.
   #
+  # The whole ROW, deliberately, where this used to hand the view `total_specs_count.to_i` and
+  # nothing else. A suite size is not self-describing: `Repository#latest_test_run` returns the
+  # newest row whatever its age, and on a sharded run `total_specs_count` is the SUM over the
+  # shards recorded SO FAR (`TestRun#suite_size_measured?` carries that argument in full). So a
+  # five-month-dead repository and one that reported an hour ago, and a half-delivered run and a
+  # complete one, all reduced to the same bare integer — on the one surface that renders N of them
+  # side by side, which makes it a comparison surface by construction. The `created_at`, `branch`
+  # and primed shard count the card needs to say which is which are all already loaded by
+  # `latest_test_runs` below and cost nothing extra; collapsing them here was throwing them away.
+  #
   # The figure itself is the run's *whole-suite* count — every spec, annotated or not (see
   # `Ingest::Payload#test_run_attributes`) — so it is already correct on a suite carrying no
   # annotations at all.
-  def latest_suite_size(repository)
-    run = latest_test_runs[repository.id]
-    run && run.total_specs_count.to_i
+  def latest_run(repository)
+    latest_test_runs[repository.id]
   end
 
   # `repository_id => newest TestRun` for every repository on this page, in one query no matter how
@@ -258,6 +267,14 @@ class RepositoriesController < ApplicationController
   # `Repository#latest_test_run`'s tie-break exactly (created_at desc, then id desc) so a card and
   # the page it links to can never name different runs. Scoped to the ids already on this page, so
   # it never scans `test_runs` globally.
+  #
+  # Primed through `preload_shard_counts` at the point the rows are loaded, because the card asks
+  # each run whether it is `multi_shard?` and `TestRun#shard_count` is a memoized per-instance
+  # `pick` (`test_run.rb`) — asked in the card loop that is one `test_run_shards` query per card,
+  # the same N+1 shape this page has already been cleaned of twice. One grouped `COUNT(*)` over
+  # `index_test_run_shards_on_test_run_id` answers it for the whole grid, exactly as the Recent-runs
+  # table on `show` already does. Primed HERE and not in `#index`, so the aggregate is taken only
+  # when something actually reads the runs and a page of no repositories still pays nothing.
   def latest_test_runs
     @latest_test_runs ||= begin
       repository_ids = @repositories.map(&:id)
@@ -265,10 +282,12 @@ class RepositoriesController < ApplicationController
       if repository_ids.empty?
         {}
       else
-        TestRun.where(repository_id: repository_ids)
-               .select("DISTINCT ON (test_runs.repository_id) test_runs.*")
-               .order(:repository_id, created_at: :desc, id: :desc)
-               .index_by(&:repository_id)
+        runs = TestRun.where(repository_id: repository_ids)
+                      .select("DISTINCT ON (test_runs.repository_id) test_runs.*")
+                      .order(:repository_id, created_at: :desc, id: :desc)
+                      .index_by(&:repository_id)
+        preload_shard_counts(runs.values)
+        runs
       end
     end
   end

@@ -62,4 +62,29 @@ module ApplicationHelper
     "#{number_with_delimiter(delta.abs)} #{"test".pluralize(delta.abs)} #{direction} " \
       "than the previous run on this branch"
   end
+
+  # The one rendering of how a run was assembled, and of what that means for the count sitting
+  # above it. Two surfaces state this now — the Recent-runs table on `show` and the repositories
+  # index card — and they must not state it in two sets of words: the fact is that
+  # `total_specs_count` on a sharded run is the SUM over the shards recorded SO FAR
+  # (`Ingest::RunRecorder#recompute_totals` re-derives it after every POST), which is a single fact
+  # about the data and not a per-page nuance to be re-explained.
+  #
+  # The composition itself comes from `TestRun#delivery_description` and is never re-derived here —
+  # a hand-rolled count of parts would print "0 shards" for the unsharded corpus, which is every run
+  # that named no `ci_run_id`.
+  #
+  # The qualifier is `multi_shard?` and not `shard_count.positive?`: one shard's SUM is its own
+  # whole report, so a single-shard run has no coverage gap to disclose and gets no sentence about
+  # one.
+  #
+  # A plain String, not a `tag`, because the two callers put it in different containers — a table
+  # cell and a card paragraph — and only the wording is shared. Neither predicate queries: every
+  # run reaching here was primed with its shard count by
+  # `RepositoriesController#preload_shard_counts`.
+  def test_run_delivery_note(test_run)
+    return test_run.delivery_description unless test_run.multi_shard?
+
+    "#{test_run.delivery_description} — the count above covers those, not necessarily the whole suite"
+  end
 end

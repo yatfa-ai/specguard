@@ -814,19 +814,21 @@
                     in full, in the model's own words.
 
                     So every row states how it was assembled, and a multi-shard row says what its
-                    figure therefore covers. Through `TestRun#delivery_description`, which the
-                    Overview panel already words this with — and which answers "reported in one
-                    piece" for a `shard_count` of zero, the entire unsharded corpus. A hand-rolled
-                    count of parts would render "0 shards" for the most common run there is.
+                    figure therefore covers. Through `ApplicationHelper#test_run_delivery_note`,
+                    which wraps the `TestRun#delivery_description` the Overview panel already words
+                    this with — and which answers "reported in one piece" for a `shard_count` of
+                    zero, the entire unsharded corpus. A hand-rolled count of parts would render
+                    "0 shards" for the most common run there is.
 
-                    `multi_shard?`, not `shard_count.positive?`: one shard's SUM is its own whole
-                    report, so a single-shard run has no coverage gap to disclose and reads exactly
-                    as it always has. Neither predicate queries here — every row was primed with its
-                    shard count by `RepositoriesController#preload_shard_counts`, in one aggregate
-                    for the whole panel. %>
+                    The helper rather than the two fragments inline, because the repositories index
+                    card now says this too and the qualifier is a fact about the column, not about
+                    this table — see the helper for that argument, and for why the predicate behind
+                    it is `multi_shard?`. Neither predicate queries here — every row was primed with
+                    its shard count by `RepositoriesController#preload_shard_counts`, in one
+                    aggregate for the whole panel. %>
                 <%= number_with_delimiter(test_run.total_specs_count.to_i) %>
                 <span class="block text-xs text-app-muted">
-                  <%= test_run.delivery_description %><%= " — the count above covers those, not necessarily the whole suite" if test_run.multi_shard? %>
+                  <%= test_run_delivery_note(test_run) %>
                 </span>
               </td>
               <td class="px-3 py-2 text-app-content-secondary tabular-nums">
