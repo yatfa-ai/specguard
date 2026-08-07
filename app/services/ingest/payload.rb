@@ -52,6 +52,14 @@ module Ingest
       }
     end
 
+    # Which shard of the run this request is, as the client named it. Deliberately **not** part of
+    # {#test_run_attributes}: it does not describe the run, it identifies this one contribution to
+    # it, and it is stored on `TestRunShard` rather than on `TestRun`.
+    #
+    # Nil is ordinary and is not an error — an unsharded run, or a runner exposing no index the
+    # client recognises. See `Ingest::RunRecorder` for what a nil costs.
+    def shard_id = @body["shard_id"].presence
+
     private
 
     def validate
@@ -60,6 +68,7 @@ module Ingest
       validate_commit_sha
       validate_branch
       validate_ci_run_id
+      validate_shard_id
       validate_duration_seconds
       validate_specs
     end
@@ -95,6 +104,18 @@ module Ingest
       return if value.nil? || value.is_a?(String)
 
       @errors << "ci_run_id must be a string when present"
+    end
+
+    # Same rule and the same reason as `ci_run_id` above, and the number case matters more here,
+    # not less: shard indexes are `0`, `1`, `2` on every runner that publishes one, so a client
+    # sending them as JSON numbers is the *likely* mistake rather than an exotic one. `0` and
+    # `"0"` keying different shards of one run would let a shard fail to replace itself, which is
+    # the whole property these ids exist to provide.
+    def validate_shard_id
+      value = @body["shard_id"]
+      return if value.nil? || value.is_a?(String)
+
+      @errors << "shard_id must be a string when present"
     end
 
     def validate_duration_seconds

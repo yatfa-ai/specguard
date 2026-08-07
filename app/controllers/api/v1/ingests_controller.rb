@@ -12,13 +12,16 @@ class Api::V1::IngestsController < Api::BaseController
 
     return render_bad_request(payload.errors) unless payload.valid?
 
-    test_run = Ingest::RunRecorder.record(current_repository, payload.test_run_attributes)
+    test_run = Ingest::RunRecorder.record(current_repository, payload.test_run_attributes,
+                                          shard_id: payload.shard_id)
 
     render json: {
       test_run_id: test_run.id,
-      # After accumulation these are the running totals for the whole CI run so far, not this
-      # shard's own slice — the row *is* the run (see `Ingest::RunRecorder`). For an unsharded
-      # run, which is every run with no `ci_run_id`, the two are the same number.
+      # These are the whole CI run's totals, not this shard's own slice — the row *is* the run
+      # (see `Ingest::RunRecorder`), and after a re-run they are the run's *current* numbers
+      # rather than a running tally, because the run's counts are derived from its shards rather
+      # than accumulated. For an unsharded run, which is every run with no `ci_run_id`, the run
+      # and the shard are the same thing and so are the numbers.
       total_specs: test_run.total_specs_count,
       annotated_specs: test_run.annotated_specs_count,
       # A 0–1 fraction, per the SpecGuard API Reference. The dashboard renders the same number as a

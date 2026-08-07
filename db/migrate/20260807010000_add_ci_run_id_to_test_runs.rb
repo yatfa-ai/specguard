@@ -1,12 +1,19 @@
 # frozen_string_literal: true
 
-# Gives a run an identity of its own, so the N shards of one sharded CI run accumulate into one
+# Gives a run an identity of its own, so the N shards of one sharded CI run fold into one
 # `TestRun` instead of landing as N rows with a split denominator.
 #
-# `commit_sha` cannot be that identity: two runs of the same commit (a re-run, a nightly) are
+# `commit_sha` cannot be that identity: a nightly and a later push of the same commit are
 # genuinely two runs and must stay two rows. The client sources this from whatever its CI provider
-# calls the build (`GITHUB_RUN_ID`, `CI_PIPELINE_ID`, …), which every shard of one run shares and
-# no second run repeats.
+# calls the build (`GITHUB_RUN_ID`, `CI_PIPELINE_ID`, …), which every shard of one run shares.
+#
+# These provider ids are documented as **stable across a re-run** of the same build — GitHub's
+# `GITHUB_RUN_ID` is *"A unique number for each workflow run within a repository. This number does
+# not change if you re-run the workflow run."* — and this column deliberately inherits that.
+# "Re-run failed jobs" re-runs a *subset* of shards, and those need to land back on the run they
+# came from rather than forming a new run holding only the shards that were retried. What makes
+# that safe is `test_run_shards`: a shard replaces its own slice instead of adding to it. Neither
+# table is correct without the other.
 #
 # == Why the unique index must be PARTIAL
 #

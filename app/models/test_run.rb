@@ -4,13 +4,15 @@
 # state of each test location lives in SpecIntent.
 #
 # One row is one *run*, which is not the same as one POST: a sharded suite delivers itself over N
-# requests and `Ingest::RunRecorder` accumulates every one of them onto the row named by
-# `ci_run_id`. The counters are therefore written by the first shard and *incremented in the
-# database* by the rest, never read-modify-written — see `Ingest::RunRecorder` for why.
-# `ci_run_id` is nil for every run no CI provider named, and those rows never accumulate.
+# requests and `Ingest::RunRecorder` folds every one of them onto the row named by `ci_run_id`.
+# For those rows the counters here are **derived** — the SUM of `test_run_shards`, with
+# `duration_seconds` the MAX, recomputed on every ingest — which is what makes a redelivered shard
+# replace its own slice rather than add to it. `ci_run_id` is nil for every run no CI provider
+# named; those rows have no shards, are written once, and are left exactly as they always were.
 class TestRun < ApplicationRecord
   belongs_to :repository
   has_many :spec_intents, dependent: :nullify
+  has_many :test_run_shards, dependent: :destroy
 
   validates :commit_sha, presence: true
 
