@@ -44,6 +44,26 @@ class Repository < ApplicationRecord
     test_runs.order(created_at: :desc, id: :desc).first
   end
 
+  # The newest run on ONE named branch — the anchor for a history the reader asked for by name,
+  # where `latest_test_run` is the anchor for the one the repository happens to have pushed last.
+  #
+  # Same ordering as `latest_test_run`, tie-break included, so "the newest run on main" means the
+  # same row here as it does everywhere else on the page.
+  #
+  # `nil` — and no query at all — for a blank branch, for the reason `previous_test_run_on_branch`
+  # gives at length: `WHERE branch IS NULL` would pool every anonymous run from every branch and
+  # every machine into one fictional history. A caller handed `nil` here falls back; it must never
+  # be handed a row assembled from runs that have nothing in common.
+  #
+  # `nil` too for a branch that simply has no runs — an unrecognised `?branch=` value is an ordinary
+  # thing for a reader to arrive with (a deleted branch, a typo, a stale bookmark), and it is the
+  # caller's job to fall back to what it would have shown anyway rather than render an empty chart.
+  def latest_test_run_on_branch(branch)
+    return nil if branch.blank?
+
+    test_runs.where(branch: branch).order(created_at: :desc, id: :desc).first
+  end
+
   # The run `run`'s suite figures can honestly be compared against: the newest run on the **same
   # branch**, strictly older than `run` itself. `nil` — never a fallback row — when there is no
   # honest comparison to make.
@@ -89,6 +109,24 @@ class Repository < ApplicationRecord
   # Thirty rather than ten because ten runs of a busy repository is an afternoon, and the question
   # this answers is what the suite has done over a month.
   TRAJECTORY_LIMIT = 30
+
+  # How many branches the panel's selector will ever offer, and the hard bound on the walk that
+  # finds them.
+  #
+  # A repository's BRANCH cardinality is human-scale where its RUN count is not — but nothing
+  # enforces that, so the walk stops here rather than trusting it. `branch_histories` returning
+  # exactly this many rows is how it says the list was cut.
+  BRANCH_HISTORY_LIMIT = 50
+
+  # One branch that has runs, and how much history it holds — a choice the "Suite growth" panel
+  # offers.
+  #
+  # `run_count` is deliberately CAPPED at `TRAJECTORY_LIMIT` (see `branch_histories`), so `capped?`
+  # is load-bearing rather than a detail: a capped count must be worded "30+ runs" and never as an
+  # exact figure, because the query stopped counting rather than reaching the end of the history.
+  BranchHistory = Data.define(:name, :run_count, :capped, :last_run_at) do
+    def capped? = capped
+  end
 
   # The suite-size series for `run`'s branch: the last `limit` runs on it, oldest first, each one
   # already primed with the shard count that says how it was assembled.
@@ -152,6 +190,97 @@ class Repository < ApplicationRecord
              .to_a
              .reverse
              .each { |point| point.preload_shard_count(point["shards_recorded"]) }
+  end
+
+  # A loose index scan ("skip scan") over `index_test_runs_on_repository_id_and_branch_and_created_at`
+  # — see `branch_histories` for why the obvious `SELECT DISTINCT branch` is not what this is.
+  #
+  # The recursive term is the canonical Postgres skip-scan shape: each step asks the index for the
+  # single smallest branch strictly greater than the one before it, so the walk costs one index
+  # descent PER BRANCH and touches no other row of the history. `branch > walked.branch` also drops
+  # `NULL` for free, which is the behaviour this panel wants — an anonymous run names no branch and
+  # is not selectable (see `previous_test_run_on_branch`).
+  #
+  # The LATERAL counts each branch's runs over a window that is bounded the same way the trajectory
+  # itself is: `LIMIT :run_probe` rows, walked newest-first off the same index. A bare `COUNT(*)`
+  # here would be an index scan of the whole branch — 40,000 entries for a trunk with 40,000 runs,
+  # which is precisely the O(history) work the panel's one-query contract exists to refuse. The
+  # probe is one row wider than the window so the caller can tell "exactly thirty" from "more than
+  # thirty" without ever counting past it, and `MAX(created_at)` over those same rows is the
+  # branch's newest run, free, because they are the newest rows.
+  BRANCH_HISTORY_SQL = <<~SQL.squish.freeze
+    WITH RECURSIVE walked AS (
+      SELECT (SELECT anchor.branch
+              FROM test_runs anchor
+              WHERE anchor.repository_id = :repository_id AND anchor.branch IS NOT NULL
+              ORDER BY anchor.branch
+              LIMIT 1) AS branch
+      UNION ALL
+      SELECT (SELECT next_branch.branch
+              FROM test_runs next_branch
+              WHERE next_branch.repository_id = :repository_id
+                AND next_branch.branch > walked.branch
+              ORDER BY next_branch.branch
+              LIMIT 1)
+      FROM walked
+      WHERE walked.branch IS NOT NULL
+    )
+    SELECT walked.branch AS branch, tail.run_count, tail.last_run_at
+    FROM walked
+    CROSS JOIN LATERAL (
+      SELECT COUNT(*) AS run_count, MAX(recent.created_at) AS last_run_at
+      FROM (SELECT run.created_at
+            FROM test_runs run
+            WHERE run.repository_id = :repository_id AND run.branch = walked.branch
+            ORDER BY run.created_at DESC, run.id DESC
+            LIMIT :run_probe) recent
+    ) tail
+    WHERE walked.branch IS NOT NULL
+    LIMIT :branch_limit
+  SQL
+
+  private_constant :BRANCH_HISTORY_SQL
+
+  # The branches this repository has runs on, most history first — the choices the "Suite growth"
+  # panel offers a reader whose trunk history has been pushed off the page by a feature branch.
+  #
+  # == Why this is not `SELECT DISTINCT branch`
+  #
+  # `DISTINCT` over the repository's whole history is O(history): Postgres has no way to answer it
+  # without visiting all 40,000 rows of a busy repository, and it gets no help from the branch index
+  # because it wants every row's branch, not a position in the ordering. That is the same scan
+  # `suite_size_trajectory` documents at length for refusing, reintroduced one line lower down the
+  # page. This walks the index instead — one descent per BRANCH, none per run — and both bounds are
+  # explicit: at most `branches` branches, and at most `runs + 1` rows counted for each.
+  #
+  # == Why the counts are capped
+  #
+  # A count is what the reader needs to see that a dark panel is not the whole story ("main has
+  # thirty runs, you are looking at a feature branch's first"), and beyond the trajectory window it
+  # answers no question this panel asks — the chart never reaches past `TRAJECTORY_LIMIT` runs. So
+  # the count stops there, and `BranchHistory#capped?` carries the fact that it stopped, so a
+  # caller can say "30+ runs" rather than inventing an exact figure it did not count to.
+  #
+  # Ordered by history rather than alphabetically, so the branch a reader is most likely looking
+  # for is first and stays first when a caller shows only the head of the list — `main` sorts after
+  # a dozen `feature/*` branches, and an alphabetical list truncated for display is a list with the
+  # trunk missing. Ties go to the branch pushed to most recently, then to its name so the order is
+  # stable between two identically-idle branches.
+  def branch_histories(branches: BRANCH_HISTORY_LIMIT, runs: TRAJECTORY_LIMIT)
+    rows = self.class.connection.select_all(
+      self.class.sanitize_sql_array(
+        [BRANCH_HISTORY_SQL, { repository_id: id, branch_limit: branches, run_probe: runs + 1 }]
+      )
+    )
+
+    rows.map { |row|
+      counted = row["run_count"].to_i
+      last_run_at = row["last_run_at"]
+      last_run_at = Time.zone.parse(last_run_at.to_s) unless last_run_at.nil? || last_run_at.is_a?(Time)
+
+      BranchHistory.new(name: row["branch"], run_count: [counted, runs].min,
+                        capped: counted > runs, last_run_at: last_run_at)
+    }.sort_by { |history| [-history.run_count, -(history.last_run_at&.to_f || 0), history.name] }
   end
 
   # The tail of the append-only run history, newest first — what the "Recent runs" panel lists.

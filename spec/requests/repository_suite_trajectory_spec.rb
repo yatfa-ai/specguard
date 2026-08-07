@@ -550,6 +550,220 @@ RSpec.describe "Repository suite-size trajectory", type: :request do
     end
   end
 
+  # == Choosing the branch (`?branch=`)
+  #
+  # The state this whole surface was dark for, and which NO example above can observe: the newest
+  # run in the repository is a feature branch's FIRST run, so the panel re-anchors to it and has
+  # one point to draw, while `main` holds a month of comparable history in the same table. The two
+  # mixed-branch examples above cannot reach it — "never reaches across branches" puts its
+  # `feature/x` run BETWEEN two `main` runs, and the sharded budget example puts its feature run
+  # OLDER than the anchor. Both leave `main` as the anchor, which is the case that was never broken.
+  describe "choosing the branch the panel is drawn on" do
+    # Newest run in the repository is `feature/x`'s first and only one; `main` has two comparable
+    # runs behind it. On a busy repository whose CI reports on every PR, this is the normal state.
+    def repository_anchored_on_a_feature_branch
+      repository = create_repository(user: @user)
+      run(repository, "trunkaaaaaa", total: 1_000, at: 3.days.ago)
+      run(repository, "trunkbbbbbb", total: 1_047, at: 2.days.ago)
+      run(repository, "feat1111111", branch: "feature/x", total: 12, at: 1.minute.ago)
+      repository
+    end
+
+    def branch_choices
+      trajectory_panel.all("#suite-trajectory-branches nav a").map(&:text)
+    end
+
+    it "draws the branch that was asked for, where the default anchor has nothing to draw" do
+      repository = repository_anchored_on_a_feature_branch
+
+      get repository_path(repository)
+
+      # Today's behaviour, unchanged: the panel is dark because the newest run is a first run.
+      expect(trajectory_panel).to have_no_css("svg", visible: :all)
+      expect(trajectory_panel).to have_text("SpecGuard has 1 run on feature/x so far", normalize_ws: true)
+
+      get repository_path(repository, branch: "main")
+
+      expect(response).to have_http_status(:ok)
+      expect(chart).to have_css("svg circle", count: 2, visible: :all)
+      expect(plotted_labels).to eq(%w[trunkaa trunkbb])
+      expect(chart).to have_text("Tests in suite on main", normalize_ws: true)
+      expect(basis_line).to have_text("Drawn through 2 of the last 2 runs on main", normalize_ws: true)
+    end
+
+    # The selected branch anchors THIS panel and nothing else. `@latest_test_run` is untouched, so
+    # the Overview's suite size and the Recent-runs panel go on naming the repository's latest run —
+    # and a reader can never end up with a headline figure about one run above a chart about another.
+    it "moves this panel only, leaving the rest of the page naming the latest run" do
+      repository = repository_anchored_on_a_feature_branch
+
+      get repository_path(repository, branch: "main")
+
+      page = Capybara.string(response.body)
+      expect(page.find("#overview")).to have_text("Measured on feat111 (feature/x)", normalize_ws: true)
+      expect(page.find("#recent-runs")).to have_text("feat111", normalize_ws: true)
+    end
+
+    # Criterion 2: a dark panel discloses that another branch has history. Without this the reader
+    # of a dark panel has no way to learn that `main` is one click away — nothing else on the page
+    # mentions a branch they are not already looking at.
+    it "names the branches that have runs and how many each has" do
+      repository = repository_anchored_on_a_feature_branch
+
+      get repository_path(repository)
+
+      # Most history first, and the branch being drawn is the one marked current — not the one
+      # moved to the front, so the list does not reshuffle as the reader clicks along it.
+      expect(branch_choices).to eq(["main (2 runs)", "feature/x (1 run)"])
+      expect(trajectory_panel.all("#suite-trajectory-branches nav a[aria-current='page']").map(&:text))
+        .to eq(["feature/x (1 run)"])
+    end
+
+    it "marks the branch it is drawing as the current one" do
+      repository = repository_anchored_on_a_feature_branch
+
+      get repository_path(repository, branch: "main")
+
+      expect(trajectory_panel.all("#suite-trajectory-branches nav a[aria-current='page']").map(&:text))
+        .to eq(["main (2 runs)"])
+    end
+
+    # A count that STOPPED is not a count that finished. The query walks one row past the window and
+    # no further, so a trunk with thousands of runs is never counted to answer a question the chart
+    # does not ask — and the label says "30+" rather than publishing the row it stopped at.
+    it "words a history longer than the window it counts as 30+" do
+      repository = create_repository(user: @user)
+      (Repository::TRAJECTORY_LIMIT + 1).times do |i|
+        run(repository, "sha#{i.to_s.rjust(4, "0")}000", total: 1_000 + i, at: (40 - i).days.ago)
+      end
+
+      get repository_path(repository)
+
+      expect(branch_choices).to eq(["main (30+ runs)"])
+      expect(trajectory_panel.find("#suite-trajectory-branches-basis"))
+        .to have_text("means the branch holds more history than the chart reaches", normalize_ws: true)
+    end
+
+    # A truncated list of branches with nothing said about it reads as the complete set. The ones
+    # shown are the ones with the most history, so `main` survives a cut that an alphabetical list
+    # would have dropped it out of.
+    it "lists the branches with the most history and says how many it left out" do
+      repository = create_repository(user: @user)
+      run(repository, "trunkaaaaaa", total: 1_000, at: 30.days.ago)
+      run(repository, "trunkbbbbbb", total: 1_047, at: 29.days.ago)
+      10.times { |i| run(repository, "feat#{i}0000000", branch: "feature/#{i}", total: 10, at: (20 - i).days.ago) }
+
+      get repository_path(repository)
+
+      expect(branch_choices.size).to eq(RepositoriesHelper::TRAJECTORY_BRANCH_CHOICES)
+      # `main` has twice the history of any feature branch and leads on that; the feature branches
+      # follow newest-pushed first, which is where the cut falls.
+      expect(branch_choices.first(2)).to eq(["main (2 runs)", "feature/9 (1 run)"])
+      expect(trajectory_panel.find("#suite-trajectory-branches-basis"))
+        .to have_text("3 further branches have runs and are not listed here", normalize_ws: true)
+    end
+
+    # The one case the display order bends for. A reader can arrive by URL on a branch holding a
+    # single run with a dozen busier branches ahead of it — and a selector that cannot show the
+    # branch it is drawing is a selector that has lost the reader.
+    it "shows the branch it is drawing even when the cut would have left it out" do
+      repository = create_repository(user: @user)
+      run(repository, "trunkaaaaaa", total: 1_000, at: 30.days.ago)
+      run(repository, "trunkbbbbbb", total: 1_047, at: 29.days.ago)
+      10.times { |i| run(repository, "feat#{i}0000000", branch: "feature/#{i}", total: 10, at: (20 - i).days.ago) }
+
+      # The thinnest, least recently pushed branch there is: last in the order, well past the cut.
+      get repository_path(repository, branch: "feature/0")
+
+      expect(branch_choices.size).to eq(RepositoriesHelper::TRAJECTORY_BRANCH_CHOICES)
+      expect(branch_choices.first).to eq("feature/0 (1 run)")
+      expect(branch_choices).to include("main (2 runs)")
+      expect(trajectory_panel.all("#suite-trajectory-branches nav a[aria-current='page']").map(&:text))
+        .to eq(["feature/0 (1 run)"])
+      expect(trajectory_panel).to have_text("SpecGuard has 1 run on feature/0 so far", normalize_ws: true)
+    end
+
+    # Criterion 3, and the reason the fallback is disclosed rather than silent: a deleted branch, a
+    # typo and a stale bookmark are ordinary ways to arrive here. The page renders what it would
+    # have rendered anyway — and says which branch it drew instead of the one that was asked for.
+    it "falls back to the default anchor for a branch it has no runs on, and says so" do
+      repository = repository_anchored_on_a_feature_branch
+
+      get repository_path(repository, branch: "feature/deleted")
+
+      expect(response).to have_http_status(:ok)
+      expect(trajectory_panel).to have_no_css("svg", visible: :all)
+      expect(trajectory_panel).to have_text("SpecGuard has 1 run on feature/x so far", normalize_ws: true)
+      expect(trajectory_panel.find("#suite-trajectory-branch-fallback")).to have_text(
+        "SpecGuard has no runs on feature/deleted, so this panel is drawn on feature/x", normalize_ws: true
+      )
+    end
+
+    it "treats a blank branch as no ask at all, and says nothing about a fallback that did not happen" do
+      repository = repository_anchored_on_a_feature_branch
+
+      get repository_path(repository, branch: "")
+
+      expect(trajectory_panel).to have_text("SpecGuard has 1 run on feature/x so far", normalize_ws: true)
+      expect(trajectory_panel).to have_no_css("#suite-trajectory-branch-fallback")
+    end
+
+    it "says nothing about a fallback when the branch asked for is the one it drew" do
+      repository = repository_anchored_on_a_feature_branch
+
+      get repository_path(repository, branch: "main")
+
+      expect(trajectory_panel).to have_no_css("#suite-trajectory-branch-fallback")
+    end
+
+    # `?branch[]=main` and `?branch[x]=1` are a URL anyone can type, and neither is a branch name.
+    # Handed to a `where` they raise — a 500 on the read-only page a reader arrived at by link.
+    it "does not fail on a branch parameter that is not a branch name" do
+      repository = repository_anchored_on_a_feature_branch
+
+      get repository_path(repository), params: { branch: ["main"] }
+
+      expect(response).to have_http_status(:ok)
+      expect(trajectory_panel).to have_text("SpecGuard has 1 run on feature/x so far", normalize_ws: true)
+
+      get repository_path(repository), params: { branch: { name: "main" } }
+
+      expect(response).to have_http_status(:ok)
+      expect(trajectory_panel).to have_text("SpecGuard has 1 run on feature/x so far", normalize_ws: true)
+    end
+
+    # The anonymous runs are not a branch and are not offered as one — pooling them is the failure
+    # the "No branch to plot a history on" state exists to refuse. What the selector adds is the way
+    # OUT of that state: the panel names the branch that does have a history.
+    it "offers no way to select the runs that named no branch, and a way to leave that state" do
+      repository = create_repository(user: @user)
+      run(repository, "trunkaaaaaa", total: 1_000, at: 3.days.ago)
+      run(repository, "trunkbbbbbb", total: 1_047, at: 2.days.ago)
+      repository.test_runs.create!(commit_sha: "anonymous01", branch: nil, total_specs_count: 900,
+                                   created_at: 1.minute.ago)
+
+      get repository_path(repository)
+
+      expect(trajectory_panel).to have_text("No branch to plot a history on", normalize_ws: true)
+      expect(branch_choices).to eq(["main (2 runs)"])
+
+      get repository_path(repository, branch: "main")
+
+      expect(plotted_labels).to eq(%w[trunkaa trunkbb])
+    end
+
+    it "renders no selector at all when no run has ever named a branch" do
+      repository = create_repository(user: @user)
+      repository.test_runs.create!(commit_sha: "anonymous01", branch: nil, total_specs_count: 900,
+                                   created_at: 2.days.ago)
+
+      get repository_path(repository)
+
+      expect(trajectory_panel).to have_text("No branch to plot a history on", normalize_ws: true)
+      expect(trajectory_panel).to have_no_css("#suite-trajectory-branches")
+    end
+  end
+
   # Criterion 3: the caption's plotted/withheld counts equal direct SQL over the same window.
   #
   # Recomputed here from the database rather than from `SuiteTrajectory`, so this cannot be
@@ -631,6 +845,27 @@ RSpec.describe "Repository suite-size trajectory", type: :request do
 
       expect(count_queries { get repository_path(repository) }).to eq(baseline)
       expect(chart).to have_css("svg circle", count: 23, visible: :all)
+    end
+
+    # The same budget with a branch ASKED for, which is the request that added work: an anchor
+    # lookup and a branch list. Both are bounded, and the two axes that could unbound them pull in
+    # different directions — more runs on the branch (which the capped counts must not follow) and
+    # more branches to choose from (which the index walk must not turn into a query each). Neither
+    # moves the count.
+    it "costs the same with a branch asked for, however much history and however many branches" do
+      repository = create_repository(user: @user)
+      3.times { |i| run(repository, "early#{i}00000", total: 1_000 + i, at: (30 - i).days.ago) }
+
+      get repository_path(repository, branch: "main")
+      baseline = count_queries { get repository_path(repository, branch: "main") }
+      expect(chart).to have_css("svg circle", count: 3, visible: :all)
+
+      20.times { |i| run(repository, "later#{i.to_s.rjust(6, "0")}", total: 1_100 + i, at: (25 - i).days.ago) }
+      10.times { |i| run(repository, "side#{i}0000000", branch: "feature/#{i}", total: 5, at: 40.days.ago) }
+
+      expect(count_queries { get repository_path(repository, branch: "main") }).to eq(baseline)
+      expect(chart).to have_css("svg circle", count: 23, visible: :all)
+      expect(basis_line).to have_text("Drawn through 23 of the last 23 runs on main", normalize_ws: true)
     end
 
     # The N+1 that would otherwise ship green. Every route to a run's composition —

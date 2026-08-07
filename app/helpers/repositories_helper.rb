@@ -1,6 +1,15 @@
 # frozen_string_literal: true
 
 module RepositoriesHelper
+  # How many branches the "Suite growth" selector lists.
+  #
+  # `Repository#branch_histories` walks up to fifty; this is how many of them a reader is shown,
+  # and the two are deliberately different numbers. The walk's bound is about what the database is
+  # asked for; this one is about what a row of links can carry before it stops being a way to find
+  # a branch. The ones shown are the ones with the most history — see the sentence below, which
+  # says so rather than leaving a truncated list to look complete.
+  TRAJECTORY_BRANCH_CHOICES = 8
+
   # Both halves of the same disclosure for repository removal: what the presser is told *before*
   # they confirm, and what they are told *after*. They live together for the reason
   # `MembershipsHelper#revoke_confirmation` and `#revoke_notice` do — they make the same claim about
@@ -118,7 +127,98 @@ module RepositoriesHelper
     reasons.to_sentence
   end
 
+  # The branches the "Suite growth" panel offers, as `UI::PageNavComponent` items.
+  #
+  # Ordered by `Repository#branch_histories` — most history first — and cut to
+  # `TRAJECTORY_BRANCH_CHOICES`. `trajectory_hidden_branches_sentence` states what the cut left out;
+  # a truncated list with nothing said about it reads as the complete set of branches.
+  def trajectory_branch_choices(repository, histories, current_branch)
+    trajectory_shown_branches(histories, current_branch).map do |history|
+      { label: trajectory_branch_label(history),
+        href: repository_path(repository, branch: history.name),
+        current: history.name == current_branch }
+    end
+  end
+
+  # What the selector left out, or `nil` when it left out nothing.
+  #
+  # "At least" when the walk itself stopped at its own bound: past that point SpecGuard has not
+  # counted the branches either, and a bare number would be a figure nothing measured.
+  def trajectory_hidden_branches_sentence(histories)
+    hidden = histories.size - TRAJECTORY_BRANCH_CHOICES
+    return nil unless hidden.positive?
+
+    counted = histories.size == Repository::BRANCH_HISTORY_LIMIT ? "At least #{hidden}" : hidden.to_s
+
+    "#{counted} further #{"branch".pluralize(hidden)} #{hidden == 1 ? "has" : "have"} runs and " \
+      "#{hidden == 1 ? "is" : "are"} not listed here — the branches with the most history are listed first."
+  end
+
+  # Said when the reader asked for a branch SpecGuard has no runs on, and the panel drew another
+  # one instead.
+  #
+  # Without this the URL says `?branch=feature/gone` and the panel draws `main` — every figure on it
+  # correctly labelled `main`, and nothing anywhere saying the ask was not honoured. A reader who
+  # followed a stale bookmark would read the trunk's history as their branch's.
+  #
+  # `nil` whenever the ask WAS honoured, including the ordinary no-ask case, so this sentence only
+  # ever appears next to a substitution it is describing.
+  #
+  # The asked-for name is truncated: it is unvalidated URL input, and a branch name is a short
+  # thing. Escaping is ERB's, which is why this returns a plain String and not `html_safe` markup.
+  def trajectory_branch_fallback_notice(requested, trajectory)
+    return nil if requested.blank? || trajectory.branch == requested
+
+    asked = truncate(requested, length: 60)
+
+    if trajectory.branch.blank?
+      return "SpecGuard has no runs on #{asked}. The latest run named no branch, so there is " \
+             "still no history to draw."
+    end
+
+    "SpecGuard has no runs on #{asked}, so this panel is drawn on #{trajectory.branch} — the " \
+      "branch of the repository's latest run — instead."
+  end
+
   private
+
+  # The branches that fit, in `Repository#branch_histories`' order — most history first, which is
+  # the order a cut is worth making in.
+  #
+  # The order does NOT move as the reader clicks between branches. A list that reshuffled under the
+  # pointer — the selected branch jumping to the front on every click — would make the reader
+  # re-find their place each time, and the branch they just clicked is already marked `current`.
+  #
+  # The one exception is a selected branch that would otherwise not be shown AT ALL: it is pulled
+  # to the front, displacing the thinnest history that would have been. That is a real case rather
+  # than a defensive one — a reader can arrive by URL on a branch holding a single run while a dozen
+  # busier branches sit ahead of it, and a selector that cannot show you what you are looking at is
+  # worse than one that lists a branch out of order.
+  def trajectory_shown_branches(histories, current_branch)
+    shown = histories.first(TRAJECTORY_BRANCH_CHOICES)
+    return shown if shown.any? { |history| history.name == current_branch }
+
+    current = histories.find { |history| history.name == current_branch }
+    return shown if current.nil?
+
+    [current, *shown.first(TRAJECTORY_BRANCH_CHOICES - 1)]
+  end
+
+  # A branch and how much history it holds, as one link label.
+  #
+  # A capped count is worded `30+` and never as the exact figure the query stopped at, because it
+  # stopped rather than finished — see `Repository::BranchHistory`. Below the cap the count is
+  # exact, and inflected, because "1 runs" on the branch a reader is deciding about is the kind of
+  # sentence that makes them doubt the figure next to it.
+  def trajectory_branch_label(history)
+    runs = if history.capped?
+             "#{history.run_count}+ runs"
+           else
+             pluralize(history.run_count, "run")
+           end
+
+    "#{history.name} (#{runs})"
+  end
 
   # `0` gets its own wording rather than riding the count. "only 0 of them are comparable" is a
   # sentence about a number; "none of them can be plotted" is a sentence about this repository.
