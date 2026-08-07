@@ -506,12 +506,16 @@ RSpec.describe "Repository registration and API keys", type: :request do
       # builds a 4-shard, 20,000-example run and pins its MAX at 74.25s. These are the same rows
       # that path produces, written directly — the recorder is exercised there, and the question
       # here is only what the Overview does with what it left behind.
-      def sharded_run(repository, durations, commit_sha:)
+      # `names:` overrides the shard_ids for the examples that need an unnamed slice or a
+      # particular one to be slowest. Defaulted to nil so every existing caller — and the
+      # `(index + 1).to_s` numbering the pinned expectations above depend on — is untouched.
+      def sharded_run(repository, durations, commit_sha:, names: nil)
         run = repository.test_runs.create!(commit_sha: commit_sha, ci_run_id: "gha-#{commit_sha}",
                                            total_specs_count: 20_000, annotated_specs_count: 5000,
                                            duration_seconds: durations.compact.max)
         durations.each_with_index do |seconds, index|
-          run.test_run_shards.create!(shard_id: (index + 1).to_s, total_specs_count: 5000,
+          run.test_run_shards.create!(shard_id: names ? names[index] : (index + 1).to_s,
+                                      total_specs_count: 5000,
                                       annotated_specs_count: 1250, duration_seconds: seconds)
         end
         run
@@ -734,6 +738,286 @@ RSpec.describe "Repository registration and API keys", type: :request do
         expect(panel).to have_text("Total runtime 6m 12s", normalize_ws: true)
         expect(panel).to have_no_text("Machine time", normalize_ws: true)
         expect(panel).to have_no_text("Assembled from", normalize_ws: true)
+      end
+    end
+
+    # The panel could name the slowest shard, say how far ahead of an even split the run finished,
+    # and show the spread — from rows it already stores — and said none of it. So two runs that are
+    # opposite operational facts rendered byte-identically: four shards at 63.4s each and three at
+    # ~60s beside a runaway at 74.25s are both 253.75s of machine time and both print one MAX and
+    # one SUM. Only the second has anything to fix.
+    #
+    # ELEMENT-scoped throughout, never panel-scoped. The panel already carries several sentences
+    # about shards and timings that share vocabulary with these, so a `have_text` against the whole
+    # panel would go green off the wrong paragraph with the deciding branch deleted — the trap
+    # `spec/requests/repository_suite_growth_spec.rb:30-34` documents from a verified mutation.
+    describe "the latest run's wall-clock decomposition" do
+      def sharded_run(repository, durations, commit_sha:, names: nil)
+        run = repository.test_runs.create!(commit_sha: commit_sha, ci_run_id: "gha-#{commit_sha}",
+                                           total_specs_count: 20_000, annotated_specs_count: 5000,
+                                           duration_seconds: durations.compact.max)
+        durations.each_with_index do |seconds, index|
+          run.test_run_shards.create!(shard_id: names ? names[index] : (index + 1).to_s,
+                                      total_specs_count: 5000,
+                                      annotated_specs_count: 1250, duration_seconds: seconds)
+        end
+        run
+      end
+
+      def decomposition = overview_panel.find("#wall-clock-decomposition")
+      def distribution = overview_panel.find("#shard-distribution")
+
+      # The project's canonical fixture, the same durations `spec/requests/api/v1/ingest_spec.rb`
+      # builds. Its arithmetic: SUM 253.75, spread across 4 shards 63.4375 (`1m 3s`), MAX 74.25
+      # (`1m 14s`), so 10.8125s — 14.6% of the wait — bought nothing. Every one of those facts is
+      # derivable from the stored rows and none of them had a surface.
+      it "names the slowest shard, the floor, and the excess on the canonical fixture" do
+        repository = create_repository(user: @user)
+        sharded_run(repository, [61.0, 58.5, 74.25, 60.0], commit_sha: "feedfacecafe0030")
+
+        get repository_path(repository)
+
+        # The shard the headline MAX came from, finally identified — and named by the `shard_id`
+        # its own client sent, which is the only name anyone can act on.
+        expect(decomposition).to have_text("The slowest was shard 3, at 1m 14s.", normalize_ws: true)
+        # The floor, worded as a bound and never as a target. A split achieving it is not claimed
+        # to exist — tests are not arbitrarily divisible — only that none can beat it.
+        expect(decomposition).to have_text(
+          "Those 4 shards hold 4m 14s of machine time between them, so 1m 3s is the shortest wall " \
+          "clock any arrangement of them could have produced",
+          normalize_ws: true
+        )
+        expect(decomposition).to have_text("a floor nothing can go under", normalize_ws: true)
+        # The whole point: how much of the 1m 14s wait was the suite and how much was the split.
+        expect(decomposition).to have_text(
+          "This run waited 1m 14s: 10.8s of that, 14.6% of the wait, came from how the suite was " \
+          "divided across shards rather than from the suite itself.",
+          normalize_ws: true
+        )
+        # A shard that ran 10.8s past the floor did stand out, and the balanced branch's opener
+        # must not be reachable from here.
+        expect(decomposition).to have_no_text("No shard stood out", normalize_ws: true)
+      end
+
+      # A single ratio flattens shapes that are not the same problem — three shards at a minute
+      # beside one runaway, and four fanned evenly across thirty seconds, can share an excess. So
+      # the distribution is shown, slowest first, which is also the order that puts the shard just
+      # named at the head of the list.
+      it "shows every shard's duration, slowest first" do
+        repository = create_repository(user: @user)
+        sharded_run(repository, [61.0, 58.5, 74.25, 60.0], commit_sha: "feedfacecafe0031")
+
+        get repository_path(repository)
+
+        expect(distribution.all("li").map { |li| li.text(normalize_ws: true) })
+          .to eq(["shard 3 1m 14s", "shard 1 1m 1s", "shard 4 1m", "shard 2 58.5s"])
+      end
+
+      # Every figure here is a fact about SHARDS. No per-test duration exists anywhere in the
+      # schema, so a reader who came away thinking this page had told them which *tests* are slow
+      # would have been misled by wording alone — the one failure mode this slice can cause and
+      # cannot detect from arithmetic.
+      it "attributes the excess to the split and never to individual tests" do
+        repository = create_repository(user: @user)
+        sharded_run(repository, [61.0, 58.5, 74.25, 60.0], commit_sha: "feedfacecafe0032")
+
+        get repository_path(repository)
+
+        panel = overview_panel
+        expect(panel).to have_no_text("slowest test", normalize_ws: true)
+        expect(panel).to have_no_text("slow tests", normalize_ws: true)
+        expect(panel).to have_no_text("which tests", normalize_ws: true)
+      end
+
+      # The gate. The floor divides the machine time by the shard COUNT, so a shard missing from
+      # the numerator but present in the denominator drags the floor down and pushes the excess up
+      # by the same amount — the branch where a fabricated finding is easiest to produce is the one
+      # that must not produce one. `[61.0, 58.5, nil, 60.0]` is the shape the API spec already uses.
+      it "withholds the decomposition entirely when a shard reported no timing" do
+        repository = create_repository(user: @user)
+        sharded_run(repository, [61.0, 58.5, nil, 60.0], commit_sha: "feedfacecafe0033")
+
+        get repository_path(repository)
+
+        panel = overview_panel
+        expect(panel).to have_no_css("#wall-clock-decomposition")
+        expect(panel).to have_no_css("#shard-distribution")
+        # Not a silent absence. A reader looking at two rendered figures is owed the reason the
+        # third fact is missing, and the reason is that the arithmetic would be biased rather than
+        # merely uncertain.
+        expect(panel).to have_text(
+          "Which shard was slowest, and how much of the wait went to uneven splitting, cannot be " \
+          "answered without every shard's timing: spreading a partial machine time across all 4 " \
+          "would put the floor below where it belongs and overstate the gap by exactly the same " \
+          "margin. Both are withheld rather than estimated.",
+          normalize_ws: true
+        )
+        # And no fragment of the withheld claim leaks out in any other wording. Each negative is
+        # narrow enough not to match the withholding sentence itself, which necessarily names the
+        # same subjects in order to say it is not answering them — a bare "of the wait" here would
+        # fail against the very sentence it is meant to be checking sits alone.
+        expect(panel).to have_no_text("The slowest was", normalize_ws: true)
+        expect(panel).to have_no_text("shortest wall clock", normalize_ws: true)
+        expect(panel).to have_no_text("% of the wait", normalize_ws: true)
+        expect(panel).to have_no_text("over that floor", normalize_ws: true)
+      end
+
+      # The other silent shape: nothing reported at all. There is no wall clock and no machine time
+      # on the page to decompose, so the existing sentence already says why and a second apology
+      # would be noise — but the decomposition itself must still be absent.
+      it "renders no decomposition when not one shard reported a timing" do
+        repository = create_repository(user: @user)
+        sharded_run(repository, [nil, nil, nil, nil], commit_sha: "feedfacecafe0034")
+
+        get repository_path(repository)
+
+        panel = overview_panel
+        expect(panel).to have_no_css("#wall-clock-decomposition")
+        expect(panel).to have_no_css("#shard-distribution")
+        expect(panel).to have_no_text("The slowest was", normalize_ws: true)
+      end
+
+      # `shard_id` is nullable and a nil one is an ordinary state: a client that shards without
+      # exposing an index the gem recognises sends nothing to tell its slices apart, and
+      # `Ingest::RunRecorder#upsert_shard` records one row per delivery for it. Numbering those
+      # rows by position would hand a reader a name their CI does not use — unactionable, and
+      # pointing at a different slice on the next run.
+      it "calls a shard that never named itself unnamed rather than giving it an index" do
+        repository = create_repository(user: @user)
+        sharded_run(repository, [61.0, 58.5, 74.25, 60.0], names: ["1", "2", nil, "4"],
+                                commit_sha: "feedfacecafe0035")
+
+        get repository_path(repository)
+
+        expect(decomposition).to have_text("The slowest was an unnamed shard, at 1m 14s.", normalize_ws: true)
+        expect(distribution.all("li").map { |li| li.text(normalize_ws: true) })
+          .to eq(["an unnamed shard 1m 14s", "shard 1 1m 1s", "shard 4 1m", "shard 2 58.5s"])
+        # The index it would have been given had position been mistaken for identity.
+        expect(overview_panel).to have_no_text("shard 3", normalize_ws: true)
+      end
+
+      # An evenly split run should read as evenly split. The excess is still stated — a measured
+      # `0.0s` is a measurement, and muting it would file "we checked, and the split was fine"
+      # under "we did not check" — but it is not dressed up as time anything could recover.
+      it "reads a perfectly balanced run as balanced without hiding its zero" do
+        repository = create_repository(user: @user)
+        sharded_run(repository, [63.4, 63.4, 63.4, 63.4], commit_sha: "feedfacecafe0036")
+
+        get repository_path(repository)
+
+        expect(decomposition).to have_text("No shard stood out: the longest was shard 1, at 1m 3s.",
+                                           normalize_ws: true)
+        expect(decomposition).to have_text(
+          "This run waited 1m 3s — 0.0s over that floor, 0.0% of the wait. Its shards were evenly " \
+          "matched, so the wait is the suite's own length rather than a cost of how it was split.",
+          normalize_ws: true
+        )
+        # The finding wording belongs to the other branch and must not be reachable from here —
+        # and neither does calling one of four shards tied to the tenth "the slowest", which is
+        # true of the maximum and misleading about the shard. A reader sent to look at shard 1
+        # would find it identical to its three peers.
+        expect(decomposition).to have_no_text("came from how the suite was divided", normalize_ws: true)
+        expect(decomposition).to have_no_text("The slowest was", normalize_ws: true)
+      end
+
+      # Two independent floors, and this pins the ABSOLUTE one on its own: 0.3s over the floor is
+      # 21.4% of a 1.4s wait, so a relative-only threshold would call it a finding. It is smaller
+      # than the scheduling jitter between two runners starting the same suite — it is not a
+      # property of the split at all.
+      it "does not call a sub-second gap a finding however large its share" do
+        repository = create_repository(user: @user)
+        sharded_run(repository, [1.0, 1.0, 1.0, 1.4], commit_sha: "feedfacecafe0037")
+
+        get repository_path(repository)
+
+        expect(decomposition).to have_text("No shard stood out: the longest was shard 4, at 1.4s.",
+                                           normalize_ws: true)
+        expect(decomposition).to have_text("0.3s over that floor, 21.4% of the wait", normalize_ws: true)
+        expect(decomposition).to have_text("Its shards were evenly matched", normalize_ws: true)
+        expect(decomposition).to have_no_text("came from how the suite was divided", normalize_ws: true)
+      end
+
+      # And the RELATIVE floor on its own, which the absolute one would miss: 3s clears a second
+      # comfortably, but on a ten-minute wait it is 0.5% — inside the run-to-run variance of the
+      # same suite on the same shards, so re-dividing them could not reliably recover it.
+      it "does not call a fraction-of-a-percent gap a finding however many seconds it is" do
+        repository = create_repository(user: @user)
+        sharded_run(repository, [600.0, 600.0, 600.0, 604.0], commit_sha: "feedfacecafe0038")
+
+        get repository_path(repository)
+
+        expect(decomposition).to have_text("No shard stood out: the longest was shard 4, at 10m 4s.",
+                                           normalize_ws: true)
+        expect(decomposition).to have_text("3.0s over that floor, 0.5% of the wait", normalize_ws: true)
+        expect(decomposition).to have_text("Its shards were evenly matched", normalize_ws: true)
+        expect(decomposition).to have_no_text("came from how the suite was divided", normalize_ws: true)
+      end
+
+      # Clearing exactly one floor is not enough, and clearing both is — the pair above proves each
+      # threshold fires, this proves the conjunction is not vacuous.
+      it "does call a gap that clears both floors a finding" do
+        repository = create_repository(user: @user)
+        sharded_run(repository, [60.0, 60.0, 60.0, 80.0], commit_sha: "feedfacecafe0039")
+
+        get repository_path(repository)
+
+        expect(decomposition).to have_text(
+          "15.0s of that, 18.8% of the wait, came from how the suite was divided across shards",
+          normalize_ws: true
+        )
+        expect(decomposition).to have_no_text("Its shards were evenly matched", normalize_ws: true)
+      end
+
+      # A run with one shard has no composition to decompose — its MAX *is* its SUM and the floor
+      # is the wait — and a run with no shard rows is the entire corpus that predates sharding.
+      # Both keep the page they have always had, on the rule `multi_shard?` already enforces.
+      it "adds nothing at all to a one-shard run or a run with no shards" do
+        repository = create_repository(user: @user)
+        sharded_run(repository, [372.4], commit_sha: "feedfacecafe0040")
+        unsharded = create_repository(user: @user, github_full_name: "acme/laptop-suite")
+        unsharded.test_runs.create!(commit_sha: "feedfacecafe0041", total_specs_count: 3,
+                                    annotated_specs_count: 2, duration_seconds: 372.4)
+
+        [repository, unsharded].each do |repo|
+          get repository_path(repo)
+
+          panel = overview_panel
+          expect(panel).to have_no_css("#wall-clock-decomposition")
+          expect(panel).to have_no_css("#shard-distribution")
+          expect(panel).to have_no_text("The slowest was", normalize_ws: true)
+          expect(panel).to have_text("Total runtime 6m 12s", normalize_ws: true)
+        end
+      end
+
+      # Rendering per-shard rows is exactly the shape that becomes a query per shard, and a
+      # 40-shard matrix is an ordinary CI configuration rather than a pathological one. Same
+      # subscriber the index's per-card guard uses, so the failure is a count and not a timeout.
+      def queries_against(table)
+        queries = []
+        subscriber = ActiveSupport::Notifications.subscribe("sql.active_record") do |_, _, _, _, payload|
+          queries << payload[:sql] if payload[:name] != "SCHEMA" && payload[:sql].to_s.include?(table)
+        end
+        yield
+        queries
+      ensure
+        ActiveSupport::Notifications.unsubscribe(subscriber)
+      end
+
+      it "costs the same number of shard queries at 40 shards as at 3" do
+        small = create_repository(user: @user, github_full_name: "acme/three-way")
+        sharded_run(small, Array.new(3) { |i| 60.0 + i }, commit_sha: "feedfacecafe0042")
+        large = create_repository(user: @user, github_full_name: "acme/forty-way")
+        sharded_run(large, Array.new(40) { |i| 60.0 + i }, commit_sha: "feedfacecafe0043")
+
+        small_queries = queries_against("test_run_shards") { get repository_path(small) }
+        large_queries = queries_against("test_run_shards") { get repository_path(large) }
+
+        # Both pages decompose — the 40-shard one renders forty rows — and cost the same.
+        expect(decomposition).to have_text("The slowest was shard 40", normalize_ws: true)
+        expect(large_queries.size).to eq(small_queries.size)
+        # An absolute ceiling too: equality alone would still hold if both pages regressed to a
+        # fixed-but-wasteful number of passes over the same table.
+        expect(large_queries.size).to be <= 3
       end
     end
 

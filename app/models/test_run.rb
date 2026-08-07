@@ -177,6 +177,131 @@ class TestRun < ApplicationRecord
     "slowest of the #{timed_shard_count} that reported"
   end
 
+  # == Decomposing the wall clock across the shards that produced it
+  #
+  # The pair above tells a reader that the wall clock is the slowest single shard. It does not say
+  # *which* shard, *how far ahead of the others* it was, or *how much of the wait came from uneven
+  # splitting rather than from the suite* — so two runs that are opposite operational facts print
+  # byte-identically. Four shards at 63.4s each and three at ~60s beside a runaway at 74.25s are
+  # both `253.75s` of machine time; only the second has anything to fix, and only the second is
+  # what the canonical fixture actually contains.
+  #
+  # None of this is a new measurement. The run's MAX *is* the slowest shard's `duration_seconds`
+  # (`Ingest::RunRecorder#recompute_totals`), so naming it is identifying the row the headline
+  # number already came from. Everything else here is arithmetic over rows that are already
+  # stored and already indexed.
+  #
+  # **This is about shards and never about tests.** Which *tests* are slow is not derivable from
+  # anything here — no per-test duration exists in the schema — and every string this feeds must
+  # be worded so a reader cannot mistake one for the other.
+
+  # Below either of these, the excess is stated but not presented as a finding.
+  #
+  # Two floors rather than one, because "immaterial" has two independent causes and a single
+  # threshold would miss whichever it was not written for. Under a second, the gap is smaller than
+  # the scheduling jitter between two CI runners starting the same suite — it is not a property of
+  # the split at all. Under a few percent, it is inside the run-to-run variance of the same suite
+  # on the same shards, so re-dividing them could not reliably recover it. A run has to clear BOTH
+  # to have a gap worth acting on.
+  NEGLIGIBLE_EXCESS_SECONDS = 1.0
+  NEGLIGIBLE_EXCESS_PERCENT = 5.0
+
+  # Whether the wall clock can honestly be decomposed at all.
+  #
+  # Two conditions, and the second is the load-bearing one. The floor below divides the SUM by the
+  # shard *count*, so a silent shard puts a numerator over the wrong denominator twice over: the
+  # floor comes out too low (its own work is missing from the SUM) and the excess therefore comes
+  # out too high, in the direction that manufactures a finding. `some_shard_untimed?` is the
+  # existing predicate for exactly that question — note its documented caveat, that it is
+  # vacuously false on a run with no shards, which is safe here only because `multi_shard?` is
+  # asked first and asked in the same expression.
+  def wall_clock_decomposable? = multi_shard? && !some_shard_untimed?
+
+  # Every shard's `[shard_id, duration_seconds]`, slowest first.
+  #
+  # ONE query for all of them regardless of how many there are — a 40-shard matrix costs the same
+  # as a 4-shard one. It is a second read against `test_run_shards` beside the memoized
+  # `shard_totals` aggregate, which is deliberate: `shard_totals` is a `pick` of three scalars and
+  # feeds `GET /api/v1/repository`, so widening it to carry rows would change what its callers
+  # load for a figure only the dashboard renders. Constant, not minimal, is the property that
+  # matters.
+  #
+  # Ordered by duration rather than by `shard_id` or by insertion, because the point of rendering
+  # the list at all is to make the *shape* visible: slowest-first puts the shard just named at the
+  # head and walks down to the fastest, so the spread reads off in one pass. Ordering by name
+  # would sort `"10"` before `"2"` (the column is a string, and it is a string because a client
+  # may name its slices anything), and ordering by insertion would sort by whichever shard
+  # happened to POST first, which is not a fact about the suite. `id` breaks ties so the order is
+  # total and stable.
+  def shard_durations
+    @shard_durations ||= test_run_shards.order(duration_seconds: :desc, id: :asc)
+                                        .pluck(:shard_id, :duration_seconds)
+  end
+
+  # What to call one shard in a sentence.
+  #
+  # `shard_id` is nullable and a nil one is not an oversight — `Ingest::RunRecorder#upsert_shard`
+  # says outright that a client which shards without exposing an index the gem recognises sends
+  # nothing to tell its slices apart, so each POST becomes its own row. Numbering those rows by
+  # their position in this list would hand a reader a name the client never sent, and a stable-
+  # looking one: "shard 2 is your slow shard" is unactionable advice when nothing in CI is called
+  # shard 2, and it would point at a different slice on the next run.
+  #
+  # One label and not two — the same string names a shard in the prose and in the list below it,
+  # so the sentence and the row a reader checks it against cannot drift apart.
+  def shard_label(shard_id) = shard_id.present? ? "shard #{shard_id}" : "an unnamed shard"
+
+  # The slowest shard's name — the row the run's `duration_seconds` MAX came from.
+  def slowest_shard_label = shard_label(shard_durations.first&.first)
+
+  # The shortest wall clock any arrangement of these shards could have produced: the machine time
+  # spread perfectly evenly across them.
+  #
+  # A **lower bound and never a target**. Tests are not arbitrarily divisible — a single example
+  # longer than this floor makes it unreachable on its own — so nothing here claims such a split
+  # exists, only that none can go under it. Every surface rendering this has to word it that way.
+  def balanced_wall_clock_seconds = machine_seconds / shard_count
+
+  # How much longer the run waited than that floor: the part of the wait attributable to how the
+  # suite was divided rather than to the suite itself.
+  def wall_clock_excess_seconds = duration_seconds - balanced_wall_clock_seconds
+
+  # The same as a share of the wait.
+  #
+  # Guarded on a positive denominator, not on a blank one: a run whose shards all genuinely
+  # measured `0.0` is a real state with a real (zero) excess, and `0.0 / 0.0` is `NaN` — which
+  # formats as `NaN%` and compares false against every threshold, so it would slip past the
+  # materiality test below and render as a finding.
+  def wall_clock_excess_percent
+    return 0.0 unless duration_seconds.to_f.positive?
+
+    (wall_clock_excess_seconds / duration_seconds * 100).round(1)
+  end
+
+  # Whether that excess is worth reading as a finding rather than as noise.
+  #
+  # This decides the WORDING and never whether the number is shown. An evenly split run has a
+  # measured excess of `0.0s` and says so; what it does not do is dress that up as time something
+  # could have recovered. Same rule the machine time follows one section up — an incomplete fact
+  # carries its incompleteness in the words, and an unremarkable one carries that.
+  def wall_clock_excess_material?
+    wall_clock_excess_seconds >= NEGLIGIBLE_EXCESS_SECONDS &&
+      wall_clock_excess_percent >= NEGLIGIBLE_EXCESS_PERCENT
+  end
+
+  # The floor and the excess, formatted by the same formatter the wall clock and the machine time
+  # already use. Four numbers in one unit within a few lines of each other: a second formatter
+  # would eventually print them two ways and destroy the comparison they exist to enable.
+  def balanced_wall_clock_label = humanized_seconds(balanced_wall_clock_seconds)
+  def wall_clock_excess_label = humanized_seconds(wall_clock_excess_seconds)
+
+  # Every shard as `[name, formatted duration]`, slowest first — the distribution itself, so the
+  # shape is visible rather than summarised into a single ratio. Formatted here rather than in the
+  # view for the reason directly above: `humanized_seconds` is private, and it stays private.
+  def shard_duration_labels
+    shard_durations.map { |shard_id, seconds| [shard_label(shard_id), humanized_seconds(seconds)] }
+  end
+
   # == Whether this run's suite size may be differenced against another run's
   #
   # `total_specs_count` is not a suite size. On a run with shards it is the SUM over the shards

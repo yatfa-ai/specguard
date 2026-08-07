@@ -327,8 +327,94 @@
                 overall, and the machine time is a floor rather than a total — the real cost is
                 higher by however long the <%= untimed_shards %>
                 silent <%= "shard".pluralize(untimed_shards) %> took.
+                <%# The decomposition below is withheld on this branch, and a reader who can see
+                    both figures is owed the reason rather than left to notice an absence. It is
+                    withheld because the arithmetic would not merely be uncertain, it would be
+                    biased: the floor divides the machine time by the shard count, so a shard whose
+                    work is missing from the numerator but present in the denominator drags the
+                    floor down and pushes the excess up by exactly the same amount. The one branch
+                    where a fabricated finding is easiest to produce is the one branch that must
+                    not produce one. The all-silent branch above needs no such sentence — it prints
+                    no wall clock and no machine time at all, so there is visibly nothing to
+                    decompose and no partial SUM to divide. %>
+                Which shard was slowest, and how much of the wait went to uneven splitting, cannot
+                be answered without every shard's timing: spreading a partial machine time across
+                all <%= shard_count %> would put the floor below where it belongs and overstate the
+                gap by exactly the same margin. Both are withheld rather than estimated.
               <% end %>
             </p>
+
+            <%# The wall clock, decomposed across the shards that produced it. Everything here is
+                arithmetic over rows already stored — the MAX the headline figure came from,
+                identified; the SUM spread evenly; the difference between them.
+
+                It reads as a second paragraph rather than as more clauses on the first because the
+                two answer different questions. The paragraph above says what the two figures ARE.
+                This one says what they mean *for this run* — which is the part that differs
+                between a run worth acting on and one that is not, and the part no surface has ever
+                been able to say.
+
+                About SHARDS, never about tests. Nothing in the schema records how long any single
+                test took, so "which tests are slow" stays unanswerable and no wording here may
+                imply otherwise: every noun below is a shard, a split, or the suite as a whole. %>
+            <% if @latest_test_run.wall_clock_decomposable? %>
+              <%# One condition read once and branched on twice, so the sentence between the two —
+                  the floor, and what a floor is — exists in exactly one copy. It is the same
+                  statement on a balanced run as on a lopsided one and must not be able to drift
+                  into two versions of itself.
+
+                  Both branches name the longest shard, and neither calls it "the slowest" unless
+                  being slowest is a fact about it. Four shards tied to the tenth have a maximum,
+                  and picking one of them by tie-break and announcing it as *the slowest* invites a
+                  reader to go looking at a slice that is no different from its three peers — the
+                  same overclaim the labels one section up refuse, in the one place the arithmetic
+                  cannot catch it. %>
+              <% imbalanced = @latest_test_run.wall_clock_excess_material? %>
+              <p id="wall-clock-decomposition" class="text-xs text-app-muted">
+                <% if imbalanced %>
+                  The slowest was <%= @latest_test_run.slowest_shard_label %>, at
+                  <%= @latest_test_run.duration_label %>.
+                <% else %>
+                  No shard stood out: the longest was <%= @latest_test_run.slowest_shard_label %>,
+                  at <%= @latest_test_run.duration_label %>.
+                <% end %>
+                Those <%= shard_count %> shards hold
+                <%= @latest_test_run.machine_seconds_label %> of machine time between them, so
+                <%= @latest_test_run.balanced_wall_clock_label %> is the shortest wall clock any
+                arrangement of them could have produced — a floor nothing can go under, not a split
+                known to exist, since tests cannot be divided arbitrarily finely.
+                <% if imbalanced %>
+                  This run waited <%= @latest_test_run.duration_label %>:
+                  <%= @latest_test_run.wall_clock_excess_label %> of that,
+                  <%= @latest_test_run.wall_clock_excess_percent %>% of the wait, came from how the
+                  suite was divided across shards rather than from the suite itself.
+                <% else %>
+                  <%# A measured zero is a measurement. An evenly split run states its excess in
+                      the same words and the same units as an uneven one — what changes is only
+                      whether the number is read back as something recoverable, and here it is
+                      not. Muting or dropping it would file "we checked, and the split was fine"
+                      under "we did not check". %>
+                  This run waited <%= @latest_test_run.duration_label %> —
+                  <%= @latest_test_run.wall_clock_excess_label %> over that floor,
+                  <%= @latest_test_run.wall_clock_excess_percent %>% of the wait. Its shards were
+                  evenly matched, so the wait is the suite's own length rather than a cost of how
+                  it was split.
+                <% end %>
+              </p>
+
+              <%# The distribution itself, so the shape is visible rather than compressed into the
+                  single ratio above — three shards at a minute beside one at 74s and four shards
+                  fanned evenly from 40s to 90s can share an excess and are not the same problem.
+
+                  A real list, not a separator-joined string: `·` between values is announced
+                  inconsistently by screen readers and reads as content when it is punctuation, and
+                  a `ul` gets the grouping across without inventing a character for it. %>
+              <ul id="shard-distribution" class="flex flex-wrap gap-x-3 gap-y-1 text-xs text-app-muted tabular-nums">
+                <% @latest_test_run.shard_duration_labels.each do |name, duration| %>
+                  <li><%= name %> <span class="text-app-content-secondary"><%= duration %></span></li>
+                <% end %>
+              </ul>
+            <% end %>
           <% end %>
 
           <%# Name the run behind the figures: they come from the latest run only, so a stale run
