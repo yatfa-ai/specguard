@@ -43,8 +43,18 @@ class MembershipsController < ApplicationController
   def index
     @repository = current_repository(:members_manage)
     # Ordered by handle so the list is stable between requests; `includes(:user)` because every row
-    # renders the user's handle and avatar.
-    @memberships = @repository.repository_memberships.includes(:user).joins(:user).order("users.github_handle")
+    # renders the user's handle and avatar, and `:granted_by_user` because every row also renders
+    # who last set its permissions. The grantor preloads as a second `users` lookup rather than a
+    # join, so it costs one query for the whole table however many rows there are — the same rule
+    # `keys_minted_by` states below, and the one an unpreloaded `membership.granted_by_user` would
+    # break with a `users` query per row.
+    #
+    # `.joins(:user)` is not interchangeable with the `includes` and must stay: it is what puts
+    # `users` in the FROM clause for `order("users.github_handle")`.
+    @memberships = @repository.repository_memberships
+                              .includes(:user, :granted_by_user)
+                              .joins(:user)
+                              .order("users.github_handle")
     @keys_minted = keys_minted_by(@repository, @memberships.map(&:user_id))
   end
 

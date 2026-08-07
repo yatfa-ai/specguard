@@ -1198,6 +1198,131 @@ RSpec.describe "Repository members", type: :request do
     end
   end
 
+  # Slice: the reader for `repository_memberships.granted_by_user_id`. The column has been written
+  # on every web save since the grantor bound landed and rendered nowhere, so until now nothing in
+  # the suite proved the stored attribution was ever legible to the owner.
+  describe "who set a member's permissions" do
+    before { repository }
+
+    # The cell is asserted against the ROW it belongs to, not against the whole body: the signed-in
+    # viewer's handle is in the topbar on every one of these pages, so a page-wide `include` would
+    # pass on the chrome and a page-wide `not_to include` would fail on it. `drop(1)` discards
+    # everything before the first `<tr>` — the chrome, and the `<thead>` row, whose tag carries a
+    # class and so is not a split point. `>handle<` then matches only the member-name span
+    # (`<span class="text-app-content">hubot</span>`); the grantor cell renders its text on its own
+    # line, so it can never be mistaken for a row's subject.
+    def member_row(handle)
+      row = response.body.split("<tr>").drop(1).find { |chunk| chunk.include?(">#{handle}<") }
+      raise "no member row for #{handle} in the rendered table" if row.nil?
+
+      row
+    end
+
+    def user_queries
+      queries = []
+      subscriber = ActiveSupport::Notifications.subscribe("sql.active_record") do |_, _, _, _, payload|
+        queries << payload[:sql] if payload[:name] != "SCHEMA" && payload[:sql].to_s.include?(%(FROM "users"))
+      end
+      yield
+      queries
+    ensure
+      ActiveSupport::Notifications.unsubscribe(subscriber)
+    end
+
+    # Criterion 1. `MembershipsController#update` re-stamps the grantor from the session on every
+    # save, so this column holds who LAST SET the row — while the "Since" cell beside it prints
+    # `created_at`, which an edit does not move. A header claiming original authorship would let a
+    # reader fuse the two into "hubot was added by alice three days ago" when alice only narrowed
+    # hubot's permissions this morning, so the wording is asserted, not just the value.
+    it "names the column for what it holds rather than claiming original authorship" do
+      create_membership(repository: repository, user: colleague)
+      sign_in_via_github
+
+      get repository_members_path(repository)
+
+      expect(response).to have_http_status(:ok)
+      expect(response.body).to include("Permissions set by")
+      expect(response.body).not_to include("Added by")
+      expect(response.body).not_to include("Granted by")
+    end
+
+    # Criterion 2. A nil grantor is an ordinary state, not an edge case: every row written before
+    # the column existed, every console- and spec-built row (this one), and every row whose grantor
+    # account was later deleted. Migration 20260806150000 declined to backfill precisely because
+    # naming the owner would be "a fabricated audit trail, which is worse than an honest NULL" —
+    # so the second assertion is the point of the example, not a decoration on the first.
+    it "reads Unknown for a row with no grantor, and never names the owner in its place" do
+      membership = create_membership(repository: repository, user: colleague)
+      expect(membership.granted_by_user).to be_nil
+
+      sign_in_via_github
+
+      get repository_members_path(repository)
+
+      expect(member_row("hubot")).to include("Unknown")
+      expect(member_row("hubot")).not_to include("octocat")
+    end
+
+    # Criteria 4 and 5, end to end and in one example because either half alone is satisfiable by a
+    # decoration: a `members.manage` colleague — not the owner — adds a third party through the real
+    # add door, and the table then names that colleague on the row they created, for a viewer who is
+    # not the owner either. A cell that hardcoded `@repository.user` would pass every other example
+    # in this block and fail here.
+    it "names the members.manage colleague who granted the row, to a viewer who is not the owner" do
+      create_user(github_uid: "8888", github_handle: "dependabot")
+      create_membership(repository: repository, user: colleague, permissions: %w[view members.manage])
+      # The nickname has to be passed alongside the uid: the callback refreshes the handle from the
+      # payload, and the mock's default nickname is the owner's — signing in as uid 9999 without it
+      # would rename the colleague to `octocat` and make the assertions below unfalsifiable.
+      sign_in_via_github(uid: "9999", info: { nickname: "hubot" })
+
+      post repository_members_path(repository),
+           params: { membership_grant: { handle: "dependabot", permissions: ["", "view"] } }
+      expect(response).to redirect_to(repository_members_path(repository))
+
+      get repository_members_path(repository)
+
+      expect(response).to have_http_status(:ok)
+      expect(member_row("dependabot")).to include("hubot")
+      expect(member_row("dependabot")).not_to include("octocat")
+      # The colleague's own row was built by the spec builder, which names no grantor — the two
+      # states render side by side in one table.
+      expect(member_row("hubot")).to include("Unknown")
+    end
+
+    # Criterion 3, held to the standard `MembershipsController#keys_minted_by` sets for the cell two
+    # columns over. Distinct grantors on purpose: three rows sharing one grantor would be collapsed
+    # by the per-request query cache, and an unpreloaded `membership.granted_by_user` would still
+    # look like a single query.
+    it "asks for the grantors in one preload, not once per member" do
+      add_member = lambda do |uid, handle|
+        member = create_user(github_uid: uid, github_handle: handle)
+        grantor = create_user(github_uid: "7#{uid}", github_handle: "grantor-of-#{handle}")
+        # `update_column` because this grantor holds no membership of their own — which is exactly
+        # what a row looks like once the colleague who granted it has since been revoked, and is not
+        # reachable through the controller in a single request.
+        create_membership(repository: repository, user: member)
+          .update_column(:granted_by_user_id, grantor.id)
+      end
+
+      add_member.call("9999", "hubot")
+      sign_in_via_github
+
+      baseline = user_queries { get repository_members_path(repository) }
+      expect(baseline).not_to be_empty
+      expect(member_row("hubot")).to include("grantor-of-hubot")
+
+      add_member.call("8888", "dependabot")
+      add_member.call("6666", "renovate")
+
+      three_rows = user_queries { get repository_members_path(repository) }
+
+      expect(member_row("renovate")).to include("grantor-of-renovate")
+      # Two more rows, two more distinct grantors, and not one more query.
+      expect(three_rows.size).to eq(baseline.size)
+    end
+  end
+
   describe "a signed-out visitor" do
     it "is sent to sign in rather than shown the list" do
       create_membership(repository: repository, user: colleague)

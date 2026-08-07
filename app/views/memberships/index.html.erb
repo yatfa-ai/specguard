@@ -24,7 +24,15 @@
 
   <%= render UI::PanelComponent.new(title: "Shared with", body_class: @memberships.any? ? "p-0" : "p-4") do %>
     <% if @memberships.any? %>
-      <%= render UI::TableComponent.new(columns: ["Member", "Permissions", "Since", ""]) do %>
+      <%# "Permissions set by" rather than "Added by"/"Granted by", and the wording is load-bearing:
+          MembershipsController#update RE-STAMPS `granted_by_user` from the session on every save
+          (deliberately — see the comment above that action), so after any permission edit this
+          column holds who LAST SET this row, not who originally added the member. Sitting next to
+          "Since", which prints `created_at` and does not move on an edit, an "Added by" header
+          would invite the reader to fuse two facts from two different moments into one false
+          sentence: "hubot was added by alice three days ago", when alice merely narrowed hubot's
+          permissions this morning. %>
+      <%= render UI::TableComponent.new(columns: ["Member", "Permissions", "Since", "Permissions set by", ""]) do %>
         <% @memberships.each do |membership| %>
           <% keys_minted = @keys_minted.fetch(membership.user_id, 0) %>
           <tr>
@@ -70,6 +78,23 @@
             </td>
             <td class="px-3 py-2 text-app-content-secondary tabular-nums">
               <%= time_ago_in_words(membership.created_at) %> ago
+            </td>
+            <td class="px-3 py-2 text-app-content-secondary">
+              <%# The account named by `granted_by_user_id`, degrading exactly as the API keys table
+                  does for `created_by_user` (repositories/show.html.erb). A nil grantor is an
+                  ordinary state, not an edge case — every row written before the column existed,
+                  every console- and spec-built row, and every row whose grantor account was later
+                  deleted (`User has_many :granted_repository_memberships, dependent: :nullify`).
+                  It reads "Unknown" and must NEVER fall back to the repository owner: migration
+                  20260806150000 declined to backfill precisely because inventing the owner as
+                  grantor would be "a fabricated audit trail, which is worse than an honest NULL".
+
+                  Plain text, no link: the row's Edit/Revoke controls are asserted as the exact set
+                  of `/repositories/:id/members/:id` links on the page, and no gate either — this is
+                  a fact about a row already on screen, on a page already authorized at
+                  `:members_manage`, so a `can?` wrapper would be true by construction (the same
+                  reasoning the actions cell below spells out). %>
+              <%= membership.granted_by_user&.display_name || "Unknown" %>
             </td>
             <td class="px-3 py-2 text-right">
               <%# Edit sits beside Revoke because they are the two ends of the same decision, and
