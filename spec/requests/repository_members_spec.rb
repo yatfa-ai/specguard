@@ -34,14 +34,19 @@ RSpec.describe "Repository members", type: :request do
     # filter that would mask the invariant regressing — the same reasoning as the deliberate absence
     # of `.distinct` in RepositoriesController#index.
     it "does not see themselves in the list" do
-      create_membership(repository: repository, user: colleague)
+      membership = create_membership(repository: repository, user: colleague)
 
       get repository_members_path(repository)
 
       expect(response.body).to include("hubot")
       # The owner's own handle is in the topbar — they are signed in — so this has to be scoped to
-      # the table: exactly one revoke control, and none of them aimed at the owner.
-      expect(response.body.scan(%r{/repositories/#{repository.id}/members/\d+}).size).to eq(1)
+      # the table. Asserted as the set of membership ids the page links to rather than as a count of
+      # controls: each row now carries Edit *and* Revoke, so counting matches would need a constant
+      # bumped every time a control is added to the cell, and would stay green if the second link
+      # pointed at the wrong row. The set says the stronger thing — exactly one member row, and it
+      # is the colleague's.
+      linked_ids = response.body.scan(%r{/repositories/#{repository.id}/members/(\d+)}).flatten.uniq
+      expect(linked_ids).to eq([membership.id.to_s])
       expect(response.body).not_to include("Revoke octocat")
     end
 
@@ -225,13 +230,20 @@ RSpec.describe "Repository members", type: :request do
     end
   end
 
-  # Granting escalates where revoking de-escalates, so this holder administers the page and is
-  # refused the form — and, per the same gated-affordance discipline as repositories#show, is never
-  # offered a control that could only ever 403.
+  # Slice 2c gated `new`/`create` at `:owner` and this block pinned that. Slice 2f widens it to the
+  # `:members_manage` that opens the page, which is what the roadmap's own definition of the
+  # permission says it buys ("add/remove collaborators, edit permissions") — all three clauses, not
+  # the middle one alone.
+  #
+  # What made the tighter gate defensible was that `grantable_permissions` had no call site, so
+  # nothing bounded what a non-owner's invite could contain. Every grid on this controller renders
+  # from it now, so the escalation the gate was standing in for is closed by the grid and the
+  # model's `grantor_holds_every_granted_permission` together — which is the thing actually asserted
+  # below, rather than "a non-owner is refused".
   describe "who may grant access" do
-    def attempt_grant
+    def attempt_grant(permissions = %w[view])
       post repository_members_path(repository),
-           params: { membership_grant: { handle: "dependabot", permissions: %w[view] } }
+           params: { membership_grant: { handle: "dependabot", permissions: [""] + permissions } }
     end
 
     let(:third_party) { create_user(github_uid: "8888", github_handle: "dependabot") }
@@ -244,16 +256,39 @@ RSpec.describe "Repository members", type: :request do
         sign_in_via_github(uid: "9999")
       end
 
-      it "gets 403 on the form and the grant, and is offered no Add control" do
-        get new_repository_member_path(repository)
-        expect(response).to have_http_status(:forbidden)
-
-        expect { attempt_grant }.not_to change(RepositoryMembership, :count)
-        expect(response).to have_http_status(:forbidden)
-
+      it "can add a member, and is offered the control that does it" do
         get repository_members_path(repository)
+        expect(response.body).to include(new_repository_member_path(repository))
+
+        get new_repository_member_path(repository)
         expect(response).to have_http_status(:ok)
-        expect(response.body).not_to include(new_repository_member_path(repository))
+
+        expect { attempt_grant }.to change(RepositoryMembership, :count).by(1)
+        expect(response).to redirect_to(repository_members_path(repository))
+      end
+
+      # The bound that replaced the `:owner` gate, asserted as behaviour rather than assumed. The
+      # grid does not offer `repo.delete` to this actor, and the model refuses it even when the
+      # request is written by hand — the two halves matter separately, because only the second
+      # survives a client that ignores the form.
+      it "is offered only what they hold, and is refused anything more even by hand" do
+        get new_repository_member_path(repository)
+
+        expect(response.body).to include("members.manage")
+        expect(response.body).not_to include("repo.delete")
+        expect(response.body).not_to include("keys.manage")
+
+        expect { attempt_grant(%w[view repo.delete]) }.not_to change(RepositoryMembership, :count)
+        expect(response).to have_http_status(:unprocessable_content)
+        expect(response.body).to include("the grantor does not hold: repo.delete")
+      end
+
+      # The grantor stamp on the add door, from this actor's session rather than the owner's — the
+      # bound above is only as good as the identity it is computed against.
+      it "records itself as the grantor, not the owner" do
+        attempt_grant
+
+        expect(RepositoryMembership.find_by!(user: third_party).granted_by_user).to eq(colleague)
       end
     end
 
@@ -263,6 +298,11 @@ RSpec.describe "Repository members", type: :request do
         sign_in_via_github(uid: "9999")
       end
 
+      # `grantable_permissions` returns `["view"]` for this member — non-empty, and deliberately not
+      # read as permission to invite anyone. RepositoryPolicy says so itself: "Reading a non-empty
+      # result here as permission to manage members would let a view-only member start inviting
+      # people." This is the example that fails if the controller ever asks the grid instead of
+      # asking `can?(:members_manage)`.
       it "gets 403 on the form and the grant" do
         get new_repository_member_path(repository)
         expect(response).to have_http_status(:forbidden)
@@ -282,6 +322,338 @@ RSpec.describe "Repository members", type: :request do
 
         expect { attempt_grant }.not_to change(RepositoryMembership, :count)
         expect(response).to have_http_status(:not_found)
+      end
+    end
+  end
+
+  # Slice 2f: editing a member's permissions in place. Closes the half of DoD bullet 4 that Remove
+  # shipped without — "the owner can EDIT or remove a colleague's access".
+  #
+  # Before this, narrowing a colleague had exactly one path: Revoke, then re-add. That path fires a
+  # consequence dialog about API keys that will keep authenticating (for an operation that is not a
+  # removal), and destroys the row, so the "Since" column resets and a colleague who merely lost a
+  # permission reports as newly added. Same argument RepositoriesController#update makes for rename
+  # one level up: "the alternative (Remove + re-register) destroys every key and all telemetry."
+  describe "editing a member's permissions" do
+    # Exactly what the form submits. The leading "" is the hidden field that makes "nothing ticked"
+    # arrive as an empty set rather than as no parameter at all — passing the tidy array a
+    # hand-written client would send is how a spec stops exercising the real form, and on THIS form
+    # the empty case is the whole point.
+    def edit_member(membership, permissions = [])
+      patch repository_member_path(repository, membership),
+            params: { repository_membership: { permissions: [""] + permissions } }
+    end
+
+    let!(:membership) do
+      create_membership(repository: repository, user: colleague, permissions: %w[view keys.manage])
+    end
+
+    describe "the owner" do
+      before { sign_in_via_github }
+
+      # Criterion 1, and the reason the whole slice exists. Asserted on the SAME row — the id and
+      # created_at are what separate "edited" from "revoked and re-added", and a spec that only
+      # checked the stored array would stay green if the implementation destroyed and recreated.
+      it "narrows a member in place, keeping the row and the date they were added" do
+        original_created_at = membership.created_at
+
+        expect { edit_member(membership, %w[view]) }.not_to change(RepositoryMembership, :count)
+
+        expect(response).to redirect_to(repository_members_path(repository))
+        expect(membership.reload.permissions).to eq(%w[view])
+        expect(membership.created_at).to eq(original_created_at)
+      end
+
+      # Criterion 2 — the narrowing case a naive form breaks. Browsers omit unchecked boxes
+      # entirely, so with no hidden blank the `permissions` key vanishes and `params.expect` raises
+      # ParameterMissing → 400. This is the example that fails if that hidden field is dropped.
+      #
+      # The second half is why `[]` must not be "helpfully" filled in with "view": membership itself
+      # grants access (RepositoryPolicy#can?), so the colleague is narrowed, not locked out. Asserted
+      # from their own session, because that is the claim the flash makes to the owner.
+      it "stores an empty set when every box is unchecked, and that member can still open the repository" do
+        expect { edit_member(membership) }.not_to change(RepositoryMembership, :count)
+
+        expect(response).to redirect_to(repository_members_path(repository))
+        expect(membership.reload.permissions).to eq([])
+
+        sign_in_via_github(uid: "9999", info: { nickname: "hubot" })
+
+        get repository_path(repository)
+        expect(response).to have_http_status(:ok)
+      end
+
+      it "can widen a member too, not only narrow them" do
+        edit_member(membership, %w[view keys.manage members.manage repo.delete])
+
+        expect(membership.reload.permissions).to eq(%w[view keys.manage members.manage repo.delete])
+      end
+
+      # Criterion 3's first half. `create_membership` names no grantor — as the console and every
+      # spec builder do — so this row arrives with a nil one, which is the state
+      # `grantor_holds_every_granted_permission` fails OPEN on. The stamp is what converts it to a
+      # bounded row.
+      it "stamps the editor as the grantor, including on a row that had none" do
+        expect(membership.granted_by_user).to be_nil
+
+        edit_member(membership, %w[view])
+
+        expect(membership.reload.granted_by_user).to eq(owner)
+      end
+
+      # Criterion 5. `permissions` is the only attribute this form may change. Each of these is a
+      # distinct attack: `user_id` would move a colleague's access onto somebody else, `repository_id`
+      # would move the row out from under the authorization that admitted the request, and
+      # `granted_by_user_id` would name a wider-rights grantor so the bound is computed against
+      # theirs. All three are submitted in ONE request, so a filter that catches two of them and
+      # misses the third still fails here.
+      it "changes nothing but the permissions, whatever else is in the body" do
+        impostor = create_user(github_uid: "4004", github_handle: "impostor")
+        other_repository = create_repository(user: owner, github_full_name: "acme/payments-service")
+
+        patch repository_member_path(repository, membership),
+              params: { repository_membership: { permissions: ["", "view"],
+                                                 user_id: impostor.id,
+                                                 repository_id: other_repository.id,
+                                                 granted_by_user_id: impostor.id } }
+
+        membership.reload
+        expect(membership.permissions).to eq(%w[view])
+        expect(membership.user).to eq(colleague)
+        expect(membership.repository).to eq(repository)
+        expect(membership.granted_by_user).to eq(owner)
+      end
+
+      # Criterion 7's positive control: the owner's `grantable_permissions` is the full set, so the
+      # grid offers everything. Without this, restricting the grid to nothing at all would pass the
+      # negative assertions further down.
+      it "is offered every permission on the form" do
+        get edit_repository_member_path(repository, membership)
+
+        expect(response).to have_http_status(:ok)
+        RepositoryMembership::PERMISSIONS.each { |permission| expect(response.body).to include(permission) }
+        # Pre-ticked from the stored row, so the owner edits what is there rather than starting from
+        # a blank grid and re-granting by hand. The negative half matters as much: a grid rendering
+        # every box checked would pass the line above.
+        expect(response.body).to match(/value="keys\.manage"[^>]*checked/)
+        expect(response.body).not_to match(/value="repo\.delete"[^>]*checked/)
+      end
+
+      # The OTHER half of anti-trap 1, and it has to be asserted on the markup rather than on a
+      # round trip. `edit_member` prepends the blank itself, because that is what a browser sends —
+      # which means every example above stays green even with the hidden field deleted from the
+      # form. Verified by deleting it: the whole file still passed. A request spec constructs params
+      # directly, so it can never observe the browser's "omit unchecked boxes entirely" behaviour;
+      # only the rendered form can say whether the blank will be there to omit around.
+      #
+      # Without it, an owner clearing every box sends no `permissions` key at all and
+      # `params.expect` raises ParameterMissing → 400 — so the narrowing this whole slice exists for
+      # is the one operation that breaks, and it breaks on the form, not on the server.
+      it "renders the hidden blank that makes 'nothing ticked' reach the server as an empty set" do
+        get edit_repository_member_path(repository, membership)
+
+        expect(response.body).to match(
+          /<input[^>]*type="hidden"[^>]*name="repository_membership\[permissions\]\[\]"[^>]*value=""/
+        )
+      end
+
+      # The same contract on the add form, which shares the grid partial. Its own examples prepend
+      # the blank for the same reason and are blind in the same way.
+      it "renders the hidden blank on the add form too" do
+        get new_repository_member_path(repository)
+
+        expect(response.body).to match(
+          /<input[^>]*type="hidden"[^>]*name="membership_grant\[permissions\]\[\]"[^>]*value=""/
+        )
+      end
+
+      it "offers the Edit control from the members list" do
+        get repository_members_path(repository)
+
+        expect(response.body).to include(edit_repository_member_path(repository, membership))
+      end
+    end
+
+    # The gate is `:members_manage`, not `:owner` — the roadmap defines that permission as
+    # "add/remove collaborators, edit permissions", and re-stamping the grantor on every save is
+    # what makes the third clause safe to hand over.
+    describe "a member holding 'members.manage'" do
+      let!(:own_membership) do
+        create_membership(repository: repository, user: colleague, permissions: %w[view members.manage])
+      end
+
+      let(:third_party) { create_user(github_uid: "8888", github_handle: "dependabot") }
+      let!(:third_party_membership) do
+        create_membership(repository: repository, user: third_party, permissions: %w[view])
+      end
+
+      # `membership` (hubot's, from the outer let!) is this actor's own row, so it is replaced here.
+      let!(:membership) { own_membership }
+
+      before { sign_in_via_github(uid: "9999") }
+
+      it "can narrow another member" do
+        edit_member(third_party_membership)
+
+        expect(response).to redirect_to(repository_members_path(repository))
+        expect(third_party_membership.reload.permissions).to eq([])
+      end
+
+      # ⚠ Criterion 3's load-bearing half, and the reason the grantor stamp is not bookkeeping.
+      #
+      # `third_party_membership` has a NIL grantor, which is the state the model's bound fails OPEN
+      # on. An `update` that loaded the row and saved it without re-stamping would leave that row
+      # unbounded, and this actor could write `repo.delete` onto it — reopening the exact two-step
+      # escalation slice 1d closed, while the model still looks like it is defending against it.
+      # repo.delete really does destroy the repository (see repository_sharing_spec), so this is the
+      # whole chain, not a permission-string comparison.
+      it "cannot grant a permission it does not hold, even on a row that had no grantor" do
+        expect(third_party_membership.granted_by_user).to be_nil
+
+        patch repository_member_path(repository, third_party_membership),
+              params: { repository_membership: { permissions: ["", "view", "repo.delete"] } }
+
+        expect(response).to have_http_status(:unprocessable_content)
+        expect(response.body).to include("the grantor does not hold: repo.delete")
+        # Refused, not partially applied: the row is exactly as it was.
+        expect(third_party_membership.reload.permissions).to eq(%w[view])
+        expect(third_party_membership.granted_by_user).to be_nil
+      end
+
+      # Criterion 4's first half. The row a member can edit includes their OWN — which is what
+      # repository_membership_spec:111 was written for, reaching a controller here for the first
+      # time. The bound is measured against what they hold NOW, so a grant cannot bootstrap itself.
+      it "cannot escalate its own row" do
+        patch repository_member_path(repository, own_membership),
+              params: { repository_membership: { permissions: ["", "view", "members.manage", "repo.delete"] } }
+
+        expect(response).to have_http_status(:unprocessable_content)
+        expect(own_membership.reload.permissions).to eq(%w[view members.manage])
+      end
+
+      # Criterion 4's second half. De-escalating themselves is always within bounds and nothing
+      # guards it — but the members page they came from now 403s, because they are still a member
+      # and so the repository does not hide from them. `#destroy` already handles the mirror case
+      # (revoking yourself redirects to repositories_path); this is the softer half, since the
+      # repository itself is still theirs to open.
+      it "can edit away its own 'members.manage', and is redirected somewhere it can still reach" do
+        edit_member(own_membership, %w[view])
+
+        expect(response).to redirect_to(repository_path(repository))
+        expect(own_membership.reload.permissions).to eq(%w[view])
+
+        follow_redirect!
+        expect(response).to have_http_status(:ok)
+
+        # The page they would have been sent to is now genuinely refused — 403 rather than 404,
+        # since they are still a member. This is the landing the redirect exists to avoid.
+        get repository_members_path(repository)
+        expect(response).to have_http_status(:forbidden)
+      end
+
+      # Criterion 7. The grid renders `grantable_permissions`, so it never offers a box whose save
+      # the model would refuse — RepositoryPolicy#grantable_permissions says this is what it is for,
+      # and until this slice it had no view or controller call site at all.
+      it "is offered only the permissions it can actually grant" do
+        get edit_repository_member_path(repository, third_party_membership)
+
+        expect(response).to have_http_status(:ok)
+        expect(response.body).to include("members.manage")
+        expect(response.body).to include("view")
+        expect(response.body).not_to include("keys.manage")
+        expect(response.body).not_to include("repo.delete")
+      end
+
+      # The silent-narrowing disclosure. The grid cannot offer `keys.manage` to this actor, so
+      # saving the form drops it — a de-escalation, and safe, but not one they asked for. Silent is
+      # the part that is not acceptable on a page whose whole subject is who holds what.
+      it "is warned that saving will strip a permission it cannot re-grant" do
+        create_membership(repository: repository, user: create_user(github_uid: "5005", github_handle: "ci-bot"),
+                          permissions: %w[view keys.manage])
+        holder = RepositoryMembership.find_by!(repository: repository, user: User.find_by!(github_handle: "ci-bot"))
+
+        get edit_repository_member_path(repository, holder)
+
+        expect(response.body).to include("Saving will also remove permissions you cannot grant")
+        expect(response.body).to include("keys.manage")
+      end
+    end
+
+    # Criterion 6. The whole surface is refused, not just the button — the same discipline the
+    # members page itself follows.
+    describe "a member with only 'view'" do
+      before { sign_in_via_github(uid: "9999") }
+
+      let!(:membership) { create_membership(repository: repository, user: colleague, permissions: %w[view]) }
+
+      it "gets 403 on the form and the save, and changes nothing" do
+        get edit_repository_member_path(repository, membership)
+        expect(response).to have_http_status(:forbidden)
+
+        edit_member(membership, %w[view repo.delete])
+        expect(response).to have_http_status(:forbidden)
+        expect(membership.reload.permissions).to eq(%w[view])
+      end
+
+      # They cannot open the members page at all, so the affordance question is asked where they can
+      # see something: a member who holds `members.manage` sees Edit, and this one never reaches the
+      # page that renders it. Asserted as the 403 above plus the absence here, because "no Edit
+      # affordance" on a page that returns 403 would otherwise pass vacuously.
+      it "is never rendered an Edit control, because the page itself is refused" do
+        get repository_members_path(repository)
+
+        expect(response).to have_http_status(:forbidden)
+        expect(response.body).not_to include(edit_repository_member_path(repository, membership))
+      end
+    end
+
+    # 404 rather than 403: the repository's existence stays hidden from a non-member.
+    describe "a signed-in user with no membership" do
+      before { sign_in_via_github(uid: "7777") }
+
+      it "gets 404 on the form and the save, and changes nothing" do
+        get edit_repository_member_path(repository, membership)
+        expect(response).to have_http_status(:not_found)
+
+        edit_member(membership, %w[view repo.delete])
+        expect(response).to have_http_status(:not_found)
+        expect(membership.reload.permissions).to eq(%w[view keys.manage])
+      end
+    end
+
+    describe "a signed-out visitor" do
+      it "is sent to sign in rather than shown the form" do
+        get edit_repository_member_path(repository, membership)
+
+        expect(response).to redirect_to(root_path)
+      end
+    end
+
+    # The same IDOR the revoke path is pinned against, on the two new doors. On this nested route
+    # `params[:id]` is a *membership* id while `current_repository` authorized against
+    # `params[:repository_id]`, so a global `RepositoryMembership.find` would authorize against
+    # repository A and then rewrite a row belonging to repository B — a cross-tenant WRITE, which is
+    # strictly worse than the cross-tenant delete, since it can also *grant*.
+    describe "editing across repositories" do
+      it "refuses a membership id that belongs to a different repository" do
+        other_owner = create_user(github_uid: "2002", github_handle: "other-owner")
+        other_repository = create_repository(user: other_owner, github_full_name: "acme/payments-service")
+        victim = create_membership(repository: other_repository,
+                                   user: create_user(github_uid: "3003", github_handle: "victim"),
+                                   permissions: %w[view])
+
+        create_membership(repository: repository, user: create_user(github_uid: "9998", github_handle: "admin"),
+                          permissions: %w[view members.manage])
+        sign_in_via_github(uid: "9998")
+
+        get edit_repository_member_path(repository, victim)
+        expect(response).to have_http_status(:not_found)
+
+        patch repository_member_path(repository, victim),
+              params: { repository_membership: { permissions: ["", "view", "members.manage"] } }
+
+        expect(response).to have_http_status(:not_found)
+        expect(victim.reload.permissions).to eq(%w[view])
       end
     end
   end

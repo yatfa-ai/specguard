@@ -19,11 +19,9 @@ class MembershipGrant
   attr_accessor :handle
   attr_writer :permissions
 
-  # Always an Array, so the view can ask `granted?` before anything has been submitted. The values
-  # are left exactly as they arrived — stripping and de-duplicating them is
+  # Always an Array, so the checkbox grid can ask which boxes are ticked before anything has been
+  # submitted. The values are left exactly as they arrived — stripping and de-duplicating them is
   # `RepositoryMembership#normalize_permissions`'s job, and doing it again here would be a second
   # copy of that rule to keep in step.
   def permissions = Array(@permissions)
-
-  def granted?(permission) = permissions.include?(permission)
 end

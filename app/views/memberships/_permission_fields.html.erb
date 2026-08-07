@@ -1,0 +1,30 @@
+<%# The permission checkbox grid, shared by the add form and the edit form.
+
+    ONE partial rather than two grids on purpose. The two forms make the same promise — "these are
+    the permissions you may hand to this person" — and a grid duplicated per form is how the add
+    door and the edit door drift into offering different sets, which on this feature means one of
+    them offers a box whose save is then refused.
+
+    `permissions` is the caller's `repository_policy.grantable_permissions`, NOT
+    RepositoryMembership::PERMISSIONS. That reader was built for exactly this and says so: "the set
+    an 'add/edit member' form should render checkboxes from — so the grid offers only what the save
+    will accept, rather than options that are rejected on submit." Rendering the full set instead
+    would show a `members.manage` holder a `repo.delete` box that
+    `grantor_holds_every_granted_permission` refuses on submit, i.e. a control that can only ever
+    422.
+
+    `param_name` differs because the two forms post different objects: the add form posts a
+    MembershipGrant (a typed handle is not an attribute of a membership row), the edit form posts
+    the RepositoryMembership itself (the row already names its user).
+%>
+<% permissions.each do |permission| %>
+  <label class="flex items-start gap-2 rounded-md border border-app-border-light bg-app-surface-raised p-3">
+    <%= check_box_tag "#{param_name}[permissions][]", permission, selected.include?(permission),
+                      id: "#{param_name}_permissions_#{permission.parameterize}",
+                      class: "mt-0.5 rounded border-app-border-light" %>
+    <span class="space-y-0.5">
+      <span class="block font-mono text-sm text-app-content"><%= permission %></span>
+      <span class="block text-xs text-app-muted"><%= permission_description(permission) %></span>
+    </span>
+  </label>
+<% end %>

@@ -1,0 +1,106 @@
+<% content_for :title, "Edit #{@membership.user.github_handle} · #{@repository.github_full_name} · SpecGuard" %>
+
+<%# Permissions the row holds today that this actor may not grant. Read from `permissions_was` —
+    the PERSISTED value — rather than from `permissions`, which after a refused save holds what was
+    just submitted and would make this warning describe the attempt instead of the row.
+
+    They are not rendered as boxes (the grid is `grantable_permissions`, so a box this actor cannot
+    grant could only ever 422 on submit), which means saving this form silently drops them. Silent
+    is the part that is not acceptable: narrowing a colleague is the whole point of the page, but
+    narrowing one the actor did not intend to touch, without a word, is not. So the form says so
+    before the click. %>
+<% stripped = @membership.permissions_was.to_a - repository_policy.grantable_permissions %>
+
+<%= render UI::PageComponent.new do %>
+  <%= render UI::BreadcrumbComponent.new(items: [
+        { label: "Repositories", href: repositories_path },
+        { label: @repository.github_full_name, href: repository_path(@repository) },
+        { label: "Members", href: repository_members_path(@repository) },
+        { label: @membership.user.github_handle }
+      ]) %>
+
+  <%= render UI::PageHeaderComponent.new(
+        title: "Edit #{@membership.user.github_handle}",
+        subtitle: "Change what #{@membership.user.github_handle} holds on #{@repository.github_full_name}. " \
+                  "They keep their access and the date they were added."
+      ) %>
+
+  <%= render UI::PanelComponent.new do %>
+    <%= form_with model: @membership, url: repository_member_path(@repository, @membership),
+                  method: :patch do |form| %>
+      <%# RepositoryMembership's own messages, surfaced rather than restated — the same discipline
+          MembershipsController#reject_grant follows on the add form. The one that actually lands
+          here is the grantor bound ("includes permissions the grantor does not hold: repo.delete"),
+          which is a whole sentence about the submission, not about a field. %>
+      <% if @membership.errors.any? %>
+        <div class="mb-4">
+          <%= render UI::AlertComponent.new(tone: :error, title: "Nothing was changed") do %>
+            <ul class="mt-1 list-disc space-y-1 pl-5">
+              <% @membership.errors.full_messages.each do |message| %>
+                <li><%= message %></li>
+              <% end %>
+            </ul>
+          <% end %>
+        </div>
+      <% end %>
+
+      <%# The handle is text, never a field. This form changes a permission set, not who it belongs
+          to — moving a grant between people is add + revoke, two separate decisions, and
+          `membership_params` refuses `user_id` so the server agrees with what the page shows. %>
+      <div class="mb-4 flex flex-wrap items-center gap-2">
+        <% if @membership.user.avatar_url.present? %>
+          <%= image_tag @membership.user.avatar_url, alt: "", class: "size-6 rounded-full", loading: "lazy" %>
+        <% end %>
+        <span class="text-app-content"><%= @membership.user.github_handle %></span>
+        <span class="text-xs text-app-muted">
+          Added <%= time_ago_in_words(@membership.created_at) %> ago
+        </span>
+      </div>
+
+      <% if stripped.any? %>
+        <div class="mb-4">
+          <%= render UI::AlertComponent.new(tone: :warning, title: "Saving will also remove permissions you cannot grant") do %>
+            <p class="mt-1">
+              <%= @membership.user.github_handle %> currently holds
+              <%= stripped.to_sentence %>, which you do not hold yourself and therefore cannot
+              re-grant. Saving this form removes <%= stripped.size == 1 ? "it" : "them" %>. Ask
+              <%= @repository.owner_login %> if that is not what you intend.
+            </p>
+          <% end %>
+        </div>
+      <% end %>
+
+      <fieldset class="space-y-2">
+        <legend class="text-app-h4 text-app-content-secondary">Permissions</legend>
+
+        <%# ⭐ The load-bearing line on this form. Unchecking every box is the narrowing case — the
+            entire point of the slice — and it is the one a naive form breaks: browsers omit
+            unchecked boxes entirely, so with none ticked the `permissions` key would vanish from
+            the submission and `params.expect` would raise ParameterMissing → 400. The blank entry
+            means the array always arrives. `[]` is a legitimate, working membership (`view` is
+            implied by the row itself — see RepositoryPolicy#can?), so "cleared every box" and
+            "never mentioned permissions" must not be conflated.
+            The blank is stripped by RepositoryMembership#normalize_permissions rather than here —
+            one place decides what a stored permission set looks like. %>
+        <%= hidden_field_tag "repository_membership[permissions][]", "", id: nil %>
+
+        <div class="grid gap-2 sm:grid-cols-2">
+          <%= render "permission_fields", param_name: "repository_membership",
+                     permissions: repository_policy.grantable_permissions,
+                     selected: @membership.permissions %>
+        </div>
+      </fieldset>
+
+      <div class="mt-4 flex items-center gap-2">
+        <%= form.submit_button "Save permissions" %>
+        <%= render UI::ButtonComponent.new(variant: :ghost, href: repository_members_path(@repository)) { "Cancel" } %>
+      </div>
+    <% end %>
+  <% end %>
+
+  <p class="max-w-prose text-xs text-app-muted">
+    Editing keeps the membership row, so <%= @membership.user.github_handle %> keeps their access to
+    <%= @repository.github_full_name %> and any API keys they minted keep working. To remove their
+    access entirely, revoke it from the members list instead.
+  </p>
+<% end %>

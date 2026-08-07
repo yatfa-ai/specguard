@@ -1,21 +1,30 @@
 # frozen_string_literal: true
 
-# Who else can reach a repository: who holds it, the form that grants it, and the lever to take it
-# away again.
+# Who else can reach a repository: who holds it, the form that grants it, the form that narrows it,
+# and the lever to take it away again.
 #
-# `index` and `destroy` are `members.manage` end to end — the table names people (GitHub handles,
-# avatars), which is the same category as the credential metadata repositories#show already gates. A
-# `view` member gets 403 on the page itself rather than a rendered page with the buttons hidden.
+# Every action here gates at `:members_manage` — the roadmap defines that permission as "add/remove
+# collaborators, edit permissions", and all three clauses now have code. A `view` member gets 403 on
+# the page itself rather than a rendered page with the buttons hidden.
 #
-# `new`/`create` gate one step tighter, at `:owner`, and the split falls on a real line: revoking
-# only ever de-escalates, whereas granting escalates. `RepositoryMembership`'s
-# `grantor_holds_every_granted_permission` now bounds a grant by what the grantor holds, so a
-# `members.manage` holder can no longer write `repo.delete` onto a row — but *who* may invite at all
-# is a separate question from *what* an invite may contain, and widening this gate to
-# `:members_manage` (rendering `grantable_permissions` rather than the full `PERMISSIONS` set) is its
-# own slice. Under an owner the two sets are identical, so nothing here depends on the difference.
+# `new`/`create` gated one step tighter, at `:owner`, until this slice. The split was provisional and
+# said so: the question it answered was *who may invite at all*, deferred while `grantable_permissions`
+# had no call site. It has one now — every grid on this controller renders from it — so a
+# `members.manage` holder is bounded by what they themselves hold on both doors, and the tighter gate
+# would only have meant they could narrow an existing colleague but not name a new one. Under an
+# owner the two sets are identical, so nothing the owner sees changed.
 #
-# Editing an existing member's permissions is the same checkbox grid and is likewise still absent.
+# EDIT IS THE HALF THAT COULD ALWAYS HAVE SHIPPED. The counterpart controls were deferred together
+# on `User.resolve_by_handle`, but a handle is typed only when the person is unknown: an existing
+# membership already names its user, and `#edit`/`#update` look it up the way `#destroy` does. Only
+# the add half ever needed resolution.
+#
+# Narrowing a colleague's access used to have exactly one path — Revoke, then re-add — and that is
+# the operation slices 2d/2e were built to warn about. It fires a confirm dialog about API keys that
+# will keep authenticating, for something that is not a removal, and it destroys the row, so the
+# "Since" column resets and a colleague who lost a permission reports as newly added. This is the
+# same argument `RepositoriesController#update` makes one level up for rename: "the alternative
+# (Remove + re-register) destroys every key and all telemetry."
 #
 # Revoking removes only the *web* half of access. A member who held `keys.manage` and minted a CI
 # key keeps authenticating against the API afterwards — deliberately, see `User has_many
@@ -40,7 +49,7 @@ class MembershipsController < ApplicationController
   end
 
   def new
-    @repository = current_repository(:owner)
+    @repository = current_repository(:members_manage)
     @grant = MembershipGrant.new
   end
 
@@ -57,7 +66,7 @@ class MembershipsController < ApplicationController
   # here would be a second copy of a rule that can drift from the one the database is actually
   # protected by.
   def create
-    @repository = current_repository(:owner)
+    @repository = current_repository(:members_manage)
     @grant = MembershipGrant.new(grant_params.to_h)
 
     resolution = User.resolve_by_handle(@grant.handle)
@@ -69,15 +78,48 @@ class MembershipsController < ApplicationController
     redirect_to repository_members_path(@repository), notice: grant_notice(membership)
   end
 
-  # Scoped through `repository.repository_memberships`, exactly as ApiKeysController#destroy scopes
-  # through `repository.api_keys`, and for the same reason — but the trap is sharper here. On this
-  # nested route `params[:id]` is a *membership* id while `current_repository` authorized against
-  # `params[:repository_id]`, so a global `RepositoryMembership.find(params[:id])` would let a
-  # holder of `members.manage` on one repository delete a membership belonging to another. The
-  # scoped lookup makes that a 404 instead. See the cross-repository example in the request spec.
+  # The membership is loaded through `find_membership!` for the same reason `#destroy` is, and the
+  # form deliberately shows the handle as text rather than as a field: this changes a permission
+  # set, not who it belongs to. Moving a grant between people is add + revoke, two decisions, and
+  # collapsing them into one form would let a mis-click hand a colleague's access to a stranger
+  # while the page still says "Edit".
+  def edit
+    @repository = current_repository(:members_manage)
+    @membership = find_membership!(@repository)
+  end
+
+  # The narrowing path, and the reason it is safe to gate at `:members_manage` rather than `:owner`.
+  #
+  # `granted_by_user` is RE-STAMPED on every save, from the session, and this is load-bearing rather
+  # than bookkeeping. `RepositoryMembership#grantor_holds_every_granted_permission` fails OPEN on a
+  # nil grantor — deliberately, for the console and the spec builders — so an `update` that loaded a
+  # row and saved it without naming a grantor would be unbounded on every row written before that
+  # column existed. A `members.manage` holder could then grant themselves `repo.delete` through the
+  # edit door and destroy the owner's repository, which is precisely the two-step escalation that
+  # validation exists to close. Re-stamping means the bound is computed against *this* actor's
+  # rights on every save, whatever the row said before.
+  #
+  # It is `assign_attributes` + `save` rather than `update(...)` so the grantor is set BEFORE
+  # validation runs — `update` would assign and validate in one call, and the stamp would land too
+  # late to bound anything.
+  def update
+    @repository = current_repository(:members_manage)
+    @membership = find_membership!(@repository)
+
+    @membership.assign_attributes(membership_params)
+    @membership.granted_by_user = current_user
+
+    # A refused escalation re-renders with the model's reasons rather than 500ing or redirecting
+    # silently — matching RepositoriesController#update, down to `:unprocessable_content`.
+    return render :edit, status: :unprocessable_content unless @membership.save
+
+    redirect_to after_update_path, notice: update_notice
+  end
+
+  # See `find_membership!` for why the lookup is scoped through the repository.
   def destroy
     repository = current_repository(:members_manage)
-    membership = repository.repository_memberships.find(params[:id])
+    membership = find_membership!(repository)
     revoked_own_access = membership.user_id == current_user.id
     handle = membership.user.github_handle
     # Read before the row goes away. Destroying a membership does not touch an api_keys row — only
@@ -100,6 +142,20 @@ class MembershipsController < ApplicationController
   end
 
   private
+
+  # Scoped through `repository.repository_memberships`, exactly as ApiKeysController#destroy scopes
+  # through `repository.api_keys`, and for the same reason — but the trap is sharper here. On these
+  # nested member routes `params[:id]` is a *membership* id while `current_repository` authorized
+  # against `params[:repository_id]`, so a global `RepositoryMembership.find(params[:id])` would let
+  # a holder of `members.manage` on one repository read, rewrite or delete a membership belonging to
+  # another. The scoped lookup makes that a 404 instead.
+  #
+  # One method for all three actions rather than a line repeated in each: this is the only thing
+  # standing between the nested route and a cross-repository write, and a call site that forgets it
+  # is the whole vulnerability. See the cross-repository examples in the request spec.
+  def find_membership!(repository)
+    repository.repository_memberships.find(params[:id])
+  end
 
   # `granted_by_user` is set HERE, from the session, and is deliberately absent from `grant_params`.
   # `RepositoryMembership#grantor_holds_every_granted_permission` bounds a grant by what the grantor
@@ -128,6 +184,69 @@ class MembershipsController < ApplicationController
   # merely that a row appeared.
   def grant_params
     params.expect(membership_grant: [:handle, permissions: []])
+  end
+
+  # `permissions` is the ONLY attribute the edit form may change, and the omissions are each a
+  # specific attack rather than tidiness:
+  #
+  #   - `granted_by_user_id` — permitting it would let a `members.manage` holder name the *owner*
+  #     as grantor, at which point `grantor_holds_every_granted_permission` computes its bound
+  #     against unlimited rights and reports success. `#update` overwrites it from the session
+  #     immediately after this, so a submitted value could not survive anyway; it stays unpermitted
+  #     so that neither line alone is load-bearing.
+  #   - `user_id` — this form edits a permission set. Permitting the user would make "Edit hubot"
+  #     a control that can move hubot's access onto somebody else entirely, and the uniqueness
+  #     validation would happily accept it.
+  #   - `repository_id` — the scoped lookup in `find_membership!` establishes which repository the
+  #     row belongs to *and* that the actor was authorized against that same one. Permitting this
+  #     would let the save move the row somewhere the actor was never authorized against, undoing
+  #     the check from the other end.
+  #
+  # The array form (`permissions: []`) rather than a scalar for the reason `grant_params` states:
+  # a scalar silently DROPS the submitted array and persists `[]`, which is still a working
+  # membership — so mis-permitting it does not raise and does not 422. It reads to the owner as
+  # "the checkboxes do nothing", and on this form that is indistinguishable from the narrowing the
+  # form exists to perform. Pinned by request specs asserting the stored array.
+  def membership_params
+    params.expect(repository_membership: [permissions: []])
+  end
+
+  # `members.manage` is not owner-only, so the holder can edit their OWN row — including editing
+  # away the very permission that let them open this page. That is their access to give up, and the
+  # model does not guard it (`grantor_holds_every_granted_permission` measures a grantor against
+  # what they hold *now*, so de-escalating themselves is always within bounds).
+  #
+  # But sending them back to the members page afterwards lands on a 403, not a 404: they are still
+  # a member, so the repository does not hide from them — they simply may no longer administer it.
+  # `#destroy` already handles the mirror case (revoking yourself redirects to `repositories_path`);
+  # this is the softer half, because the repository itself is still theirs to open.
+  # The condition is read off the just-saved row rather than by re-asking `RepositoryPolicy`, and
+  # that is deliberate: `repository_policy` is memoized per request and loaded its membership
+  # BEFORE this save, so it would answer with the permissions the row held on the way in and send
+  # the actor straight into the 403 this method exists to avoid. The owner never reaches the
+  # `user_id` comparison as true — an owner membership row is impossible (`user_is_not_the_owner`).
+  def after_update_path
+    edited_away_own_access =
+      @membership.user_id == current_user.id &&
+      @membership.permissions.exclude?(RepositoryMembership::MEMBERS_MANAGE)
+
+    return repository_path(@repository) if edited_away_own_access
+
+    repository_members_path(@repository)
+  end
+
+  # Names what was actually STORED rather than what was submitted — `normalize_permissions` strips
+  # and de-duplicates, and a row can legitimately end up with none at all. Saying so matters more
+  # here than on the add form: "no permissions" is the destination of the narrowing this page
+  # exists for, and the owner needs to read that the colleague can still open the repository rather
+  # than assume they were locked out.
+  def update_notice
+    handle = @membership.user.github_handle
+    if @membership.permissions.empty?
+      return "Updated #{handle}. They hold nothing beyond opening #{@repository.github_full_name}."
+    end
+
+    "Updated #{handle}: #{@membership.permissions.to_sentence}."
   end
 
   # Re-renders the form with the reasons, and never with a redirect: the owner's typed handle and

@@ -52,17 +52,9 @@
         <%= hidden_field_tag "membership_grant[permissions][]", "", id: nil %>
 
         <div class="grid gap-2 sm:grid-cols-2">
-          <% RepositoryMembership::PERMISSIONS.each do |permission| %>
-            <label class="flex items-start gap-2 rounded-md border border-app-border-light bg-app-surface-raised p-3">
-              <%= check_box_tag "membership_grant[permissions][]", permission, @grant.granted?(permission),
-                                id: "membership_grant_permissions_#{permission.parameterize}",
-                                class: "mt-0.5 rounded border-app-border-light" %>
-              <span class="space-y-0.5">
-                <span class="block font-mono text-sm text-app-content"><%= permission %></span>
-                <span class="block text-xs text-app-muted"><%= permission_description(permission) %></span>
-              </span>
-            </label>
-          <% end %>
+          <%= render "permission_fields", param_name: "membership_grant",
+                     permissions: repository_policy.grantable_permissions,
+                     selected: @grant.permissions %>
         </div>
       </fieldset>
 
