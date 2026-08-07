@@ -33,9 +33,14 @@
                   `view`-only member more than the page it links to is willing to. The suite size
                   below is not credential information — it is the same class of signal as the
                   connection-health stat on `show`, which is deliberately outside that gate — so it
-                  stays for everyone. %>
+                  stays for everyone.
+
+                  The figure itself comes from RepositoriesController#api_key_count, grouped for
+                  the whole page in one query — never a COUNT per card, the same rule the suite
+                  size below is held to. The gate stays on what is *rendered*: the count is loaded
+                  for every card, and read only where `key_count_visible?` says so. %>
               <% if key_count_visible?(repository) %>
-                <%= render UI::BadgeComponent.new(tone: :neutral) { pluralize(repository.api_keys.size, "key") } %>
+                <%= render UI::BadgeComponent.new(tone: :neutral) { pluralize(api_key_count(repository), "key") } %>
               <% end %>
               <%# Suite size off the newest TestRun, preloaded for the whole page by
                   RepositoriesController#latest_suite_size — never a COUNT per card.

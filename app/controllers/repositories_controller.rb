@@ -3,9 +3,9 @@
 class RepositoriesController < ApplicationController
   before_action :require_authentication
 
-  # The first three are per-card questions asked by repositories/index, once per repository in the
-  # list. The fourth is a per-row question asked by repositories/show, once per API key.
-  helper_method :owns_repository?, :key_count_visible?, :latest_suite_size, :former_member?
+  # The first four are per-card questions asked by repositories/index, once per repository in the
+  # list. The fifth is a per-row question asked by repositories/show, once per API key.
+  helper_method :owns_repository?, :key_count_visible?, :api_key_count, :latest_suite_size, :former_member?
 
   # Everything the viewer can open: what they own, plus what has been shared with them. Kept as one
   # relation rather than `owned + shared`, because concatenating two Arrays orders them
@@ -233,6 +233,39 @@ class RepositoriesController < ApplicationController
                .select("DISTINCT ON (test_runs.repository_id) test_runs.*")
                .order(:repository_id, created_at: :desc, id: :desc)
                .index_by(&:repository_id)
+      end
+    end
+  end
+
+  # How many API keys one card should report. Reads the grouped count below rather than
+  # `repository.api_keys.size`, which — on an association the index does not preload — was one
+  # `SELECT COUNT(*) FROM api_keys` per rendered card, two lines above the card's own "never a
+  # COUNT per card" rule.
+  #
+  # `to_i` is load-bearing: a grouped count has no key at all for a repository with no keys, and
+  # that card must keep reading `0 keys` exactly as the association call did. The defaulting lives
+  # here so the view never has to know the difference.
+  def api_key_count(repository)
+    api_key_counts[repository.id].to_i
+  end
+
+  # `repository_id => key count` for every repository on this page, in one query no matter how long
+  # the list is — the same shape, and the same reason, as `shared_permissions` and
+  # `latest_test_runs`. Scoped to the ids already on this page, so it never counts `api_keys`
+  # globally.
+  #
+  # Counted for the whole page even though `key_count_visible?` withholds the badge from a
+  # `view`-only member: the gate is on what is *rendered*, not on what is loaded, and narrowing the
+  # query to visible ids would put a per-card decision back in front of it for no benefit. Nothing
+  # here reaches a viewer the gate has not already admitted.
+  def api_key_counts
+    @api_key_counts ||= begin
+      repository_ids = @repositories.map(&:id)
+
+      if repository_ids.empty?
+        {}
+      else
+        ApiKey.where(repository_id: repository_ids).group(:repository_id).count
       end
     end
   end
