@@ -159,6 +159,77 @@ RSpec.describe Repository do
 
       expect(repository.recent_test_runs).to be_empty
     end
+
+    # `branch:` — the predicate that has to live INSIDE this query rather than be applied to its
+    # result. Bounding first and filtering afterwards is what makes a branch's history unreachable:
+    # the limit is spent on whatever CI happened to run.
+    describe "branch:" do
+      # Six `main` runs, then six `feature/x` runs, read at `limit: 3`. The three newest runs
+      # repository-wide are all `feature/x`, so filtering the unfiltered result at this limit
+      # returns nothing at all — and the correct answer is three `main` rows. A fixture whose
+      # branches interleaved would pass under either implementation.
+      def starved_repository
+        repository = create_repository
+        6.times { |i| repository.test_runs.create!(commit_sha: "main#{i}", branch: "main", created_at: (20 - i).hours.ago) }
+        6.times { |i| repository.test_runs.create!(commit_sha: "feat#{i}", branch: "feature/x", created_at: (6 - i).hours.ago) }
+        repository
+      end
+
+      it "applies the bound to the branch's own rows, not to a window filtered afterwards" do
+        repository = starved_repository
+
+        # The starvation, stated: the unfiltered window at this bound holds no `main` row.
+        expect(repository.recent_test_runs(limit: 3).map(&:branch)).to eq(%w[feature/x feature/x feature/x])
+        expect(repository.recent_test_runs(limit: 3, branch: "main").map(&:commit_sha))
+          .to eq(%w[main5 main4 main3])
+      end
+
+      it "keeps the created_at/id tie-break inside the narrowed window" do
+        repository = create_repository
+        at = 1.hour.ago
+        repository.test_runs.create!(commit_sha: "first", branch: "main", created_at: at)
+        repository.test_runs.create!(commit_sha: "second", branch: "main", created_at: at)
+        repository.test_runs.create!(commit_sha: "other", branch: "feature/x", created_at: at)
+
+        expect(repository.recent_test_runs(branch: "main").map(&:commit_sha)).to eq(%w[second first])
+      end
+
+      it "returns nothing for a branch that never ran, rather than falling back to the whole history" do
+        repository = starved_repository
+
+        expect(repository.recent_test_runs(branch: "release/nope")).to be_empty
+      end
+
+      # The guard the API's own `.presence` makes unreachable from that direction, asserted here
+      # because this is a public model method and `RepositoriesController` calls it too. `nil` and
+      # `""` both mean "no filter" — never `WHERE branch = ''`, which matches nothing and would
+      # turn an empty string into an unknown-branch answer.
+      it "treats nil and a blank string alike as no filter" do
+        repository = starved_repository
+
+        expect(repository.recent_test_runs(limit: 12, branch: nil).length).to eq(12)
+        expect(repository.recent_test_runs(limit: 12, branch: "").length).to eq(12)
+        expect(repository.recent_test_runs(limit: 12, branch: "   ").length).to eq(12)
+      end
+
+      # The trap `#previous_test_run_on_branch` and `#suite_size_trajectory` already guard, reached
+      # through a new door. `branch` is nullable and `Ingest::Payload` writes `.presence`, so
+      # anonymous runs are an ordinary live state — and `WHERE branch IS NULL` would pool every one
+      # of them, from every branch and every machine, into a single fictional history. A blank
+      # argument must return the anonymous rows AS PART OF the unfiltered history and never as a
+      # scoped series of their own.
+      it "never selects the anonymous runs as a branch of their own" do
+        repository = create_repository
+        3.times { |i| repository.test_runs.create!(commit_sha: "anon#{i}", branch: nil) }
+        repository.test_runs.create!(commit_sha: "named", branch: "main")
+
+        # Blank means "no filter": every row, anonymous ones included.
+        expect(repository.recent_test_runs(branch: "").length).to eq(4)
+        expect(repository.recent_test_runs(branch: nil).map(&:branch)).to include(nil)
+        # And no argument reaches a NULL match: the named branch returns its own row alone.
+        expect(repository.recent_test_runs(branch: "main").map(&:commit_sha)).to eq(%w[named])
+      end
+    end
   end
 
   describe "#previous_test_run_on_branch" do

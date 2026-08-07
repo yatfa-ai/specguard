@@ -10,11 +10,34 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
   let(:repository) { create_repository }
   let(:api_key) { repository.api_keys.create! }
 
-  def get_repository(key: api_key)
-    get "/api/v1/repository", headers: { "Authorization" => "Bearer #{key.raw_token}" }
+  # `query:` rather than a `branch:` keyword, so an example can send a non-String `branch` (an
+  # Array, a nested hash) the same way a real client's malformed query string would.
+  def get_repository(key: api_key, query: {})
+    get "/api/v1/repository", params: query, headers: { "Authorization" => "Bearer #{key.raw_token}" }
 
     response.parsed_body
   end
+
+  # What counts as a query for every cost example in this file, defined once. The cost blocks below
+  # bound the endpoint on different axes — runs for a branch-scoped window, shards on one run — but
+  # they must agree on what they are counting, so the `cached` / SCHEMA / TRANSACTION exclusion
+  # lives here rather than being restated per block. RSpec scopes a `def` to its own example group,
+  # so a helper defined in either block is invisible to the other; that is how it came to be
+  # written twice, and hoisting is what stops a third copy landing with the next cost example.
+  def executed_sql
+    statements = []
+    subscriber = ActiveSupport::Notifications.subscribe("sql.active_record") do |_, _, _, _, payload|
+      statements << payload[:sql] unless payload[:cached] || payload[:name].in?(["SCHEMA", "TRANSACTION"])
+    end
+    yield
+    statements
+  ensure
+    ActiveSupport::Notifications.unsubscribe(subscriber)
+  end
+
+  # The count is the general helper's length — one rule, two readings, so a change to what counts
+  # as a query cannot drift between them.
+  def count_queries(&block) = executed_sql(&block).length
 
   describe "a repository with an ingested run" do
     let!(:test_run) do
@@ -403,6 +426,15 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
     # The window is asserted whole rather than key by key: this block's whole job is to be the
     # contract, so a key that quietly stopped being served would be a client reading an ordering
     # promise that is no longer made.
+    #
+    # UPDATED DELIBERATELY when `?branch=` shipped, and `"branch" => nil` is the added key. It is
+    # served in every response rather than only in narrowed ones, on the key-always-present rule
+    # `latest_run.shards` already follows here — a client tests one thing (`branch == null` → "not
+    # narrowed") instead of distinguishing an absent key from a null one. The whole-hash `eq` is
+    # kept rather than relaxed to `include(...)`: relaxing it is how the next added key ships
+    # unnoticed, which is the exact failure this example was written against. Every other key's
+    # value is unchanged, which is the compatibility claim — `branch_scope` is still
+    # `"all_branches"` and `limit` is still `10` for a request that named no branch.
     it "carries each row's own branch, and says on the window that it interleaves them" do
       three_runs
 
@@ -415,6 +447,7 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
         "order" => "ingested_at_desc,ingest_sequence_desc",
         "tie_break_served" => false,
         "branch_scope" => "all_branches",
+        "branch" => nil,
         "limit" => 10,
         "returned" => 3
       )
@@ -541,7 +574,435 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
     end
   end
 
-  # AC7. The block is derived from `TestRun#shard_totals` — one memoized aggregate on
+  # `?branch=` — asking the history for ONE branch's series.
+  #
+  # The block above serves the interleaved history and tells the client, in `branch_scope`, that it
+  # must filter to get a series. It could not: the bound is applied before the client sees anything,
+  # so `history.select { it["branch"] == "main" }` filters a window that may contain no `main` rows
+  # at all while `main` holds dozens in the same table. Every example here is written so that the
+  # unfiltered window CANNOT answer the question — see `branch_starved_repository`.
+  describe "narrowing the history with ?branch=" do
+    # The fixture the whole slice turns on, and its shape is the assertion. Twenty-five `main` runs
+    # FIRST, then thirty `feature/*` runs, so:
+    #
+    #   * the ten newest runs repository-wide are all `feature/*` — the unfiltered window, bounded
+    #     at ten, contains ZERO `main` rows, and client-side filtering of it returns `[]`;
+    #   * the THIRTY newest are all `feature/*` too, which starves the deeper bound as well: an
+    #     implementation that bounded at thirty and then filtered in Ruby also returns `[]`;
+    #   * `main` has twenty-five runs — more than the unfiltered bound and fewer than the branch
+    #     bound, so the correct count is neither limit and cannot be produced by truncation.
+    #
+    # Both starvation depths are deliberate, and the second was learned the hard way: a fixture
+    # starved only at ten passes under a serializer that fetches thirty rows and filters the Array,
+    # which is the same defect one bound further out. A fixture where `main` happened to fall inside
+    # either window would pass with or without the predicate at all — the vacuous shape this project
+    # keeps having to un-ship. Reverting `where(branch:)` in `Repository#recent_test_runs`, or
+    # moving the filter out of the query and into Ruby, must turn these examples red; the two
+    # examples immediately below state each starvation depth as its own expectation so the fixture
+    # cannot silently drift into the harmless shape.
+    def branch_starved_repository
+      main_runs = Array.new(25) do |index|
+        create_test_run(repository: repository, commit_sha: "main%08d" % index, branch: "main",
+                        total_specs_count: 100 + index, annotated_specs_count: 25)
+      end
+      feature_runs = Array.new(30) do |index|
+        create_test_run(repository: repository, commit_sha: "feat%08d" % index,
+                        branch: "feature/extract-billing-#{index}",
+                        total_specs_count: 7, annotated_specs_count: 1)
+      end
+
+      [main_runs, feature_runs]
+    end
+
+    it "sees the defect: the unfiltered window holds no main rows at all, so filtering it answers []" do
+      branch_starved_repository
+
+      body = get_repository
+
+      expect(repository.test_runs.where(branch: "main").count).to eq(25)
+      expect(body["history"].length).to eq(10)
+      expect(body["history"].select { |row| row["branch"] == "main" }).to eq([])
+    end
+
+    # The same starvation one bound further out, pinned directly on the table rather than through
+    # the endpoint — because no response exposes the thirty newest interleaved rows, and this is the
+    # property that makes "bound first, filter the Array" indistinguishable from a broken filter.
+    it "starves the deeper bound too: the 30 newest runs repository-wide are also all feature branches" do
+      branch_starved_repository
+
+      newest = repository.recent_test_runs(limit: Repository::TRAJECTORY_LIMIT).to_a
+
+      expect(newest.length).to eq(Repository::TRAJECTORY_LIMIT)
+      expect(newest.map(&:branch)).to all(start_with("feature/"))
+    end
+
+    # AC1. The same repository, the same instant, one query parameter — twenty-five `main` rows
+    # where filtering either bounded window could only ever produce zero. Twenty-five is neither
+    # limit, so the count cannot have come from truncating anything.
+    it "returns only that branch's rows, and more of them than the unfiltered bound could hold" do
+      main_runs, _feature_runs = branch_starved_repository
+
+      body = get_repository(query: { branch: "main" })
+
+      expect(response).to have_http_status(:ok)
+      expect(body["history"].map { |row| row["branch"] }.uniq).to eq(["main"])
+      expect(body["history"].length).to eq(25)
+      expect(body["history"].length).to be > 10
+      expect(body["history"].map { |row| row["commit_sha"] })
+        .to eq(main_runs.reverse.map(&:commit_sha))
+    end
+
+    # AC2. Tokens a client compares, not a caption it parses. `branch_scope` takes a DISTINCT value
+    # — a client that hard-coded `== "all_branches"` to mean "not a series" keeps being right — and
+    # the branch name rides in its OWN key rather than interpolated into the token, so nobody has to
+    # `start_with?("branch:")` their way back to the two facts.
+    #
+    # Whole-hash, for the same reason the unfiltered assertion is: this block is the contract.
+    it "states the narrowed scope as comparable tokens, with the branch name in its own key" do
+      branch_starved_repository
+
+      expect(get_repository(query: { branch: "main" })["history_window"]).to eq(
+        "order" => "ingested_at_desc,ingest_sequence_desc",
+        "tie_break_served" => false,
+        "branch_scope" => "single_branch",
+        "branch" => "main",
+        # AC2's second half: the bound ACTUALLY APPLIED, not the constant `10` the unfiltered
+        # window reports. Twelve rows came back, which is only a coherent response if `limit` says
+        # a deeper bound was in force — under `limit => 10` a client reading `returned` against it
+        # would conclude the window overflowed its own bound.
+        "limit" => 30,
+        "returned" => 25
+      )
+    end
+
+    it "reports the branch bound rather than the unfiltered one, and stops there" do
+      Array.new(35) do |index|
+        create_test_run(repository: repository, commit_sha: "deep%08d" % index, branch: "main")
+      end
+
+      body = get_repository(query: { branch: "main" })
+
+      expect(repository.test_runs.where(branch: "main").count).to eq(35)
+      expect(body["history"].length).to eq(30)
+      expect(body["history_window"]).to include("limit" => 30, "returned" => 30)
+      # The bound is the model's, read off the constant rather than restated — so the API's series
+      # and the dashboard's chart cannot drift apart on how far back "the history" reaches.
+      expect(body["history_window"]["limit"]).to eq(Repository::TRAJECTORY_LIMIT)
+    end
+
+    # AC3. The divergence from the human panel, stated as an expectation. The panel falls back to
+    # its current anchor for a branch it does not recognise and renders a visible notice saying so;
+    # a JSON client has no notice, so a substituted branch's rows would be a growth series computed
+    # for the wrong branch with nothing in the body to detect it.
+    it "answers an unknown branch with [], never another branch's rows" do
+      branch_starved_repository
+
+      body = get_repository(query: { branch: "release/does-not-exist" })
+
+      expect(response).to have_http_status(:ok)
+      expect(body["history"]).to eq([])
+      expect(body["history_window"]).to include(
+        "branch_scope" => "single_branch",
+        # The ask restated, so a client can tell "that branch has no runs" from "your filter was
+        # ignored" — two responses that would otherwise be one empty array.
+        "branch" => "release/does-not-exist",
+        "returned" => 0
+      )
+      # The half that matters. `[]` on its own would also be what a broken filter returns; what
+      # must never happen is a NON-empty array of somebody else's rows.
+      expect(body["history"]).not_to include(hash_including("branch" => "main"))
+    end
+
+    # AC4, first half. `?branch=` present but empty is "no filter" — it must not become
+    # `WHERE branch = ''` (which matches nothing, and would make an empty param indistinguishable
+    # from an unknown branch) and it must not become "give me the unfiltered window under a
+    # narrowed scope token" either. It is byte-identical to sending no param at all.
+    it "treats a blank branch as no filter, not as an empty branch name" do
+      branch_starved_repository
+
+      blank = get_repository(query: { branch: "" })
+      absent = get_repository
+
+      expect(blank).to eq(absent)
+      expect(blank["history_window"]).to include("branch_scope" => "all_branches", "branch" => nil,
+                                                 "limit" => 10)
+      expect(blank["history"].length).to eq(10)
+    end
+
+    # AC4, second half — the trap `Repository#previous_test_run_on_branch` and
+    # `#suite_size_trajectory` both already guard, arriving here through a new door. `branch` is
+    # nullable, `Ingest::Payload` writes `.presence`, and "SpecGuard does not know where this run
+    # came from" is not a branch: `WHERE branch IS NULL` would pool every anonymous run from every
+    # branch and every machine into one fictional history and serve it as a series.
+    #
+    # Asserted from BOTH sides, because either alone is passable by a broken guard: a blank param
+    # must return the anonymous rows as part of the unfiltered history (not a NULL-scoped subset),
+    # and no branch name may select them.
+    it "leaves runs that reported no branch unselectable, and never pools them into a series" do
+      anonymous = Array.new(3) do |index|
+        create_test_run(repository: repository, commit_sha: "anon%08d" % index, branch: nil)
+      end
+      named = create_test_run(repository: repository, commit_sha: "named0000000", branch: "main")
+
+      unfiltered = get_repository(query: { branch: "" })
+      expect(unfiltered["history"].map { |row| row["commit_sha"] })
+        .to contain_exactly(named.commit_sha, *anonymous.map(&:commit_sha))
+      expect(unfiltered["history"].map { |row| row["branch"] }).to include(nil)
+
+      # The named branch returns its own row and none of the anonymous ones.
+      expect(get_repository(query: { branch: "main" })["history"].map { |row| row["commit_sha"] })
+        .to eq([named.commit_sha])
+    end
+
+    # AC5. This is the first request parameter read anywhere in `Api::V1`, so the shapes a query
+    # string can legally parse into are worth pinning rather than assuming. `?branch[]=main` is an
+    # Array and `?branch[a]=b` is an `ActionController::Parameters`; neither is a String, and an
+    # unguarded `.presence` on either is a 500 on an authenticated GET.
+    #
+    # A non-String is treated as no filter — the same answer an absent param gets — rather than a
+    # 400, because there is nothing here for a client to correct that a missing param would not
+    # equally have. `branch => nil` in the window is what says the filter did not apply, so the
+    # response is not silently claiming to have honoured a request it dropped.
+    [
+      ["an array", { branch: ["main"] }],
+      ["a nested hash", { branch: { a: "b" } }],
+      ["an array of hashes", { branch: [{ a: "b" }] }]
+    ].each do |shape, query|
+      it "answers 200 rather than 500 when branch arrives as #{shape}" do
+        branch_starved_repository
+
+        body = get_repository(query: query)
+
+        expect(response).to have_http_status(:ok)
+        expect(body["history_window"]).to include("branch_scope" => "all_branches", "branch" => nil,
+                                                  "limit" => 10)
+        expect(body["history"].length).to eq(10)
+      end
+    end
+
+    # AC7. A client that filtered the history has not asked for a different latest run. Compared
+    # against the SAME response's unfiltered twin rather than against restated fixture values, so
+    # this cannot pass by both sides drifting together.
+    #
+    # `latest_run` is deliberately the `feature/*` run here while `history[0]` is a `main` row —
+    # they differ, and that is the contract rather than a bug. Pinned explicitly below so a later
+    # slice that "fixes" the mismatch by re-anchoring `latest_run` has to argue with this example.
+    it "leaves latest_run, shards, api_key and repository exactly where they were" do
+      _main_runs, feature_runs = branch_starved_repository
+
+      filtered = get_repository(query: { branch: "main" })
+      unfiltered = get_repository
+
+      expect(filtered.values_at("repository", "api_key", "latest_run"))
+        .to eq(unfiltered.values_at("repository", "api_key", "latest_run"))
+      expect(filtered.dig("latest_run", "commit_sha")).to eq(feature_runs.last.commit_sha)
+      expect(filtered.dig("latest_run", "branch")).to eq(feature_runs.last.branch)
+      expect(filtered.dig("latest_run", "shards")).to be_nil
+      # The mismatch, stated: the newest run on the repository is not the newest run on `main`.
+      expect(filtered["history"].first["branch"]).to eq("main")
+      expect(filtered.dig("latest_run", "branch")).not_to eq("main")
+    end
+
+    it "serves the same top-level keys, and the same row keys, under a branch param" do
+      branch_starved_repository
+
+      body = get_repository(query: { branch: "main" })
+
+      expect(body.keys)
+        .to contain_exactly("repository", "api_key", "latest_run", "history_window", "history")
+      expect(body["history"].first.keys).to contain_exactly(
+        "commit_sha", "branch", "total_specs", "annotated_specs", "annotated_ratio",
+        "duration_seconds", "shard_count", "suite_size_measured", "ingested_at"
+      )
+    end
+
+    # AC8. The rows are `recent_test_runs`' own ordering, tie-break included, and the branch
+    # predicate rides along with it rather than being applied to a re-sorted result. Same-instant
+    # rows are the only fixture that can tell the two apart: any distinctly-stamped fixture agrees
+    # under both.
+    it "keeps the created_at/id tie-break inside the narrowed window" do
+      stamp = 2.hours.ago
+      older = create_test_run(repository: repository, commit_sha: "tieold000000", branch: "main")
+      newer = create_test_run(repository: repository, commit_sha: "tienew000000", branch: "main")
+      [older, newer].each { |run| run.update_columns(created_at: stamp) }
+      # A newer run on another branch, so the narrowed window is genuinely a filtered slice rather
+      # than the whole table in disguise.
+      create_test_run(repository: repository, commit_sha: "tieother0000", branch: "feature/x")
+
+      body = get_repository(query: { branch: "main" })
+
+      expect(body["history"].map { |row| row["commit_sha"] })
+        .to eq([newer.commit_sha, older.commit_sha])
+    end
+
+    it "scopes the narrowed history to the key's own repository" do
+      create_test_run(repository: repository, commit_sha: "ourmain00000", branch: "main")
+      other = create_repository(user: create_user(github_uid: "2002", github_handle: "hubot"),
+                                github_full_name: "acme/ledger")
+      create_test_run(repository: other, commit_sha: "theirmain000", branch: "main")
+
+      expect(get_repository(query: { branch: "main" })["history"].map { |row| row["commit_sha"] })
+        .to eq(["ourmain00000"])
+    end
+
+    # The rows a narrowed window serves are the same rows, assembled the same way — the composition
+    # facts a client needs before differencing two of them are not a casualty of the filter.
+    it "still primes each narrowed row's shard count" do
+      create_test_run(repository: repository, commit_sha: "onepiece0000", branch: "main",
+                      total_specs_count: 20)
+      sharded = repository.test_runs.create!(commit_sha: "sharded00000", branch: "main",
+                                             ci_run_id: "gha-sharded", total_specs_count: 20_000)
+      3.times { |index| sharded.test_run_shards.create!(shard_id: (index + 1).to_s, total_specs_count: 5000) }
+
+      rows = get_repository(query: { branch: "main" })["history"].index_by { |row| row["commit_sha"] }
+
+      expect(rows.fetch("sharded00000")["shard_count"]).to eq(3)
+      expect(rows.fetch("onepiece0000")["shard_count"]).to eq(0)
+    end
+
+    # AC. Re-derived straight from the table, in the ordering and with the predicate the model
+    # documents — so the assertion cannot pass by reading the same Ruby the serializer read.
+    it "matches direct SQL over the same branch's rows" do
+      branch_starved_repository
+
+      sql = <<~SQL.squish
+        SELECT commit_sha, branch, total_specs_count, annotated_specs_count
+        FROM test_runs WHERE repository_id = $1 AND branch = $2
+        ORDER BY created_at DESC, id DESC LIMIT 30
+      SQL
+      rows = ActiveRecord::Base.connection
+                               .select_all(sql, "branch history cross-check", [repository.id, "main"]).to_a
+      # Guards against the comparison passing on two empty arrays — the vacuous shape an empty
+      # `history` and an empty result set answer identically.
+      expect(rows.length).to eq(25)
+      expect(get_repository(query: { branch: "main" })["history"].map do |row|
+        row.values_at("commit_sha", "branch", "total_specs", "annotated_specs")
+      end).to eq(rows.map do |row|
+        row.values_at("commit_sha", "branch", "total_specs_count", "annotated_specs_count")
+      end)
+    end
+  end
+
+  # AC6. What a narrowed window costs, asserted AT ITS OWN BOUND. The unfiltered budget examples
+  # below bound at ten; a branch-scoped window bounds at thirty, and thirty is where a per-row
+  # `pick` for `shard_count` would show up as twenty-nine extra queries that a three-row fixture
+  # cannot distinguish from none.
+  describe "what a branch-scoped history costs the endpoint" do
+    def create_main_runs(count, prefix:)
+      Array.new(count) do |index|
+        create_test_run(repository: repository, commit_sha: "#{prefix}%08d" % index, branch: "main",
+                        total_specs_count: 100 + index)
+      end
+    end
+
+    # The invariance, from a ONE-ROW baseline to the full thirty-row bound and past it. A baseline
+    # taken inside the window would sit inside the leak it is meant to measure; forty rows is what
+    # proves the bound is enforced rather than the fixture merely being small.
+    it "costs the same at 1 branch row, at 30 and at 40" do
+      create_main_runs(1, prefix: "cost")
+      get_repository(query: { branch: "main" })
+      baseline = executed_sql { get_repository(query: { branch: "main" }) }.length
+
+      create_main_runs(29, prefix: "grow")
+      expect(repository.test_runs.where(branch: "main").count).to eq(30)
+      expect(executed_sql { get_repository(query: { branch: "main" }) }.length).to eq(baseline)
+
+      create_main_runs(10, prefix: "over")
+      expect(repository.test_runs.where(branch: "main").count).to eq(40)
+      expect(executed_sql { get_repository(query: { branch: "main" }) }.length).to eq(baseline)
+      expect(get_repository(query: { branch: "main" })["history"].length).to eq(30)
+    end
+
+    # The budget stated as TWO absolute queries rather than only as "the same as before", because
+    # invariance alone would also hold for a window that cost thirty-one queries at every size. The
+    # two are the branch-scoped history SELECT and the one grouped COUNT that primes `shard_count`
+    # across all thirty rows — the same pair `ShardCountPreloading` buys the human panel.
+    #
+    # The `test_run_shards` read is matched on `GROUP BY` rather than on the table alone, because
+    # `latest_run` pays its own separate un-grouped aggregate for `shard_totals` on ONE row. That
+    # query is not part of this window and is not what this example bounds; counting it here would
+    # make the budget read as three and hide which of the two axes moved if one ever did.
+    it "pays exactly two queries for a 30-row narrowed window: the history and one grouped count" do
+      create_main_runs(30, prefix: "budget")
+      # Warm the API-key lookup path so the auth queries do not vary between runs.
+      get_repository(query: { branch: "main" })
+
+      statements = executed_sql { get_repository(query: { branch: "main" }) }
+
+      history_queries = statements.grep(/FROM "test_runs"/).grep(/"branch" = /)
+      grouped_counts = statements.grep(/FROM "test_run_shards"/).grep(/GROUP BY/)
+
+      expect(history_queries.length).to eq(1)
+      expect(history_queries.first).to include("LIMIT")
+      expect(grouped_counts.length).to eq(1)
+      # One grouped COUNT for the WHOLE window, not one per row: thirty bind placeholders in a
+      # single `IN`. A per-row `pick` reads as thirty statements here rather than one.
+      expect(grouped_counts.first).to include("IN (")
+    end
+
+    # The branch predicate and the LIMIT are ONE query, which is the entire fix: a window bounded
+    # before it is filtered is what returns zero `main` rows today. Asserted on the SQL rather than
+    # on the rows, because a two-query implementation that filtered in Ruby can return exactly the
+    # same rows and would pass every example above.
+    it "puts the branch predicate in the same statement as the bound" do
+      create_main_runs(30, prefix: "onequery")
+      get_repository(query: { branch: "main" })
+
+      history = executed_sql { get_repository(query: { branch: "main" }) }
+                .grep(/FROM "test_runs"/).grep(/"branch" = /)
+
+      expect(history.length).to eq(1)
+      # Both clauses, in that order, in one statement. `latest_run`'s own `LIMIT 1` read carries no
+      # branch predicate and is filtered out above, so this cannot pass by matching that row.
+      expect(history.first).to match(/"branch" = .*LIMIT/m)
+    end
+
+    # AC6's second half: the narrowed query is served by
+    # `index_test_runs_on_repository_id_and_branch_and_created_at` (db/schema.rb), whose column
+    # order — `(repository_id, branch, created_at, id)` — matches this predicate and this ordering
+    # exactly.
+    #
+    # THREE THOUSAND ROWS AND AN `ANALYZE`, not the forty the examples above use, and not
+    # `enable_seqscan = off`. On a forty-row table Postgres sequentially scans however good the
+    # index is, so the plan says nothing about the index; and forcing the planner's hand with a
+    # `SET` only proves the index is *usable*, which is a weaker claim than the one that matters.
+    # At a size where the choice is real the planner picks the index on its own, which is the
+    # property a growing repository actually depends on. Written through `insert_all!` so the
+    # fixture costs one statement rather than three thousand.
+    #
+    # BACKWARD INDEX SCAN, and NO SORT NODE — that is the load-bearing half. The index supplies the
+    # `(created_at, id) DESC` ordering, so the `Limit` stops the walk after thirty rows instead of
+    # the planner sorting every run on the branch first. That is the difference between O(limit) and
+    # O(history) as the branch grows, and it is the same distinction
+    # `Repository#suite_size_trajectory` measured on a 40,000-run branch and documented.
+    it "is served by the (repository_id, branch, created_at, id) index, walked backwards, with no sort" do
+      now = Time.current
+      TestRun.insert_all!(Array.new(3000) do |index|
+        { repository_id: repository.id, commit_sha: "planned%09d" % index,
+          # One row in thirty on `main`, so the predicate is genuinely selective and the branch has
+          # a hundred runs — more than the bound, which is what makes the LIMIT meaningful.
+          branch: (index % 30).zero? ? "main" : "feature/churn-#{index}",
+          total_specs_count: 10, annotated_specs_count: 1,
+          created_at: now - index.minutes, updated_at: now - index.minutes }
+      end)
+      ActiveRecord::Base.connection.execute("ANALYZE test_runs")
+
+      plan = ActiveRecord::Base.connection.select_values(
+        "EXPLAIN #{repository.recent_test_runs(limit: Repository::TRAJECTORY_LIMIT, branch: 'main').to_sql}"
+      ).join("\n")
+
+      expect(plan).to include("index_test_runs_on_repository_id_and_branch_and_created_at")
+      expect(plan).to include("Index Scan Backward")
+      expect(plan).not_to include("Seq Scan")
+      expect(plan).not_to include("Sort")
+      # The predicate is an Index Cond — resolved by the index walk itself — and not a `Filter`
+      # applied to rows the index already handed back. A `Filter` here would mean the branch was
+      # being matched AFTER the ordering walk, which is the shape that makes the scan O(history).
+      expect(plan).to match(/Index Cond:.*branch/m)
+      expect(plan).not_to match(/Filter:.*branch/m)
+    end
+  end
+
   # `index_test_run_shards_on_test_run_id` answering all three counts at once — so the endpoint's
   # cost does not move with the number of shards. A per-shard read, or one query per figure, shows
   # up here immediately; the 20,000-example fixture is 4 shards today and nothing stops it being 40.
@@ -552,17 +1013,6 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
   # count incidentally. The run-count example is therefore its own, named, and starts from a
   # one-run baseline that the shard example never establishes.
   describe "what the shard figures and the history cost the endpoint" do
-    def count_queries
-      count = 0
-      subscriber = ActiveSupport::Notifications.subscribe("sql.active_record") do |_, _, _, _, payload|
-        count += 1 unless payload[:cached] || payload[:name].in?(["SCHEMA", "TRANSACTION"])
-      end
-      yield
-      count
-    ensure
-      ActiveSupport::Notifications.unsubscribe(subscriber)
-    end
-
     def sharded_run(shard_count, commit_sha:)
       run = repository.test_runs.create!(commit_sha: commit_sha, ci_run_id: "gha-#{commit_sha}",
                                          total_specs_count: 20_000, duration_seconds: 74.25)
