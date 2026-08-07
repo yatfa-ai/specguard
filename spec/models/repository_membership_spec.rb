@@ -59,6 +59,47 @@ RSpec.describe RepositoryMembership do
     }.to raise_error(ActiveRecord::RecordNotUnique)
   end
 
+  # ...and this is what turns the line holding into a refusal a form can render. When the validation
+  # loses the race — its SELECT ran before the competing row was visible — the index raises, and the
+  # save path translates that into the SAME `:user_id` error the sequential path produces, so every
+  # caller of `save` gets one answer for one condition instead of a 500 for the unlucky half.
+  #
+  # The race is simulated by silencing the uniqueness validation, which is exactly what it does on
+  # its own when it cannot see the other row yet. Attribute matters: `:user_id`, not `:base` — the
+  # sequential example above reads it off `:user_id`, and the controller renders `full_message`, so
+  # landing it anywhere else changes the sentence the owner is shown.
+  it "translates a lost uniqueness race into the same :user_id refusal" do
+    create_membership(repository: repository, user: teammate)
+    duplicate = described_class.new(repository: repository, user: teammate)
+    allow(uniqueness_validator).to receive(:validate_each)
+
+    expect(duplicate.save).to be(false)
+    expect(duplicate.errors[:user_id].join).to include("already has a membership")
+    expect(duplicate).not_to be_persisted
+    expect(described_class.count).to eq(1)
+  end
+
+  # A conflict on some OTHER constraint is not this one's to explain away. Swallowing every
+  # `RecordNotUnique` would turn an unrelated index violation into "already has a membership" — a
+  # wrong sentence is worse than the raise, because it sends the owner to fix something that is
+  # fine, and it reports `save` as a clean refusal when the real fault is still there. Provoked
+  # with a genuine second violation on this same table — a primary-key collision, for a row that is
+  # *not* a duplicate membership.
+  it "re-raises a unique violation that is not the duplicate-membership index" do
+    existing = create_membership(repository: repository, user: teammate)
+    third_party = create_user(github_uid: "5150", github_handle: "third-party")
+    clashing = described_class.new(id: existing.id, repository: repository, user: third_party)
+
+    expect { clashing.save }.to raise_error(ActiveRecord::RecordNotUnique)
+  end
+
+  # Stubbed on the validator instance itself rather than on any_instance of the class, so only this
+  # model's uniqueness check is silenced. `validates` registers the object once at class-load and the
+  # validation callback closes over it, so this is the same instance the save path consults.
+  def uniqueness_validator
+    described_class.validators.grep(ActiveRecord::Validations::UniquenessValidator).sole
+  end
+
   # The owner's rights come from Repository#user_id. A row here would be a second, contradictable
   # source of truth for the same fact.
   it "refuses a membership for the repository's own owner" do

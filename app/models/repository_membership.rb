@@ -13,6 +13,17 @@ class RepositoryMembership < ApplicationRecord
 
   PERMISSIONS = [VIEW, KEYS_MANAGE, MEMBERS_MANAGE, REPO_DELETE].freeze
 
+  # One condition, one sentence, named once. The read-then-write validation below and the
+  # database-conflict translation in `#save` are two detections of the SAME fact, and they must
+  # answer in the same words — the request spec's anti-collapse matrix asserts that each refusal
+  # renders its own sentence and none of the others', so a second phrasing for this condition is a
+  # regression by design.
+  DUPLICATE_MESSAGE = "already has a membership on this repository"
+
+  # The index that enforces the rule the message above explains, named so `#save` can tell this
+  # conflict apart from any other unique violation the row might hit.
+  DUPLICATE_INDEX = "index_repository_memberships_on_user_and_repository"
+
   belongs_to :user
   belongs_to :repository
   # Optional, and the validation below fails open on nil — see `grantor_holds_every_granted_permission`.
@@ -21,10 +32,41 @@ class RepositoryMembership < ApplicationRecord
 
   before_validation :normalize_permissions
 
-  validates :user_id, uniqueness: { scope: :repository_id, message: "already has a membership on this repository" }
+  validates :user_id, uniqueness: { scope: :repository_id, message: DUPLICATE_MESSAGE }
   validate :permissions_are_known
   validate :user_is_not_the_owner
   validate :grantor_holds_every_granted_permission
+
+  # The uniqueness validation above is a read-then-write check: its SELECT runs before the INSERT,
+  # so it cannot see a competing request that has not committed yet. Two concurrent adds for the
+  # same person — a double-clicked "Add member", a re-submit on a slow connection — leave the loser
+  # to be refused by the unique index instead, as `ActiveRecord::RecordNotUnique`, several layers
+  # below anyone who is listening. There is no `rescue_from` anywhere in this app, so that reached
+  # the 500 handler: a crash for the exact condition the sequential path answers with a sentence.
+  #
+  # Translated HERE rather than in `MembershipsController#create` for the reason that action's own
+  # comment gives — "Re-checking any of them here would be a second copy of a rule that can drift
+  # from the one the database is actually protected by". Every writer inherits it: `#create`'s
+  # `return reject_grant(...) unless membership.save` and `#update`'s `unless @membership.save`
+  # both re-render the form with the model's reasons, with no change to either.
+  #
+  # `:user_id`, not `:base`, so the two detections are indistinguishable downstream — same
+  # attribute, same words, and therefore the same `full_message` the controller renders.
+  #
+  # Only THIS conflict is translated. Any other unique violation is a different fault and is
+  # re-raised: answering it with "already has a membership" would send the reader to fix something
+  # that is not broken, and would report a clean refusal while the real fault stays hidden.
+  #
+  # `save!` is deliberately untouched — it does not route through here, and a caller who chose the
+  # bang asked for the exception. The model spec pins that it still raises.
+  def save(**)
+    super
+  rescue ActiveRecord::RecordNotUnique => e
+    raise unless e.message.include?(DUPLICATE_INDEX)
+
+    errors.add(:user_id, DUPLICATE_MESSAGE)
+    false
+  end
 
   private
 
