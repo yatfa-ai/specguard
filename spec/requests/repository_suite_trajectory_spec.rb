@@ -573,6 +573,47 @@ RSpec.describe "Repository suite-size trajectory", type: :request do
       trajectory_panel.all("#suite-trajectory-branches nav a").map(&:text)
     end
 
+    # The OVERFLOW control, and deliberately a different accessor from `branch_choices`.
+    #
+    # That one is scoped to `nav a` — the eight-item primary row — so it would go on reporting eight
+    # names however many the menu reached, and every criterion about reaching PAST the row asserted
+    # through it would be green by construction. The two selectors are disjoint on purpose: the menu
+    # is rendered outside the `<nav>`, which is also why the row's size, order and `30+` wording are
+    # unchanged by this control existing.
+    #
+    # `visible: :all` because the control is a CLOSED `<details>` and Capybara is right to call its
+    # contents hidden — that is the disclosure working, not the links missing. What these accessors
+    # assert is that the names are in the document the server sent, which is what makes them
+    # reachable from the keyboard and with no JavaScript at all.
+    def branch_menu_links
+      trajectory_panel.all("#suite-trajectory-branch-menu a", visible: :all)
+    end
+
+    def branch_menu_choices
+      branch_menu_links.map(&:text)
+    end
+
+    # The branch each menu link actually asks for, read off the rendered `href` rather than assumed
+    # from its label — an href carrying the wrong name, or no `branch=` at all, is the failure this
+    # is here to catch and a label assertion cannot see it.
+    def branch_menu_targets
+      branch_menu_links.map { |link| Rack::Utils.parse_query(URI.parse(link[:href]).query)["branch"] }
+    end
+
+    # `main` plus ten feature branches: three more than the row can carry, which is the fixture
+    # shape the cut-and-say-so example above already pins the row's half of.
+    def repository_with_eleven_branches
+      repository = create_repository(user: @user)
+      run(repository, "trunkaaaaaa", total: 1_000, at: 30.days.ago)
+      run(repository, "trunkbbbbbb", total: 1_047, at: 29.days.ago)
+      10.times { |i| run(repository, "feat#{i}0000000", branch: "feature/#{i}", total: 10, at: (20 - i).days.ago) }
+      repository
+    end
+
+    def every_branch_in_the_eleven
+      ["main", *0.upto(9).map { |i| "feature/#{i}" }]
+    end
+
     it "draws the branch that was asked for, where the default anchor has nothing to draw" do
       repository = repository_anchored_on_a_feature_branch
 
@@ -659,8 +700,10 @@ RSpec.describe "Repository suite-size trajectory", type: :request do
       # `main` has twice the history of any feature branch and leads on that; the feature branches
       # follow newest-pushed first, which is where the cut falls.
       expect(branch_choices.first(2)).to eq(["main (2 runs)", "feature/9 (1 run)"])
-      expect(trajectory_panel.find("#suite-trajectory-branches-basis"))
-        .to have_text("3 further branches have runs and are not listed here", normalize_ws: true)
+      expect(trajectory_panel.find("#suite-trajectory-branches-basis")).to have_text(
+        "3 further branches have runs and are not in the row above. The branch menu names all 11.",
+        normalize_ws: true
+      )
     end
 
     # The one case the display order bends for. A reader can arrive by URL on a branch holding a
@@ -687,6 +730,109 @@ RSpec.describe "Repository suite-size trajectory", type: :request do
         "The branch being drawn is listed first, then the branches with the most history",
         normalize_ws: true
       )
+    end
+
+    # == Reaching the branches the row does not carry
+    #
+    # The row is cut to eight and the page said so — a COUNT, and nothing that turns it into names.
+    # `?branch=` is a mechanism nothing rendered on this page mentioned, so the only route to a
+    # branch behind the cut was to type the URL, and a reader cannot type a name they were never
+    # shown. Every step past the click already shipped: the controller honours `?branch=`, the panel
+    # re-anchors, and `trajectory_shown_branches` pulls the asked-for branch into the row and marks
+    # it current. What was missing was the first step.
+
+    # Criterion 1. Eleven branches are loaded out of one query; before this, three of them existed
+    # on the page only as the number 3.
+    #
+    # Asserted through `branch_menu_*` and never `branch_choices` — see that accessor's note.
+    it "names every branch it loaded, not only the eight the row lists" do
+      repository = repository_with_eleven_branches
+
+      get repository_path(repository)
+
+      # The row is untouched: still eight, and still the eight with the most history.
+      expect(branch_choices.size).to eq(RepositoriesHelper::TRAJECTORY_BRANCH_CHOICES)
+
+      expect(branch_menu_choices).to match_array(
+        ["main (2 runs)", *0.upto(9).map { |i| "feature/#{i} (1 run)" }]
+      )
+      # Every one of them is a link that ASKS for that branch, not merely a name printed on a page.
+      expect(branch_menu_links.map { |link| link[:href] }).to all(include("branch="))
+      expect(branch_menu_targets).to match_array(every_branch_in_the_eleven)
+      # The three the row left out are the whole point, and they are the ones an assertion over the
+      # union of both controls would not notice going missing.
+      expect(branch_menu_choices - branch_choices).to contain_exactly(
+        "feature/0 (1 run)", "feature/1 (1 run)", "feature/2 (1 run)"
+      )
+    end
+
+    # Criterion 2. The URL is taken off the page rather than written here: a spec that composes
+    # `repository_path(repository, branch: "feature/0")` itself would pass against the very page
+    # this ticket describes, where the reader has no way to compose it.
+    it "draws a branch from behind the cut by following a link the page itself rendered" do
+      repository = repository_with_eleven_branches
+
+      get repository_path(repository)
+
+      # Thinnest and least recently pushed: last in the order, well past the cut.
+      expect(branch_choices).not_to include("feature/0 (1 run)")
+
+      href = trajectory_panel.find("#suite-trajectory-branch-menu a", exact_text: "feature/0 (1 run)",
+                                    visible: :all)[:href]
+      get href
+
+      expect(response).to have_http_status(:ok)
+      expect(trajectory_panel).to have_text("SpecGuard has 1 run on feature/0 so far", normalize_ws: true)
+      expect(trajectory_panel.all("#suite-trajectory-branches nav a[aria-current='page']").map(&:text))
+        .to eq(["feature/0 (1 run)"])
+    end
+
+    # Criterion 7. The disclosure is `details`/`summary`, so it opens from the keyboard and closes on
+    # Escape with no JavaScript — and its links are in the document whether it is open or not, which
+    # is what makes the criterion-1 assertion above a statement about the page rather than about a
+    # widget's default state.
+    it "opens from the keyboard, with no script and nothing hidden from a non-visual reader" do
+      repository = repository_with_eleven_branches
+
+      get repository_path(repository)
+
+      menu = trajectory_panel.find("#suite-trajectory-branch-menu")
+      expect(menu).to have_css("details > summary")
+      expect(menu.find("summary").text.squish).to eq("All 11 branches")
+      expect(menu.all("details a", visible: :all).size).to eq(11)
+    end
+
+    # Criterion 7's other half. The drawn branch is named TWICE on this page — pulled into the row
+    # by `trajectory_shown_branches` and listed in the menu, which omits nothing — so both have to
+    # say it is the current one. A menu that marked none of its entries would tell a screen reader
+    # the opposite of what the row says about the same branch.
+    it "marks the branch it is drawing as current in the menu as well as in the row" do
+      repository = repository_with_eleven_branches
+
+      get repository_path(repository, branch: "feature/0")
+
+      expect(trajectory_panel.all("#suite-trajectory-branch-menu a[aria-current='page']", visible: :all).map(&:text))
+        .to eq(["feature/0 (1 run)"])
+      expect(trajectory_panel.all("#suite-trajectory-branches nav a[aria-current='page']").map(&:text))
+        .to eq(["feature/0 (1 run)"])
+      # Twice, and only the two: one control marking a branch the other does not is a reader being
+      # told two different things about which branch they are looking at.
+      expect(trajectory_panel.all("#suite-trajectory-branches [aria-current='page']", visible: :all).map(&:text))
+        .to eq(["feature/0 (1 run)", "feature/0 (1 run)"])
+    end
+
+    # The menu and the hidden-branches sentence are two halves of one disclosure — what the row left
+    # out, and where it is — so neither may appear without the other. A menu on a page whose row
+    # already names every branch is a control with nothing behind it, and the sentence with no menu
+    # under it is the state this ticket exists to end.
+    it "renders no menu on a page whose row already names every branch" do
+      repository = repository_anchored_on_a_feature_branch
+
+      get repository_path(repository)
+
+      expect(branch_choices).to match_array(["main (2 runs)", "feature/x (1 run)"])
+      expect(trajectory_panel).to have_no_css("#suite-trajectory-branch-menu")
+      expect(trajectory_panel.find("#suite-trajectory-branches-basis")).to have_no_text("further branch")
     end
 
     # Criterion 2 in the shape the ticket was written for, and the composed case nothing reached
@@ -748,10 +894,15 @@ RSpec.describe "Repository suite-size trajectory", type: :request do
       expect(trajectory_panel.all("#suite-trajectory-branches nav a[aria-current='page']").map(&:text))
         .to eq(["main (2 runs)"])
       expect(trajectory_panel.find("#suite-trajectory-branches-basis")).to have_text(
-        "At least 3 further branches have runs and are not listed here. The branches with the most " \
-        "history are listed first. SpecGuard stops after walking 10 branches, so that is an ordering " \
-        "over the ones it walked and not over every branch here.", normalize_ws: true
+        "At least 3 further branches have runs and are not in the row above. The branch menu names " \
+        "the 11 SpecGuard walked to, and cannot offer one the walk never reached. The branches with " \
+        "the most history are listed first. SpecGuard stops after walking 10 branches, so that is an " \
+        "ordering over the ones it walked and not over every branch here.", normalize_ws: true
       )
+      # The menu's own label carries the same bound. "All 11 branches" over a walk that STOPPED
+      # would be the completeness claim the sentence above is written to withhold — said on the
+      # control itself, where a reader deciding whether to open it will read it first.
+      expect(trajectory_panel.find("#suite-trajectory-branch-menu summary").text.squish).to eq("11 branches")
     end
 
     # Criterion 3, and the reason the fallback is disclosed rather than silent: a deleted branch, a
