@@ -133,9 +133,13 @@ RSpec.describe SuiteTrajectory do
       series = trajectory(runs)
 
       expect(series.plotted.size).to eq(2)
-      # No composition to state. "the same 0 shard reports" would describe a run that arrived whole
-      # as a delivery that lost everything.
-      expect(series.cohort_description).to be_nil
+      # Worded through `TestRun#delivery_description`, which is why this is a sentence at all: the
+      # phrase was once inflected here as "the same N shard reports", which for the unsharded
+      # corpus means "the same 0 shard reports" — a run that arrived whole, described as a delivery
+      # that lost everything. The one spelling in `TestRun` already answers this case, and the
+      # answer is worth saying: it is the clause a withheld sharded run gets contrasted against.
+      expect(series.cohort_description).to eq("all reported in one piece")
+      expect(series.cohort_delivery).to eq("reported in one piece")
     end
 
     it "names the cohort's composition when there is one to name" do
@@ -143,15 +147,134 @@ RSpec.describe SuiteTrajectory do
       runs = [point(repository, "whole01", total: 20_000, shards: 4, at: 2.days.ago),
               point(repository, "whole02", total: 20_010, shards: 4, at: 1.day.ago)]
 
-      expect(trajectory(runs).cohort_description).to eq("assembled from the same 4 shard reports")
+      expect(trajectory(runs).cohort_description).to eq("all assembled from 4 shard reports")
     end
 
+    # Inflection is `TestRun#delivery_description`'s to get right, and this asserts that the caption
+    # is asking it rather than carrying a second copy of the rule that could drift from it.
     it "inflects a one-shard cohort rather than bolting an s on" do
       repository = create_repository
       runs = [point(repository, "single1", total: 1_000, shards: 1, at: 2.days.ago),
               point(repository, "single2", total: 1_010, shards: 1, at: 1.day.ago)]
 
-      expect(trajectory(runs).cohort_description).to eq("assembled from the same 1 shard report")
+      expect(trajectory(runs).cohort_description).to eq("all assembled from 1 shard report")
+    end
+  end
+
+  # == The mismatch has two directions and only one of them is a fragment
+  #
+  # `assembled_like?` is symmetric, so a run is withheld whether it holds fewer parts than the
+  # cohort or more. The in-flight/cancelled explanation is true only of the first. Told about the
+  # second — a repository whose CI just moved from four shards to eight, or an unsharded corpus with
+  # sharded CI runs arriving beside it — it says the MORE completely assembled runs are builds still
+  # arriving, which is false in every clause.
+  describe "which direction a withheld run missed the cohort in" do
+    it "calls a run holding some of the cohort's parts part-way, and nothing else" do
+      repository = create_repository
+      runs = [point(repository, "whole01", total: 20_000, shards: 4, at: 3.days.ago),
+              point(repository, "whole02", total: 20_010, shards: 4, at: 2.days.ago),
+              point(repository, "infligh", total: 5_010, shards: 1, at: 1.minute.ago)]
+
+      series = trajectory(runs)
+
+      expect(series.withheld_part_way.map(&:commit_sha)).to eq(%w[infligh])
+      expect(series.withheld_other_composition).to be_empty
+    end
+
+    # The reviewer's case, and the one the old fixed sentence was wrong about: eight COMPLETE
+    # four-shard runs sitting beside a larger unsharded cohort. Every one of them measured its whole
+    # suite across all four shards; none of them is a fraction of anything.
+    it "does not call a complete sharded run a fragment when the cohort is unsharded" do
+      repository = create_repository
+      runs = 10.times.map { |i| point(repository, "plain0#{i}", total: 1_000 + i, at: (30 - i).days.ago) }
+      runs += 3.times.map { |i| point(repository, "whole0#{i}", total: 20_000 + i, shards: 4, at: (5 - i).days.ago) }
+
+      series = trajectory(runs)
+
+      expect(series.plotted.size).to eq(10)
+      expect(series.withheld_part_way).to be_empty
+      expect(series.withheld_other_composition.map(&:commit_sha)).to eq(%w[whole00 whole01 whole02])
+    end
+
+    # Zero shards is not "fewer parts". A run that arrived whole in a single POST is not a partial
+    # delivery of a four-shard one, and `TestRun#delivery_description` already refuses to word it as
+    # a count of parts.
+    it "does not call a whole delivery part-way merely for holding fewer shards than the cohort" do
+      repository = create_repository
+      runs = 3.times.map { |i| point(repository, "whole0#{i}", total: 20_000 + i, shards: 4, at: (5 - i).days.ago) }
+      runs << point(repository, "laptop0", total: 12, at: 1.day.ago)
+
+      series = trajectory(runs)
+
+      expect(series.withheld_part_way).to be_empty
+      expect(series.withheld_other_composition.map(&:commit_sha)).to eq(%w[laptop0])
+    end
+
+    it "separates the two directions when both are in the same window" do
+      repository = create_repository
+      runs = 3.times.map { |i| point(repository, "whole0#{i}", total: 20_000 + i, shards: 4, at: (9 - i).days.ago) }
+      runs << point(repository, "infligh", total: 5_010, shards: 1, at: 3.days.ago)
+      runs << point(repository, "newlyt0", total: 20_100, shards: 8, at: 2.days.ago)
+
+      series = trajectory(runs)
+
+      expect(series.withheld_part_way.map(&:commit_sha)).to eq(%w[infligh])
+      expect(series.withheld_other_composition.map(&:commit_sha)).to eq(%w[newlyt0])
+      # Still one figure between them, so the split cannot quietly lose or double-count a run.
+      expect(series.withheld_count).to eq(2)
+    end
+
+    # A phrase for a group is only available when the group shares one. Generalising one member's
+    # composition to a mixed set is the same overclaim in miniature.
+    it "names a withheld group's composition only when they all arrived the same way" do
+      repository = create_repository
+      runs = 3.times.map { |i| point(repository, "plain0#{i}", total: 1_000 + i, at: (9 - i).days.ago) }
+      alike = [point(repository, "whole01", total: 20_000, shards: 4, at: 3.days.ago),
+               point(repository, "whole02", total: 20_010, shards: 4, at: 2.days.ago)]
+      series = trajectory(runs + alike)
+
+      expect(series.shared_delivery_description(series.withheld_other_composition))
+        .to eq("assembled from 4 shard reports")
+
+      mixed = trajectory(runs + alike + [point(repository, "eightsh", total: 20_020, shards: 8, at: 1.day.ago)])
+
+      expect(mixed.shared_delivery_description(mixed.withheld_other_composition)).to be_nil
+    end
+  end
+
+  # A growth chart's unstated premise is that its right-hand end is "now". During a shard-layout
+  # migration it is not: the cohort is the older, larger group, so the newest runs are the withheld
+  # ones and the line stops before the SHA the Overview names.
+  describe "whether the newest run made it onto the line" do
+    it "is true when the window's last run is the line's last point" do
+      repository = create_repository
+      runs = [point(repository, "aaaaaaa", total: 1_000, at: 2.days.ago),
+              point(repository, "bbbbbbb", total: 1_047, at: 1.day.ago)]
+
+      expect(trajectory(runs)).to be_plots_newest
+    end
+
+    it "is false when the most recent runs are the withheld ones" do
+      repository = create_repository
+      runs = 4.times.map { |i| point(repository, "oldwy0#{i}", total: 1_000 + i, shards: 4, at: (9 - i).days.ago) }
+      runs += 2.times.map { |i| point(repository, "newwy0#{i}", total: 4_000 + i, shards: 8, at: (2 - i).days.ago) }
+
+      series = trajectory(runs)
+
+      expect(series.plotted.map(&:commit_sha)).to eq(%w[oldwy00 oldwy01 oldwy02 oldwy03])
+      expect(series).not_to be_plots_newest
+      expect(series.newest_run.commit_sha).to eq("newwy01")
+    end
+
+    # An unmeasured newest run counts too — it is withheld for a different reason, but the line
+    # still does not reach it.
+    it "is false when the newest run reported no tests" do
+      repository = create_repository
+      runs = [point(repository, "aaaaaaa", total: 1_000, at: 3.days.ago),
+              point(repository, "bbbbbbb", total: 1_047, at: 2.days.ago),
+              point(repository, "zeroooo", total: 0, at: 1.day.ago)]
+
+      expect(trajectory(runs)).not_to be_plots_newest
     end
   end
 
@@ -264,6 +387,10 @@ RSpec.describe SuiteTrajectory do
     series.coverage
     series.cohort_description
     series.withheld_count
+    series.withheld_part_way
+    series.withheld_other_composition
+    series.shared_delivery_description(series.withheld_composition)
+    series.plots_newest?
     series.values
     ActiveSupport::Notifications.unsubscribe(subscriber)
 

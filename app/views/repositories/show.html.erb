@@ -690,20 +690,54 @@
                 <%= @suite_trajectory.withheld_unmeasured.size == 1 ? "is" : "are" %> withheld for
                 having reported no tests at all — a zero there describes the report, not the suite.
               <% end %>
-              <% if @suite_trajectory.withheld_composition.any? %>
+              <% if @suite_trajectory.withheld_part_way.any? %>
                 <%# The state that would otherwise produce a wrong PICTURE rather than an honest
                     gap, and the reason this panel needed a rule at all: a four-shard suite reads at
                     a quarter of itself for most of its own build, and a job cancelled after two of
                     four shards leaves that half-sized row in the history permanently. Plotted, each
                     one is a cliff and a recovery — a mass deletion and a mass restoration, neither
-                    of which any commit made. %>
-                <%= @suite_trajectory.withheld_composition.size %>
-                <%= "run".pluralize(@suite_trajectory.withheld_composition.size) %>
-                <%= @suite_trajectory.withheld_composition.size == 1 ? "is" : "are" %> withheld for
-                having been assembled differently from the rest: a run's test count is the sum of
-                the shards it has reported so far, so a build still arriving — or one cancelled
-                part-way — sits at a fraction of its own suite, and plotting it beside a complete
-                run would draw a drop no commit made.
+                    of which any commit made.
+
+                    Said ONLY of the runs holding fewer parts than the line's, because it is true
+                    only of those. See `SuiteTrajectory#withheld_part_way`. %>
+                <%= @suite_trajectory.withheld_part_way.size %>
+                <%= "run".pluralize(@suite_trajectory.withheld_part_way.size) %>
+                <%= @suite_trajectory.withheld_part_way.size == 1 ? "is" : "are" %> withheld for
+                having reported only some of the parts the plotted runs reported: a run's test
+                count is the sum of the shards it has reported so far, so a build still arriving —
+                or one cancelled part-way — sits at a fraction of its own suite, and plotting it
+                beside a complete run would draw a drop no commit made.
+              <% end %>
+              <% if @suite_trajectory.withheld_other_composition.any? %>
+                <%# The other direction of the same mismatch: assembled from MORE parts than the
+                    cohort, or delivered whole where the cohort was sharded. The sentence above is
+                    false about every one of these — they are not fragments of themselves, and
+                    during a shard-layout migration they are the newer, more completely assembled
+                    runs. So this one claims only what the rule actually establishes: the totals
+                    count different amounts of delivered work and cannot be differenced. Both sides
+                    are named through `TestRun#delivery_description` when the withheld runs share a
+                    composition, and neither is named when they do not. %>
+                <% others = @suite_trajectory.withheld_other_composition %>
+                <% others_delivery = @suite_trajectory.shared_delivery_description(others) %>
+                <%= others.size %>
+                <%= "run".pluralize(others.size) %>
+                <%= others.size == 1 ? "is" : "are" %> withheld for having arrived differently from
+                the runs the line is drawn through<%= " — #{others_delivery}, where the line is drawn through runs #{@suite_trajectory.cohort_delivery}" if others_delivery %>.
+                A total counts the work that was delivered, so two runs assembled from different
+                numbers of parts cannot be differenced in either direction. That is not a claim
+                that these ones measured less than they should have.
+              <% end %>
+              <% unless @suite_trajectory.plots_newest? %>
+                <%# The one thing a reader infers from a growth chart without being told. During a
+                    shard-layout migration the cohort is the older, larger group, so the newest runs
+                    are the withheld ones and the line stops short of the SHA the Overview names
+                    directly above. The counts disclose it arithmetically; this says it. It
+                    self-heals as the new layout accumulates and the cohort flips. %>
+                The most recent run on <%= @suite_trajectory.branch %> is not on this line:
+                <span class="font-mono"><%= @suite_trajectory.newest_run.commit_sha.first(7) %></span>
+                is one of the withheld runs, so the line ends at
+                <%= @suite_trajectory.last_run.commit_sha.first(7) %>,
+                <%= time_ago_in_words(@suite_trajectory.last_run.created_at) %> ago.
               <% end %>
             </p>
           <% else %>

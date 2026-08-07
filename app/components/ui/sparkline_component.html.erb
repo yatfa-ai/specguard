@@ -11,12 +11,19 @@
     <div class="min-w-0 flex-1">
       <%# `role="img"` with an explicit accessible name, because the default treatment of an inline
           <svg> varies by browser and screen reader — from "graphic" with no name to the raw path
-          data read aloud. `aria-labelledby` points at the visible label and the summary sentence,
-          so the announced name is the same text a sighted reader gets rather than a second,
-          drifting description. The plot itself is `aria-hidden` scenery: every figure in it is a
-          row of the table below. %>
+          data read aloud. `role="img"` is what makes the paths, markers and their `<title>`s
+          presentational: it prunes the descendants from the accessibility tree, so the plot is
+          announced as one named image rather than as a list of shapes. That is the load-bearing
+          attribute here and there is no `aria-hidden` doing it — removing the role would expose
+          the whole subtree, not merely rename it.
+
+          Name and description are split rather than both riding `aria-labelledby`. A name is
+          announced in full and uninterrupted, so pointing it at the ~60-word summary as well made
+          the summary unskippable on the way to the table below; `aria-describedby` delivers the
+          same sentence to the same reader as a description they can move past. Both still point at
+          text a sighted reader can see, so the two cannot drift. %>
       <svg class="block h-auto w-full" viewBox="0 0 <%= UI::SparklineComponent::VIEWBOX_WIDTH %> <%= UI::SparklineComponent::VIEWBOX_HEIGHT %>"
-           role="img" aria-labelledby="<%= label_id %> <%= summary_id %>">
+           role="img" aria-labelledby="<%= label_id %>" aria-describedby="<%= summary_id %>">
         <path d="<%= area_path %>" class="fill-app-cta opacity-10" />
         <path d="<%= line_path %>" fill="none" class="stroke-app-cta" stroke-width="2"
               stroke-linejoin="round" stroke-linecap="round" />

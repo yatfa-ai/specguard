@@ -423,8 +423,14 @@ RSpec.describe Repository do
           .to eq([4, 1])
       end
 
-      # A LEFT join, so a run that recorded no shard rows stays in its own history with a count of
-      # zero. An INNER join would silently delete the entire unsharded corpus from the chart.
+      # The shard count rides along as a correlated scalar subquery, which returns 0 for a run that
+      # recorded no shard rows — so the entire unsharded corpus stays in its own history. The
+      # `LEFT JOIN … GROUP BY` this was NOT written as would preserve them too; an INNER join would
+      # silently delete every one of them from the chart. Named precisely because the construct is
+      # the thing under test: `Repository#suite_size_trajectory` explains at length why the join was
+      # rejected (it aggregates the whole branch before the LIMIT, so it cannot walk the ordering
+      # index — ~12ms on a 40,000-run branch versus ~0.05ms), and a "simplification" toward it would
+      # leave this example green while restoring the plan.
       it "does not drop a run that recorded no shards at all" do
         repository = create_repository
         run(repository, "plain0", at: 2.days.ago)

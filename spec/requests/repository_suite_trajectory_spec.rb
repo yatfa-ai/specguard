@@ -233,11 +233,119 @@ RSpec.describe "Repository suite-size trajectory", type: :request do
 
       expect(chart).to have_text("2 of 3 runs plotted", normalize_ws: true)
       expect(basis_line).to have_text("Drawn through 2 of the last 3 runs on main", normalize_ws: true)
-      expect(basis_line).to have_text("assembled from the same 4 shard reports", normalize_ws: true)
-      expect(basis_line).to have_text("1 run is withheld for having been assembled differently",
-                                      normalize_ws: true)
+      expect(basis_line).to have_text("all assembled from 4 shard reports", normalize_ws: true)
+      # The withheld run holds ONE of the cohort's four parts, so this is the direction the
+      # fraction-of-its-own-suite sentence is actually true about.
+      expect(basis_line).to have_text(
+        "1 run is withheld for having reported only some of the parts the plotted runs reported",
+        normalize_ws: true
+      )
       expect(basis_line).to have_text("the sum of the shards it has reported so far",
                                       normalize_ws: true)
+    end
+
+    # == The other direction of the same mismatch
+    #
+    # `assembled_like?` is symmetric, so a run is withheld whether it holds FEWER of the cohort's
+    # parts or MORE. The fraction-of-its-own-suite explanation is true only of the first. These
+    # three sharded runs each measured their whole suite across all four shards; the caption used to
+    # tell their reader they were builds "still arriving — or one cancelled part-way", sitting "at a
+    # fraction of [their] own suite", which is false in every clause. The count was right and the
+    # reason was invented, and no example rendered the sentence to catch it.
+    it "does not call a complete sharded run a fragment when the cohort arrived whole" do
+      repository = create_repository(user: @user)
+      5.times { |i| run(repository, "plain#{i}000000", total: 1_000 + i, at: (30 - i).days.ago) }
+      3.times { |i| sharded_run(repository, commit_sha: "whole#{i}0000000", per_shard: 5_000) }
+
+      get repository_path(repository)
+
+      # The five that arrived whole are the cohort; the three complete sharded runs are withheld.
+      expect(plotted_labels).to eq(%w[plain00 plain10 plain20 plain30 plain40])
+      expect(basis_line).to have_text(
+        "3 runs are withheld for having arrived differently from the runs the line is drawn " \
+        "through — assembled from 4 shard reports, where the line is drawn through runs reported " \
+        "in one piece",
+        normalize_ws: true
+      )
+      expect(basis_line).to have_text("not a claim that these ones measured less than they should have",
+                                      normalize_ws: true)
+      # Every clause of the in-flight explanation is false about all three.
+      expect(basis_line).to have_no_text("only some of the parts", normalize_ws: true)
+      expect(basis_line).to have_no_text("cancelled part-way", normalize_ws: true)
+      expect(basis_line).to have_no_text("a fraction of its own suite", normalize_ws: true)
+    end
+
+    # Both directions at once, each getting the sentence that is true of it — and never one
+    # combined figure, for the reason the two withholding *reasons* are never combined: a number
+    # that merges two causes describes neither.
+    it "explains each direction of the mismatch separately when both are in the window" do
+      repository = create_repository(user: @user)
+      3.times { |i| sharded_run(repository, commit_sha: "whole#{i}0000000", per_shard: 5_000 + i) }
+      ingest_shard(repository, ci_run_id: "gha-inflight", shard_id: "0", total: 5_020,
+                   commit_sha: "inflight9999")
+      sharded_run(repository, commit_sha: "eightsh00000", per_shard: 2_500, shards: 8)
+
+      get repository_path(repository)
+
+      expect(plotted_labels).to eq(%w[whole00 whole10 whole20])
+      expect(basis_line).to have_text(
+        "1 run is withheld for having reported only some of the parts the plotted runs reported",
+        normalize_ws: true
+      )
+      expect(basis_line).to have_text(
+        "1 run is withheld for having arrived differently from the runs the line is drawn " \
+        "through — assembled from 8 shard reports, where the line is drawn through runs assembled " \
+        "from 4 shard reports",
+        normalize_ws: true
+      )
+    end
+
+    # A phrase for a group is only available when the group shares one — generalising one member's
+    # composition to a mixed set is this panel's own overclaim in miniature.
+    it "names no composition for a withheld group that did not all arrive the same way" do
+      repository = create_repository(user: @user)
+      4.times { |i| run(repository, "plain#{i}000000", total: 1_000 + i, at: (30 - i).days.ago) }
+      sharded_run(repository, commit_sha: "fourshard000", per_shard: 5_000)
+      sharded_run(repository, commit_sha: "eightsh00000", per_shard: 2_500, shards: 8)
+
+      get repository_path(repository)
+
+      expect(plotted_labels).to eq(%w[plain00 plain10 plain20 plain30])
+      expect(basis_line).to have_text(
+        "2 runs are withheld for having arrived differently from the runs the line is drawn through.",
+        normalize_ws: true
+      )
+      expect(basis_line).to have_no_text("where the line is drawn through runs", normalize_ws: true)
+    end
+
+    # A growth chart's unstated premise is that its right-hand end is "now". During a shard-layout
+    # migration it is not: the cohort is the older, larger group, so the line stops before the SHA
+    # the Overview names directly above. The counts disclose it arithmetically; nothing said it.
+    it "says out loud when the most recent run is not on the line" do
+      repository = create_repository(user: @user)
+      4.times { |i| sharded_run(repository, commit_sha: "oldwy#{i}0000000", per_shard: 5_000 + i) }
+      TestRun.where.not(ci_run_id: nil).update_all(created_at: 20.days.ago)
+      sharded_run(repository, commit_sha: "newwy00000000", per_shard: 2_500, shards: 8)
+
+      get repository_path(repository)
+
+      expect(plotted_labels).to eq(%w[oldwy00 oldwy10 oldwy20 oldwy30])
+      expect(basis_line).to have_text("The most recent run on main is not on this line: newwy00",
+                                      normalize_ws: true)
+      expect(basis_line).to have_text("is one of the withheld runs, so the line ends at oldwy30",
+                                      normalize_ws: true)
+    end
+
+    # The ordinary case must not carry the caveat — a sentence that appears every time is a sentence
+    # nobody reads the one time it matters.
+    it "says nothing about a missing newest run when the newest run is plotted" do
+      repository = create_repository(user: @user)
+      run(repository, "aaaaaaa1111", total: 1_000, at: 2.days.ago)
+      run(repository, "bbbbbbb2222", total: 1_047, at: 1.hour.ago)
+
+      get repository_path(repository)
+
+      expect(basis_line).to have_no_text("is not on this line", normalize_ws: true)
     end
 
     # The reading that first suggests itself — anchor on the latest run, as the Overview's delta
@@ -258,7 +366,7 @@ RSpec.describe "Repository suite-size trajectory", type: :request do
     # The whole existing corpus — a laptop `bundle exec rspec`, an unrecognised CI provider. Those
     # rows record no shards, were written once and never re-derived, so they were always comparable
     # and the guard must not have quietly switched the panel off for them.
-    it "plots the unsharded corpus and states no composition for it" do
+    it "plots the unsharded corpus and states how it arrived in the words that fit it" do
       repository = create_repository(user: @user)
       run(repository, "plainaaaaaa", total: 1_000, at: 2.days.ago)
       run(repository, "plainbbbbbb", total: 1_047, at: 1.hour.ago)
@@ -266,8 +374,10 @@ RSpec.describe "Repository suite-size trajectory", type: :request do
       get repository_path(repository)
 
       expect(plotted_labels).to eq(%w[plainaa plainbb])
-      # "the same 0 shard reports" would describe a run that arrived whole as a delivery that lost
-      # everything.
+      # Through `TestRun#delivery_description`, which is the point: "the same 0 shard reports" —
+      # which is what an inflected count renders here — would describe a run that arrived whole as a
+      # delivery that lost everything.
+      expect(basis_line).to have_text("all reported in one piece", normalize_ws: true)
       expect(basis_line).to have_no_text("shard report", normalize_ws: true)
     end
   end
@@ -289,7 +399,8 @@ RSpec.describe "Repository suite-size trajectory", type: :request do
       expect(basis_line).to have_text("a zero there describes the report, not the suite",
                                       normalize_ws: true)
       # The composition wording must not stand in for this one: nothing here was sharded.
-      expect(basis_line).to have_no_text("assembled differently", normalize_ws: true)
+      expect(basis_line).to have_no_text("arrived differently", normalize_ws: true)
+      expect(basis_line).to have_no_text("only some of the parts", normalize_ws: true)
     end
 
     it "keeps the two reasons apart when both occur" do
@@ -306,8 +417,10 @@ RSpec.describe "Repository suite-size trajectory", type: :request do
       # reporting nothing, and only one of those is a fault.
       expect(basis_line).to have_text("1 run is withheld for having reported no tests at all",
                                       normalize_ws: true)
-      expect(basis_line).to have_text("1 run is withheld for having been assembled differently",
-                                      normalize_ws: true)
+      expect(basis_line).to have_text(
+        "1 run is withheld for having reported only some of the parts the plotted runs reported",
+        normalize_ws: true
+      )
       expect(chart).to have_text("2 of 4 runs plotted", normalize_ws: true)
     end
   end
@@ -342,6 +455,44 @@ RSpec.describe "Repository suite-size trajectory", type: :request do
       expect(trajectory_panel).to have_text("only 1 of them can be compared with each other",
                                             normalize_ws: true)
       expect(trajectory_panel).to have_text("1 reported no tests at all", normalize_ws: true)
+    end
+
+    # The thin state was the second site of the same defect the basis line carried: it worded every
+    # composition mismatch as "assembled from a different number of shard reports than the rest",
+    # which for a whole delivery means "0 shard reports" — the exact phrasing
+    # `TestRun#delivery_description`'s comment exists to forbid — and its closing sentence called
+    # every withheld run a "less complete report". Here the withheld run really is one.
+    it "says a run had reported only some of its parts when that is the direction it missed by" do
+      repository = create_repository(user: @user)
+      ingest_shard(repository, ci_run_id: "gha-inflight", shard_id: "0", total: 5_000,
+                   commit_sha: "inflight9999")
+      sharded_run(repository, commit_sha: "whole00000000", per_shard: 5_000)
+
+      get repository_path(repository)
+
+      expect(trajectory_panel).to have_text("SpecGuard has 2 runs on main", normalize_ws: true)
+      expect(trajectory_panel).to have_text("1 had reported only some of its parts", normalize_ws: true)
+      expect(trajectory_panel).to have_no_text("shard reports than the rest", normalize_ws: true)
+    end
+
+    # ...and here it is the opposite: the withheld run arrived whole in a single POST, which is not
+    # a partial delivery of anything and is not "0 shard reports" either.
+    it "does not call a whole delivery a partial one when it is the odd run out" do
+      repository = create_repository(user: @user)
+      sharded_run(repository, commit_sha: "whole00000000", per_shard: 5_000)
+      run(repository, "laptop00000", total: 12, at: 1.minute.ago)
+
+      get repository_path(repository)
+
+      expect(trajectory_panel).to have_text(
+        "1 was assembled from more parts than the rest, or arrived whole where the rest were sharded",
+        normalize_ws: true
+      )
+      expect(trajectory_panel).to have_no_text("only some of its parts", normalize_ws: true)
+      # The closing sentence claims only what the rule establishes. "less complete reports" was
+      # false about exactly this run.
+      expect(trajectory_panel).to have_text("None of those is a smaller suite", normalize_ws: true)
+      expect(trajectory_panel).to have_no_text("less complete reports", normalize_ws: true)
     end
 
     # `0` gets its own wording. "only 0 of them are comparable" is a sentence about a number.
@@ -430,8 +581,10 @@ RSpec.describe "Repository suite-size trajectory", type: :request do
     )
     expect(basis_line).to have_text("#{expected_unmeasured} run is withheld for having reported no tests",
                                     normalize_ws: true)
-    expect(basis_line).to have_text("#{expected_mismatched} run is withheld for having been assembled differently",
-                                    normalize_ws: true)
+    expect(basis_line).to have_text(
+      "#{expected_mismatched} run is withheld for having reported only some of the parts",
+      normalize_ws: true
+    )
   end
 
   # Criterion 4: the panel adds ONE query.
@@ -476,9 +629,10 @@ RSpec.describe "Repository suite-size trajectory", type: :request do
     # until a repository's history became sharded. Which is exactly the history this panel exists
     # to be careful about.
     #
-    # Verified by mutation: dropping the `LEFT JOIN … COUNT` from `Repository#suite_size_trajectory`
-    # and letting each point ask for itself turns both examples in this block red — this one by the
-    # eight sharded runs added below — and leaves every other example in this file green.
+    # Verified by mutation: dropping the correlated `(SELECT COUNT(*) FROM test_run_shards …)`
+    # from `Repository#suite_size_trajectory` and letting each point ask for itself turns both
+    # examples in this block red — this one by the eight sharded runs added below — and leaves
+    # every other example in this file green.
     it "asks how the runs were assembled once for the whole panel, not once per point" do
       repository = create_repository(user: @user)
       # The newest run is held fixed across both measurements, deliberately: the Overview above

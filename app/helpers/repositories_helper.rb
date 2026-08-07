@@ -78,15 +78,24 @@ module RepositoriesHelper
         "and one run cannot say that."
     else
       "SpecGuard has #{history}, but #{trajectory_comparable_phrase(trajectory)}: " \
-        "#{trajectory_withheld_reasons(trajectory)}. Those runs are not smaller suites, they are " \
-        "less complete reports, and a line through them would be a picture of how much each run " \
-        "had delivered rather than of the suite."
+        "#{trajectory_withheld_reasons(trajectory)}. None of those is a smaller suite — they are " \
+        "runs whose totals cover different amounts of delivered work, so a line through them " \
+        "would be a picture of what each run reported rather than of the suite."
     end
   end
 
   # The withheld runs grouped by WHY, never totalled into one number. "3 withheld" hides an
   # in-flight build inside the same figure as a client that is reporting nothing, and only one of
   # those is a fault.
+  #
+  # The composition mismatch splits for the same reason, one level down. It is symmetric — a run is
+  # withheld whenever its shard count differs from the cohort's, in either direction — but "had
+  # reported only some of its parts" is true only of the runs holding FEWER, and reads as a fault
+  # that will clear on its own. Said of a run assembled from MORE parts, or one delivered whole, it
+  # is false: a repository mid-shard-migration would be told its complete new runs are half-arrived.
+  # The old wording here ("assembled from a different number of shard reports") had the further
+  # problem that for a whole delivery it means "0 shard reports", which is precisely what
+  # `TestRun#delivery_description`'s comment exists to forbid.
   def trajectory_withheld_reasons(trajectory)
     reasons = []
 
@@ -95,10 +104,15 @@ module RepositoriesHelper
       reasons << "#{unmeasured} reported no tests at all"
     end
 
-    mismatched = trajectory.withheld_composition.size
-    if mismatched.positive?
-      reasons << "#{mismatched} #{mismatched == 1 ? "was" : "were"} assembled from a different " \
-                 "number of shard reports than the rest"
+    part_way = trajectory.withheld_part_way.size
+    if part_way.positive?
+      reasons << "#{part_way} had reported only some of #{part_way == 1 ? "its" : "their"} parts"
+    end
+
+    others = trajectory.withheld_other_composition.size
+    if others.positive?
+      reasons << "#{others} #{others == 1 ? "was" : "were"} assembled from more parts than the " \
+                 "rest, or arrived whole where the rest were sharded"
     end
 
     reasons.to_sentence

@@ -65,6 +65,62 @@ class SuiteTrajectory
     @withheld_composition ||= measured - plotted
   end
 
+  # == Why the withholding is one rule and two explanations
+  #
+  # The rule is symmetric: a run is withheld whenever its shard count differs from the cohort's, in
+  # EITHER direction. The explanation that first suggests itself is not symmetric, and is true of
+  # only one of them.
+  #
+  # "Its count is the sum of the shards reported so far, so it sits at a fraction of its own suite"
+  # describes a run holding SOME of the cohort's parts and not all of them. Said about a run holding
+  # MORE parts — or one that arrived whole in a single POST — it is false in every clause: during a
+  # shard-layout migration those are the *more* completely assembled runs of the two, and a
+  # repository whose CI just moved from four shards to eight would be told its complete new runs are
+  # builds "still arriving". That is this panel's own defect aimed one layer out: an overclaim made
+  # in the sentence that explains why the reader should not worry, rather than in the figure.
+  #
+  # So the direction is read off the data and each side gets the sentence that is true of it. Split
+  # for the same reason `RepositoriesHelper#trajectory_withheld_reasons` refuses to total the two
+  # withholding *reasons* into one number — a figure that merges two causes describes neither.
+
+  # Withheld for holding some of the cohort's parts and not all of them: a build still arriving, or
+  # a job cancelled part-way. The only group the fraction-of-its-own-suite sentence is true about.
+  #
+  # `positive?` and not merely `<`: zero shards is not "fewer parts", it is a run that arrived whole
+  # (`TestRun#delivery_description`), which belongs below.
+  def withheld_part_way
+    @withheld_part_way ||= withheld_composition.select do |run|
+      run.shard_count.positive? && run.shard_count < reference.shard_count
+    end
+  end
+
+  # The rest: assembled from MORE parts than the cohort, or delivered whole where the cohort was
+  # sharded. Not comparable with the line — and that is the whole claim. Nothing here says these
+  # runs measured less than they should have, because as far as the data goes they may well have
+  # measured more.
+  def withheld_other_composition
+    @withheld_other_composition ||= withheld_composition - withheld_part_way
+  end
+
+  # How a group of runs arrived, as one phrase, or `nil` when they did not all arrive the same way.
+  # `TestRun#delivery_description` again, asked of a set: a mixed group has no single true phrase,
+  # and the caption says nothing rather than picking one member's and generalising it.
+  def shared_delivery_description(group)
+    descriptions = Array(group).map(&:delivery_description).uniq
+    descriptions.one? ? descriptions.first : nil
+  end
+
+  # Whether the newest run in the window is on the line.
+  #
+  # False in the state above — twenty four-shard runs and ten newer eight-shard ones puts the cohort
+  # on the older layout, so the line stops before "now" while the Overview directly above names
+  # today's SHA. Nothing about that is untrue, but "the latest run is on this line" is the one
+  # inference a reader draws from a growth chart without being told, so the caption says it out loud
+  # rather than leaving it to be inferred from two counts that happen not to match.
+  def plots_newest? = plotted.last == runs.last
+
+  def newest_run = runs.last
+
   def withheld_count = withheld_unmeasured.size + withheld_composition.size
 
   def considered_count = runs.size
@@ -79,15 +135,25 @@ class SuiteTrajectory
     "every one of the last #{considered_count} runs plotted"
   end
 
-  # How the plotted runs were assembled, as a phrase — `TestRun#delivery_description` asked of the
-  # cohort rather than of one row, so the caption can say what the line is a line THROUGH.
-  # `nil` for the unsharded corpus, which has no composition to state: "the same 0 shard reports"
-  # would describe a run that arrived whole as a delivery that lost everything.
-  def cohort_description
-    return nil if reference.nil? || reference.shard_count.zero?
+  # How the plotted runs arrived, in `TestRun#delivery_description`'s words and only in those —
+  # the caption can then say what the line is a line THROUGH, and the mismatch sentence below it
+  # can name the other side of the comparison in the same vocabulary.
+  #
+  # Routed rather than re-spelled. This method used to inflect "#{n} shard #{"report".pluralize(n)}"
+  # itself, which is the third spelling of a rule this class's own doc argues against holding two
+  # of: the day `delivery_description` changes "shard report" to "shard", the Overview and this
+  # caption start describing the same run differently on the same page.
+  #
+  # And the carve-out that re-spelling forced — returning `nil` for the unsharded cohort, because
+  # "the same 0 shard reports" would word a run that arrived whole as a delivery that lost
+  # everything — dissolves with it. `delivery_description` already answers that case correctly, and
+  # "all reported in one piece" is not noise: it is the clause the mismatch sentence contrasts
+  # against when a sharded run is withheld from an unsharded line.
+  def cohort_description = reference && "all #{cohort_delivery}"
 
-    "assembled from the same #{reference.shard_count} shard #{"report".pluralize(reference.shard_count)}"
-  end
+  # The same phrase undressed, for a sentence that needs it mid-clause rather than as the basis
+  # line's opening apposition. One source, two framings.
+  def cohort_delivery = reference&.delivery_description
 
   def values = plotted.map { |run| run.total_specs_count.to_i }
 

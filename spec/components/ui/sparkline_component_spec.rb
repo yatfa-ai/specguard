@@ -135,12 +135,18 @@ RSpec.describe UI::SparklineComponent, type: :component do
     # The default treatment of an inline <svg> ranges from "graphic" with no name to the raw path
     # data read aloud, so the name is declared rather than left to the browser — and it points at
     # the same text a sighted reader gets, so the two cannot drift.
-    it "names itself from the visible label and summary" do
+    #
+    # Name and description are separate attributes rather than two ids on `aria-labelledby`. An
+    # accessible name is announced in full and uninterrupted, so a ~60-word summary used as the name
+    # sits unskippably between the reader and the table of figures below; as a description it is the
+    # same sentence, reachable and passable.
+    it "names itself from the visible label and describes itself from the visible summary" do
       render_series
 
       svg = page.find("svg")
       expect(svg[:role]).to eq("img")
-      expect(svg["aria-labelledby"]).to eq("trajectory-label trajectory-summary")
+      expect(svg["aria-labelledby"]).to eq("trajectory-label")
+      expect(svg["aria-describedby"]).to eq("trajectory-summary")
       expect(page.find("#trajectory-label").text).to eq("Tests in suite on main")
       expect(page.find("#trajectory-summary").text)
         .to eq("The suite measured between 1,000 and 1,047 tests.")

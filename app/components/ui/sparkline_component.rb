@@ -17,8 +17,8 @@
 # A line is a picture of numbers and cannot be read by anything that does not see. Every point is
 # therefore also a row of a real table — disclosed, not visually hidden, because a keyboard user
 # who wants the numbers and a screen-reader user who needs them want exactly the same thing. The
-# `<svg>` itself is `role="img"` and points at the label and summary rather than announcing its own
-# path data.
+# `<svg>` itself is `role="img"`, named from the visible label and described by the visible
+# summary, rather than announcing its own path data.
 #
 # == The vertical axis does not start at zero, and says so
 #
@@ -44,8 +44,8 @@ class UI::SparklineComponent < ApplicationComponent
   MARKER_RADIUS = 3
 
   # `id` is required rather than generated. The `<svg>` has to reference its label and summary by
-  # id for `aria-labelledby`, and a generated one would make the markup non-deterministic — which
-  # is exactly the thing a request spec has to be able to name.
+  # id for `aria-labelledby`/`aria-describedby`, and a generated one would make the markup
+  # non-deterministic — which is exactly the thing a request spec has to be able to name.
   #
   # `columns` are the three headings of the text alternative, in the caller's own vocabulary: this
   # component knows it is drawing "points", and the page knows they are runs.
