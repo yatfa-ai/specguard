@@ -140,9 +140,7 @@ module RepositoriesHelper
   # a truncated list with nothing said about it reads as the complete set of branches.
   def trajectory_branch_choices(repository, histories, current_branch)
     trajectory_shown_branches(histories, current_branch).map do |history|
-      { label: trajectory_branch_label(history),
-        href: repository_path(repository, branch: history.name),
-        current: history.name == current_branch }
+      trajectory_branch_item(repository, history, current_branch)
     end
   end
 
@@ -167,11 +165,7 @@ module RepositoriesHelper
   def trajectory_branch_menu_choices(repository, histories, current_branch)
     return nil unless trajectory_branches_overflow?(histories)
 
-    histories.map do |history|
-      { label: trajectory_branch_label(history),
-        href: repository_path(repository, branch: history.name),
-        current: history.name == current_branch }
-    end
+    histories.map { |history| trajectory_branch_item(repository, history, current_branch) }
   end
 
   # What that menu may call itself, or `nil` when there is no menu.
@@ -200,6 +194,16 @@ module RepositoriesHelper
   # bound still has branches this page has never seen, and the menu cannot offer one it never
   # reached. That is the same bound "At least" reports, said about reachability instead of arithmetic.
   #
+  # The cut wording says "these #{n}" and NOT "the #{n} SpecGuard walked to". The count is a count of
+  # this list, and this list is not the walk's output: `Repository#branch_histories` UNIONs the
+  # bounded walk with the PINNED branch outside `:branch_limit` (`app/models/repository.rb:255-259`),
+  # which is the same fact `trajectory_walk_cut?` uses `>=` for. On a cut repository the branch being
+  # drawn is routinely in this list *because the walk never reached it* — pin `main` on a repository
+  # of `feature/*` and it arrives behind every one of them — so naming the size as the walked figure
+  # is off by the pins, in the one branch of this method written to not overclaim. A bare count
+  # claims nothing about provenance and is true however a row got here; the bound the reader
+  # actually needs is carried by the clause after it, which is unconditionally true.
+  #
   # The ORDERING claim is the one that has to be earned. "The branches with the most history are
   # listed first" is true of the branches the WALK REACHED, and the walk is alphabetical — so on a
   # repository with more branches than it walks, the head of this list is the busiest of an
@@ -218,8 +222,8 @@ module RepositoriesHelper
     cut = trajectory_walk_cut?(histories)
     counted = cut ? "At least #{hidden}" : hidden.to_s
     reach = if cut
-              "The branch menu names the #{histories.size} SpecGuard walked to, and cannot offer " \
-                "one the walk never reached."
+              "The branch menu names these #{histories.size}, and cannot offer one the walk " \
+                "never reached."
             else
               "The branch menu names all #{histories.size}."
             end
@@ -256,6 +260,24 @@ module RepositoriesHelper
   end
 
   private
+
+  # One branch as one item, for BOTH the row and the menu.
+  #
+  # The two controls differ in WHICH branches they carry — the row is cut and pulls the drawn branch
+  # to the front, the menu is the untouched full list — and that difference is the point of having
+  # two of them. They must not differ in what an item IS. Both mean "go to this branch", so for a
+  # given branch they have to produce the same href and the same idea of `current`; while the two
+  # `map` bodies were written out separately, nothing but convention held that. Adding an anchor
+  # fragment to one, or changing how `current` is decided, would have left the row and the menu
+  # quietly disagreeing about the same branch on the same page.
+  #
+  # With this extracted, the ordering IS the only difference in the code, which is what the comments
+  # on both callers already say the intent is.
+  def trajectory_branch_item(repository, history, current_branch)
+    { label: trajectory_branch_label(history),
+      href: repository_path(repository, branch: history.name),
+      current: history.name == current_branch }
+  end
 
   # Whether the row had to leave anything out — the one condition the menu and the hidden-branches
   # sentence both hang off.

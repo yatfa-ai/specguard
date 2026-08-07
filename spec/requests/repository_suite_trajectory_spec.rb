@@ -893,9 +893,17 @@ RSpec.describe "Repository suite-size trajectory", type: :request do
       expect(branch_choices.first).to eq("main (2 runs)")
       expect(trajectory_panel.all("#suite-trajectory-branches nav a[aria-current='page']").map(&:text))
         .to eq(["main (2 runs)"])
+      # NOTE: the sentence says "these 11" and NOT "the 11 SpecGuard walked to". The walk reached
+      # TEN here — `BRANCH_HISTORY_LIMIT` is stubbed to 10 and the walk is alphabetical, so it gets
+      # `feature/000`…`feature/009` and stops. `main` is the eleventh and it is in this list because
+      # it was PINNED, outside `:branch_limit` (`app/models/repository.rb:255-259`) — i.e. it is here
+      # precisely because the walk never reached it, which is the same fact `trajectory_walk_cut?`
+      # needs `>=` for. A provenance claim over this count is off by the pins in exactly the branch
+      # written to not overclaim; the bare count is true however a row arrived. Do not reach for
+      # "walked to" when rewording this again.
       expect(trajectory_panel.find("#suite-trajectory-branches-basis")).to have_text(
         "At least 3 further branches have runs and are not in the row above. The branch menu names " \
-        "the 11 SpecGuard walked to, and cannot offer one the walk never reached. The branches with " \
+        "these 11, and cannot offer one the walk never reached. The branches with " \
         "the most history are listed first. SpecGuard stops after walking 10 branches, so that is an " \
         "ordering over the ones it walked and not over every branch here.", normalize_ws: true
       )

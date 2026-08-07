@@ -677,11 +677,23 @@
                           <%# `aria-current` is carried here as well as in the row. The drawn branch
                               is pulled into the row by `trajectory_shown_branches`, so it is named
                               twice on this page, and a menu that marked none of its entries current
-                              would tell a screen reader the opposite of what the row says. %>
+                              would tell a screen reader the opposite of what the row says.
+
+                              NOT truncated, unlike the row. This menu is the only place a hidden
+                              branch is named at all, and this slice exists because a branch you
+                              cannot name is a branch you cannot ask for — `feature/some-long-desc…`
+                              in the one control meant to end that problem gives back part of what
+                              the menu bought. The box above is `absolute` and `min-w-48` is a floor,
+                              not a ceiling, so it grows to fit at no cost to the layout; `max-w-sm`
+                              plus `break-all` keeps a pathological name wrapping inside the panel
+                              instead of running off the viewport. A `title` tooltip was the other
+                              way and is worse: it is hover-only, so the keyboard reader this
+                              control is built for never receives it. %>
                           <%= link_to choice[:label], choice[:href],
-                                      class: "block truncate rounded px-2 py-1 text-app-h4 " \
-                                             "text-app-content-secondary hover:bg-app-neutral-surface " \
-                                             "hover:text-app-content aria-[current=page]:text-app-content",
+                                      class: "block max-w-sm break-all rounded px-2 py-1 " \
+                                             "text-app-h4 text-app-content-secondary " \
+                                             "hover:bg-app-neutral-surface hover:text-app-content " \
+                                             "aria-[current=page]:text-app-content",
                                       aria: { current: choice[:current] ? "page" : nil } %>
                         </li>
                       <% end %>
