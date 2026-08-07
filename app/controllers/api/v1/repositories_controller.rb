@@ -129,8 +129,54 @@ class Api::V1::RepositoriesController < Api::BaseController
   # present in every response, on the same rule `latest_run` itself follows — a client tests one
   # thing (`shards == null` → "not assembled from parts") rather than distinguishing an absent key
   # from a null one.
+  #
+  # WHICH SHARD, not just how many. The four scalars above say a run was assembled from four parts
+  # and cost 253.75s between them; not one of them is a shard, so an agent reading only those
+  # cannot learn which part it waited on. `repositories#show` has rendered the full decomposition —
+  # the rows, the balanced floor, the excess over it — since SPGD-192, and the three keys added
+  # below are the same model accessors that panel reads, so the API and the panel cannot name
+  # different figures for the same run.
+  #
+  # `rows` mirrors `TestRun#shard_durations`' ordering VERBATIM rather than re-sorting here, which
+  # is what makes `rows.first` and the panel's `longest_shard_label` the same shard by
+  # construction instead of by coincidence.
+  #
+  # `shard_id` RAW AND NULLABLE, never a position number. `TestRun#shard_label` argues this at
+  # length: a client that shards without naming its slices sends nothing, and numbering the rows
+  # would hand the reader a name CI never used — one that points at a different slice next run.
+  # The prose formatting (`"shard 3"` / `"an unnamed shard"`) stays view-side; a client that wants
+  # a sentence can build one, and a client that wants to correlate against its CI config needs the
+  # raw value.
+  #
+  # RAW FLOATS, not the panel's `humanized_seconds` labels, on the rule `duration_seconds` and
+  # `machine_seconds` already follow on this endpoint. Prose in JSON is a figure a client has to
+  # regex before it can compute with it.
+  #
+  # GATED ON `#wall_clock_decomposable?` ITSELF — called, not re-spelled. Two of its three
+  # conditions are easy to reach for and the third is the one that matters:
+  # `shard_delivery_settled?`. `Repository#latest_test_run` picks a run up the instant its FIRST
+  # shard lands, so on a half-delivered run every shard present is timed and a two-condition gate
+  # waves it through with a partial SUM over a partial count — both the floor and the excess move,
+  # in the direction that manufactures a finding. And the gate is a correctness requirement rather
+  # than only an honesty one: `#wall_clock_excess_seconds` documents that it RAISES on a nil
+  # `duration_seconds`, which is exactly the state a run whose shards said nothing is in.
+  #
+  # `null` — the three keys still PRESENT — when the gate fails, on this block's own rule that a
+  # client tests one thing rather than distinguishing an absent key from a null one. Never a
+  # partial or mis-ordered list: `duration_seconds: :desc` is NULLS FIRST in Postgres, so an
+  # ungated `rows` would put the shard that reported *nothing* at the head of a list whose whole
+  # contract is "slowest first".
+  #
+  # ONE EXTRA QUERY, and constant rather than minimal. `#shard_durations` is documented as a second
+  # read beside the memoized `shard_totals` aggregate, kept separate so widening `shard_totals`
+  # does not change what its other callers load — so this necessarily costs one more statement on
+  # gated multi-shard runs. What is bounded is that it stays ONE: a 40-shard matrix costs exactly
+  # what a 4-shard one does. `#wall_clock_decomposable?` itself adds nothing (it reads the already
+  # memoized `shard_totals`), and an ungated run pays nothing at all.
   def serialized_shards(test_run)
     return nil unless test_run.multi_shard?
+
+    decomposable = test_run.wall_clock_decomposable?
 
     {
       count: test_run.shard_count,
@@ -145,8 +191,23 @@ class Api::V1::RepositoriesController < Api::BaseController
       coverage: {
         duration_seconds: test_run.timed_shard_count,
         machine_seconds: test_run.timed_shard_count
-      }
+      },
+      rows: decomposable ? serialized_shard_rows(test_run) : nil,
+      balanced_wall_clock_seconds: decomposable ? test_run.balanced_wall_clock_seconds : nil,
+      wall_clock_excess_seconds: decomposable ? test_run.wall_clock_excess_seconds : nil
     }
+  end
+
+  # `#shard_durations` is `[shard_id, duration_seconds]` pairs and this names both halves, because
+  # a positional array would make a client index into a tuple whose order it can only learn from
+  # prose — and the second field is the one every reader sorts on.
+  #
+  # Called only from the gated branch above; it does no gating of its own, so do not call it from
+  # anywhere that has not already asked `#wall_clock_decomposable?`.
+  def serialized_shard_rows(test_run)
+    test_run.shard_durations.map do |shard_id, duration_seconds|
+      { shard_id: shard_id, duration_seconds: duration_seconds }
+    end
   end
 
   # The contract the array below is served under, stated as tokens a client can compare rather
