@@ -80,9 +80,12 @@ RSpec.describe UI::MeterComponent, type: :component do
 
     # The floor is the ceiling's twin, and it went unobserved for exactly the reason `eq` alone
     # could not see the ceiling's type: `0 == 0.0` is true in Ruby. A negative count is as
-    # unenforced as `annotated > total` — `schema.rb:197,202` store both counts as plain
-    # `t.integer ... null: false` with no check constraint (the schema declares none at all), and
-    # `app/models/test_run.rb` validates only `commit_sha` presence, no numericality.
+    # unenforced as `annotated > total` — `db/schema.rb`'s `test_runs` table (the call site reads
+    # `@latest_test_run.annotated_specs_count` / `.total_specs_count`) stores both counts as plain
+    # `t.integer ... default: 0`, not even `null: false`; the identically-named columns on
+    # `test_run_shards` DO carry `null: false`, so resolve this by table name, not by line number.
+    # The schema declares no check constraint anywhere, and `app/models/test_run.rb` validates only
+    # `commit_sha` presence, no numericality.
     #
     # Without this example, reverting HALF the fix — `clamp(0.0, 100.0)` -> `clamp(0, 100.0)` —
     # left the whole suite green while the floor branch returned Integer `0` and rendered "0%"
