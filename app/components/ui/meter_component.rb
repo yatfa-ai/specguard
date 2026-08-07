@@ -29,7 +29,12 @@ class UI::MeterComponent < ApplicationComponent
   def percent
     return 0.0 if max <= 0
 
-    ((value / max) * 100).clamp(0, 100).round(1)
+    # Float bounds, not `0`/`100`: `Comparable#clamp` returns THE BOUND ITSELF when the receiver
+    # falls outside the range, so Integer bounds made the clamped branch return Integer `100`
+    # (`100.round(1)` is still Integer) while every other branch returned a Float — one fact
+    # rendering as "100%" or "100.0%" depending on which branch produced it, in both the printed
+    # text and the bar's inline width.
+    ((value / max) * 100).clamp(0.0, 100.0).round(1)
   end
 
   def bar_class = TONES.fetch(@tone, TONES[:cta])
