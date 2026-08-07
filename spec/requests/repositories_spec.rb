@@ -290,6 +290,35 @@ RSpec.describe "Repository registration and API keys", type: :request do
     # prose that would satisfy a bare `response.body` match. `#overview` is the panel's own id.
     def overview_panel = Capybara.string(response.body).find("#overview")
 
+    # A sharded run, written directly. The suite's own canonical fixture one layer up —
+    # `spec/requests/api/v1/ingest_spec.rb` builds a 4-shard, 20,000-example run and pins its MAX
+    # at 74.25s — produces exactly these rows through the recorder; the recorder is exercised
+    # there, and the question here is only what the Overview does with what it left behind.
+    #
+    # One helper for every describe in this panel, hoisted here rather than copied into each: two
+    # byte-identical definitions of the same fixture drift, and the shard timestamps below are
+    # precisely the sort of detail that would end up set in one copy and not the other.
+    #
+    # `names:` overrides the shard_ids for the examples that need an unnamed slice. Defaulted to
+    # nil so the `(index + 1).to_s` numbering the pinned expectations depend on is untouched.
+    #
+    # `last_shard_arrived_ago` backdates the shard rows' `updated_at`, which is what
+    # `TestRun#shard_delivery_settled?` reads. The default puts every fixture in the ordinary
+    # settled state a reader looks at long after CI finished; the in-flight examples pass a fresh
+    # one deliberately, and are the only place the distinction is the subject.
+    def sharded_run(repository, durations, commit_sha:, names: nil, last_shard_arrived_ago: 1.hour)
+      run = repository.test_runs.create!(commit_sha: commit_sha, ci_run_id: "gha-#{commit_sha}",
+                                         total_specs_count: 20_000, annotated_specs_count: 5000,
+                                         duration_seconds: durations.compact.max)
+      durations.each_with_index do |seconds, index|
+        run.test_run_shards.create!(shard_id: names ? names[index] : (index + 1).to_s,
+                                    total_specs_count: 5000,
+                                    annotated_specs_count: 1250, duration_seconds: seconds)
+      end
+      run.test_run_shards.update_all(updated_at: last_shard_arrived_ago.ago)
+      run
+    end
+
     it "shows the suite denominator and the tests SpecGuard cannot see" do
       repository = create_repository(user: @user)
       # 3 specs, 2 annotated — so 1 test is invisible to SpecGuard, and 66.7% is the ratio.
@@ -502,25 +531,6 @@ RSpec.describe "Repository registration and API keys", type: :request do
     # shows — so nothing here changes it. What is pinned is that the panel stops calling it a
     # total, and starts saying how many parts the run came in.
     describe "the latest run's shard composition" do
-      # The suite's own canonical fixture, one layer up: `spec/requests/api/v1/ingest_spec.rb`
-      # builds a 4-shard, 20,000-example run and pins its MAX at 74.25s. These are the same rows
-      # that path produces, written directly — the recorder is exercised there, and the question
-      # here is only what the Overview does with what it left behind.
-      # `names:` overrides the shard_ids for the examples that need an unnamed slice or a
-      # particular one to be slowest. Defaulted to nil so every existing caller — and the
-      # `(index + 1).to_s` numbering the pinned expectations above depend on — is untouched.
-      def sharded_run(repository, durations, commit_sha:, names: nil)
-        run = repository.test_runs.create!(commit_sha: commit_sha, ci_run_id: "gha-#{commit_sha}",
-                                           total_specs_count: 20_000, annotated_specs_count: 5000,
-                                           duration_seconds: durations.compact.max)
-        durations.each_with_index do |seconds, index|
-          run.test_run_shards.create!(shard_id: names ? names[index] : (index + 1).to_s,
-                                      total_specs_count: 5000,
-                                      annotated_specs_count: 1250, duration_seconds: seconds)
-        end
-        run
-      end
-
       # The defect, stated as an expectation: MAX 74.25s under the label "Total runtime" was a
       # 3.4× understatement of the only cost figure on the page.
       it "names the wall clock as the slowest shard and prints the machine time beside it" do
@@ -752,18 +762,6 @@ RSpec.describe "Repository registration and API keys", type: :request do
     # panel would go green off the wrong paragraph with the deciding branch deleted — the trap
     # `spec/requests/repository_suite_growth_spec.rb:30-34` documents from a verified mutation.
     describe "the latest run's wall-clock decomposition" do
-      def sharded_run(repository, durations, commit_sha:, names: nil)
-        run = repository.test_runs.create!(commit_sha: commit_sha, ci_run_id: "gha-#{commit_sha}",
-                                           total_specs_count: 20_000, annotated_specs_count: 5000,
-                                           duration_seconds: durations.compact.max)
-        durations.each_with_index do |seconds, index|
-          run.test_run_shards.create!(shard_id: names ? names[index] : (index + 1).to_s,
-                                      total_specs_count: 5000,
-                                      annotated_specs_count: 1250, duration_seconds: seconds)
-        end
-        run
-      end
-
       def decomposition = overview_panel.find("#wall-clock-decomposition")
       def distribution = overview_panel.find("#shard-distribution")
 
@@ -860,6 +858,76 @@ RSpec.describe "Repository registration and API keys", type: :request do
         expect(panel).to have_no_text("shortest wall clock", normalize_ws: true)
         expect(panel).to have_no_text("% of the wait", normalize_ws: true)
         expect(panel).to have_no_text("over that floor", normalize_ws: true)
+      end
+
+      # The OTHER incompleteness, and the one the timing gate above cannot see: not a recorded row
+      # with a NULL duration, but a row that has not arrived yet. Every shard present has a timing,
+      # so `some_shard_untimed?` waves the run straight through while the SUM and the shard count
+      # are both still climbing.
+      #
+      # This is the ordinary state of every sharded run for the minutes its build takes —
+      # `Repository#latest_test_run` picks the row up the instant the first shard lands — so the
+      # panel renders half-delivered runs routinely rather than exceptionally.
+      it "withholds the decomposition while shard reports are still arriving" do
+        repository = create_repository(user: @user)
+        # The canonical run, caught at the moment shards 1 and 3 have POSTed and 2 and 4 have not.
+        sharded_run(repository, [61.0, 74.25], names: %w[1 3], commit_sha: "feedfacecafe0044",
+                                last_shard_arrived_ago: 30.seconds)
+
+        get repository_path(repository)
+
+        panel = overview_panel
+        expect(panel).to have_no_css("#wall-clock-decomposition")
+        expect(panel).to have_no_css("#shard-distribution")
+        # The figures a half-delivered run would otherwise have published: a floor of 1m 8s and an
+        # excess of 6.6s / 8.9%, computed over two of the four shards this run is made of, clearing
+        # the materiality bar and reading exactly like a settled page. The real answer is 10.8s and
+        # 14.6% across four. Pinned as literals rather than only as an absent element, because the
+        # element being gone is asserted above and the point here is the NUMBERS.
+        expect(panel).to have_no_text("6.6s", normalize_ws: true)
+        expect(panel).to have_no_text("8.9%", normalize_ws: true)
+        expect(panel).to have_no_text("The slowest was", normalize_ws: true)
+        expect(panel).to have_no_text("came from how the suite was divided", normalize_ws: true)
+      end
+
+      # Withheld, but not silently. A reader looking at two rendered figures and no third fact is
+      # owed the difference between "we are still waiting" and "there is nothing here to say", and
+      # nothing on this panel said the former before.
+      it "says the reports are still arriving rather than leaving a silent gap" do
+        repository = create_repository(user: @user)
+        sharded_run(repository, [61.0, 74.25], names: %w[1 3], commit_sha: "feedfacecafe0045",
+                                last_shard_arrived_ago: 30.seconds)
+
+        get repository_path(repository)
+
+        pending_note = overview_panel.find("#wall-clock-decomposition-pending")
+        expect(pending_note).to have_text(
+          "A shard report arrived in the last 15 minutes, so more may still be on their way",
+          normalize_ws: true
+        )
+        # And it says WHY that matters, in terms of the arithmetic rather than as an apology: the
+        # floor and the excess are both taken over the shard count, so a run mid-delivery divides
+        # by wherever it has reached.
+        expect(pending_note).to have_text(
+          "spreading their machine time across their own count would put the floor wherever the " \
+          "run happens to have reached",
+          normalize_ws: true
+        )
+      end
+
+      # The gate is a quiet period and not a permanent refusal: the same rows, once the reports
+      # stop coming, decompose exactly as they always did. Pinned so a mutation that simply
+      # withheld from every sharded run — which would satisfy every negative expectation above —
+      # cannot pass.
+      it "decomposes those same rows once the reports have stopped coming" do
+        repository = create_repository(user: @user)
+        sharded_run(repository, [61.0, 74.25], names: %w[1 3], commit_sha: "feedfacecafe0046",
+                                last_shard_arrived_ago: 16.minutes)
+
+        get repository_path(repository)
+
+        expect(overview_panel).to have_no_css("#wall-clock-decomposition-pending")
+        expect(decomposition).to have_text("The slowest was shard 3, at 1m 14s.", normalize_ws: true)
       end
 
       # The other silent shape: nothing reported at all. There is no wall clock and no machine time
@@ -966,6 +1034,30 @@ RSpec.describe "Repository registration and API keys", type: :request do
           normalize_ws: true
         )
         expect(decomposition).to have_no_text("Its shards were evenly matched", normalize_ws: true)
+      end
+
+      # The materiality test judges both of its operands at the precision the reader sees them at.
+      # It did not always: the percent was thresholded rounded and the seconds raw, so two runs
+      # straddling the one-second floor printed the identical `1.0s` and received opposite
+      # verdicts — the same figure meaning two things, which is this ticket's own defect one level
+      # down. Both sides of the seam, asserted together, because either alone passes under the
+      # rounding it is meant to be catching.
+      it "gives two runs that print the same excess the same verdict" do
+        just_under = create_repository(user: @user, github_full_name: "acme/just-under")
+        sharded_run(just_under, [17.0, 18.96], commit_sha: "feedfacecafe0047")
+        just_over = create_repository(user: @user, github_full_name: "acme/just-over")
+        sharded_run(just_over, [17.0, 19.04], commit_sha: "feedfacecafe0048")
+
+        # 0.98s raw and 1.02s raw. Both round to the 1.0s the page prints, and both are now on the
+        # same side of the floor rather than one either side of it.
+        [just_under, just_over].each do |repository|
+          get repository_path(repository)
+
+          expect(decomposition).to have_text("1.0s of that", normalize_ws: true)
+          expect(decomposition).to have_text("came from how the suite was divided across shards",
+                                             normalize_ws: true)
+          expect(decomposition).to have_no_text("Its shards were evenly matched", normalize_ws: true)
+        end
       end
 
       # A run with one shard has no composition to decompose — its MAX *is* its SUM and the floor

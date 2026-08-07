@@ -206,16 +206,96 @@ class TestRun < ApplicationRecord
   NEGLIGIBLE_EXCESS_SECONDS = 1.0
   NEGLIGIBLE_EXCESS_PERCENT = 5.0
 
+  # How long this run's shard reports must have been quiet before their composition is read as
+  # final. See `#shard_delivery_settled?` for what it is standing in for and why a clock is the
+  # only observable that can stand in for it at all.
+  #
+  # Generous on purpose, because the two ways of being wrong are not symmetric. Too short and the
+  # decomposition is published over a half-delivered run — the exact fabrication the gate exists to
+  # prevent. Too long and a settled run's decomposition appears a few minutes after the run does,
+  # which costs a reader nothing they can act on: a suite's split is not a thing anybody fixes in
+  # the first quarter of an hour. Shards run concurrently, so a run's parts normally land within
+  # the spread of their own durations — minutes, not hours — and this leaves room for a retried
+  # shard on top of that.
+  SHARD_DELIVERY_SETTLING_PERIOD = 15.minutes
+
+  # When the most recent shard report arrived. `Ingest::RunRecorder#upsert_shard` writes a shard
+  # row on every delivery — inserting it, or updating the named slice in place — so this is the
+  # moment the last POST touched this run's parts. `nil` for a run that has no shards at all.
+  def last_shard_arrived_at = shard_totals[3]
+
+  # Whether this run's shards have stopped arriving, as nearly as anything here can know it.
+  #
+  # **A run cannot be asked whether it is complete.** `Ingest::Payload` accepts a shard *index* and
+  # never a total — `#assembled_like?` below says so at length — so nothing in the schema or the
+  # protocol distinguishes "four shards, all in" from "four of eight, still going". The only
+  # observable that separates them is that a run still being delivered is a run something wrote to
+  # recently, so that is what this asks, and it asks it in those words rather than pretending to
+  # ask about completeness.
+  #
+  # It is a proxy and it is stated as one. What it catches and what it does not:
+  #
+  # - **Catches the in-flight window**, which is the ordinary state of every sharded run for the
+  #   minutes its build takes. `Repository#latest_test_run` picks a run up the instant its first
+  #   shard lands (`created_at` is stamped by that POST), so the Overview renders half-delivered
+  #   runs routinely rather than exceptionally.
+  # - **Does not catch a run that was abandoned mid-delivery** — a job cancelled after two of four
+  #   shards, which `#assembled_like?` records leaves a half-sized row in the history forever. That
+  #   row goes quiet and is then indistinguishable, in every column and at every later moment, from
+  #   a genuine two-shard run that a reader is entitled to see decomposed. No gate can separate
+  #   them, so this one does not claim to; a gate that withheld from both would withhold from every
+  #   small honest matrix in order to catch a cancelled job it cannot name.
+  #
+  # That residual is bounded in the direction that matters. A missing shard cannot invent an
+  # imbalance that the whole run did not have: if every shard is within a narrow spread then so is
+  # any subset of them, so the *finding* survives a partial set even where the *magnitude* does
+  # not. The failure it does leave is an excess quoted over the wrong denominator — wrong in size,
+  # right in kind — which is a far narrower claim than the unbounded one this gate removes.
+  #
+  # Deliberately not a comparison against the previous run's shard count, the way `#assembled_like?`
+  # decides its own question. That test is answerable there because a suite-size delta already has
+  # two runs in hand; here it would make a first run on a branch, and every legitimate change of
+  # matrix width, silently undecomposable — a permanent cost paid to catch a transient state a
+  # clock catches directly.
+  def shard_delivery_settled?
+    last_shard_arrived_at.present? && last_shard_arrived_at <= SHARD_DELIVERY_SETTLING_PERIOD.ago
+  end
+
   # Whether the wall clock can honestly be decomposed at all.
   #
-  # Two conditions, and the second is the load-bearing one. The floor below divides the SUM by the
-  # shard *count*, so a silent shard puts a numerator over the wrong denominator twice over: the
-  # floor comes out too low (its own work is missing from the SUM) and the excess therefore comes
-  # out too high, in the direction that manufactures a finding. `some_shard_untimed?` is the
-  # existing predicate for exactly that question — note its documented caveat, that it is
-  # vacuously false on a run with no shards, which is safe here only because `multi_shard?` is
-  # asked first and asked in the same expression.
-  def wall_clock_decomposable? = multi_shard? && !some_shard_untimed?
+  # Three conditions, and the last two are each guarding the same hazard from a different side: the
+  # floor divides the machine time by the shard *count*, so any shard whose work is absent from the
+  # numerator while its slot is present in the denominator — or whose slot is absent from both —
+  # moves the floor and the excess together, in the direction that manufactures a finding.
+  #
+  # - `multi_shard?` — there is a composition to explain. Also what makes the next condition safe:
+  #   `some_shard_untimed?` is vacuously false on a run with no shards, as its own comment records.
+  # - `!some_shard_untimed?` — every shard that is HERE reported a timing. A recorded row carrying
+  #   a NULL duration is missing from the SUM but counted in the denominator, which drags the floor
+  #   down and pushes the excess up by exactly the same amount.
+  # - `shard_delivery_settled?` — every shard that is COMING has arrived, as nearly as a clock can
+  #   know it. This is the other half, and it is a different question rather than a stricter form
+  #   of the same one: the predicate above reads the rows that exist, and cannot see a row that
+  #   does not. On a half-delivered run every shard present has a timing, so it waves the run
+  #   straight through while both the SUM and the count are still climbing — a partial numerator
+  #   over a partial denominator, published with no more hedging than a settled run gets.
+  #
+  # The comment on `#shard_delivery_settled?` says which incompleteness that third condition
+  # catches and which it cannot, and it does not catch all of them. It is written that way rather
+  # than named for a completeness it cannot establish.
+  def wall_clock_decomposable?
+    multi_shard? && !some_shard_untimed? && shard_delivery_settled?
+  end
+
+  # A run whose shards are all timed and still arriving: the decomposition is not withheld because
+  # anything is wrong, only because it is too early to take. The panel says so in those words
+  # rather than rendering nothing, which is the difference between "we are waiting" and "there is
+  # nothing to say" — and a reader who can see two figures and no third fact is owed which one it
+  # is. The untimed case has a sentence of its own already and is not routed here; the two are
+  # mutually exclusive by construction.
+  def wall_clock_decomposition_pending?
+    multi_shard? && !some_shard_untimed? && !shard_delivery_settled?
+  end
 
   # Every shard's `[shard_id, duration_seconds]`, slowest first.
   #
@@ -251,8 +331,15 @@ class TestRun < ApplicationRecord
   # so the sentence and the row a reader checks it against cannot drift apart.
   def shard_label(shard_id) = shard_id.present? ? "shard #{shard_id}" : "an unnamed shard"
 
-  # The slowest shard's name — the row the run's `duration_seconds` MAX came from.
-  def slowest_shard_label = shard_label(shard_durations.first&.first)
+  # The name of the shard the run's `duration_seconds` MAX came from.
+  #
+  # Named for the measurement and not for the verdict. Being the longest is a fact about the row;
+  # being *the slowest* is a claim about the run, and the panel deliberately declines to make it
+  # when four shards are tied to the tenth. A method called `slowest_shard_label` feeding a
+  # sentence that refuses the word "slowest" is a name working against its own caller — the same
+  # discipline `#wall_clock_coverage` applies one section up, where the label is allowed to say
+  # "slowest of 4 shards" only in the branch where the MAX covers all four.
+  def longest_shard_label = shard_label(shard_durations.first&.first)
 
   # The shortest wall clock any arrangement of these shards could have produced: the machine time
   # spread perfectly evenly across them.
@@ -284,14 +371,31 @@ class TestRun < ApplicationRecord
   # measured excess of `0.0s` and says so; what it does not do is dress that up as time something
   # could have recovered. Same rule the machine time follows one section up — an incomplete fact
   # carries its incompleteness in the words, and an unremarkable one carries that.
+  #
+  # Both operands are compared at the precision they are RENDERED at, which is why the seconds are
+  # rounded here even though nothing stores them rounded. The percent has always been thresholded
+  # on the value the reader sees (`#wall_clock_excess_percent` rounds), and the seconds reach the
+  # page through `humanized_seconds`, which rounds to the same tenth. Judging one operand rounded
+  # and the other raw opens a seam either side of the boundary where two runs print the identical
+  # figure and receive opposite verdicts — `[17.0, 18.96]` and `[17.0, 19.04]` both read `1.0s`
+  # over the floor — which is this ticket's own defect one level down. The boundary belongs where
+  # a reader can see it.
   def wall_clock_excess_material?
-    wall_clock_excess_seconds >= NEGLIGIBLE_EXCESS_SECONDS &&
+    wall_clock_excess_seconds.round(1) >= NEGLIGIBLE_EXCESS_SECONDS &&
       wall_clock_excess_percent >= NEGLIGIBLE_EXCESS_PERCENT
   end
 
   # The floor and the excess, formatted by the same formatter the wall clock and the machine time
   # already use. Four numbers in one unit within a few lines of each other: a second formatter
   # would eventually print them two ways and destroy the comparison they exist to enable.
+  #
+  # A known and accepted consequence: at a minute and above `humanized_seconds` drops the tenth, so
+  # the three figures do not reconcile by subtraction on screen. The canonical run prints a `1m 14s`
+  # wait and a `1m 3s` floor, and a reader taking the difference gets `11s` where the excess reads
+  # `10.8s`. The alternative is a second formatter for the excess alone — which would print the
+  # wait and the floor at one precision and the gap between them at another, in a paragraph whose
+  # entire purpose is to relate the three. A rounding seam is the smaller cost, and it is only ever
+  # a tenth wide.
   def balanced_wall_clock_label = humanized_seconds(balanced_wall_clock_seconds)
   def wall_clock_excess_label = humanized_seconds(wall_clock_excess_seconds)
 
@@ -358,19 +462,26 @@ class TestRun < ApplicationRecord
 
   private
 
-  # One aggregate read, on `index_test_run_shards_on_test_run_id`, answering all three questions at
-  # once — the Overview asks every one of them about the same already-loaded run, and three separate
-  # scalar queries would be three round trips for one row of facts.
+  # One aggregate read, on `index_test_run_shards_on_test_run_id`, answering all four questions at
+  # once — the Overview asks every one of them about the same already-loaded run, and four separate
+  # scalar queries would be four round trips for one row of facts.
   #
   # `COUNT(duration_seconds)` counts non-nulls, which is what separates "four shards, one silent"
   # from "four shards" without a second pass over the rows. Memoized per instance: this is a
   # read-only display path, and `reload` on a run whose shards changed under it is not something
   # any caller does.
+  #
+  # `MAX(updated_at)` rides along rather than taking a read of its own, and the position it rides
+  # in is load-bearing: it is APPENDED, so `shard_count`, `timed_shard_count` and `machine_seconds`
+  # keep reading indices 0-2 and every caller of theirs — including `GET /api/v1/repository`, whose
+  # body is pinned byte-for-byte by `spec/requests/api/v1/repository_latest_run_spec.rb` — answers
+  # exactly what it answered before. A wider aggregate over the same index is the same round trip.
   def shard_totals
     @shard_totals ||= test_run_shards.pick(
       Arel.sql("COUNT(*)"),
       Arel.sql("COUNT(duration_seconds)"),
-      Arel.sql("SUM(duration_seconds)")
+      Arel.sql("SUM(duration_seconds)"),
+      Arel.sql("MAX(updated_at)")
     )
   end
 

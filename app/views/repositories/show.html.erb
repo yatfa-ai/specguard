@@ -372,10 +372,10 @@
               <% imbalanced = @latest_test_run.wall_clock_excess_material? %>
               <p id="wall-clock-decomposition" class="text-xs text-app-muted">
                 <% if imbalanced %>
-                  The slowest was <%= @latest_test_run.slowest_shard_label %>, at
+                  The slowest was <%= @latest_test_run.longest_shard_label %>, at
                   <%= @latest_test_run.duration_label %>.
                 <% else %>
-                  No shard stood out: the longest was <%= @latest_test_run.slowest_shard_label %>,
+                  No shard stood out: the longest was <%= @latest_test_run.longest_shard_label %>,
                   at <%= @latest_test_run.duration_label %>.
                 <% end %>
                 Those <%= shard_count %> shards hold
@@ -414,6 +414,34 @@
                   <li><%= name %> <span class="text-app-content-secondary"><%= duration %></span></li>
                 <% end %>
               </ul>
+            <% elsif @latest_test_run.wall_clock_decomposition_pending? %>
+              <%# The run's shards are all timed and still arriving, which is the ordinary state of
+                  every sharded run for the minutes its build takes — `Repository#latest_test_run`
+                  picks a run up the instant its first shard lands, so this panel renders
+                  half-delivered runs routinely rather than exceptionally.
+
+                  Decomposing one would divide a partial machine time by a partial shard count and
+                  print the result with no more hedging than a settled run gets: a floor over the
+                  wrong denominator, an excess over the wrong denominator, and a distribution
+                  missing rows with nothing on the page marking any of it partial. The gate above
+                  refuses that, and this says so — a reader looking at two rendered figures and no
+                  third fact is owed the difference between "we are still waiting" and "there is
+                  nothing here to say". Nothing on this panel said the former before.
+
+                  It states the reports-still-arriving fact and not a completeness claim, because
+                  no completeness claim is available: see `TestRun#shard_delivery_settled?` for why
+                  a quiet period is the only observable that separates the two, and for what it
+                  does and does not catch. %>
+              <p id="wall-clock-decomposition-pending" class="text-xs text-app-muted">
+                A shard report arrived in the last
+                <%= distance_of_time_in_words(TestRun::SHARD_DELIVERY_SETTLING_PERIOD) %>, so more
+                may still be on their way — a run's parts arrive one POST at a time and nothing in
+                a report says how many to expect. Naming a slowest shard now would name the slowest
+                of however many have got here so far, and spreading their machine time across their
+                own count would put the floor wherever the run happens to have reached. The
+                decomposition waits until the reports stop coming rather than describing a run
+                mid-delivery.
+              </p>
             <% end %>
           <% end %>
 
