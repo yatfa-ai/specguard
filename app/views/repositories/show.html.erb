@@ -23,9 +23,12 @@
         <%= render UI::ButtonComponent.new(variant: :ghost, href: edit_repository_path(@repository)) { "Rename" } %>
       <% end %>
       <% if repository_policy.can?(:repo_delete) %>
+        <%# `repo.delete` is grantable to a member, so the presser here is not necessarily the
+            owner — the dialog says whose repository it is and what goes with it in that case, and
+            is verbatim what it always was for the owner. See RepositoriesHelper. %>
         <%= button_to "Remove", repository_path(@repository), method: :delete,
                       class: UI::ButtonComponent.classes(variant: :danger, size: :md),
-                      form: { data: { turbo_confirm: "Remove #{@repository.github_full_name} and all of its data?" } } %>
+                      form: { data: { turbo_confirm: remove_confirmation(@repository, owner: repository_policy.can?(:owner)) } } %>
       <% end %>
     <% end %>
   <% end %>
