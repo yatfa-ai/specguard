@@ -24,7 +24,7 @@ class UI::TableComponent < ApplicationComponent
   attr_reader :columns
 
   def wrapper_class
-    merge_classes("w-full overflow-x-auto", @options.delete(:class))
+    @wrapper_class ||= merge_classes("w-full overflow-x-auto", @options.delete(:class))
   end
 
   # Built as one attribute hash rather than by appending a conditional string, so an unset

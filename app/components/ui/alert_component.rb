@@ -18,10 +18,20 @@ class UI::AlertComponent < ApplicationComponent
 
   attr_reader :title
 
+  # Memoised, and the `delete` is load-bearing — see `wrapper_class` in `UI::PanelComponent` for
+  # the full reasoning. This component splats the REMAINING options into the same `<div>`, so the
+  # caller's `:class` has to leave `@options`; memoising is what makes a second call return the
+  # same string instead of silently dropping it.
   def wrapper_class
-    merge_classes("rounded-md border px-4 py-3 text-sm",
-                  TONES.fetch(@tone, TONES[:info]), @options.delete(:class))
+    @wrapper_class ||= merge_classes("rounded-md border px-4 py-3 text-sm",
+                                     TONES.fetch(@tone, TONES[:info]), @options.delete(:class))
   end
 
-  def html_options = @options
+  # Consumes `:class` before handing the rest over, so the guarantee is structural rather than a
+  # bet on the template reading `wrapper_class` first. Reading this accessor ahead of
+  # `wrapper_class` would otherwise leave `:class` in the hash and emit it a second time.
+  def html_options
+    wrapper_class
+    @options
+  end
 end

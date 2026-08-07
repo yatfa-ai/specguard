@@ -12,7 +12,16 @@ class UI::HeadingComponent < ApplicationComponent
   end
 
   def call
-    content_tag("h#{@level}", content,
-                class: merge_classes(RAMP.fetch(@level), @options.delete(:class)), **@options)
+    # Read into a local FIRST: `**@options` lands on the same tag, and `heading_class` is what
+    # removes `:class` from that hash.
+    classes = heading_class
+
+    content_tag("h#{@level}", content, class: classes, **@options)
+  end
+
+  # `delete`, not `[]` — a surviving `:class` in the splat would override this list entirely and
+  # the ramp step would be lost. Memoised so a second call still carries the caller's class.
+  def heading_class
+    @heading_class ||= merge_classes(RAMP.fetch(@level), @options.delete(:class))
   end
 end

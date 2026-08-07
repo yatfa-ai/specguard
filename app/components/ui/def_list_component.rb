@@ -11,6 +11,6 @@ class UI::DefListComponent < ApplicationComponent
   attr_reader :rows
 
   def wrapper_class
-    merge_classes("divide-y divide-app-border", @options.delete(:class))
+    @wrapper_class ||= merge_classes("divide-y divide-app-border", @options.delete(:class))
   end
 end

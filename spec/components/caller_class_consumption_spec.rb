@@ -1,0 +1,136 @@
+# frozen_string_literal: true
+
+require "rails_helper"
+
+# One place where every component consuming a caller-supplied class is enumerated.
+#
+# The construct under test is `@x ||= merge_classes(..., @options.delete(:class))` — a MUTATING
+# read, memoised so it happens exactly once. It is easy to get wrong in two opposite directions
+# (drop the memoisation and a second call loses the caller's class; drop the `delete` and the class
+# is either emitted twice or overrides the component's own), and neither failure raises. See
+# `ApplicationComponent#merge_classes` for the convention and
+# `spec/support/shared_examples/caller_class.rb` for what each example asserts.
+#
+# `base:` is one class the component always writes onto its root element, given as a LITERAL. It is
+# not read from the component's own constants: an expectation sourced from the subject moves
+# whenever the subject does and pins nothing.
+RSpec.describe "caller-supplied component classes" do
+  # `Forms::FormBuilder#submit_button` matches the same grep and is deliberately absent from the
+  # registry below: it deletes from a LOCAL `options` hash, freshly bound on every call, so there
+  # is no instance state to memoise and no second call to be idempotent across.
+  exempt = ["app/components/forms/form_builder.rb"].freeze
+
+  registry = [
+    { klass: UI::AlertComponent, base: "rounded-md",
+      build: ->(opts) { UI::AlertComponent.new(**opts) } },
+
+    { klass: UI::BadgeComponent, base: "rounded-full", method: :badge_class,
+      build: ->(opts) { UI::BadgeComponent.new(**opts) } },
+
+    { klass: UI::BreadcrumbComponent, base: "text-app-content-secondary",
+      build: ->(opts) { UI::BreadcrumbComponent.new(items: [{ label: "Repositories" }], **opts) } },
+
+    { klass: UI::ButtonComponent, base: "bg-app-cta", method: :button_class,
+      build: ->(opts) { UI::ButtonComponent.new(variant: :primary, **opts) } },
+
+    # `link_to` MERGES its kwargs where `tag.button`/`tag.div` do not, so for the two components
+    # that branch on `href:` the splat regression only reproduces on one of the two branches. Both
+    # are enumerated rather than trusting whichever one happens to be the default.
+    { klass: UI::ButtonComponent, base: "bg-app-cta", method: :button_class, suffix: "with an href",
+      build: ->(opts) { UI::ButtonComponent.new(href: "/repositories", **opts) } },
+
+    { klass: UI::CardComponent, base: "bg-app-surface-raised",
+      build: ->(opts) { UI::CardComponent.new(**opts) } },
+
+    { klass: UI::CardComponent, base: "hover:border-app-cta", suffix: "with an href",
+      build: ->(opts) { UI::CardComponent.new(href: "/repositories", **opts) } },
+
+    { klass: UI::CopyableCodeComponent, base: "items-center",
+      build: ->(opts) { UI::CopyableCodeComponent.new(**opts) } },
+
+    { klass: UI::DefListComponent, base: "divide-y",
+      build: ->(opts) { UI::DefListComponent.new(rows: [%w[Suite RSpec]], **opts) } },
+
+    { klass: UI::DropdownComponent, base: "inline-block",
+      build: ->(opts) { UI::DropdownComponent.new(label: "Actions", **opts) } },
+
+    { klass: UI::EmptyStateComponent, base: "border-dashed",
+      build: ->(opts) { UI::EmptyStateComponent.new(title: "No repositories yet", **opts) } },
+
+    { klass: UI::HeadingComponent, base: "text-app-h2", method: :heading_class,
+      build: ->(opts) { UI::HeadingComponent.new(level: 2, **opts) } },
+
+    { klass: UI::MeterComponent, base: "space-y-1",
+      build: ->(opts) { UI::MeterComponent.new(value: 1, max: 2, **opts) } },
+
+    { klass: UI::PageComponent, base: "px-6",
+      build: ->(opts) { UI::PageComponent.new(**opts) } },
+
+    { klass: UI::PageHeaderComponent, base: "flex-wrap",
+      build: ->(opts) { UI::PageHeaderComponent.new(title: "Repositories", **opts) } },
+
+    { klass: UI::PageNavComponent, base: "border-b",
+      build: ->(opts) { UI::PageNavComponent.new(items: [{ label: "Runs", href: "/runs" }], **opts) } },
+
+    { klass: UI::PanelComponent, base: "bg-app-surface",
+      build: ->(opts) { UI::PanelComponent.new(**opts) } },
+
+    { klass: UI::SparklineComponent, base: "space-y-2",
+      build: lambda { |opts|
+        UI::SparklineComponent.new(
+          id: "trajectory", label: "Suite size", coverage: "80%", summary: "Two runs.",
+          columns: %w[Commit Tests Age],
+          points: [
+            UI::SparklineComponent::Point.new(label: "abc1234", value: 10, detail: "2d ago"),
+            UI::SparklineComponent::Point.new(label: "def5678", value: 12, detail: "1d ago")
+          ],
+          **opts
+        )
+      } },
+
+    { klass: UI::StatComponent, base: "space-y-1",
+      build: ->(opts) { UI::StatComponent.new(label: "Tests", value: 12, **opts) } },
+
+    { klass: UI::TableComponent, base: "overflow-x-auto",
+      build: ->(opts) { UI::TableComponent.new(columns: ["Commit"], **opts) } },
+
+    # The one component whose caller slot is not `:class`. Same construct, same two failure modes,
+    # different key — which is why the shared example takes the key as a parameter.
+    { klass: Forms::FieldComponent, base: "space-y-1", key: :wrapper_class,
+      build: lambda { |opts|
+        Forms::FieldComponent.new(
+          form: ActionView::Helpers::FormBuilder.new(
+            :repository, Repository.new, vc_test_controller.view_context, {}
+          ),
+          attribute: :github_full_name, **opts
+        )
+      } }
+  ].freeze
+
+  registry.each do |entry|
+    describe [entry[:klass], entry[:suffix]].compact.join(" "), type: :component do
+      it_behaves_like "a component that appends the caller's class", entry
+    end
+  end
+
+  # A registry is only a guard while it is complete. This walks the components for the construct
+  # itself and fails on any site the registry does not name, so the next component written this way
+  # arrives with coverage rather than a silent gap. It also fails the other way, on a registry entry
+  # whose component no longer consumes a class — a stale entry is a passing example that guards
+  # nothing.
+  it "names every component that consumes a caller-supplied class" do
+    consuming = Rails.root.glob("app/components/**/*.rb").filter_map { |path|
+      # Whole-line comments dropped first: `ApplicationComponent` documents this very construct in
+      # prose, and prose is not a site. Lines carrying code plus a trailing comment are kept, so
+      # nothing real is skipped.
+      code = path.read.lines.grep_v(/\A\s*#/).join
+      relative = path.relative_path_from(Rails.root).to_s
+      relative if code.match?(/delete\(:(?:wrapper_)?class\)/) && exempt.exclude?(relative)
+    }.sort
+
+    registered = registry.map { |entry| "app/components/#{entry[:klass].name.underscore}.rb" }.uniq.sort
+
+    expect(consuming - registered).to eq([])
+    expect(registered - consuming).to eq([])
+  end
+end

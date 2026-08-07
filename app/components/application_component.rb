@@ -25,6 +25,21 @@ class ApplicationComponent < ViewComponent::Base
   private
 
   # Compose class lists, last-writer-wins on duplicates, nils and blanks dropped.
+  #
+  # == The `@x ||= merge_classes(..., @options.delete(:class))` convention
+  #
+  # Every component consumes the caller's `class:` with a MUTATING `delete`, and that mutation is
+  # load-bearing: components that also splat the remaining options onto the same element
+  # (`**@options`, or `tag.attributes(html_options)`) rely on `:class` having left the hash. Switch
+  # a site to `@options[:class]` and it either emits a second `class` attribute on one element
+  # (`tag.attributes` case) or lets the caller's class override the component's own variant classes
+  # entirely (kwargs-splat case, where the last key wins). Both are silent.
+  #
+  # A mutating read is only safe if it happens exactly once — so every such method is MEMOISED
+  # rather than converted to a non-mutating read. Memoisation keeps consume-once semantics and
+  # makes the method idempotent: call it twice and you get the same string, instead of the caller's
+  # class silently disappearing on the second call. `spec/support/shared_examples/caller_class.rb`
+  # pins both halves for every component that does this.
   def merge_classes(*lists)
     lists.flatten.compact.flat_map { |list| list.to_s.split(/\s+/) }.reject(&:empty?).uniq.join(" ")
   end

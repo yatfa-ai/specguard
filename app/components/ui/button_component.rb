@@ -44,12 +44,22 @@ class UI::ButtonComponent < ApplicationComponent
   end
 
   def call
-    classes = merge_classes(self.class.classes(variant: @variant, size: @size), @options.delete(:class))
+    # Read into a local FIRST: both branches splat the remaining `@options` into the same tag, and
+    # `button_class` is what removes `:class` from that hash.
+    classes = button_class
 
     if @href
       link_to(@href, class: classes, **@options) { content }
     else
       tag.button(type: @type, class: classes, **@options) { content }
     end
+  end
+
+  # `delete`, not `[]` — `**@options` lands on the same element, so a surviving `:class` would
+  # override this whole list (last key wins in a kwargs splat) and the variant would vanish.
+  # Memoised so calling it twice returns the same string rather than dropping the caller's class.
+  def button_class
+    @button_class ||=
+      merge_classes(self.class.classes(variant: @variant, size: @size), @options.delete(:class))
   end
 end

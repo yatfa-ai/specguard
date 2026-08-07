@@ -24,6 +24,6 @@ class UI::StatComponent < ApplicationComponent
   def value_class = TONES.fetch(@tone, TONES[:default])
 
   def wrapper_class
-    merge_classes("space-y-1", @options.delete(:class))
+    @wrapper_class ||= merge_classes("space-y-1", @options.delete(:class))
   end
 end

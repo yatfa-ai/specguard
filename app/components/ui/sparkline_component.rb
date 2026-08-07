@@ -106,7 +106,7 @@ class UI::SparklineComponent < ApplicationComponent
       .compact_blank.join(" — ")
   end
 
-  def wrapper_class = merge_classes("space-y-2", @options.delete(:class))
+  def wrapper_class = @wrapper_class ||= merge_classes("space-y-2", @options.delete(:class))
 
   private
 

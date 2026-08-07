@@ -13,7 +13,7 @@ class UI::EmptyStateComponent < ApplicationComponent
   attr_reader :title, :description
 
   def wrapper_class
-    merge_classes(
+    @wrapper_class ||= merge_classes(
       "flex flex-col items-center justify-center gap-3 rounded-lg border border-dashed " \
       "border-app-border-light px-6 py-12 text-center",
       @options.delete(:class)

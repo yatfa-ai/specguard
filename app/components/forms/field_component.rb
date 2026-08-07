@@ -25,7 +25,8 @@ class Forms::FieldComponent < ApplicationComponent
   end
 
   def wrapper_class
-    merge_classes("space-y-1", @full ? "form-field-full" : nil, @input_options.delete(:wrapper_class))
+    @wrapper_class ||=
+      merge_classes("space-y-1", @full ? "form-field-full" : nil, @input_options.delete(:wrapper_class))
   end
 
   def errors
