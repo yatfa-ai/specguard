@@ -9,11 +9,20 @@ module MembershipsHelper
   # access to the repository (see RepositoryPolicy#can?), so a member with every box unticked can
   # still open it. Describing it as "can open the repository" would tell the owner that unticking it
   # locks the colleague out, which is the one thing it cannot do.
+  #
+  # `members.manage` names four doors because it opens four: the members page, the add form, the
+  # edit form and Revoke — every action on MembershipsController gates on it. It described only
+  # the last two for a while, because nothing failed when the add and edit doors moved onto it;
+  # repository_members_spec now reads this sentence back off the rendered form and exercises all
+  # four in the same example, so the next such move cannot land silently. Do not name a sibling
+  # permission string in any caption here: both forms assert their rendered body does NOT contain
+  # `repo.delete` or `keys.manage` when the viewer may not grant them.
   PERMISSION_DESCRIPTIONS = {
     RepositoryMembership::VIEW => "Open the repository. Implied by membership — a member can " \
                                   "always reach it, ticked or not.",
     RepositoryMembership::KEYS_MANAGE => "See, mint and revoke this repository's API keys.",
-    RepositoryMembership::MEMBERS_MANAGE => "See who has access, and revoke it.",
+    RepositoryMembership::MEMBERS_MANAGE => "See who can reach this repository, add and remove " \
+                                            "members, and change what each one holds.",
     RepositoryMembership::REPO_DELETE => "Delete the repository, and every key, run and intent on it."
   }.freeze
 
