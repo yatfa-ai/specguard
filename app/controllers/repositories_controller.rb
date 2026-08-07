@@ -35,6 +35,11 @@ class RepositoriesController < ApplicationController
     # annotations. Deliberately not `Repository#annotated_ratio`, which cannot express that
     # difference (it floors at 0.0 by contract — see spec/models/repository_spec.rb).
     @latest_test_run = @repository.latest_test_run
+    # The tail of that same append-only history for the "Recent runs" panel. Bounded at ten rows by
+    # the model, so this stays O(1) no matter how long CI has been reporting. It shares
+    # `latest_test_run`'s ordering by construction, so the run named on the Overview panel above is
+    # always the top row here — the two panels cannot name different commits on the same page.
+    @recent_test_runs = @repository.recent_test_runs
     # Set by ApiKeysController#create and readable exactly once — see ApiKeysController.
     @revealed_token = flash[:revealed_api_key]
     @revealed_token_name = flash[:revealed_api_key_name]

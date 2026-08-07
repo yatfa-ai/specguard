@@ -41,6 +41,19 @@ class Repository < ApplicationRecord
     test_runs.order(created_at: :desc, id: :desc).first
   end
 
+  # The tail of the append-only run history, newest first — what the "Recent runs" panel lists.
+  #
+  # Deliberately the *same* ordering as `latest_test_run` above, tie-break included. The two are
+  # read side by side on the repository page (Overview names the latest run, this panel's top row
+  # names it again), so an ordering that disagreed by even the id tie-break would print two
+  # different commits for the same run on the same screen.
+  #
+  # Bounded by `limit` rather than paginated: this is a history of *runs*, so ten rows is ten rows
+  # whether the suite holds three tests or twenty thousand.
+  def recent_test_runs(limit: 10)
+    test_runs.order(created_at: :desc, id: :desc).limit(limit)
+  end
+
   private
 
   def normalize_full_name
