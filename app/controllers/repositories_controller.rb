@@ -62,7 +62,11 @@ class RepositoriesController < ApplicationController
     # the model, so this stays O(1) no matter how long CI has been reporting. It shares
     # `latest_test_run`'s ordering by construction, so the run named on the Overview panel above is
     # always the top row here — the two panels cannot name different commits on the same page.
-    @recent_test_runs = @repository.recent_test_runs
+    #
+    # Materialised with `.to_a` rather than left as a relation, because each row is then primed
+    # with its own shard count — see `preload_shard_counts`. Every reader in the view is `any?` /
+    # `each`, so an Array answers them identically.
+    @recent_test_runs = preload_shard_counts(@repository.recent_test_runs.to_a)
     # Set by ApiKeysController#create and readable exactly once — see ApiKeysController.
     @revealed_token = flash[:revealed_api_key]
     @revealed_token_name = flash[:revealed_api_key_name]
@@ -118,6 +122,32 @@ class RepositoriesController < ApplicationController
   end
 
   private
+
+  # How each of the Recent-runs rows was assembled, in ONE aggregate for the whole panel.
+  #
+  # The panel names every row's composition, and every route to that fact on the model —
+  # `TestRun#shard_count`, `#multi_shard?`, `#delivery_description` — goes through a memoized
+  # per-instance `pick`. Asked inside the row loop, that is ten queries for one column, and it is
+  # the kind of N+1 that ships green: the page's existing query-budget example
+  # (spec/requests/repositories_spec.rb) is the API-keys one and its fixture holds no runs at all.
+  # So the aggregate is taken here, once, and each row is primed from it —
+  # `spec/requests/repository_runs_spec.rb` pins that the count does not move when rows become
+  # sharded.
+  #
+  # `group(:test_run_id).count` over `index_test_run_shards_on_test_run_id` (db/schema.rb), keyed by
+  # the ten ids already loaded. A run with no shard rows — the whole unsharded corpus, every run
+  # that named no `ci_run_id` — is simply absent from the hash and is primed with the zero
+  # `TestRun#delivery_description` already words as "reported in one piece".
+  #
+  # Returns early on an empty list rather than letting `where(test_run_id: [])` issue a `WHERE 1=0`:
+  # a repository that has never ingested renders the empty state and should pay nothing for a panel
+  # of no rows.
+  def preload_shard_counts(runs)
+    return runs if runs.empty?
+
+    counts = TestRunShard.where(test_run_id: runs.map(&:id)).group(:test_run_id).count
+    runs.each { |run| run.preload_shard_count(counts[run.id]) }
+  end
 
   # `user_id` is already loaded on the record, so this asks nothing of the database.
   def owns_repository?(repository)

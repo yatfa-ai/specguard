@@ -486,6 +486,26 @@
         suite still renders ten rows, and there is no per-spec aggregation behind any cell. %>
     <%= render UI::PanelComponent.new(title: "Recent runs", id: "recent-runs", class: "lg:col-span-3") do %>
       <% if @recent_test_runs.any? %>
+        <%# What this list IS, said once for the whole panel, because its shape is the one thing a
+            time-ordered column of numbers actively misleads a reader about.
+
+            `test_runs` is a single interleaved history across every branch CI reports from, and
+            `Repository#recent_test_runs` lists it exactly that way on purpose. So two rows sitting
+            next to each other are routinely two different branches, and the difference between
+            their test counts is not a change any commit made — a feature branch that deleted a
+            directory reads here as the trunk suite shrinking. That is `Repository#previous_test_run_on_branch`'s
+            own reasoning (app/models/repository.rb), which exists so the Overview panel never takes
+            that subtraction; this panel cannot decline it on the reader's behalf, because it prints
+            the operands. So it says what they are instead.
+
+            Above the table rather than below it: it is a precondition for reading the rows, not a
+            note about them. %>
+        <p class="text-xs text-app-muted mb-3" id="recent-runs-basis">
+          One history across every branch CI reports from, interleaved, newest first — so two
+          consecutive rows are routinely two different branches. They are not a series, and the
+          difference between two of these test counts is not a change in the suite. Suite growth is
+          measured on the Overview panel above, and only against the previous run on the same branch.
+        </p>
         <%= render UI::TableComponent.new(columns: ["Commit", "Branch", "Tests", "Duration", "Annotated", "Ingested"]) do %>
           <% @recent_test_runs.each do |test_run| %>
             <tr>
@@ -496,10 +516,32 @@
                 <%= test_run.branch.presence || tag.span("not reported", class: "text-app-muted") %>
               </td>
               <td class="px-3 py-2 text-app-content tabular-nums">
-                <%# Whole-suite size — Ingest::Payload derives it from every spec in the run, not
-                    only the annotated ones, so this is a real number on a suite with zero @intent
-                    annotations. %>
+                <%# Ingest::Payload derives this from every spec in the run, not only the annotated
+                    ones, so it is a real number on a suite with zero @intent annotations.
+
+                    What it is not is a whole-suite size. On a run with shards it is the SUM over
+                    the shards recorded SO FAR — `Ingest::RunRecorder#recompute_totals` re-derives
+                    it after every ingest, and the row is created by the first shard's POST, so
+                    `created_at` (the column this table orders by) is stamped while three quarters
+                    of a four-shard suite is still in flight. A cancelled job leaves that half-sized
+                    row here permanently. `TestRun#suite_size_measured?` carries the argument
+                    in full, in the model's own words.
+
+                    So every row states how it was assembled, and a multi-shard row says what its
+                    figure therefore covers. Through `TestRun#delivery_description`, which the
+                    Overview panel already words this with — and which answers "reported in one
+                    piece" for a `shard_count` of zero, the entire unsharded corpus. A hand-rolled
+                    count of parts would render "0 shards" for the most common run there is.
+
+                    `multi_shard?`, not `shard_count.positive?`: one shard's SUM is its own whole
+                    report, so a single-shard run has no coverage gap to disclose and reads exactly
+                    as it always has. Neither predicate queries here — every row was primed with its
+                    shard count by `RepositoriesController#preload_shard_counts`, in one aggregate
+                    for the whole panel. %>
                 <%= number_with_delimiter(test_run.total_specs_count.to_i) %>
+                <span class="block text-xs text-app-muted">
+                  <%= test_run.delivery_description %><%= " — the count above covers those, not necessarily the whole suite" if test_run.multi_shard? %>
+                </span>
               </td>
               <td class="px-3 py-2 text-app-content-secondary tabular-nums">
                 <%# `duration_seconds` is nullable and Ingest::Payload accepts `nil` explicitly.

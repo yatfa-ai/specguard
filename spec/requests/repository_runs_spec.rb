@@ -27,7 +27,11 @@ RSpec.describe "Repository recent runs", type: :request do
   # indexed one red. Indices follow the header order asserted below.
   COMMIT, BRANCH, TESTS, DURATION, ANNOTATED, AGE = (0..5).to_a
 
-  def run_cells(commit) = run_row(commit).all("td").map { |cell| cell.text.strip }
+  # Whitespace-collapsed, because the `Tests` cell is now two lines — the figure and the
+  # composition sentence beneath it — and ERB indentation would otherwise be part of every
+  # assertion on it. `Capybara::Node::Simple#text` does no normalising of its own. Every other cell
+  # holds a single token, so collapsing changes nothing about what they assert.
+  def run_cells(commit) = run_row(commit).all("td").map { |cell| cell.text.gsub(/\s+/, " ").strip }
 
   def runs_panel = Capybara.string(response.body).find("#recent-runs")
 
@@ -44,7 +48,12 @@ RSpec.describe "Repository recent runs", type: :request do
     cells = run_cells("a1b2c3d")
     expect(cells[COMMIT]).to eq("a1b2c3d")
     expect(cells[BRANCH]).to eq("main")
-    expect(cells[TESTS]).to eq("3")
+    # The composition rides INSIDE the `Tests` cell rather than in a seventh column, which is why
+    # the header assertion above is untouched and the indices below still mean what they meant.
+    # A run that named no `ci_run_id` records no shard rows at all, so this is the whole unsharded
+    # corpus and it must not read as a delivery that lost all its parts — `shard_count` is 0 here,
+    # not 1, and a hand-rolled "0 shards" is exactly the wording this pins against.
+    expect(cells[TESTS]).to eq("3 reported in one piece")
     expect(cells[DURATION]).to eq("12.5s")
     # A reported duration must NOT wear the muted treatment this table gives absent facts.
     expect(run_row("a1b2c3d").all("td")[DURATION]).to have_css("span:not(.text-app-muted)", text: "12.5s")
@@ -181,5 +190,167 @@ RSpec.describe "Repository recent runs", type: :request do
 
     expect(response).to have_http_status(:ok)
     expect(run_row("shared1")).to have_text("50.0%").and have_text("main")
+  end
+
+  # Honest state 4, and the one this table got wrong for longest. `total_specs_count` is the SUM
+  # over the shards recorded SO FAR — see `TestRun`'s own comment — so on a sharded run it is not a
+  # suite size, and this is the one surface that renders it as a column ordered by time.
+  describe "how each run was assembled" do
+    # The project's canonical fixture shape (spec/requests/api/v1/ingest_spec.rb): a 20,000-example
+    # suite delivered four ways. `total_specs_count` is set to what the shards recorded so far,
+    # which is what `Ingest::RunRecorder#recompute_totals` would have derived after that many
+    # ingests.
+    def sharded_run(repository, commit:, shards:, per_shard: 5_000, **attributes)
+      run = repository.test_runs.create!(commit_sha: commit, branch: "main", ci_run_id: commit,
+                                         total_specs_count: shards * per_shard,
+                                         annotated_specs_count: shards * (per_shard / 2),
+                                         **attributes)
+      shards.times { |i| run.test_run_shards.create!(shard_id: i.to_s, total_specs_count: per_shard) }
+      run
+    end
+
+    it "says a multi-shard run's figure covers the shards reported so far" do
+      repository = create_repository(user: @user)
+      sharded_run(repository, commit: "inflig2", shards: 2)
+
+      get repository_path(repository)
+
+      cell = run_cells("inflig2")[TESTS]
+      # The figure survives — a level is a true statement about what was reported, and withholding
+      # it is not what this asks for.
+      expect(cell).to include("10,000")
+      # `TestRun#delivery_description`'s wording, reused rather than re-spelled: the Overview panel
+      # settles it, and two spellings of one fact is how the two surfaces would drift apart.
+      expect(cell).to include("assembled from 2 shard reports")
+      # And the qualification that makes it not a whole-suite size. Readable from the row alone.
+      expect(cell).to include("not necessarily the whole suite")
+    end
+
+    it "inflects a single shard report rather than printing '1 shard reports'" do
+      repository = create_repository(user: @user)
+      sharded_run(repository, commit: "one1shd", shards: 1)
+
+      get repository_path(repository)
+
+      expect(run_cells("one1shd")[TESTS]).to include("assembled from 1 shard report")
+      # One shard's SUM is its own whole report, so there is no coverage gap to disclose and the
+      # row reads as it always did. `multi_shard?` is the predicate for exactly this reason;
+      # `shard_count.positive?` would apologise here for nothing.
+      expect(run_cells("one1shd")[TESTS]).not_to include("not necessarily the whole suite")
+    end
+
+    it "says an unsharded run arrived in one piece, never as '0 shards'" do
+      repository = create_repository(user: @user)
+      repository.test_runs.create!(commit_sha: "laptop0", branch: "main", total_specs_count: 12,
+                                   annotated_specs_count: 6)
+
+      get repository_path(repository)
+
+      expect(run_cells("laptop0")[TESTS]).to eq("12 reported in one piece")
+      expect(run_cells("laptop0")[TESTS]).not_to include("0 shard")
+    end
+
+    it "states the composition of every row, sharded and not, in the same table" do
+      repository = create_repository(user: @user)
+      sharded_run(repository, commit: "mixshrd", shards: 4, created_at: 2.hours.ago)
+      repository.test_runs.create!(commit_sha: "mixwhol", branch: "main", total_specs_count: 20_000,
+                                   created_at: 1.hour.ago)
+
+      get repository_path(repository)
+
+      # Both rows print a five-figure count. Without the composition beneath them a reader has no
+      # way to tell that only one of the two measured a whole suite.
+      expect(run_cells("mixwhol")[TESTS]).to eq("20,000 reported in one piece")
+      expect(run_cells("mixshrd")[TESTS]).to include("assembled from 4 shard reports")
+    end
+
+    # Criterion 4 from the ticket: the existing honest states are untouched by the addition. A run
+    # that reported nothing still says so in the Annotated cell, and it still states its own
+    # composition — "no tests" is a fact about the report, and how the report arrived is another.
+    it "leaves the 'no tests' treatment alone" do
+      repository = create_repository(user: @user)
+      repository.test_runs.create!(commit_sha: "emptyc0", branch: "main", total_specs_count: 0,
+                                   annotated_specs_count: 0, duration_seconds: 2.0)
+
+      get repository_path(repository)
+
+      cells = run_cells("emptyc0")
+      expect(cells[ANNOTATED]).to eq("no tests")
+      expect(cells[TESTS]).to eq("0 reported in one piece")
+    end
+
+    # The N+1 this pins is a ten-query one that would ship green: every route to a run's
+    # composition — `shard_count`, `multi_shard?`, `delivery_description` — goes through a memoized
+    # per-INSTANCE `pick`, so calling any of them in the row loop costs one query per row. The
+    # page's other query-budget example (spec/requests/repositories_spec.rb) is the API-keys one
+    # and its fixture creates no runs at all, so nothing caught this before.
+    #
+    # Verified by mutation: dropping `preload_shard_counts` from the controller — leaving the view
+    # to ask each row itself — turns this example red by exactly the four sharded rows added below,
+    # and leaves every other example in this file green.
+    it "asks how the rows were assembled once for the whole panel, not once per row" do
+      repository = create_repository(user: @user)
+      # The newest row is a plain run in BOTH measurements, deliberately: the Overview panel above
+      # reads `latest_test_run` and its predecessor on the same branch through their own unprimed
+      # shard aggregates, so holding those two rows fixed keeps it in an identical state either side
+      # of the change and stops it absorbing or masking a difference belonging to this panel.
+      3.times do |i|
+        repository.test_runs.create!(commit_sha: "plainrun000#{i}", branch: "main",
+                                     total_specs_count: 100, created_at: (i + 1).hours.ago)
+      end
+
+      get repository_path(repository)
+      baseline = count_queries { get repository_path(repository) }
+      expect(runs_table.all("tbody tr").size).to eq(3)
+
+      # Four sharded runs and sixteen shard rows, all older than the newest plain run.
+      4.times { |i| sharded_run(repository, commit: "shrdrn#{i}", shards: 4, created_at: (i + 4).hours.ago) }
+
+      expect(count_queries { get repository_path(repository) }).to eq(baseline)
+      expect(runs_table.all("tbody tr").size).to eq(7)
+      expect(run_cells("shrdrn0")[TESTS]).to include("assembled from 4 shard reports")
+    end
+
+    def count_queries
+      count = 0
+      subscriber = ActiveSupport::Notifications.subscribe("sql.active_record") do |_, _, _, _, payload|
+        count += 1 unless payload[:cached] || payload[:name].in?(["SCHEMA", "TRANSACTION"])
+      end
+      yield
+      count
+    ensure
+      ActiveSupport::Notifications.unsubscribe(subscriber)
+    end
+  end
+
+  # The panel's own shape is what a time-ordered column of numbers misleads a reader about, and the
+  # codebase has written the argument down twice — `Repository#previous_test_run_on_branch` exists
+  # so the Overview never differences two rows of this history. This panel prints the operands, so
+  # it says what they are.
+  describe "what the list is" do
+    def caption = Capybara.string(response.body).find("#recent-runs-basis")
+
+    it "says the list is every branch interleaved and not a series" do
+      repository = create_repository(user: @user)
+      repository.test_runs.create!(commit_sha: "capshown", branch: "main", total_specs_count: 5)
+
+      get repository_path(repository)
+
+      # Three claims, each load-bearing on its own: what the rows are drawn from, what order they
+      # are in, and — the point of the other two — that subtracting one from another measures
+      # nothing.
+      expect(caption).to have_text("every branch CI reports from")
+      expect(caption).to have_text("newest first")
+      expect(caption.text).to include("not a change in the suite")
+    end
+
+    it "does not caption an empty state, which has no rows to explain" do
+      repository = create_repository(user: @user)
+
+      get repository_path(repository)
+
+      expect(runs_panel).to have_text("No runs yet")
+      expect(runs_panel).to have_no_selector("#recent-runs-basis")
+    end
   end
 end
