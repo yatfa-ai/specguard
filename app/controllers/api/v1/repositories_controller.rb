@@ -334,12 +334,14 @@ class Api::V1::RepositoriesController < Api::BaseController
   # Materialized once and memoized: `show` reads it twice (the window's `returned`, then the rows)
   # and must not pay for it twice.
   #
-  # One grouped `COUNT(*)` for the whole window primes `shard_count` on every row — see
-  # `ShardCountPreloading`, shared with the human panel that asks the same question of the same
-  # rows. So `history` costs two queries at ten rows and the same two at one, instead of one `pick`
-  # per row. A narrowed window primes identically: `preload_shard_counts` keys off the ids it is
-  # handed and does not care how they were selected, so `?branch=` costs the same two queries at
-  # thirty rows.
+  # ONE grouped aggregate for the whole window primes BOTH of the row's counts on every row —
+  # `COUNT(*)` for `shard_count` and `COUNT(duration_seconds)` for `timed_shard_count`, two columns
+  # of the same `GROUP BY` rather than two queries — see `ShardCountPreloading`, shared with the
+  # human panel, which asks the same question of the same rows and reads only the first of the two
+  # facts the aggregate carries. So `history` costs two queries at ten rows and the same two at one,
+  # instead of one `pick` per row. A narrowed window primes identically: `preload_shard_counts` keys
+  # off the ids it is handed and does not care how they were selected, so `?branch=` costs the same
+  # two queries at thirty rows.
   #
   # The branch predicate is passed INTO the model call, and that placement is the whole feature. The
   # `WHERE` and the `LIMIT` have to be one query: bounding first and filtering the result is what
