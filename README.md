@@ -15,6 +15,9 @@ The platform: a Ruby on Rails 8 application providing
 
 - `POST /api/v1/ingest` — CI telemetry ingestion (JSONL test-run payloads),
 - `POST /api/v1/check-intent` — agent duplicate check (hybrid vector search),
+- `GET /api/v1/repository` — the agent-readable repository summary: the key's repository, and the
+  latest run's suite size, annotated share and cost
+  ([response shape](docs/DEVELOPMENT.md#get-apiv1repository--the-response-shape)),
 - a minimal Hotwire dashboard for repo health and API-key management,
 - a PostgreSQL + pgvector data model with HNSW-indexed intent embeddings.
 

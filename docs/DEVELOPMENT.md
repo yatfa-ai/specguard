@@ -69,11 +69,92 @@ flash. That is what makes the reveal-once UI honest rather than cosmetic.
 
 ```sh
 curl -H "Authorization: Bearer sgk_..." http://localhost:3000/api/v1/repository
-# => {"repository":{...},"api_key":{...}}
+# => {"repository":{...},"api_key":{...},"latest_run":{...}}
 
 curl -H "Authorization: Bearer nope" http://localhost:3000/api/v1/repository
 # => 401 {"error":"unauthorized",...}
 ```
+
+### `GET /api/v1/repository` — the response shape
+
+The agent-readable half of the repository page: which repository the key resolves to, and what the
+suite looked like the last time CI reported. Every figure is read off the same row
+`repositories#show` renders from, so the API and the dashboard cannot name different commits for
+the same repository.
+
+```json
+{
+  "repository": {
+    "id": 12,
+    "full_name": "acme/billing-service",
+    "name": "billing-service",
+    "registered_at": "2026-07-01T09:14:22Z"
+  },
+  "api_key": {
+    "name": "ci",
+    "last_used_at": "2026-08-07T11:02:00Z"
+  },
+  "latest_run": {
+    "commit_sha": "a1b2c3d4e5f6",
+    "branch": "main",
+    "total_specs": 20000,
+    "annotated_specs": 5000,
+    "annotated_ratio": 0.25,
+    "duration_seconds": 74.25,
+    "shards": {
+      "count": 4,
+      "timed_count": 4,
+      "machine_seconds": 253.75,
+      "coverage": { "duration_seconds": 4, "machine_seconds": 4 }
+    },
+    "ingested_at": "2026-08-07T11:01:58Z"
+  }
+}
+```
+
+**`null` is never a stand-in for a measurement.** Everything nullable below distinguishes "not
+reported" from a real zero, because a client cannot tell them apart after the fact:
+
+| Field | `null` means |
+| --- | --- |
+| `api_key.last_used_at` | the key has never authenticated a request |
+| `latest_run` | **CI has never reported for this repository** — not a zeroed block. A repo whose CI never ran must not serialize byte-identically to one that ran and found an empty suite. |
+| `latest_run.branch` | the client did not say. `POST /api/v1/ingest` accepts a body without it. |
+| `latest_run.duration_seconds` | no wall clock was reported. `0.0` would assert the run took no time. |
+| `latest_run.annotated_ratio` | the run reported **zero tests**, so there is no share to take. The counts are still present, so a client can compute its own. |
+| `latest_run.shards` | the run was assembled from **one shard or none** — the entire unsharded corpus. There is no composition to disambiguate: one shard's MAX *is* its SUM. The key is always present. |
+| `latest_run.shards.machine_seconds` | not one shard reported a timing. `0.0` would assert the suite was free. |
+
+`annotated_ratio` is the **0–1 fraction**, the same unit `POST /api/v1/ingest` answers with — never
+the 0–100 percentage `TestRun#annotated_ratio` renders for the dashboard. The 100× gap between the
+two is invisible in a JSON body.
+
+#### The two cost figures, and what each was measured over
+
+A sharded suite delivers itself over N requests and `Ingest::RunRecorder` folds all of them onto
+one run, recomputing the counts as the SUM of the shards and `duration_seconds` as the **MAX**.
+That MAX is correct — shards run concurrently, so the slowest one is the run's wall clock — but it
+is not what the suite *cost*. Four shards of 61.0s, 58.5s, 74.25s and 60.0s are a 74.25s wait and
+253.75s of machine time, a 3.4× gap that widens with every shard added.
+
+- `duration_seconds` — the **wall clock**, MAX over the shards. Unchanged in key, type and value
+  from before the `shards` block existed.
+- `shards.machine_seconds` — what the suite **cost**, SUM over the shards.
+- `shards.count` — how many shard rows the run was assembled from. A count of *recorded shards*,
+  not of distinct CI jobs: the unique index on `(test_run_id, shard_id)` is partial
+  (`WHERE shard_id IS NOT NULL`), so a client that shards without exposing an index the gem
+  recognises gets one row per delivery.
+- `shards.timed_count` — how many of those reported a duration. Shard durations are nullable and
+  ingest accepts a shard without one, so a silent shard is an ordinary state.
+- `shards.coverage` — **how many shards each cost figure was computed over**, keyed by the figure's
+  own JSON name. `coverage.duration_seconds` is the MAX's denominator, `coverage.machine_seconds`
+  the SUM's, and `count` is what the run has. When they differ, the SUM is a *floor* and the MAX is
+  a maximum over a subset — which may well have excluded the slowest shard, since a cancelled or
+  timed-out job usually is. Counts rather than the dashboard's prose ("slowest of the 3 that
+  reported") so a client can divide rather than parse English.
+
+The dashboard's Overview panel renders the same two figures under coverage-stating labels; this
+block is how a client reconstructs those labels for itself.
 
 ## The design system
 
