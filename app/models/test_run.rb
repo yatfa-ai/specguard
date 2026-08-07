@@ -68,7 +68,35 @@ class TestRun < ApplicationRecord
   # unique index on `(test_run_id, shard_id)` is partial (`WHERE shard_id IS NOT NULL`), so a client
   # that shards without exposing an index the gem recognises gets one row per delivery rather than
   # one row per slice. Any surface rendering this number has to word it as what it is.
-  def shard_count = shard_totals[0]
+  def shard_count = @shard_count ||= shard_totals[0]
+
+  # Hand this run a shard count that a caller has already counted, so `shard_count` — and the
+  # `multi_shard?` / `delivery_description` that route through it — answer without a query.
+  #
+  # The seam exists because `shard_totals` is one `pick` per instance. That is exactly right for
+  # the Overview panel, which asks one already-loaded run three questions and pays one round trip
+  # for all of them, and exactly wrong for the Recent-runs table, which asks ten runs one question
+  # each and would pay ten. The caller there holds a single grouped `COUNT(*)` keyed by
+  # `test_run_id` (`RepositoriesController#preload_shard_counts`, indexed by
+  # `index_test_run_shards_on_test_run_id`) and primes each row from it.
+  #
+  # Deliberately narrow: it primes the COUNT alone and never the whole `shard_totals` tuple,
+  # because a grouped count is the only aggregate a list view can cheaply take. `timed_shard_count`
+  # and `machine_seconds` keep reading their own row of facts, so nothing can end up answering a
+  # *timing* question out of a number that measured no timing. Priming the tuple with two nils
+  # would do exactly that, and it would do it silently.
+  #
+  # A named method rather than `attr_writer :shard_count`: a writer named for a non-column would be
+  # reachable through `TestRun.new(shard_count: 4)`, which looks like it persists something and
+  # does not.
+  #
+  # `.to_i` because a grouped count has no entry at all for a run with no shard rows — the entire
+  # unsharded corpus — and `nil` there would send `shard_count` back to querying for a number the
+  # caller already knows is zero.
+  def preload_shard_count(count)
+    @shard_count = count.to_i
+    self
+  end
 
   # Whether there is a composition to disambiguate at all. One shard's MAX *is* its SUM, and zero
   # shards have neither, so both render exactly as they always have — no second figure, no wording
