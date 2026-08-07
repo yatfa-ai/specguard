@@ -91,10 +91,13 @@
                 <%# What the figure above covers, when it does not cover the whole suite. Through
                     the same `test_run_delivery_note` seam the Recent-runs table renders, so this
                     card cannot word the fact differently from the page it links to — and
-                    unconditional there, per-row, but only on a multi-shard run here: a grid of
-                    cards each repeating "reported in one piece" would bury the one card that is
-                    not. %>
-                <% if run.multi_shard? %>
+                    unconditional there, per-row, but only on a run that arrived in parts here: a
+                    grid of cards each repeating "reported in one piece" would bury the one card
+                    that is not. That is a reason to exclude ZERO shards, and `positive?` excludes
+                    exactly that. A ONE-shard card is the case the sentence is most needed on —
+                    a build still arriving, printing a fraction of its suite in the same type as
+                    a whole one. %>
+                <% if run.shard_count.positive? %>
                   <span class="block"><%= test_run_delivery_note(run) %></span>
                 <% end %>
               </p>

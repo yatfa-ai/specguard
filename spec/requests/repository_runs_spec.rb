@@ -233,10 +233,15 @@ RSpec.describe "Repository recent runs", type: :request do
       get repository_path(repository)
 
       expect(run_cells("one1shd")[TESTS]).to include("assembled from 1 shard report")
-      # One shard's SUM is its own whole report, so there is no coverage gap to disclose and the
-      # row reads as it always did. `multi_shard?` is the predicate for exactly this reason;
-      # `shard_count.positive?` would apologise here for nothing.
-      expect(run_cells("one1shd")[TESTS]).not_to include("not necessarily the whole suite")
+      # And it still discloses its coverage. A one-shard row is not a whole report — it is the most
+      # understated row there is, a four-way split whose first POST has landed, printing a quarter
+      # of its suite. The predicate is `shard_count.positive?` for exactly that reason;
+      # `multi_shard?` would go silent on a larger gap than the two-shard row it does warn about.
+      # The clause inflects with the count: "covers those" would promise more reports than the
+      # phrase before it just named.
+      expect(run_cells("one1shd")[TESTS]).to include(
+        "the count above covers that report, not necessarily the whole suite"
+      )
     end
 
     it "says an unsharded run arrived in one piece, never as '0 shards'" do
