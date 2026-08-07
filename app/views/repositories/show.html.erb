@@ -419,16 +419,103 @@
                 <% end %>
               </p>
 
+              <%# WHICH of the two things that spread is, which is the half a reader can act on.
+                  `duration = test count x cost per test`, so a shard that ran long did so because
+                  it held more tests than its siblings — re-divide the suite — or because it held
+                  the same number of individually dearer ones, where re-dividing moves the wait to
+                  another shard and changes nothing. The durations alone print identically in both
+                  cases, and the panel advised the first in both until the counts were read.
+
+                  Rendered only in the imbalanced branch. The balanced branch has no spread to
+                  attribute a cause to, and offering one there would be answering a question the
+                  numbers did not raise.
+
+                  Each branch claims exactly what its own spread supports, including the branch
+                  that claims neither: a material duration spread can be the product of two
+                  immaterial ones (a count spread and a cost spread compound), and "we cannot
+                  attribute this" is a truthful answer where picking the larger of two
+                  below-threshold figures is not. Same discipline `TestRun#wall_clock_coverage`
+                  applies to the word "slowest". %>
+              <% if imbalanced %>
+                <p id="shard-imbalance-cause" class="text-xs text-app-muted">
+                  <% if !@latest_test_run.every_shard_sized? %>
+                    <%# The zero-denominator case, stated rather than divided. `total_specs_count`
+                        is `null: false, default: 0`, so a shard that loaded no specs is an ordinary
+                        row with a wall clock and nothing to divide it by — and taking the spread
+                        over the shards that did report would be a fact about a subset wearing a
+                        sentence about the run. %>
+                    Whether that came from uneven test counts or from individually expensive tests
+                    is not answerable on these rows:
+                    <%= @latest_test_run.unsized_shard_count %> of these
+                    <%= shard_count %> shards reported no tests at all, so there is a wall clock
+                    there with no denominator to divide it by. The per-test comparison is withheld
+                    rather than taken over the shards that did report and described as the run's.
+                  <% elsif @latest_test_run.spec_count_spread_material? && @latest_test_run.seconds_per_spec_spread_material? %>
+                    Both halves moved: these shards' test counts spread
+                    <%= @latest_test_run.spec_count_spread_label %> and their per-test costs spread
+                    <%= @latest_test_run.seconds_per_spec_spread_label %>, from
+                    <%= @latest_test_run.cheapest_seconds_per_spec_label %> to
+                    <%= @latest_test_run.dearest_seconds_per_spec_label %>. Re-dividing the suite
+                    addresses one of them and leaves the other where it is.
+                  <% elsif @latest_test_run.spec_count_spread_material? %>
+                    That came from how many tests each shard got: their counts spread
+                    <%= @latest_test_run.spec_count_spread_label %>, while every shard's tests cost
+                    much the same each — within
+                    <%= @latest_test_run.seconds_per_spec_spread_label %>, from
+                    <%= @latest_test_run.cheapest_seconds_per_spec_label %> to
+                    <%= @latest_test_run.dearest_seconds_per_spec_label %>. Re-dividing the suite
+                    across the same shards is what moves this number.
+                  <% elsif @latest_test_run.seconds_per_spec_spread_material? %>
+                    That did not come from how many tests each shard got — their counts are within
+                    <%= @latest_test_run.spec_count_spread_label %> of each other. Their per-test
+                    costs spread <%= @latest_test_run.seconds_per_spec_spread_label %>, from
+                    <%= @latest_test_run.cheapest_seconds_per_spec_label %> to
+                    <%= @latest_test_run.dearest_seconds_per_spec_label %>: the expensive work is in
+                    what that partition holds, not in how much of it there is, so re-dividing the
+                    suite moves the wait to another shard rather than removing it.
+                  <% else %>
+                    Neither half accounts for it on its own: these shards' test counts are within
+                    <%= @latest_test_run.spec_count_spread_label %> of each other and their per-test
+                    costs within <%= @latest_test_run.seconds_per_spec_spread_label %>. Two spreads
+                    this size compound into the gap above without either being a finding, so no
+                    cause is named for it here.
+                  <% end %>
+                  <%# The limitation, stated on the surface rather than left for a reader to
+                      discover. A shard is whatever slice the client's partitioner handed that
+                      job — arbitrary with respect to directories — so "this partition is
+                      expensive per test" is a fact about the run's division and never about a
+                      code area, and a reader who came away thinking otherwise would have been
+                      misled by wording alone. %>
+                  A shard is an arbitrary slice of the suite rather than a directory, so this says
+                  which partition of the run was expensive and not which code.
+                </p>
+              <% end %>
+
               <%# The distribution itself, so the shape is visible rather than compressed into the
                   single ratio above — three shards at a minute beside one at 74s and four shards
                   fanned evenly from 40s to 90s can share an excess and are not the same problem.
+
+                  Each row carries its duration, the number of tests that duration was measured
+                  over, and the two divided — the sentence above states the spread, and this is
+                  where a reader checks which shard is on which end of it.
 
                   A real list, not a separator-joined string: `·` between values is announced
                   inconsistently by screen readers and reads as content when it is punctuation, and
                   a `ul` gets the grouping across without inventing a character for it. %>
               <ul id="shard-distribution" class="flex flex-wrap gap-x-3 gap-y-1 text-xs text-app-muted tabular-nums">
-                <% @latest_test_run.shard_duration_labels.each do |name, duration| %>
-                  <li><%= name %> <span class="text-app-content-secondary"><%= duration %></span></li>
+                <% @latest_test_run.shard_distribution_labels.each do |name, duration, size, per_spec| %>
+                  <li>
+                    <%= name %>
+                    <span class="text-app-content-secondary"><%= duration %></span>
+                    <%# The denominator, never omitted: a duration with no count beside it is the
+                        figure this panel could not interpret. A shard that reported none says so
+                        in words and carries no per-test figure at all — there is no denominator,
+                        so there is no quotient, and printing one would be inventing it. %>
+                    <span class="text-app-content-secondary"><%= size %></span>
+                    <% if per_spec %>
+                      <span class="text-app-content-secondary"><%= per_spec %></span>
+                    <% end %>
+                  </li>
                 <% end %>
               </ul>
             <% elsif @latest_test_run.wall_clock_decomposition_pending? %>

@@ -112,7 +112,13 @@ here is the response with **no** parameter.
       "count": 4,
       "timed_count": 4,
       "machine_seconds": 253.75,
-      "coverage": { "duration_seconds": 4, "machine_seconds": 4 }
+      "coverage": { "duration_seconds": 4, "machine_seconds": 4 },
+      "per_shard": [
+        { "shard_id": "1", "duration_seconds": 61.0, "total_specs": 5000 },
+        { "shard_id": "2", "duration_seconds": 58.5, "total_specs": 5000 },
+        { "shard_id": "3", "duration_seconds": 74.25, "total_specs": 5000 },
+        { "shard_id": "4", "duration_seconds": 60.0, "total_specs": 5000 }
+      ]
     },
     "ingested_at": "2026-08-07T11:01:58Z"
   },
@@ -177,6 +183,8 @@ reported" from a real zero, because a client cannot tell them apart after the fa
 | `latest_run.annotated_ratio` | the run reported **zero tests**, so there is no share to take. The counts are still present, so a client can compute its own. |
 | `latest_run.shards` | the run was assembled from **one shard or none** — the entire unsharded corpus. There is no composition to disambiguate: one shard's MAX *is* its SUM. The key is always present. |
 | `latest_run.shards.machine_seconds` | not one shard reported a timing. `0.0` would assert the suite was free. |
+| `latest_run.shards.per_shard[].shard_id` | the client did not name that slice. A positional index would be a name nothing in CI answers to, and it would point at a different slice on the next run. |
+| `latest_run.shards.per_shard[].duration_seconds` | that shard reported no timing. `total_specs` beside it is still a real count, and `0` there is a real count too — a shard that loaded no specs, not a shard that said nothing. |
 | `history[].branch` / `.duration_seconds` / `.annotated_ratio` | exactly what the same-named `latest_run` field means. A history row is the same row `latest_run` serializes, minus the per-shard cost figures. |
 | `branches` | **never `null`** — `[]` instead, by the list rule below. No field on a row is nullable either: a row exists because a branch has runs, so `name`, `run_count` and `run_count_capped` are always present. |
 | `branches_window` | **never `null`**, and served on every request — with or without `?branch=`, and including one whose `branches` came back empty. Its fields are bounds on the walk, which are facts about how SpecGuard looked rather than about what it found, so there is no state in which they are unknown. |
@@ -218,6 +226,25 @@ is not what the suite *cost*. Four shards of 61.0s, 58.5s, 74.25s and 60.0s are 
   a maximum over a subset — which may well have excluded the slowest shard, since a cancelled or
   timed-out job usually is. Counts rather than the dashboard's prose ("slowest of the 3 that
   reported") so a client can divide rather than parse English.
+- `shards.per_shard` — **each shard's duration beside the test count it was measured over.** The
+  figures above say how much the run's wait exceeded an even split; they cannot say *why*, and the
+  two causes take opposite actions. `duration = test count × cost per test`, so a shard that ran
+  long either held more tests than its siblings — re-divide the suite — or held the same number of
+  individually dearer ones, where re-dividing moves the wait to a different shard and removes
+  nothing. Both print identically from durations alone.
+  - `shard_id` — `null` when the client did not name the slice, never a positional index: a name
+    nothing in CI answers to is worse than no name.
+  - `duration_seconds` — `null`, never `0.0`, for a shard that reported no timing.
+  - `total_specs` — `0` is a real value. A shard can load no specs, and that row has a wall clock
+    with no denominator. **The endpoint serves the two operands and never the quotient**, partly so
+    the client owns that decision and partly because a served rate would have to invent an answer
+    there.
+  - **Delivery order, not slowest-first.** Sort it yourself if you want a ranking; a duration-ranked
+    read puts nulls first in Postgres, so the shard that reported *nothing* would head a list read
+    as "slowest".
+
+  A shard is an arbitrary partition of the suite and not a directory, so this answers *which
+  partition of this run is expensive per test* — never *which code is expensive*.
 
 The dashboard's Overview panel renders the same two figures under coverage-stating labels; this
 block is how a client reconstructs those labels for itself.

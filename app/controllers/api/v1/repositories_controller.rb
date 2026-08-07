@@ -139,7 +139,41 @@ class Api::V1::RepositoriesController < Api::BaseController
       coverage: {
         duration_seconds: test_run.timed_shard_count,
         machine_seconds: test_run.timed_shard_count
-      }
+      },
+      # The denominator of every duration above, per shard — the block's own STRUCTURED COUNTS,
+      # NOT PROSE rule taken one level down. `machine_seconds` says what the run cost and
+      # `coverage` says over how many shards; neither says whether the expensive shard was
+      # expensive because it held more tests or because its tests cost more each, and the two take
+      # opposite actions. `duration = count x cost per test`, so serving both columns lets a client
+      # divide and decide — the Overview panel words that division in English, and this endpoint
+      # exists so an agent does not have to parse the sentence.
+      #
+      # Two raw columns and no derived rate, deliberately: a `seconds_per_spec` key would be this
+      # block shipping the arithmetic instead of the operands, and it would have to invent an
+      # answer for a shard whose `total_specs` is `0` — a real row, since the column is
+      # `null: false, default: 0`. A client dividing for itself sees the zero and decides.
+      #
+      # ADDED BESIDE the four keys above, which keep their names, their types and their values, on
+      # the rule `shards` itself followed when it was added beside `duration_seconds`.
+      #
+      # DELIVERY ORDER, and that is why it reads `TestRun#shard_reports` rather than the panel's
+      # `#shard_durations`. The latter ranks slowest-first, which is NULLS FIRST in Postgres and
+      # therefore safe only behind `#wall_clock_decomposable?`; this block's gate is `multi_shard?`,
+      # which does not establish that every shard reported a timing. An unranked list makes no
+      # claim to rank, so it needs no such gate — and a client that wants an ordering sorts on the
+      # `duration_seconds` it can see is null.
+      per_shard: test_run.shard_reports.map do |shard_id, duration_seconds, total_specs|
+        {
+          # Nullable, and a nil one is an ordinary state rather than an omission —
+          # `Ingest::RunRecorder#upsert_shard` records one row per delivery for a client that
+          # shards without exposing an index the gem recognises. `null` says the client did not
+          # name this slice; a positional index would hand back a name nothing in CI answers to.
+          shard_id: shard_id,
+          # `null`, never `0.0`, on the same rule the run's own `duration_seconds` follows.
+          duration_seconds: duration_seconds,
+          total_specs: total_specs
+        }
+      end
     }
   end
 

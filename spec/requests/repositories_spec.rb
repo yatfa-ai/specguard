@@ -306,7 +306,14 @@ RSpec.describe "Repository registration and API keys", type: :request do
     # `TestRun#shard_delivery_settled?` reads. The default puts every fixture in the ordinary
     # settled state a reader looks at long after CI finished; the in-flight examples pass a fresh
     # one deliberately, and are the only place the distinction is the subject.
-    def sharded_run(repository, durations, commit_sha:, names: nil, last_shard_arrived_ago: 1.hour)
+    # `spec_counts` sizes each shard independently, defaulting to the even 5,000 every existing
+    # expectation was written against. It is a parameter and not a constant because the two causes
+    # of a duration spread are only separable by it: with every shard the same size a long shard is
+    # long because its tests are dear, and only a fixture that can make the counts UNEVEN can drive
+    # the other branch. A helper that hard-coded 5,000 would leave that branch unreachable —
+    # green by fixture rather than by behaviour.
+    def sharded_run(repository, durations, commit_sha:, names: nil, spec_counts: nil,
+                    last_shard_arrived_ago: 1.hour)
       # The parent's counts are DERIVED from the shards written below, never asserted beside them.
       # `Ingest::RunRecorder#recompute_totals` re-derives them as the SUM over the rows recorded so
       # far, after every ingest — so a two-shard run's parent reads 10,000 and not 20,000, and a
@@ -315,14 +322,15 @@ RSpec.describe "Repository registration and API keys", type: :request do
       # half-delivered run looks like: they would have rendered a "Tests in suite 20,000" no
       # half-delivered run ever shows. A 4-shard fixture is unaffected — 5000 x 4 is the 20,000
       # the pinned expectations already depend on.
+      sizes = spec_counts || Array.new(durations.length, 5000)
       run = repository.test_runs.create!(commit_sha: commit_sha, ci_run_id: "gha-#{commit_sha}",
-                                         total_specs_count: 5000 * durations.length,
-                                         annotated_specs_count: 1250 * durations.length,
+                                         total_specs_count: sizes.sum,
+                                         annotated_specs_count: sizes.sum / 4,
                                          duration_seconds: durations.compact.max)
       durations.each_with_index do |seconds, index|
         run.test_run_shards.create!(shard_id: names ? names[index] : (index + 1).to_s,
-                                    total_specs_count: 5000,
-                                    annotated_specs_count: 1250, duration_seconds: seconds)
+                                    total_specs_count: sizes[index],
+                                    annotated_specs_count: sizes[index] / 4, duration_seconds: seconds)
       end
       run.test_run_shards.update_all(updated_at: last_shard_arrived_ago.ago)
       run
@@ -810,14 +818,81 @@ RSpec.describe "Repository registration and API keys", type: :request do
       # beside one runaway, and four fanned evenly across thirty seconds, can share an excess. So
       # the distribution is shown, slowest first, which is also the order that puts the shard just
       # named at the head of the list.
-      it "shows every shard's duration, slowest first" do
+      #
+      # Each row also carries the DENOMINATOR its duration was measured over and the two divided.
+      # Without them the list is four wall clocks and no way to tell a shard that ran long because
+      # it held four times the tests from one that held the same tests four times dearer — two
+      # opposite actions behind one identical display, which is exactly what this fixture is: every
+      # shard holds 5,000, so the whole of this spread is in what the tests COST.
+      it "shows every shard's duration, its test count and the two divided, slowest first" do
         repository = create_repository(user: @user)
         sharded_run(repository, [61.0, 58.5, 74.25, 60.0], commit_sha: "feedfacecafe0031")
 
         get repository_path(repository)
 
         expect(distribution.all("li").map { |li| li.text(normalize_ws: true) })
-          .to eq(["shard 3 1m 14s", "shard 1 1m 1s", "shard 4 1m", "shard 2 58.5s"])
+          .to eq(["shard 3 1m 14s 5,000 tests 14.9ms/test",
+                  "shard 1 1m 1s 5,000 tests 12.2ms/test",
+                  "shard 4 1m 5,000 tests 12.0ms/test",
+                  "shard 2 58.5s 5,000 tests 11.7ms/test"])
+      end
+
+      # The per-test figure is in MILLISECONDS and not in the panel's shared `humanized_seconds`,
+      # which is the correct formatter for the three run-level figures that sit within a few lines
+      # of each other and the wrong one here: this quantity is three orders of magnitude smaller,
+      # and `74.25 / 5000` through that formatter renders `0.0s` — a computed zero, on the panel
+      # whose rule is that a figure it cannot stand behind is withheld with its reason rather than
+      # rounded away. Pinned as an absence so a later "share one formatter" tidy-up goes red.
+      it "renders the per-test cost in a unit that resolves it rather than rounding it to zero" do
+        repository = create_repository(user: @user)
+        sharded_run(repository, [61.0, 58.5, 74.25, 60.0], commit_sha: "feedfacecafe0050")
+
+        get repository_path(repository)
+
+        expect(distribution).to have_text("14.9ms/test", normalize_ws: true)
+        expect(distribution).to have_no_text("0.0s/test", normalize_ws: true)
+        expect(distribution).to have_no_text("0.0s", normalize_ws: true)
+      end
+
+      # A slow integration suite is seconds per example, not milliseconds, and the same formatter
+      # has to stay legible there — 8 tests over 61s is 7.6s each, and `7625.0ms/test` is a number
+      # a reader has to divide in their head to use. The other end of the same rule the example
+      # above states.
+      it "renders a seconds-per-test suite in seconds rather than in thousands of milliseconds" do
+        repository = create_repository(user: @user)
+        sharded_run(repository, [61.0, 58.5, 74.25, 60.0], spec_counts: [8, 8, 8, 8],
+                                commit_sha: "feedfacecafe0051")
+
+        get repository_path(repository)
+
+        expect(distribution.all("li").map { |li| li.text(normalize_ws: true) })
+          .to eq(["shard 3 1m 14s 8 tests 9.3s/test",
+                  "shard 1 1m 1s 8 tests 7.6s/test",
+                  "shard 4 1m 8 tests 7.5s/test",
+                  "shard 2 58.5s 8 tests 7.3s/test"])
+      end
+
+      # `total_specs_count` is `null: false, default: 0`, so a shard that loaded no specs is a real
+      # row with a real wall clock and NO DENOMINATOR. The list says so in words rather than
+      # printing `0 tests 0.0ms/test`, which would read as "these tests are free" about a shard
+      # that ran none — and the division that would produce it never happens.
+      it "states a zero-count shard's absence rather than dividing by it" do
+        repository = create_repository(user: @user)
+        sharded_run(repository, [61.0, 58.5, 74.25, 60.0], spec_counts: [5000, 5000, 0, 5000],
+                                commit_sha: "feedfacecafe0052")
+
+        get repository_path(repository)
+
+        rows = distribution.all("li").map { |li| li.text(normalize_ws: true) }
+        expect(rows.first).to eq("shard 3 1m 14s no tests reported")
+        # No quotient anywhere on that row, and no zero standing in for one.
+        expect(rows.first).not_to include("/test")
+        expect(rows.first).not_to include("0 tests")
+        # The shards that DID report a size keep theirs — the absence is scoped to the row it is a
+        # fact about and does not suppress its neighbours.
+        expect(rows.drop(1)).to eq(["shard 1 1m 1s 5,000 tests 12.2ms/test",
+                                    "shard 4 1m 5,000 tests 12.0ms/test",
+                                    "shard 2 58.5s 5,000 tests 11.7ms/test"])
       end
 
       # Every figure here is a fact about SHARDS. No per-test duration exists anywhere in the
@@ -834,6 +909,192 @@ RSpec.describe "Repository registration and API keys", type: :request do
         expect(panel).to have_no_text("slowest test", normalize_ws: true)
         expect(panel).to have_no_text("slow tests", normalize_ws: true)
         expect(panel).to have_no_text("which tests", normalize_ws: true)
+      end
+
+      # WHICH of the two things the spread is, which is the half a reader can act on. A shard runs
+      # long because it holds more tests than its siblings — re-divide the suite — or because it
+      # holds the same number of individually dearer ones, where re-dividing moves the wait to a
+      # different shard and changes nothing. `duration = count x cost per test`, so the durations
+      # alone print identically in both cases and the panel advised the first in both until the
+      # counts were read.
+      #
+      # ELEMENT-scoped on `#shard-imbalance-cause` throughout, for the reason this whole describe
+      # block states: the panel carries several sentences sharing this vocabulary, and a
+      # panel-scoped matcher would go green off a neighbouring paragraph with the deciding branch
+      # deleted.
+      describe "which of the two causes the spread is" do
+        def cause = overview_panel.find("#shard-imbalance-cause")
+
+        # The canonical fixture: every shard holds 5,000 tests, so NONE of its 14.6% imbalance is
+        # the split. 74.25s over 5,000 is 14.9ms a test against 11.7ms on the fastest shard — the
+        # tests in that partition are individually dearer, and re-dividing the suite would move the
+        # wait rather than remove it. The panel said "how the suite was divided" and stopped.
+        it "names the per-test cost when the shards hold equal numbers of tests" do
+          repository = create_repository(user: @user)
+          sharded_run(repository, [61.0, 58.5, 74.25, 60.0], commit_sha: "feedfacecafe0060")
+
+          get repository_path(repository)
+
+          expect(cause).to have_text(
+            "That did not come from how many tests each shard got — their counts are within 0.0% " \
+            "of each other. Their per-test costs spread 24.8%, from 11.7ms/test to 14.9ms/test",
+            normalize_ws: true
+          )
+          expect(cause).to have_text(
+            "re-dividing the suite moves the wait to another shard rather than removing it",
+            normalize_ws: true
+          )
+          # The advice the panel used to give unconditionally must not be reachable here.
+          expect(cause).to have_no_text("came from how many tests each shard got:", normalize_ws: true)
+          expect(cause).to have_no_text("Re-dividing the suite across the same shards", normalize_ws: true)
+        end
+
+        # The other cause, and the one the panel always assumed. Same 4 shards, same ~254s of
+        # machine time, per-test costs within 3.3% of each other — and one shard holding 6,000
+        # tests against 4,800 on the smallest. Here re-dividing IS the fix.
+        it "names the split when the counts are uneven and the per-test costs are not" do
+          repository = create_repository(user: @user)
+          sharded_run(repository, [72.0, 61.0, 59.04, 62.0], spec_counts: [6000, 5000, 4800, 5000],
+                                  commit_sha: "feedfacecafe0061")
+
+          get repository_path(repository)
+
+          expect(cause).to have_text(
+            "That came from how many tests each shard got: their counts spread 23.1%, while every " \
+            "shard's tests cost much the same each — within 3.3%, from 12.0ms/test to 12.4ms/test. " \
+            "Re-dividing the suite across the same shards is what moves this number.",
+            normalize_ws: true
+          )
+          expect(cause).to have_no_text("That did not come from how many tests", normalize_ws: true)
+          expect(cause).to have_no_text("Both halves moved", normalize_ws: true)
+        end
+
+        # Both, which is a real shape and not a tie-break: one shard holding 8,000 tests that also
+        # cost 15.0ms each against 12.0ms elsewhere. Naming only the larger of the two spreads
+        # would send a reader to re-divide a suite whose tests are also unevenly priced, and the
+        # second half of their problem would survive the fix.
+        it "names both when both spreads clear the floor" do
+          repository = create_repository(user: @user)
+          sharded_run(repository, [120.0, 60.0, 60.0, 60.0], spec_counts: [8000, 5000, 5000, 5000],
+                                  commit_sha: "feedfacecafe0062")
+
+          get repository_path(repository)
+
+          expect(cause).to have_text(
+            "Both halves moved: these shards' test counts spread 52.2% and their per-test costs " \
+            "spread 23.5%, from 12.0ms/test to 15.0ms/test. Re-dividing the suite addresses one " \
+            "of them and leaves the other where it is.",
+            normalize_ws: true
+          )
+        end
+
+        # NEITHER, which is reachable and is the branch a panel that always picked a winner would
+        # get wrong. The two spreads COMPOUND — `duration = count x cost` — so a 4.0% count spread
+        # over a 4.0% cost spread is a 5.7% imbalance that clears the materiality floor while
+        # neither of its factors does. Claiming the larger of two immaterial figures as the cause
+        # would be manufacturing a finding out of noise; the panel says it cannot attribute it.
+        it "claims neither cause when neither spread clears the floor" do
+          repository = create_repository(user: @user)
+          sharded_run(repository, [67.6, 62.5, 62.5, 62.5], spec_counts: [5200, 5000, 5000, 5000],
+                                  commit_sha: "feedfacecafe0063")
+
+          get repository_path(repository)
+
+          # The imbalance itself is still material and still stated — this is about its cause.
+          expect(decomposition).to have_text("5.7% of the wait", normalize_ws: true)
+          expect(cause).to have_text(
+            "Neither half accounts for it on its own: these shards' test counts are within 4.0% " \
+            "of each other and their per-test costs within 4.0%.",
+            normalize_ws: true
+          )
+          expect(cause).to have_text("so no cause is named for it here", normalize_ws: true)
+          expect(cause).to have_no_text("That came from how many tests", normalize_ws: true)
+          expect(cause).to have_no_text("That did not come from how many tests", normalize_ws: true)
+          expect(cause).to have_no_text("Both halves moved", normalize_ws: true)
+        end
+
+        # A shard with a wall clock and no denominator. `total_specs_count` is
+        # `null: false, default: 0`, so this is an ordinary row rather than a fault — and taking
+        # the per-test spread over the three shards that DID report would be a fact about a subset
+        # wearing a sentence about the run. The comparison is withheld with its reason, the line
+        # `TestRun#suite_size_measured?` draws for the run-level column.
+        it "withholds the per-test comparison when a shard reported no tests, and says why" do
+          repository = create_repository(user: @user)
+          sharded_run(repository, [61.0, 58.5, 74.25, 60.0], spec_counts: [5000, 5000, 0, 5000],
+                                  commit_sha: "feedfacecafe0064")
+
+          get repository_path(repository)
+
+          expect(cause).to have_text(
+            "Whether that came from uneven test counts or from individually expensive tests is " \
+            "not answerable on these rows: 1 of these 4 shards reported no tests at all, so there " \
+            "is a wall clock there with no denominator to divide it by.",
+            normalize_ws: true
+          )
+          expect(cause).to have_text(
+            "withheld rather than taken over the shards that did report", normalize_ws: true
+          )
+          # No spread figure is quoted at all — not the count spread either, which IS computable
+          # here. A sentence that led with "counts spread 30.8%" while declining the other half
+          # would be the same lopsided advice this slice exists to stop.
+          expect(cause).to have_no_text("%", normalize_ws: true)
+          expect(cause).to have_no_text("ms/test", normalize_ws: true)
+        end
+
+        # The honest limitation, on the surface rather than left for a reader to discover.
+        # RSpec/Knapsack partitions are arbitrary with respect to directories, so "this partition
+        # is expensive per test" is a fact about the run's division and never about a code area.
+        # SPGD-114's file-shaped aggregation is the ticket that could say the latter, and it has
+        # not shipped; this panel must not read as though it had.
+        it "says a shard is a partition and not a code area" do
+          repository = create_repository(user: @user)
+          sharded_run(repository, [61.0, 58.5, 74.25, 60.0], commit_sha: "feedfacecafe0065")
+
+          get repository_path(repository)
+
+          expect(cause).to have_text(
+            "A shard is an arbitrary slice of the suite rather than a directory, so this says " \
+            "which partition of the run was expensive and not which code.",
+            normalize_ws: true
+          )
+          panel = overview_panel
+          expect(panel).to have_no_text("directory is", normalize_ws: true)
+          expect(panel).to have_no_text("which files", normalize_ws: true)
+        end
+
+        # The balanced branch has no spread to attribute a cause to, and offering one there would
+        # be answering a question the numbers did not raise — the discipline the balanced branch
+        # already applies when it declines the operational claim about the run.
+        it "names no cause on a run whose shards are evenly matched" do
+          repository = create_repository(user: @user)
+          sharded_run(repository, [60.0, 60.0, 60.0, 60.0], commit_sha: "feedfacecafe0066")
+
+          get repository_path(repository)
+
+          panel = overview_panel
+          expect(decomposition).to have_text("No shard stood out", normalize_ws: true)
+          expect(panel).to have_no_css("#shard-imbalance-cause")
+          # The distribution itself still renders, counts and all: the list is a description and
+          # not a finding, so it is not withheld with the sentence. Tied durations fall back to
+          # `id: :asc`, which is the insertion order the fixture wrote them in.
+          expect(distribution.all("li").map { |li| li.text(normalize_ws: true) })
+            .to eq(["shard 1 1m 5,000 tests 12.0ms/test",
+                    "shard 2 1m 5,000 tests 12.0ms/test",
+                    "shard 3 1m 5,000 tests 12.0ms/test",
+                    "shard 4 1m 5,000 tests 12.0ms/test"])
+        end
+
+        # The gate, restated for this paragraph. Every figure it prints is derived from the same
+        # rows `#wall_clock_decomposable?` guards, so an undecomposable run must not acquire a
+        # cause sentence where it has no decomposition to attribute.
+        it "renders no cause sentence on a run the decomposition itself is withheld from" do
+          repository = create_repository(user: @user)
+          sharded_run(repository, [61.0, 58.5, nil, 60.0], commit_sha: "feedfacecafe0067")
+
+          get repository_path(repository)
+
+          expect(overview_panel).to have_no_css("#shard-imbalance-cause")
+        end
       end
 
       # The gate. The floor divides the machine time by the shard COUNT, so a shard missing from
@@ -973,7 +1234,10 @@ RSpec.describe "Repository registration and API keys", type: :request do
 
         expect(decomposition).to have_text("The slowest was an unnamed shard, at 1m 14s.", normalize_ws: true)
         expect(distribution.all("li").map { |li| li.text(normalize_ws: true) })
-          .to eq(["an unnamed shard 1m 14s", "shard 1 1m 1s", "shard 4 1m", "shard 2 58.5s"])
+          .to eq(["an unnamed shard 1m 14s 5,000 tests 14.9ms/test",
+                  "shard 1 1m 1s 5,000 tests 12.2ms/test",
+                  "shard 4 1m 5,000 tests 12.0ms/test",
+                  "shard 2 58.5s 5,000 tests 11.7ms/test"])
         # The index it would have been given had position been mistaken for identity.
         expect(overview_panel).to have_no_text("shard 3", normalize_ws: true)
       end
@@ -1169,6 +1433,56 @@ RSpec.describe "Repository registration and API keys", type: :request do
         # An absolute ceiling too: equality alone would still hold if both pages regressed to a
         # fixed-but-wasteful number of passes over the same table.
         expect(large_queries.size).to be <= 3
+      end
+
+      # The page's WHOLE query count, as an absolute integer rather than as a comparison against
+      # something else the same change could move.
+      #
+      # The two guards above bound the shard axis: equal at 3 and at 40, and at most three passes
+      # over `test_run_shards`. Neither can see a query added anywhere ELSE on the page, and
+      # neither can see a fourth pass over a different table — a relative guard is only ever as
+      # wide as the thing it compares. SPGD-230 widened `TestRun#shard_durations` from two columns
+      # to three and added a second reader of the same tuple, and the property that makes that
+      # free is that it is still one `pluck` on one already-issued query. A number is the only
+      # form of that claim that cannot drift.
+      #
+      # 13 on `origin/main` at a7c7421 and 13 after — verified by running this example against the
+      # pre-change `app/models/test_run.rb`, `app/views/repositories/show.html.erb` and
+      # `app/controllers/api/v1/repositories_controller.rb`, where it passes the count and fails
+      # only on the rendered-output assertion below. Recount it deliberately if it moves: a
+      # *lower* number is as much a change to explain as a higher one, since it usually means a
+      # figure stopped being read rather than that a query stopped being issued.
+      #
+      # QUERY-CACHE HITS ARE COUNTED, unlike the panel's other budget guards. A repeated identical
+      # SELECT inside one request costs no round trip and is invisible to a `payload[:cached]`
+      # filter — which is exactly how a dropped `@shard_durations ||=` would slip through, and this
+      # slice added three more readers of that tuple. Counting the hits makes this a count of
+      # READS rather than of round trips, which is the property that degrades when a widened tuple
+      # acquires callers.
+      it "issues exactly the queries the page issued before the shard counts were read" do
+        repository = create_repository(user: @user)
+        sharded_run(repository, [61.0, 58.5, 74.25, 60.0], commit_sha: "feedfacecafe0068")
+
+        # Warm the schema/statement caches first: the count is of the SECOND render, so
+        # first-request-only work cannot land in it.
+        get repository_path(repository)
+
+        expect(count_all_queries { get repository_path(repository) }).to eq(13)
+        # And the page really did render the thing being counted — an absolute count is satisfied
+        # by a page that renders nothing at all.
+        expect(distribution.all("li").size).to eq(4)
+        expect(distribution).to have_text("5,000 tests", normalize_ws: true)
+      end
+
+      def count_all_queries
+        count = 0
+        subscriber = ActiveSupport::Notifications.subscribe("sql.active_record") do |_, _, _, _, payload|
+          count += 1 unless payload[:name].in?(%w[SCHEMA TRANSACTION])
+        end
+        yield
+        count
+      ensure
+        ActiveSupport::Notifications.unsubscribe(subscriber)
       end
     end
 

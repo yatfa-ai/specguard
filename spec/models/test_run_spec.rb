@@ -292,6 +292,118 @@ RSpec.describe TestRun do
 
   # The database half of the run-identity invariant. `Ingest::RunRecorder` looks a run up before
   # inserting, but a lookup and an insert are two statements and four shards POST at once — the
+  # The denominator each shard's duration was measured over. `test_run_shards.total_specs_count`
+  # was written by `Ingest::RunRecorder#upsert_shard` on every sharded POST since sharding shipped
+  # and read by nothing, so the panel could show four wall clocks and no way to tell a shard that
+  # ran long because it held four times the tests from one that held the same tests four times
+  # dearer. These are the shapes the request specs cannot reach cheaply: a set with no mean, a
+  # suite too fast for the tenth of a millisecond, and the ordering contract the API depends on.
+  describe "each shard's test count beside its duration" do
+    def sharded_run(rows, commit_sha: "shardedrun00")
+      run = repository.test_runs.create!(commit_sha: commit_sha, ci_run_id: "gha-#{commit_sha}",
+                                         total_specs_count: rows.sum { |row| row[:total] },
+                                         duration_seconds: rows.filter_map { |row| row[:seconds] }.max)
+      rows.each_with_index do |row, index|
+        run.test_run_shards.create!(shard_id: row.fetch(:name, (index + 1).to_s),
+                                    total_specs_count: row[:total], duration_seconds: row[:seconds])
+      end
+      run
+    end
+
+    # APPENDED, never prepended. `#longest_shard_label` reads `shard_durations.first&.first` and
+    # `#shard_distribution_labels` destructures `|shard_id, seconds, spec_count|`, so a count in
+    # position 0 would make the panel name a number as a shard. Pinned as the whole tuple rather
+    # than as "includes the count", which a reordered pluck would also satisfy.
+    it "carries the count as the third element, slowest first" do
+      run = sharded_run([{ total: 5000, seconds: 61.0 }, { total: 4000, seconds: 74.25 }])
+
+      expect(run.shard_durations).to eq([["2", 74.25, 4000], ["1", 61.0, 5000]])
+      expect(run.longest_shard_label).to eq("shard 2")
+    end
+
+    # `#shard_reports` is the same three columns UNRANKED, and the ordering is the entire reason it
+    # is a separate method: `#shard_durations` sorts `duration_seconds: :desc`, which is NULLS
+    # FIRST in Postgres, so on a run with a silent shard its head is the shard that reported
+    # nothing. `GET /api/v1/repository` gates on `multi_shard?` alone and would serve that row at
+    # the top of a list a client reads as slowest-first.
+    it "serves an unranked delivery-ordered tuple for callers that are not behind the gate" do
+      run = sharded_run([{ total: 5000, seconds: 61.0 }, { total: 4000, seconds: nil },
+                         { total: 3000, seconds: 74.25 }])
+
+      expect(run.shard_reports).to eq([["1", 61.0, 5000], ["2", nil, 4000], ["3", 74.25, 3000]])
+      # The hazard, stated as the difference between the two: the silent shard heads the ranked
+      # read and sits in its own place in the unranked one.
+      expect(run.shard_durations.first).to eq(["2", nil, 4000])
+    end
+
+    # A shard that loaded no specs is a real row — the column is `null: false, default: 0` — with a
+    # wall clock and no denominator. No division happens and no zero stands in for the quotient.
+    it "withholds a per-test cost from a shard that reported no tests" do
+      run = sharded_run([{ total: 5000, seconds: 61.0 }, { total: 0, seconds: 3.5 }])
+
+      expect(run.shard_seconds_per_spec).to eq([0.0122, nil])
+      expect(run.unsized_shard_count).to eq(1)
+      expect(run).not_to be_every_shard_sized
+      expect(run.shard_distribution_labels.last).to eq(["shard 2", "3.5s", "no tests reported", nil])
+    end
+
+    # ...and the spread that would have been taken over the rest is withheld with it, rather than
+    # computed over a subset and described as the run's. The COUNT spread survives — a zero is a
+    # real count — which is why the two are separate figures and not one.
+    it "withholds the per-test spread when any shard has no denominator" do
+      run = sharded_run([{ total: 5000, seconds: 61.0 }, { total: 0, seconds: 3.5 }])
+
+      expect(run.seconds_per_spec_spread_percent).to be_nil
+      expect(run).not_to be_seconds_per_spec_spread_material
+      expect(run.spec_count_spread_percent).to eq(200.0)
+    end
+
+    # `nil`, never `0.0`, when there is no mean to divide by. A run whose shards all reported zero
+    # tests has no dispersion TO measure, and a computed 0% would let "the shards are evenly sized"
+    # be said about shards that reported nothing at all.
+    it "has no count spread at all when every shard reported zero tests" do
+      run = sharded_run([{ total: 0, seconds: 61.0 }, { total: 0, seconds: 58.5 }])
+
+      expect(run.spec_count_spread_percent).to be_nil
+      expect(run).not_to be_spec_count_spread_material
+      expect(run.seconds_per_spec_spread_percent).to be_nil
+    end
+
+    # Three magnitudes, three units. `humanized_seconds` is right for the three run-level figures
+    # that sit within a few lines of each other and wrong here: `74.25 / 5000` through it prints
+    # `0.0s`, a computed zero on the panel whose rule is that a figure it cannot stand behind is
+    # withheld with its reason rather than rounded away.
+    it "states a per-test cost in the unit that resolves it" do
+      seconds_each = sharded_run([{ total: 8, seconds: 61.0 }], commit_sha: "slowsuite000")
+      millis_each = sharded_run([{ total: 5000, seconds: 74.25 }], commit_sha: "unitsuite000")
+      # 100,000 examples in 4 seconds is 40 microseconds each — below what a tenth of a
+      # millisecond resolves, so it states a bound instead of rounding to `0.0ms/test`.
+      micros_each = sharded_run([{ total: 100_000, seconds: 4.0 }], commit_sha: "fastsuite000")
+
+      expect(seconds_each.shard_distribution_labels.first.last).to eq("7.6s/test")
+      expect(millis_each.shard_distribution_labels.first.last).to eq("14.9ms/test")
+      expect(micros_each.shard_distribution_labels.first.last).to eq("under 0.1ms/test")
+    end
+
+    # The two spreads are separately computable from the same tuple, and a run can have one
+    # without the other — which is the whole point, since they take opposite actions.
+    it "separates a count-driven spread from a cost-driven one" do
+      cost_driven = sharded_run([{ total: 5000, seconds: 74.25 }, { total: 5000, seconds: 58.5 }],
+                                commit_sha: "costdriven00")
+      count_driven = sharded_run([{ total: 6000, seconds: 72.0 }, { total: 4800, seconds: 57.6 }],
+                                 commit_sha: "countdriven0")
+
+      expect(cost_driven.spec_count_spread_percent).to eq(0.0)
+      expect(cost_driven).to be_seconds_per_spec_spread_material
+      expect(cost_driven).not_to be_spec_count_spread_material
+
+      # Identical 12.0ms/test on both shards: every second of this run's spread is the split.
+      expect(count_driven.seconds_per_spec_spread_percent).to eq(0.0)
+      expect(count_driven).to be_spec_count_spread_material
+      expect(count_driven).not_to be_seconds_per_spec_spread_material
+    end
+  end
+
   # index is what makes the loser of that race an exception to rescue rather than a second row
   # with half the suite in it.
   describe "the run identity" do
