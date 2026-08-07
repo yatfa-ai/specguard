@@ -394,6 +394,29 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
       [first, second, third]
     end
 
+    # A sharded history row, written directly in the shape the `latest_run` block's own
+    # `sharded_run` helper uses — the recorder is exercised in the ingest spec, and the question
+    # here is only what the serializer does with the rows it leaves behind.
+    #
+    # `nil` is an ordinary member of `durations`, not an error case: `test_run_shards.duration_seconds`
+    # is nullable and `Ingest::Payload` accepts a shard that reports no timing, so a silent shard is
+    # the live state these rows exist to describe. The run's own `duration_seconds` defaults to the
+    # MAX over the shards that REPORTED — which is exactly what the recorder stores and exactly the
+    # figure whose denominator is at issue — and is overridable for the row that reports a wall
+    # clock its shards no longer account for.
+    def sharded_history_run(commit_sha, durations, duration_seconds: :max)
+      run = repository.test_runs.create!(
+        commit_sha: commit_sha, branch: "main", ci_run_id: "gha-#{commit_sha}",
+        total_specs_count: 20_000, annotated_specs_count: 5000,
+        duration_seconds: duration_seconds == :max ? durations.compact.max : duration_seconds
+      )
+      durations.each_with_index do |seconds, index|
+        run.test_run_shards.create!(shard_id: (index + 1).to_s, total_specs_count: 5000,
+                                    annotated_specs_count: 1250, duration_seconds: seconds)
+      end
+      run
+    end
+
     it "serves every row newest first, with the figures a client needs to difference them" do
       _first, _second, third = three_runs
 
@@ -413,6 +436,10 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
         # Zero, not null: this run named no `ci_run_id`, and "reported in one piece" is a fact
         # about its composition rather than a missing measurement.
         "shard_count" => 0,
+        # Zero on the same rule, and unchanged in meaning for a run with no parts: there were none
+        # to time. `duration_seconds` above is this run's own reported wall clock, not a MAX over
+        # anything, so the denominator a client reads here is the count of shards that is also zero.
+        "timed_shard_count" => 0,
         "suite_size_measured" => true,
         "ingested_at" => third.created_at.iso8601
       )
@@ -475,7 +502,7 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
       # block up. `ingested_at` is the only ordering key served, and it is the one that ties.
       expect(row.keys).to contain_exactly(
         "commit_sha", "branch", "total_specs", "annotated_specs", "annotated_ratio",
-        "duration_seconds", "shard_count", "suite_size_measured", "ingested_at"
+        "duration_seconds", "shard_count", "timed_shard_count", "suite_size_measured", "ingested_at"
       )
     end
 
@@ -530,6 +557,90 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
 
       expect(rows.fetch(sharded.commit_sha)["shard_count"]).to eq(3)
       expect(rows.fetch(one_piece.commit_sha)["shard_count"]).to eq(0)
+    end
+
+    # THE ROW'S `duration_seconds` HAS A DENOMINATOR, AND IT IS NOT `shard_count`. On a sharded run
+    # the wall clock is the MAX over the shards that REPORTED, so a row serving the numerator beside
+    # the recorded-shard count states a coverage the figure does not have — the same honesty gap
+    # `latest_run.shards.coverage` exists to close, on rows that SPGD-211 turned into a series whose
+    # stated purpose is differencing.
+    #
+    # The two runs here are `assembled_like?` — identical `shard_count`, identical
+    # `suite_size_measured` — and are opposite operational facts: one measured its wall clock over
+    # every shard, the other over half of them, AND THE TWO IT LOST WERE THE SLOWEST, because a
+    # cancelled or timed-out job usually is. Differencing them on `duration_seconds` alone reports a
+    # 70% speedup that is entirely telemetry loss. `timed_shard_count` is the only field on either
+    # row that can tell them apart.
+    it "distinguishes a fully-timed row from a half-silent one that is otherwise identical" do
+      timed = sharded_history_run("alltimed0000", [150.0, 300.0, 450.0, 600.0])
+      silent = sharded_history_run("halfsilent00", [150.0, 180.0, nil, nil])
+
+      rows = get_repository["history"].index_by { |row| row["commit_sha"] }
+      timed_row = rows.fetch(timed.commit_sha)
+      silent_row = rows.fetch(silent.commit_sha)
+
+      # Indistinguishable on every other axis — this is what makes the new field load-bearing
+      # rather than decorative.
+      expect(silent_row.values_at("shard_count", "suite_size_measured")).to eq([4, true])
+      expect(timed_row.values_at("shard_count", "suite_size_measured")).to eq([4, true])
+      # The 70% "speedup": 600s of wall clock against 180s, from the same four-shard suite.
+      expect(timed_row["duration_seconds"]).to eq(600.0)
+      expect(silent_row["duration_seconds"]).to eq(180.0)
+      # And the fact that undoes it, read off each row alone with no reference to `latest_run`.
+      expect(timed_row["timed_shard_count"]).to eq(4)
+      expect(silent_row["timed_shard_count"]).to eq(2)
+    end
+
+    # The state the endpoint's own fixtures were already sitting in, green, because nothing asserted
+    # on it: three shards recorded, not one of them timed. `test_run_shards.duration_seconds` is
+    # nullable and `Ingest::Payload` accepts a shard with no timing, so this is an ordinary live
+    # state and not a fault — `TestRun#wall_clock_coverage` words it "0 of 3 reported" for the human
+    # panel.
+    #
+    # `0` and not absent, null, or `3`: a run whose `duration_seconds` was measured over nothing is
+    # exactly the row a client most needs to refuse to difference, and each of the three wrong
+    # answers hides that in a different way — absent and null read as "the endpoint does not say",
+    # `3` reads as full coverage.
+    it "reports zero timed shards for a run that recorded shards and timed none of them" do
+      run = sharded_history_run("nonetimed000", [nil, nil, nil], duration_seconds: 74.25)
+
+      row = get_repository["history"].find { |candidate| candidate["commit_sha"] == run.commit_sha }
+
+      expect(run.wall_clock_coverage).to eq("0 of 3 reported")
+      expect(row).to include("shard_count" => 3, "duration_seconds" => 74.25)
+      expect(row["timed_shard_count"]).to eq(0)
+      # Not merely falsy: `nil` and `false` both pass a `be_falsey` here, and `nil` is one of the
+      # three wrong answers.
+      expect(row["timed_shard_count"]).to be_an(Integer)
+    end
+
+    # A run with no shard rows at all is absent from the grouped aggregate entirely, so its primed
+    # value is the one place a nil placeholder could reach the body. It serves the same really-
+    # counted `0` its `shard_count` does: there were no parts, so there were none to time. This is
+    # the whole unsharded corpus — every laptop `bundle exec rspec` — and its meaning is unchanged.
+    it "serves a really-counted zero for a shardless run rather than a nil placeholder" do
+      run = create_test_run(repository: repository, commit_sha: "onepiece0000",
+                            total_specs_count: 20, duration_seconds: 42.5)
+
+      row = get_repository["history"].find { |candidate| candidate["commit_sha"] == run.commit_sha }
+
+      expect(row["duration_seconds"]).to eq(42.5)
+      expect(row).to include("shard_count" => 0, "timed_shard_count" => 0)
+    end
+
+    # Read off the model accessor rather than the fixture's arithmetic, on the same rule the
+    # `latest_run` cost example follows: restating the count here would still pass if the preload
+    # primed a number counted over a different set of rows than `TestRun#timed_shard_count` reads.
+    # This is what pins the PRIMED value to the queried one — the preload's whole risk is that it
+    # answers fast and wrong.
+    it "primes each row's timed count to what the model itself counts" do
+      run = sharded_history_run("agreement000", [61.0, 58.5, nil, 60.0])
+
+      row = get_repository["history"].find { |candidate| candidate["commit_sha"] == run.commit_sha }
+
+      expect(run.reload.timed_shard_count).to eq(3)
+      expect(row["timed_shard_count"]).to eq(run.timed_shard_count)
+      expect(row["shard_count"]).to eq(run.shard_count)
     end
 
     # Ten rows is ten rows whether the suite holds three tests or twenty thousand. The window
@@ -812,7 +923,7 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
         .to contain_exactly("repository", "api_key", "latest_run", "history_window", "history")
       expect(body["history"].first.keys).to contain_exactly(
         "commit_sha", "branch", "total_specs", "annotated_specs", "annotated_ratio",
-        "duration_seconds", "shard_count", "suite_size_measured", "ingested_at"
+        "duration_seconds", "shard_count", "timed_shard_count", "suite_size_measured", "ingested_at"
       )
     end
 
@@ -938,6 +1049,19 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
       # One grouped COUNT for the WHOLE window, not one per row: thirty bind placeholders in a
       # single `IN`. A per-row `pick` reads as thirty statements here rather than one.
       expect(grouped_counts.first).to include("IN (")
+      # BOTH counts ride in that ONE statement. `timed_shard_count` is served per row beside
+      # `shard_count`, and the cheap way to get it wrong is a second grouped query — which keeps
+      # every semantic example green, keeps this example's `length` at 1 for the `COUNT(*)` read,
+      # and quietly makes the window cost three. Matching the second aggregate here is what makes
+      # "exactly two" mean the two the comment above names.
+      expect(grouped_counts.first).to match(/COUNT\(duration_seconds\)/i)
+      # And no row pays a `pick` of its own for the timed count. The cheap way to serve
+      # `timed_shard_count` per row is thirty un-grouped reads, which the two greps above cannot
+      # see: they are not `GROUP BY` statements, so `grouped_counts` stays at one and this example
+      # stays green while the window costs thirty-two. Exactly two reads of the table — the window's
+      # one grouped aggregate, plus the single un-grouped `shard_totals` `latest_run` pays for its
+      # own one row — is the bound that catches it.
+      expect(statements.grep(/FROM "test_run_shards"/).length).to eq(2)
     end
 
     # The branch predicate and the LIMIT are ONE query, which is the entire fix: a window bounded

@@ -81,11 +81,13 @@ class TestRun < ApplicationRecord
   # `COUNT(*)` keyed by `test_run_id` (`ShardCountPreloading#preload_shard_counts`, indexed by
   # `index_test_run_shards_on_test_run_id`) and prime each row from it.
   #
-  # Deliberately narrow: it primes the COUNT alone and never the whole `shard_totals` tuple,
-  # because a grouped count is the only aggregate a list view can cheaply take. `timed_shard_count`
-  # and `machine_seconds` keep reading their own row of facts, so nothing can end up answering a
-  # *timing* question out of a number that measured no timing. Priming the tuple with two nils
-  # would do exactly that, and it would do it silently.
+  # Deliberately narrow: it primes ONE COUNT and never the whole `shard_totals` tuple, so nothing
+  # can end up answering a question out of a number that did not measure it. Priming the tuple with
+  # nils would do exactly that, and it would do it silently. `machine_seconds` and the shards'
+  # `MAX(updated_at)` therefore keep reading their own row of facts; the timed count has its own
+  # narrow seam beside this one (`#preload_timed_shard_count`) rather than riding along here,
+  # because it is a separately-counted number and a caller must not be able to prime one from the
+  # other.
   #
   # A named method rather than `attr_writer :shard_count`: a writer named for a non-column would be
   # reachable through `TestRun.new(shard_count: 4)`, which looks like it persists something and
@@ -114,7 +116,30 @@ class TestRun < ApplicationRecord
   # and `Ingest::Payload` accepts nil explicitly, so a shard with no timing is an ordinary state
   # rather than a fault — and the gap between this and `shard_count` is exactly how much of the
   # machine time is missing.
-  def timed_shard_count = shard_totals[1]
+  #
+  # Memoized in its own ivar, on the same shape `shard_count` has, so it can be primed across a
+  # window of rows without a `pick` each. `||=` is safe over a count: a really-counted `0` is
+  # truthy in Ruby, so a run whose shards all went silent memoizes the zero rather than re-asking.
+  def timed_shard_count = @timed_shard_count ||= shard_totals[1]
+
+  # Hand this run a timed shard count a caller has already counted, so `timed_shard_count` — and
+  # the `some_shard_untimed?` / `untimed_shard_count` / coverage labels that route through it —
+  # answer without a query. The seam beside `preload_shard_count`, and it exists for the same
+  # reason: one `pick` per instance is right for a single run and wrong for a window of them.
+  #
+  # The caller is `ShardCountPreloading`, which takes `COUNT(duration_seconds)` as a second column
+  # of the ONE grouped aggregate it already runs. `GET /api/v1/repository` needs it because each
+  # `history` row serves a `duration_seconds` whose denominator is this number and not
+  # `shard_count`.
+  #
+  # SEPARATE FROM `preload_shard_count` rather than one call taking both, so a caller cannot prime
+  # a timing number out of a count that measured no timing — the failure `#preload_shard_count`'s
+  # comment refuses. `.to_i` for the same reason it does: a run with no shard rows is absent from
+  # the grouped result entirely, and its really-counted answer here is `0`, never nil.
+  def preload_timed_shard_count(count)
+    @timed_shard_count = count.to_i
+    self
+  end
 
   # How many reported nothing — the size of the hole in the SUM below, and the number any surface
   # apologising for a partial machine time has to name.
