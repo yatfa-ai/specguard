@@ -106,7 +106,14 @@ class RepositoriesController < ApplicationController
     # looking at a dark panel: nothing else on the page would tell them that `main` has thirty runs
     # behind it, and a selector that only appears once you have already selected something is no
     # help to the reader who does not know there is anything to select.
-    @trajectory_branches = @repository.branch_histories
+    #
+    # The branch being DRAWN is pinned into that list rather than left to the walk to find. The walk
+    # is bounded, and its bound is alphabetical (see `Repository::BRANCH_HISTORY_LIMIT`), so past it
+    # a selector could render without the option it is currently on — a list of branches the reader
+    # is not looking at, with nothing marked current, on a page that is drawing one of them. Pinning
+    # the drawn branch covers the branch ASKED for as well: a requested branch that has runs is the
+    # branch drawn, and one that has none is not a choice this list may offer.
+    @trajectory_branches = @repository.branch_histories(pinned: [@trajectory_run&.branch])
     # The same branch history the delta above reads one row of, read as a series — what the suite
     # has done over the last thirty runs rather than since the last one. ONE query, and it stays
     # one: the shard count each point needs to answer `TestRun#assembled_like?` is folded into that

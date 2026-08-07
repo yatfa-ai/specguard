@@ -656,17 +656,24 @@
                   “<%= Repository::TRAJECTORY_LIMIT %>+” means the branch holds more history than
                   the chart reaches.
                 <% end %>
-                <%= trajectory_hidden_branches_sentence(@trajectory_branches) %>
+                <%= trajectory_hidden_branches_sentence(@trajectory_branches, @suite_trajectory.branch) %>
               </p>
-              <% if (fallback_notice = trajectory_branch_fallback_notice(@trajectory_branch_request, @suite_trajectory)) %>
-                <%# The ask was not honoured, and the panel says so. Every figure below is correctly
-                    labelled with the branch that WAS drawn, but a reader who followed a stale
-                    bookmark would otherwise read the trunk's history as their branch's. %>
-                <p class="text-xs text-app-muted" id="suite-trajectory-branch-fallback">
-                  <%= fallback_notice %>
-                </p>
-              <% end %>
             </div>
+          <% end %>
+          <%# The ask was not honoured, and the panel says so. Every figure below is correctly
+              labelled with the branch that WAS drawn, but a reader who followed a stale bookmark
+              would otherwise read the trunk's history as their branch's.
+
+              Deliberately OUTSIDE the selector above, and the two conditions are independent: that
+              one is about whether there are CHOICES to offer, this one about whether an ASK was
+              substituted. They come apart on a repository where every run named no branch — there
+              is nothing to select, and `?branch=feature/gone` is still an ask that went unanswered.
+              Nested inside the selector, the one page state that says nothing else about the ask
+              was the one state where this could not speak. %>
+          <% if (fallback_notice = trajectory_branch_fallback_notice(@trajectory_branch_request, @suite_trajectory)) %>
+            <p class="text-xs text-app-muted" id="suite-trajectory-branch-fallback">
+              <%= fallback_notice %>
+            </p>
           <% end %>
           <% if @suite_trajectory.branch.blank? %>
             <%# The same state the basis line above names, and it must not be answered here with the

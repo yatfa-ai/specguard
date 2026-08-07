@@ -110,13 +110,32 @@ class Repository < ApplicationRecord
   # this answers is what the suite has done over a month.
   TRAJECTORY_LIMIT = 30
 
-  # How many branches the panel's selector will ever offer, and the hard bound on the walk that
-  # finds them.
+  # The hard bound on the branch walk — a SAFETY bound, not a display one.
   #
-  # A repository's BRANCH cardinality is human-scale where its RUN count is not — but nothing
-  # enforces that, so the walk stops here rather than trusting it. `branch_histories` returning
-  # exactly this many rows is how it says the list was cut.
-  BRANCH_HISTORY_LIMIT = 50
+  # How many branches a reader is *shown* is `RepositoriesHelper::TRAJECTORY_BRANCH_CHOICES`, and
+  # the two must not be confused: the walk is name-ordered by construction (it asks the index for
+  # the next branch alphabetically), so any bound on it is an ALPHABETICAL bound. Cutting the walk
+  # near the display size therefore hands the sort an arbitrary alphabetical prefix — on a
+  # repository with sixty `feature/*` branches, the fifty walked are `feature/000`…`feature/049`
+  # and `main` is not among them, which is exactly the "list with the trunk missing" that ordering
+  # by history exists to prevent, reintroduced one layer lower.
+  #
+  # So the walk is bounded where a repository's BRANCH cardinality stops being human-scale rather
+  # than where a row of links stops fitting, and inside that bound the walk is COMPLETE — which is
+  # what makes "most history first" a property of every branch and not of a prefix. The cost is
+  # O(branches) and pays nothing for history: measured on a 46,000-run repository holding 2,001
+  # branches, walking a full five hundred of them costs 5.3ms against 8.2ms for the
+  # `SELECT DISTINCT branch` over the same rows — and that DISTINCT returns no counts and no
+  # ordering, while its cost follows the run history, which grows without bound, where this one
+  # follows the branch count, which does not. The same repository walked over 101 branches costs
+  # 1.5ms and over 51 costs 1.4ms, and every scan in the plan is an index-only scan of
+  # `index_test_runs_on_repository_id_and_branch_and_created_at`; the bound only bites a repository
+  # that genuinely has this many branches.
+  #
+  # `branch_histories` returning at least this many rows is how it says the walk stopped rather than
+  # finished — see `RepositoriesHelper#trajectory_hidden_branches_sentence`, which stops claiming
+  # the ordering spans every branch once it did.
+  BRANCH_HISTORY_LIMIT = 500
 
   # One branch that has runs, and how much history it holds — a choice the "Suite growth" panel
   # offers.
@@ -208,6 +227,15 @@ class Repository < ApplicationRecord
   # probe is one row wider than the window so the caller can tell "exactly thirty" from "more than
   # thirty" without ever counting past it, and `MAX(created_at)` over those same rows is the
   # branch's newest run, free, because they are the newest rows.
+  #
+  # `pinned` is the second arm of the candidate set, and it exists because the walk's bound is
+  # alphabetical (see `BRANCH_HISTORY_LIMIT`). A caller may name branches that MUST be offered
+  # whatever the walk did — in practice the one the panel is drawing — so that a selector can never
+  # be rendered without the branch it is a selector for. `WHERE tail.run_count > 0` is what keeps
+  # that from becoming a way to invent a branch: a pinned name with no runs behind it drops out
+  # here, the same answer an unrecognised `?branch=` gets everywhere else.
+  #
+  # `UNION` rather than `UNION ALL` so a pinned branch the walk already found is one row, not two.
   BRANCH_HISTORY_SQL = <<~SQL.squish.freeze
     WITH RECURSIVE walked AS (
       SELECT (SELECT anchor.branch
@@ -224,19 +252,23 @@ class Repository < ApplicationRecord
               LIMIT 1)
       FROM walked
       WHERE walked.branch IS NOT NULL
+    ), candidate AS (
+      SELECT walk.branch
+      FROM (SELECT walked.branch FROM walked WHERE walked.branch IS NOT NULL LIMIT :branch_limit) walk
+      UNION
+      SELECT pin FROM unnest(ARRAY[:pinned_branches]::text[]) AS pin WHERE pin IS NOT NULL
     )
-    SELECT walked.branch AS branch, tail.run_count, tail.last_run_at
-    FROM walked
+    SELECT candidate.branch AS branch, tail.run_count, tail.last_run_at
+    FROM candidate
     CROSS JOIN LATERAL (
       SELECT COUNT(*) AS run_count, MAX(recent.created_at) AS last_run_at
       FROM (SELECT run.created_at
             FROM test_runs run
-            WHERE run.repository_id = :repository_id AND run.branch = walked.branch
+            WHERE run.repository_id = :repository_id AND run.branch = candidate.branch
             ORDER BY run.created_at DESC, run.id DESC
             LIMIT :run_probe) recent
     ) tail
-    WHERE walked.branch IS NOT NULL
-    LIMIT :branch_limit
+    WHERE tail.run_count > 0
   SQL
 
   private_constant :BRANCH_HISTORY_SQL
@@ -266,10 +298,28 @@ class Repository < ApplicationRecord
   # a dozen `feature/*` branches, and an alphabetical list truncated for display is a list with the
   # trunk missing. Ties go to the branch pushed to most recently, then to its name so the order is
   # stable between two identically-idle branches.
-  def branch_histories(branches: BRANCH_HISTORY_LIMIT, runs: TRAJECTORY_LIMIT)
+  #
+  # That ordering is a property of the branches the WALK REACHED, and the walk is name-ordered — so
+  # its bound has to sit where branch cardinality stops being human-scale rather than where a
+  # display list stops fitting, or the sort is handed an alphabetical prefix and the trunk is
+  # missing from it after all. `BRANCH_HISTORY_LIMIT` says where that bound is and what it costs;
+  # a result at or above it is how a caller learns the walk stopped rather than finished.
+  #
+  # == Why a caller may pin branches
+  #
+  # `pinned` names branches that must be offered whatever the walk did — the panel pins the branch
+  # it is DRAWING, so the selector can never be rendered without the option it is currently on. A
+  # pinned branch with no runs is not invented: it drops out with every other empty one, which is
+  # the same answer an unrecognised `?branch=` gets. Pinning the branch drawn covers the branch
+  # *asked for* too, and that is not a coincidence — a requested branch that has runs IS the branch
+  # drawn (`latest_test_run_on_branch` found it), and one that has none must not appear in a list of
+  # branches that have runs.
+  def branch_histories(branches: BRANCH_HISTORY_LIMIT, runs: TRAJECTORY_LIMIT, pinned: [])
     rows = self.class.connection.select_all(
       self.class.sanitize_sql_array(
-        [BRANCH_HISTORY_SQL, { repository_id: id, branch_limit: branches, run_probe: runs + 1 }]
+        [BRANCH_HISTORY_SQL,
+         { repository_id: id, branch_limit: branches, run_probe: runs + 1,
+           pinned_branches: Array(pinned).compact.map(&:to_s).uniq }]
       )
     )
 

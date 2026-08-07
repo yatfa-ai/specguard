@@ -627,7 +627,59 @@ RSpec.describe Repository do
       run(repository, "featur", branch: "feature/x", at: 1.minute.ago)
 
       expect(repository.branch_histories(runs: 2).first.run_count).to eq(2)
-      expect(repository.branch_histories(branches: 1).size).to eq(1)
+      # WHICH branch survives the bound, not merely how many do. The walk is ALPHABETICAL, so the
+      # survivor here is `feature/x` and not the trunk with five times its history — and a size-only
+      # assertion cannot tell those apart, which is the whole difference the ordering is about.
+      expect(repository.branch_histories(branches: 1).map(&:name)).to eq(["feature/x"])
+    end
+
+    # The reason the walk's bound sits two orders of magnitude above what any list displays. The
+    # walk asks the index for the next branch BY NAME, so a bound near the display size hands the
+    # history sort an alphabetical prefix — and on this shape, which is the one the whole feature
+    # was written for, `main` sorts behind every `feature/*` and is not in it. The panel would then
+    # offer eight unrelated one-run branches on the page whose entire reason for existing is that
+    # `main` holds the history.
+    it "reaches a branch that sorts alphabetically behind far more branches than a list would show" do
+      repository = create_repository
+      60.times { |i| run(repository, "side#{i}", branch: "feature/#{i.to_s.rjust(3, "0")}", at: (40 - i).days.ago) }
+      5.times { |i| run(repository, "trunk#{i}", at: (10 - i).days.ago) }
+
+      histories = repository.branch_histories
+
+      expect(histories.size).to eq(61)
+      expect(histories.first).to have_attributes(name: "main", run_count: 5)
+    end
+
+    # Past that bound the cut IS alphabetical, so the one branch a caller cannot afford to lose is
+    # named rather than hoped for. The page pins the branch it is DRAWING: a selector rendered
+    # without the option it is currently on has lost the reader it was rendered for.
+    it "offers a pinned branch the walk stopped before reaching" do
+      repository = create_repository
+      3.times { |i| run(repository, "side#{i}", branch: "feature/#{i}", at: (9 - i).days.ago) }
+      run(repository, "trunk0", at: 1.day.ago)
+
+      expect(repository.branch_histories(branches: 2).map(&:name)).not_to include("main")
+      expect(repository.branch_histories(branches: 2, pinned: ["main"]))
+        .to include(have_attributes(name: "main", run_count: 1))
+    end
+
+    # A pin keeps a branch in the list; it is never a way to put one there. An unrecognised
+    # `?branch=` reaches this as a pin, and a list of the branches that HAVE runs must not answer it
+    # with one that has none — that would be a selectable choice leading to an empty chart.
+    it "does not invent a pinned branch that has no runs" do
+      repository = create_repository
+      run(repository, "trunk0")
+
+      expect(repository.branch_histories(pinned: ["feature/gone", nil]).map(&:name)).to eq(["main"])
+    end
+
+    it "does not offer a pinned branch the walk found anyway twice" do
+      repository = create_repository
+      run(repository, "trunk0", at: 2.days.ago)
+      run(repository, "trunk1", at: 1.day.ago)
+
+      expect(repository.branch_histories(pinned: %w[main main]).map { |b| [b.name, b.run_count] })
+        .to eq([["main", 2]])
     end
 
     it "has nothing to offer a repository CI has never reported to" do
@@ -659,6 +711,10 @@ RSpec.describe Repository do
         expect(count_queries { histories = repository.branch_histories }).to eq(1)
         expect(histories.size).to eq(11)
         expect(histories.first.run_count).to eq(Repository::TRAJECTORY_LIMIT)
+
+        # A pinned branch is a second arm of the SAME query, never a lookup of its own — the page
+        # pins on every render, so a pin that cost a query would be a query added to every render.
+        expect(count_queries { repository.branch_histories(pinned: ["main", "feature/3"]) }).to eq(1)
       end
     end
   end

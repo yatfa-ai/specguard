@@ -681,6 +681,77 @@ RSpec.describe "Repository suite-size trajectory", type: :request do
       expect(trajectory_panel.all("#suite-trajectory-branches nav a[aria-current='page']").map(&:text))
         .to eq(["feature/0 (1 run)"])
       expect(trajectory_panel).to have_text("SpecGuard has 1 run on feature/0 so far", normalize_ws: true)
+      # …and the sentence describing the order says so, rather than claiming a most-history-first
+      # list the reader can see the first entry is not the head of.
+      expect(trajectory_panel.find("#suite-trajectory-branches-basis")).to have_text(
+        "The branch being drawn is listed first, then the branches with the most history",
+        normalize_ws: true
+      )
+    end
+
+    # Criterion 2 in the shape the ticket was written for, and the composed case nothing reached
+    # before: the newest run is a feature branch's FIRST, `main` holds the history, and there are
+    # more branches than the selector shows. `:163` puts its `feature/x` run BETWEEN two `main` runs
+    # and `:565` puts it OLDER than the anchor, so both keep `main` as the anchor and neither can
+    # observe this.
+    #
+    # The walk that finds the branches is alphabetical, so `main` sorts behind every `feature/*`
+    # here — a walk bounded near the display size would offer eight unrelated one-run branches on
+    # the one page whose reason for existing is that `main` has the runs, and mark none of them
+    # current. A dark panel that lists only branches with nothing behind them tells the reader the
+    # opposite of the thing it is here to disclose. Sixty of them, deliberately: that is where a
+    # bound set for a display list rather than for branch cardinality drops the trunk.
+    it "names the branch that holds the history, on a dark panel drawn on another one" do
+      repository = create_repository(user: @user)
+      5.times { |i| run(repository, "trunk#{i}000000", total: 1_000 + i, at: (40 - i).days.ago) }
+      60.times do |i|
+        run(repository, "old#{i.to_s.rjust(8, "0")}", branch: "feature/#{i.to_s.rjust(3, "0")}",
+                        total: 10, at: (30 - (i * 0.4)).days.ago)
+      end
+      run(repository, "newest000000", branch: "feature/999", total: 12, at: 1.minute.ago)
+
+      get repository_path(repository)
+
+      expect(trajectory_panel).to have_no_css("svg", visible: :all)
+      expect(trajectory_panel).to have_text("SpecGuard has 1 run on feature/999 so far", normalize_ws: true)
+      expect(branch_choices.first).to eq("main (5 runs)")
+      expect(trajectory_panel.all("#suite-trajectory-branches nav a[aria-current='page']").map(&:text))
+        .to eq(["feature/999 (1 run)"])
+
+      # …and the way out of it. The chart draws `main`, and the selector says that is what it drew.
+      get repository_path(repository, branch: "main")
+
+      expect(basis_line).to have_text("Drawn through 5 of the last 5 runs on main", normalize_ws: true)
+      expect(trajectory_panel.all("#suite-trajectory-branches nav a[aria-current='page']").map(&:text))
+        .to eq(["main (5 runs)"])
+    end
+
+    # What the panel may still claim once the walk STOPPED rather than finished. The ordering is a
+    # property of the branches SpecGuard walked and the walk is alphabetical, so past its bound the
+    # head of this list is the busiest of a prefix and not of the repository — and a sentence
+    # promising otherwise tells a reader who cannot find `main` that `main` has no history.
+    #
+    # The branch being drawn is in the list whatever the walk did: it is pinned, not walked to.
+    # Here `main` sorts behind every `feature/*`, so the walk never reaches it.
+    it "stops claiming an ordering over every branch once the walk was cut, and still offers the one it drew" do
+      stub_const("Repository::BRANCH_HISTORY_LIMIT", 10)
+      repository = create_repository(user: @user)
+      2.times { |i| run(repository, "trunk#{i}000000", total: 1_000 + i, at: (40 - i).days.ago) }
+      12.times do |i|
+        run(repository, "side#{i.to_s.rjust(7, "0")}", branch: "feature/#{i.to_s.rjust(3, "0")}",
+                        total: 10, at: (30 - i).days.ago)
+      end
+
+      get repository_path(repository, branch: "main")
+
+      expect(branch_choices.first).to eq("main (2 runs)")
+      expect(trajectory_panel.all("#suite-trajectory-branches nav a[aria-current='page']").map(&:text))
+        .to eq(["main (2 runs)"])
+      expect(trajectory_panel.find("#suite-trajectory-branches-basis")).to have_text(
+        "At least 3 further branches have runs and are not listed here. The branches with the most " \
+        "history are listed first. SpecGuard stops after walking 10 branches, so that is an ordering " \
+        "over the ones it walked and not over every branch here.", normalize_ws: true
+      )
     end
 
     # Criterion 3, and the reason the fallback is disclosed rather than silent: a deleted branch, a
@@ -761,6 +832,26 @@ RSpec.describe "Repository suite-size trajectory", type: :request do
 
       expect(trajectory_panel).to have_text("No branch to plot a history on", normalize_ws: true)
       expect(trajectory_panel).to have_no_css("#suite-trajectory-branches")
+    end
+
+    # The one page state where there is no selector to nest the disclosure in — and the one state
+    # where nothing else on the panel says anything about the ask. Whether there are CHOICES to
+    # offer and whether an ASK was substituted are independent questions, and a notice rendered
+    # inside the selector could answer the second only when the first happened to be yes.
+    it "discloses a substituted branch where there is no selector to hang the notice on" do
+      repository = create_repository(user: @user)
+      repository.test_runs.create!(commit_sha: "anonymous01", branch: nil, total_specs_count: 900,
+                                   created_at: 2.days.ago)
+
+      get repository_path(repository, branch: "feature/gone")
+
+      expect(response).to have_http_status(:ok)
+      expect(trajectory_panel).to have_no_css("#suite-trajectory-branches")
+      expect(trajectory_panel).to have_text("No branch to plot a history on", normalize_ws: true)
+      expect(trajectory_panel.find("#suite-trajectory-branch-fallback")).to have_text(
+        "SpecGuard has no runs on feature/gone. The latest run named no branch, so there is still " \
+        "no history to draw.", normalize_ws: true
+      )
     end
   end
 

@@ -3,11 +3,17 @@
 module RepositoriesHelper
   # How many branches the "Suite growth" selector lists.
   #
-  # `Repository#branch_histories` walks up to fifty; this is how many of them a reader is shown,
-  # and the two are deliberately different numbers. The walk's bound is about what the database is
-  # asked for; this one is about what a row of links can carry before it stops being a way to find
-  # a branch. The ones shown are the ones with the most history — see the sentence below, which
-  # says so rather than leaving a truncated list to look complete.
+  # `Repository#branch_histories` walks up to `Repository::BRANCH_HISTORY_LIMIT`; this is how many
+  # of them a reader is shown, and the two are deliberately different numbers by two orders of
+  # magnitude. The walk's bound is about where a repository's branch cardinality stops being
+  # human-scale; this one is about what a row of links can carry before it stops being a way to
+  # find a branch. Keeping them apart is not tidiness — the walk is ALPHABETICAL, so a walk bounded
+  # near this number would hand the history sort an alphabetical prefix and drop the trunk out of
+  # the list ordering by history exists to keep in it.
+  #
+  # The ones shown are the ones with the most history — `trajectory_hidden_branches_sentence` says
+  # so rather than leaving a truncated list to look complete, and says it only as far as the walk
+  # can support it.
   TRAJECTORY_BRANCH_CHOICES = 8
 
   # Both halves of the same disclosure for repository removal: what the presser is told *before*
@@ -142,16 +148,31 @@ module RepositoriesHelper
 
   # What the selector left out, or `nil` when it left out nothing.
   #
-  # "At least" when the walk itself stopped at its own bound: past that point SpecGuard has not
-  # counted the branches either, and a bare number would be a figure nothing measured.
-  def trajectory_hidden_branches_sentence(histories)
+  # Two claims, and they are separated because they can fail separately.
+  #
+  # The COUNT is "at least" when the walk itself stopped at its own bound: past that point SpecGuard
+  # has not counted the branches either, and a bare number would be a figure nothing measured.
+  #
+  # The ORDERING claim is the one that has to be earned. "The branches with the most history are
+  # listed first" is true of the branches the WALK REACHED, and the walk is alphabetical — so on a
+  # repository with more branches than it walks, the head of this list is the busiest of an
+  # alphabetical prefix and not of the repository. Saying so is the whole point: a sentence
+  # promising an ordering the query cannot deliver is worse than no sentence, because it tells a
+  # reader who cannot find `main` that `main` must not have any history.
+  #
+  # It is also not the plain ordering when the branch being drawn had to be pulled to the front to
+  # be shown at all (see `trajectory_shown_branches`) — the reader is then looking at one branch out
+  # of order on purpose, and the sentence names that rather than describing a list they can see is
+  # not sorted that way.
+  def trajectory_hidden_branches_sentence(histories, current_branch)
     hidden = histories.size - TRAJECTORY_BRANCH_CHOICES
     return nil unless hidden.positive?
 
-    counted = histories.size == Repository::BRANCH_HISTORY_LIMIT ? "At least #{hidden}" : hidden.to_s
+    counted = trajectory_walk_cut?(histories) ? "At least #{hidden}" : hidden.to_s
 
     "#{counted} further #{"branch".pluralize(hidden)} #{hidden == 1 ? "has" : "have"} runs and " \
-      "#{hidden == 1 ? "is" : "are"} not listed here — the branches with the most history are listed first."
+      "#{hidden == 1 ? "is" : "are"} not listed here. " \
+      "#{trajectory_listing_basis(histories, current_branch)}"
   end
 
   # Said when the reader asked for a branch SpecGuard has no runs on, and the panel drew another
@@ -181,6 +202,37 @@ module RepositoriesHelper
   end
 
   private
+
+  # Whether the walk stopped rather than finished — the fact that turns every claim about this
+  # list from one about the repository into one about a prefix of it.
+  #
+  # `>=` rather than `==`: a pinned branch is added to the walk's result, so a cut walk can hand
+  # back more rows than its own bound. It cannot hand back FEWER than the bound and still be cut,
+  # and a complete walk that lands exactly on the bound is the ambiguity "At least" already covers.
+  def trajectory_walk_cut?(histories)
+    histories.size >= Repository::BRANCH_HISTORY_LIMIT
+  end
+
+  # How the shown list is ordered, said in the terms that are actually true of it.
+  def trajectory_listing_basis(histories, current_branch)
+    order = if trajectory_pulled_to_front?(histories, current_branch)
+              "The branch being drawn is listed first, then the branches with the most history."
+            else
+              "The branches with the most history are listed first."
+            end
+
+    return order unless trajectory_walk_cut?(histories)
+
+    "#{order} SpecGuard stops after walking #{number_with_delimiter(Repository::BRANCH_HISTORY_LIMIT)} " \
+      "branches, so that is an ordering over the ones it walked and not over every branch here."
+  end
+
+  # Whether the branch being drawn is only in the list because it was pulled there.
+  def trajectory_pulled_to_front?(histories, current_branch)
+    return false if current_branch.blank? || histories.first&.name == current_branch
+
+    trajectory_shown_branches(histories, current_branch).first&.name == current_branch
+  end
 
   # The branches that fit, in `Repository#branch_histories`' order — most history first, which is
   # the order a cut is worth making in.
