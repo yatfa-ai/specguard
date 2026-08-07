@@ -34,7 +34,7 @@ class Api::V1::RepositoriesController < Api::BaseController
   #
   # `history_window.limit` serves whichever of the two applied, so no client has to know this rule
   # exists to know which bound it got.
-  BRANCH_HISTORY_LIMIT = Repository::TRAJECTORY_LIMIT
+  SINGLE_BRANCH_HISTORY_LIMIT = Repository::TRAJECTORY_LIMIT
 
   def show
     render json: {
@@ -171,9 +171,9 @@ class Api::V1::RepositoriesController < Api::BaseController
   # inference it would otherwise draw wrongly from a full array.
   #
   # `limit` reports WHICH BOUND APPLIED, not a constant. A narrowed window is bounded at
-  # `BRANCH_HISTORY_LIMIT` and an unfiltered one at `HISTORY_LIMIT`, and serving the applied bound is
-  # what keeps `returned == limit` meaning the same thing under both — a client that had to know the
-  # rule to interpret the number would be reading a caption again.
+  # `SINGLE_BRANCH_HISTORY_LIMIT` and an unfiltered one at `HISTORY_LIMIT`, and serving the applied
+  # bound is what keeps `returned == limit` meaning the same thing under both — a client that had to
+  # know the rule to interpret the number would be reading a caption again.
   #
   # `order` NAMES BOTH KEYS, because the second one is load-bearing and is not served. The rows are
   # ordered `(created_at, id) DESC` — `Repository#recent_test_runs`' ordering, tie-break included —
@@ -236,7 +236,7 @@ class Api::V1::RepositoriesController < Api::BaseController
   # client's `returned == limit` test — its only signal that there is more history behind the
   # window — would answer about a number nothing enforced.
   def history_limit
-    requested_branch ? BRANCH_HISTORY_LIMIT : HISTORY_LIMIT
+    requested_branch ? SINGLE_BRANCH_HISTORY_LIMIT : HISTORY_LIMIT
   end
 
   # `[]` — not `null` — for a repository whose CI has never reported, which is the one place this
