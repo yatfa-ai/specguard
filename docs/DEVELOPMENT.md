@@ -176,14 +176,17 @@ reported" from a real zero, because a client cannot tell them apart after the fa
 | `latest_run.shards` | the run was assembled from **one shard or none** — the entire unsharded corpus. There is no composition to disambiguate: one shard's MAX *is* its SUM. The key is always present. |
 | `latest_run.shards.machine_seconds` | not one shard reported a timing. `0.0` would assert the suite was free. |
 | `history[].branch` / `.duration_seconds` / `.annotated_ratio` | exactly what the same-named `latest_run` field means. A history row is the same row `latest_run` serializes, minus the per-shard cost figures. |
+| `branches` | **never `null`** — `[]` instead, by the list rule below. No field on a row is nullable either: a row exists because a branch has runs, so `name`, `run_count` and `run_count_capped` are always present. |
+| `branches_window` | **never `null`**, and served on every request — with or without `?branch=`, and including one whose `branches` came back empty. Its fields are bounds on the walk, which are facts about how SpecGuard looked rather than about what it found, so there is no state in which they are unknown. |
 
-**`history` is the one exception, and it is a list rather than a block.** It is `[]` — never
-`null` — for a repository whose CI has never reported. The rule above exists because a zeroed
-*block* asserts measurements nobody took: a `latest_run` of zeros claims a run happened and found
-nothing. An empty *list* asserts nothing of the kind — "no runs" is exactly what zero rows means,
-and it is the same answer you get after filtering a populated history down to a branch that never
-ran. Nulling it would force every consumer to handle two spellings of the empty case before it
-could iterate. `latest_run` stays `null` in that same response; the two are consistent, not in
+**The two lists are the exception, and they are lists rather than blocks.** `history` and
+`branches` are each `[]` — never `null` — for a repository whose CI has never reported. The rule
+above exists because a zeroed *block* asserts measurements nobody took: a `latest_run` of zeros
+claims a run happened and found nothing. An empty *list* asserts nothing of the kind — "no runs" is
+exactly what zero rows means, and it is the same answer you get after filtering a populated history
+down to a branch that never ran, or after cataloguing a repository whose every run named no branch.
+Nulling either would force every consumer to handle two spellings of the empty case before it could
+iterate. `latest_run` stays `null` in that same response; all three are consistent, not in
 conflict.
 
 `annotated_ratio` is the **0–1 fraction**, the same unit `POST /api/v1/ingest` answers with — never
@@ -368,7 +371,7 @@ anonymous runs of every machine are not one branch — offering them a name here
 | `tie_break_served` | `false`. The middle key is not a field on a row, so **read the array in the order it arrived** — two branches with equal counts carry nothing that says which the server put first. |
 | `run_count_limit` | Where each row's `run_count` stops counting: `30`. |
 | `walk_limit` | How many branches SpecGuard walks: `500`. |
-| `walk_cut` | `true` when the walk **stopped rather than finished** — see below. |
+| `walk_cut` | `true` when the walk **may have stopped short** — the list is a prefix, and a branch's absence from it is not evidence that branch has no runs. See below. |
 | `returned` | How many rows this response carries. Can exceed `walk_limit` by one when `?branch=` pinned a branch the walk did not reach, which is why it is not a substitute for `walk_cut`. |
 
 **`walk_cut` is the one you must not ignore.** The walk is *name-ordered* — it asks the index for
@@ -378,6 +381,14 @@ than over the branches there are. On a repository with 2,900 `feature/*` branche
 walked are `feature/000…`, and `main` — with a hundred runs — is not among them. Under
 `walk_cut: true`, **a branch's absence from this list is not evidence that it has no runs**; ask for
 it with `?branch=` anyway. Under `walk_cut: false` the list is every branch that has a run.
+
+**The two directions are not equally sharp, and the asymmetry is deliberate.** `walk_cut` is
+derived by comparing what the walk returned against `walk_limit` with `>=`, so a repository holding
+*exactly* `walk_limit` branches reports `true` although the walk reached every one of them. That
+direction over-warns by design — its cost is a client re-probing a branch with `?branch=` that was
+already in the list, which answers correctly — and the same derivation runs behind the dashboard's
+own panel. `walk_cut: false` carries no such slack: it is reached only by returning fewer rows than
+the bound, so it means the walk finished and the list is complete.
 
 Bounded that way, and not near the size of a display list, on purpose: the dashboard shows eight
 branches, and cutting the *walk* anywhere near eight would hand the history sort an arbitrary
