@@ -431,12 +431,19 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
       row = get_repository["history"].last
 
       expect(row["commit_sha"]).to eq(first.commit_sha)
+      # Asserted on the KEYS, and bidirectionally: a served id or ingest sequence needs a key, and
+      # `contain_exactly` fails on any key not in this list. Checking the VALUES for the row's id
+      # instead would read as the stronger assertion and be a weaker one — `test_runs.id` is a
+      # bigint from a sequence Postgres does not roll back between examples, so it eventually
+      # collides with this fixture's `total_specs` (30) or `annotated_specs` (6) and goes red on an
+      # untouched serializer, under a name that blames the serializer for leaking an id.
+      # `not_to include("id", "ingest_sequence")` is no better: it negates "includes BOTH", so it
+      # passes on a row serving one of them — the same trap the shards example flags one describe
+      # block up. `ingested_at` is the only ordering key served, and it is the one that ties.
       expect(row.keys).to contain_exactly(
         "commit_sha", "branch", "total_specs", "annotated_specs", "annotated_ratio",
         "duration_seconds", "shard_count", "suite_size_measured", "ingested_at"
       )
-      # `ingested_at` is the only ordering key served, and it is the one that ties.
-      expect(row.values).not_to include(first.id)
     end
 
     # AC. Every figure re-derived straight from the table, in the ordering the model documents —
