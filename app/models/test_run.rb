@@ -76,9 +76,10 @@ class TestRun < ApplicationRecord
   # The seam exists because `shard_totals` is one `pick` per instance. That is exactly right for
   # the Overview panel, which asks one already-loaded run three questions and pays one round trip
   # for all of them, and exactly wrong for the Recent-runs table, which asks ten runs one question
-  # each and would pay ten. The caller there holds a single grouped `COUNT(*)` keyed by
-  # `test_run_id` (`RepositoriesController#preload_shard_counts`, indexed by
-  # `index_test_run_shards_on_test_run_id`) and primes each row from it.
+  # each and would pay ten. The callers there — the panel, and the `history` block on
+  # `GET /api/v1/repository`, which asks the same question of the same rows — hold a single grouped
+  # `COUNT(*)` keyed by `test_run_id` (`ShardCountPreloading#preload_shard_counts`, indexed by
+  # `index_test_run_shards_on_test_run_id`) and prime each row from it.
   #
   # Deliberately narrow: it primes the COUNT alone and never the whole `shard_totals` tuple,
   # because a grouped count is the only aggregate a list view can cheaply take. `timed_shard_count`

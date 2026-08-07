@@ -69,7 +69,7 @@ flash. That is what makes the reveal-once UI honest rather than cosmetic.
 
 ```sh
 curl -H "Authorization: Bearer sgk_..." http://localhost:3000/api/v1/repository
-# => {"repository":{...},"api_key":{...},"latest_run":{...}}
+# => {"repository":{...},"api_key":{...},"latest_run":{...},"history_window":{...},"history":[...]}
 
 curl -H "Authorization: Bearer nope" http://localhost:3000/api/v1/repository
 # => 401 {"error":"unauthorized",...}
@@ -77,10 +77,11 @@ curl -H "Authorization: Bearer nope" http://localhost:3000/api/v1/repository
 
 ### `GET /api/v1/repository` — the response shape
 
-The agent-readable half of the repository page: which repository the key resolves to, and what the
-suite looked like the last time CI reported. Every figure is read off the same row
-`repositories#show` renders from, so the API and the dashboard cannot name different commits for
-the same repository.
+The agent-readable half of the repository page: which repository the key resolves to, what the
+suite looked like the last time CI reported, and the bounded tail of what it looked like before
+that. Every figure is read off the same rows `repositories#show` renders from
+(`Repository#latest_test_run` and `#recent_test_runs`, which share an ordering tie-break included),
+so the API and the dashboard cannot name different commits for the same repository.
 
 ```json
 {
@@ -108,7 +109,38 @@ the same repository.
       "coverage": { "duration_seconds": 4, "machine_seconds": 4 }
     },
     "ingested_at": "2026-08-07T11:01:58Z"
-  }
+  },
+  "history_window": {
+    "order": "ingested_at_desc,ingest_sequence_desc",
+    "tie_break_served": false,
+    "branch_scope": "all_branches",
+    "limit": 10,
+    "returned": 2
+  },
+  "history": [
+    {
+      "commit_sha": "a1b2c3d4e5f6",
+      "branch": "main",
+      "total_specs": 20000,
+      "annotated_specs": 5000,
+      "annotated_ratio": 0.25,
+      "duration_seconds": 74.25,
+      "shard_count": 4,
+      "suite_size_measured": true,
+      "ingested_at": "2026-08-07T11:01:58Z"
+    },
+    {
+      "commit_sha": "9f8e7d6c5b4a",
+      "branch": "spike/extract-billing",
+      "total_specs": 400,
+      "annotated_specs": 116,
+      "annotated_ratio": 0.29,
+      "duration_seconds": 11.5,
+      "shard_count": 0,
+      "suite_size_measured": true,
+      "ingested_at": "2026-08-07T10:44:03Z"
+    }
+  ]
 }
 ```
 
@@ -124,6 +156,16 @@ reported" from a real zero, because a client cannot tell them apart after the fa
 | `latest_run.annotated_ratio` | the run reported **zero tests**, so there is no share to take. The counts are still present, so a client can compute its own. |
 | `latest_run.shards` | the run was assembled from **one shard or none** — the entire unsharded corpus. There is no composition to disambiguate: one shard's MAX *is* its SUM. The key is always present. |
 | `latest_run.shards.machine_seconds` | not one shard reported a timing. `0.0` would assert the suite was free. |
+| `history[].branch` / `.duration_seconds` / `.annotated_ratio` | exactly what the same-named `latest_run` field means. A history row is the same row `latest_run` serializes, minus the per-shard cost figures. |
+
+**`history` is the one exception, and it is a list rather than a block.** It is `[]` — never
+`null` — for a repository whose CI has never reported. The rule above exists because a zeroed
+*block* asserts measurements nobody took: a `latest_run` of zeros claims a run happened and found
+nothing. An empty *list* asserts nothing of the kind — "no runs" is exactly what zero rows means,
+and it is the same answer you get after filtering a populated history down to a branch that never
+ran. Nulling it would force every consumer to handle two spellings of the empty case before it
+could iterate. `latest_run` stays `null` in that same response; the two are consistent, not in
+conflict.
 
 `annotated_ratio` is the **0–1 fraction**, the same unit `POST /api/v1/ingest` answers with — never
 the 0–100 percentage `TestRun#annotated_ratio` renders for the dashboard. The 100× gap between the
@@ -155,6 +197,57 @@ is not what the suite *cost*. Four shards of 61.0s, 58.5s, 74.25s and 60.0s are 
 
 The dashboard's Overview panel renders the same two figures under coverage-stating labels; this
 block is how a client reconstructs those labels for itself.
+
+#### `history` — how the suite grew, without differencing two polls
+
+Without it, the only way to learn that the suite grew is to call this endpoint twice and subtract
+one `total_specs` from the next — which is exactly the subtraction `TestRun` spends eighteen lines
+of its own documentation forbidding, because two runs are only comparable under conditions a poll
+cannot see. `history` serves the rows themselves, plus the facts that decide whether any two of
+them may be differenced at all.
+
+**`history` is not a series.** `history_window.branch_scope` is `all_branches`, and it means what
+it says: these are the repository's runs interleaved across every branch CI reports from, so
+`history[0]` and `history[1]` are routinely two different branches and the difference between their
+`total_specs` is **not** a change in the suite. The dashboard's Recent-runs panel carries that same
+warning as a caption under its heading; a machine client has no caption, so the fact is structural
+here — every row carries its own `branch`, and a client that wants a series filters on it first.
+
+Before differencing two rows, check both:
+
+- `suite_size_measured` — `false` when the run reported **zero tests**. It has a count but not a
+  measurement, and a difference taken against it describes the report rather than the suite.
+- `shard_count` — how many shards the row was assembled from. A run's `total_specs` is the SUM over
+  the shards recorded *so far*, so differencing an in-flight sharded run against a complete one
+  reports a deletion no commit made. Equal counts is the same rule `TestRun#assembled_like?`
+  applies on the dashboard.
+
+Deliberately **not** a `shards` sub-block like `latest_run` carries. The preload that makes this
+window cheap primes the shard *count* alone, so per-shard cost figures on ten rows would be ten
+extra queries — and `assembled_like?` reads the count, not the costs. The full cost figures stay on
+`latest_run`, which is one row.
+
+`history_window` is the contract, as tokens rather than prose:
+
+| Field | Meaning |
+| --- | --- |
+| `order` | `"ingested_at_desc,ingest_sequence_desc"` — **both** keys. Rows are ordered by ingest time descending, ties broken by ingest sequence descending. |
+| `tie_break_served` | `false`. The second ordering key is **not** a field on a row, so the ordering is not reproducible from what you hold — see below. |
+| `branch_scope` | `"all_branches"`. The array was never filtered to one branch. |
+| `limit` | The bound, currently `10`. |
+| `returned` | How many rows this response actually carries. |
+
+**Read the array in the order it arrived.** Two runs ingested in the same instant carry the same
+`ingested_at`, and the key that orders them — the ingest sequence — is not served on a row, here or
+on `latest_run`. So a client that re-sorts on `ingested_at` alone scrambles exactly those pairs and
+can end up disagreeing with `latest_run` about which commit is newest. `history[0]` is the same row
+as `latest_run` **always**, including the same-instant case; re-sorting is the one way to break
+that.
+
+`limit` is a bound, not a page: ten rows is ten rows whether the suite holds three tests or twenty
+thousand, and there is no cursor to continue. `returned == limit` is how you learn the suite has
+run at least ten times and this is the tail — the inference you would otherwise draw wrongly from a
+full array.
 
 ## The design system
 

@@ -75,6 +75,16 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
       expect(body["api_key"]).to have_key("last_used_at")
     end
 
+    # The documented body is the whole feature here — an agent finds out `history` exists by reading
+    # `docs/DEVELOPMENT.md`, not by diffing responses. So the top level is pinned EXACTLY rather
+    # than key by key: a sixth key added without a line in that doc fails here, and a documented key
+    # quietly dropped fails here too. `contain_exactly` is what makes it bidirectional; `have_key`
+    # per block would catch neither.
+    it "serves exactly the top-level keys docs/DEVELOPMENT.md documents" do
+      expect(get_repository.keys)
+        .to contain_exactly("repository", "api_key", "latest_run", "history_window", "history")
+    end
+
     it "scopes latest_run to the key's own repository" do
       other = create_repository(user: create_user(github_uid: "2002", github_handle: "hubot"),
                                 github_full_name: "acme/ledger")
@@ -389,6 +399,10 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
     # consecutive rows are routinely two branches and "are not a series". A machine client cannot
     # read a caption, so the same fact has to be structural — per-row `branch`, plus a scope marker
     # on the window that says the array was never filtered to one.
+    #
+    # The window is asserted whole rather than key by key: this block's whole job is to be the
+    # contract, so a key that quietly stopped being served would be a client reading an ordering
+    # promise that is no longer made.
     it "carries each row's own branch, and says on the window that it interleaves them" do
       three_runs
 
@@ -396,11 +410,33 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
 
       expect(body["history"].map { |row| row["branch"] }).to eq(%w[main feature-x main])
       expect(body["history_window"]).to eq(
-        "order" => "ingested_at_desc",
+        # BOTH ordering keys, because the second one decides the same-instant pair below and a
+        # client that read `ingested_at_desc` alone would re-sort straight through it.
+        "order" => "ingested_at_desc,ingest_sequence_desc",
+        "tie_break_served" => false,
         "branch_scope" => "all_branches",
         "limit" => 10,
         "returned" => 3
       )
+    end
+
+    # The claim `tie_break_served: false` makes, pinned rather than left as a literal nobody checks:
+    # the rows genuinely do not carry the second ordering key, so the order cannot be reproduced
+    # from what the client holds and the array's own order is the answer. If a later slice serves an
+    # id or an ingest sequence on a row, this fails and the token has to be re-decided rather than
+    # silently becoming a lie.
+    it "serves no second ordering key on a row, which is what makes the array order authoritative" do
+      first, _second, _third = three_runs
+
+      row = get_repository["history"].last
+
+      expect(row["commit_sha"]).to eq(first.commit_sha)
+      expect(row.keys).to contain_exactly(
+        "commit_sha", "branch", "total_specs", "annotated_specs", "annotated_ratio",
+        "duration_seconds", "shard_count", "suite_size_measured", "ingested_at"
+      )
+      # `ingested_at` is the only ordering key served, and it is the one that ties.
+      expect(row.values).not_to include(first.id)
     end
 
     # AC. Every figure re-derived straight from the table, in the ordering the model documents —
@@ -408,12 +444,12 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
     it "matches direct SQL over the same rows" do
       three_runs
 
-      rows = ActiveRecord::Base.connection.select_all(<<~SQL.squish).to_a
+      sql = <<~SQL.squish
         SELECT commit_sha, branch, total_specs_count, annotated_specs_count, duration_seconds
-        FROM test_runs WHERE repository_id = '#{repository.id}'
+        FROM test_runs WHERE repository_id = $1
         ORDER BY created_at DESC, id DESC LIMIT 10
       SQL
-
+      rows = ActiveRecord::Base.connection.select_all(sql, "history cross-check", [repository.id]).to_a
       # Guards the comparison below against passing on two empty arrays — an empty `history` and an
       # empty result set answer identically, which is the vacuous shape this project keeps shipping.
       expect(rows.length).to eq(3)

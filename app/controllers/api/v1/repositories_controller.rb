@@ -11,6 +11,12 @@
 # (`Repository#latest_test_run` and `#recent_test_runs`, which share an ordering tie-break
 # included), so the API and the dashboard cannot name different commits for the same repository.
 class Api::V1::RepositoriesController < Api::BaseController
+  # How each `history` row was assembled, in one aggregate for the whole window. The same four
+  # lines the human Recent-runs panel primes its rows with — see `ShardCountPreloading`, which is
+  # one module rather than two copies because nothing in it needs anything an
+  # `ActionController::API` lacks.
+  include ShardCountPreloading
+
   # The bound on `history` below. Ten rows is ten rows whether the suite holds three tests or
   # twenty thousand — `Repository#recent_test_runs` argues that in its own comment — so this is a
   # bound and not the first page of a pagination contract there is no cursor to continue.
@@ -128,9 +134,24 @@ class Api::V1::RepositoriesController < Api::BaseController
   # `returned` beside `limit` rather than either alone: `returned == limit` is how a client learns
   # the suite has run at least ten times and this is the tail, not the whole history — the
   # inference it would otherwise draw wrongly from a full array.
+  #
+  # `order` NAMES BOTH KEYS, because the second one is load-bearing and is not served. The rows are
+  # ordered `(created_at, id) DESC` — `Repository#recent_test_runs`' ordering, tie-break included —
+  # and `ingested_at_desc` alone would invite exactly the re-sort the serializer refuses to do
+  # itself: two runs ingested in the same instant carry the same `ingested_at`, so a client sorting
+  # on that field alone scrambles the very pair the tie-break exists to order, and can disagree with
+  # `latest_run` about which commit is newest.
+  #
+  # `tie_break_served: false` is the honest half of that. The tie-break key is the ingest sequence —
+  # the runs table's own id — and this endpoint does not serialize it on a row, here or on
+  # `latest_run`. So the ordering is NOT reproducible from the fields the client holds, which makes
+  # the array's own order the authoritative answer rather than a rendering of one. A client that
+  # needs a stable comparison reads the array in the order it arrived; one that must re-sort can
+  # only do so within a set of distinct `ingested_at` values.
   def serialized_history_window
     {
-      order: "ingested_at_desc",
+      order: "ingested_at_desc,ingest_sequence_desc",
+      tie_break_served: false,
       branch_scope: "all_branches",
       limit: HISTORY_LIMIT,
       returned: history_runs.length
@@ -198,27 +219,13 @@ class Api::V1::RepositoriesController < Api::BaseController
   #
   # Materialized once and memoized: `show` reads it twice (the window's `returned`, then the rows)
   # and must not pay for it twice.
+  #
+  # One grouped `COUNT(*)` for the whole window primes `shard_count` on every row — see
+  # `ShardCountPreloading`, shared with the human panel that asks the same question of the same
+  # rows. So `history` costs two queries at ten rows and the same two at one, instead of one `pick`
+  # per row.
   def history_runs
     @history_runs ||= preload_shard_counts(current_repository.recent_test_runs(limit: HISTORY_LIMIT).to_a)
-  end
-
-  # One grouped `COUNT(*)` on `index_test_run_shards_on_test_run_id` for the whole window, priming
-  # each row the way `TestRun#preload_shard_count` documents — so `history` costs two queries at ten
-  # rows and the same two at one, instead of one `pick` per row.
-  #
-  # Re-stated here rather than shared with `RepositoriesController#preload_shard_counts`, which is
-  # the same four lines. The two controllers descend from different bases (`Api::BaseController` is
-  # an `ActionController::API`), so sharing means extracting a concern and editing
-  # `app/controllers/repositories_controller.rb` — a file SPGD-197 is in flight on. A copy that can
-  # be collapsed later beats a merge conflict in a file this ticket has no reason to touch.
-  #
-  # Returns early on an empty window rather than issuing `WHERE 1=0`: a repository that has never
-  # ingested pays nothing for a history of no rows.
-  def preload_shard_counts(runs)
-    return runs if runs.empty?
-
-    counts = TestRunShard.where(test_run_id: runs.map(&:id)).group(:test_run_id).count
-    runs.each { |run| run.preload_shard_count(counts[run.id]) }
   end
 
   # The 0–1 FRACTION, matching what `/ingest` answered for this same run — never the 0–100
