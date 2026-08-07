@@ -43,6 +43,25 @@ require "zlib"
 #
 # The cap is deliberately far above any real run: 20k examples is 7 MiB inflated, so 64 MiB leaves
 # an order of magnitude of headroom and will only ever be reached by something pathological.
+#
+# == Two knowing permissivenesses, so they are inherited on purpose rather than by accident
+#
+# Both were probed rather than reasoned about, and both are recorded here because the sole client
+# today cannot produce either — which is exactly why a future non-Ruby client would find them the
+# hard way.
+#
+#   * *Only the first gzip member is read.* `Zlib.gzip(a) + Zlib.gzip(b)` inflates to `a` alone and
+#     the request succeeds; a valid member followed by trailing garbage does the same. That matches
+#     `Zlib.gunzip`'s own behavior and this gem emits exactly one member, so it is not a defect
+#     today. But "accept, and silently drop half the body" is a bad shape to hand a client that
+#     concatenates streams — if one ever appears, this is the line to revisit.
+#   * *`x-gzip` is not recognised.* The match is an exact `gzip`, so the legacy synonym falls
+#     through un-inflated and dies at the JSON parser, which tells the client its *JSON* is broken
+#     when in truth its *encoding* was unsupported. The strictness is deliberate; the misleading
+#     diagnosis is a wart. Giving an unrecognised `Content-Encoding` under `/api/` its own 400 would
+#     fix it, and is a deliberate non-change here rather than an oversight: it widens this class
+#     from "inflate gzip" to "police encodings", which is a contract decision about the public API
+#     and wants its own slice.
 class GzipRequestBody
   API_PREFIX = "/api/"
   ENCODING = "gzip"
@@ -105,6 +124,17 @@ class GzipRequestBody
     end
 
     buffer
+  ensure
+    # Deterministic release of the zstream, which matters most on the cap path: that one abandons
+    # the reader mid-stream, so without this the inflate state lives until the GC gets to it — and
+    # the cap path is exactly the one an attacker gets to trigger repeatedly.
+    #
+    # `finish` rather than the more idiomatic `GzipReader.wrap`, and the difference is load-bearing:
+    # `wrap` closes the *underlying* IO, which here is `rack.input`. That belongs to the server, and
+    # a middleware closing it is out of bounds. `finish` frees the zstream and leaves the IO open.
+    # Safe on every path — verified against a complete read, a mid-stream abandon, a truncated
+    # stream and a body that is not gzip at all; `reader` is nil when the constructor itself raised.
+    reader&.finish
   end
 
   # The request is handed downstream as though it had arrived identity-encoded. `CONTENT_LENGTH`
