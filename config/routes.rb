@@ -12,10 +12,11 @@ Rails.application.routes.draw do
   resources :repositories, only: %i[index new create show edit update destroy] do
     resources :api_keys, only: %i[create destroy]
     # `/repositories/:repository_id/members` reads as the thing it lists (people), while the
-    # controller is named for the row it actually manipulates (RepositoryMembership). No `edit`
-    # /`update` yet: editing an existing member's permissions is the same checkbox grid `new`
-    # renders, and lands as its own slice.
-    resources :members, only: %i[index new create destroy], controller: "memberships"
+    # controller is named for the row it actually manipulates (RepositoryMembership). `edit`
+    # /`update` change a member's permission set in place: the alternative is Revoke + re-add,
+    # which fires a consequence dialog about surviving API keys for an operation that is not a
+    # removal, and resets the "Since" column so a narrowed colleague reads as a brand-new one.
+    resources :members, only: %i[index new create edit update destroy], controller: "memberships"
   end
 
   # --- Machine auth: Bearer API key ---------------------------------------------

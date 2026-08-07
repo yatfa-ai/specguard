@@ -12,13 +12,12 @@
         subtitle: "Who can reach #{@repository.github_full_name}, and what they hold."
       ) do |header| %>
     <% header.with_actions do %>
-      <%# Gated on the capability MembershipsController#new will demand, the same discipline
-          repositories/show.html.erb follows: this page is reachable by any `members.manage` holder,
-          and granting is owner-only, so an ungated Add here would offer them a control that can
-          only ever 403. %>
-      <% if repository_policy.can?(:owner) %>
-        <%= render UI::ButtonComponent.new(href: new_repository_member_path(@repository)) { "Add member" } %>
-      <% end %>
+      <%# Ungated, and that is a change: `new`/`create` demanded `:owner` while
+          `grantable_permissions` had no call site to bound a non-owner's grant with. Every grid on
+          this controller renders from it now, so a `members.manage` holder can only ever offer what
+          they themselves hold, and the page and the form ask for the same permission. Under an
+          owner the two sets are identical, so nothing the owner sees changed. %>
+      <%= render UI::ButtonComponent.new(href: new_repository_member_path(@repository)) { "Add member" } %>
       <%= render UI::ButtonComponent.new(variant: :ghost, href: repository_path(@repository)) { "Back to repository" } %>
     <% end %>
   <% end %>
@@ -73,25 +72,35 @@
               <%= time_ago_in_words(membership.created_at) %> ago
             </td>
             <td class="px-3 py-2 text-right">
-              <%= button_to "Revoke", repository_member_path(@repository, membership), method: :delete,
-                            class: UI::ButtonComponent.classes(variant: :danger, size: :xs),
-                            form: { data: { turbo_confirm: revoke_confirmation(@repository, membership.user.github_handle, keys_minted) } } %>
+              <%# Edit sits beside Revoke because they are the two ends of the same decision, and
+                  putting them together is what stops Revoke being used as a narrowing tool. Neither
+                  is gated here: `edit`, `update` and `destroy` all demand `:members_manage`, which
+                  is the same permission that opened this page, so every viewer who can read this
+                  row can work both controls. A `can?(:members_manage)` wrapper would be a condition
+                  that is true by construction — it would read like a gate while checking nothing. %>
+              <div class="flex flex-wrap items-center justify-end gap-2">
+                <%= render UI::ButtonComponent.new(variant: :secondary, size: :xs,
+                                                   href: edit_repository_member_path(@repository, membership)) do %>
+                  Edit
+                <% end %>
+                <%= button_to "Revoke", repository_member_path(@repository, membership), method: :delete,
+                              class: UI::ButtonComponent.classes(variant: :danger, size: :xs),
+                              form: { data: { turbo_confirm: revoke_confirmation(@repository, membership.user.github_handle, keys_minted) } } %>
+              </div>
             </td>
           </tr>
         <% end %>
       <% end %>
     <% else %>
-      <%# The description stays true for a `members.manage` holder, who reaches this page and cannot
-          grant: it says what sharing does, and only the owner is handed the control that does it. %>
+      <%# The description holds for every viewer of this page: they all hold `members.manage`, and
+          the form they are handed offers only what they can grant themselves. %>
       <%= render UI::EmptyStateComponent.new(
             title: "No one else has access",
             description: "Only #{@repository.owner_login} can reach this repository. Adding a colleague " \
                          "by their GitHub handle puts it in their repository list too."
           ) do |empty| %>
-        <% if repository_policy.can?(:owner) %>
-          <% empty.with_action do %>
-            <%= render UI::ButtonComponent.new(href: new_repository_member_path(@repository)) { "Add member" } %>
-          <% end %>
+        <% empty.with_action do %>
+          <%= render UI::ButtonComponent.new(href: new_repository_member_path(@repository)) { "Add member" } %>
         <% end %>
       <% end %>
     <% end %>
