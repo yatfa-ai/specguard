@@ -42,15 +42,43 @@ class MembershipsController < ApplicationController
 
   def index
     @repository = current_repository(:members_manage)
-    # Ordered by handle so the list is stable between requests; `includes(:user)` because every row
-    # renders the user's handle and avatar, and `:granted_by_user` because every row also renders
-    # who last set its permissions. The grantor preloads as a second `users` lookup rather than a
-    # join, so it costs one query for the whole table however many rows there are — the same rule
-    # `keys_minted_by` states below, and the one an unpreloaded `membership.granted_by_user` would
-    # break with a `users` query per row.
+    # Ordered by handle so the list is stable between requests; `:user` because every row renders
+    # the member's handle and avatar, and `:granted_by_user` because every row also renders who
+    # last set its permissions.
     #
-    # `.joins(:user)` is not interchangeable with the `includes` and must stay: it is what puts
-    # `users` in the FROM clause for `order("users.github_handle")`.
+    # This `includes` does NOT preload — it EAGER-LOADS, and the whole table arrives in ONE query:
+    #
+    #   SELECT repository_memberships.* AS t0_r*,
+    #          users.* AS t1_r*,
+    #          granted_by_users_repository_memberships.* AS t2_r*
+    #   FROM   repository_memberships
+    #   INNER      JOIN users ON users.id = repository_memberships.user_id
+    #   LEFT OUTER JOIN users granted_by_users_repository_memberships
+    #                      ON granted_by_users_repository_memberships.id
+    #                       = repository_memberships.granted_by_user_id
+    #
+    # Two independent things force that strategy, and both are already here: the raw string in
+    # `order("users.github_handle")` puts `"users"` into `references_values` on its own, and
+    # `:user` appearing in both `includes` and `joins` puts it into `joined_includes_values`.
+    # Either alone flips the ENTIRE `includes` list to `eager_load`, so `:granted_by_user` is
+    # joined whether or not anyone meant it to be — it does not arrive as a second `users` lookup.
+    #
+    # What that buys, and what it costs:
+    #
+    # - One query for the whole table however many rows there are — the same rule `keys_minted_by`
+    #   states below, and the one an unloaded `membership.granted_by_user` would break with a
+    #   `users` query per row.
+    # - The grantor's join is LEFT OUTER, so a row with a NULL `granted_by_user_id` — an ordinary
+    #   state, given the migration's deliberate no-backfill — keeps its row and renders "Unknown"
+    #   rather than dropping the member off the page.
+    # - `.joins(:user)` stays, but not because it is what puts `users` in the FROM clause — the
+    #   `order` string's implicit `references` already does that, and dropping the `joins` still
+    #   yields one query that orders correctly. It stays because it makes the member's own join
+    #   INNER rather than LEFT OUTER, which is the honest shape for a required `belongs_to`.
+    # - SAFE FROM ROW MULTIPLICATION ONLY WHILE EVERY ASSOCIATION IN THIS LIST IS A `belongs_to`.
+    #   Both are (1:1 each), so the join cannot duplicate a membership row. Add a `has_many` here
+    #   and the LEFT OUTER JOIN fans each membership out into one rendered row per child. If you
+    #   ever need a collection alongside these, load it separately rather than appending it here.
     @memberships = @repository.repository_memberships
                               .includes(:user, :granted_by_user)
                               .joins(:user)

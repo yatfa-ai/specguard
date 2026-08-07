@@ -1218,10 +1218,26 @@ RSpec.describe "Repository members", type: :request do
       row
     end
 
-    def user_queries
+    # EVERY statement the request issues, unfiltered — deliberately, and the deliberation is worth
+    # recording because the first version of this helper filtered on `FROM "users"` and that filter
+    # was a lie. The members query eager-loads (`:user` is in both `includes` and `joins`, and the
+    # raw `order` string references `users`), so it reads `FROM "repository_memberships"` and never
+    # matched; the only query on the page that did match was the `current_user` lookup, which is one
+    # per request by construction. The count it compared was therefore `1 == 1`, and would have
+    # stayed `1 == 1` with the grantor cell deleted outright.
+    #
+    # An unfiltered count is the measurement that matches the claim below, which is about growth:
+    # dropping `:granted_by_user` from the controller's `includes` takes this example from 5
+    # statements to 7 — one lazy `users` SELECT per member — so the comparison genuinely fails.
+    #
+    # What it does NOT catch, measured rather than assumed: a switch from eager_load to preload.
+    # That adds exactly ONE statement to every render regardless of member count, so both sides of
+    # the comparison move together and the count stays flat. Detecting the query SHAPE is a
+    # different job from counting, and the example does it separately, on the statement itself.
+    def request_queries
       queries = []
       subscriber = ActiveSupport::Notifications.subscribe("sql.active_record") do |_, _, _, _, payload|
-        queries << payload[:sql] if payload[:name] != "SCHEMA" && payload[:sql].to_s.include?(%(FROM "users"))
+        queries << payload[:sql].to_s if payload[:name] != "SCHEMA"
       end
       yield
       queries
@@ -1292,9 +1308,9 @@ RSpec.describe "Repository members", type: :request do
 
     # Criterion 3, held to the standard `MembershipsController#keys_minted_by` sets for the cell two
     # columns over. Distinct grantors on purpose: three rows sharing one grantor would be collapsed
-    # by the per-request query cache, and an unpreloaded `membership.granted_by_user` would still
+    # by the per-request query cache, and a lazily-loaded `membership.granted_by_user` would still
     # look like a single query.
-    it "asks for the grantors in one preload, not once per member" do
+    it "fetches the grantors with the members, not once per member" do
       add_member = lambda do |uid, handle|
         member = create_user(github_uid: uid, github_handle: handle)
         grantor = create_user(github_uid: "7#{uid}", github_handle: "grantor-of-#{handle}")
@@ -1308,17 +1324,32 @@ RSpec.describe "Repository members", type: :request do
       add_member.call("9999", "hubot")
       sign_in_via_github
 
-      baseline = user_queries { get repository_members_path(repository) }
-      expect(baseline).not_to be_empty
+      baseline = request_queries { get repository_members_path(repository) }
+
+      # Non-vacuity, and it has to witness THE GRANTOR — not merely that some SQL ran. This is what
+      # a filter on `FROM "users"` failed to give: the members table is fetched by exactly one
+      # statement, and that statement is the one carrying the grantor join, so the count compared
+      # below is a count that saw the thing it is policing.
+      #
+      # It is also the ONLY assertion here that pins the query shape. A switch from eager_load to
+      # preload leaves the growth comparison below completely flat (one extra statement on both
+      # renders, measured, not assumed), so without this line that regression would land green.
+      # `granted_by_users_` is the alias Rails derives for the second `users` table in the eager
+      # load; if the grantor ever arrives some other way, this fails loudly rather than passing on
+      # a stale assumption about how it is fetched.
+      member_fetches = baseline.grep(/FROM "repository_memberships"/)
+      expect(member_fetches.size).to eq(1)
+      expect(member_fetches.first).to match(/LEFT OUTER JOIN "users" "granted_by_users_/)
       expect(member_row("hubot")).to include("grantor-of-hubot")
 
       add_member.call("8888", "dependabot")
       add_member.call("6666", "renovate")
 
-      three_rows = user_queries { get repository_members_path(repository) }
+      three_rows = request_queries { get repository_members_path(repository) }
 
       expect(member_row("renovate")).to include("grantor-of-renovate")
-      # Two more rows, two more distinct grantors, and not one more query.
+      # Two more rows, two more distinct grantors, and not one more statement ANYWHERE in the
+      # request — the whole page's cost is flat in the number of members.
       expect(three_rows.size).to eq(baseline.size)
     end
   end
