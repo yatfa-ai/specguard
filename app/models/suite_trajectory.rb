@@ -170,6 +170,72 @@ class SuiteTrajectory
 
   def last_run = plotted.last
 
+  # == The same runs, read for what they cost rather than for what they contained
+  #
+  # Every row this class was handed already carries `duration_seconds`, so the runtime series below
+  # is the plotted cohort read a second way — no second window, no second query, and deliberately
+  # not a second panel.
+  #
+  # It rides on `plotted` and not on `runs` because a wall clock is only comparable within one
+  # shard layout. `duration_seconds` on a run is the MAX over its shards (see `TestRun`), so a CI
+  # config moving from four shards to eight halves the wall clock while nothing gets faster —
+  # plotted naively that is a 2× speed-up wearing a real SHA. `plotted` has already withheld every
+  # run not `assembled_like?` the cohort, which is exactly the precondition a runtime line needs;
+  # inheriting it is the argument for putting this series here rather than anywhere else on the
+  # page.
+  #
+  # What it does NOT inherit is timing coverage. `duration_seconds` is nullable and
+  # `Ingest::Payload#validate_duration_seconds` accepts nil explicitly, so a run that reported a
+  # suite and no clock is an ordinary state rather than a fault — and `TestRun#duration_reported?`
+  # is deliberately `nil?` and not `present?`, because a measured `0.0` is a measurement. Those runs
+  # are withheld from this line and stay on the size line, and the count is carried rather than
+  # quietly dropped, the way `withheld_unmeasured` carries its own.
+
+  # The plotted runs that also reported a wall clock — the points of the runtime line, oldest first.
+  def timed
+    @timed ||= plotted.select(&:duration_reported?)
+  end
+
+  # Two points, for the reason `plottable?` wants two — and asked separately, because `plottable?`
+  # does not imply it. A cohort of thirty runs of which one reported a clock is a plottable suite
+  # size and not a trajectory of anything else.
+  def runtime_plottable? = timed.size >= 2
+
+  # On the line for size, off it for time: reported no clock at all. Not a fault and not a zero —
+  # the client sent nothing, so there is nothing to plot and nothing to infer from the absence.
+  def withheld_untimed
+    @withheld_untimed ||= plotted.reject(&:duration_reported?)
+  end
+
+  # The runtime series' own denominator, and its denominator is the PLOTTED cohort rather than the
+  # window: the runs this line could have drawn through are the ones the size line drew through,
+  # never the thirty the window held. Stating it against the window would count a shard-layout
+  # mismatch as a timing gap, which is a different withholding with a different cause.
+  def runtime_coverage
+    return "#{timed.size} of #{plotted.size} plotted runs timed" if withheld_untimed.any?
+
+    "every one of the #{plotted.size} plotted runs timed"
+  end
+
+  # Floats, unrounded and uncoerced. The chart scales to this series' own range, so the difference
+  # between 74.25 and 74.80 is the whole picture; anything that flattens it here is a chart
+  # asserting a suite whose runtime did not move.
+  def runtime_values = timed.map { |run| run.duration_seconds.to_f }
+
+  def runtime_minimum = runtime_values.min
+
+  def runtime_maximum = runtime_values.max
+
+  # Whether every timed run waited exactly as long — a real flat line, and about as likely as a
+  # coincidence gets. Separate from `flat?`, which is a statement about the suite's SIZE: the two
+  # answer independently and a panel that reused one for the other would say a suite that grew did
+  # not.
+  def runtime_flat? = runtime_minimum == runtime_maximum
+
+  def first_timed_run = timed.first
+
+  def last_timed_run = timed.last
+
   private
 
   def measured

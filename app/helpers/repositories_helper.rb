@@ -280,4 +280,34 @@ module RepositoriesHelper
 
     "only #{plotted} of them can be compared with each other"
   end
+
+  # == The two units the "Suite growth" panel plots, worded once each
+  #
+  # `UI::SparklineComponent` holds no unit (see its `initialize`), so each series hands it the
+  # wording of its own figures. These are those two, kept beside each other because that is the
+  # whole reason the component stopped holding one: a chart of tests and a chart of seconds sit in
+  # the same panel, and the day a third series lands it must be impossible for it to inherit either
+  # of these by accident.
+
+  # The suite-size series. Exactly what the component used to hard-code, moved out to its caller —
+  # the bare delimited figure for the axis and the table, the pluralized noun for a marker that has
+  # no heading beside it.
+  def trajectory_size_formatters
+    [->(value) { number_with_delimiter(value.to_i) },
+     ->(value) { "#{number_with_delimiter(value.to_i)} #{"test".pluralize(value.to_i)}" }]
+  end
+
+  # The runtime series. One lambda and not two: `1m 14s` names its own unit, so the marker needs no
+  # second spelling and must not get one.
+  #
+  # Routed through `TestRun#duration_label`, which is the single formatting seam for this column and
+  # says so — "the same float cannot render two ways on one page". It is an instance method because
+  # the thing it words is a column, and the chart holds the floats rather than the rows, so the
+  # value is wrapped in an unsaved run to ask it. That is deliberately the awkward half: the
+  # alternative is calling `humanized_seconds`, which is private and STAYS private
+  # (`TestRun` :470), and a fourth spelling of seconds on a page that already prints three is
+  # precisely the drift `duration_label`'s own comment exists to prevent.
+  def trajectory_runtime_formatter
+    ->(value) { TestRun.new(duration_seconds: value).duration_label }
+  end
 end

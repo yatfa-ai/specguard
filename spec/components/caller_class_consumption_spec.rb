@@ -80,6 +80,10 @@ RSpec.describe "caller-supplied component classes" do
         UI::SparklineComponent.new(
           id: "trajectory", label: "Suite size", coverage: "80%", summary: "Two runs.",
           columns: %w[Commit Tests Age],
+          # `formatter` is required rather than defaulted, so the component holds no opinion about
+          # what it is plotting — the same refusal `columns:` already makes. This spec has no stake
+          # in the unit; it asserts wrapper-class merging.
+          formatter: ->(value) { value.to_s },
           points: [
             UI::SparklineComponent::Point.new(label: "abc1234", value: 10, detail: "2d ago"),
             UI::SparklineComponent::Point.new(label: "def5678", value: 12, detail: "1d ago")
