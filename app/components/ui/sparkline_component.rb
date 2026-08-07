@@ -49,18 +49,40 @@ class UI::SparklineComponent < ApplicationComponent
   #
   # `columns` are the three headings of the text alternative, in the caller's own vocabulary: this
   # component knows it is drawing "points", and the page knows they are runs.
-  def initialize(id:, points:, label:, coverage:, summary:, columns:, **options)
+  #
+  # == Why the unit is a caller's argument and not a default
+  #
+  # This class documents itself as unit-agnostic above and then used to name the unit in three
+  # places — an integer coercion, `number_with_delimiter`, and a hard-coded `"test".pluralize`. Each
+  # is a claim about what is being plotted, and every one of them is false of a series of seconds: a
+  # cohort moving 74.25s → 74.80s coerces to a flat line, which is the single shape that asserts a
+  # quantity did not move.
+  #
+  # So `formatter` is REQUIRED rather than defaulted to the suite-size wording. A default is the
+  # opinion kept, moved one line down: the next caller plotting something else inherits "tests"
+  # silently and only finds out by reading the rendered page. Required, the component holds no unit
+  # at all — the same way `columns:` already refuses to know that its points are runs.
+  #
+  # `formatter` is the figure ALONE, because the two places it is used both sit under a heading that
+  # names the unit: the axis bounds beside `label`, and the table cells under `columns`. A marker's
+  # `<title>` floats free of both, so it gets `point_formatter` and names its own unit. That defaults
+  # to `formatter` — not to a unit word — because a figure that already carries its unit (`1m 14s`)
+  # needs no second spelling, and a caller whose figure does not (`20,013`) says so once.
+  def initialize(id:, points:, label:, coverage:, summary:, columns:, formatter:,
+                 point_formatter: nil, **options)
     @id = id
     @points = Array(points)
     @label = label
     @coverage = coverage
     @summary = summary
     @columns = columns
+    @formatter = formatter
+    @point_formatter = point_formatter || formatter
     @options = options
     super
   end
 
-  attr_reader :id, :points, :label, :coverage, :summary, :columns
+  attr_reader :id, :points, :label, :coverage, :summary, :columns, :formatter, :point_formatter
 
   # Two points or nothing. One point drawn as a line is a FLAT line, which is a picture of a suite
   # that was measured twice and did not move — a claim a single measurement cannot support.
@@ -74,7 +96,12 @@ class UI::SparklineComponent < ApplicationComponent
 
   def summary_id = "#{id}-summary"
 
-  def values = points.map { |point| point.value.to_i }
+  # The plotted figures as they were handed over — no coercion. `to_i` here was the unit opinion in
+  # its most damaging form: it is invisible on a series of test counts, which are already integers,
+  # and on a series of seconds it silently discards the whole range a runtime chart exists to show.
+  # 74.25 → 74.80 is a slope; 74 → 74 is a flat line, and `flat?` copy would then assert the
+  # quantity "has not moved" over a real regression.
+  def values = points.map(&:value)
 
   def minimum = values.min
 
@@ -94,16 +121,21 @@ class UI::SparklineComponent < ApplicationComponent
   end
 
   def coordinates
-    @coordinates ||= points.each_with_index.map { |point, index| [x_for(index), y_for(point.value.to_i)] }
+    @coordinates ||= points.each_with_index.map { |point, index| [x_for(index), y_for(point.value)] }
   end
 
-  def formatted(value) = helpers.number_with_delimiter(value.to_i)
+  # The figure as the axis bounds and the table cells state it — both under a heading that names
+  # the unit, so this is the number and nothing else.
+  def formatted(value) = formatter.call(value)
 
   # What one marker announces on hover. The text alternative below carries the same three facts as
   # a row, so this is a convenience and never the only place a figure appears.
+  #
+  # `point_formatter` and not `formatted`: a `<title>` is read on its own, with neither the label
+  # above the plot nor the column heading below it in reach, so the figure here has to name its own
+  # unit. Which unit that is, is the caller's to say.
   def point_title(point)
-    [point.label, "#{formatted(point.value)} #{"test".pluralize(point.value.to_i)}", point.detail]
-      .compact_blank.join(" — ")
+    [point.label, point_formatter.call(point.value), point.detail].compact_blank.join(" — ")
   end
 
   def wrapper_class = @wrapper_class ||= merge_classes("space-y-2", @options.delete(:class))

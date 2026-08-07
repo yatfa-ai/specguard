@@ -397,4 +397,152 @@ RSpec.describe SuiteTrajectory do
     expect(count).to eq(0)
     expect(series.plotted.map(&:commit_sha)).to eq(%w[whole01 whole02])
   end
+
+  # The same rows read a second way: what these runs COST. Every figure below comes off columns the
+  # window already loaded, and the series rides on `plotted` rather than on `runs` because a wall
+  # clock is comparable only within one shard layout.
+  describe "the wall-clock series" do
+    def timed_point(repository, commit, total:, seconds:, shards: 0, at: 1.hour.ago)
+      repository.test_runs.create!(commit_sha: commit, branch: "main", total_specs_count: total,
+                                   duration_seconds: seconds, created_at: at)
+                          .preload_shard_count(shards)
+    end
+
+    it "plots the wall clock of every plotted run that reported one" do
+      repository = create_repository
+      runs = [timed_point(repository, "aaaaaaa", total: 1_000, seconds: 40.2, at: 3.days.ago),
+              timed_point(repository, "bbbbbbb", total: 1_020, seconds: 61.5, at: 2.days.ago),
+              timed_point(repository, "ccccccc", total: 1_047, seconds: 74.25, at: 1.day.ago)]
+
+      series = trajectory(runs)
+
+      expect(series).to be_runtime_plottable
+      expect(series.timed.map(&:commit_sha)).to eq(%w[aaaaaaa bbbbbbb ccccccc])
+      expect(series.runtime_values).to eq([40.2, 61.5, 74.25])
+      expect(series.runtime_minimum).to eq(40.2)
+      expect(series.runtime_maximum).to eq(74.25)
+      expect(series.withheld_untimed).to be_empty
+      expect(series.runtime_coverage).to eq("every one of the 3 plotted runs timed")
+    end
+
+    # Nullable by design — `Ingest::Payload#validate_duration_seconds` accepts nil explicitly — so a
+    # run that measured its suite and sent no clock is an ordinary state. It comes off THIS line and
+    # stays on the size line, because the two withhold for different reasons.
+    it "withholds a run that reported no timing while leaving it on the size line" do
+      repository = create_repository
+      runs = [timed_point(repository, "aaaaaaa", total: 1_000, seconds: 40.2, at: 3.days.ago),
+              timed_point(repository, "silentc", total: 1_020, seconds: nil, at: 2.days.ago),
+              timed_point(repository, "ccccccc", total: 1_047, seconds: 74.25, at: 1.day.ago)]
+
+      series = trajectory(runs)
+
+      expect(series.timed.map(&:commit_sha)).to eq(%w[aaaaaaa ccccccc])
+      expect(series.withheld_untimed.map(&:commit_sha)).to eq(%w[silentc])
+      expect(series.plotted.map(&:commit_sha)).to eq(%w[aaaaaaa silentc ccccccc])
+      expect(series.runtime_coverage).to eq("2 of 3 plotted runs timed")
+    end
+
+    # A build that really did finish instantly measured something, and reporting it as an omission
+    # would be reporting a measurement as an absence. The predicate this asks — `duration_reported?`
+    # — is `nil?` for exactly that reason, and a `positive?`-shaped check in its place reads a
+    # measured zero as nothing having been sent.
+    it "keeps a run that measured 0.0 seconds, which is a measurement" do
+      repository = create_repository
+      runs = [timed_point(repository, "instant", total: 1_000, seconds: 0.0, at: 2.days.ago),
+              timed_point(repository, "ccccccc", total: 1_047, seconds: 74.25, at: 1.day.ago)]
+
+      series = trajectory(runs)
+
+      expect(series.timed.map(&:commit_sha)).to eq(%w[instant ccccccc])
+      expect(series.withheld_untimed).to be_empty
+      expect(series.runtime_minimum).to eq(0.0)
+    end
+
+    # The whole reason this rides on `plotted`. `duration_seconds` is the MAX over a run's shards, so
+    # four shards becoming eight halves the wall clock while nothing gets faster — a 2× speed-up
+    # wearing a real SHA. The cohort rule the size line already enforces is exactly the guard this
+    # line needs, and it is inherited rather than re-spelled.
+    it "never plots a run assembled differently from the cohort, however well it was timed" do
+      repository = create_repository
+      runs = [timed_point(repository, "fourwid", total: 20_000, seconds: 74.25, shards: 4, at: 3.days.ago),
+              timed_point(repository, "fourwi2", total: 20_010, seconds: 75.0, shards: 4, at: 2.days.ago),
+              timed_point(repository, "eightwd", total: 20_020, seconds: 38.0, shards: 8, at: 1.day.ago)]
+
+      series = trajectory(runs)
+
+      expect(series.timed.map(&:commit_sha)).to eq(%w[fourwid fourwi2])
+      expect(series.runtime_values).to eq([74.25, 75.0])
+      # And the 38.0s run is not counted as a timing gap: it reported a clock, it is simply not
+      # comparable. Wording it as untimed would name the wrong cause.
+      expect(series.withheld_untimed).to be_empty
+      expect(series.withheld_other_composition.map(&:commit_sha)).to eq(%w[eightwd])
+    end
+
+    # `plottable?` does not imply this one. Thirty comparable runs of which one reported a clock is
+    # a plottable suite size and a trajectory of nothing else.
+    it "refuses a line through a single timed run even when the size line is plottable" do
+      repository = create_repository
+      runs = [timed_point(repository, "aaaaaaa", total: 1_000, seconds: nil, at: 3.days.ago),
+              timed_point(repository, "bbbbbbb", total: 1_020, seconds: nil, at: 2.days.ago),
+              timed_point(repository, "ccccccc", total: 1_047, seconds: 74.25, at: 1.day.ago)]
+
+      series = trajectory(runs)
+
+      expect(series).to be_plottable
+      expect(series).not_to be_runtime_plottable
+      expect(series.timed.map(&:commit_sha)).to eq(%w[ccccccc])
+    end
+
+    # Two independent questions about the same cohort. A suite that grew while its wall clock held
+    # steady is the ordinary case, and a panel that answered one out of the other would say the
+    # suite did not move.
+    it "answers flatness separately for size and for runtime" do
+      repository = create_repository
+      runs = [timed_point(repository, "aaaaaaa", total: 1_000, seconds: 74.25, at: 2.days.ago),
+              timed_point(repository, "bbbbbbb", total: 1_047, seconds: 74.25, at: 1.day.ago)]
+
+      series = trajectory(runs)
+
+      expect(series).not_to be_flat
+      expect(series).to be_runtime_flat
+    end
+
+    # Floats, uncoerced. 74.25 → 74.80 is a real 0.55s regression, and an integer coercion anywhere
+    # on this path renders it as a flat line — the one shape that asserts the wait did not move.
+    it "keeps a sub-second range rather than coercing it away" do
+      repository = create_repository
+      runs = [timed_point(repository, "aaaaaaa", total: 1_000, seconds: 74.25, at: 2.days.ago),
+              timed_point(repository, "bbbbbbb", total: 1_047, seconds: 74.80, at: 1.day.ago)]
+
+      series = trajectory(runs)
+
+      expect(series.runtime_values).to eq([74.25, 74.80])
+      expect(series).not_to be_runtime_flat
+    end
+
+    it "asks the database nothing for any of it" do
+      repository = create_repository
+      runs = [timed_point(repository, "aaaaaaa", total: 1_000, seconds: 40.2, at: 3.days.ago),
+              timed_point(repository, "silentc", total: 1_020, seconds: nil, at: 2.days.ago),
+              timed_point(repository, "ccccccc", total: 1_047, seconds: 74.25, at: 1.day.ago)]
+      series = trajectory(runs)
+
+      count = 0
+      subscriber = ActiveSupport::Notifications.subscribe("sql.active_record") do |_, _, _, _, payload|
+        count += 1 unless payload[:cached] || payload[:name].in?(["SCHEMA", "TRANSACTION"])
+      end
+      series.runtime_plottable?
+      series.runtime_coverage
+      series.runtime_values
+      series.runtime_minimum
+      series.runtime_maximum
+      series.runtime_flat?
+      series.withheld_untimed
+      series.first_timed_run
+      series.last_timed_run
+      ActiveSupport::Notifications.unsubscribe(subscriber)
+
+      expect(count).to eq(0)
+    end
+  end
 end

@@ -17,6 +17,12 @@ class Api::V1::RepositoriesController < Api::BaseController
   # `ActionController::API` lacks.
   include ShardCountPreloading
 
+  # `?branch=` read as a branch name, to narrow `history` below. Shared with
+  # `RepositoriesController`, which reads the same parameter under the same guard for the
+  # suite-trajectory panel on repositories#show — see `RequestedBranchParam` for the guard's
+  # reasoning, which used to sit here in full.
+  include RequestedBranchParam
+
   # The bound on `history` below. Ten rows is ten rows whether the suite holds three tests or
   # twenty thousand — `Repository#recent_test_runs` argues that in its own comment — so this is a
   # bound and not the first page of a pagination contract there is no cursor to continue.
@@ -234,37 +240,6 @@ class Api::V1::RepositoriesController < Api::BaseController
       limit: history_limit,
       returned: history_runs.length
     }
-  end
-
-  # The branch the client asked to narrow `history` to, or `nil` for "do not narrow it".
-  #
-  # THE FIRST REQUEST PARAMETER READ ANYWHERE IN `Api::V1` (`git grep "params\[" app/controllers/api`
-  # found none before this), so the two guards below are the pattern rather than local caution.
-  #
-  # `is_a?(String)` FIRST, and it is not defensive noise: `?branch[]=main` parses to an Array and
-  # `?branch[a]=b` to `ActionController::Parameters`, neither of which answers `.presence` the way
-  # this reads it — an unguarded `params[:branch].presence` turns a malformed query string into a
-  # 500 on an authenticated GET. Anything that is not a String is treated as no filter, which is the
-  # same answer an absent param gets.
-  #
-  # `.presence` SECOND, which is what makes `?branch=` mean "no filter" rather than
-  # `WHERE branch = ''` — and, critically, keeps any input at all from reaching a
-  # `WHERE branch IS NULL`. `branch` is nullable and an anonymous run is an ordinary live state, so
-  # NULL is "the client did not say" (the meaning `serialized_history_row` pins) and not a branch
-  # anyone can ask for. `Repository#recent_test_runs` makes the same guard on its own side; this one
-  # is here so the model is never handed a blank in the first place.
-  #
-  # No validation branch and no 400: an unknown branch is not a malformed request, it is a request
-  # whose answer is zero rows. See `serialized_history` for why `[]` is the right answer and a
-  # substituted branch's rows would be the dangerous one.
-  #
-  # Memoized with `defined?` rather than `||=`, because `nil` is the common answer and `||=` would
-  # re-read the params on every call.
-  def requested_branch
-    return @requested_branch if defined?(@requested_branch)
-
-    raw = params[:branch]
-    @requested_branch = raw.is_a?(String) ? raw.presence : nil
   end
 
   # Which bound applies, decided in ONE place so the window's `limit` and the query's `LIMIT` cannot

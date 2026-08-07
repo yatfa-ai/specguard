@@ -874,7 +874,9 @@
                            "and the newest #{time_ago_in_words(@suite_trajectory.last_run.created_at)} ago. " \
                            "The vertical axis spans that range and does not start at zero, so the " \
                            "slope is the size of the change and not its share of the suite.",
-                  columns: ["Run", "Tests in suite", "Ingested"]
+                  columns: ["Run", "Tests in suite", "Ingested"],
+                  formatter: trajectory_size_formatter,
+                  point_formatter: trajectory_size_point_formatter
                 ) %>
 
             <%# What the line covers, in the register the Overview's basis line uses: a series is a
@@ -953,6 +955,107 @@
                 <%= time_ago_in_words(@suite_trajectory.last_run.created_at) %> ago.
               <% end %>
             </p>
+
+            <%# == The same cohort, read for what it COST
+                A suite-size line answers "is this suite growing?" and cannot answer "is it getting
+                slower?" — which is the question a reader of a growth chart asks next, and the one
+                the page could already almost answer: every row plotted above carries its own
+                `duration_seconds`, and until now nothing read it.
+
+                Drawn here rather than in a panel of its own because a wall clock is comparable only
+                within one shard layout. `duration_seconds` is the MAX over a run's shards, so a CI
+                config moving from four shards to eight halves it while nothing gets faster; the
+                cohort rule that makes the size line honest is exactly the rule this line needs, and
+                sharing the cohort is what guarantees the two lines are drawn through the same runs
+                rather than through two sets that drifted apart. %>
+            <% if @suite_trajectory.runtime_plottable? %>
+              <% runtime_formatter = trajectory_runtime_formatter %>
+              <% runtime_points = @suite_trajectory.timed.map do |run|
+                   UI::SparklineComponent::Point.new(
+                     label: run.commit_sha.first(7),
+                     value: run.duration_seconds.to_f,
+                     detail: "#{time_ago_in_words(run.created_at)} ago"
+                   )
+                 end %>
+              <%# One formatter and no `point_formatter`: `1m 14s` names its own unit, so a marker
+                  needs no second spelling. The suite-size chart above passes both precisely because
+                  `20,013` does not. %>
+              <%= render UI::SparklineComponent.new(
+                    id: "suite-trajectory-runtime-chart",
+                    points: runtime_points,
+                    label: "Wall clock on #{@suite_trajectory.branch}",
+                    coverage: @suite_trajectory.runtime_coverage,
+                    summary: "These runs waited between #{runtime_formatter.call(@suite_trajectory.runtime_minimum)} " \
+                             "and #{runtime_formatter.call(@suite_trajectory.runtime_maximum)} across " \
+                             "#{@suite_trajectory.timed.size} runs on #{@suite_trajectory.branch}, " \
+                             "the oldest #{time_ago_in_words(@suite_trajectory.first_timed_run.created_at)} ago " \
+                             "and the newest #{time_ago_in_words(@suite_trajectory.last_timed_run.created_at)} ago. " \
+                             "Each point is the run's wall clock — the slowest single shard, not the " \
+                             "machine time the suite cost. The vertical axis spans that range and does " \
+                             "not start at zero, so the slope is the size of the change and not its " \
+                             "share of the wait.",
+                    columns: ["Run", "Wall clock", "Ingested"],
+                    formatter: runtime_formatter
+                  ) %>
+
+              <%# The runtime line's own basis, stated separately from the size line's above. The two
+                  are drawn through the same cohort but not necessarily through the same runs — a
+                  run that reported a suite and no clock is on one line and off the other — so one
+                  shared caption would be true of neither. %>
+              <p class="text-xs text-app-muted" id="suite-trajectory-runtime-basis">
+                Drawn through <%= @suite_trajectory.timed.size %>
+                of the <%= @suite_trajectory.plotted.size %>
+                <%= "run".pluralize(@suite_trajectory.plotted.size) %>
+                the suite-size line is drawn through, on <%= @suite_trajectory.branch %><%= ", #{@suite_trajectory.cohort_description}" if @suite_trajectory.cohort_description %>.
+                Each point is that run's wall clock — how long the build waited, which on a sharded
+                run is its slowest single shard and not the machine time every shard spent. Only
+                runs assembled the same way are plotted, because a config that splits four shards
+                into eight halves the wall clock without anything having got faster.
+                <% if @suite_trajectory.runtime_flat? %>
+                  Every one of them waited
+                  <%= runtime_formatter.call(@suite_trajectory.runtime_minimum) %>: this suite's
+                  wall clock has not moved over that window, which is a measurement and not an
+                  absence of one.
+                <% end %>
+                <% if @suite_trajectory.withheld_untimed.any? %>
+                  <%# Withheld from THIS line only, and still plotted above. A run may measure a
+                      suite perfectly and send no timing — `duration_seconds` is nullable and
+                      `Ingest::Payload` accepts nil explicitly — so this is a gap in what was
+                      reported and never a build that took no time. %>
+                  <%= @suite_trajectory.withheld_untimed.size %>
+                  <%= "run".pluralize(@suite_trajectory.withheld_untimed.size) %>
+                  <%= @suite_trajectory.withheld_untimed.size == 1 ? "is" : "are" %> withheld from
+                  this line for having reported no timing at all, and
+                  <%= @suite_trajectory.withheld_untimed.size == 1 ? "remains" : "remain" %>
+                  on the suite-size line above: a missing wall clock is something the client did not
+                  send, not a build that took no time.
+                <% end %>
+              </p>
+            <% else %>
+              <%# Not an empty state, because the panel is not empty — the size line above is drawn.
+                  A missing runtime line is one sentence about what was reported, in the same
+                  register as the withholding sentences beside it. %>
+              <p class="text-xs text-app-muted" id="suite-trajectory-runtime-basis">
+                No wall-clock line yet on <%= @suite_trajectory.branch %>:
+                <% if @suite_trajectory.timed.empty? %>
+                  none of the <%= @suite_trajectory.plotted.size %> plotted
+                  <%= "run".pluralize(@suite_trajectory.plotted.size) %> reported one.
+                <% else %>
+                  <%# Counted off `timed`, not typed in. The `else` can only be reached with exactly
+                      one timed run TODAY, because the threshold happens to be two — so a literal
+                      "1" would read correctly and lie the moment the threshold moved, in the one
+                      sentence whose whole job is explaining a shortfall. The threshold itself comes
+                      off the rule for the same reason. %>
+                  <%= @suite_trajectory.timed.size %> of the
+                  <%= @suite_trajectory.plotted.size %> plotted
+                  <%= "run".pluralize(@suite_trajectory.plotted.size) %> reported one, and a
+                  trajectory needs
+                  <%= SuiteTrajectory::MINIMUM_POINTS %>.
+                <% end %>
+                A single wall clock drawn as a line is a flat one, which says this suite takes as
+                long as it always did — a claim one measurement cannot support.
+              </p>
+            <% end %>
           <% else %>
             <%# Never a flat line, and never a single point drawn as one. Both would assert a stable
                 suite, which is precisely what a history too thin to compare cannot say. The counts
