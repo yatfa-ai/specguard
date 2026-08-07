@@ -583,7 +583,7 @@ RSpec.describe "POST /api/v1/ingest", type: :request do
     end
   end
 
-  # A 20,000-example run is a ~6 MiB JSON body and ~0.17 MiB gzipped. The client gem bounds the
+  # A 20,000-example run is a 7.01 MiB JSON body and 0.33 MiB gzipped. The client gem bounds the
   # whole POST with one `write_timeout`, so on a modest CI uplink compression is the difference
   # between the run landing and the run never arriving. `GzipRequestBody` is what makes it
   # readable here; these are the end-to-end claims the middleware's own unit spec cannot make,

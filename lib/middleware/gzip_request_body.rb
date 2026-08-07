@@ -8,11 +8,13 @@ require "zlib"
 #
 # == Why this exists
 #
-# A 20,000-example RSpec run is a ~6 MiB JSON body; gzipped it is ~0.17 MiB, a 35x saving. The
-# client gem sets a single `write_timeout` for the whole POST, so on a modest CI uplink the
+# A 20,000-example RSpec run is a 7.01 MiB JSON body; gzipped it is 0.33 MiB, a 21x saving
+# (measured by running a real 200-file / 20,000-example suite through the client gem's formatter).
+# The client sets a single `write_timeout` for the whole POST, so on a modest CI uplink the
 # uncompressed body is the difference between the run landing and the run timing out in the write
-# and never arriving at all. Compression is what makes the large-suite case shippable, and the
-# client cannot turn it on until this side can read it.
+# and never arriving at all — 11.8s to write at 5 Mbit/s against a 10s budget, versus 0.55s
+# compressed. Compression is what makes the large-suite case shippable, and the client cannot turn
+# it on until this side can read it.
 #
 # == Why at the Rack boundary, and where in it
 #
@@ -33,19 +35,19 @@ require "zlib"
 #
 # == The inflate is capped, and capped by streaming
 #
-# The 35x ratio that makes honest telemetry cheap makes a zip bomb cheap too: a few hundred KiB of
+# The 21x ratio that makes honest telemetry cheap makes a zip bomb cheap too: a few hundred KiB of
 # zeros expands to gigabytes. So the inflated size is bounded, and the bound is enforced *during*
 # the inflate rather than after it — a `Zlib.gunzip` followed by a size check would have already
 # allocated the very payload the check exists to refuse. Reading a chunk at a time means a bomb is
 # abandoned after a couple of KiB of input, holding at most one chunk plus the cap in memory.
 #
-# The cap is deliberately far above any real run: 20k examples is 6 MiB inflated, so 64 MiB leaves
+# The cap is deliberately far above any real run: 20k examples is 7 MiB inflated, so 64 MiB leaves
 # an order of magnitude of headroom and will only ever be reached by something pathological.
 class GzipRequestBody
   API_PREFIX = "/api/"
   ENCODING = "gzip"
 
-  # Generous on purpose — see the class comment. A legitimate run is ~100x under this.
+  # Generous on purpose — see the class comment. A 20k-example run is ~9x under this.
   MAX_INFLATED_BYTES = 64 * 1024 * 1024
 
   # Inflated bytes pulled per iteration. Bounds the transient allocation when the cap is hit.
