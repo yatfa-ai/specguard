@@ -28,12 +28,31 @@
             <div class="flex items-center gap-2">
               <%# The key count is credential information, and `show` gates every bit of it behind
                   `keys.manage` (see the API keys panel there). A count on this card would hand a
-                  `view`-only member more than the page it links to is willing to. The intent count
-                  is not credential information and stays for everyone. %>
+                  `view`-only member more than the page it links to is willing to. The suite size
+                  below is not credential information — it is the same class of signal as the
+                  connection-health stat on `show`, which is deliberately outside that gate — so it
+                  stays for everyone. %>
               <% if key_count_visible?(repository) %>
                 <%= render UI::BadgeComponent.new(tone: :neutral) { pluralize(repository.api_keys.size, "key") } %>
               <% end %>
-              <%= render UI::BadgeComponent.new(tone: :info) { pluralize(repository.spec_intents.size, "intent") } %>
+              <%# Suite size off the newest TestRun, preloaded for the whole page by
+                  RepositoriesController#latest_suite_size — never a COUNT per card.
+
+                  This replaces a `spec_intents` count that no production code path can make
+                  non-zero: nothing on `main` writes that table, so a repository whose CI had
+                  ingested forty-seven runs of a twelve-thousand-test suite still read `0 intents`
+                  here. `total_specs_count` is derived by ingestion on every POST and counts the
+                  whole suite, annotated or not.
+
+                  `nil` means CI has never reported, and gets its own words rather than `0 tests`:
+                  "never ingested" and "the suite is empty" are different facts and the card has to
+                  be able to tell them apart. `show` draws the same line in its Overview panel. %>
+              <% suite_size = latest_suite_size(repository) %>
+              <% if suite_size.nil? %>
+                <%= render UI::BadgeComponent.new(tone: :neutral) { "No runs yet" } %>
+              <% else %>
+                <%= render UI::BadgeComponent.new(tone: :info) { "#{number_with_delimiter(suite_size)} #{'test'.pluralize(suite_size)}" } %>
+              <% end %>
             </div>
           </div>
         <% end %>

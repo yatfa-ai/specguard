@@ -3,9 +3,9 @@
 class RepositoriesController < ApplicationController
   before_action :require_authentication
 
-  # The first two are per-card questions asked by repositories/index, once per repository in the
-  # list. The third is a per-row question asked by repositories/show, once per API key.
-  helper_method :owns_repository?, :key_count_visible?, :former_member?
+  # The first three are per-card questions asked by repositories/index, once per repository in the
+  # list. The fourth is a per-row question asked by repositories/show, once per API key.
+  helper_method :owns_repository?, :key_count_visible?, :latest_suite_size, :former_member?
 
   # Everything the viewer can open: what they own, plus what has been shared with them. Kept as one
   # relation rather than `owned + shared`, because concatenating two Arrays orders them
@@ -163,6 +163,46 @@ class RepositoriesController < ApplicationController
 
     ids = access_holder_ids
     ids.nil? ? false : ids.exclude?(user.id)
+  end
+
+  # Suite size for one card, or `nil` when this repository's CI has never reported.
+  #
+  # `nil` is load-bearing and means *never ingested*, which the card renders as its own state
+  # rather than as `0 tests` — a repository CI has never posted a run for must not read identically
+  # to one whose suite is genuinely empty. Same distinction the Overview panel on `show` draws on
+  # `@latest_test_run` presence, and the reason this is not `Repository#annotated_ratio`, which
+  # floors at 0.0 by contract and cannot express it.
+  #
+  # The figure itself is the run's *whole-suite* count — every spec, annotated or not (see
+  # `Ingest::Payload#test_run_attributes`) — so it is already correct on a suite carrying no
+  # annotations at all.
+  def latest_suite_size(repository)
+    run = latest_test_runs[repository.id]
+    run && run.total_specs_count.to_i
+  end
+
+  # `repository_id => newest TestRun` for every repository on this page, in one query no matter how
+  # long the list is — the same shape, and the same reason, as `shared_permissions` above. Asking
+  # `Repository#latest_test_run` per card would be an N+1, and the card only just stopped paying a
+  # per-repository COUNT for the badge this replaces.
+  #
+  # `DISTINCT ON` keeps the first row per repository under the ORDER BY, and that ORDER BY repeats
+  # `Repository#latest_test_run`'s tie-break exactly (created_at desc, then id desc) so a card and
+  # the page it links to can never name different runs. Scoped to the ids already on this page, so
+  # it never scans `test_runs` globally.
+  def latest_test_runs
+    @latest_test_runs ||= begin
+      repository_ids = @repositories.map(&:id)
+
+      if repository_ids.empty?
+        {}
+      else
+        TestRun.where(repository_id: repository_ids)
+               .select("DISTINCT ON (test_runs.repository_id) test_runs.*")
+               .order(:repository_id, created_at: :desc, id: :desc)
+               .index_by(&:repository_id)
+      end
+    end
   end
 
   def repository_params

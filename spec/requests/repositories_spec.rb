@@ -423,6 +423,79 @@ RSpec.describe "Repository registration and API keys", type: :request do
     end
   end
 
+  # The card's only suite signal used to be `pluralize(repository.spec_intents.size, "intent")`, and
+  # no production code path writes `spec_intents` — so it read `0 intents` for every repository in
+  # every real deployment, including one whose CI had ingested forty-seven runs of a
+  # twelve-thousand-test suite. These examples pin the replacement: a figure that comes from real
+  # ingestion, an empty state that does not impersonate a measured zero, and a bounded query count
+  # so the per-card COUNT this removed cannot quietly return as a per-card SELECT.
+  describe "the suite size on the repositories index" do
+    # Every SELECT the index issues against one table, so a per-card query shows up as N of them
+    # rather than as a passing test. Same shape as the members page's key-count guard.
+    def queries_against(table)
+      queries = []
+      subscriber = ActiveSupport::Notifications.subscribe("sql.active_record") do |_, _, _, _, payload|
+        queries << payload[:sql] if payload[:name] != "SCHEMA" && payload[:sql].to_s.include?(table)
+      end
+      yield
+      queries
+    ensure
+      ActiveSupport::Notifications.unsubscribe(subscriber)
+    end
+
+    it "shows the ingested suite size, delimited, in place of the intent count" do
+      repository = create_repository(user: @user)
+      create_test_run(repository: repository, commit_sha: "feedfacecafe0101",
+                      total_specs_count: 12_431, annotated_specs_count: 118)
+
+      get repositories_path
+
+      expect(response.body).to include("12,431 tests")
+      # The badge this replaces could only ever say `0`, whatever CI had reported.
+      expect(response.body).not_to match(/\d+ intents?\b/)
+    end
+
+    # Both runs land in the same instant, so this also pins the id tie-break — the same one
+    # `Repository#latest_test_run` uses, which is what keeps the card and `show` naming one run.
+    it "reads the newest run, not the first one ingested" do
+      repository = create_repository(user: @user)
+      create_test_run(repository: repository, commit_sha: "0ld", total_specs_count: 100)
+      create_test_run(repository: repository, commit_sha: "new", total_specs_count: 3)
+
+      get repositories_path
+
+      expect(response.body).to include("3 tests")
+      expect(response.body).not_to include("100 tests")
+    end
+
+    it "says a never-ingested repository has no runs, rather than showing it as an empty suite" do
+      create_repository(user: @user)
+
+      get repositories_path
+
+      expect(response.body).to include("No runs yet")
+      # `0 tests` would make "CI has never reported" byte-identical to "the suite is empty".
+      expect(response.body).not_to include("0 tests")
+    end
+
+    it "loads every card's latest run in one query, however long the list is" do
+      ["acme/one", "acme/two", "acme/three"].each_with_index do |full_name, index|
+        create_test_run(repository: create_repository(user: @user, github_full_name: full_name),
+                        commit_sha: "cafe000#{index}", total_specs_count: 10 + index)
+      end
+
+      run_queries = queries_against("test_runs") { get repositories_path }
+      intent_queries = queries_against("spec_intents") { get repositories_path }
+
+      expect(response).to have_http_status(:ok)
+      expect(response.body).to include("11 tests")
+      # One DISTINCT ON for the whole page — three cards must not cost three SELECTs.
+      expect(run_queries.size).to eq(1)
+      # ...and the per-card COUNT it replaced is gone outright, not merely folded into a join.
+      expect(intent_queries).to be_empty
+    end
+  end
+
   describe "renaming a repository" do
     it "updates the name without touching keys, runs or intents" do
       repository = create_repository(user: @user, github_full_name: "acme/billing-servce")

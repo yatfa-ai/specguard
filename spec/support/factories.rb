@@ -17,6 +17,16 @@ module Builders
     RepositoryMembership.create!(repository: repository, user: user, permissions: permissions)
   end
 
+  # One ingested CI run. `total_specs_count` is the whole-suite figure ingestion derives from the
+  # payload (every spec, annotated or not — see Ingest::Payload#test_run_attributes), so a run built
+  # here with the default `annotated_specs_count: 0` is a faithful zero-annotation suite rather than
+  # an impossible state. `commit_sha` is the only attribute TestRun validates.
+  def create_test_run(repository:, commit_sha: "feedfacecafebabe", total_specs_count: 0, **attrs)
+    repository.test_runs.create!(
+      { commit_sha: commit_sha, total_specs_count: total_specs_count }.merge(attrs)
+    )
+  end
+
   def create_spec_intent(repository:, file_path: "spec/models/invoice_spec.rb", line_number: 12, **attrs)
     repository.spec_intents.create!(
       {
