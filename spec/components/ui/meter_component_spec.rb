@@ -65,12 +65,33 @@ RSpec.describe UI::MeterComponent, type: :component do
     # `be_a(Float)` alongside `eq(100)`, matching the `max <= 0` guard examples above: `eq` alone
     # cannot see this branch's return TYPE, because `100 == 100.0` is true in Ruby. That is what
     # let the clamped branch return Integer `100` (`Comparable#clamp` returns the bound itself, and
-    # the bounds were Integer literals) while every other branch returned a Float — SPGD-214. With
-    # only `eq`, reverting `clamp(0.0, 100.0)` to `clamp(0, 100)` leaves the whole suite green.
+    # the bounds were Integer literals) while every other branch returned a Float — SPGD-214.
+    #
+    # `clamp` has TWO bounds, so it takes two examples to observe the whole line: this one covers
+    # the ceiling, the one below covers the floor. Mutation-confirmed against the full suite, each
+    # bound independently — `clamp(0.0, 100)` fails this example and only this one; `clamp(0,
+    # 100.0)` fails the floor example and only that one. Neither half can be reverted silently.
     it "holds the 100 ceiling when value exceeds max instead of overflowing the bar" do
       percent = described_class.new(value: 5, max: 3).percent
 
       expect(percent).to eq(100)
+      expect(percent).to be_a(Float)
+    end
+
+    # The floor is the ceiling's twin, and it went unobserved for exactly the reason `eq` alone
+    # could not see the ceiling's type: `0 == 0.0` is true in Ruby. A negative count is as
+    # unenforced as `annotated > total` — `schema.rb:197,202` store both counts as plain
+    # `t.integer ... null: false` with no check constraint (the schema declares none at all), and
+    # `app/models/test_run.rb` validates only `commit_sha` presence, no numericality.
+    #
+    # Without this example, reverting HALF the fix — `clamp(0.0, 100.0)` -> `clamp(0, 100.0)` —
+    # left the whole suite green while the floor branch returned Integer `0` and rendered "0%"
+    # immediately beside the `max <= 0` guard's "0.0%": SPGD-214's own one-fact-two-spellings
+    # defect, lower bound instead of upper.
+    it "holds the 0 floor as a Float when value is negative" do
+      percent = described_class.new(value: -2, max: 3).percent
+
+      expect(percent).to eq(0)
       expect(percent).to be_a(Float)
     end
   end
