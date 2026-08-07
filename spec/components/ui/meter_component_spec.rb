@@ -7,7 +7,7 @@ require "rails_helper"
 #
 #   * `show.html.erb:277` -> `TestRun#annotated_ratio` — `(annotated / total * 100).round(1)`,
 #     guarded by `total_specs_count.to_i.zero?`, pinned by `spec/models/test_run_spec.rb`.
-#   * `show.html.erb:234` -> this component — `((value / max) * 100).clamp(0, 100).round(1)`,
+#   * `show.html.erb:234` -> this component — `((value / max) * 100).clamp(0.0, 100.0).round(1)`,
 #     guarded by `max <= 0`, handed the RAW COUNTS rather than the ratio (deliberately, see the
 #     comment at the call site) so it recomputes the share itself.
 #
@@ -61,8 +61,41 @@ RSpec.describe UI::MeterComponent, type: :component do
     # integers. The ceiling is the component's stated contract for the day a second consumer
     # arrives without the call site's `suite_size_measured?` gate, and it is load-bearing exactly
     # because nothing fails when someone deletes it as dead code.
+    #
+    # `be_a(Float)` alongside `eq(100)`, matching the `max <= 0` guard examples above: `eq` alone
+    # cannot see this branch's return TYPE, because `100 == 100.0` is true in Ruby. That is what
+    # let the clamped branch return Integer `100` (`Comparable#clamp` returns the bound itself, and
+    # the bounds were Integer literals) while every other branch returned a Float — SPGD-214.
+    #
+    # `clamp` has TWO bounds, so it takes two examples to observe the whole line: this one covers
+    # the ceiling, the one below covers the floor. Mutation-confirmed against the full suite, each
+    # bound independently — `clamp(0.0, 100)` fails this example and only this one; `clamp(0,
+    # 100.0)` fails the floor example and only that one. Neither half can be reverted silently.
     it "holds the 100 ceiling when value exceeds max instead of overflowing the bar" do
-      expect(described_class.new(value: 5, max: 3).percent).to eq(100)
+      percent = described_class.new(value: 5, max: 3).percent
+
+      expect(percent).to eq(100)
+      expect(percent).to be_a(Float)
+    end
+
+    # The floor is the ceiling's twin, and it went unobserved for exactly the reason `eq` alone
+    # could not see the ceiling's type: `0 == 0.0` is true in Ruby. A negative count is as
+    # unenforced as `annotated > total` — `db/schema.rb`'s `test_runs` table (the call site reads
+    # `@latest_test_run.annotated_specs_count` / `.total_specs_count`) stores both counts as plain
+    # `t.integer ... default: 0`, not even `null: false`; the identically-named columns on
+    # `test_run_shards` DO carry `null: false`, so resolve this by table name, not by line number.
+    # The schema declares no check constraint anywhere, and `app/models/test_run.rb` validates only
+    # `commit_sha` presence, no numericality.
+    #
+    # Without this example, reverting HALF the fix — `clamp(0.0, 100.0)` -> `clamp(0, 100.0)` —
+    # left the whole suite green while the floor branch returned Integer `0` and rendered "0%"
+    # immediately beside the `max <= 0` guard's "0.0%": SPGD-214's own one-fact-two-spellings
+    # defect, lower bound instead of upper.
+    it "holds the 0 floor as a Float when value is negative" do
+      percent = described_class.new(value: -2, max: 3).percent
+
+      expect(percent).to eq(0)
+      expect(percent).to be_a(Float)
     end
   end
 
