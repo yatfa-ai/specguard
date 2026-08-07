@@ -107,6 +107,301 @@ RSpec.describe "POST /api/v1/ingest", type: :request do
     end
   end
 
+  # The defect this accumulation exists for: a 20,000-example suite is the size at which nobody
+  # runs single-process, so every shard loads the formatter and POSTs its own slice. Creating a row
+  # per request produced N rows with a split denominator, and `Repository#latest_test_run` picked
+  # whichever shard finished last — an unstable headline for an unchanged suite.
+  describe "a sharded CI run, delivered as one POST per shard" do
+    # Annotations clustered in a minority of files, which is how teams actually annotate: whoever
+    # reads a single shard's row reads anything from 8% to 71%, and never the 25% that is true.
+    let(:shards) do
+      [
+        { total: 4900, annotated: 500 },
+        { total: 4900, annotated: 400 },
+        { total: 5100, annotated: 3600 },
+        { total: 5100, annotated: 500 }
+      ]
+    end
+
+    def shard_payload(total:, annotated:, ci_run_id: "gha-42", **attrs)
+      specs = Array.new(total) do |index|
+        index < annotated ? annotated_spec(line_number: index + 1) : unannotated_spec(line_number: index + 1)
+      end
+
+      ingest_payload(commit_sha: "deadbee", branch: "main", ci_run_id: ci_run_id, specs: specs, **attrs)
+    end
+
+    it "lands the whole run as one TestRun whose denominator is the whole suite" do
+      expect { shards.each { |shard| ingest(shard_payload(**shard)) } }
+        .to change(TestRun, :count).by(1)
+
+      run = TestRun.last
+      expect(run.total_specs_count).to eq(20_000)
+      expect(run.annotated_specs_count).to eq(5000)
+      expect(run.annotated_ratio).to eq(25.0)
+    end
+
+    # Summing would report ~4× the wall clock, because the shards ran at the same time. The number
+    # has to be reconcilable with what the operator's CI dashboard shows for the build.
+    it "reports the slowest shard's duration, not the sum of all four" do
+      [61.0, 58.5, 74.25, 60.0].each_with_index do |duration, index|
+        ingest(shard_payload(**shards[index], duration_seconds: duration))
+      end
+
+      expect(TestRun.last.duration_seconds).to eq(74.25)
+    end
+
+    it "widens the duration even when the slowest shard arrives first" do
+      ingest(shard_payload(total: 2, annotated: 1, duration_seconds: 90.0))
+      ingest(shard_payload(total: 2, annotated: 1, duration_seconds: 10.0))
+
+      expect(TestRun.last.duration_seconds).to eq(90.0)
+    end
+
+    it "takes the first shard's duration when a later shard reports none" do
+      ingest(shard_payload(total: 2, annotated: 1, duration_seconds: 12.5))
+      ingest(shard_payload(total: 2, annotated: 1))
+
+      expect(TestRun.last.duration_seconds).to eq(12.5)
+    end
+
+    # `update_counters` writes past the loaded instance, so an un-reloaded record would answer with
+    # the previous shard's numbers — the client would read a total that never existed.
+    it "answers each shard with the run's totals so far, not the stale ones" do
+      ingest(shard_payload(total: 10, annotated: 4))
+      ingest(shard_payload(total: 6, annotated: 2))
+
+      expect(response.parsed_body).to include(
+        "test_run_id" => TestRun.last.id,
+        "total_specs" => 16,
+        "annotated_specs" => 6,
+        "annotated_ratio" => 0.375
+      )
+    end
+
+    it "keeps the run under the commit and branch the first shard named" do
+      shards.each { |shard| ingest(shard_payload(**shard)) }
+
+      expect(TestRun.last).to have_attributes(commit_sha: "deadbee", branch: "main", ci_run_id: "gha-42")
+    end
+
+    # `commit_sha` cannot be the key: a re-run of the same commit is genuinely a second run, and
+    # merging the two would hide a suite that changed between them.
+    it "keeps two CI runs of the same commit apart when their run ids differ" do
+      expect do
+        ingest(shard_payload(total: 4, annotated: 2, ci_run_id: "gha-42"))
+        ingest(shard_payload(total: 4, annotated: 2, ci_run_id: "gha-43"))
+      end.to change(TestRun, :count).by(2)
+
+      expect(TestRun.pluck(:total_specs_count)).to all(eq(4))
+    end
+
+    it "scopes accumulation to the repository behind the key, not to the run id alone" do
+      other = create_repository(user: create_user(github_uid: "2002", github_handle: "hubot"),
+                                github_full_name: "acme/ledger")
+
+      expect do
+        ingest(shard_payload(total: 4, annotated: 2))
+        ingest(shard_payload(total: 4, annotated: 2), key: other.api_keys.create!)
+      end.to change(TestRun, :count).by(2)
+
+      expect(repository.test_runs.sole.total_specs_count).to eq(4)
+      expect(other.test_runs.sole.total_specs_count).to eq(4)
+    end
+  end
+
+  # The gesture the run identity alone could not survive.
+  #
+  # CI providers keep a build's id STABLE across a re-run — GitHub's `GITHUB_RUN_ID` is documented
+  # as *"This number does not change if you re-run the workflow run"*, Buildkite retries a job
+  # inside the same `BUILDKITE_BUILD_ID`, GitLab inside the same `CI_PIPELINE_ID`. An
+  # implementation that keyed on the run id and *added* each arriving payload therefore could not
+  # tell a re-delivery from a new slice, and "re-run failed jobs" produced a headline ratio that
+  # was wrong rather than merely partial. `shard_id` is what closes that: the run's counts are
+  # derived from its shards, so a shard reporting again replaces its own slice.
+  describe "a sharded CI run that is re-run under the same run id" do
+    let(:shards) do
+      [
+        { total: 4900, annotated: 500, shard_id: "1" },
+        { total: 4900, annotated: 400, shard_id: "2" },
+        { total: 5100, annotated: 3600, shard_id: "3" },
+        { total: 5100, annotated: 500, shard_id: "4" }
+      ]
+    end
+
+    def shard_payload(total:, annotated:, ci_run_id: "gha-42", **attrs)
+      specs = Array.new(total) do |index|
+        index < annotated ? annotated_spec(line_number: index + 1) : unannotated_spec(line_number: index + 1)
+      end
+
+      ingest_payload(commit_sha: "deadbee", branch: "main", ci_run_id: ci_run_id, specs: specs, **attrs)
+    end
+
+    def run_all_shards = shards.each { |shard| ingest(shard_payload(**shard)) }
+
+    it "still lands the first attempt as one TestRun over the whole suite" do
+      expect { run_all_shards }.to change(TestRun, :count).by(1)
+
+      expect(TestRun.sole).to have_attributes(total_specs_count: 20_000, annotated_specs_count: 5000)
+    end
+
+    # "Re-run all jobs". Every shard reports a second time under the same run id. Adding would give
+    # a 40,000 denominator for a 20,000-example suite.
+    it "does not double the suite when every shard reports again" do
+      run_all_shards
+
+      expect { run_all_shards }.not_to change(TestRun, :count)
+
+      expect(TestRun.sole).to have_attributes(total_specs_count: 20_000, annotated_specs_count: 5000)
+      expect(TestRun.sole.annotated_ratio).to eq(25.0)
+    end
+
+    # **The blocking case.** "Re-run failed jobs" is the mainline recovery gesture for a sharded
+    # suite — sharding a 20,000-example suite exists precisely so one flaky shard does not cost a
+    # full re-run — so this is the ordinary path, not a corner. Re-adding shard 3 on top of itself
+    # gave a 25,100 denominator for a 20,000-example suite, with the ratio dragged off by however
+    # annotated that shard happened to be.
+    it "reports the truth when only the failed shard is re-run" do
+      run_all_shards
+
+      ingest(shard_payload(**shards[2]))
+
+      expect(TestRun.sole).to have_attributes(total_specs_count: 20_000, annotated_specs_count: 5000)
+      expect(TestRun.sole.annotated_ratio).to eq(25.0)
+    end
+
+    # And the re-run is genuinely a *refresh*, not a no-op: a shard whose numbers changed between
+    # attempts — someone pushed an annotation, a file moved between shards — replaces its own
+    # slice rather than being ignored.
+    it "takes the re-run shard's new numbers in place of its old ones" do
+      run_all_shards
+
+      ingest(shard_payload(total: 5100, annotated: 4100, shard_id: "3"))
+
+      # Shard 3's 3,600 annotations become 4,100; the other three shards are untouched.
+      expect(TestRun.sole).to have_attributes(total_specs_count: 20_000, annotated_specs_count: 5500)
+    end
+
+    it "keeps one row per shard rather than one per delivery" do
+      run_all_shards
+      run_all_shards
+
+      expect(TestRun.sole.test_run_shards.count).to eq(4)
+    end
+
+    # `duration_seconds` is a MAX over the shards, and it is derived like the counts are — so when
+    # the slowest shard is re-run and comes back faster, the run gets *faster*. An implementation
+    # that only ever widened the maximum would be stuck at the old high-water mark forever.
+    it "narrows the duration when the slowest shard is re-run and comes back faster" do
+      shards.each_with_index { |shard, index| ingest(shard_payload(**shard, duration_seconds: [61.0, 58.5, 74.25, 60.0][index])) }
+      expect(TestRun.sole.duration_seconds).to eq(74.25)
+
+      ingest(shard_payload(**shards[2], duration_seconds: 59.0))
+
+      expect(TestRun.sole.duration_seconds).to eq(61.0)
+    end
+
+    # A shard index is only unique *within* a run — every run has a shard "1". Scoping the key to
+    # the run is what stops two builds' shard 1s from overwriting each other.
+    it "does not let one run's shard overwrite another run's shard of the same name" do
+      ingest(shard_payload(total: 10, annotated: 4, shard_id: "1"))
+      ingest(shard_payload(total: 20, annotated: 9, shard_id: "1", ci_run_id: "gha-43"))
+
+      expect(repository.test_runs.count).to eq(2)
+      expect(repository.test_runs.order(:id).map(&:total_specs_count)).to eq([10, 20])
+    end
+
+    # The honest limit, pinned so it cannot regress silently into something worse and cannot be
+    # mistaken for idempotency the design does not have. A client that shards without exposing an
+    # index the gem recognises sends no `shard_id`, and its slices are genuinely
+    # indistinguishable — so they are counted (losing one would be worse) but a redelivery is
+    # counted again. `Ingest::RunRecorder#upsert_shard` and the client README's sharding section
+    # both say so; this is the executable version of that sentence.
+    it "cannot deduplicate shards the client did not name, and counts a redelivery twice" do
+      ingest(shard_payload(total: 100, annotated: 25, shard_id: nil))
+      ingest(shard_payload(total: 100, annotated: 25, shard_id: nil))
+
+      expect(TestRun.sole.total_specs_count).to eq(200)
+    end
+  end
+
+  # The local path the roadmap's DoD explicitly protects. Without a *partial* unique index this is
+  # where a non-partial one would show itself: every laptop run in a repository collapsing into a
+  # single ever-growing row.
+  describe "a run that no CI provider named" do
+    it "gives each unidentified run its own TestRun, exactly as before" do
+      expect do
+        ingest(ingest_payload(commit_sha: "deadbee", specs: [annotated_spec]))
+        ingest(ingest_payload(commit_sha: "deadbee", specs: [annotated_spec]))
+      end.to change(TestRun, :count).by(2)
+
+      expect(TestRun.pluck(:ci_run_id)).to eq([nil, nil])
+      expect(TestRun.pluck(:total_specs_count)).to eq([1, 1])
+    end
+
+    it "treats a blank ci_run_id as no run id at all rather than as a key" do
+      expect do
+        ingest(ingest_payload(ci_run_id: "   ", specs: [annotated_spec]))
+        ingest(ingest_payload(ci_run_id: "", specs: [annotated_spec]))
+      end.to change(TestRun, :count).by(2)
+
+      expect(TestRun.pluck(:ci_run_id)).to eq([nil, nil])
+    end
+  end
+
+  # Four shards POST at once. The lookup and the insert are not one operation, so the shard that
+  # loses the race meets the partial unique index — and before the rescue that was a 500 with its
+  # counts discarded. Driven through the recorder rather than over HTTP because a request spec runs
+  # inside one transaction, which a genuinely concurrent connection could not see into; the seam is
+  # the lookup, and what is faked is only its *timing*.
+  describe "shards racing to create the same run" do
+    let(:attributes) do
+      { ci_run_id: "gha-42", commit_sha: "deadbee", duration_seconds: 30.0,
+        total_specs_count: 3, annotated_specs_count: 1 }
+    end
+    let(:recorder) { Ingest::RunRecorder.new(repository, attributes, shard_id: "shard-2") }
+
+    it "recovers when the row appears between the lookup and the insert, without losing counts" do
+      winner = nil
+      lookups = 0
+
+      # First lookup answers nil — the state every shard sees before any insert has landed — and
+      # the winning shard's row lands immediately afterwards, so our insert hits the index.
+      #
+      # The winner is recorded *through the recorder*, not written straight to `test_runs`: a run
+      # with a `ci_run_id` keeps its counts in `test_run_shards`, so a hand-built row would be a
+      # run with no slices — a state the recorder's own transaction makes unreachable, and faking
+      # it would have this example assert against a shape production can never produce.
+      allow(recorder).to receive(:find_run).and_wrap_original do |original|
+        lookups += 1
+        next original.call unless lookups == 1
+
+        winner = Ingest::RunRecorder.record(repository,
+                                            attributes.merge(total_specs_count: 5, annotated_specs_count: 2,
+                                                             duration_seconds: 40.0),
+                                            shard_id: "shard-1")
+        nil
+      end
+
+      run = nil
+      expect { run = recorder.record }.to change(TestRun, :count).by(1)
+
+      expect(run.id).to eq(winner.id)
+      expect(run).to have_attributes(total_specs_count: 8, annotated_specs_count: 3,
+                                     duration_seconds: 40.0)
+    end
+
+    it "gives up rather than retrying forever when the collision never resolves" do
+      # A row that is always absent on lookup and always present on insert — the pathological case
+      # the attempt cap exists for. Retrying it forever would hang the request instead.
+      allow(recorder).to receive(:find_run).and_return(nil)
+      allow(recorder).to receive(:create_run).and_raise(ActiveRecord::RecordNotUnique, "duplicate key")
+
+      expect { recorder.record }.to raise_error(ActiveRecord::RecordNotUnique)
+      expect(recorder).to have_received(:create_run).exactly(Ingest::RunRecorder::MAX_ATTEMPTS).times
+    end
+  end
+
   # Missing annotations are never an ingestion failure — only malformed ones are. Adoption of the
   # protocol has to be opt-in and gradual, so a suite that annotates nothing still reports.
   describe "a run with no annotations" do
@@ -231,6 +526,45 @@ RSpec.describe "POST /api/v1/ingest", type: :request do
 
       expect(response).to have_http_status(:bad_request)
       expect(response.parsed_body["message"]).to include("duration_seconds")
+    end
+
+    # A run id sent as a JSON number would key its shards on `12345` while a client that sent the
+    # same build's id as a string keyed on `"12345"` — one run split over a type difference, which
+    # is the exact failure the field exists to remove.
+    it "rejects a ci_run_id that is not a string" do
+      ingest(ingest_payload(ci_run_id: 12_345))
+
+      expect(response).to have_http_status(:bad_request)
+      expect(response.parsed_body["message"]).to include("ci_run_id")
+      expect(TestRun.count).to eq(0)
+    end
+
+    # Absence is the ordinary shape of a run nobody's CI provider named, and must never be a
+    # rejection — the local path depends on it.
+    it "accepts a run that omits ci_run_id entirely" do
+      ingest(ingest_payload)
+
+      expect(response).to have_http_status(:accepted)
+      expect(TestRun.last.ci_run_id).to be_nil
+    end
+
+    # The same rule as `ci_run_id`, and the number case is *likelier* here: every runner that
+    # publishes a shard index publishes `0`, `1`, `2`, so sending them unquoted is the natural
+    # mistake. `0` and `"0"` keying different shards would let a shard fail to replace itself,
+    # which is the one property these ids exist to provide.
+    it "rejects a shard_id that is not a string" do
+      ingest(ingest_payload(ci_run_id: "gha-42", shard_id: 0))
+
+      expect(response).to have_http_status(:bad_request)
+      expect(response.parsed_body["message"]).to include("shard_id")
+      expect(TestRun.count).to eq(0)
+    end
+
+    it "accepts a run that omits shard_id entirely" do
+      ingest(ingest_payload(ci_run_id: "gha-42"))
+
+      expect(response).to have_http_status(:accepted)
+      expect(TestRun.last.test_run_shards.sole.shard_id).to be_nil
     end
 
     it "rejects a JSON body that is not an object" do

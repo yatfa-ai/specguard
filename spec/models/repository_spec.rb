@@ -89,6 +89,21 @@ RSpec.describe Repository do
       expect(repository.annotated_ratio).to eq(0.0)
       expect(repository.annotated_ratio).to be_a(Float)
     end
+
+    # The sharded case, read from this end. A sharded run used to land as one row per shard, so
+    # `latest_test_run` picked whichever shard finished last — and shard completion order is not
+    # stable, which made the headline move without the suite changing. Accumulation leaves one row
+    # per run, so there is nothing left to pick between.
+    it "reads a sharded run's accumulated row rather than one shard's slice of it" do
+      repository = create_repository
+      run = repository.test_runs.create!(commit_sha: "deadbee", ci_run_id: "gha-42",
+                                         total_specs_count: 4900, annotated_specs_count: 500)
+      TestRun.update_counters(run.id, total_specs_count: 15_100, annotated_specs_count: 4500)
+
+      expect(repository.latest_test_run).to eq(run)
+      expect(repository.latest_test_run.total_specs_count).to eq(20_000)
+      expect(repository.annotated_ratio).to eq(25.0)
+    end
   end
 
   describe "#recent_test_runs" do

@@ -10,7 +10,7 @@
 #
 # It's strongly recommended that you check this file into your version control system.
 
-ActiveRecord::Schema[8.1].define(version: 2026_08_06_150000) do
+ActiveRecord::Schema[8.1].define(version: 2026_08_07_020000) do
   # These are extensions that must be enabled in order to support this database
   enable_extension "pg_catalog.plpgsql"
   enable_extension "vector"
@@ -193,15 +193,29 @@ ActiveRecord::Schema[8.1].define(version: 2026_08_06_150000) do
     t.index ["test_run_id"], name: "index_spec_intents_on_test_run_id"
   end
 
+  create_table "test_run_shards", force: :cascade do |t|
+    t.integer "annotated_specs_count", default: 0, null: false
+    t.datetime "created_at", null: false
+    t.float "duration_seconds"
+    t.string "shard_id"
+    t.bigint "test_run_id", null: false
+    t.integer "total_specs_count", default: 0, null: false
+    t.datetime "updated_at", null: false
+    t.index ["test_run_id", "shard_id"], name: "index_test_run_shards_on_test_run_id_and_shard_id", unique: true, where: "(shard_id IS NOT NULL)"
+    t.index ["test_run_id"], name: "index_test_run_shards_on_test_run_id"
+  end
+
   create_table "test_runs", force: :cascade do |t|
     t.integer "annotated_specs_count", default: 0
     t.string "branch"
+    t.string "ci_run_id"
     t.string "commit_sha", null: false
     t.datetime "created_at", null: false
     t.float "duration_seconds"
     t.bigint "repository_id", null: false
     t.integer "total_specs_count", default: 0
     t.datetime "updated_at", null: false
+    t.index ["repository_id", "ci_run_id"], name: "index_test_runs_on_repository_id_and_ci_run_id", unique: true, where: "(ci_run_id IS NOT NULL)"
     t.index ["repository_id"], name: "index_test_runs_on_repository_id"
   end
 
@@ -230,5 +244,6 @@ ActiveRecord::Schema[8.1].define(version: 2026_08_06_150000) do
   add_foreign_key "solid_queue_scheduled_executions", "solid_queue_jobs", column: "job_id", on_delete: :cascade
   add_foreign_key "spec_intents", "repositories"
   add_foreign_key "spec_intents", "test_runs"
+  add_foreign_key "test_run_shards", "test_runs"
   add_foreign_key "test_runs", "repositories"
 end
