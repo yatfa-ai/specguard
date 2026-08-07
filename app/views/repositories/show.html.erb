@@ -607,6 +607,153 @@
       <% end %>
     <% end %>
 
+    <%# == Suite growth over time
+        The Overview above answers "+47 since the last run" — one subtraction across two rows. This
+        answers what the suite has done over the last thirty runs, which `test_runs` has been able
+        to say since Phase 2 and nothing has ever asked.
+
+        Built on the BRANCH history (`Repository#suite_size_trajectory`), never on the "Recent runs"
+        panel below, which is one interleaved history across every branch and disclaims being a
+        series in those exact words. A line drawn through that panel's rows would connect a trunk
+        run to a feature branch's and call the gap growth.
+
+        Outside the `manage_keys` gate for the same reason the Overview and Recent runs are: read-
+        only suite telemetry, nothing credential, nothing actionable.
+
+        Not rendered at all when CI has never reported. The Overview's "No CI run has reported yet"
+        is the page's one never-ingested empty state, and a second dashed box saying a quieter
+        version of it would read as a different, milder fact. %>
+    <% if @latest_test_run.present? %>
+      <%= render UI::PanelComponent.new(title: "Suite growth", id: "suite-trajectory", class: "lg:col-span-3") do %>
+        <div class="space-y-3">
+          <% if @suite_trajectory.branch.blank? %>
+            <%# The same state the basis line above names, and it must not be answered here with the
+                thin-history wording below: "not enough comparable runs yet" describes a young
+                branch that will fill in on its own, and this is a CI client that is not sending a
+                branch and never will until someone changes it. %>
+            <%= render UI::EmptyStateComponent.new(
+                  title: "No branch to plot a history on",
+                  description: "The latest run named no branch, so SpecGuard cannot place it in one. " \
+                               "Runs that name no branch are not pooled together — they may come from " \
+                               "anywhere, and a line drawn through them would be a history of nothing " \
+                               "in particular."
+                ) %>
+          <% elsif @suite_trajectory.plottable? %>
+            <% trajectory_points = @suite_trajectory.plotted.map do |run|
+                 UI::SparklineComponent::Point.new(
+                   label: run.commit_sha.first(7),
+                   value: run.total_specs_count.to_i,
+                   detail: "#{time_ago_in_words(run.created_at)} ago"
+                 )
+               end %>
+            <%# Every figure the caption states is counted off the same object the line is drawn
+                from, so the two cannot disagree — the count of points, the count withheld, and the
+                axis bounds all come from `SuiteTrajectory`. %>
+            <%= render UI::SparklineComponent.new(
+                  id: "suite-trajectory-chart",
+                  points: trajectory_points,
+                  label: "Tests in suite on #{@suite_trajectory.branch}",
+                  coverage: @suite_trajectory.coverage,
+                  summary: "The suite measured between #{number_with_delimiter(@suite_trajectory.minimum)} " \
+                           "and #{number_with_delimiter(@suite_trajectory.maximum)} tests across " \
+                           "#{@suite_trajectory.plotted.size} runs on #{@suite_trajectory.branch}, " \
+                           "the oldest #{time_ago_in_words(@suite_trajectory.first_run.created_at)} ago " \
+                           "and the newest #{time_ago_in_words(@suite_trajectory.last_run.created_at)} ago. " \
+                           "The vertical axis spans that range and does not start at zero, so the " \
+                           "slope is the size of the change and not its share of the suite.",
+                  columns: ["Run", "Tests in suite", "Ingested"]
+                ) %>
+
+            <%# What the line covers, in the register the Overview's basis line uses: a series is a
+                stronger claim than a level, and it is worth only as much as the rows it declined to
+                draw. Which rows those were, and why, said here rather than left to the reader to
+                notice that the count under the label is smaller than the history. %>
+            <p class="text-xs text-app-muted" id="suite-trajectory-basis">
+              Drawn through <%= @suite_trajectory.plotted.size %>
+              of the last <%= @suite_trajectory.considered_count %>
+              <%= "run".pluralize(@suite_trajectory.considered_count) %>
+              on <%= @suite_trajectory.branch %><%= ", #{@suite_trajectory.cohort_description}" if @suite_trajectory.cohort_description %>,
+              covering <%= distance_of_time_in_words(@suite_trajectory.first_run.created_at,
+                                                     @suite_trajectory.last_run.created_at) %>.
+              Only runs on the same branch are plotted — a suite size from somewhere else is not a
+              change this branch made.
+              <% if @suite_trajectory.flat? %>
+                Every one of them measured
+                <%= number_with_delimiter(@suite_trajectory.minimum) %> tests: this suite has not
+                moved over that window, which is a measurement and not an absence of one.
+              <% end %>
+              <% if @suite_trajectory.withheld_unmeasured.any? %>
+                <%# The same fact the Overview withholds its delta on, one row per occurrence
+                    instead of one. %>
+                <%= @suite_trajectory.withheld_unmeasured.size %>
+                <%= "run".pluralize(@suite_trajectory.withheld_unmeasured.size) %>
+                <%= @suite_trajectory.withheld_unmeasured.size == 1 ? "is" : "are" %> withheld for
+                having reported no tests at all — a zero there describes the report, not the suite.
+              <% end %>
+              <% if @suite_trajectory.withheld_part_way.any? %>
+                <%# The state that would otherwise produce a wrong PICTURE rather than an honest
+                    gap, and the reason this panel needed a rule at all: a four-shard suite reads at
+                    a quarter of itself for most of its own build, and a job cancelled after two of
+                    four shards leaves that half-sized row in the history permanently. Plotted, each
+                    one is a cliff and a recovery — a mass deletion and a mass restoration, neither
+                    of which any commit made.
+
+                    Said ONLY of the runs holding fewer parts than the line's, because it is true
+                    only of those. See `SuiteTrajectory#withheld_part_way`. %>
+                <%= @suite_trajectory.withheld_part_way.size %>
+                <%= "run".pluralize(@suite_trajectory.withheld_part_way.size) %>
+                <%= @suite_trajectory.withheld_part_way.size == 1 ? "is" : "are" %> withheld for
+                having reported only some of the parts the plotted runs reported: a run's test
+                count is the sum of the shards it has reported so far, so a build still arriving —
+                or one cancelled part-way — sits at a fraction of its own suite, and plotting it
+                beside a complete run would draw a drop no commit made.
+              <% end %>
+              <% if @suite_trajectory.withheld_other_composition.any? %>
+                <%# The other direction of the same mismatch: assembled from MORE parts than the
+                    cohort, or delivered whole where the cohort was sharded. The sentence above is
+                    false about every one of these — they are not fragments of themselves, and
+                    during a shard-layout migration they are the newer, more completely assembled
+                    runs. So this one claims only what the rule actually establishes: the totals
+                    count different amounts of delivered work and cannot be differenced. Both sides
+                    are named through `TestRun#delivery_description` when the withheld runs share a
+                    composition, and neither is named when they do not. %>
+                <% others = @suite_trajectory.withheld_other_composition %>
+                <% others_delivery = @suite_trajectory.shared_delivery_description(others) %>
+                <%= others.size %>
+                <%= "run".pluralize(others.size) %>
+                <%= others.size == 1 ? "is" : "are" %> withheld for having arrived differently from
+                the runs the line is drawn through<%= " — #{others_delivery}, where the line is drawn through runs #{@suite_trajectory.cohort_delivery}" if others_delivery %>.
+                A total counts the work that was delivered, so two runs assembled from different
+                numbers of parts cannot be differenced in either direction. That is not a claim
+                that these ones measured less than they should have.
+              <% end %>
+              <% unless @suite_trajectory.plots_newest? %>
+                <%# The one thing a reader infers from a growth chart without being told. During a
+                    shard-layout migration the cohort is the older, larger group, so the newest runs
+                    are the withheld ones and the line stops short of the SHA the Overview names
+                    directly above. The counts disclose it arithmetically; this says it. It
+                    self-heals as the new layout accumulates and the cohort flips. %>
+                The most recent run on <%= @suite_trajectory.branch %> is not on this line:
+                <span class="font-mono"><%= @suite_trajectory.newest_run.commit_sha.first(7) %></span>
+                is one of the withheld runs, so the line ends at
+                <span class="font-mono"><%= @suite_trajectory.last_run.commit_sha.first(7) %></span>,
+                <%= time_ago_in_words(@suite_trajectory.last_run.created_at) %> ago.
+              <% end %>
+            </p>
+          <% else %>
+            <%# Never a flat line, and never a single point drawn as one. Both would assert a stable
+                suite, which is precisely what a history too thin to compare cannot say. The counts
+                are stated anyway, because "nothing to show" and "three runs, none of them
+                comparable to each other" are different things to go and look at. %>
+            <%= render UI::EmptyStateComponent.new(
+                  title: "Not enough comparable runs yet",
+                  description: trajectory_thin_description(@suite_trajectory)
+                ) %>
+          <% end %>
+        </div>
+      <% end %>
+    <% end %>
+
     <%# Read-only suite telemetry, deliberately OUTSIDE the `manage_keys` gate above — the same
         class of information as the connection-health stat: a `view` member legitimately needs to
         see whether CI is still reporting and what it reported. Nothing here is credential

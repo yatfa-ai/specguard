@@ -10,7 +10,7 @@
 #
 # It's strongly recommended that you check this file into your version control system.
 
-ActiveRecord::Schema[8.1].define(version: 2026_08_07_020000) do
+ActiveRecord::Schema[8.1].define(version: 2026_08_07_120000) do
   # These are extensions that must be enabled in order to support this database
   enable_extension "pg_catalog.plpgsql"
   enable_extension "vector"
@@ -215,6 +215,7 @@ ActiveRecord::Schema[8.1].define(version: 2026_08_07_020000) do
     t.bigint "repository_id", null: false
     t.integer "total_specs_count", default: 0
     t.datetime "updated_at", null: false
+    t.index ["repository_id", "branch", "created_at", "id"], name: "index_test_runs_on_repository_id_and_branch_and_created_at"
     t.index ["repository_id", "ci_run_id"], name: "index_test_runs_on_repository_id_and_ci_run_id", unique: true, where: "(ci_run_id IS NOT NULL)"
     t.index ["repository_id"], name: "index_test_runs_on_repository_id"
   end

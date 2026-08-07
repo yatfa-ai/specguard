@@ -1,0 +1,70 @@
+<div class="<%= wrapper_class %>" id="<%= id %>">
+  <%# The label and its denominator on one row, the shape UI::MeterComponent uses for the same
+      reason: the figure a reader takes away is the one sitting next to the name of the thing, so
+      the coverage has to be there and not in a caption below the plot. %>
+  <div class="flex items-baseline justify-between gap-3 text-app-h4">
+    <span class="text-app-content-secondary" id="<%= label_id %>"><%= label %></span>
+    <span class="tabular-nums text-app-content-secondary"><%= coverage %></span>
+  </div>
+
+  <div class="flex items-stretch gap-3">
+    <div class="min-w-0 flex-1">
+      <%# `role="img"` with an explicit accessible name, because the default treatment of an inline
+          <svg> varies by browser and screen reader — from "graphic" with no name to the raw path
+          data read aloud. `role="img"` is what makes the paths, markers and their `<title>`s
+          presentational: it prunes the descendants from the accessibility tree, so the plot is
+          announced as one named image rather than as a list of shapes. That is the load-bearing
+          attribute here and there is no `aria-hidden` doing it — removing the role would expose
+          the whole subtree, not merely rename it.
+
+          Name and description are split rather than both riding `aria-labelledby`. A name is
+          announced in full and uninterrupted, so pointing it at the ~60-word summary as well made
+          the summary unskippable on the way to the table below; `aria-describedby` delivers the
+          same sentence to the same reader as a description they can move past. Both still point at
+          text a sighted reader can see, so the two cannot drift. %>
+      <svg class="block h-auto w-full" viewBox="0 0 <%= UI::SparklineComponent::VIEWBOX_WIDTH %> <%= UI::SparklineComponent::VIEWBOX_HEIGHT %>"
+           role="img" aria-labelledby="<%= label_id %>" aria-describedby="<%= summary_id %>">
+        <path d="<%= area_path %>" class="fill-app-cta opacity-10" />
+        <path d="<%= line_path %>" fill="none" class="stroke-app-cta" stroke-width="2"
+              stroke-linejoin="round" stroke-linecap="round" />
+        <% coordinates.each_with_index do |(x, y), index| %>
+          <circle cx="<%= x %>" cy="<%= y %>" r="<%= UI::SparklineComponent::MARKER_RADIUS %>" class="fill-app-cta">
+            <title><%= point_title(points[index]) %></title>
+          </circle>
+        <% end %>
+      </svg>
+    </div>
+
+    <%# The axis bounds, printed rather than implied. Without them the slope is unreadable: a line
+        climbing corner to corner is +47 tests on a suite of 20,000 or a suite that doubled, and
+        nothing in the picture distinguishes them. %>
+    <div class="flex shrink-0 flex-col justify-between text-right text-xs tabular-nums text-app-muted">
+      <span><%= formatted(maximum) %></span>
+      <span><%= formatted(minimum) %></span>
+    </div>
+  </div>
+
+  <p class="text-xs text-app-muted" id="<%= summary_id %>"><%= summary %></p>
+
+  <%# Not `sr-only`. The numbers behind a chart are wanted by anyone who wants to check it, and
+      hiding them from sight while exposing them to assistive technology would make the honest
+      version of this panel the one fewest people can reach. Collapsed by default so it does not
+      compete with the plot; `<details>` needs no JavaScript, which is the same constraint the
+      chart itself is drawn under. %>
+  <details class="text-xs">
+    <summary class="cursor-pointer text-app-content-secondary">
+      Show the <%= points.size %> plotted <%= "figure".pluralize(points.size) %>
+    </summary>
+    <div class="mt-2">
+      <%= render UI::TableComponent.new(columns: columns) do %>
+        <% points.each do |point| %>
+          <tr>
+            <td class="px-3 py-1.5 font-mono text-xs text-app-content"><%= point.label %></td>
+            <td class="px-3 py-1.5 tabular-nums text-app-content"><%= formatted(point.value) %></td>
+            <td class="px-3 py-1.5 text-app-content-secondary"><%= point.detail %></td>
+          </tr>
+        <% end %>
+      <% end %>
+    </div>
+  </details>
+</div>
