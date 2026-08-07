@@ -125,8 +125,52 @@ class UI::SparklineComponent < ApplicationComponent
   end
 
   # The figure as the axis bounds and the table cells state it — both under a heading that names
-  # the unit, so this is the number and nothing else.
+  # the unit, so this is the number and nothing else. The table cells reach it through `#tabulated`
+  # rather than directly, which adds to this and never rewords it.
   def formatted(value) = formatter.call(value)
+
+  # The figure as the TEXT ALTERNATIVE states it: the wording, plus the plotted value itself on the
+  # rows whose wording cannot tell them apart from another point on the same line.
+  #
+  # == The equivalence this exists to keep
+  #
+  # The table is not a caption for the chart, it is the chart — the half a reader who cannot see the
+  # line has to work from, which is the whole argument two sections up. That equivalence holds only
+  # while `formatter` maps distinct plotted values to distinct strings, and one caller's does not:
+  # `TestRun#duration_label` keeps the tenth below a minute and drops it at a minute and above, so a
+  # cohort moving 74.25s → 74.30s is two `cy` values and a visible slope on the line, and `1m 14s`
+  # printed twice underneath it. The picture says the wait moved and the text says it did not, and
+  # only the reader who can see the picture is told the truth. `#values` refuses to coerce for
+  # exactly this movement; losing it one row further down is the same defect wearing the other half.
+  #
+  # == Why the disclosure lands here and not in the wording
+  #
+  # Because the wording is single-sourced on purpose. That lambda reaches the page four times — the
+  # axis bounds, the caller's summary sentence, this cell, and the marker `<title>` — so widening it
+  # re-prints three figures at a precision nothing else on the page uses in order to separate a pair
+  # of rows. This changes exactly one of the four, the one where the information is actually lost.
+  #
+  # Disclosed as VISIBLE text, not as `title`/`data`/`aria`. Each of those reaches a hovering mouse,
+  # or a screen reader, or a parser — none reaches all three, and a keyboard reader none of them.
+  # An accessibility gap is not closed by moving it to a different reader.
+  #
+  # And the plotted value verbatim rather than formatted again: a format is an opinion about the
+  # unit, this component holds none by construction, and a second wording of the same float is the
+  # drift a single formatting seam exists to prevent. This is the number the chart was handed,
+  # printed as it was handed over.
+  def tabulated(value)
+    return formatted(value) unless ambiguous_wording?(value)
+
+    "#{formatted(value)} (#{value})"
+  end
+
+  # Whether this point's wording is shared with a DIFFERENT plotted value on the same line.
+  #
+  # Two runs that measured the SAME figure are not an ambiguity to resolve: the line draws them at
+  # one height deliberately, so one wording repeated is the truth about them, and a float disclosed
+  # beside it would be noise printed to separate two things that are not different. Hence the
+  # comparison is over the DISTINCT values, not over the points.
+  def ambiguous_wording?(value) = ambiguous_wordings.include?(formatted(value))
 
   # What one marker announces on hover. The text alternative below carries the same three facts as
   # a row, so this is a convenience and never the only place a figure appears.
@@ -141,6 +185,14 @@ class UI::SparklineComponent < ApplicationComponent
   def wrapper_class = @wrapper_class ||= merge_classes("space-y-2", @options.delete(:class))
 
   private
+
+  # The wordings that more than one distinct plotted value collapses onto. Memoised because the
+  # text alternative asks once per row and the answer is a property of the series.
+  def ambiguous_wordings
+    @ambiguous_wordings ||= values.uniq
+                                  .group_by { |value| formatted(value) }
+                                  .filter_map { |wording, sharing| wording if sharing.size > 1 }
+  end
 
   def x_for(index)
     span = VIEWBOX_WIDTH - (2 * PADDING_X)

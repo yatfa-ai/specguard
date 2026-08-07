@@ -1274,6 +1274,51 @@ RSpec.describe "Repository suite-size trajectory", type: :request do
       expect(runtime_basis).to have_no_text("has not moved")
     end
 
+    # Criterion 4's own blind spot, deferred out of SPGD-226 and closed here. `74.25 → 74.80`
+    # straddles a rounding boundary, so it words as two different strings and the guard above passes
+    # whether or not the text alternative can carry the movement. `74.25 → 74.30` does not straddle
+    # one: `humanized_seconds` drops the tenth at a minute and above, so both points word `1m 14s`.
+    # The line separates them either way — that is the float preservation criterion 4 pins — and
+    # before this the table did not, so a reader working from the numbers read "unmoved" off a line
+    # that moved.
+    it "keeps two runtimes the line separates distinguishable on the text alternative" do
+      repository = create_repository(user: @user)
+      timed_run(repository, "aaaaaaa1111", seconds: 74.25, at: 2.days.ago)
+      timed_run(repository, "ccccccc3333", seconds: 74.30, total: 1_047, at: 1.hour.ago)
+
+      get repository_path(repository)
+
+      ys = runtime_chart.all("svg circle", visible: :all).map { |circle| circle[:cy].to_f }
+      expect(ys.uniq.size).to eq(2)
+
+      older, newer = repository.test_runs.order(:created_at).to_a
+      figures = runtime_rows.map { |row| row[1] }
+      # The wording is untouched and still single-sourced — this is the collision, asked of the seam
+      # itself rather than asserted as a literal, and the disclosure sits BESIDE it rather than
+      # replacing it.
+      expect(older.duration_label).to eq(newer.duration_label)
+      expect(figures).to all(include(newer.duration_label))
+      # …and the two rows no longer say the same thing.
+      expect(figures.uniq.size).to eq(2)
+      expect(figures).to eq(["1m 14s (74.25)", "1m 14s (74.3)"])
+    end
+
+    # The other half of that rule, and the half a careless implementation breaks: two runs that
+    # waited the SAME 74.25s are not an ambiguity. The line draws them at one height on purpose, so
+    # one figure printed twice is the truth about them, and a float disclosed beside it would be
+    # noise printed to separate two things that are not different.
+    it "words two runs that waited the same time once, with nothing disclosed beside it" do
+      repository = create_repository(user: @user)
+      timed_run(repository, "aaaaaaa1111", seconds: 74.25, at: 2.days.ago)
+      timed_run(repository, "ccccccc3333", seconds: 74.25, total: 1_047, at: 1.hour.ago)
+
+      get repository_path(repository)
+
+      newest = repository.test_runs.order(:created_at).last
+      expect(runtime_rows.map { |row| row[1] }).to eq([newest.duration_label] * 2)
+      expect(runtime_chart).to have_no_text("(74.25)")
+    end
+
     # Criterion 2. Nullable by design, so a run that measured its suite and sent no clock is an
     # ordinary state — off this line, counted here, and still on the size line above.
     it "withholds an untimed run by name while leaving it on the size line" do
