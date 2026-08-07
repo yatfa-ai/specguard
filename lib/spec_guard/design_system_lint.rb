@@ -69,8 +69,20 @@ module SpecGuard
 
         scanned_files.each do |path|
           relative = path.relative_path_from(root).to_s
+          # Comment state is per-file: an unterminated comment must never leak into the next file.
+          in_erb_comment = false
 
           path.readlines.each_with_index do |line, index|
+            if in_erb_comment
+              in_erb_comment = false if line.include?(ERB_COMMENT_CLOSE)
+              next
+            end
+
+            if opens_erb_comment?(line)
+              in_erb_comment = true
+              next
+            end
+
             next if comment?(line)
 
             RULES.each do |rule, config|
@@ -161,10 +173,25 @@ module SpecGuard
 
     # Prose about the rules is not a violation of them — a comment explaining why raw `btn` is
     # banned must not itself count as raw `btn`.
+    #
+    # This regex is line-local, which is enough for `.rb` (`#` is line-initial on every line) but
+    # not for ERB: `<%#` appears only on the OPENING line, so every continuation line through the
+    # closing `%>` reads as ordinary markup. `offenses` therefore tracks the open comment across
+    # lines, and this predicate only has to answer for a line that stands alone.
     COMMENT_LINE = %r{\A\s*(?:#|<%#|/\*|\*)}
+
+    ERB_COMMENT_OPEN = /\A\s*<%#/
+    ERB_COMMENT_CLOSE = "%>"
 
     def comment?(line)
       line.match?(COMMENT_LINE)
+    end
+
+    # A multi-line ERB comment: opens with `<%#` and does not close on its own line. A single-line
+    # `<%# … %>` is deliberately excluded — `comment?` already skips it, and treating it as an
+    # opener would swallow the whole file from there.
+    def opens_erb_comment?(line)
+      line.match?(ERB_COMMENT_OPEN) && !line.include?(ERB_COMMENT_CLOSE)
     end
 
     def scanned_files
