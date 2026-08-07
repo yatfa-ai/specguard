@@ -18,6 +18,27 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
     response.parsed_body
   end
 
+  # What counts as a query for every cost example in this file, defined once. The cost blocks below
+  # bound the endpoint on different axes — runs for a branch-scoped window, shards on one run — but
+  # they must agree on what they are counting, so the `cached` / SCHEMA / TRANSACTION exclusion
+  # lives here rather than being restated per block. RSpec scopes a `def` to its own example group,
+  # so a helper defined in either block is invisible to the other; that is how it came to be
+  # written twice, and hoisting is what stops a third copy landing with the next cost example.
+  def executed_sql
+    statements = []
+    subscriber = ActiveSupport::Notifications.subscribe("sql.active_record") do |_, _, _, _, payload|
+      statements << payload[:sql] unless payload[:cached] || payload[:name].in?(["SCHEMA", "TRANSACTION"])
+    end
+    yield
+    statements
+  ensure
+    ActiveSupport::Notifications.unsubscribe(subscriber)
+  end
+
+  # The count is the general helper's length — one rule, two readings, so a change to what counts
+  # as a query cannot drift between them.
+  def count_queries(&block) = executed_sql(&block).length
+
   describe "a repository with an ingested run" do
     let!(:test_run) do
       create_test_run(repository: repository,
@@ -867,17 +888,6 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
   # `pick` for `shard_count` would show up as twenty-nine extra queries that a three-row fixture
   # cannot distinguish from none.
   describe "what a branch-scoped history costs the endpoint" do
-    def executed_sql
-      statements = []
-      subscriber = ActiveSupport::Notifications.subscribe("sql.active_record") do |_, _, _, _, payload|
-        statements << payload[:sql] unless payload[:cached] || payload[:name].in?(["SCHEMA", "TRANSACTION"])
-      end
-      yield
-      statements
-    ensure
-      ActiveSupport::Notifications.unsubscribe(subscriber)
-    end
-
     def create_main_runs(count, prefix:)
       Array.new(count) do |index|
         create_test_run(repository: repository, commit_sha: "#{prefix}%08d" % index, branch: "main",
@@ -993,7 +1003,6 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
     end
   end
 
-
   # `index_test_run_shards_on_test_run_id` answering all three counts at once — so the endpoint's
   # cost does not move with the number of shards. A per-shard read, or one query per figure, shows
   # up here immediately; the 20,000-example fixture is 4 shards today and nothing stops it being 40.
@@ -1004,17 +1013,6 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
   # count incidentally. The run-count example is therefore its own, named, and starts from a
   # one-run baseline that the shard example never establishes.
   describe "what the shard figures and the history cost the endpoint" do
-    def count_queries
-      count = 0
-      subscriber = ActiveSupport::Notifications.subscribe("sql.active_record") do |_, _, _, _, payload|
-        count += 1 unless payload[:cached] || payload[:name].in?(["SCHEMA", "TRANSACTION"])
-      end
-      yield
-      count
-    ensure
-      ActiveSupport::Notifications.unsubscribe(subscriber)
-    end
-
     def sharded_run(shard_count, commit_sha:)
       run = repository.test_runs.create!(commit_sha: commit_sha, ci_run_id: "gha-#{commit_sha}",
                                          total_specs_count: 20_000, duration_seconds: 74.25)
