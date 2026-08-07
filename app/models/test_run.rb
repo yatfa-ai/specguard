@@ -31,4 +31,44 @@ class TestRun < ApplicationRecord
 
     (annotated_specs_count.to_f / total_specs_count).round(3)
   end
+
+  # Whether the client reported a wall clock at all. `duration_seconds` is nullable by design and
+  # `Ingest::Payload#validate_duration_seconds` accepts nil explicitly, so "no timing was sent" is
+  # a real state — and a distinct one from a run that genuinely measured 0.0 seconds. Deliberately
+  # `nil?` rather than `present?`: `0.0.present?` is true, but reading the predicate as "is there a
+  # number here" and answering it with a blank check is how a measured zero starts rendering as an
+  # omission.
+  def duration_reported? = !duration_seconds.nil?
+
+  # The run's wall clock, formatted once for every surface that shows it. Both readers of this
+  # column — the Overview panel's header figure and the Recent-runs table cell — go through here,
+  # so the same float cannot render two ways on one page.
+  #
+  # Seconds below a minute keep their tenth, which is the precision the Recent-runs cell already
+  # rendered this column at. At a minute and above the tenth stops carrying anything a reader
+  # wants and `372.4s` stops being legible as "six minutes", so it becomes h/m/s parts instead.
+  #
+  # Only the *minutes* part survives a zero, and only when hours precede it, which keeps
+  # `1h 0m 12s` from collapsing into a misleading `1h 12s`. A trailing zero is dropped instead —
+  # `1h 0m`, not `1h 0m 0s` — because a last part has no following part to be misread as.
+  #
+  # The rounding happens BEFORE the sub-minute test, not after it. Rounding after would let
+  # `59.96` choose the seconds branch and then print as `60.0s`: a string this format can
+  # otherwise never produce, in exactly the raw-seconds shape the h/m/s branch exists to retire,
+  # at exactly the value where it decided raw seconds stop being legible.
+  def duration_label
+    return "not reported" unless duration_reported?
+
+    seconds = duration_seconds.to_f.round(1)
+    return "#{seconds}s" if seconds < 60
+
+    hours, remainder = seconds.round.divmod(3600)
+    minutes, whole_seconds = remainder.divmod(60)
+
+    parts = []
+    parts << "#{hours}h" if hours.positive?
+    parts << "#{minutes}m" if minutes.positive? || hours.positive?
+    parts << "#{whole_seconds}s" if whole_seconds.positive?
+    parts.join(" ")
+  end
 end

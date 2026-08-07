@@ -157,10 +157,14 @@
             <%= render UI::MeterComponent.new(value: annotated_specs, max: total_specs, label: "Annotated") %>
           <% end %>
 
+          <%# The fourth figure answers what the other three do not: what the suite *costs*. It sits
+              outside the `measured_tests` gate on purpose — a share needs a denominator, but wall
+              clock is not a share, and a run that measured nothing still took time. %>
           <%= render UI::DefListComponent.new(rows: [
                 ["Tests in suite", number_with_delimiter(total_specs)],
                 ["Carrying an @intent", number_with_delimiter(annotated_specs)],
-                ["Not visible to SpecGuard", number_with_delimiter(invisible_specs)]
+                ["Not visible to SpecGuard", number_with_delimiter(invisible_specs)],
+                ["Total runtime", test_run_duration(@latest_test_run)]
               ]) %>
 
           <% if measured_tests %>
@@ -297,12 +301,9 @@
                 <%# `duration_seconds` is nullable and Ingest::Payload accepts `nil` explicitly.
                     Rendering `0.0s` for a run that never reported one would make "the client sent
                     no timing" byte-identical to "the run took no time" — so the two states are
-                    kept visibly apart. %>
-                <% if test_run.duration_seconds.nil? %>
-                  <span class="text-app-muted">not reported</span>
-                <% else %>
-                  <%= number_with_precision(test_run.duration_seconds, precision: 1) %>s
-                <% end %>
+                    kept visibly apart. Through the same seam as the Overview panel's runtime
+                    figure, so this column has exactly one rendering on this page. %>
+                <%= test_run_duration(test_run) %>
               </td>
               <td class="px-3 py-2 text-app-content tabular-nums">
                 <%# The PERCENTAGE (`annotated_ratio`), never the 0–1 `annotated_fraction` the
