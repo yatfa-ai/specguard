@@ -117,8 +117,12 @@
     <%= render UI::PanelComponent.new(title: "Overview", id: "overview",
                                       class: manage_keys ? "lg:col-span-1" : "lg:col-span-3") do %>
       <div class="space-y-4">
+        <%# "Owner" names the SpecGuard account that registered this repository — the only one who
+            can grant access or rename it, and so the person a member must ask for more. Read off
+            the `user` association, never off the slug: the org segment of `github_full_name` is
+            already the first half of the page title directly above, and names no account. %>
         <%= render UI::DefListComponent.new(rows: [
-              ["Owner", @repository.owner_login],
+              ["Owner", @repository.user.display_name],
               ["Test runs", number_with_delimiter(@repository.test_runs.count)]
             ]) %>
 

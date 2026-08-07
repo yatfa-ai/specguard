@@ -5,6 +5,11 @@
 class Repository < ApplicationRecord
   FULL_NAME_FORMAT = %r{\A[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?/[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?\z}
 
+  # The owner: the account that registered this repository, and the only one that holds every
+  # permission implicitly (see RepositoryPolicy#owner?). Anything naming the owner reads through
+  # here — never off `github_full_name`. The slug's org segment is a *GitHub* org, not a SpecGuard
+  # account, and nothing constrains the two to match: `github_full_name` is permitted free-form and
+  # validated only for presence, uniqueness and shape, so any user may register any slug.
   belongs_to :user
   has_many :api_keys, dependent: :destroy
   has_many :test_runs, dependent: :destroy
@@ -20,8 +25,6 @@ class Repository < ApplicationRecord
   validates :github_full_name, presence: true, uniqueness: { case_sensitive: false },
                                format: { with: FULL_NAME_FORMAT, message: "must look like org/repo" }
   validates :name, presence: true
-
-  def owner_login = github_full_name.to_s.split("/").first
 
   def github_url = "https://github.com/#{github_full_name}"
 

@@ -64,7 +64,7 @@
               <%= @membership.user.github_handle %> currently holds
               <%= stripped.to_sentence %>, which you do not hold yourself and therefore cannot
               re-grant. Saving this form removes <%= stripped.size == 1 ? "it" : "them" %>. Ask
-              <%= @repository.owner_login %> if that is not what you intend.
+              <%= @repository.user.display_name %> if that is not what you intend.
             </p>
           <% end %>
         </div>

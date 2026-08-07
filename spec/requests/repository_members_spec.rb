@@ -59,6 +59,12 @@ RSpec.describe "Repository members", type: :request do
       expect(response).to have_http_status(:ok)
       expect(response.body).to include("No one else has access")
       expect(response.body).to include(new_repository_member_path(repository))
+      # "Only X can reach this repository" is a factual claim about SpecGuard access, so X must be
+      # the owning account. `acme` is the org segment of the slug and names no SpecGuard account —
+      # the fixture keeps the two different (owner @octocat, slug acme/billing-service) so this
+      # assertion cannot pass on a coincidence of naming.
+      expect(response.body).to include("Only octocat can reach this repository")
+      expect(response.body).not_to include("Only acme can reach")
       expect(response.body).not_to include("not available yet")
       # The console is no longer the way in, so the page must not still say it is.
       expect(response.body).not_to include("created from the console")
@@ -490,7 +496,13 @@ RSpec.describe "Repository members", type: :request do
       # `membership` (hubot's, from the outer let!) is this actor's own row, so it is replaced here.
       let!(:membership) { own_membership }
 
-      before { sign_in_via_github(uid: "9999") }
+      # The mock's nickname defaults to the OWNER's, and the callback writes it onto whichever uid
+      # signs in — so without this override the callback silently renames the `colleague` row from
+      # "hubot" to "octocat", and every example below would run with an actor whose handle is byte-
+      # identical to the owner's, contradicting the `let` that declares otherwise. With it the three
+      # names in play stay distinct: actor hubot, owner octocat, slug org acme — which is what lets
+      # an assertion about who a page NAMES tell the actor and the owner apart.
+      before { sign_in_via_github(uid: "9999", info: { nickname: "hubot" }) }
 
       it "can narrow another member" do
         edit_member(third_party_membership)
@@ -576,6 +588,14 @@ RSpec.describe "Repository members", type: :request do
 
         expect(response.body).to include("Saving will also remove permissions you cannot grant")
         expect(response.body).to include("keys.manage")
+
+        # The warning ends by naming who to ask, and that has to be the owning *account* — this
+        # actor's recourse is the person who can re-grant what the save is about to drop. Normalized
+        # because the ERB breaks the line between "Ask" and the handle; anchored on the whole
+        # sentence so the bare handle in the topbar cannot satisfy it.
+        prose = response.body.gsub(/\s+/, " ")
+        expect(prose).to include("Ask octocat if that is not what you intend.")
+        expect(prose).not_to include("Ask acme")
       end
     end
 

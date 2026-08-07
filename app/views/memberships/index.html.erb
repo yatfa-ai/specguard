@@ -93,10 +93,15 @@
       <% end %>
     <% else %>
       <%# The description holds for every viewer of this page: they all hold `members.manage`, and
-          the form they are handed offers only what they can grant themselves. %>
+          the form they are handed offers only what they can grant themselves.
+          "Only X can reach this repository" is a factual claim about SpecGuard access, so X must be
+          the owning account — the slug's org segment names no account and could be an org with two
+          hundred members, none of whom can reach it. In practice the owner is the only one who ever
+          reads this state: a `members.manage` holder holds it via a membership row, so the list they
+          are looking at is never empty. %>
       <%= render UI::EmptyStateComponent.new(
             title: "No one else has access",
-            description: "Only #{@repository.owner_login} can reach this repository. Adding a colleague " \
+            description: "Only #{@repository.user.display_name} can reach this repository. Adding a colleague " \
                          "by their GitHub handle puts it in their repository list too."
           ) do |empty| %>
         <% empty.with_action do %>
