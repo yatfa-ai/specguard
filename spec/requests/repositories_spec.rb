@@ -422,6 +422,11 @@ RSpec.describe "Repository registration and API keys", type: :request do
         expect(panel).to have_text("Total runtime 6m 12s", normalize_ws: true)
         # A true number is not automatically a legible one: nobody reads `372.4s` as six minutes.
         expect(panel).to have_no_text("372.4s", normalize_ws: true)
+        # The other half of the seam is the TREATMENT, and this is the side of it that says "this
+        # is a measurement". `text-app-muted` is how this page styles an absent fact, so a
+        # reported wall clock wearing it would read as an omission. Asserted positively — a bare
+        # `have_no_css(".text-app-muted")` would also pass with the figure deleted outright.
+        expect(panel).to have_css("dd span:not(.text-app-muted)", text: "6m 12s")
       end
 
       # The panel's signature refusal, applied to this column: rendering `0.0s` would make "the
@@ -439,6 +444,11 @@ RSpec.describe "Repository registration and API keys", type: :request do
         expect(panel).to have_text("Total runtime not reported", normalize_ws: true)
         expect(panel).to have_no_text("Total runtime 0.0s", normalize_ws: true)
         expect(panel).to have_no_text("Total runtime 0s", normalize_ws: true)
+        # The wording alone does not carry the distinction — the muted tone is the other half of
+        # it, and this panel's whole job is styling an absent fact as absent rather than printing
+        # it as a number. Pinned here because the helper is now the single treatment authority for
+        # BOTH surfaces that render this column: one unnoticed edit desaturates them together.
+        expect(panel).to have_css("dd span.text-app-muted", text: "not reported")
       end
 
       # A measured zero is a measurement. The distinction only exists if both sides of it render.
@@ -451,6 +461,10 @@ RSpec.describe "Repository registration and API keys", type: :request do
 
         expect(overview_panel).to have_text("Total runtime 0.0s", normalize_ws: true)
         expect(overview_panel).to have_no_text("Total runtime not reported", normalize_ws: true)
+        # And it is styled as a measurement, not as an absence. This is the example where the
+        # treatment carries the most: `0.0s` muted would read as "nothing was reported" to a
+        # reader who takes the tone at its word, which is precisely the conflation being refused.
+        expect(overview_panel).to have_css("dd span:not(.text-app-muted)", text: "0.0s")
       end
 
       # The meter and the ratio are suppressed for a run that reported no tests, because 0/0 has

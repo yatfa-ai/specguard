@@ -46,6 +46,8 @@ RSpec.describe "Repository recent runs", type: :request do
     expect(cells[BRANCH]).to eq("main")
     expect(cells[TESTS]).to eq("3")
     expect(cells[DURATION]).to eq("12.5s")
+    # A reported duration must NOT wear the muted treatment this table gives absent facts.
+    expect(run_row("a1b2c3d").all("td")[DURATION]).to have_css("span:not(.text-app-muted)", text: "12.5s")
     # The PERCENTAGE, not the 0–1 fraction /ingest reports. 2/3 is 66.7%, and 0.667 rendered here
     # would be wrong by two orders of magnitude — the exact confusion TestRun's two methods exist
     # to prevent.
@@ -79,6 +81,11 @@ RSpec.describe "Repository recent runs", type: :request do
     # Neither `0.0s` nor a silently blank cell: an omitted timing is a fact worth naming.
     expect(cells[DURATION]).not_to eq("0.0s")
     expect(cells[DURATION]).not_to be_empty
+    # The wording's other half. Since SPGD-152 both this cell and the Overview panel's runtime
+    # figure render through one helper, so the muted tone is now a shared authority — unpinned, a
+    # single edit there would strip it from both surfaces silently. Cell-scoped for the reason
+    # stated at the top of this file: the branch cell wears the same treatment for the same reason.
+    expect(run_row("notimed").all("td")[DURATION]).to have_css("span.text-app-muted", text: "not reported")
     # The rest of the row is unaffected by the missing timing.
     expect(cells[ANNOTATED]).to eq("25.0%")
   end

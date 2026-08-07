@@ -129,6 +129,16 @@ RSpec.describe TestRun do
       expect(run_lasting(7325.0).duration_label).to eq("2h 2m 5s")
     end
 
+    # The minute boundary, both sides of it. Rounding to the tenth AFTER choosing the sub-minute
+    # branch would print `59.96` as `60.0s` — a string this format can otherwise never produce,
+    # in the raw-seconds shape the h/m/s branch exists to retire, at the exact value where it
+    # decided raw seconds stop being legible. So the branch is taken on the rounded value.
+    it "does not print a rounded-up minute as raw seconds" do
+      expect(run_lasting(59.96).duration_label).to eq("1m")
+      expect(run_lasting(59.94).duration_label).to eq("59.9s")
+      expect(run_lasting(59.96).duration_label).not_to eq("60.0s")
+    end
+
     # A zero minute that sits between two non-zero parts has to survive: dropping it turns
     # "one hour and twelve seconds" into a string that reads as "one hour twelve minutes".
     it "keeps a zero minutes part when there are hours in front of it" do
