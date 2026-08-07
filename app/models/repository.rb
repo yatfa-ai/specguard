@@ -44,6 +44,42 @@ class Repository < ApplicationRecord
     test_runs.order(created_at: :desc, id: :desc).first
   end
 
+  # The run `run`'s suite figures can honestly be compared against: the newest run on the **same
+  # branch**, strictly older than `run` itself. `nil` — never a fallback row — when there is no
+  # honest comparison to make.
+  #
+  # Branch-scoped, and that is the point rather than a refinement. `test_runs` is one interleaved
+  # history across every branch CI reports from (the "Recent runs" panel lists it exactly that way,
+  # deliberately), so the row immediately before the latest one is routinely a different branch
+  # entirely — and a difference taken against it would report a suite-size change no commit ever
+  # made. A feature branch that deleted a directory would read as the trunk suite shrinking.
+  #
+  # A nil `branch` returns nil rather than matching `branch IS NULL`. `Ingest::Payload` writes
+  # `.presence` and validates a missing branch as acceptable, so anonymous runs are an ordinary
+  # live state — and `WHERE branch IS NULL` would pool every one of them, from every branch and
+  # every machine, into a single fictional history. "SpecGuard does not know where this run came
+  # from" is not a branch.
+  #
+  # "Older than `run`" is a row-value comparison over exactly the ordering key `latest_test_run`
+  # and `recent_test_runs` sort by, tie-break included — a strict position in that ordering, not a
+  # set exclusion. Both halves matter and they break differently. A bare `created_at <` skips the
+  # same-instant predecessor entirely and compares against a run two rows further back, which the
+  # Overview shows today. A bare `id != run.id` is asked nothing it can get wrong *by this page*
+  # (the controller only ever passes the latest run), but for any earlier run it answers with the
+  # NEWER half of a same-instant pair and reports the suite's growth backwards — so the ordering,
+  # not the exclusion, is what this says.
+  #
+  # Takes the run rather than reading `latest_test_run` itself, so a page that has already loaded
+  # the latest run pays one query for this and not two.
+  def previous_test_run_on_branch(run)
+    return nil if run.nil? || run.branch.blank?
+
+    test_runs.where(branch: run.branch)
+             .where("(test_runs.created_at, test_runs.id) < (?, ?)", run.created_at, run.id)
+             .order(created_at: :desc, id: :desc)
+             .first
+  end
+
   # The tail of the append-only run history, newest first — what the "Recent runs" panel lists.
   #
   # Deliberately the *same* ordering as `latest_test_run` above, tie-break included. The two are

@@ -142,6 +142,17 @@
           <% annotated_specs = @latest_test_run.annotated_specs_count.to_i %>
           <% invisible_specs = total_specs - annotated_specs %>
 
+          <%# The only figure on this panel read off more than one run. Every other number here is
+              a level — what the suite is right now — and a level cannot say whether 20,013 tests
+              is 47 more than yesterday or 400 fewer. `test_runs` has held that answer since the
+              first run was ingested and nothing has ever asked it.
+
+              `nil` (no comparison) and `0` (compared, and it did not move) are different answers
+              and are kept apart here: `@previous_test_run &&` guards the subtraction, so a zero
+              delta stays truthy and still renders. Which of the three no-comparison states this
+              is gets said below, where the basis is stated. %>
+          <% suite_size_delta = @previous_test_run && total_specs - @previous_test_run.total_specs_count.to_i %>
+
           <%# A run reporting no tests has no share to display: 0/0 renders as a tidy `0%` headline
               that reads exactly like a real suite measured at zero annotations — the same
               conflation the never-ingested branch above refuses, one state over. So the meter is
@@ -176,8 +187,19 @@
                          else
                            [["Total runtime", test_run_duration(@latest_test_run)]]
                          end %>
+          <%# The delta rides in the same cell as the size it modifies rather than in a row of its
+              own. A separate "Change since last run" row would be a second figure a reader has to
+              relate back to the first; here 20,013 and +47 are one statement, and the row's
+              `tabular-nums` treatment aligns the two the same way it aligns everything else. %>
+          <% suite_size = if suite_size_delta
+                            safe_join([number_with_delimiter(total_specs),
+                                       tag.span(signed_count(suite_size_delta), id: "suite-size-delta",
+                                                class: "text-app-content-secondary")], " ")
+                          else
+                            number_with_delimiter(total_specs)
+                          end %>
           <%= render UI::DefListComponent.new(rows: [
-                ["Tests in suite", number_with_delimiter(total_specs)],
+                ["Tests in suite", suite_size],
                 ["Carrying an @intent", number_with_delimiter(annotated_specs)],
                 ["Not visible to SpecGuard", number_with_delimiter(invisible_specs)],
                 *cost_rows
@@ -247,6 +269,42 @@
           <p class="text-xs text-app-muted">
             Measured on <span class="font-mono"><%= @latest_test_run.commit_sha.first(7) %></span><%= " (#{@latest_test_run.branch})" if @latest_test_run.branch.present? %>,
             <%= time_ago_in_words(@latest_test_run.created_at) %> ago.
+          </p>
+
+          <%# The delta's own basis, stated on the surface beside it — a change is meaningless
+              without the thing it is a change *from*, and this panel's rule is that every figure
+              names its own coverage.
+
+              Three mutually exclusive sentences and never a shared one, because the three no-delta
+              states are three different facts about this repository and only one of them is a
+              shortcoming a reader can act on. "No earlier run on this branch" is a young branch;
+              "this run named no branch" is a CI client that is not sending one, which is a thing
+              to go and fix. Collapsing them into one "no comparison available" would hide the
+              second inside the first.
+
+              It renders in every one of those states rather than only when there is a number.
+              Silence would be read as "the suite has not changed" — the one thing none of these
+              states says. %>
+          <p class="text-xs text-app-muted" id="suite-size-basis">
+            <% if suite_size_delta %>
+              <%# Names the run compared against, not just its age: the previous run on a branch
+                  can be days old, and "since 3 hours ago" with no commit behind it is not
+                  something a reader can go and check. %>
+              Suite size is measured against
+              <span class="font-mono"><%= @previous_test_run.commit_sha.first(7) %></span>,
+              the previous run on <%= @latest_test_run.branch %>,
+              <%= time_ago_in_words(@previous_test_run.created_at) %> ago.
+              Only runs on the same branch are compared.
+            <% elsif @latest_test_run.branch.present? %>
+              No earlier run on <%= @latest_test_run.branch %>, so there is no change to show — this
+              is the first run SpecGuard has from that branch. Runs on other branches are
+              deliberately not compared: a suite size from somewhere else is not a change this one
+              made.
+            <% else %>
+              This run reported no branch, so SpecGuard cannot place it in a history and has no
+              earlier run to measure it against. Runs that name no branch are not pooled together —
+              they may come from anywhere.
+            <% end %>
           </p>
         <% end %>
 
