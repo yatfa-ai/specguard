@@ -290,8 +290,6 @@ RSpec.describe TestRun do
     end
   end
 
-  # The database half of the run-identity invariant. `Ingest::RunRecorder` looks a run up before
-  # inserting, but a lookup and an insert are two statements and four shards POST at once — the
   # The denominator each shard's duration was measured over. `test_run_shards.total_specs_count`
   # was written by `Ingest::RunRecorder#upsert_shard` on every sharded POST since sharding shipped
   # and read by nothing, so the panel could show four wall clocks and no way to tell a shard that
@@ -343,8 +341,25 @@ RSpec.describe TestRun do
 
       expect(run.shard_seconds_per_spec).to eq([0.0122, nil])
       expect(run.unsized_shard_count).to eq(1)
-      expect(run).not_to be_every_shard_sized
+      expect(run).not_to be_every_shard_costed
       expect(run.shard_distribution_labels.last).to eq(["shard 2", "3.5s", "no tests reported", nil])
+    end
+
+    # The other way `#every_shard_costed?` goes false, pinned as the DIFFERENT fact it is. Both a
+    # zero count and a null duration leave a shard with no rate, so both sink the predicate — but
+    # only the first is what `#unsized_shard_count` counts, and the panel's zero-denominator
+    # sentence quotes that count as its own evidence. Wiring the sentence to the predicate instead
+    # would render "0 of these 2 shards reported no tests at all" on exactly this run.
+    #
+    # Unreachable from the panel — `#wall_clock_decomposable?` withholds the whole decomposition on
+    # `#some_shard_untimed?` — which is why it is pinned here, on the model, where the gate is not
+    # in the way. This is the assertion that fails if the two are ever fused back together.
+    it "has no per-test cost for an untimed shard either, and does not call that shard unsized" do
+      run = sharded_run([{ total: 5000, seconds: 61.0 }, { total: 4000, seconds: nil }])
+
+      expect(run).not_to be_every_shard_costed
+      expect(run.unsized_shard_count).to eq(0)
+      expect(run.untimed_shard_count).to eq(1)
     end
 
     # ...and the spread that would have been taken over the rest is withheld with it, rather than
@@ -404,6 +419,8 @@ RSpec.describe TestRun do
     end
   end
 
+  # The database half of the run-identity invariant. `Ingest::RunRecorder` looks a run up before
+  # inserting, but a lookup and an insert are two statements and four shards POST at once — the
   # index is what makes the loser of that race an exception to rescue rather than a second row
   # with half the suite in it.
   describe "the run identity" do

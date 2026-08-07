@@ -438,12 +438,22 @@
                   applies to the word "slowest". %>
               <% if imbalanced %>
                 <p id="shard-imbalance-cause" class="text-xs text-app-muted">
-                  <% if !@latest_test_run.every_shard_sized? %>
+                  <% if @latest_test_run.unsized_shard_count.positive? %>
                     <%# The zero-denominator case, stated rather than divided. `total_specs_count`
                         is `null: false, default: 0`, so a shard that loaded no specs is an ordinary
                         row with a wall clock and nothing to divide it by — and taking the spread
                         over the shards that did report would be a fact about a subset wearing a
-                        sentence about the run. %>
+                        sentence about the run.
+
+                        Branched on the COUNT this sentence quotes, not on
+                        `TestRun#every_shard_costed?`. That predicate is false in two states — no
+                        tests and no timing — and entering on the second while quoting
+                        `unsized_shard_count` would print "0 of these 4 shards reported no tests at
+                        all", a stated absence naming zero rows as its own evidence. The untimed
+                        state has its own vocabulary (`#some_shard_untimed?`) and never reaches
+                        this panel at all: `#wall_clock_decomposable?` withholds the whole
+                        decomposition on it. So the branch below cannot be entered with a missing
+                        cost figure, and the one absence that IS reachable here is the one named. %>
                     Whether that came from uneven test counts or from individually expensive tests
                     is not answerable on these rows:
                     <%= @latest_test_run.unsized_shard_count %> of these
@@ -501,11 +511,22 @@
 
                   A real list, not a separator-joined string: `·` between values is announced
                   inconsistently by screen readers and reads as content when it is punctuation, and
-                  a `ul` gets the grouping across without inventing a character for it. %>
+                  a `ul` gets the grouping across without inventing a character for it.
+
+                  That argument is about the boundary BETWEEN items and settles nothing about the
+                  four heterogeneous values inside one, which do need telling apart: a row reading
+                  `shard 3 1m 14s 5,000 tests 14.9ms/test` in one weight is a wall of digits at
+                  four shards. Two devices, no punctuation. The within-item `gap-x-1.5` is
+                  deliberately TIGHTER than the `gap-x-3` between items, so proximity does the
+                  grouping a `·` would have done. And the per-test cost — the derived figure this
+                  row exists to carry, and the only one of the four that is not already on the
+                  page — takes `text-app-content` against the operands' `text-app-content-secondary`
+                  so the eye lands on the answer rather than on the arithmetic. The shard's name
+                  stays at the list's inherited `text-app-muted`: it is the label, not a value. %>
               <ul id="shard-distribution" class="flex flex-wrap gap-x-3 gap-y-1 text-xs text-app-muted tabular-nums">
                 <% @latest_test_run.shard_distribution_labels.each do |name, duration, size, per_spec| %>
-                  <li>
-                    <%= name %>
+                  <li class="inline-flex items-baseline gap-x-1.5">
+                    <span><%= name %></span>
                     <span class="text-app-content-secondary"><%= duration %></span>
                     <%# The denominator, never omitted: a duration with no count beside it is the
                         figure this panel could not interpret. A shard that reported none says so
@@ -513,7 +534,7 @@
                         so there is no quotient, and printing one would be inventing it. %>
                     <span class="text-app-content-secondary"><%= size %></span>
                     <% if per_spec %>
-                      <span class="text-app-content-secondary"><%= per_spec %></span>
+                      <span class="font-medium text-app-content"><%= per_spec %></span>
                     <% end %>
                   </li>
                 <% end %>

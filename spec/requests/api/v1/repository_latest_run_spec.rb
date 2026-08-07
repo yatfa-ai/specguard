@@ -1608,11 +1608,8 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
     # an inequality is a guard that stops catching the second read, and the third.
     #
     # Verified by mutation: making `serialized_shards` read `test_run.test_run_shards.map` instead
-    # of the single `#shard_reports` pluck turns the 4-vs-40 assertions red (44 ≠ 8) and leaves
-    # `PER_SHARD_ROW_READ` at 1 — which is exactly the failure this example exists to catch, still
-    # caught.
-    PER_SHARD_ROW_READ = 1
-
+    # of the single `#shard_reports` pluck turns the 4-vs-40 assertions red (44 ≠ 8) and leaves the
+    # `+ 1` at one — which is exactly the failure this example exists to catch, still caught.
     it "costs the same on a 4-shard run and a 40-shard run, one read more than a shardless one" do
       create_test_run(repository: repository, commit_sha: "noshards0000", duration_seconds: 42.5)
       get_repository
@@ -1621,8 +1618,11 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
       sharded_run(4, commit_sha: "fourshards00")
       baseline = count_queries { get_repository }
       # The whole cost of serving the rows, stated as a number rather than as "more than": one
-      # query, on `index_test_run_shards_on_test_run_id`, whatever the matrix width.
-      expect(baseline).to eq(shardless + PER_SHARD_ROW_READ)
+      # query, on `index_test_run_shards_on_test_run_id`, whatever the matrix width. Written
+      # inline as `+ 1` rather than behind a name — an `RSpec.describe` block is not a namespace,
+      # so a constant declared in one is `Object::PER_SHARD_ROW_READ`, defined project-wide from a
+      # request spec. The reasoning it was named for is in the comment above, where it belongs.
+      expect(baseline).to eq(shardless + 1)
 
       sharded_run(40, commit_sha: "fortyshards0")
       expect(count_queries { get_repository }).to eq(baseline)

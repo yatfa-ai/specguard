@@ -576,6 +576,16 @@ class TestRun < ApplicationRecord
   # Each shard's seconds per test, in the same order, with `nil` for any shard that has no
   # denominator to divide by (or no numerator to divide). Aligned with `#shard_durations` rather
   # than compacted, so a caller cannot line a rate up against the wrong shard.
+  #
+  # **Two different absences arrive here as the same `nil`, and they are not the same fact.** A
+  # shard with `total_specs_count = 0` reported a wall clock over no tests — an ordinary row, since
+  # the column is `null: false, default: 0`, and the one `#unsized_shard_count` counts. A shard
+  # with a null `duration_seconds` reported no wall clock at all, which is the coverage gap
+  # `#some_shard_untimed?` / `#untimed_shard_count` already word for the whole panel. Collapsing
+  # them here is correct for THIS list — neither shard has a cost per test, and this list is of
+  # costs per test — but it means `nil` here answers "is there a rate?" and never "why not". A
+  # caller that wants to SAY why must ask one of those two named predicates; it cannot recover the
+  # reason from this array.
   def shard_seconds_per_spec
     @shard_seconds_per_spec ||= shard_durations.map do |_shard_id, seconds, spec_count|
       next nil if seconds.nil? || !spec_count.to_i.positive?
@@ -594,11 +604,23 @@ class TestRun < ApplicationRecord
   # and dividing by its zero, or quietly taking the spread over the rest and calling it the run's,
   # are both figures this panel cannot stand behind.
   #
+  # **Named for the conjunction it is, not for either half.** It is false in two distinct states —
+  # a shard that reported no TESTS and a shard that reported no TIMING — because
+  # `#shard_seconds_per_spec` needs both and its comment writes out why the two nils differ. An
+  # earlier draft of this called itself `every_shard_sized?`, which named only the first half while
+  # answering both, and the sentence built on it then reported `#unsized_shard_count` — a count of
+  # the first half alone — as the evidence for a branch the second half could also have entered.
+  # Anything that wants to SAY which absence it hit branches on `#unsized_shard_count` or on
+  # `#untimed_shard_count`, the two predicates that each name one of them; this one is for deciding
+  # whether a cost figure exists at all.
+  #
   # Vacuously TRUE on a run with no shards (`[].none?`), which is safe only because every caller
   # sits behind `#wall_clock_decomposable?` — the same load-bearing vacuity `#some_shard_untimed?`
   # records about its own vacuous false, and it fails the same way: a future ungated caller would
-  # read "every shard has a cost" off a run that has no shards.
-  def every_shard_sized? = shard_seconds_per_spec.none?(&:nil?)
+  # read "every shard has a cost" off a run that has no shards. That same gate is also what makes
+  # the untimed half of this predicate unreachable from the panel today: `!some_shard_untimed?` is
+  # exactly the statement that no null-duration row is present.
+  def every_shard_costed? = shard_seconds_per_spec.none?(&:nil?)
 
   # How far apart the shards' test counts are, as a percentage of their mean. `nil` when there is
   # no mean to divide by — every shard reported zero — which is a real state and not a spread of 0.
@@ -608,7 +630,7 @@ class TestRun < ApplicationRecord
   # taken over the sized shards alone would be a fact about a subset wearing a sentence about the
   # run.
   def seconds_per_spec_spread_percent
-    return nil unless every_shard_sized?
+    return nil unless every_shard_costed?
 
     relative_spread_percent(shard_seconds_per_spec)
   end
@@ -634,7 +656,7 @@ class TestRun < ApplicationRecord
 
   # The cheapest and dearest per-test costs on record, for a sentence that wants the two ends of
   # the spread rather than the spread itself. `nil` unless every shard has a cost, on
-  # `#every_shard_sized?`'s rule.
+  # `#every_shard_costed?`'s rule.
   def cheapest_seconds_per_spec_label = extreme_seconds_per_spec_label(:min)
   def dearest_seconds_per_spec_label = extreme_seconds_per_spec_label(:max)
 
@@ -765,7 +787,7 @@ class TestRun < ApplicationRecord
   # The cheapest or dearest per-test cost, formatted. `nil` unless every shard has one, so a
   # sentence naming the two ends of the spread cannot quote an end of a subset.
   def extreme_seconds_per_spec_label(bound)
-    return nil unless every_shard_sized?
+    return nil unless every_shard_costed?
 
     humanized_seconds_per_spec(shard_seconds_per_spec.public_send(bound))
   end
