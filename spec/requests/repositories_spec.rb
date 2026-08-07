@@ -497,6 +497,145 @@ RSpec.describe "Repository registration and API keys", type: :request do
       end
     end
 
+    # A sharded run's wall clock is a MAX and its cost is a SUM, and they are not the same number.
+    # `Ingest::RunRecorder` derives the MAX deliberately — it is what an operator's CI dashboard
+    # shows — so nothing here changes it. What is pinned is that the panel stops calling it a
+    # total, and starts saying how many parts the run came in.
+    describe "the latest run's shard composition" do
+      # The suite's own canonical fixture, one layer up: `spec/requests/api/v1/ingest_spec.rb`
+      # builds a 4-shard, 20,000-example run and pins its MAX at 74.25s. These are the same rows
+      # that path produces, written directly — the recorder is exercised there, and the question
+      # here is only what the Overview does with what it left behind.
+      def sharded_run(repository, durations, commit_sha:)
+        run = repository.test_runs.create!(commit_sha: commit_sha, ci_run_id: "gha-#{commit_sha}",
+                                           total_specs_count: 20_000, annotated_specs_count: 5000,
+                                           duration_seconds: durations.compact.max)
+        durations.each_with_index do |seconds, index|
+          run.test_run_shards.create!(shard_id: (index + 1).to_s, total_specs_count: 5000,
+                                      annotated_specs_count: 1250, duration_seconds: seconds)
+        end
+        run
+      end
+
+      # The defect, stated as an expectation: MAX 74.25s under the label "Total runtime" was a
+      # 3.4× understatement of the only cost figure on the page.
+      it "names the wall clock as the slowest shard and prints the machine time beside it" do
+        repository = create_repository(user: @user)
+        sharded_run(repository, [61.0, 58.5, 74.25, 60.0], commit_sha: "feedfacecafe0020")
+
+        get repository_path(repository)
+
+        panel = overview_panel
+        expect(panel).to have_text("Wall clock (slowest of 4 shards) 1m 14s", normalize_ws: true)
+        expect(panel).to have_text("Machine time (all 4 added up) 4m 14s", normalize_ws: true)
+        # The label the figure used to wear is what made it wrong. It must be gone, not merely
+        # joined by a second row — "Total runtime 1m 14s" beside "Machine time 4m 14s" is two
+        # contradictory descriptions of the same run.
+        expect(panel).to have_no_text("Total runtime", normalize_ws: true)
+        # And the machine time is styled as the measurement it is, not as an absent fact.
+        expect(panel).to have_css("dd span:not(.text-app-muted)", text: "4m 14s")
+      end
+
+      it "states that the run was assembled from shards, and how many" do
+        repository = create_repository(user: @user)
+        sharded_run(repository, [61.0, 58.5, 74.25, 60.0], commit_sha: "feedfacecafe0021")
+
+        get repository_path(repository)
+
+        panel = overview_panel
+        expect(panel).to have_text("Assembled from 4 shard reports", normalize_ws: true)
+        # Counted as rows, and worded as rows. The unique index that deduplicates a redelivered
+        # shard is partial (`WHERE shard_id IS NOT NULL`), so an unnamed shard contributes one row
+        # per delivery — a shard count is not a count of distinct CI jobs and must not claim to be.
+        expect(panel).to have_text("not necessarily 4 distinct CI jobs", normalize_ws: true)
+      end
+
+      # `test_run_shards.duration_seconds` is nullable and `Ingest::Payload` accepts nil
+      # explicitly, so a silent shard is an ordinary state. A SUM that skips it and prints the
+      # remainder as a total is a confident number over a sliver — the exact thing this panel
+      # refuses everywhere else.
+      it "says the machine time is a floor when a shard reported no timing" do
+        repository = create_repository(user: @user)
+        sharded_run(repository, [60.0, 30.0, nil, 45.0], commit_sha: "feedfacecafe0022")
+
+        get repository_path(repository)
+
+        panel = overview_panel
+        expect(panel).to have_text("Machine time (all 4 added up) at least 2m 15s", normalize_ws: true)
+        expect(panel).to have_no_text("Machine time (all 4 added up) 2m 15s", normalize_ws: true)
+        expect(panel).to have_text("1 of them reported no timing", normalize_ws: true)
+        expect(panel).to have_text("floor rather than a total", normalize_ws: true)
+        # The wall clock is untouched: it is a MAX over the shards that *did* report, and 60.0s of
+        # it is a complete fact regardless of what the silent shard cost.
+        expect(panel).to have_text("Wall clock (slowest of 4 shards) 1m", normalize_ws: true)
+        # An incomplete measurement is still a measurement — muting it would file it under
+        # "nothing was reported", which is the state one example below.
+        expect(panel).to have_css("dd span:not(.text-app-muted)", text: "at least 2m 15s")
+      end
+
+      it "reports no machine time at all when not one shard reported a timing" do
+        repository = create_repository(user: @user)
+        sharded_run(repository, [nil, nil, nil, nil], commit_sha: "feedfacecafe0023")
+
+        get repository_path(repository)
+
+        panel = overview_panel
+        expect(panel).to have_text("Machine time (all 4 added up) not reported", normalize_ws: true)
+        # Never `0.0s`: four shards that added up to nothing and four shards that said nothing are
+        # different runs, and SQL's SUM over an all-null column returns NULL precisely so they stay
+        # different here.
+        expect(panel).to have_no_text("Machine time (all 4 added up) 0.0s", normalize_ws: true)
+        expect(panel).to have_no_text("at least", normalize_ws: true)
+        expect(panel).to have_text("None of them reported a timing", normalize_ws: true)
+        expect(panel).to have_css("dd span.text-app-muted", text: "not reported")
+      end
+
+      # A measured zero is a measurement here too, and `0.0.present?` being false is how the
+      # blank-check version of this would get it wrong.
+      it "prints a machine time that genuinely measured zero as zero" do
+        repository = create_repository(user: @user)
+        sharded_run(repository, [0.0, 0.0], commit_sha: "feedfacecafe0024")
+
+        get repository_path(repository)
+
+        panel = overview_panel
+        expect(panel).to have_text("Machine time (all 2 added up) 0.0s", normalize_ws: true)
+        expect(panel).to have_no_text("Machine time (all 2 added up) not reported", normalize_ws: true)
+        expect(panel).to have_css("dd span:not(.text-app-muted)", text: "0.0s")
+      end
+
+      # The other side of the branch, and the one the whole existing corpus takes. A single shard's
+      # MAX *is* its SUM, so there is no composition to disambiguate and nothing to disambiguate it
+      # with — the second figure would be the first figure printed twice under a heavier label.
+      it "renders a one-shard run exactly as an unsharded run" do
+        repository = create_repository(user: @user)
+        sharded_run(repository, [372.4], commit_sha: "feedfacecafe0025")
+
+        get repository_path(repository)
+
+        panel = overview_panel
+        expect(panel).to have_text("Total runtime 6m 12s", normalize_ws: true)
+        expect(panel).to have_no_text("Machine time", normalize_ws: true)
+        expect(panel).to have_no_text("Wall clock", normalize_ws: true)
+        expect(panel).to have_no_text("Assembled from", normalize_ws: true)
+      end
+
+      # And a run with no shard rows at all — every run whose client named no `ci_run_id`, which
+      # is every laptop `bundle exec rspec` and the entire corpus predating sharding.
+      it "renders a run with no shard rows exactly as before" do
+        repository = create_repository(user: @user)
+        repository.test_runs.create!(commit_sha: "feedfacecafe0026", total_specs_count: 3,
+                                     annotated_specs_count: 2, duration_seconds: 372.4)
+
+        get repository_path(repository)
+
+        panel = overview_panel
+        expect(panel).to have_text("Total runtime 6m 12s", normalize_ws: true)
+        expect(panel).to have_no_text("Machine time", normalize_ws: true)
+        expect(panel).to have_no_text("Assembled from", normalize_ws: true)
+      end
+    end
+
     it "stays visible to a member who cannot manage keys" do
       owner = create_user(github_uid: "7007", github_handle: "repo-owner")
       repository = create_repository(user: owner, github_full_name: "acme/shared-service")
