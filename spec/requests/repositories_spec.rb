@@ -497,6 +497,246 @@ RSpec.describe "Repository registration and API keys", type: :request do
       end
     end
 
+    # A sharded run's wall clock is a MAX and its cost is a SUM, and they are not the same number.
+    # `Ingest::RunRecorder` derives the MAX deliberately — it is what an operator's CI dashboard
+    # shows — so nothing here changes it. What is pinned is that the panel stops calling it a
+    # total, and starts saying how many parts the run came in.
+    describe "the latest run's shard composition" do
+      # The suite's own canonical fixture, one layer up: `spec/requests/api/v1/ingest_spec.rb`
+      # builds a 4-shard, 20,000-example run and pins its MAX at 74.25s. These are the same rows
+      # that path produces, written directly — the recorder is exercised there, and the question
+      # here is only what the Overview does with what it left behind.
+      def sharded_run(repository, durations, commit_sha:)
+        run = repository.test_runs.create!(commit_sha: commit_sha, ci_run_id: "gha-#{commit_sha}",
+                                           total_specs_count: 20_000, annotated_specs_count: 5000,
+                                           duration_seconds: durations.compact.max)
+        durations.each_with_index do |seconds, index|
+          run.test_run_shards.create!(shard_id: (index + 1).to_s, total_specs_count: 5000,
+                                      annotated_specs_count: 1250, duration_seconds: seconds)
+        end
+        run
+      end
+
+      # The defect, stated as an expectation: MAX 74.25s under the label "Total runtime" was a
+      # 3.4× understatement of the only cost figure on the page.
+      it "names the wall clock as the slowest shard and prints the machine time beside it" do
+        repository = create_repository(user: @user)
+        sharded_run(repository, [61.0, 58.5, 74.25, 60.0], commit_sha: "feedfacecafe0020")
+
+        get repository_path(repository)
+
+        panel = overview_panel
+        expect(panel).to have_text("Wall clock (slowest of 4 shards) 1m 14s", normalize_ws: true)
+        expect(panel).to have_text("Machine time (all 4 added up) 4m 14s", normalize_ws: true)
+        # The label the figure used to wear is what made it wrong. It must be gone, not merely
+        # joined by a second row — "Total runtime 1m 14s" beside "Machine time 4m 14s" is two
+        # contradictory descriptions of the same run.
+        expect(panel).to have_no_text("Total runtime", normalize_ws: true)
+        # And the machine time is styled as the measurement it is, not as an absent fact.
+        expect(panel).to have_css("dd span:not(.text-app-muted)", text: "4m 14s")
+      end
+
+      it "states that the run was assembled from shards, and how many" do
+        repository = create_repository(user: @user)
+        sharded_run(repository, [61.0, 58.5, 74.25, 60.0], commit_sha: "feedfacecafe0021")
+
+        get repository_path(repository)
+
+        panel = overview_panel
+        expect(panel).to have_text("Assembled from 4 shard reports", normalize_ws: true)
+        # Counted as rows, and worded as rows. The unique index that deduplicates a redelivered
+        # shard is partial (`WHERE shard_id IS NOT NULL`), so an unnamed shard contributes one row
+        # per delivery — a shard count is not a count of distinct CI jobs and must not claim to be.
+        expect(panel).to have_text("not necessarily 4 distinct CI jobs", normalize_ws: true)
+        # The whole sentence, not a fragment of it. This is the one branch entitled to say the
+        # figure is what the suite cost, and asserting only the phrase "added together" would pass
+        # just as happily if the claim were emitted unconditionally — which is how it shipped
+        # beside a floor once already.
+        expect(panel).to have_text(
+          "The machine time is those 4 added together, which is what the suite cost.",
+          normalize_ws: true
+        )
+        # Same rule for the wall clock's own claim: it belongs to this branch and only this one,
+        # where every shard reported and "the slowest single shard" is therefore the slowest shard
+        # there was.
+        expect(panel).to have_text(
+          "The wall clock is the slowest single shard, which is what a reader waited through.",
+          normalize_ws: true
+        )
+      end
+
+      # `test_run_shards.duration_seconds` is nullable and `Ingest::Payload` accepts nil
+      # explicitly, so a silent shard is an ordinary state. A SUM that skips it and prints the
+      # remainder as a total is a confident number over a sliver — the exact thing this panel
+      # refuses everywhere else.
+      it "says the machine time is a floor when a shard reported no timing" do
+        repository = create_repository(user: @user)
+        sharded_run(repository, [60.0, 30.0, nil, 45.0], commit_sha: "feedfacecafe0022")
+
+        get repository_path(repository)
+
+        panel = overview_panel
+        # The LABEL carries the denominator, because a label is the most prominent claim a number
+        # wears. "all 4 added up" over a SUM of three is this ticket's own defect one level down:
+        # a coverage asserted in the loudest place on the row and retracted in the quietest.
+        expect(panel).to have_text("Machine time (3 of 4 added up) at least 2m 15s", normalize_ws: true)
+        expect(panel).to have_no_text("all 4 added up", normalize_ws: true)
+        expect(panel).to have_no_text("Machine time (3 of 4 added up) 2m 15s", normalize_ws: true)
+        # The wall clock's label carries its denominator too, and its denominator is 3 — the MAX is
+        # over the shards that reported, and the silent one may well have been the slowest, since a
+        # cancelled or timed-out job usually is. "slowest of 4 shards" over a MAX of three is the
+        # row below's overclaim moved one row up.
+        expect(panel).to have_text("Wall clock (slowest of the 3 that reported) 1m", normalize_ws: true)
+        expect(panel).to have_no_text("slowest of 4 shards", normalize_ws: true)
+        # And the prose says the figure is partial ONCE, in the branch that is true — it must not
+        # also assert the complete claim, in this or any other wording.
+        expect(panel).to have_text(
+          "Only 3 of them reported a timing, so both figures above cover just that much: the wall " \
+          "clock is the slowest that reported rather than the slowest overall, and the machine " \
+          "time is a floor rather than a total — the real cost is higher by however long the 1 " \
+          "silent shard took.",
+          normalize_ws: true
+        )
+        expect(panel).to have_no_text("which is what the suite cost", normalize_ws: true)
+        expect(panel).to have_no_text("the slowest single shard", normalize_ws: true)
+        # `pluralize` inflects the noun and nothing around it, so the singular reading is the one
+        # that breaks — and one silent shard, a cancelled or timed-out CI job, is the likeliest
+        # way this branch is ever reached.
+        expect(panel).to have_no_text("silent shards", normalize_ws: true)
+        # An incomplete measurement is still a measurement — muting it would file it under
+        # "nothing was reported", which is the state one example below.
+        expect(panel).to have_css("dd span:not(.text-app-muted)", text: "at least 2m 15s")
+      end
+
+      # The plural side of the same branch, which nothing exercised before: `pluralize` exists only
+      # to handle plurality, and a branch whose sole example supplies 1 tests the inflection it
+      # never performs.
+      it "words the shortfall in the plural when more than one shard reported no timing" do
+        repository = create_repository(user: @user)
+        sharded_run(repository, [60.0, nil, nil, 45.0], commit_sha: "feedfacecafe0027")
+
+        get repository_path(repository)
+
+        panel = overview_panel
+        expect(panel).to have_text("Machine time (2 of 4 added up) at least 1m 45s", normalize_ws: true)
+        expect(panel).to have_text("Wall clock (slowest of the 2 that reported) 1m", normalize_ws: true)
+        expect(panel).to have_text(
+          "Only 2 of them reported a timing, so both figures above cover just that much: the wall " \
+          "clock is the slowest that reported rather than the slowest overall, and the machine " \
+          "time is a floor rather than a total — the real cost is higher by however long the 2 " \
+          "silent shards took.",
+          normalize_ws: true
+        )
+        expect(panel).to have_no_text("which is what the suite cost", normalize_ws: true)
+        expect(panel).to have_no_text("the slowest single shard", normalize_ws: true)
+      end
+
+      # The OTHER count in that same sentence, and the reading neither example above reaches: two
+      # shards with one silent puts `timed_shards` at 1. Both quantities on this branch are counts
+      # that words have to agree with, so both need a singular example — the first round of this
+      # panel shipped "those shard took" and the second shipped "adds up those 1", each because
+      # only the plural reading of one of them was ever rendered.
+      it "reads correctly when exactly one shard reported a timing" do
+        repository = create_repository(user: @user)
+        sharded_run(repository, [90.0, nil], commit_sha: "feedfacecafe0028")
+
+        get repository_path(repository)
+
+        panel = overview_panel
+        expect(panel).to have_text("Wall clock (slowest of the 1 that reported) 1m 30s", normalize_ws: true)
+        expect(panel).to have_text("Machine time (1 of 2 added up) at least 1m 30s", normalize_ws: true)
+        expect(panel).to have_text(
+          "Only 1 of them reported a timing, so both figures above cover just that much: the wall " \
+          "clock is the slowest that reported rather than the slowest overall, and the machine " \
+          "time is a floor rather than a total — the real cost is higher by however long the 1 " \
+          "silent shard took.",
+          normalize_ws: true
+        )
+        expect(panel).to have_no_text("all 2 added up", normalize_ws: true)
+        expect(panel).to have_no_text("slowest of 2 shards", normalize_ws: true)
+        expect(panel).to have_no_text("which is what the suite cost", normalize_ws: true)
+        expect(panel).to have_no_text("silent shards", normalize_ws: true)
+      end
+
+      it "reports no machine time at all when not one shard reported a timing" do
+        repository = create_repository(user: @user)
+        sharded_run(repository, [nil, nil, nil, nil], commit_sha: "feedfacecafe0023")
+
+        get repository_path(repository)
+
+        panel = overview_panel
+        expect(panel).to have_text("Machine time (0 of 4 added up) not reported", normalize_ws: true)
+        # The wall clock is in the same state and says so. A label reading "slowest of 4 shards"
+        # over a figure the very same row prints as "not reported" describes a number that is not
+        # there.
+        expect(panel).to have_text("Wall clock (0 of 4 reported) not reported", normalize_ws: true)
+        expect(panel).to have_no_text("slowest of 4 shards", normalize_ws: true)
+        # Never `0.0s`: four shards that added up to nothing and four shards that said nothing are
+        # different runs, and SQL's SUM over an all-null column returns NULL precisely so they stay
+        # different here.
+        expect(panel).to have_no_text("Machine time (0 of 4 added up) 0.0s", normalize_ws: true)
+        expect(panel).to have_no_text("at least", normalize_ws: true)
+        expect(panel).to have_no_text("all 4 added up", normalize_ws: true)
+        expect(panel).to have_text(
+          "Not one of them reported a timing, so there is neither a wall clock nor a machine " \
+          "time to show — this run's cost is unknown, not zero.",
+          normalize_ws: true
+        )
+        expect(panel).to have_no_text("which is what the suite cost", normalize_ws: true)
+        # The sentence stating what the wall clock IS must not survive into a branch where the page
+        # printed no wall clock at all — that is a confident claim over an absent number, which is
+        # the whole defect this panel exists to retire.
+        expect(panel).to have_no_text("the slowest single shard", normalize_ws: true)
+        expect(panel).to have_css("dd span.text-app-muted", text: "not reported")
+      end
+
+      # A measured zero is a measurement here too, and `0.0.present?` being false is how the
+      # blank-check version of this would get it wrong.
+      it "prints a machine time that genuinely measured zero as zero" do
+        repository = create_repository(user: @user)
+        sharded_run(repository, [0.0, 0.0], commit_sha: "feedfacecafe0024")
+
+        get repository_path(repository)
+
+        panel = overview_panel
+        # "all 2" is earned here — both shards reported, so the label's coverage claim is true.
+        expect(panel).to have_text("Machine time (all 2 added up) 0.0s", normalize_ws: true)
+        expect(panel).to have_no_text("Machine time (all 2 added up) not reported", normalize_ws: true)
+        expect(panel).to have_css("dd span:not(.text-app-muted)", text: "0.0s")
+      end
+
+      # The other side of the branch, and the one the whole existing corpus takes. A single shard's
+      # MAX *is* its SUM, so there is no composition to disambiguate and nothing to disambiguate it
+      # with — the second figure would be the first figure printed twice under a heavier label.
+      it "renders a one-shard run exactly as an unsharded run" do
+        repository = create_repository(user: @user)
+        sharded_run(repository, [372.4], commit_sha: "feedfacecafe0025")
+
+        get repository_path(repository)
+
+        panel = overview_panel
+        expect(panel).to have_text("Total runtime 6m 12s", normalize_ws: true)
+        expect(panel).to have_no_text("Machine time", normalize_ws: true)
+        expect(panel).to have_no_text("Wall clock", normalize_ws: true)
+        expect(panel).to have_no_text("Assembled from", normalize_ws: true)
+      end
+
+      # And a run with no shard rows at all — every run whose client named no `ci_run_id`, which
+      # is every laptop `bundle exec rspec` and the entire corpus predating sharding.
+      it "renders a run with no shard rows exactly as before" do
+        repository = create_repository(user: @user)
+        repository.test_runs.create!(commit_sha: "feedfacecafe0026", total_specs_count: 3,
+                                     annotated_specs_count: 2, duration_seconds: 372.4)
+
+        get repository_path(repository)
+
+        panel = overview_panel
+        expect(panel).to have_text("Total runtime 6m 12s", normalize_ws: true)
+        expect(panel).to have_no_text("Machine time", normalize_ws: true)
+        expect(panel).to have_no_text("Assembled from", normalize_ws: true)
+      end
+    end
+
     it "stays visible to a member who cannot manage keys" do
       owner = create_user(github_uid: "7007", github_handle: "repo-owner")
       repository = create_repository(user: owner, github_full_name: "acme/shared-service")

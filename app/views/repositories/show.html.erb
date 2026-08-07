@@ -159,12 +159,28 @@
 
           <%# The fourth figure answers what the other three do not: what the suite *costs*. It sits
               outside the `measured_tests` gate on purpose — a share needs a denominator, but wall
-              clock is not a share, and a run that measured nothing still took time. %>
+              clock is not a share, and a run that measured nothing still took time.
+
+              For a run assembled from more than one shard, one figure cannot answer it. The run's
+              `duration_seconds` is the MAX over its shards — the wall clock, and deliberately so —
+              but a four-shard suite whose slowest shard took 74s burned 254s of machine time, and
+              printing the 74 under "Total runtime" understates the only cost figure on this page by
+              3.4×. So a sharded run names the wall clock for what it is and puts the machine time
+              beside it. A run with one shard or none — every unsharded run there has ever been,
+              since a run with no `ci_run_id` records no shards at all — keeps the single row
+              unchanged, because for it the MAX and the SUM are the same number. %>
+          <% shard_count = @latest_test_run.shard_count %>
+          <% cost_rows = if @latest_test_run.multi_shard?
+                           [["Wall clock (#{@latest_test_run.wall_clock_coverage})", test_run_duration(@latest_test_run)],
+                            ["Machine time (#{@latest_test_run.machine_seconds_coverage})", test_run_machine_time(@latest_test_run)]]
+                         else
+                           [["Total runtime", test_run_duration(@latest_test_run)]]
+                         end %>
           <%= render UI::DefListComponent.new(rows: [
                 ["Tests in suite", number_with_delimiter(total_specs)],
                 ["Carrying an @intent", number_with_delimiter(annotated_specs)],
                 ["Not visible to SpecGuard", number_with_delimiter(invisible_specs)],
-                ["Total runtime", test_run_duration(@latest_test_run)]
+                *cost_rows
               ]) %>
 
           <% if measured_tests %>
@@ -183,6 +199,46 @@
               The latest run reported no tests at all, so there is no share to take and no coverage
               figure to show — not a coverage figure of zero. That is a fact about this run, not
               about the suite.
+            </p>
+          <% end %>
+
+          <%# Say that the run arrived in pieces, which nothing on this page said before. Without it
+              the two figures above are an unexplained pair; with it they are a wall clock and a
+              bill. The count is worded as shard *reports* rather than as CI jobs on purpose — the
+              unique index that deduplicates a redelivered shard is partial (`WHERE shard_id IS NOT
+              NULL`), so a client that shards without naming its slices contributes one row per
+              delivery, and this figure counts rows.
+
+              What the two figures ARE gets said once each, inside the branch where it is true —
+              not asserted flatly and then walked back a clause later. That applies to the wall
+              clock as much as to the machine time: "the wall clock is the slowest single shard" is
+              a confident sentence about a figure the page has just declined to print when not one
+              shard reported a timing, and it overclaims its denominator when only some did. Three
+              mutually exclusive branches, each describing both figures as they actually stand. %>
+          <% if @latest_test_run.multi_shard? %>
+            <% untimed_shards = @latest_test_run.untimed_shard_count %>
+            <% timed_shards = @latest_test_run.timed_shard_count %>
+            <p class="text-xs text-app-muted">
+              Assembled from <%= shard_count %> shard reports — what SpecGuard recorded, which is
+              not necessarily <%= shard_count %> distinct CI jobs if a shard did not name itself.
+              <% if untimed_shards.zero? %>
+                The wall clock is the slowest single shard, which is what a reader waited through.
+                The machine time is those <%= shard_count %> added together, which is what the
+                suite cost.
+              <% elsif timed_shards.zero? %>
+                Not one of them reported a timing, so there is neither a wall clock nor a machine
+                time to show — this run's cost is unknown, not zero.
+              <% else %>
+                <%# Every count here is either count-neutral or inflected by `pluralize`.
+                    `pluralize` inflects the noun and nothing around it, and one silent shard — a
+                    cancelled or timed-out CI job — is the likeliest way this branch is ever
+                    reached, so no determiner is allowed to depend on a count reading as plural. %>
+                Only <%= timed_shards %> of them reported a timing, so both figures above cover
+                just that much: the wall clock is the slowest that reported rather than the slowest
+                overall, and the machine time is a floor rather than a total — the real cost is
+                higher by however long the <%= untimed_shards %>
+                silent <%= "shard".pluralize(untimed_shards) %> took.
+              <% end %>
             </p>
           <% end %>
 
