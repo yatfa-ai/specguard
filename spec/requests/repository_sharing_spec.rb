@@ -207,6 +207,136 @@ RSpec.describe "Repository sharing", type: :request do
     end
   end
 
+  # The Overview panel's "Your access" row — what the reader HOLDS, rather than a fourth surface
+  # naming the owner as the person to ask for more.
+  #
+  # `RepositoriesController#show` authorizes at `:view`, which is what makes this the surface that
+  # reaches everybody: the members table was previously the only place SpecGuard ever displayed an
+  # access set to a human, and `MembershipsController#index` authorizes at `:members_manage`. So a
+  # colleague who administers other people could find their own row incidentally, in a table built
+  # for administering somebody else, and a `view` colleague or a key-minter had nowhere at all.
+  #
+  # Every example below signs in as a member and none of them holds `members.manage`, which is the
+  # point rather than an accident: gating this row on that permission would reproduce the defect.
+  describe "what repositories#show tells a member about their own access" do
+    # The row's value, read off the DefList by its term. Anchored on the term/value adjacency for
+    # the same reason the "Owner" example above is, and with the same standing instruction: if this
+    # regex fails after a change to `DefListComponent` while the panel still names the access
+    # correctly, re-anchor it on whatever the component now renders. A bare substring match is not
+    # the fallback — the permission strings are short tokens and would match half the page.
+    def access_row
+      response.body[%r{<dt[^>]*>\s*Your access\s*</dt>\s*<dd[^>]*>\s*(.*?)\s*</dd>}m, 1]
+    end
+
+    # The sentence underneath, read as TEXT so its apostrophes and dashes arrive unescaped and the
+    # assertions below can be written as the reader sees them. Found by its closing clause rather
+    # than by position, so it cannot silently start reading one of the Overview panel's several
+    # other muted paragraphs if the panel is reordered.
+    def access_description
+      css_select("p").map { |node| node.text.squish }
+                     .find { |text| text.include?("That is everything you hold here") }
+    end
+
+    # The closing clause, quoted once. It is the whole reason the row exists: this page renders no
+    # control its viewer does not hold, so without a sentence naming the set as complete, ABSENCE is
+    # the only signal — and absence reads identically for "never granted", "granted but broken" and
+    # "SpecGuard does not do this".
+    let(:closing) do
+      "That is everything you hold here — a control this page does not show you is one you have " \
+        "not been granted, not one that is broken or missing."
+    end
+
+    # `eq` and not `include`, deliberately: "and nothing beyond it" is half of what this row has to
+    # say, and only equality can prove a second capability was not also named.
+    it "tells a 'view' member they may open it, and that this is the whole of it" do
+      sign_in_as_member(%w[view])
+
+      get repository_path(repository)
+
+      expect(access_row).to eq("view")
+      expect(access_description).to eq("Open the repository. #{closing}")
+    end
+
+    it "names both of a member's permissions, in the words the grant side uses" do
+      sign_in_as_member(%w[view keys.manage])
+
+      get repository_path(repository)
+
+      expect(access_row).to eq("view, keys.manage")
+      expect(access_description).to eq(
+        "Open the repository. See, mint and revoke this repository's API keys. #{closing}"
+      )
+    end
+
+    # The example that decides the derivation. This row stores no "view" at all, yet the member can
+    # open the page — `RepositoryPolicy#can?` grants view on the membership itself — so a row built
+    # from `membership.permissions` would tell them they may manage keys on a repository they are
+    # not allowed to open, which is both incoherent and false. Reading through
+    # `grantable_permissions` (derived from `can?`) is what makes the answer the effective one.
+    it "tells a member whose row omits 'view' that they may still open the repository" do
+      sign_in_as_member(%w[keys.manage])
+
+      get repository_path(repository)
+
+      expect(access_row).to eq("view, keys.manage")
+      expect(access_description).to start_with("Open the repository.")
+    end
+
+    # The owner's page is unchanged, and that is a requirement rather than an omission: they hold
+    # every capability implicitly and the "Owner" row already names them, so a row here would be a
+    # second truth about the same person that could contradict the first.
+    it "says nothing about access on the owner's own page" do
+      repository
+      sign_in_via_github
+
+      get repository_path(repository)
+
+      expect(response.body).not_to include("Your access")
+      expect(access_description).to be_nil
+      # The positive control: without it this passes just as well if the whole panel stops
+      # rendering, which would take the "Owner" row with it and prove the opposite of the point.
+      expect(response.body).to match(%r{<dt[^>]*>\s*Owner\s*</dt>\s*<dd[^>]*>\s*octocat\s*</dd>}m)
+    end
+
+    # The row asks `can?` four times, and every one of them has to be served by the membership row
+    # `current_repository(:view)` already loaded to authorize the request — `repository_policy` is
+    # memoized per repository and memoizes the row inside it.
+    #
+    # Reduces to reads of `repository_memberships`, not to a total: that is exactly the read a
+    # re-derivation would add (a `find_by` in the template, or reaching past the policy for the
+    # row), and a total would move for reasons this example is not about. The delta example further
+    # down covers the total from the other direction.
+    #
+    # Counted through its own subscriber rather than `captured_sql`, and the difference is the whole
+    # point. `captured_sql` drops `payload[:cached]` because a cached repeat is not work the page
+    # chose to do — true of the queries it is used for, and false here: the likeliest wrong
+    # implementation is a second `find_by` for the SAME row, which ActiveRecord's per-request query
+    # cache serves byte-identically and therefore invisibly. Counting cached repeats is what makes
+    # this example able to fail at all.
+    def membership_reads
+      queries = []
+      subscriber = ActiveSupport::Notifications.subscribe("sql.active_record") do |_, _, _, _, payload|
+        next if payload[:name].in?(["SCHEMA", "TRANSACTION"])
+
+        queries << payload[:sql] if payload[:sql].to_s.match?(/from "repository_memberships"/i)
+      end
+      yield
+      queries
+    ensure
+      ActiveSupport::Notifications.unsubscribe(subscriber)
+    end
+
+    it "costs no membership read beyond the one that authorized the request" do
+      sign_in_as_member(%w[view])
+
+      get repository_path(repository)
+      reads = membership_reads { get repository_path(repository) }
+
+      expect(access_row).to eq("view")
+      expect(reads.size).to eq(1)
+    end
+  end
+
   # The examples above prove every control *rejects* a member who lacks its permission. These prove
   # the control is never offered in the first place — a "Remove" button that asks a member to
   # confirm destroying the repository and all of its data, then dead-ends on a 403, is worse than

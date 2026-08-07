@@ -123,11 +123,48 @@
         <%# "Owner" names the SpecGuard account that registered this repository — the only one who
             can grant access or rename it, and so the person a member must ask for more. Read off
             the `user` association, never off the slug: the org segment of `github_full_name` is
-            already the first half of the page title directly above, and names no account. %>
-        <%= render UI::DefListComponent.new(rows: [
-              ["Owner", @repository.user.display_name],
-              ["Test runs", number_with_delimiter(@repository.test_runs.count)]
-            ]) %>
+            already the first half of the page title directly above, and names no account.
+
+            "Your access" is the other half of that sentence, and nothing on any page said it: three
+            shipped surfaces name the owner as the person to ask for MORE, and none states what the
+            reader already HAS. The rule at the top of this file is what makes it necessary rather
+            than merely nice — rendering no control the viewer does not hold is correct, and it
+            leaves absence as the only signal, which cannot separate "never granted" from "granted
+            but broken". Until now the sole surface that ever showed a colleague their own access
+            was the members table, which is authorized at `members.manage`: a viewer who could
+            administer other people found their own row incidentally, and everyone else — a `view`
+            colleague, a key-minter, someone who can unregister the repository — had nowhere at all.
+
+            Non-owners only, and that is not a gate but a de-duplication: the owner holds every
+            capability implicitly and the "Owner" row directly above already names them, so a row
+            here would be a second truth about the same person that could contradict the first.
+            Deliberately NOT gated on `members.manage` — that gate is the defect.
+
+            Read through `grantable_permissions`, which derives the set from `can?` instead of from
+            the stored strings. That is what keeps it honest for a row storing only "keys.manage":
+            membership itself grants view (RepositoryPolicy#can?), so they still read that they may
+            open the repository, which is what they can actually do. Re-deriving from
+            `membership.permissions` here would be the second rule this codebase keeps refusing —
+            and `RepositoryPolicy#membership` is private precisely so nobody reaches for it.
+
+            Costs no query: `repository_policy` is memoized and its membership row was already
+            loaded to authorize this request, so all four `can?` calls are served from it. Pinned as
+            a query-count example in spec/requests/repository_sharing_spec.rb, alongside the
+            existing delta assertion this must not move. %>
+        <% viewer_access = repository_policy.grantable_permissions unless repository_policy.can?(:owner) %>
+        <% overview_rows = [["Owner", @repository.user.display_name],
+                            ["Test runs", number_with_delimiter(@repository.test_runs.count)]] %>
+        <%# Last row rather than beside "Owner", so the sentence below sits under the row it
+            explains. The value is the permission strings themselves, which is the vocabulary every
+            other surface uses for them (the members table's badges, the label above each checkbox,
+            the API) — so a colleague asking for more can quote the exact word back. What each one
+            means is the muted line beneath, from the one glossary the grant side reads. %>
+        <% overview_rows << ["Your access", viewer_access.join(", ")] if viewer_access %>
+        <%= render UI::DefListComponent.new(rows: overview_rows) %>
+
+        <% if viewer_access %>
+          <p class="text-xs text-app-muted"><%= held_access_description(viewer_access) %></p>
+        <% end %>
 
         <% if @latest_test_run.nil? %>
           <%# "Never ingested" is not "measured zero". Rendering `0%` here — which is what

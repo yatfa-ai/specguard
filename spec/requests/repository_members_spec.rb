@@ -799,6 +799,41 @@ RSpec.describe "Repository members", type: :request do
         expect(rendered_caption(permission)).to match(/\A\S.*\.\z/m), "#{permission} has no caption"
       end
     end
+
+    # `view` is the one box that does not decide what it appears to decide, and its caption is now
+    # assembled from two pieces: the sentence the colleague also reads on repositories#show
+    # (MembershipsHelper::PERMISSION_DESCRIPTIONS, one glossary for both ends of the grant) plus the
+    # note that only means anything beside a checkbox (`GRANT_NOTES`). The example above cannot see
+    # that seam — drop the note and the caption is still non-empty and still ends in a full stop —
+    # so the half that has to reach the OWNER specifically is pinned here.
+    #
+    # Paired with the request that proves the clause, in the same shape as the `members.manage`
+    # example above: the box is left unticked, and the colleague opens the repository anyway. An
+    # owner who reads the caption as "untick this to lock them out" has consented to something the
+    # tick cannot do.
+    it "tells the owner that leaving 'view' unticked does not lock the member out, and it does not" do
+      repository
+      colleague
+      sign_in_via_github
+
+      get new_repository_member_path(repository)
+      caption = rendered_caption(RepositoryMembership::VIEW)
+
+      # Every box unticked (the blank is the form's own hidden entry), so nothing at all is stored.
+      expect {
+        post repository_members_path(repository),
+             params: { membership_grant: { handle: "hubot", permissions: [""] } }
+      }.to change(RepositoryMembership, :count).by(1)
+      expect(RepositoryMembership.find_by!(repository: repository, user: colleague).permissions).to eq([])
+
+      # And they can still reach it — which is what the caption promises and what
+      # `RepositoryPolicy#can?` grants on the membership itself.
+      sign_in_via_github(uid: "9999", info: { nickname: "hubot" })
+      get repository_path(repository)
+      expect(response).to have_http_status(:ok)
+
+      expect(caption).to match(/\bimplied by membership\b/i)
+    end
   end
 
   # Slice 2d. Revoking a membership removes only the *web* half of access: a member who held
