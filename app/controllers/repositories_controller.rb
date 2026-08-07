@@ -31,7 +31,6 @@ class RepositoriesController < ApplicationController
     # Set by ApiKeysController#create and readable exactly once — see ApiKeysController.
     @revealed_token = flash[:revealed_api_key]
     @revealed_token_name = flash[:revealed_api_key_name]
-    @access_holder_ids = access_holder_ids
   end
 
   def new
@@ -124,10 +123,20 @@ class RepositoriesController < ApplicationController
   #
   # `repository_policy` is memoized and already populated by `current_repository` in `show`, so the
   # gate itself costs no query.
+  #
+  # Memoized on first call rather than assigned by the action, so the query fires only once a row
+  # actually asks: the keys panel is itself gated on `keys.manage`, and a viewer holding
+  # `%w[view members.manage]` never renders it. That also keeps `former_member?` self-contained —
+  # it answers truthfully on any render path, not only one that remembered to prime an ivar.
+  # `defined?` rather than `||=` because `nil` is a meaningful memo here, the same idiom
+  # `RepositoryPolicy#membership` uses for the same reason.
   def access_holder_ids
-    return nil unless repository_policy.can?(:members_manage)
+    return @access_holder_ids if defined?(@access_holder_ids)
 
-    @repository.repository_memberships.pluck(:user_id).to_set << @repository.user_id
+    @access_holder_ids =
+      if repository_policy.can?(:members_manage)
+        @repository.repository_memberships.pluck(:user_id).to_set << @repository.user_id
+      end
   end
 
   # A key's creator who no longer holds access — the durable half of the warning SPGD-113 gives at
@@ -138,9 +147,10 @@ class RepositoriesController < ApplicationController
   # A `nil` creator is NOT this: it is a legacy key or a deleted account, and it reads "Unknown".
   # Conflating the two would have the page assert that a deleted user was revoked, which is false.
   def former_member?(user)
-    return false if user.nil? || @access_holder_ids.nil?
+    return false if user.nil?
 
-    @access_holder_ids.exclude?(user.id)
+    ids = access_holder_ids
+    ids.nil? ? false : ids.exclude?(user.id)
   end
 
   def repository_params
