@@ -226,6 +226,81 @@ RSpec.describe "Repository sharing", type: :request do
     end
   end
 
+  # Deliberately its own describe rather than a seventh key in `rendered_controls` above: that
+  # matrix is for *controls*, things that 403 if they render ungated. This is a badge — it grants
+  # nothing and 403s nowhere. What it discloses is who was removed from this repository, which is a
+  # `members.manage` fact, so it is gated on `members.manage` even though the panel it sits in is
+  # gated on `keys.manage`. That is MembershipsController#keys_minted_by's rule applied
+  # symmetrically: the members page withholds a key count from a `members.manage`-only viewer, so
+  # the keys panel withholds membership status from a `keys.manage`-only one. Both degrade to
+  # silence rather than to a hedge.
+  describe "the ex-member marker in the API keys panel" do
+    let(:departed) { create_user(github_uid: "7777", github_handle: "departed-dev") }
+
+    # Revoked, not merely never-a-member: the assertion only needs "does not currently hold
+    # access", but the describe says *ex*-member, and a fixture that reaches that state the way
+    # production does is the one a reader can trust. MembershipsController#destroy touches no
+    # api_keys row, so the key outlives the access it was minted under.
+    before do
+      membership = create_membership(repository: repository, user: departed,
+                                     permissions: [RepositoryMembership::VIEW,
+                                                   RepositoryMembership::KEYS_MANAGE])
+      repository.api_keys.create!(name: "Their CI", created_by_user: departed)
+      membership.destroy!
+    end
+
+    it "is shown to the owner but withheld from a member holding 'keys.manage' and not 'members.manage'" do
+      # The positive half is load-bearing: without it the negative below would keep passing if the
+      # marker's wording changed, or if it stopped rendering for everyone.
+      sign_in_via_github
+
+      get repository_path(repository)
+
+      expect(response.body).to include("no longer has access")
+
+      # `sign_in_via_github` switches identity, so this is the same page seen by the other viewer.
+      sign_in_as_member(%w[view keys.manage])
+
+      get repository_path(repository)
+
+      # They hold the panel — the withholding is of the membership fact, not of the row.
+      expect(response.body).to include("Their CI").and include("departed-dev")
+      expect(response.body).not_to include("no longer has access")
+    end
+
+    # The gate decides who may be *told*; this decides who has to *pay*. The keys panel is gated on
+    # `keys.manage`, so a viewer holding `%w[view members.manage]` never renders it — and must not
+    # be charged the membership query that feeds it. Asserted as a delta against a `view`-only
+    # viewer, who cannot reach the marker at all: both skip the panel, so any extra query the
+    # `members.manage` viewer issues is the lookup this page declined to render.
+    #
+    # Counts the SELECTs a block issues. Schema reads and cached repeats are excluded: neither is
+    # work this page chose to do.
+    def count_queries
+      count = 0
+      subscriber = ActiveSupport::Notifications.subscribe("sql.active_record") do |_, _, _, _, payload|
+        count += 1 unless payload[:cached] || payload[:name].in?(["SCHEMA", "TRANSACTION"])
+      end
+      yield
+      count
+    ensure
+      ActiveSupport::Notifications.unsubscribe(subscriber)
+    end
+
+    it "costs a 'members.manage' viewer who cannot see the panel no more than a 'view'-only one" do
+      membership = sign_in_as_member(%w[view])
+      get repository_path(repository)
+      baseline = count_queries { get repository_path(repository) }
+
+      # Same viewer, same repository, same rows, one more permission — and still no keys panel.
+      membership.update!(permissions: %w[view members.manage])
+      get repository_path(repository)
+
+      expect(response.body).not_to include("Their CI")
+      expect(count_queries { get repository_path(repository) }).to eq(baseline)
+    end
+  end
+
   describe "a signed-in user with no membership" do
     before do
       repository
