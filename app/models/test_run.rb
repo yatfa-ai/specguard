@@ -101,10 +101,15 @@ class TestRun < ApplicationRecord
   # omission.
   def machine_seconds_reported? = !machine_seconds.nil?
 
-  # Some shard reported no timing, so the SUM is over fewer rows than the run has. The figure is
-  # then a floor rather than a total and must not be printed as one — this panel's established
-  # refusal is to say what it does not know rather than round it away.
-  def machine_seconds_partial? = timed_shard_count < shard_count
+  # Some shard reported no timing, so BOTH derived cost figures are computed over fewer rows than
+  # the run has: the SUM is a floor rather than a total, and the MAX is a maximum over a subset.
+  # One predicate and not two, because it is one fact about the shard rows — and the two labels
+  # that read it were only ever asking the same question in different words.
+  #
+  # Vacuously false on a run with no shards (`0 < 0`), which is correct but load-bearing rather
+  # than incidental: it is safe only because every caller sits behind `multi_shard?`, and a future
+  # caller that does not would read "nothing is missing" off a run that reported nothing at all.
+  def some_shard_untimed? = timed_shard_count < shard_count
 
   # The machine time, worded to its own coverage. Three states, because there are three: nothing
   # reported, a partial sum, a complete one. Only the last is a total, and only it says so.
@@ -112,7 +117,7 @@ class TestRun < ApplicationRecord
     return "not reported" unless machine_seconds_reported?
 
     label = humanized_seconds(machine_seconds)
-    machine_seconds_partial? ? "at least #{label}" : label
+    some_shard_untimed? ? "at least #{label}" : label
   end
 
   # The figure's own denominator, carried by the label that names it rather than left to a caveat
@@ -121,9 +126,27 @@ class TestRun < ApplicationRecord
   # level down, and stating the partial count in the caption below does not undo it. The complete
   # case is the only one allowed to say "all".
   def machine_seconds_coverage
-    return "all #{shard_count} added up" unless machine_seconds_partial?
+    return "all #{shard_count} added up" unless some_shard_untimed?
 
     "#{timed_shard_count} of #{shard_count} added up"
+  end
+
+  # The wall clock's denominator, on the same rule and for the same reason one row up.
+  # `duration_seconds` is the MAX over the shards that *reported*, so on a run with a silent shard
+  # it is a maximum over a subset — and the silent one may well have been the slowest, since a
+  # cancelled or timed-out job usually is. "slowest of 4 shards" over a MAX of three claims a
+  # coverage the figure does not have, which is this ticket's own defect one row up from where it
+  # was found. The complete case is the only one entitled to the run's full shard count.
+  #
+  # No inflected noun rides on the count in the partial branch. `pluralize` inflects a noun and
+  # nothing around it, and the words *around* the count are exactly where this panel's wording has
+  # broken before, so that branch names the number and drops the noun rather than betting on a
+  # determiner reading correctly at every count.
+  def wall_clock_coverage
+    return "slowest of #{shard_count} shards" unless some_shard_untimed?
+    return "0 of #{shard_count} reported" if timed_shard_count.zero?
+
+    "slowest of the #{timed_shard_count} that reported"
   end
 
   private
