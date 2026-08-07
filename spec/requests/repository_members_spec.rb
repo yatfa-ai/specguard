@@ -82,8 +82,12 @@ RSpec.describe "Repository members", type: :request do
   end
 
   # Slice 2c: the grant form, and the first production call site `User.resolve_by_handle` has ever
-  # had. `new`/`create` gate at `:owner` rather than at the `members.manage` that opens the page,
-  # because revoking only de-escalates while granting escalates — see MembershipsController.
+  # had. `new`/`create` gated one step tighter than the page, at `:owner`, until the checkbox grid
+  # gave `grantable_permissions` a call site; they gate at the same `members.manage` that opens the
+  # page now, bounded by what the grantor themselves holds — see MembershipsController, and "can
+  # add a member, and is offered the control that does it" below, which grants as an actor who is
+  # not the owner. The examples in THIS block sign in as the owner, for whom the two gates have
+  # always been the same, so nothing here distinguishes them.
   describe "adding a member by GitHub handle" do
     # Exactly what the form submits. The leading "" is the hidden field every checkbox grid needs so
     # that "nothing ticked" arrives as an empty set rather than as no parameter at all — passing the
@@ -674,6 +678,125 @@ RSpec.describe "Repository members", type: :request do
 
         expect(response).to have_http_status(:not_found)
         expect(victim.reload.permissions).to eq(%w[view])
+      end
+    end
+  end
+
+  # The sentence printed under each checkbox on both member forms (MembershipsHelper::
+  # PERMISSION_DESCRIPTIONS via `_permission_fields`) — the only prose SpecGuard shows explaining
+  # what ticking a box hands over, and it is read at the moment of the decision rather than looked
+  # up afterwards.
+  #
+  # It had no example of any kind until this one, and had already drifted: the `members.manage`
+  # caption named the revoke door alone, while this same file demonstrates that the identical tick
+  # also opens the members page, the add form and the edit form. Under-describing the box that
+  # decides who else can reach a private repository means the owner consents to less than they
+  # grant, and nothing failed when the add and edit doors moved onto that permission.
+  #
+  # ⚠ Two things make this example non-vacuous, and both are deliberate:
+  #
+  #   1. It reads the caption off the RENDERED page, not off the constant. Asserting that every
+  #      permission *has* a caption would be green forever — `permission_description` is a `fetch`
+  #      over a frozen constant, so presence is structural and could not have caught this.
+  #   2. Every clause it demands of the sentence is paired with the request that proves the clause.
+  #      So the caption cannot lose a door without failing, and a door cannot close (or open) on
+  #      this permission without failing either — which is the direction the original drift ran.
+  describe "the caption printed under each permission checkbox" do
+    # The caption as the owner reads it: the sentence inside the label that wraps this permission's
+    # checkbox. Read off the parsed page rather than matched against the whole body, so these
+    # assertions are about the prose under THIS box and not about words that happen to appear
+    # somewhere else on the form — including the permission string the same label prints above it.
+    def rendered_caption(permission)
+      label = css_select("label").find { |node| node.at_css("input[value='#{permission}']") }
+      raise "no checkbox rendered for #{permission}" if label.nil?
+
+      # The grid nests the name span and the caption span inside one wrapper; the caption is last.
+      label.css("span").last.text.strip
+    end
+
+    let(:third_party) { create_user(github_uid: "8888", github_handle: "dependabot") }
+
+    describe "'members.manage', read by an actor who holds it" do
+      before do
+        create_membership(repository: repository, user: colleague, permissions: %w[view members.manage])
+        third_party
+        # Nickname pinned for the same reason as the edit block above: the OmniAuth mock defaults it
+        # to the owner's, and the callback would rename this actor's row to "octocat".
+        sign_in_via_github(uid: "9999", info: { nickname: "hubot" })
+      end
+
+      it "names every door the tick opens, and each door named really opens" do
+        get new_repository_member_path(repository)
+        expect(response).to have_http_status(:ok)
+        caption = rendered_caption("members.manage")
+
+        # Nothing below quotes the retired sentence: the clause set retires it on its own (it named
+        # neither the add door nor the edit door), and writing it out here would put the string this
+        # slice deleted straight back into the repository for the next `git grep` to find.
+
+        # Door 1 — add somebody who was not there.
+        expect {
+          post repository_members_path(repository),
+               params: { membership_grant: { handle: "dependabot", permissions: ["", "view"] } }
+        }.to change(RepositoryMembership, :count).by(1)
+        expect(caption).to match(/\badds?\b/i)
+
+        # Door 2 — see who has access. Scoped to the row the members table draws, NOT matched
+        # against the body: door 1 above redirects with `notice: "Added dependabot with view."`,
+        # which this very request renders in the flash, so `body.include?("dependabot")` passes
+        # with the table rendering zero rows. Same trap and same fix as "does not see themselves
+        # in the list" above — read the table, not the page. Anchoring on the row's own Edit link
+        # also ties the handle to *this* membership rather than to the word appearing anywhere.
+        added = RepositoryMembership.find_by!(repository: repository, user: third_party)
+        get repository_members_path(repository)
+        expect(response).to have_http_status(:ok)
+        row = css_select("tr").find do |node|
+          node.at_css("a[href='#{edit_repository_member_path(repository, added)}']")
+        end
+        expect(row).not_to be_nil, "the members table rendered no row for the added membership"
+        expect(row.text).to include("dependabot")
+        expect(caption).to match(/\bsee\b/i)
+
+        # Door 3 — change what an existing member holds. Widening as well as narrowing, within this
+        # actor's own bound: "narrow" alone would be the same under-description in a new place.
+        patch repository_member_path(repository, added),
+              params: { repository_membership: { permissions: ["", "view", "members.manage"] } }
+        expect(added.reload.permissions).to eq(%w[view members.manage])
+        expect(caption).to match(/\bchanges?\b/i)
+
+        # Door 4 — take access away again.
+        expect {
+          delete repository_member_path(repository, added)
+        }.to change(RepositoryMembership, :count).by(-1)
+        expect(caption).to match(/\bremoves?\b|\brevokes?\b/i)
+      end
+
+      # Anti-trap, pinned rather than left to review: both forms assert their rendered body does not
+      # contain a permission this viewer may not grant, so a caption that quoted a sibling
+      # permission string would break four green examples elsewhere in this file. Asserted here too
+      # because THIS is the file a future caption edit is read against.
+      it "describes the capabilities without quoting a sibling permission string" do
+        get new_repository_member_path(repository)
+        caption = rendered_caption("members.manage")
+
+        # Separately, not `include(a, b)` — the negation of a two-argument `include` passes when
+        # only one of them is present, which is exactly the half-failure worth catching.
+        expect(caption).not_to include("keys.manage")
+        expect(caption).not_to include("repo.delete")
+      end
+    end
+
+    # The owner is the only viewer offered the full grid, so this is where the other three captions
+    # are reachable at all. They are accurate today; this pins that they are all still printed, so
+    # deleting one is a failure rather than a blank line under a checkbox.
+    it "prints a caption under every box the owner is offered" do
+      repository
+      sign_in_via_github
+
+      get new_repository_member_path(repository)
+
+      RepositoryMembership::PERMISSIONS.each do |permission|
+        expect(rendered_caption(permission)).to match(/\A\S.*\.\z/m), "#{permission} has no caption"
       end
     end
   end
