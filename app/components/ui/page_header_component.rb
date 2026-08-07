@@ -13,6 +13,7 @@ class UI::PageHeaderComponent < ApplicationComponent
   attr_reader :title, :subtitle
 
   def wrapper_class
-    merge_classes("flex flex-wrap items-start justify-between gap-4", @options.delete(:class))
+    @wrapper_class ||=
+      merge_classes("flex flex-wrap items-start justify-between gap-4", @options.delete(:class))
   end
 end

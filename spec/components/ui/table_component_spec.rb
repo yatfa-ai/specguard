@@ -22,16 +22,18 @@ RSpec.describe UI::TableComponent, type: :component do
     expect(page.native.to_html).not_to include("aria-describedby")
   end
 
-  # `class:` belongs to the wrapper div, and `wrapper_class` consumes it with a mutating `delete`.
-  # The seam added for `describedby` must not also read `@options`, or the wrapper's classes get
-  # duplicated onto a second element.
+  # `class:` belongs to the wrapper div, and `wrapper_class` consumes it with a `delete` — once,
+  # memoised. The seam added for `describedby` must not also read `@options`, or the wrapper's
+  # classes get duplicated onto a second element.
   #
-  # Asserted on the METHOD, not on rendered markup, and that is the whole point of the example. In
-  # the template `wrapper_class` runs on line 1 and `table_attributes` on line 2, so by the time
-  # the table is built `:class` has already been deleted out of the hash — a `table_attributes`
-  # that DID merge `@options[:class]` renders identically and a markup-level assertion passes on
-  # evaluation order alone. Verified by mutation: merging `@options[:class]` into the table's
-  # classes leaves the rendered form of this example green and only this one red.
+  # Asserted on the METHOD, not on rendered markup, and that is the whole point of the example.
+  # Memoising `wrapper_class` (SPGD-215) made it idempotent but did NOT move WHEN the delete
+  # happens: in the template `wrapper_class` still runs on line 1 and `table_attributes` on line 2,
+  # so by the time the table is built `:class` has already left the hash. A `table_attributes` that
+  # DID merge `@options[:class]` therefore renders identically, and a markup-level assertion passes
+  # on evaluation order alone. Re-verified by mutation after the memoisation landed: merging
+  # `@options[:class]` into the table's classes leaves every render-level example green — the whole
+  # "a component that appends the caller's class" group included — and turns only this one red.
   it "never reads the caller's :class, independent of which accessor the template calls first" do
     component = described_class.new(columns: ["Commit"], class: "lg:col-span-3")
 

@@ -41,5 +41,5 @@ class UI::MeterComponent < ApplicationComponent
 
   def bar_class = TONES.fetch(@tone, TONES[:cta])
 
-  def wrapper_class = merge_classes("space-y-1", @options.delete(:class))
+  def wrapper_class = @wrapper_class ||= merge_classes("space-y-1", @options.delete(:class))
 end

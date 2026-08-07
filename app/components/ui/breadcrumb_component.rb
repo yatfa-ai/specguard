@@ -11,6 +11,7 @@ class UI::BreadcrumbComponent < ApplicationComponent
   attr_reader :items
 
   def wrapper_class
-    merge_classes("flex items-center gap-2 text-sm text-app-content-secondary", @options.delete(:class))
+    @wrapper_class ||=
+      merge_classes("flex items-center gap-2 text-sm text-app-content-secondary", @options.delete(:class))
   end
 end

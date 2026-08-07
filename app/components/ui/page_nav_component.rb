@@ -19,6 +19,7 @@ class UI::PageNavComponent < ApplicationComponent
   end
 
   def wrapper_class
-    merge_classes("flex items-center gap-6 border-b border-app-border", @options.delete(:class))
+    @wrapper_class ||=
+      merge_classes("flex items-center gap-6 border-b border-app-border", @options.delete(:class))
   end
 end

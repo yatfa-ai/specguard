@@ -18,6 +18,6 @@ class UI::DropdownComponent < ApplicationComponent
   end
 
   def wrapper_class
-    merge_classes("relative inline-block", @options.delete(:class))
+    @wrapper_class ||= merge_classes("relative inline-block", @options.delete(:class))
   end
 end

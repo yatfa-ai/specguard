@@ -30,5 +30,5 @@ class UI::CopyableCodeComponent < ApplicationComponent
 
   def code_class = CODE_CLASSES
 
-  def wrapper_class = merge_classes("flex items-center gap-2", @options.delete(:class))
+  def wrapper_class = @wrapper_class ||= merge_classes("flex items-center gap-2", @options.delete(:class))
 end

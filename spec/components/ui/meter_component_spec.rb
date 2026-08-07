@@ -176,10 +176,16 @@ RSpec.describe UI::MeterComponent, type: :component do
   end
 
   describe "#wrapper_class" do
-    # Asserted on the METHOD rather than through rendered markup, matching the reasoning in
-    # `table_component_spec.rb:31-40`: `wrapper_class` consumes `:class` with a MUTATING
-    # `@options.delete(:class)`, so what the markup shows depends on evaluation order, while the
-    # method's return value does not.
+    # Called directly, and since SPGD-215 memoised it that is no longer a workaround: the method is
+    # idempotent, so reading it costs the render nothing. (The comment that used to sit here said
+    # the markup depended on evaluation order. It never did for this component — the template calls
+    # `wrapper_class` once and splats nothing — and the memoisation settles the general case.)
+    #
+    # These two survive alongside the render-level coverage in the "a component that appends the
+    # caller's class" shared example because they assert something it does not: that group checks
+    # the caller's class is PRESENT on the root element, while these pin the exact composed string
+    # — the component's own class first, the caller's appended, and the base alone when the caller
+    # passes nothing.
     it "appends the caller's class to its own rather than replacing it" do
       component = described_class.new(value: 1, max: 2, class: "lg:col-span-3")
 
