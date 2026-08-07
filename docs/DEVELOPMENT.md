@@ -112,7 +112,15 @@ here is the response with **no** parameter.
       "count": 4,
       "timed_count": 4,
       "machine_seconds": 253.75,
-      "coverage": { "duration_seconds": 4, "machine_seconds": 4 }
+      "coverage": { "duration_seconds": 4, "machine_seconds": 4 },
+      "rows": [
+        { "shard_id": "3", "duration_seconds": 74.25 },
+        { "shard_id": "1", "duration_seconds": 61.0 },
+        { "shard_id": "4", "duration_seconds": 60.0 },
+        { "shard_id": "2", "duration_seconds": 58.5 }
+      ],
+      "balanced_wall_clock_seconds": 63.4375,
+      "wall_clock_excess_seconds": 10.8125
     },
     "ingested_at": "2026-08-07T11:01:58Z"
   },
@@ -177,6 +185,7 @@ reported" from a real zero, because a client cannot tell them apart after the fa
 | `latest_run.annotated_ratio` | the run reported **zero tests**, so there is no share to take. The counts are still present, so a client can compute its own. |
 | `latest_run.shards` | the run was assembled from **one shard or none** — the entire unsharded corpus. There is no composition to disambiguate: one shard's MAX *is* its SUM. The key is always present. |
 | `latest_run.shards.machine_seconds` | not one shard reported a timing. `0.0` would assert the suite was free. |
+| `latest_run.shards.rows` / `.balanced_wall_clock_seconds` / `.wall_clock_excess_seconds` | the wall clock **cannot honestly be decomposed yet**, for one of two reasons the payload does not distinguish — see below. All three null *together*, never individually: they are three readings of one decomposition, and a floor without the rows it was taken over is a figure a client cannot check. `rows` is `null` rather than a partial list, because a list ordered "slowest first" that is missing shards names the wrong head. |
 | `history[].branch` / `.duration_seconds` / `.annotated_ratio` | exactly what the same-named `latest_run` field means. A history row is the same row `latest_run` serializes, minus the per-shard cost figures. |
 | `branches` | **never `null`** — `[]` instead, by the list rule below. No field on a row is nullable either: a row exists because a branch has runs, so `name`, `run_count` and `run_count_capped` are always present. |
 | `branches_window` | **never `null`**, and served on every request — with or without `?branch=`, and including one whose `branches` came back empty. Its fields are bounds on the walk, which are facts about how SpecGuard looked rather than about what it found, so there is no state in which they are unknown. |
@@ -195,7 +204,7 @@ conflict.
 the 0–100 percentage `TestRun#annotated_ratio` renders for the dashboard. The 100× gap between the
 two is invisible in a JSON body.
 
-#### The two cost figures, and what each was measured over
+#### The cost figures and the decomposition, and what each was measured over
 
 A sharded suite delivers itself over N requests and `Ingest::RunRecorder` folds all of them onto
 one run, recomputing the counts as the SUM of the shards and `duration_seconds` as the **MAX**.
@@ -218,9 +227,49 @@ is not what the suite *cost*. Four shards of 61.0s, 58.5s, 74.25s and 60.0s are 
   a maximum over a subset — which may well have excluded the slowest shard, since a cancelled or
   timed-out job usually is. Counts rather than the dashboard's prose ("slowest of the 3 that
   reported") so a client can divide rather than parse English.
+- `shards.rows` — **which** shard, not just how many. Every shard's own `shard_id` and
+  `duration_seconds`, **slowest first**, so `rows.first` is the shard the run waited on and the
+  list walks down to the fastest. The four figures above say a run was assembled from four parts
+  and cost 253.75s between them; not one of them is a shard, so a client reading only those cannot
+  learn which part it waited on.
+  - `shard_id` is served **raw and nullable, never a position number**. A client that shards
+    without naming its slices sends nothing and gets `null` back — numbering the rows would hand
+    the reader a name CI never used, one that points at a different slice next run. The prose
+    spelling (`"shard 3"` / `"an unnamed shard"`) is the dashboard's; build your own from the raw
+    value, or correlate it against your CI config, which is what the raw value is for.
+  - `duration_seconds` is a **raw float**, on the rule the two figures above already follow. It is
+    the same per-shard column the SUM and the MAX were taken over, so a client can re-derive both.
+- `shards.balanced_wall_clock_seconds` — the shortest wall clock any arrangement of these shards
+  could have produced: `machine_seconds` spread perfectly evenly across `count`. A **lower bound
+  and never a target** — tests are not arbitrarily divisible, and a single example longer than
+  this floor makes it unreachable on its own. Nothing here claims such a split exists, only that
+  none can go under it; a client rendering this owes its reader that wording.
+- `shards.wall_clock_excess_seconds` — `duration_seconds` minus that floor: the part of the wait
+  attributable to **how the suite was divided** rather than to the suite itself. For the body
+  above, 74.25s against a 63.4375s floor is 10.8125s of the wait that a different split could in
+  principle have returned.
 
-The dashboard's Overview panel renders the same two figures under coverage-stating labels; this
-block is how a client reconstructs those labels for itself.
+Those last three are served **only when the decomposition is honest**, and are `null` — all three,
+still present — otherwise. Two distinct states produce that `null`, and the payload does not
+distinguish them, so the difference is recorded here:
+
+- **A shard reported no timing** (`timed_count` < `count`). The run will *never* decompose: a row
+  counted in the denominator but missing from the SUM drags the floor down and pushes the excess
+  up by exactly the same amount, so both figures would move in the direction that manufactures a
+  finding. Asking again does not help.
+- **The run's shards are still arriving.** SpecGuard picks a run up the instant its *first* shard
+  lands, and a half-delivered run has every shard present timed — so this state is invisible in
+  `count` and `timed_count`, which agree with each other while both are still climbing. The
+  decomposition is withheld until deliveries settle (a 15-minute quiet period on the shard rows).
+  This `null` is **transient**: once deliveries settle the three keys fill in, unless one of the
+  shards still to arrive turns out to be untimed, which drops the run into the state above.
+
+A client that needs to tell them apart today can: `timed_count == count` alongside three `null`s is
+the second state, and worth retrying; `timed_count < count` is the first, and is final.
+
+The dashboard's Overview panel renders these same figures under coverage-stating labels — the two
+cost figures, and the rows, floor and excess beneath them; this block is how a client reconstructs
+those labels for itself.
 
 #### `history` — how the suite grew, without differencing two polls
 
