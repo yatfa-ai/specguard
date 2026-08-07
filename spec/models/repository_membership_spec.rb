@@ -71,12 +71,37 @@ RSpec.describe RepositoryMembership do
   it "translates a lost uniqueness race into the same :user_id refusal" do
     create_membership(repository: repository, user: teammate)
     duplicate = described_class.new(repository: repository, user: teammate)
-    allow(uniqueness_validator).to receive(:validate_each)
+    allow(uniqueness_validator(described_class)).to receive(:validate_each)
 
     expect(duplicate.save).to be(false)
     expect(duplicate.errors[:user_id].join).to include("already has a membership")
     expect(duplicate).not_to be_persisted
     expect(described_class.count).to eq(1)
+  end
+
+  # The refusal above has to leave the CONNECTION usable, not just report itself politely.
+  #
+  # Postgres aborts the whole transaction on a constraint violation, so a rescue with no savepoint
+  # returns a clean `false` with a readable sentence on it while every subsequent statement on that
+  # connection dies with `PG::InFailedSqlTransaction`. That is strictly worse than the 500 this
+  # translation exists to remove: the caller is told the save was refused, and finds out the rest
+  # later, somewhere else.
+  #
+  # The explicit `transaction` here is what makes the example load-bearing, and it is NOT redundant
+  # with the suite's transactional fixtures — those open non-joinable, which forces a savepoint
+  # whether the model asks for one or not, so every other example in this file would stay green
+  # against a model that opened none. This one opens a JOINABLE transaction, the kind application
+  # code writes, which is the only shape that can be poisoned. The query after the failed save is
+  # the assertion: it either answers, or the connection is already dead.
+  it "leaves an enclosing transaction usable after refusing the race" do
+    create_membership(repository: repository, user: teammate)
+    duplicate = described_class.new(repository: repository, user: teammate)
+    allow(uniqueness_validator(described_class)).to receive(:validate_each)
+
+    ActiveRecord::Base.transaction do
+      expect(duplicate.save).to be(false)
+      expect(described_class.count).to eq(1)
+    end
   end
 
   # A conflict on some OTHER constraint is not this one's to explain away. Swallowing every
@@ -91,13 +116,6 @@ RSpec.describe RepositoryMembership do
     clashing = described_class.new(id: existing.id, repository: repository, user: third_party)
 
     expect { clashing.save }.to raise_error(ActiveRecord::RecordNotUnique)
-  end
-
-  # Stubbed on the validator instance itself rather than on any_instance of the class, so only this
-  # model's uniqueness check is silenced. `validates` registers the object once at class-load and the
-  # validation callback closes over it, so this is the same instance the save path consults.
-  def uniqueness_validator
-    described_class.validators.grep(ActiveRecord::Validations::UniquenessValidator).sole
   end
 
   # The owner's rights come from Repository#user_id. A row here would be a second, contradictable

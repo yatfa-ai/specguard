@@ -238,20 +238,12 @@ RSpec.describe "Repository members", type: :request do
     # The loser must land on the same 422 with the same sentence the sequential case gets, not a 500.
     it "refuses the losing half of a double-submit with the same sentence rather than 500ing" do
       create_membership(repository: repository, user: colleague)
-      allow(uniqueness_validator).to receive(:validate_each)
+      allow(uniqueness_validator(RepositoryMembership)).to receive(:validate_each)
 
       expect { add_member("hubot", %w[view]) }.not_to change(RepositoryMembership, :count)
 
       expect(response).to have_http_status(:unprocessable_content)
       expect(response.body).to include("User already has a membership on this repository")
-    end
-
-    # Stubbed on the validator instance itself rather than on any_instance of the class, so only
-    # RepositoryMembership's own uniqueness check is silenced and nothing else in the request is
-    # touched. `validates` registers this object once at class-load and the callback closes over it,
-    # so it is the same instance the save path will consult.
-    def uniqueness_validator
-      RepositoryMembership.validators.grep(ActiveRecord::Validations::UniquenessValidator).sole
     end
 
     it "offers the form from the members page" do

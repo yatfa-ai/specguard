@@ -46,9 +46,10 @@ class RepositoryMembership < ApplicationRecord
   #
   # Translated HERE rather than in `MembershipsController#create` for the reason that action's own
   # comment gives — "Re-checking any of them here would be a second copy of a rule that can drift
-  # from the one the database is actually protected by". Every writer inherits it: `#create`'s
-  # `return reject_grant(...) unless membership.save` and `#update`'s `unless @membership.save`
-  # both re-render the form with the model's reasons, with no change to either.
+  # from the one the database is actually protected by". Every writer that goes through `#save`
+  # inherits it: `#create`'s `return reject_grant(...) unless membership.save` and `#update`'s
+  # `unless @membership.save` both re-render the form with the model's reasons, with no change to
+  # either.
   #
   # `:user_id`, not `:base`, so the two detections are indistinguishable downstream — same
   # attribute, same words, and therefore the same `full_message` the controller renders.
@@ -57,10 +58,22 @@ class RepositoryMembership < ApplicationRecord
   # re-raised: answering it with "already has a membership" would send the reader to fix something
   # that is not broken, and would report a clean refusal while the real fault stays hidden.
   #
+  # A SAVEPOINT, for the same reason `Ingest::RunRecorder#create_run` opens one. Without
+  # `requires_new` the INSERT merely *joins* whatever transaction the caller is already inside, and
+  # Postgres aborts that entire transaction on a constraint violation — so rescuing the error would
+  # hand the caller back a tidy `false` with a readable sentence on it while leaving the connection
+  # refusing every subsequent statement with `PG::InFailedSqlTransaction`. That failure is worse
+  # than the 500 this method exists to remove, because it reports success at refusing. The rescue
+  # sits OUTSIDE the block deliberately: the `ROLLBACK TO SAVEPOINT` has to happen before anything
+  # else touches the connection. Nothing wraps a membership save in a transaction today, so this
+  # costs one round trip and buys the correctness for the day something does — and the suite alone
+  # would never tell us, because transactional fixtures open non-joinable, which forces a savepoint
+  # whether this asks for one or not. The model spec opens a real joinable transaction to pin it.
+  #
   # `save!` is deliberately untouched — it does not route through here, and a caller who chose the
   # bang asked for the exception. The model spec pins that it still raises.
   def save(**)
-    super
+    self.class.transaction(requires_new: true) { super }
   rescue ActiveRecord::RecordNotUnique => e
     raise unless e.message.include?(DUPLICATE_INDEX)
 
