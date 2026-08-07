@@ -480,6 +480,245 @@ RSpec.describe Repository do
     end
   end
 
+  describe "#latest_test_run_on_branch" do
+    def run(repository, commit, branch: "main", total: 100, at: 1.hour.ago)
+      repository.test_runs.create!(commit_sha: commit, branch: branch, total_specs_count: total,
+                                   created_at: at)
+    end
+
+    it "answers with the newest run on that branch, not the newest run in the repository" do
+      repository = create_repository
+      run(repository, "trunk0", at: 2.days.ago)
+      run(repository, "trunk1", at: 1.day.ago)
+      run(repository, "featur", branch: "feature/x", at: 1.minute.ago)
+
+      expect(repository.latest_test_run_on_branch("main").commit_sha).to eq("trunk1")
+      expect(repository.latest_test_run.commit_sha).to eq("featur")
+    end
+
+    # The same ordering key every other reader of this history sorts by, tie-break included — so
+    # "the newest run on main" names the same row here as it does on the Overview.
+    it "breaks a same-instant tie by id, the way the rest of this history is ordered" do
+      repository = create_repository
+      at = 1.hour.ago
+      run(repository, "tied_a", at: at)
+      run(repository, "tied_b", at: at)
+
+      expect(repository.latest_test_run_on_branch("main").commit_sha).to eq("tied_b")
+    end
+
+    it "ignores another repository's branch of the same name" do
+      repository = create_repository
+      other = create_repository(user: create_user(github_uid: "2002", github_handle: "hubot"),
+                                github_full_name: "acme/ledger")
+      run(other, "notmin")
+
+      expect(repository.latest_test_run_on_branch("main")).to be_nil
+    end
+
+    it "has no run for a branch it has never seen" do
+      repository = create_repository
+      run(repository, "trunk0")
+
+      expect(repository.latest_test_run_on_branch("feature/deleted")).to be_nil
+    end
+
+    # A blank branch is not a branch, for the reason `previous_test_run_on_branch` states at length:
+    # `WHERE branch IS NULL` would pool every anonymous run from every branch and every machine.
+    # Answered without a query, so a caller that falls back pays nothing for the fallback.
+    it "refuses a blank branch outright, and asks the database nothing" do
+      repository = create_repository
+      repository.test_runs.create!(commit_sha: "anon00", branch: nil, total_specs_count: 100)
+
+      expect(count_queries { expect(repository.latest_test_run_on_branch(nil)).to be_nil }).to eq(0)
+      expect(count_queries { expect(repository.latest_test_run_on_branch("")).to be_nil }).to eq(0)
+    end
+  end
+
+  describe "#branch_histories" do
+    def run(repository, commit, branch: "main", total: 100, at: 1.hour.ago)
+      repository.test_runs.create!(commit_sha: commit, branch: branch, total_specs_count: total,
+                                   created_at: at)
+    end
+
+    it "names every branch that has runs, with how many each has" do
+      repository = create_repository
+      run(repository, "trunk0", at: 3.days.ago)
+      run(repository, "trunk1", at: 2.days.ago)
+      run(repository, "featur", branch: "feature/x", at: 1.day.ago)
+
+      expect(repository.branch_histories.map { |branch| [branch.name, branch.run_count] })
+        .to eq([["main", 2], ["feature/x", 1]])
+    end
+
+    # Most history first, so a caller showing only the head of the list shows the branch a reader is
+    # most likely looking for. Alphabetical would put `main` behind a dozen `feature/*` branches and
+    # a truncated list would be a list with the trunk missing.
+    it "orders by how much history each branch holds" do
+      repository = create_repository
+      run(repository, "sideaa", branch: "aaa-first-alphabetically", at: 1.minute.ago)
+      3.times { |i| run(repository, "trunk#{i}", at: (5 - i).days.ago) }
+      2.times { |i| run(repository, "relea#{i}", branch: "release", at: (3 - i).days.ago) }
+
+      expect(repository.branch_histories.map(&:name)).to eq(%w[main release aaa-first-alphabetically])
+    end
+
+    # Ties go to the branch pushed to most recently — two idle branches with one run each are not
+    # equally interesting, and the order has to be stable either way.
+    it "breaks a tie on how recently the branch was pushed to" do
+      repository = create_repository
+      run(repository, "stale0", branch: "feature/stale", at: 10.days.ago)
+      run(repository, "fresh0", branch: "feature/fresh", at: 1.minute.ago)
+
+      expect(repository.branch_histories.map(&:name)).to eq(["feature/fresh", "feature/stale"])
+    end
+
+    # An anonymous run names no branch, so there is no branch here to offer. Pooling them under
+    # `branch IS NULL` is the failure the panel's "No branch to plot a history on" state exists to
+    # refuse — and a selector offering that pool would be a way to ask for it.
+    it "offers nothing for the runs that named no branch" do
+      repository = create_repository
+      repository.test_runs.create!(commit_sha: "anon00", branch: nil, total_specs_count: 100)
+      repository.test_runs.create!(commit_sha: "anon01", branch: nil, total_specs_count: 100)
+
+      expect(repository.branch_histories).to eq([])
+    end
+
+    it "ignores another repository's branches" do
+      repository = create_repository
+      other = create_repository(user: create_user(github_uid: "2002", github_handle: "hubot"),
+                                github_full_name: "acme/ledger")
+      run(other, "notmin", branch: "not-mine")
+      run(repository, "mine00")
+
+      expect(repository.branch_histories.map(&:name)).to eq(["main"])
+    end
+
+    # The count STOPS at the trajectory window rather than reaching the end of the history: past
+    # that point it answers no question this panel asks, and counting it is the O(history) scan the
+    # whole method exists to avoid. `capped?` carries the fact that it stopped, so a caller words it
+    # "30+" instead of publishing the figure the query happened to stop at.
+    it "caps the count at the trajectory window and says that it did" do
+      repository = create_repository
+      (Repository::TRAJECTORY_LIMIT + 5).times { |i| run(repository, "sha#{i}", at: (60 - i).days.ago) }
+      run(repository, "featur", branch: "feature/x", at: 1.minute.ago)
+
+      histories = repository.branch_histories.index_by(&:name)
+
+      expect(histories["main"].run_count).to eq(Repository::TRAJECTORY_LIMIT)
+      expect(histories["main"]).to be_capped
+      expect(histories["feature/x"].run_count).to eq(1)
+      expect(histories["feature/x"]).not_to be_capped
+    end
+
+    # Exactly at the window is a count that finished, not one that stopped — the off-by-one that
+    # would have every trunk on the platform wearing a "30+" it never earned.
+    it "does not call a history that ends exactly at the window capped" do
+      repository = create_repository
+      Repository::TRAJECTORY_LIMIT.times { |i| run(repository, "sha#{i}", at: (60 - i).days.ago) }
+
+      expect(repository.branch_histories.first.run_count).to eq(Repository::TRAJECTORY_LIMIT)
+      expect(repository.branch_histories.first).not_to be_capped
+    end
+
+    it "honours a caller's own bounds" do
+      repository = create_repository
+      5.times { |i| run(repository, "trunk#{i}", at: (10 - i).days.ago) }
+      run(repository, "featur", branch: "feature/x", at: 1.minute.ago)
+
+      expect(repository.branch_histories(runs: 2).first.run_count).to eq(2)
+      # WHICH branch survives the bound, not merely how many do. The walk is ALPHABETICAL, so the
+      # survivor here is `feature/x` and not the trunk with five times its history — and a size-only
+      # assertion cannot tell those apart, which is the whole difference the ordering is about.
+      expect(repository.branch_histories(branches: 1).map(&:name)).to eq(["feature/x"])
+    end
+
+    # The reason the walk's bound sits two orders of magnitude above what any list displays. The
+    # walk asks the index for the next branch BY NAME, so a bound near the display size hands the
+    # history sort an alphabetical prefix — and on this shape, which is the one the whole feature
+    # was written for, `main` sorts behind every `feature/*` and is not in it. The panel would then
+    # offer eight unrelated one-run branches on the page whose entire reason for existing is that
+    # `main` holds the history.
+    it "reaches a branch that sorts alphabetically behind far more branches than a list would show" do
+      repository = create_repository
+      60.times { |i| run(repository, "side#{i}", branch: "feature/#{i.to_s.rjust(3, "0")}", at: (40 - i).days.ago) }
+      5.times { |i| run(repository, "trunk#{i}", at: (10 - i).days.ago) }
+
+      histories = repository.branch_histories
+
+      expect(histories.size).to eq(61)
+      expect(histories.first).to have_attributes(name: "main", run_count: 5)
+    end
+
+    # Past that bound the cut IS alphabetical, so the one branch a caller cannot afford to lose is
+    # named rather than hoped for. The page pins the branch it is DRAWING: a selector rendered
+    # without the option it is currently on has lost the reader it was rendered for.
+    it "offers a pinned branch the walk stopped before reaching" do
+      repository = create_repository
+      3.times { |i| run(repository, "side#{i}", branch: "feature/#{i}", at: (9 - i).days.ago) }
+      run(repository, "trunk0", at: 1.day.ago)
+
+      expect(repository.branch_histories(branches: 2).map(&:name)).not_to include("main")
+      expect(repository.branch_histories(branches: 2, pinned: ["main"]))
+        .to include(have_attributes(name: "main", run_count: 1))
+    end
+
+    # A pin keeps a branch in the list; it is never a way to put one there. An unrecognised
+    # `?branch=` reaches this as a pin, and a list of the branches that HAVE runs must not answer it
+    # with one that has none — that would be a selectable choice leading to an empty chart.
+    it "does not invent a pinned branch that has no runs" do
+      repository = create_repository
+      run(repository, "trunk0")
+
+      expect(repository.branch_histories(pinned: ["feature/gone", nil]).map(&:name)).to eq(["main"])
+    end
+
+    it "does not offer a pinned branch the walk found anyway twice" do
+      repository = create_repository
+      run(repository, "trunk0", at: 2.days.ago)
+      run(repository, "trunk1", at: 1.day.ago)
+
+      expect(repository.branch_histories(pinned: %w[main main]).map { |b| [b.name, b.run_count] })
+        .to eq([["main", 2]])
+    end
+
+    it "has nothing to offer a repository CI has never reported to" do
+      expect(create_repository.branch_histories).to eq([])
+    end
+
+    # == The whole point of the query's shape
+    #
+    # One query, and one that walks the branch index rather than reading the history: a
+    # `SELECT DISTINCT branch` visits every row of a 40,000-run repository, which is the same
+    # O(history) scan `#suite_size_trajectory` documents for refusing one panel higher up. Counted
+    # here rather than only through the page, for the reason the trajectory's own budget block
+    # gives: a render-versus-render difference has a control walking the same code path.
+    #
+    # The cost is asserted as UNCHANGED across two axes that pull in different directions — more
+    # runs per branch (which the capped count must not follow) and more branches (which the walk
+    # must not turn into a query each).
+    describe "what it costs to ask" do
+      it "is one query, whatever the history behind it" do
+        repository = create_repository
+        3.times { |i| run(repository, "sha#{i}", at: (5 - i).days.ago) }
+
+        expect(count_queries { repository.branch_histories }).to eq(1)
+
+        60.times { |i| run(repository, "more#{i}", at: (100 - i).days.ago) }
+        10.times { |i| run(repository, "side#{i}", branch: "feature/#{i}", at: 1.day.ago) }
+
+        histories = nil
+        expect(count_queries { histories = repository.branch_histories }).to eq(1)
+        expect(histories.size).to eq(11)
+        expect(histories.first.run_count).to eq(Repository::TRAJECTORY_LIMIT)
+
+        # A pinned branch is a second arm of the SAME query, never a lookup of its own — the page
+        # pins on every render, so a pin that cost a query would be a query added to every render.
+        expect(count_queries { repository.branch_histories(pinned: ["main", "feature/3"]) }).to eq(1)
+      end
+    end
+  end
+
   it "takes its api keys, runs and intents with it when destroyed" do
     repository = create_repository
     repository.api_keys.create!

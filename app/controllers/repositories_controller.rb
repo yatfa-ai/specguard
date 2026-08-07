@@ -78,6 +78,42 @@ class RepositoriesController < ApplicationController
     # `spec/requests/repository_runs_spec.rb` is what pins that the count does not move when the
     # rows become sharded.
     @recent_test_runs = preload_shard_counts(@repository.recent_test_runs.to_a)
+    # Which branch the "Suite growth" panel below is drawn on, and what else the reader may pick.
+    #
+    # This page has no branch of record: `latest_test_run` is scoped to the repository and names
+    # whichever branch pushed most recently. So on a repository whose CI reports on every PR, the
+    # panel re-anchors to a feature branch's FIRST run — one point, nothing to draw — and goes dark
+    # for every visitor while the trunk holds a month of comparable history in the same table.
+    # `?branch=` is how a reader asks for that history back.
+    #
+    # Deliberately a SEPARATE anchor from `@latest_test_run`, which stays exactly what it was: the
+    # Overview's suite size, its delta and the Recent runs panel all name the latest run and go on
+    # naming it whatever this parameter says. Only the trajectory moves — so a reader who selects a
+    # branch cannot end up reading a headline figure about one run under a chart about another.
+    #
+    # An absent, blank or unrecognised branch falls back to `@latest_test_run` and renders exactly
+    # what this page rendered before the parameter existed. A deleted branch, a typo and a stale
+    # bookmark are all ordinary ways to arrive here. `@trajectory_branch_request` keeps the raw ask
+    # so the panel can SAY the fallback happened, rather than quietly drawing a different branch
+    # from the one the URL names.
+    @trajectory_branch_request = requested_trajectory_branch
+    @trajectory_run = @repository.latest_test_run_on_branch(@trajectory_branch_request) || @latest_test_run
+    # The choices, each with how much history it holds — ONE bounded query, and specifically not a
+    # `SELECT DISTINCT branch` over the whole run history, which is the O(history) scan
+    # `Repository#branch_histories` documents at length for refusing.
+    #
+    # Loaded whether or not a branch was asked for, because the reader who needs it most is the one
+    # looking at a dark panel: nothing else on the page would tell them that `main` has thirty runs
+    # behind it, and a selector that only appears once you have already selected something is no
+    # help to the reader who does not know there is anything to select.
+    #
+    # The branch being DRAWN is pinned into that list rather than left to the walk to find. The walk
+    # is bounded, and its bound is alphabetical (see `Repository::BRANCH_HISTORY_LIMIT`), so past it
+    # a selector could render without the option it is currently on — a list of branches the reader
+    # is not looking at, with nothing marked current, on a page that is drawing one of them. Pinning
+    # the drawn branch covers the branch ASKED for as well: a requested branch that has runs is the
+    # branch drawn, and one that has none is not a choice this list may offer.
+    @trajectory_branches = @repository.branch_histories(pinned: [@trajectory_run&.branch])
     # The same branch history the delta above reads one row of, read as a series — what the suite
     # has done over the last thirty runs rather than since the last one. ONE query, and it stays
     # one: the shard count each point needs to answer `TestRun#assembled_like?` is folded into that
@@ -96,8 +132,8 @@ class RepositoriesController < ApplicationController
     # quarter of the suite and back. The view renders the object's own counts, so the caption's
     # plotted/withheld figures cannot drift from the line.
     @suite_trajectory = SuiteTrajectory.new(
-      runs: @repository.suite_size_trajectory(@latest_test_run),
-      branch: @latest_test_run&.branch
+      runs: @repository.suite_size_trajectory(@trajectory_run),
+      branch: @trajectory_run&.branch
     )
     # Set by ApiKeysController#create and readable exactly once — see ApiKeysController.
     @revealed_token = flash[:revealed_api_key]
@@ -154,6 +190,17 @@ class RepositoriesController < ApplicationController
   end
 
   private
+
+  # `?branch=` read as a branch name, or `nil` for "no ask".
+  #
+  # `is_a?(String)` before `.presence`, and that guard is the whole method: `?branch[]=main` arrives
+  # here as an Array and `?branch[a]=1` as an ActionController::Parameters, and handing either to a
+  # `where` raises — a 500 on a URL anyone can type into the bar. Neither is a branch name, so both
+  # take the same fallback an unrecognised branch takes: the page renders what it always rendered.
+  def requested_trajectory_branch
+    value = params[:branch]
+    value.is_a?(String) ? value.presence : nil
+  end
 
   # `user_id` is already loaded on the record, so this asks nothing of the database.
   def owns_repository?(repository)

@@ -626,6 +626,55 @@
     <% if @latest_test_run.present? %>
       <%= render UI::PanelComponent.new(title: "Suite growth", id: "suite-trajectory", class: "lg:col-span-3") do %>
         <div class="space-y-3">
+          <%# == Which branch this is drawn on
+              The page has no branch of record: the run every panel above names is whichever branch
+              pushed most recently. On a repository whose CI reports on every PR that is routinely a
+              feature branch's FIRST run — one point, nothing to draw — and this panel goes dark
+              while the trunk holds a month of comparable history in the same table.
+
+              So the branches are named here, with how much history each holds, and the reader can
+              pick one (`?branch=`, RepositoriesController#show). Named even when the panel IS
+              drawing a line, because a reader cannot ask for a branch they were never told exists.
+
+              Only this panel moves. The Overview above and Recent runs below go on naming the
+              repository's latest run whichever branch it came from, so a selected branch can never
+              put a headline figure about one run above a chart about another. %>
+          <% if @trajectory_branches.any? %>
+            <div id="suite-trajectory-branches" class="space-y-2">
+              <%= render UI::PageNavComponent.new(
+                    items: trajectory_branch_choices(@repository, @trajectory_branches, @suite_trajectory.branch),
+                    class: "flex-wrap"
+                  ) %>
+              <p class="text-xs text-app-muted" id="suite-trajectory-branches-basis">
+                Only this panel follows the branch you pick — it is anchored on that branch's newest
+                run and reads back <%= Repository::TRAJECTORY_LIMIT %> runs from there.
+                <% if @trajectory_branches.any?(&:capped?) %>
+                  <%# The counts stop at the window the chart itself reaches, so a trunk with forty
+                      thousand runs is not counted to answer a question this panel never asks. The
+                      notation is explained rather than left to be read as an exact figure. %>
+                  A run count stops at that window, so
+                  “<%= Repository::TRAJECTORY_LIMIT %>+” means the branch holds more history than
+                  the chart reaches.
+                <% end %>
+                <%= trajectory_hidden_branches_sentence(@trajectory_branches, @suite_trajectory.branch) %>
+              </p>
+            </div>
+          <% end %>
+          <%# The ask was not honoured, and the panel says so. Every figure below is correctly
+              labelled with the branch that WAS drawn, but a reader who followed a stale bookmark
+              would otherwise read the trunk's history as their branch's.
+
+              Deliberately OUTSIDE the selector above, and the two conditions are independent: that
+              one is about whether there are CHOICES to offer, this one about whether an ASK was
+              substituted. They come apart on a repository where every run named no branch — there
+              is nothing to select, and `?branch=feature/gone` is still an ask that went unanswered.
+              Nested inside the selector, the one page state that says nothing else about the ask
+              was the one state where this could not speak. %>
+          <% if (fallback_notice = trajectory_branch_fallback_notice(@trajectory_branch_request, @suite_trajectory)) %>
+            <p class="text-xs text-app-muted" id="suite-trajectory-branch-fallback">
+              <%= fallback_notice %>
+            </p>
+          <% end %>
           <% if @suite_trajectory.branch.blank? %>
             <%# The same state the basis line above names, and it must not be answered here with the
                 thin-history wording below: "not enough comparable runs yet" describes a young
