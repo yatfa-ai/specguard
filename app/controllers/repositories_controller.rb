@@ -83,11 +83,20 @@ class RepositoriesController < ApplicationController
     end
   end
 
+  # Gated at `:repo_delete`, not `:owner` — a member granted `repo.delete` may destroy the owner's
+  # repository, and the flash says so. Both halves of that disclosure live in RepositoriesHelper,
+  # beside the confirm dialog they have to agree with.
   def destroy
     repository = current_repository(:repo_delete)
+    # Composed BEFORE the row goes away, the same discipline MembershipsController#destroy uses for
+    # `revoke_notice`: the non-owner sentence names `repository.user`, and a destroyed record is not
+    # something to be asking for its associations. `repository_policy` defaults to the record
+    # `current_repository` just resolved and is memoized, so this costs no query.
+    notice = helpers.remove_notice(repository, owner: repository_policy.owner?)
+
     repository.destroy!
 
-    redirect_to repositories_path, notice: "Removed #{repository.github_full_name}."
+    redirect_to repositories_path, notice: notice
   end
 
   private

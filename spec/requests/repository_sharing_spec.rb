@@ -272,6 +272,92 @@ RSpec.describe "Repository sharing", type: :request do
     end
   end
 
+  # The matrix above pins *whether* Remove renders. This pins what it says once it has — the other
+  # half of the same problem, and the one that stayed unaddressed longest. `#destroy` gates at
+  # `:repo_delete`, not `:owner`, so the presser of this button is not necessarily its owner, yet
+  # both sentences they read (the confirm dialog, then the flash) were written as if they were.
+  #
+  # Every example asserts the whole sentence with `eq`, never a substring. The owner's half of this
+  # change is that *nothing* changed for them, and an `include` cannot prove a dialog did not grow a
+  # second sentence — only equality can.
+  describe "what Remove says about whose repository it is" do
+    # `repository`'s owner is 'octocat' and `sign_in_as_member` signs in 'hubot', so an assertion
+    # that the copy names "octocat" proves it named the *owner* and not merely the reader.
+    let(:owner_dialog) { "Remove acme/billing-service and all of its data?" }
+
+    # The dialog lives in an HTML attribute, so its apostrophe arrives as `&#39;`. Unescaping once
+    # here buys whole-sentence equality below instead of assertions hand-written in escaped form.
+    #
+    # Selected by prefix rather than by position: the owner's page renders a second confirm dialog
+    # further down (Revoke, on each API key row), and matching the first attribute in the document
+    # would silently start reading that one if the header were ever reordered.
+    def remove_dialog
+      response.body.scan(/data-turbo-confirm="([^"]*)"/).flatten
+              .map { |value| CGI.unescapeHTML(value) }
+              .find { |value| value.start_with?("Remove ") }
+    end
+
+    describe "the owner" do
+      before do
+        repository
+        sign_in_via_github
+      end
+
+      it "reads the dialog it always read" do
+        get repository_path(repository)
+
+        expect(remove_dialog).to eq(owner_dialog)
+      end
+
+      it "reads the flash it always read" do
+        delete repository_path(repository)
+
+        expect(flash[:notice]).to eq("Removed acme/billing-service.")
+      end
+    end
+
+    describe "a member holding 'repo.delete'" do
+      before { sign_in_as_member(%w[view repo.delete]) }
+
+      # The first sentence is byte-identical to the owner's on purpose — `rendered_controls` above
+      # detects this control by the substring "and all of its data?", so the member variant appends
+      # rather than rewords.
+      it "is told whose repository it is, and what goes with it, before confirming" do
+        get repository_path(repository)
+
+        expect(remove_dialog).to eq(
+          "#{owner_dialog} It belongs to octocat — this destroys their repository along with " \
+          "its API keys, its entire run history and every other member's access."
+        )
+      end
+
+      it "is told whose repository it was afterwards" do
+        delete repository_path(repository)
+
+        expect(flash[:notice]).to eq(
+          "Removed acme/billing-service. It was octocat's repository — its API keys, its run " \
+          "history and every other member's access went with it."
+        )
+      end
+
+      # The owner is the SpecGuard account that registered the repository, which the slug does not
+      # name: `github_full_name`'s org segment is a *GitHub* org and nothing constrains the two to
+      # match (see Repository#user; SPGD-145 retired `owner_login` for this reason). A repository
+      # owned by 'octocat' but registered under an unrelated slug is the case that separates
+      # reading the owner off the association from reading it off the string.
+      it "names the owning account rather than the slug's org segment" do
+        repository.update!(github_full_name: "some-other-org/billing-service")
+
+        get repository_path(repository)
+        expect(remove_dialog).to include("It belongs to octocat")
+        expect(remove_dialog).not_to include("some-other-org —")
+
+        delete repository_path(repository)
+        expect(flash[:notice]).to include("It was octocat's repository")
+      end
+    end
+  end
+
   # Deliberately its own describe rather than a seventh key in `rendered_controls` above: that
   # matrix is for *controls*, things that 403 if they render ungated. This is a badge — it grants
   # nothing and 403s nowhere. What it discloses is who was removed from this repository, which is a
