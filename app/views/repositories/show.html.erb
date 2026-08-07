@@ -393,12 +393,29 @@
                       the same words and the same units as an uneven one — what changes is only
                       whether the number is read back as something recoverable, and here it is
                       not. Muting or dropping it would file "we checked, and the split was fine"
-                      under "we did not check". %>
+                      under "we did not check".
+
+                      Worded about THE SHARDS ON RECORD and not about the run, which is the
+                      weaker claim and the only one this page is entitled to. The settling gate
+                      is a clock proxy and cannot establish that a run is whole
+                      (`TestRun#shard_delivery_settled?` writes out both directions of what it
+                      misses): a shard that never arrived leaves no trace in these figures, and
+                      the shard likeliest to be missing is the slow one, because it is the one
+                      still running. So a negative verdict here is weaker than a positive one,
+                      and this branch says which it is rather than asserting "the wait is the
+                      suite's own length" — an unconditional operational claim about a run whose
+                      completeness nothing here can check. The imbalanced branch above needs no
+                      such hedge: a missing shard can only make it understate.
+
+                      This is the register `machine_seconds_label` uses one section up — state
+                      the fact to its own coverage rather than to the coverage you wish you had. %>
                   This run waited <%= @latest_test_run.duration_label %> —
                   <%= @latest_test_run.wall_clock_excess_label %> over that floor,
-                  <%= @latest_test_run.wall_clock_excess_percent %>% of the wait. Its shards were
-                  evenly matched, so the wait is the suite's own length rather than a cost of how
-                  it was split.
+                  <%= @latest_test_run.wall_clock_excess_percent %>% of the wait. The shards on
+                  record are evenly matched, so nothing in what they reported reads as a cost of
+                  how the suite was split. That is a statement about those reports rather than
+                  about the run: a slice that never arrived leaves no trace in them, and a missing
+                  slice is likelier to be a slow one than a fast one.
                 <% end %>
               </p>
 

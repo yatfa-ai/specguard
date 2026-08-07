@@ -307,8 +307,17 @@ RSpec.describe "Repository registration and API keys", type: :request do
     # settled state a reader looks at long after CI finished; the in-flight examples pass a fresh
     # one deliberately, and are the only place the distinction is the subject.
     def sharded_run(repository, durations, commit_sha:, names: nil, last_shard_arrived_ago: 1.hour)
+      # The parent's counts are DERIVED from the shards written below, never asserted beside them.
+      # `Ingest::RunRecorder#recompute_totals` re-derives them as the SUM over the rows recorded so
+      # far, after every ingest — so a two-shard run's parent reads 10,000 and not 20,000, and a
+      # fixture that hard-coded the full-suite figure would build a row the producer cannot (the
+      # SPGD-91 shape). That matters most in the examples whose whole subject is what a
+      # half-delivered run looks like: they would have rendered a "Tests in suite 20,000" no
+      # half-delivered run ever shows. A 4-shard fixture is unaffected — 5000 x 4 is the 20,000
+      # the pinned expectations already depend on.
       run = repository.test_runs.create!(commit_sha: commit_sha, ci_run_id: "gha-#{commit_sha}",
-                                         total_specs_count: 20_000, annotated_specs_count: 5000,
+                                         total_specs_count: 5000 * durations.length,
+                                         annotated_specs_count: 1250 * durations.length,
                                          duration_seconds: durations.compact.max)
       durations.each_with_index do |seconds, index|
         run.test_run_shards.create!(shard_id: names ? names[index] : (index + 1).to_s,
@@ -879,6 +888,11 @@ RSpec.describe "Repository registration and API keys", type: :request do
         panel = overview_panel
         expect(panel).to have_no_css("#wall-clock-decomposition")
         expect(panel).to have_no_css("#shard-distribution")
+        # The parent's own count is half-sized here, because `recompute_totals` derives it from the
+        # shards recorded so far and only two of the four have landed. Asserted so the fixture
+        # cannot drift back to writing a full-suite 20,000 on a two-shard run — a row the producer
+        # cannot build, in the one example whose subject is what a half-delivered run looks like.
+        expect(panel).to have_text("Tests in suite 10,000", normalize_ws: true)
         # The figures a half-delivered run would otherwise have published: a floor of 1m 8s and an
         # excess of 6.6s / 8.9%, computed over two of the four shards this run is made of, clearing
         # the materiality bar and reading exactly like a settled page. The real answer is 10.8s and
@@ -976,16 +990,61 @@ RSpec.describe "Repository registration and API keys", type: :request do
         expect(decomposition).to have_text("No shard stood out: the longest was shard 1, at 1m 3s.",
                                            normalize_ws: true)
         expect(decomposition).to have_text(
-          "This run waited 1m 3s — 0.0s over that floor, 0.0% of the wait. Its shards were evenly " \
-          "matched, so the wait is the suite's own length rather than a cost of how it was split.",
+          "This run waited 1m 3s — 0.0s over that floor, 0.0% of the wait. The shards on record " \
+          "are evenly matched, so nothing in what they reported reads as a cost of how the suite " \
+          "was split. That is a statement about those reports rather than about the run: a slice " \
+          "that never arrived leaves no trace in them, and a missing slice is likelier to be a " \
+          "slow one than a fast one.",
           normalize_ws: true
         )
+        # The claim this branch is NOT entitled to make. The settling gate is a clock proxy and
+        # cannot establish that a run is whole, so "the wait is the suite's own length" — an
+        # unconditional operational statement about the run — would be an affirmative denial of a
+        # finding the page cannot rule out. Pinned as a literal so the stronger wording cannot
+        # come back: the hedged sentence above satisfies `have_text` on its own, and a mutation
+        # that reverted only the final clause would otherwise still pass everything else here.
+        expect(decomposition).to have_no_text("the wait is the suite's own length", normalize_ws: true)
+        expect(decomposition).to have_no_text("Its shards were evenly matched", normalize_ws: true)
         # The finding wording belongs to the other branch and must not be reachable from here —
         # and neither does calling one of four shards tied to the tenth "the slowest", which is
         # true of the maximum and misleading about the shard. A reader sent to look at shard 1
         # would find it identical to its three peers.
         expect(decomposition).to have_no_text("came from how the suite was divided", normalize_ws: true)
         expect(decomposition).to have_no_text("The slowest was", normalize_ws: true)
+      end
+
+      # **The concealed runaway.** The settling gate catches a run whose shards are still arriving;
+      # it cannot catch a run whose last shard arrived after the quiet period expired. Three
+      # ordinary routes reach that state — a straggler slower than the window, a CI-retried shard
+      # landing late, and the abandoned-mid-delivery row, which is the straggler case made
+      # permanent — and the shard it hides is preferentially the SLOWEST one, because the slowest
+      # shard is the one still running when the others fall quiet. The correlation is adverse.
+      #
+      # This is the canonical `[61.0, 58.5, 74.25, 60.0]` run minus its 74.25s runaway, quiet long
+      # enough to decompose. Over the three rows on record the excess is 1.2s / 1.9% — genuinely
+      # immaterial, so `wall_clock_excess_material?` routes it to the balanced branch and cannot
+      # help. A 14.6% finding has become no finding, and the ONLY defence left is the wording.
+      #
+      # So this example is not about the arithmetic being wrong. It is about the page declining to
+      # turn a partial set of reports into an operational claim about the run.
+      it "does not deny an imbalance it cannot see when the runaway shard never arrived" do
+        repository = create_repository(user: @user)
+        sharded_run(repository, [61.0, 58.5, 60.0], names: %w[1 2 4],
+                                commit_sha: "feedfacecafe0049", last_shard_arrived_ago: 16.minutes)
+
+        get repository_path(repository)
+
+        # It does decompose — the gate is satisfied and withholding here would mean withholding
+        # from every honest 3-shard matrix, which the settling comment rejects explicitly.
+        expect(decomposition).to have_text("No shard stood out: the longest was shard 1, at 1m 1s.",
+                                           normalize_ws: true)
+        expect(decomposition).to have_text("1.2s over that floor, 1.9% of the wait",
+                                           normalize_ws: true)
+        # ...but every sentence it prints is about the reports it holds, and none of them tells the
+        # reader this run was fine. The run was not fine: its real answer is 10.8s / 14.6%.
+        expect(decomposition).to have_text("That is a statement about those reports rather than " \
+                                           "about the run", normalize_ws: true)
+        expect(decomposition).to have_no_text("the wait is the suite's own length", normalize_ws: true)
       end
 
       # Two independent floors, and this pins the ABSOLUTE one on its own: 0.3s over the floor is
@@ -1001,7 +1060,7 @@ RSpec.describe "Repository registration and API keys", type: :request do
         expect(decomposition).to have_text("No shard stood out: the longest was shard 4, at 1.4s.",
                                            normalize_ws: true)
         expect(decomposition).to have_text("0.3s over that floor, 21.4% of the wait", normalize_ws: true)
-        expect(decomposition).to have_text("Its shards were evenly matched", normalize_ws: true)
+        expect(decomposition).to have_text("The shards on record are evenly matched", normalize_ws: true)
         expect(decomposition).to have_no_text("came from how the suite was divided", normalize_ws: true)
       end
 
@@ -1017,7 +1076,7 @@ RSpec.describe "Repository registration and API keys", type: :request do
         expect(decomposition).to have_text("No shard stood out: the longest was shard 4, at 10m 4s.",
                                            normalize_ws: true)
         expect(decomposition).to have_text("3.0s over that floor, 0.5% of the wait", normalize_ws: true)
-        expect(decomposition).to have_text("Its shards were evenly matched", normalize_ws: true)
+        expect(decomposition).to have_text("The shards on record are evenly matched", normalize_ws: true)
         expect(decomposition).to have_no_text("came from how the suite was divided", normalize_ws: true)
       end
 

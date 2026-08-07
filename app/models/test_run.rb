@@ -217,6 +217,24 @@ class TestRun < ApplicationRecord
   # the first quarter of an hour. Shards run concurrently, so a run's parts normally land within
   # the spread of their own durations — minutes, not hours — and this leaves room for a retried
   # shard on top of that.
+  #
+  # **Does a longer window widen the straggler hole documented on `#shard_delivery_settled?`?** It
+  # does not; it narrows it, monotonically, and the direction is worth writing down because it is
+  # easy to assume the opposite and the assumption would argue for shortening this.
+  #
+  # Let the fast shards fall quiet at `q` and the straggler arrive at `q + T`, for a window `W`.
+  # The run settles at `q + W`, so it can be decomposed WITHOUT the straggler only while
+  # `q + W < q + T` — that is, only when `T > W`. The wrong figure is then on screen for exactly
+  # `T - W`, because the straggler's own write bumps `MAX(updated_at)` and un-settles the run,
+  # which re-settles `W` later with every row in. Both the condition (`T > W`) and the exposure
+  # (`T - W`) shrink as `W` grows. A shorter window would publish sooner over runs that had more
+  # still coming, which is the same failure from the other end.
+  #
+  # So the two concerns do NOT pull in opposite directions: both the in-flight window and the
+  # straggler favour a longer `W`, and the only thing traded away is latency — the paragraph above.
+  # What a longer `W` cannot touch is the abandoned-mid-delivery row, which is quiet forever and so
+  # sits outside this arithmetic entirely; that residual is a property of the proxy, not of its
+  # length, and no value here reaches it.
   SHARD_DELIVERY_SETTLING_PERIOD = 15.minutes
 
   # When the most recent shard report arrived. `Ingest::RunRecorder#upsert_shard` writes a shard
@@ -246,11 +264,35 @@ class TestRun < ApplicationRecord
   #   them, so this one does not claim to; a gate that withheld from both would withhold from every
   #   small honest matrix in order to catch a cancelled job it cannot name.
   #
-  # That residual is bounded in the direction that matters. A missing shard cannot invent an
-  # imbalance that the whole run did not have: if every shard is within a narrow spread then so is
-  # any subset of them, so the *finding* survives a partial set even where the *magnitude* does
-  # not. The failure it does leave is an excess quoted over the wrong denominator — wrong in size,
-  # right in kind — which is a far narrower claim than the unbounded one this gate removes.
+  # **That residual is asymmetric, and only one half of it is benign.** It is written out in both
+  # directions because it is the artifact a later reader will trust when deciding how much to
+  # believe this figure, and the benign half on its own reads as a licence the whole does not give.
+  #
+  # - **A missing shard cannot manufacture an imbalance the whole run did not have.** If every
+  #   shard is within a narrow spread then so is any subset of them. So a *positive* verdict —
+  #   this split cost you time — survives a partial set even where its magnitude does not; that
+  #   direction fails in size and not in kind.
+  # - **A missing shard can conceal one, and the shard it conceals is preferentially the slowest.**
+  #   Imbalanced-whole does NOT imply imbalanced-subset, and it fails exactly when the absent row
+  #   is the runaway — which is the row likeliest to be absent at any given moment, because it is
+  #   the one still running. The correlation is adverse rather than neutral. Drop the 74.25s shard
+  #   from the canonical `[61.0, 58.5, 74.25, 60.0]` run and the remaining three read as a 1.2s /
+  #   1.9% spread: immaterial, and `#wall_clock_excess_material?` cannot catch it, because over
+  #   those three rows the excess genuinely IS immaterial. A 14.6% finding becomes no finding.
+  #
+  # So **a negative verdict from this panel is weaker than a positive one**, and the two branches
+  # in `repositories/show` are worded to that asymmetry rather than to a symmetry they do not have:
+  # the imbalanced branch needs no hedge because it can only understate, and the balanced branch
+  # states what the recorded shards show and declines the operational claim about the run, the way
+  # `#machine_seconds_label` words itself to its own coverage. Without that, the page moves from
+  # withholding a finding to affirmatively denying one — the worse of the two failures, and the
+  # only one that puts a false sentence in front of a reader.
+  #
+  # Three routes reach a concealed runaway past the quiet period: a straggler slower than the
+  # window, a CI-retried shard landing after it, and the abandoned run above — which is the
+  # straggler case made permanent, and is why accepting that residual is not as small a decision as
+  # its own bullet makes it sound. The first two self-heal (the straggler's write bumps the
+  # timestamp, un-settling the run until it re-settles with every row in); the third never does.
   #
   # Deliberately not a comparison against the previous run's shard count, the way `#assembled_like?`
   # decides its own question. That test is answerable there because a suite-size delta already has
@@ -313,6 +355,17 @@ class TestRun < ApplicationRecord
   # may name its slices anything), and ordering by insertion would sort by whichever shard
   # happened to POST first, which is not a fact about the suite. `id` breaks ties so the order is
   # total and stable.
+  #
+  # **Safe only behind `#wall_clock_decomposable?`, and that is load-bearing rather than
+  # incidental** — the same kind of fact `#some_shard_untimed?` records about its own vacuous
+  # false. `duration_seconds: :desc` is **NULLS FIRST** in Postgres, so on a run carrying a silent
+  # shard the head of this list is the shard that reported *nothing*, and `#longest_shard_label`
+  # below would name it as the longest while `#shard_duration_labels` printed it at the top of the
+  # distribution. Unreachable today because the gate's `!some_shard_untimed?` condition is exactly
+  # the statement that no such row exists — but all three of these readers are public and none of
+  # them re-checks it, so a future caller that skipped the gate would be handed an untimed row
+  # wearing the word "longest". Call them from anywhere else and either keep the gate or order
+  # `NULLS LAST` first.
   def shard_durations
     @shard_durations ||= test_run_shards.order(duration_seconds: :desc, id: :asc)
                                         .pluck(:shard_id, :duration_seconds)
@@ -339,6 +392,10 @@ class TestRun < ApplicationRecord
   # sentence that refuses the word "slowest" is a name working against its own caller — the same
   # discipline `#wall_clock_coverage` applies one section up, where the label is allowed to say
   # "slowest of 4 shards" only in the branch where the MAX covers all four.
+  #
+  # Reads the head of `#shard_durations`, so it inherits that method's NULLS-FIRST dependency on
+  # the gate verbatim: off-gate, on a run with a silent shard, this names the shard that reported
+  # nothing.
   def longest_shard_label = shard_label(shard_durations.first&.first)
 
   # The shortest wall clock any arrangement of these shards could have produced: the machine time
@@ -351,6 +408,14 @@ class TestRun < ApplicationRecord
 
   # How much longer the run waited than that floor: the part of the wait attributable to how the
   # suite was divided rather than to the suite itself.
+  #
+  # Unguarded on `duration_seconds` where `#duration_label` guards the same column with
+  # `#duration_reported?`, and the reason is written here because it is the one link in the chain
+  # that is not visible from this file. `Ingest::RunRecorder#recompute_totals` re-derives the
+  # parent's `duration_seconds` as the MAX over its shard rows after every ingest, and a MAX over
+  # rows that all reported a timing cannot be NULL — which is exactly what the gate's
+  # `!some_shard_untimed?` condition establishes. So the invariant holds through the recorder and
+  # nowhere else: call this outside `#wall_clock_decomposable?` and it raises on a nil.
   def wall_clock_excess_seconds = duration_seconds - balanced_wall_clock_seconds
 
   # The same as a share of the wait.
