@@ -736,7 +736,7 @@
                 The most recent run on <%= @suite_trajectory.branch %> is not on this line:
                 <span class="font-mono"><%= @suite_trajectory.newest_run.commit_sha.first(7) %></span>
                 is one of the withheld runs, so the line ends at
-                <%= @suite_trajectory.last_run.commit_sha.first(7) %>,
+                <span class="font-mono"><%= @suite_trajectory.last_run.commit_sha.first(7) %></span>,
                 <%= time_ago_in_words(@suite_trajectory.last_run.created_at) %> ago.
               <% end %>
             </p>

@@ -28,6 +28,13 @@ RSpec.describe "Repository suite-size trajectory", type: :request do
   # deleted.
   def basis_line = trajectory_panel.find("#suite-trajectory-basis")
 
+  # The SHAs in the basis line, named as ELEMENTS. This page renders an inline SHA monospaced
+  # without exception, and that is what makes it legible as a SHA rather than as a word. Every
+  # other assertion here goes through `have_text`, which discards markup — so a SHA that lost the
+  # class would read identically green. Nothing else catches it either: `DesignSystemLint` counts
+  # headings, raw palette colours and raw `btn`, not this.
+  def basis_line_shas = basis_line.all("span.font-mono").map(&:text)
+
   def chart = trajectory_panel.find("#suite-trajectory-chart")
 
   def chart_summary = trajectory_panel.find("#suite-trajectory-chart-summary")
@@ -334,6 +341,9 @@ RSpec.describe "Repository suite-size trajectory", type: :request do
                                       normalize_ws: true)
       expect(basis_line).to have_text("is one of the withheld runs, so the line ends at oldwy30",
                                       normalize_ws: true)
+      # Both SHAs in the sentence, not just the one. They sit in a single clause, so one of them in
+      # the body font does not read as a second convention — it reads as a fault in the sentence.
+      expect(basis_line_shas).to include("newwy00", "oldwy30")
     end
 
     # The ordinary case must not carry the caveat — a sentence that appears every time is a sentence
