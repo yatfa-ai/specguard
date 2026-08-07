@@ -11,8 +11,17 @@ require "rails_helper"
 # API-keys/Overview file and is edited by sibling slices, and every example here needs the same
 # two-runs-on-a-branch setup.
 #
-# Runs are built directly rather than posted to /ingest: the write side has its own file
-# (spec/requests/api/v1/ingest_spec.rb) and this slice does not touch it.
+# Runs are built directly rather than posted to /ingest wherever the question is only about
+# branches and counts: the write side has its own file (spec/requests/api/v1/ingest_spec.rb) and
+# this slice does not touch it.
+#
+# The sharded examples are the exception, and deliberately so. The defect they guard against is a
+# shape `Ingest::RunRecorder` produces — `total_specs_count` re-derived as the SUM over the shards
+# recorded SO FAR — so those runs are built by driving the recorder rather than by writing the row
+# and its shards by hand. A fixture can trivially build a half-delivered run that agrees with
+# itself in ways a real one never does, which is the trap `SPGD-91` names: the earlier revision of
+# this file created every run with a bare `test_runs.create!`, left `shard_count` at 0 in all
+# fourteen examples, and was green while the panel rendered a −14,990 on every in-flight CI run.
 RSpec.describe "Repository suite-size growth", type: :request do
   before { @user = sign_in_via_github }
 
@@ -20,9 +29,9 @@ RSpec.describe "Repository suite-size growth", type: :request do
 
   # ELEMENT-scoped, never panel-scoped, and that is load-bearing — the same trap
   # spec/requests/repository_runs_spec.rb:23-30 documents from a verified mutation, one surface
-  # over. Three states here produce a no-delta panel and two of them share the words "no earlier
-  # run"; a panel-level `have_text("no earlier run")` therefore passes for the NULL-branch state
-  # with the branch check deleted. Every assertion below names the element it means.
+  # over. Five states here produce a no-delta panel and several of them share words ("no earlier
+  # run", "reported no tests"); a panel-level `have_text` therefore passes for the wrong state with
+  # the deciding check deleted. Every assertion below names the element it means.
   def delta_figure = overview_panel.find("#suite-size-delta")
 
   def basis_line = overview_panel.find("#suite-size-basis")
@@ -31,6 +40,26 @@ RSpec.describe "Repository suite-size growth", type: :request do
   # having drifted into some other row of the def list.
   def suite_size_cell
     overview_panel.find(:xpath, ".//dt[normalize-space()='Tests in suite']/following-sibling::dd[1]")
+  end
+
+  # One shard of one run, through the producer. Every sharded fixture below is a sequence of these,
+  # so a run that has delivered 1 of 4 shards is built the way CI builds it: by having posted once.
+  def ingest_shard(repository, ci_run_id:, shard_id:, total:, commit_sha:, branch: "main")
+    Ingest::RunRecorder.record(
+      repository,
+      { commit_sha: commit_sha, branch: branch, ci_run_id: ci_run_id,
+        total_specs_count: total, annotated_specs_count: total / 4, duration_seconds: 60.0 },
+      shard_id: shard_id
+    )
+  end
+
+  # A complete four-shard run of `4 × per_shard` examples.
+  def complete_sharded_run(repository, commit_sha:, per_shard: 5_000, shards: 4)
+    shards.times do |i|
+      ingest_shard(repository, ci_run_id: "gha-#{commit_sha}", shard_id: i.to_s,
+                   total: per_shard, commit_sha: commit_sha)
+    end
+    repository.test_runs.find_by!(ci_run_id: "gha-#{commit_sha}")
   end
 
   def grew_by_47(repository)
@@ -188,6 +217,199 @@ RSpec.describe "Repository suite-size growth", type: :request do
     expect(basis_line).to have_text("measured against tiedfir", normalize_ws: true)
   end
 
+  # == The coverage of each side of the subtraction
+  #
+  # A run's `total_specs_count` is not a suite size. `Ingest::RunRecorder#recompute_totals`
+  # re-derives it as the SUM over the shards recorded so far after every ingest, so a sharded run
+  # reads at a fraction of its own suite until its last shard lands — and `latest_test_run` picks
+  # the row up on the FIRST one, because `created_at` is stamped by that POST.
+  #
+  # A level survives that. A difference does not: it is only worth as much as the weaker of the two
+  # rows it is taken across, and this is the only state in this whole file that would produce a
+  # wrong NUMBER rather than an honest absence.
+  describe "when the two runs are not the same kind of measurement" do
+    # The ordinary in-flight window of every sharded CI job — the state the Overview is in for most
+    # of the twenty minutes anyone is looking at it during a build.
+    it "withholds the change while a sharded run is still arriving" do
+      repository = create_repository(user: @user)
+      complete_sharded_run(repository, commit_sha: "aaaaaaa11111", per_shard: 5_000)
+      ingest_shard(repository, ci_run_id: "gha-inflight", shard_id: "0", total: 5_010,
+                   commit_sha: "bbbbbbb22222")
+
+      get repository_path(repository)
+
+      # −14,990 is what this rendered before the guard: three quarters of the suite deleted by a
+      # commit that deleted nothing, wearing a named SHA and an age.
+      expect(overview_panel).to have_no_css("#suite-size-delta")
+      expect(suite_size_cell.text).to eq("5,010")
+      expect(basis_line).to have_no_text("14,990", normalize_ws: true)
+    end
+
+    # Both compositions named, so a reader can see for themselves which side is short rather than
+    # being told only that something is wrong.
+    it "names how each run was assembled when it declines to compare them" do
+      repository = create_repository(user: @user)
+      complete_sharded_run(repository, commit_sha: "aaaaaaa11111", per_shard: 5_000)
+      ingest_shard(repository, ci_run_id: "gha-inflight", shard_id: "0", total: 5_010,
+                   commit_sha: "bbbbbbb22222")
+
+      get repository_path(repository)
+
+      expect(basis_line).to have_text("This run was assembled from 1 shard report", normalize_ws: true)
+      expect(basis_line).to have_text("aaaaaaa was assembled from 4 shard reports", normalize_ws: true)
+      # Not one of the four other no-delta wordings standing in for this one. Each names a
+      # different fact and only this one is a build that will finish on its own.
+      expect(basis_line).to have_no_text("No earlier run on", normalize_ws: true)
+      expect(basis_line).to have_no_text("reported no branch", normalize_ws: true)
+      expect(basis_line).to have_no_text("reported no tests", normalize_ws: true)
+    end
+
+    # The permanent form: a job cancelled after two of four shards leaves a half-sized row in the
+    # history forever, and the next complete run would otherwise read the missing half as growth.
+    it "withholds the change against a run that was cancelled part-way through" do
+      repository = create_repository(user: @user)
+      complete_sharded_run(repository, commit_sha: "ccccccc33333", per_shard: 5_000, shards: 2)
+      complete_sharded_run(repository, commit_sha: "ddddddd44444", per_shard: 5_000, shards: 4)
+
+      get repository_path(repository)
+
+      expect(overview_panel).to have_no_css("#suite-size-delta")
+      expect(suite_size_cell.text).to eq("20,000")
+      expect(basis_line).to have_text("ccccccc was assembled from 2 shard reports", normalize_ws: true)
+    end
+
+    # The guard withholds, it does not disable. Two complete four-shard runs are the same kind of
+    # measurement and the figure is exactly what it always was.
+    it "still compares two runs assembled from the same number of shards" do
+      repository = create_repository(user: @user)
+      complete_sharded_run(repository, commit_sha: "eeeeeee55555", per_shard: 5_000)
+      complete_sharded_run(repository, commit_sha: "fffffff66666", per_shard: 5_005)
+
+      get repository_path(repository)
+
+      expect(delta_figure.text).to eq("+20")
+      expect(suite_size_cell.text).to eq("20,020 +20")
+      # The delta's own coverage, on the surface beside it — the second half of the rule the branch
+      # scope is the first half of.
+      expect(basis_line).to have_text("only runs assembled from the same 4 shard reports",
+                                      normalize_ws: true)
+    end
+
+    # The whole unsharded corpus — a laptop `bundle exec rspec`, an unrecognised CI provider. Those
+    # rows are written once and never re-derived, so they were always comparable and the guard must
+    # not have quietly switched the feature off for them. (Every other example in this file is one
+    # of these; this one says so on purpose.)
+    it "compares two runs that each arrived whole, as it always did" do
+      repository = create_repository(user: @user)
+      grew_by_47(repository)
+
+      get repository_path(repository)
+
+      expect(delta_figure.text).to eq("+47")
+      # No shard clause: there is no composition to state, and inventing "the same 0 shard reports"
+      # would describe the unsharded corpus as a delivery that lost everything.
+      expect(basis_line).to have_no_text("shard report", normalize_ws: true)
+    end
+  end
+
+  # The same question — *is either side of this subtraction a measurement of the whole suite?* —
+  # asked of a count rather than of a composition. A run that reported zero tests has a count but
+  # not a measurement, and the panel already says so in those words.
+  describe "when a run reported no tests at all" do
+    it "does not report the suite as having lost everything the latest run did not count" do
+      repository = create_repository(user: @user)
+      repository.test_runs.create!(commit_sha: "hadtests0001", branch: "main", total_specs_count: 1_000,
+                                   created_at: 2.hours.ago)
+      repository.test_runs.create!(commit_sha: "reportednone", branch: "main", total_specs_count: 0,
+                                   created_at: 1.minute.ago)
+
+      get repository_path(repository)
+
+      # `0 −1,000` rendered immediately above the panel's own "reported no tests at all… That is a
+      # fact about this run, not about the suite" — the page computing a change and then
+      # disclaiming the figure it computed it from, in adjacent paragraphs.
+      expect(overview_panel).to have_no_css("#suite-size-delta")
+      expect(suite_size_cell.text).to eq("0")
+      expect(basis_line).to have_text("This run reported no tests", normalize_ws: true)
+      expect(overview_panel).to have_text("The latest run reported no tests at all", normalize_ws: true)
+    end
+
+    # The mirror, which is the same defect with its sign flipped: the whole suite charged to one
+    # commit as growth because the run before it reported nothing.
+    it "does not report the whole suite as growth when the previous run counted nothing" do
+      repository = create_repository(user: @user)
+      repository.test_runs.create!(commit_sha: "zeroprev0001", branch: "main", total_specs_count: 0,
+                                   created_at: 2.hours.ago)
+      repository.test_runs.create!(commit_sha: "hastests0002", branch: "main", total_specs_count: 1_000,
+                                   created_at: 1.minute.ago)
+
+      get repository_path(repository)
+
+      expect(overview_panel).to have_no_css("#suite-size-delta")
+      expect(suite_size_cell.text).to eq("1,000")
+      expect(basis_line).to have_text("previous run on main (zeropre) reported no tests",
+                                      normalize_ws: true)
+      # The other side's wording, which must not stand in for this one: this run counted 1,000.
+      expect(basis_line).to have_no_text("This run reported no tests", normalize_ws: true)
+    end
+
+    # `total_specs_count` is nullable (default `0`, no `null: false`). A NULL on the previous run
+    # would otherwise render the entire suite as growth.
+    it "treats a NULL count as nothing reported rather than as a suite of zero" do
+      repository = create_repository(user: @user)
+      earlier = repository.test_runs.create!(commit_sha: "nullcount001", branch: "main",
+                                             total_specs_count: 0, created_at: 2.hours.ago)
+      earlier.update_columns(total_specs_count: nil)
+      repository.test_runs.create!(commit_sha: "hastests0003", branch: "main", total_specs_count: 1_000,
+                                   created_at: 1.minute.ago)
+
+      get repository_path(repository)
+
+      expect(overview_panel).to have_no_css("#suite-size-delta")
+      expect(basis_line).to have_text("reported no tests", normalize_ws: true)
+    end
+  end
+
+  # The visible figure is three characters of typography doing a sentence's work. Neither half
+  # survives being read aloud: the `dd` announces as "1,047 +47" with nothing tying the second
+  # number to the first, and U+2212 — chosen precisely because it is not a hyphen — is announced
+  # inconsistently across screen readers.
+  describe "what the figure reads as aloud" do
+    it "spells out an increase" do
+      repository = create_repository(user: @user)
+      grew_by_47(repository)
+
+      get repository_path(repository)
+
+      expect(delta_figure["aria-label"]).to eq("47 tests more than the previous run on this branch")
+    end
+
+    it "spells out a decrease as fewer, never as a bare magnitude" do
+      repository = create_repository(user: @user)
+      repository.test_runs.create!(commit_sha: "beforecut001", branch: "main", total_specs_count: 1_400,
+                                   created_at: 2.hours.ago)
+      repository.test_runs.create!(commit_sha: "aftercut0001", branch: "main", total_specs_count: 1_399,
+                                   created_at: 1.minute.ago)
+
+      get repository_path(repository)
+
+      # Singular at one, because the noun is inflected rather than bolted on.
+      expect(delta_figure["aria-label"]).to eq("1 test fewer than the previous run on this branch")
+    end
+
+    it "says a suite that did not move did not move" do
+      repository = create_repository(user: @user)
+      repository.test_runs.create!(commit_sha: "steadyaria01", branch: "main", total_specs_count: 1_000,
+                                   created_at: 2.hours.ago)
+      repository.test_runs.create!(commit_sha: "steadyaria02", branch: "main", total_specs_count: 1_000,
+                                   created_at: 1.minute.ago)
+
+      get repository_path(repository)
+
+      expect(delta_figure["aria-label"]).to eq("unchanged since the previous run on this branch")
+    end
+  end
+
   # Criterion 6, from the page. The absolute "exactly one query" is asserted where it can be
   # measured honestly — around the model call itself, in spec/models/repository_spec.rb. It is NOT
   # asserted here, and that is deliberate: a page-versus-page difference has a control that walks
@@ -208,7 +430,7 @@ RSpec.describe "Repository suite-size growth", type: :request do
       ActiveSupport::Notifications.unsubscribe(subscriber)
     end
 
-    it "costs no more when it finds a run to compare against than when it does not" do
+    it "costs one query more when it finds a run to compare against — the coverage check on it" do
       repository = create_repository(user: @user)
       repository.test_runs.create!(commit_sha: "firstofbranch", branch: "main", total_specs_count: 10,
                                    created_at: 2.hours.ago)
@@ -224,7 +446,12 @@ RSpec.describe "Repository suite-size growth", type: :request do
                                    created_at: 1.minute.ago)
       get repository_path(repository)
 
-      expect(count_queries { get repository_path(repository) }).to eq(baseline)
+      # Exactly one, and it is named rather than absorbed: the shard aggregate on the comparison
+      # run, which is what `TestRun#assembled_like?` reads and what stops the panel differencing
+      # two rows of unequal coverage. The latest run's own aggregate is not new — the cost rows
+      # already paid for it — and this one is bounded by a run's shard count, so the Overview stays
+      # O(1) in suite size exactly as before.
+      expect(count_queries { get repository_path(repository) }).to eq(baseline + 1)
       expect(delta_figure.text).to eq("+2")
     end
 

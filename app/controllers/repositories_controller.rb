@@ -51,6 +51,12 @@ class RepositoriesController < ApplicationController
     # one of them is "no delta" and only the first is the never-ingested empty state — so the view
     # decides between them on `@latest_test_run` and `@latest_test_run.branch`, never by treating a
     # nil here as one undifferentiated absence.
+    #
+    # A row here is a *candidate*, not a comparison. Finding one is necessary and not sufficient:
+    # the view still asks whether each side measured a suite at all and whether the two were
+    # assembled from the same number of shards, because a run's count is the SUM over the shards
+    # recorded so far and differencing an in-flight sharded run against a complete one reports a
+    # deletion no commit made. See `TestRun#suite_size_measured?` / `#assembled_like?`.
     @previous_test_run = @repository.previous_test_run_on_branch(@latest_test_run)
     # The tail of that same append-only history for the "Recent runs" panel. Bounded at ten rows by
     # the model, so this stays O(1) no matter how long CI has been reporting. It shares

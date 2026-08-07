@@ -149,6 +149,60 @@ class TestRun < ApplicationRecord
     "slowest of the #{timed_shard_count} that reported"
   end
 
+  # == Whether this run's suite size may be differenced against another run's
+  #
+  # `total_specs_count` is not a suite size. On a run with shards it is the SUM over the shards
+  # **recorded so far** — `Ingest::RunRecorder#recompute_totals` re-derives it after every ingest —
+  # so it climbs from one slice to the whole suite across the minutes a sharded CI job takes. And
+  # `Repository#latest_test_run` picks that row up the instant the first shard lands, because
+  # `created_at` is stamped by the first POST. A four-shard 20,000-example suite therefore reads as
+  # ~5,000 for most of its own build.
+  #
+  # A *level* survives that: "5,010 tests, measured on <sha>" is a true statement about what was
+  # reported. A *difference* does not. Subtracting yesterday's complete 20,000 from today's
+  # in-flight 5,010 prints −14,990 — a suite-size change no commit made, wearing a named SHA and an
+  # age that make it read as a checked fact. That is not an exotic state; it is the ordinary window
+  # every sharded run passes through, and it has a permanent form too: a job cancelled after two of
+  # four shards leaves a half-sized row in the history forever.
+  #
+  # So the two predicates below are the same question asked of each side of the subtraction — *is
+  # this a measurement of the whole suite?* — and the panel withholds the figure rather than
+  # printing a change across two rows of unequal coverage.
+
+  # Whether this run measured a suite at all. A run that reported zero tests has a count but not a
+  # measurement, and the panel already says so in those words a paragraph below the figure. A
+  # difference taken against it describes the report, not the suite.
+  #
+  # `.to_i` because the column is nullable (default `0`, no `null: false`): a NULL is "nothing was
+  # reported", which is the answer this predicate already gives for a reported zero.
+  def suite_size_measured? = total_specs_count.to_i.positive?
+
+  # Whether `other` was put together from the same number of parts as this run, so a difference
+  # between their counts is a change in the *suite* rather than a change in *how much of it has
+  # been reported*.
+  #
+  # Shard count is a proxy and not a proof, deliberately. Nothing in the payload says "shard 1 of
+  # 4" — `Ingest::Payload` accepts a shard *index* and never a total — so no run can be asked
+  # whether it is complete, and a check that pretended otherwise would be inventing a fact. What
+  # two runs can be asked is whether they were assembled the same way, and unequal counts is
+  # exactly the observable shape of all three ways this goes wrong: the in-flight window, the
+  # cancelled job, and a laptop run sitting beside a sharded CI one.
+  #
+  # It answers true across the entire unsharded corpus (`0 == 0`), which is every run that named no
+  # `ci_run_id`. Those rows are written once and never re-derived, so they were always comparable
+  # and nothing about them changes.
+  def assembled_like?(other) = shard_count == other.shard_count
+
+  # How this run arrived, as a phrase a sentence can name it by when two runs disagree.
+  #
+  # Zero shards is not "0 reports". It is a run that arrived whole in a single POST — the unsharded
+  # corpus — and wording it as a count of parts would read as a delivery that lost all of them.
+  def delivery_description
+    return "reported in one piece" if shard_count.zero?
+
+    "assembled from #{shard_count} shard #{"report".pluralize(shard_count)}"
+  end
+
   private
 
   # One aggregate read, on `index_test_run_shards_on_test_run_id`, answering all three questions at

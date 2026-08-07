@@ -147,19 +147,45 @@
               is 47 more than yesterday or 400 fewer. `test_runs` has held that answer since the
               first run was ingested and nothing has ever asked it.
 
+              A change is a stronger claim than a level, and it is only worth as much as the WEAKER
+              of the two rows it is taken across. Both are checked before any subtraction happens:
+              each side has to have measured a suite at all, and the two have to have been
+              assembled from the same number of parts. `TestRun#suite_size_measured?` and
+              `#assembled_like?` carry the argument for both; the short version is that a run's
+              count is the sum of the shards recorded SO FAR, so an in-flight sharded build reads
+              at a fraction of its own suite and a difference taken against yesterday's complete
+              run reports a deletion nobody made.
+
+              Withheld rather than hedged, in the register the other no-comparison states already
+              use. A signed number wearing a SHA and an age is read as a checked fact whatever
+              caveat sits beneath it, and this panel's rule is that a figure it cannot stand behind
+              does not get printed.
+
               `nil` (no comparison) and `0` (compared, and it did not move) are different answers
-              and are kept apart here: `@previous_test_run &&` guards the subtraction, so a zero
-              delta stays truthy and still renders. Which of the three no-comparison states this
-              is gets said below, where the basis is stated. %>
-          <% suite_size_delta = @previous_test_run && total_specs - @previous_test_run.total_specs_count.to_i %>
+              and are kept apart here: the subtraction happens only inside the guard, so a zero
+              delta stays truthy and still renders. Which of the five no-comparison states this is
+              gets said below, where the basis is stated. %>
+          <% comparison_measured = @previous_test_run&.suite_size_measured? %>
+          <%# Evaluated whenever there is a candidate at all, not folded into the `&&` chain below,
+              so the coverage check costs the page the same one query in every state that has a
+              row to check — see the query-count examples in
+              spec/requests/repository_suite_growth_spec.rb. %>
+          <% comparison_assembled_like = @previous_test_run && @latest_test_run.assembled_like?(@previous_test_run) %>
+          <% comparable = @latest_test_run.suite_size_measured? && comparison_measured && comparison_assembled_like %>
+          <% suite_size_delta = total_specs - @previous_test_run.total_specs_count.to_i if comparable %>
 
           <%# A run reporting no tests has no share to display: 0/0 renders as a tidy `0%` headline
               that reads exactly like a real suite measured at zero annotations — the same
               conflation the never-ingested branch above refuses, one state over. So the meter is
               suppressed rather than drawn against an empty denominator, and the counts plus the
               sentence below carry it. (It is also a degenerate meter: `aria-valuemax` equal to
-              `aria-valuemin` announces a scale a screen reader cannot place a value on.) %>
-          <% measured_tests = total_specs.positive? %>
+              `aria-valuemin` announces a scale a screen reader cannot place a value on.)
+
+              The same question the delta guard above asks of each side of its subtraction, so it
+              is asked through the same predicate rather than re-spelled as `total_specs.positive?`
+              — two spellings of one fact is how the meter and the delta would eventually disagree
+              about whether this run measured anything. %>
+          <% measured_tests = @latest_test_run.suite_size_measured? %>
 
           <% if measured_tests %>
             <%# Real counts, not `(annotated_ratio, 100)`. The component computes the percentage
@@ -193,8 +219,9 @@
               `tabular-nums` treatment aligns the two the same way it aligns everything else. %>
           <% suite_size = if suite_size_delta
                             safe_join([number_with_delimiter(total_specs),
-                                       tag.span(signed_count(suite_size_delta), id: "suite-size-delta",
-                                                class: "text-app-content-secondary")], " ")
+                                       tag.span(suite_size_change(suite_size_delta), id: "suite-size-delta",
+                                                class: "text-app-content-secondary",
+                                                "aria-label": suite_size_change_reading(suite_size_delta))], " ")
                           else
                             number_with_delimiter(total_specs)
                           end %>
@@ -275,12 +302,13 @@
               without the thing it is a change *from*, and this panel's rule is that every figure
               names its own coverage.
 
-              Three mutually exclusive sentences and never a shared one, because the three no-delta
-              states are three different facts about this repository and only one of them is a
-              shortcoming a reader can act on. "No earlier run on this branch" is a young branch;
-              "this run named no branch" is a CI client that is not sending one, which is a thing
-              to go and fix. Collapsing them into one "no comparison available" would hide the
-              second inside the first.
+              Five mutually exclusive sentences and never a shared one, because the five no-delta
+              states are five different facts about this repository and they are not equally
+              actionable. "No earlier run on this branch" is a young branch; "this run named no
+              branch" is a CI client that is not sending one, which is a thing to go and fix; "the
+              two were assembled differently" is usually a build still arriving and will resolve
+              itself in minutes. Collapsing them into one "no comparison available" would hide
+              every one of them inside the mildest.
 
               It renders in every one of those states rather than only when there is a number.
               Silence would be read as "the suite has not changed" — the one thing none of these
@@ -294,16 +322,38 @@
               <span class="font-mono"><%= @previous_test_run.commit_sha.first(7) %></span>,
               the previous run on <%= @latest_test_run.branch %>,
               <%= time_ago_in_words(@previous_test_run.created_at) %> ago.
-              Only runs on the same branch are compared.
-            <% elsif @latest_test_run.branch.present? %>
+              Only runs on the same branch are compared<%= ", and only runs assembled from the same #{shard_count} shard #{"report".pluralize(shard_count)}" if shard_count.positive? %>.
+            <% elsif @latest_test_run.branch.blank? %>
+              This run reported no branch, so SpecGuard cannot place it in a history and has no
+              earlier run to measure it against. Runs that name no branch are not pooled together —
+              they may come from anywhere.
+            <% elsif @previous_test_run.nil? %>
               No earlier run on <%= @latest_test_run.branch %>, so there is no change to show — this
               is the first run SpecGuard has from that branch. Runs on other branches are
               deliberately not compared: a suite size from somewhere else is not a change this one
               made.
+            <% elsif !measured_tests %>
+              This run reported no tests, so there is nothing to take a change from. A difference
+              measured against a run that reported nothing would describe the report and not the
+              suite — which is the same distinction the line above draws.
+            <% elsif !comparison_measured %>
+              The previous run on <%= @latest_test_run.branch %>
+              (<span class="font-mono"><%= @previous_test_run.commit_sha.first(7) %></span>)
+              reported no tests, so there is nothing to measure this run's suite size against.
+              Counting the whole suite as growth would charge a commit for a gap in the reporting.
             <% else %>
-              This run reported no branch, so SpecGuard cannot place it in a history and has no
-              earlier run to measure it against. Runs that name no branch are not pooled together —
-              they may come from anywhere.
+              <%# The state the figure is most dangerous in, and the only one that would otherwise
+                  produce a wrong NUMBER rather than an honest absence. A run's count is the sum of
+                  the shards recorded so far, so a sharded build reads at a fraction of its suite
+                  until the last shard lands — and `latest_test_run` picks the row up on the first
+                  one. Both compositions are named so the reader can see for themselves which side
+                  is short. %>
+              This run was <%= @latest_test_run.delivery_description %>, while
+              <span class="font-mono"><%= @previous_test_run.commit_sha.first(7) %></span> was
+              <%= @previous_test_run.delivery_description %> — so the two are not measuring the same
+              thing and no change is shown. A run's test count is the sum of the shards it has
+              reported so far, which climbs while a sharded build is still arriving; a difference
+              taken across two compositions would report a change no commit made.
             <% end %>
           </p>
         <% end %>
