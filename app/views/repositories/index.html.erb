@@ -15,6 +15,11 @@
       <% @repositories.each do |repository| %>
         <%= render UI::CardComponent.new(href: repository_path(repository)) do %>
           <div class="space-y-2">
+            <%# The whole run, not a bare size — see RepositoriesController#latest_run. The badge
+                below states the figure and the paragraph under the badge row states its basis;
+                both read this one already-loaded row, and it is read here so the two cannot end
+                up naming different runs. %>
+            <% run = latest_run(repository) %>
             <div class="flex items-start justify-between gap-2">
               <%= render UI::HeadingComponent.new(level: 3, class: "text-app-content min-w-0") { repository.github_full_name } %>
               <%# The list now mixes owned and shared repositories, and nothing else on the card
@@ -43,7 +48,7 @@
                 <%= render UI::BadgeComponent.new(tone: :neutral) { pluralize(api_key_count(repository), "key") } %>
               <% end %>
               <%# Suite size off the newest TestRun, preloaded for the whole page by
-                  RepositoriesController#latest_suite_size — never a COUNT per card.
+                  RepositoriesController#latest_test_runs — never a COUNT per card.
 
                   This replaces a `spec_intents` count that no production code path can make
                   non-zero: nothing on `main` writes that table, so a repository whose CI had
@@ -54,13 +59,46 @@
                   `nil` means CI has never reported, and gets its own words rather than `0 tests`:
                   "never ingested" and "the suite is empty" are different facts and the card has to
                   be able to tell them apart. `show` draws the same line in its Overview panel. %>
-              <% suite_size = latest_suite_size(repository) %>
-              <% if suite_size.nil? %>
+              <% if run.nil? %>
                 <%= render UI::BadgeComponent.new(tone: :neutral) { "No runs yet" } %>
               <% else %>
+                <% suite_size = run.total_specs_count.to_i %>
                 <%= render UI::BadgeComponent.new(tone: :info) { "#{number_with_delimiter(suite_size)} #{'test'.pluralize(suite_size)}" } %>
               <% end %>
             </div>
+            <%# The badge's basis, on the surface beside it — the rule `show` and the API already
+                hold this column to, and this grid needs it more than either of them does, because
+                it renders N repositories at once and a row of badges is a comparison by
+                construction.
+
+                Two readings are reachable without it, and neither is exotic.
+                `Repository#latest_test_run` returns the newest row whatever its age, so a
+                repository whose CI broke five months ago prints its figure in identical type,
+                tone and words to one that reported an hour ago — the age is the only thing that
+                separates them. And on a sharded run `total_specs_count` is the SUM over the shards
+                recorded SO FAR, while `created_at` is stamped by the FIRST shard's POST, so a
+                four-shard suite mid-build sits in the grid at a quarter size with nothing marking
+                it, and a job cancelled at shard two leaves that row there forever.
+
+                Rendered only where there is a run: the "No runs yet" card has no basis to state,
+                and a "never" beside it would be a second rendering of the same absence. %>
+            <% if run %>
+              <p class="text-xs text-app-muted">
+                <%# `branch` is nullable (db/schema.rb) and Ingest::Payload accepts a body without
+                    it, so a silently shortened sentence would be a client omission dressed up as a
+                    fact. Same words the Recent-runs table on `show` gives an absent branch. %>
+                Ingested <%= time_ago_in_words(run.created_at) %> ago<%= run.branch.present? ? " on #{run.branch}" : ", branch not reported" %>.
+                <%# What the figure above covers, when it does not cover the whole suite. Through
+                    the same `test_run_delivery_note` seam the Recent-runs table renders, so this
+                    card cannot word the fact differently from the page it links to — and
+                    unconditional there, per-row, but only on a multi-shard run here: a grid of
+                    cards each repeating "reported in one piece" would bury the one card that is
+                    not. %>
+                <% if run.multi_shard? %>
+                  <span class="block"><%= test_run_delivery_note(run) %></span>
+                <% end %>
+              </p>
+            <% end %>
           </div>
         <% end %>
       <% end %>

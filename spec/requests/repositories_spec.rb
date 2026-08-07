@@ -1259,6 +1259,123 @@ RSpec.describe "Repository registration and API keys", type: :request do
       # ...and the per-card COUNT it replaced is gone outright, not merely folded into a join.
       expect(intent_queries).to be_empty
     end
+
+    # The card states the basis of the figure it prints, because the grid renders N repositories at
+    # once and a size with no age or composition is two wrong readings away from the truth: a
+    # five-month-dead repository looks identical to one that reported an hour ago, and a sharded run
+    # mid-build sits at a quarter of its own suite size with nothing marking it. `show`, the Recent
+    # runs table and GET /api/v1/repository all already carry this; the card was the one surface
+    # that did not.
+    describe "the basis of that figure" do
+      # The rendered copy as a reader sees it, with the ERB's own line breaks and indentation
+      # collapsed — these examples are about sentences, and a sentence assembled across two ERB
+      # tags is one sentence on the page whatever the source did with whitespace.
+      def page_text = Capybara.string(response.body).text.gsub(/\s+/, " ")
+
+      # A run assembled from `shards` parts, built the way ingestion builds one: the parent's count
+      # is DERIVED as the SUM over the shard rows written below it, never asserted beside them —
+      # `Ingest::RunRecorder#recompute_totals` re-derives it after every POST. A fixture that
+      # hard-coded the whole-suite figure here would build a row the producer cannot, which is
+      # exactly the state these examples exist to render.
+      def sharded_run(repository, shards:, per_shard: 5_000, **attributes)
+        run = create_test_run(repository: repository, ci_run_id: "gha-#{repository.id}",
+                              total_specs_count: per_shard * shards, **attributes)
+        shards.times do |index|
+          run.test_run_shards.create!(shard_id: (index + 1).to_s, total_specs_count: per_shard,
+                                      annotated_specs_count: 0)
+        end
+        run
+      end
+
+      it "says how old the reading is and which branch reported it" do
+        repository = create_repository(user: @user)
+        create_test_run(repository: repository, commit_sha: "feedfacecafe0201",
+                        total_specs_count: 12_431, branch: "main",
+                        created_at: 5.months.ago)
+
+        get repositories_path
+
+        expect(response.body).to include("12,431 tests")
+        # Without the age, this card is byte-identical to one whose CI reported an hour ago.
+        expect(page_text).to include("Ingested 5 months ago on main.")
+      end
+
+      # `branch` is nullable and Ingest::Payload accepts a body without it, so the absence is a
+      # client omission and has to read as one — never as a shortened sentence that looks complete.
+      # Same words `show` gives an absent branch.
+      it "says a branch was not reported rather than leaving it blank" do
+        repository = create_repository(user: @user)
+        create_test_run(repository: repository, commit_sha: "feedfacecafe0202",
+                        total_specs_count: 88, branch: nil, created_at: 2.hours.ago)
+
+        get repositories_path
+
+        expect(page_text).to include("Ingested about 2 hours ago, branch not reported.")
+      end
+
+      # The half-delivered run: four shards' worth of suite, two of them recorded. The card prints
+      # 10,000 and must say what those 10,000 cover.
+      it "states what a multi-shard figure covers, in TestRun#delivery_description's words" do
+        repository = create_repository(user: @user)
+        run = sharded_run(repository, shards: 2, commit_sha: "feedfacecafe0203", branch: "main")
+
+        get repositories_path
+
+        expect(response.body).to include("10,000 tests")
+        expect(page_text).to include(
+          "assembled from 2 shard reports — the count above covers those, " \
+          "not necessarily the whole suite"
+        )
+        # The one wording, shared with the Recent-runs table on `show` — not a second one that can
+        # drift away from it.
+        expect(page_text).to include(ApplicationController.helpers.test_run_delivery_note(run))
+      end
+
+      # A single-shard run's SUM *is* its own whole report, and the unsharded corpus has no
+      # composition at all. Neither has a coverage gap to disclose, and a grid of cards each
+      # repeating "reported in one piece" would bury the one card that does.
+      it "says nothing about composition for a run with no coverage gap" do
+        whole = create_repository(user: @user, github_full_name: "acme/laptop-run")
+        create_test_run(repository: whole, commit_sha: "feedfacecafe0204", total_specs_count: 7)
+        single = create_repository(user: @user, github_full_name: "acme/one-shard")
+        sharded_run(single, shards: 1, commit_sha: "feedfacecafe0205")
+
+        get repositories_path
+
+        expect(page_text).not_to include("reported in one piece")
+        expect(page_text).not_to include("assembled from")
+      end
+
+      # A never-ingested card has no basis to state, and a "never" beside "No runs yet" would be a
+      # second rendering of the same absence.
+      it "states no basis for a repository that has never ingested" do
+        create_repository(user: @user)
+
+        get repositories_path
+
+        expect(response.body).to include("No runs yet")
+        expect(page_text).not_to include("Ingested")
+      end
+
+      # THE guard the ticket exists to install. The example above filters on the string
+      # "test_runs", which `test_run_shards` does not contain — so a per-card `shard_count` (a
+      # memoized per-instance `pick`, one query per card) sails past it green. This is the sibling
+      # that catches it: every card here has a sharded latest run, so every card would ask.
+      it "asks the shard question once for the whole grid, however long the list is" do
+        %w[acme/one acme/two acme/three acme/four].each_with_index do |full_name, index|
+          sharded_run(create_repository(user: @user, github_full_name: full_name),
+                      shards: 4, commit_sha: "cafe010#{index}", branch: "main")
+        end
+
+        shard_queries = queries_against("test_run_shards") { get repositories_path }
+
+        expect(response).to have_http_status(:ok)
+        # Every card rendered its composition, so every card really did ask the question.
+        expect(page_text.scan("assembled from 4 shard reports").size).to eq(4)
+        # One grouped COUNT for the whole page — four cards must not cost four SELECTs.
+        expect(shard_queries.size).to eq(1)
+      end
+    end
   end
 
   describe "renaming a repository" do
