@@ -103,4 +103,34 @@ RSpec.describe TestRun do
       expect(run.annotated_fraction).to eq(0.0)
     end
   end
+
+  # The database half of the run-identity invariant. `Ingest::RunRecorder` looks a run up before
+  # inserting, but a lookup and an insert are two statements and four shards POST at once — the
+  # index is what makes the loser of that race an exception to rescue rather than a second row
+  # with half the suite in it.
+  describe "the run identity" do
+    it "refuses a second row for a run this repository has already recorded" do
+      repository.test_runs.create!(commit_sha: "deadbee", ci_run_id: "gha-42")
+
+      expect { repository.test_runs.create!(commit_sha: "deadbee", ci_run_id: "gha-42") }
+        .to raise_error(ActiveRecord::RecordNotUnique)
+    end
+
+    it "lets two repositories record the same CI run id" do
+      other = create_repository(user: create_user(github_uid: "2002", github_handle: "hubot"),
+                                github_full_name: "acme/ledger")
+      repository.test_runs.create!(commit_sha: "deadbee", ci_run_id: "gha-42")
+
+      expect { other.test_runs.create!(commit_sha: "deadbee", ci_run_id: "gha-42") }
+        .to change(TestRun, :count).by(1)
+    end
+
+    # The local path the roadmap's DoD protects: a laptop `bundle exec rspec` has no CI variables
+    # to read, so every one of its runs is unnamed and every one still gets a row of its own.
+    it "lets a repository record any number of runs that no CI provider named" do
+      expect do
+        3.times { repository.test_runs.create!(commit_sha: "deadbee", ci_run_id: nil) }
+      end.to change(TestRun, :count).by(3)
+    end
+  end
 end

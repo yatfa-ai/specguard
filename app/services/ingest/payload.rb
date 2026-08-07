@@ -35,8 +35,15 @@ module Ingest
     # Attributes for the `TestRun` this run produces. The counts are **derived** from `specs[]`,
     # never read from the client: a client-supplied total is a number nobody can check, and this
     # is the denominator of the headline dashboard metric.
+    #
+    # `ci_run_id` is the one field here the client alone can know — the identity its CI provider
+    # gave the *build*, which every shard of a sharded run shares. It is what lets
+    # `Ingest::RunRecorder` accumulate N shards into one row instead of writing N rows with a
+    # split denominator. Nil is the ordinary case (a laptop run, an unrecognised provider) and
+    # means "this run is its own run".
     def test_run_attributes
       {
+        ci_run_id: @body["ci_run_id"].presence,
         commit_sha: @body["commit_sha"].strip,
         branch: @body["branch"].presence,
         duration_seconds: @body["duration_seconds"],
@@ -52,6 +59,7 @@ module Ingest
 
       validate_commit_sha
       validate_branch
+      validate_ci_run_id
       validate_duration_seconds
       validate_specs
     end
@@ -72,6 +80,21 @@ module Ingest
       return if value.nil? || value.is_a?(String)
 
       @errors << "branch must be a string when present"
+    end
+
+    # Validated exactly as `branch` is, and for the same reason: an omitted `ci_run_id` is the
+    # normal shape of a run nobody's CI provider named, so absence can never be a rejection —
+    # only a client sending something that is not a string is.
+    #
+    # A number is refused rather than coerced on purpose. `GITHUB_RUN_ID` and `CI_PIPELINE_ID` are
+    # decimal integers, and a client that sent one as a JSON number would key its shards on
+    # `12345` while another client keyed the same build on `"12345"`; splitting a run over a type
+    # difference is precisely the failure this field exists to remove. One type, stated up front.
+    def validate_ci_run_id
+      value = @body["ci_run_id"]
+      return if value.nil? || value.is_a?(String)
+
+      @errors << "ci_run_id must be a string when present"
     end
 
     def validate_duration_seconds

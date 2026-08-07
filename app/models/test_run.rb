@@ -2,6 +2,12 @@
 
 # One CI run's metadata. Append-only history: the aggregate counts live here, while the current
 # state of each test location lives in SpecIntent.
+#
+# One row is one *run*, which is not the same as one POST: a sharded suite delivers itself over N
+# requests and `Ingest::RunRecorder` accumulates every one of them onto the row named by
+# `ci_run_id`. The counters are therefore written by the first shard and *incremented in the
+# database* by the rest, never read-modify-written — see `Ingest::RunRecorder` for why.
+# `ci_run_id` is nil for every run no CI provider named, and those rows never accumulate.
 class TestRun < ApplicationRecord
   belongs_to :repository
   has_many :spec_intents, dependent: :nullify

@@ -3,16 +3,22 @@
 # Phase 2's synchronous half: accept one CI run, validate it, record the run's counts, and answer
 # `202 Accepted` immediately. Nothing here blocks on embedding — that is asynchronous by design,
 # which is why `/check-intent` may not yet reflect a run that just landed.
+#
+# One request is one *shard*, not necessarily one run: a sharded suite POSTs once per process, and
+# `Ingest::RunRecorder` is what folds those back into the single `TestRun` they came from.
 class Api::V1::IngestsController < Api::BaseController
   def create
     payload = Ingest::Payload.new(request.request_parameters)
 
     return render_bad_request(payload.errors) unless payload.valid?
 
-    test_run = current_repository.test_runs.create!(payload.test_run_attributes)
+    test_run = Ingest::RunRecorder.record(current_repository, payload.test_run_attributes)
 
     render json: {
       test_run_id: test_run.id,
+      # After accumulation these are the running totals for the whole CI run so far, not this
+      # shard's own slice — the row *is* the run (see `Ingest::RunRecorder`). For an unsharded
+      # run, which is every run with no `ci_run_id`, the two are the same number.
       total_specs: test_run.total_specs_count,
       annotated_specs: test_run.annotated_specs_count,
       # A 0–1 fraction, per the SpecGuard API Reference. The dashboard renders the same number as a
