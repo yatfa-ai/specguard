@@ -26,6 +26,21 @@ RSpec.describe "Repository sharing", type: :request do
     create_membership(repository: repository, user: member, permissions: permissions)
   end
 
+  # Captures the SQL a block issues, for the query-cost examples below to reduce however each one
+  # needs. Schema reads and cached repeats are excluded: neither is work the page chose to do.
+  # Each call site says in its own comment *why* it reduces the way it does — that reasoning is
+  # per-example and belongs there, not here.
+  def captured_sql
+    sql = []
+    subscriber = ActiveSupport::Notifications.subscribe("sql.active_record") do |_, _, _, _, payload|
+      sql << payload[:sql].to_s unless payload[:cached] || payload[:name].in?(["SCHEMA", "TRANSACTION"])
+    end
+    yield
+    sql
+  ensure
+    ActiveSupport::Notifications.unsubscribe(subscriber)
+  end
+
   describe "a member with only 'view'" do
     before { sign_in_as_member(%w[view]) }
 
@@ -104,6 +119,13 @@ RSpec.describe "Repository sharing", type: :request do
     # `DefList` row rather than on a bare substring, because the org segment is also the first half
     # of the page title directly above it — so a substring match would pass on the title alone.
     # (The third surface, the Members empty state, is pinned in spec/requests/repository_members_spec.rb.)
+    #
+    # This couples a request spec to `DefListComponent`'s markup, knowingly. What it is pinning is
+    # the *adjacency of the Owner row's label and its value* — that the panel names the owner in
+    # the row labelled "Owner" — not the `dt`/`dd` tags themselves. So if this regex fails after a
+    # change to the component while the panel still names the owner correctly, re-anchoring it on
+    # whatever the component now renders is the right fix. Deleting it is not: the substring form
+    # it would decay into passes on the page title and proves nothing.
     it "sees the owner named in the Overview panel, not the slug's org segment" do
       get repository_path(repository)
 
@@ -298,18 +320,9 @@ RSpec.describe "Repository sharing", type: :request do
     # viewer, who cannot reach the marker at all: both skip the panel, so any extra query the
     # `members.manage` viewer issues is the lookup this page declined to render.
     #
-    # Counts the SELECTs a block issues. Schema reads and cached repeats are excluded: neither is
-    # work this page chose to do.
-    def count_queries
-      count = 0
-      subscriber = ActiveSupport::Notifications.subscribe("sql.active_record") do |_, _, _, _, payload|
-        count += 1 unless payload[:cached] || payload[:name].in?(["SCHEMA", "TRANSACTION"])
-      end
-      yield
-      count
-    ensure
-      ActiveSupport::Notifications.unsubscribe(subscriber)
-    end
+    # Reduces to a total count: this example is a delta between two viewers of the same page, so
+    # every query either of them issues is in scope.
+    def count_queries(&) = captured_sql(&).size
 
     it "costs a 'members.manage' viewer who cannot see the panel no more than a 'view'-only one" do
       membership = sign_in_as_member(%w[view])
@@ -333,16 +346,7 @@ RSpec.describe "Repository sharing", type: :request do
     # Deliberately counts only reads of `users`, not every SELECT. The page has other per-card
     # queries that predate this (the intent count), so a total would be a moving target that fails
     # for reasons this example is not about, and would quietly encode those counts as intended.
-    def user_table_queries
-      sql = []
-      subscriber = ActiveSupport::Notifications.subscribe("sql.active_record") do |_, _, _, _, payload|
-        sql << payload[:sql].to_s unless payload[:cached] || payload[:name].in?(["SCHEMA", "TRANSACTION"])
-      end
-      yield
-      sql.grep(/from "users"/i).size
-    ensure
-      ActiveSupport::Notifications.unsubscribe(subscriber)
-    end
+    def user_table_queries(&) = captured_sql(&).grep(/from "users"/i).size
 
     it "reads the users table no more often for three shared cards than for one" do
       member = sign_in_via_github(uid: "9999", info: { nickname: "hubot" })

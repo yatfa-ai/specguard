@@ -496,7 +496,13 @@ RSpec.describe "Repository members", type: :request do
       # `membership` (hubot's, from the outer let!) is this actor's own row, so it is replaced here.
       let!(:membership) { own_membership }
 
-      before { sign_in_via_github(uid: "9999") }
+      # The mock's nickname defaults to the OWNER's, and the callback writes it onto whichever uid
+      # signs in — so without this override the callback silently renames the `colleague` row from
+      # "hubot" to "octocat", and every example below would run with an actor whose handle is byte-
+      # identical to the owner's, contradicting the `let` that declares otherwise. With it the three
+      # names in play stay distinct: actor hubot, owner octocat, slug org acme — which is what lets
+      # an assertion about who a page NAMES tell the actor and the owner apart.
+      before { sign_in_via_github(uid: "9999", info: { nickname: "hubot" }) }
 
       it "can narrow another member" do
         edit_member(third_party_membership)
@@ -574,12 +580,6 @@ RSpec.describe "Repository members", type: :request do
       # saving the form drops it — a de-escalation, and safe, but not one they asked for. Silent is
       # the part that is not acceptable on a page whose whole subject is who holds what.
       it "is warned that saving will strip a permission it cannot re-grant" do
-        # The mock's nickname defaults to the OWNER's, and the callback writes it onto whichever uid
-        # signs in, so without this override the actor and the owner are two rows both reading
-        # "octocat" — and no assertion about who the page names could tell them apart. With it the
-        # three names in play are distinct: actor hubot, owner octocat, slug org acme.
-        sign_in_via_github(uid: "9999", info: { nickname: "hubot" })
-
         create_membership(repository: repository, user: create_user(github_uid: "5005", github_handle: "ci-bot"),
                           permissions: %w[view keys.manage])
         holder = RepositoryMembership.find_by!(repository: repository, user: User.find_by!(github_handle: "ci-bot"))
