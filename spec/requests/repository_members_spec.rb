@@ -229,6 +229,27 @@ RSpec.describe "Repository members", type: :request do
       expect(response.body).not_to match(/value="repo\.delete"[^>]*checked/)
     end
 
+    # The duplicate refusal in the matrix above is a read-then-write validation, and it cannot see a
+    # request already in flight. A double-click on "Add member", or a re-submit on a slow connection,
+    # sends two POSTs for the same handle: one wins, and the other's SELECT ran before the winner's
+    # row existed, so it sails past the validation and reaches the unique index instead.
+    #
+    # The race is simulated by silencing the uniqueness validation for the duration of the request —
+    # which is precisely what it does on its own when the winning row is not visible to it yet — so
+    # the DATABASE is what refuses, not the model. Submitting twice sequentially would prove nothing
+    # here: the validation catches that unaided, and the example would pass against the unfixed code.
+    #
+    # The loser must land on the same 422 with the same sentence the sequential case gets, not a 500.
+    it "refuses the losing half of a double-submit with the same sentence rather than 500ing" do
+      create_membership(repository: repository, user: colleague)
+      allow(uniqueness_validator(RepositoryMembership)).to receive(:validate_each)
+
+      expect { add_member("hubot", %w[view]) }.not_to change(RepositoryMembership, :count)
+
+      expect(response).to have_http_status(:unprocessable_content)
+      expect(response.body).to include("User already has a membership on this repository")
+    end
+
     it "offers the form from the members page" do
       get repository_members_path(repository)
       expect(response.body).to include(new_repository_member_path(repository))

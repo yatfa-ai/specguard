@@ -59,6 +59,65 @@ RSpec.describe RepositoryMembership do
     }.to raise_error(ActiveRecord::RecordNotUnique)
   end
 
+  # ...and this is what turns the line holding into a refusal a form can render. When the validation
+  # loses the race — its SELECT ran before the competing row was visible — the index raises, and the
+  # save path translates that into the SAME `:user_id` error the sequential path produces, so every
+  # caller of `save` gets one answer for one condition instead of a 500 for the unlucky half.
+  #
+  # The race is simulated by silencing the uniqueness validation, which is exactly what it does on
+  # its own when it cannot see the other row yet. Attribute matters: `:user_id`, not `:base` — the
+  # sequential example above reads it off `:user_id`, and the controller renders `full_message`, so
+  # landing it anywhere else changes the sentence the owner is shown.
+  it "translates a lost uniqueness race into the same :user_id refusal" do
+    create_membership(repository: repository, user: teammate)
+    duplicate = described_class.new(repository: repository, user: teammate)
+    allow(uniqueness_validator(described_class)).to receive(:validate_each)
+
+    expect(duplicate.save).to be(false)
+    expect(duplicate.errors[:user_id].join).to include("already has a membership")
+    expect(duplicate).not_to be_persisted
+    expect(described_class.count).to eq(1)
+  end
+
+  # The refusal above has to leave the CONNECTION usable, not just report itself politely.
+  #
+  # Postgres aborts the whole transaction on a constraint violation, so a rescue with no savepoint
+  # returns a clean `false` with a readable sentence on it while every subsequent statement on that
+  # connection dies with `PG::InFailedSqlTransaction`. That is strictly worse than the 500 this
+  # translation exists to remove: the caller is told the save was refused, and finds out the rest
+  # later, somewhere else.
+  #
+  # The explicit `transaction` here is what makes the example load-bearing, and it is NOT redundant
+  # with the suite's transactional fixtures — those open non-joinable, which forces a savepoint
+  # whether the model asks for one or not, so every other example in this file would stay green
+  # against a model that opened none. This one opens a JOINABLE transaction, the kind application
+  # code writes, which is the only shape that can be poisoned. The query after the failed save is
+  # the assertion: it either answers, or the connection is already dead.
+  it "leaves an enclosing transaction usable after refusing the race" do
+    create_membership(repository: repository, user: teammate)
+    duplicate = described_class.new(repository: repository, user: teammate)
+    allow(uniqueness_validator(described_class)).to receive(:validate_each)
+
+    ActiveRecord::Base.transaction do
+      expect(duplicate.save).to be(false)
+      expect(described_class.count).to eq(1)
+    end
+  end
+
+  # A conflict on some OTHER constraint is not this one's to explain away. Swallowing every
+  # `RecordNotUnique` would turn an unrelated index violation into "already has a membership" — a
+  # wrong sentence is worse than the raise, because it sends the owner to fix something that is
+  # fine, and it reports `save` as a clean refusal when the real fault is still there. Provoked
+  # with a genuine second violation on this same table — a primary-key collision, for a row that is
+  # *not* a duplicate membership.
+  it "re-raises a unique violation that is not the duplicate-membership index" do
+    existing = create_membership(repository: repository, user: teammate)
+    third_party = create_user(github_uid: "5150", github_handle: "third-party")
+    clashing = described_class.new(id: existing.id, repository: repository, user: third_party)
+
+    expect { clashing.save }.to raise_error(ActiveRecord::RecordNotUnique)
+  end
+
   # The owner's rights come from Repository#user_id. A row here would be a second, contradictable
   # source of truth for the same fact.
   it "refuses a membership for the repository's own owner" do
