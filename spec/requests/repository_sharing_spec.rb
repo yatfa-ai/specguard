@@ -89,15 +89,15 @@ RSpec.describe "Repository sharing", type: :request do
 
     # Decision (b). repositories#show gates every scrap of key metadata — names, hints, last-used —
     # behind `keys.manage`, so the card must not hand this member a key count the page it links to
-    # would refuse them. The intent count is not credential information and stays.
-    it "sees no key count on the shared card, but still sees the intent count" do
+    # would refuse them. The suite size is not credential information and stays.
+    it "sees no key count on the shared card, but still sees the suite size" do
       repository.api_keys.create!(name: "CI")
-      create_spec_intent(repository: repository)
+      create_test_run(repository: repository, total_specs_count: 1234)
 
       get repositories_path
 
       expect(response.body).not_to include("1 key")
-      expect(response.body).to include("1 intent")
+      expect(response.body).to include("1,234 tests")
     end
 
     # Decision (d). "Every repository you have registered" stopped being true the moment shared
@@ -398,14 +398,14 @@ RSpec.describe "Repository sharing", type: :request do
     end
 
     # The other half of decision (b): the owner holds every capability, so their card is unchanged.
-    it "still sees both the key and the intent count" do
+    it "still sees both the key count and the suite size" do
       repository.api_keys.create!(name: "CI")
-      create_spec_intent(repository: repository)
+      create_test_run(repository: repository, total_specs_count: 1234)
 
       get repositories_path
 
       expect(response.body).to include("1 key")
-      expect(response.body).to include("1 intent")
+      expect(response.body).to include("1,234 tests")
     end
   end
 
