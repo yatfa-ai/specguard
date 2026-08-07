@@ -18,8 +18,9 @@ require "action_view/railtie"
 # you've limited to :test, :development, or :production.
 Bundler.require(*Rails.groups)
 
-# Not autoloadable — it is referenced while the middleware stack is being assembled, which is
+# Not autoloadable — they are referenced while the middleware stack is being assembled, which is
 # before the autoloaders are usable. `lib/middleware` is excluded from `autoload_lib` below.
+require_relative "../lib/middleware/gzip_request_body"
 require_relative "../lib/middleware/json_parse_error_responder"
 
 module Specguard
@@ -34,6 +35,10 @@ module Specguard
 
     # Give the API one error shape. Inserted inside DebugExceptions on purpose — see the class.
     config.middleware.insert_after ActionDispatch::DebugExceptions, JsonParseErrorResponder
+
+    # Deeper than JsonParseErrorResponder so everything above the inflater sees an ordinary
+    # identity-encoded request. The two do not compete for a failure — see the class.
+    config.middleware.insert_after JsonParseErrorResponder, GzipRequestBody
 
     # Configuration for the application, engines, and railties goes here.
     #

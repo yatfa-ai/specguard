@@ -583,6 +583,137 @@ RSpec.describe "POST /api/v1/ingest", type: :request do
     end
   end
 
+  # A 20,000-example run is a ~6 MiB JSON body and ~0.17 MiB gzipped. The client gem bounds the
+  # whole POST with one `write_timeout`, so on a modest CI uplink compression is the difference
+  # between the run landing and the run never arriving. `GzipRequestBody` is what makes it
+  # readable here; these are the end-to-end claims the middleware's own unit spec cannot make,
+  # because they depend on the middleware being *in the stack* and in the right place in it.
+  describe "a gzipped body" do
+    let(:body) do
+      ingest_payload(
+        commit_sha: "beefcafe01",
+        branch: "main",
+        duration_seconds: 12.5,
+        specs: [
+          annotated_spec(file_path: "spec/models/invoice_spec.rb", line_number: 12),
+          annotated_spec(file_path: "spec/requests/checkout_spec.rb", line_number: 30, layer: "request"),
+          unannotated_spec(file_path: "spec/models/user_spec.rb", line_number: 7)
+        ]
+      )
+    end
+
+    def ingest_gzipped(payload, key: api_key)
+      raw = payload.is_a?(String) ? payload : payload.to_json
+
+      ingest(Zlib.gzip(raw), key: key, headers: { "Content-Encoding" => "gzip" })
+    end
+
+    def ingest_raw_gzip(bytes)
+      ingest(bytes, headers: { "Content-Encoding" => "gzip" })
+    end
+
+    it "accepts it with 202" do
+      ingest_gzipped(body)
+
+      expect(response).to have_http_status(:accepted)
+    end
+
+    # The whole acceptance criterion in one example: not "gzip works" but "gzip is
+    # indistinguishable". Both bodies are posted in the same example and their answers compared to
+    # each other rather than to a hand-copied literal, so the two can never drift apart silently.
+    it "answers exactly what the same body answers uncompressed" do
+      ingest(body)
+      identity = response.parsed_body
+
+      ingest_gzipped(body)
+
+      expect(response.parsed_body.except("test_run_id")).to eq(identity.except("test_run_id"))
+      expect(identity).to include("total_specs" => 3, "annotated_specs" => 2, "annotated_ratio" => 0.667)
+    end
+
+    it "records a TestRun indistinguishable from the one the uncompressed body records" do
+      ingest(body)
+      identity_run = TestRun.find(response.parsed_body["test_run_id"])
+
+      ingest_gzipped(body)
+      gzipped_run = TestRun.find(response.parsed_body["test_run_id"])
+
+      volatile = %w[id created_at updated_at]
+      expect(gzipped_run.attributes.except(*volatile)).to eq(identity_run.attributes.except(*volatile))
+    end
+
+    # `ActionDispatch::Request#raw_post` reads exactly CONTENT_LENGTH bytes. A body that spans
+    # several inflate chunks is where a mis-set length stops being a rounding error and starts
+    # truncating the JSON — and a suite big enough to be worth compressing is always this shape.
+    it "carries a body far larger than one inflate chunk without truncating it" do
+      specs = Array.new(400) { |i| annotated_spec(file_path: "spec/models/m#{i}_spec.rb", line_number: i + 1) }
+      large = ingest_payload(specs: specs)
+      expect(large.to_json.bytesize).to be > GzipRequestBody::READ_CHUNK_BYTES
+
+      ingest_gzipped(large)
+
+      expect(response).to have_http_status(:accepted)
+      expect(TestRun.sole.total_specs_count).to eq(400)
+    end
+
+    it "leaves the endpoint's own validation in charge of a gzipped body that is bad JSON-wise" do
+      ingest_gzipped(ingest_payload(duration_seconds: -1))
+
+      expect(response).to have_http_status(:bad_request)
+      expect(response.parsed_body["message"]).to include("duration_seconds")
+    end
+
+    describe "when the body is not the gzip it claims to be" do
+      it "answers 400 in the API's own error shape, not a 500" do
+        ingest_raw_gzip("this is not gzip at all")
+
+        expect(response).to have_http_status(:bad_request)
+        expect(response.parsed_body).to include("error" => "bad_request",
+                                                "message" => GzipRequestBody::CORRUPT_MESSAGE)
+        expect(response.parsed_body["details"]).to eq([GzipRequestBody::CORRUPT_MESSAGE])
+        expect(TestRun.count).to eq(0)
+      end
+
+      it "answers 400 for a body that inflates past the cap" do
+        stub_const("GzipRequestBody::MAX_INFLATED_BYTES", 1024)
+
+        ingest_raw_gzip(Zlib.gzip("a" * (4 * 1024 * 1024)))
+
+        expect(response).to have_http_status(:bad_request)
+        expect(response.parsed_body["message"]).to include("inflates to more than")
+        expect(TestRun.count).to eq(0)
+      end
+    end
+
+    # The two failure families a gzipped request has, and the evidence the stack does not confuse
+    # them: "your gzip is broken" and "your JSON is broken" are different bugs to go and fix.
+    #
+    # Asserted as one example on purpose, because either half alone is vacuous. With the inflater
+    # missing from the stack entirely, a gzipped body reaches the JSON parser as raw bytes and
+    # *both* of these requests come back as `JsonParseErrorResponder`'s parse error with a 400 —
+    # so the second assertion passes for the wrong reason and proves nothing. Only the contrast
+    # between the two messages tells a working inflater apart from no inflater at all.
+    it "tells a broken gzip apart from a broken JSON body inside a good gzip" do
+      ingest_raw_gzip("this is not gzip at all")
+
+      expect(response.parsed_body["message"]).to eq(GzipRequestBody::CORRUPT_MESSAGE)
+
+      ingest_gzipped("{ not json")
+
+      expect(response).to have_http_status(:bad_request)
+      expect(response.parsed_body["message"]).to eq(JsonParseErrorResponder::MESSAGE)
+    end
+
+    # The inflater sits above the auth filter, so it necessarily runs for an unauthenticated
+    # request too. It must not turn a 401 into anything else.
+    it "still answers 401 for a gzipped body with no API key" do
+      ingest_gzipped(body, key: nil)
+
+      expect(response).to have_http_status(:unauthorized)
+      expect(TestRun.count).to eq(0)
+    end
+  end
+
   # The full auth matrix is proved once in spec/requests/api/v1/repositories_spec.rb. All this
   # endpoint owes is evidence that it inherits the filter rather than re-plumbing it.
   describe "authentication" do
