@@ -741,16 +741,24 @@ RSpec.describe "Repository members", type: :request do
         }.to change(RepositoryMembership, :count).by(1)
         expect(caption).to match(/\badds?\b/i)
 
-        # Door 2 — see who has access. Asserted on `dependabot`, who is neither the viewer nor the
-        # owner, so the signed-in handle in the topbar cannot satisfy it.
+        # Door 2 — see who has access. Scoped to the row the members table draws, NOT matched
+        # against the body: door 1 above redirects with `notice: "Added dependabot with view."`,
+        # which this very request renders in the flash, so `body.include?("dependabot")` passes
+        # with the table rendering zero rows. Same trap and same fix as "does not see themselves
+        # in the list" above — read the table, not the page. Anchoring on the row's own Edit link
+        # also ties the handle to *this* membership rather than to the word appearing anywhere.
+        added = RepositoryMembership.find_by!(repository: repository, user: third_party)
         get repository_members_path(repository)
         expect(response).to have_http_status(:ok)
-        expect(response.body).to include("dependabot")
+        row = css_select("tr").find do |node|
+          node.at_css("a[href='#{edit_repository_member_path(repository, added)}']")
+        end
+        expect(row).not_to be_nil, "the members table rendered no row for the added membership"
+        expect(row.text).to include("dependabot")
         expect(caption).to match(/\bsee\b/i)
 
         # Door 3 — change what an existing member holds. Widening as well as narrowing, within this
         # actor's own bound: "narrow" alone would be the same under-description in a new place.
-        added = RepositoryMembership.find_by!(repository: repository, user: third_party)
         patch repository_member_path(repository, added),
               params: { repository_membership: { permissions: ["", "view", "members.manage"] } }
         expect(added.reload.permissions).to eq(%w[view members.manage])
