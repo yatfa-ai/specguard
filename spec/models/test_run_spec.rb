@@ -104,6 +104,57 @@ RSpec.describe TestRun do
     end
   end
 
+  # The one formatting seam over `duration_seconds`. Both surfaces that render the column go
+  # through it, so what it decides here is what the page shows in both places.
+  describe "#duration_label" do
+    def run_lasting(seconds)
+      repository.test_runs.create!(commit_sha: "abc123", duration_seconds: seconds)
+    end
+
+    it "keeps the tenth for a suite that finished inside a minute" do
+      expect(run_lasting(12.5).duration_label).to eq("12.5s")
+      expect(run_lasting(1.0).duration_label).to eq("1.0s")
+    end
+
+    # The headline case: `372.4s` is a true number nobody reads as "six minutes".
+    it "reads a longer run in minutes and seconds rather than raw seconds" do
+      expect(run_lasting(372.4).duration_label).to eq("6m 12s")
+      expect(run_lasting(59.4).duration_label).to eq("59.4s")
+      expect(run_lasting(60.0).duration_label).to eq("1m")
+    end
+
+    it "reads a run over an hour in hours, minutes and seconds" do
+      expect(run_lasting(3600.0).duration_label).to eq("1h 0m")
+      expect(run_lasting(3612.0).duration_label).to eq("1h 0m 12s")
+      expect(run_lasting(7325.0).duration_label).to eq("2h 2m 5s")
+    end
+
+    # A zero minute that sits between two non-zero parts has to survive: dropping it turns
+    # "one hour and twelve seconds" into a string that reads as "one hour twelve minutes".
+    it "keeps a zero minutes part when there are hours in front of it" do
+      expect(run_lasting(3612.0).duration_label).not_to eq("1h 12s")
+    end
+
+    # `duration_seconds` is nullable and Ingest::Payload accepts nil explicitly, so "the client
+    # sent no timing" is a state the column can be in — and it is not "the run took no time".
+    it "says a missing timing was not reported rather than calling it zero" do
+      run = run_lasting(nil)
+
+      expect(run.duration_label).to eq("not reported")
+      expect(run.duration_label).not_to eq("0.0s")
+      expect(run).not_to be_duration_reported
+    end
+
+    # The other half of that distinction, and the reason `duration_reported?` asks `nil?` rather
+    # than `present?`: a genuinely measured zero is a measurement and must print as one.
+    it "prints a run that genuinely measured zero as zero" do
+      run = run_lasting(0.0)
+
+      expect(run.duration_label).to eq("0.0s")
+      expect(run).to be_duration_reported
+    end
+  end
+
   # The database half of the run-identity invariant. `Ingest::RunRecorder` looks a run up before
   # inserting, but a lookup and an insert are two statements and four shards POST at once — the
   # index is what makes the loser of that race an exception to rescue rather than a second row

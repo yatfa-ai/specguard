@@ -407,6 +407,82 @@ RSpec.describe "Repository registration and API keys", type: :request do
       expect(panel).to have_no_text("Spec intents", normalize_ws: true)
     end
 
+    # What the suite *costs*, which the panel stated the size of and never the price of. The
+    # column has been on the page since the Recent-runs table shipped; what is new is that it is
+    # a labelled header figure here, which is a separate surface.
+    describe "the latest run's total runtime" do
+      it "renders the wall clock as a labelled figure, in a form a reader can read" do
+        repository = create_repository(user: @user)
+        repository.test_runs.create!(commit_sha: "feedfacecafe0008", total_specs_count: 3,
+                                     annotated_specs_count: 2, duration_seconds: 372.4)
+
+        get repository_path(repository)
+
+        panel = overview_panel
+        expect(panel).to have_text("Total runtime 6m 12s", normalize_ws: true)
+        # A true number is not automatically a legible one: nobody reads `372.4s` as six minutes.
+        expect(panel).to have_no_text("372.4s", normalize_ws: true)
+      end
+
+      # The panel's signature refusal, applied to this column: rendering `0.0s` would make "the
+      # client sent no timing" byte-identical to "the run took no time".
+      it "says the timing was not reported rather than showing it as 0.0s" do
+        repository = create_repository(user: @user)
+        repository.test_runs.create!(commit_sha: "feedfacecafe0009", total_specs_count: 3,
+                                     annotated_specs_count: 2, duration_seconds: nil)
+
+        get repository_path(repository)
+
+        panel = overview_panel
+        # Label-scoped, not a bare "not reported": the wording is shared with other absent facts
+        # on this page, and a bare match would pass with the runtime figure deleted entirely.
+        expect(panel).to have_text("Total runtime not reported", normalize_ws: true)
+        expect(panel).to have_no_text("Total runtime 0.0s", normalize_ws: true)
+        expect(panel).to have_no_text("Total runtime 0s", normalize_ws: true)
+      end
+
+      # A measured zero is a measurement. The distinction only exists if both sides of it render.
+      it "prints a run that genuinely measured zero seconds as zero" do
+        repository = create_repository(user: @user)
+        repository.test_runs.create!(commit_sha: "feedfacecafe0010", total_specs_count: 3,
+                                     annotated_specs_count: 2, duration_seconds: 0.0)
+
+        get repository_path(repository)
+
+        expect(overview_panel).to have_text("Total runtime 0.0s", normalize_ws: true)
+        expect(overview_panel).to have_no_text("Total runtime not reported", normalize_ws: true)
+      end
+
+      # The meter and the ratio are suppressed for a run that reported no tests, because 0/0 has
+      # no share. Wall clock is not a share: a run that measured nothing still took time, so the
+      # runtime figure must NOT be gated on the same condition.
+      it "still renders for a run that reported no tests at all" do
+        repository = create_repository(user: @user)
+        repository.test_runs.create!(commit_sha: "feedfacecafe0011", total_specs_count: 0,
+                                     annotated_specs_count: 0, duration_seconds: 92.0)
+
+        get repository_path(repository)
+
+        panel = overview_panel
+        expect(panel).to have_text("Total runtime 1m 32s", normalize_ws: true)
+        # ...without disturbing the suppression that example above pins.
+        expect(panel).to have_text("Tests in suite 0", normalize_ws: true)
+        expect(panel).to have_no_text("0%", normalize_ws: true)
+        expect(panel).to have_no_css("[role='meter']")
+      end
+
+      # The empty state stays a pure empty state: a repository whose CI has never reported has no
+      # run to have taken time, so there is no runtime figure to label — not one reading zero,
+      # and not one reading "not reported" either.
+      it "renders no runtime figure at all for a repository whose CI has never reported" do
+        repository = create_repository(user: @user)
+
+        get repository_path(repository)
+
+        expect(overview_panel).to have_no_text("Total runtime", normalize_ws: true)
+      end
+    end
+
     it "stays visible to a member who cannot manage keys" do
       owner = create_user(github_uid: "7007", github_handle: "repo-owner")
       repository = create_repository(user: owner, github_full_name: "acme/shared-service")
