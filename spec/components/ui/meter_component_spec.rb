@@ -63,7 +63,6 @@ RSpec.describe UI::MeterComponent, type: :component do
     # because nothing fails when someone deletes it as dead code.
     it "holds the 100 ceiling when value exceeds max instead of overflowing the bar" do
       expect(described_class.new(value: 5, max: 3).percent).to eq(100)
-      expect(described_class.new(value: 5, max: 3).percent).not_to be > 100
     end
   end
 
@@ -92,21 +91,54 @@ RSpec.describe UI::MeterComponent, type: :component do
   end
 
   describe "#bar_class" do
-    UI::MeterComponent::TONES.each do |tone, expected_class|
-      it "paints the bar with the #{tone} tone's class" do
-        expect(described_class.new(value: 1, max: 2, tone: tone).bar_class).to eq(expected_class)
-        expect(described_class.new(value: 1, max: 2, tone: tone).bar_class).to eq(described_class::TONES[tone])
+    # Asserted THROUGH THE RENDER, on the bar element's whole class attribute, and against
+    # LITERAL class names rather than `TONES[tone]`.
+    #
+    # Both halves are load-bearing, and each was confirmed by a mutation the other one misses:
+    #
+    #   * Through the render, because `bar_class` IS `TONES.fetch(...)` — comparing its return
+    #     value to `TONES[tone]` restates the method's definition, and stays green when the
+    #     template drops `<%= bar_class %>` and ships an invisible bar against its own track.
+    #   * Against literals, because interpolating `TONES[tone]` into the expectation puts the
+    #     same frozen hash on both sides one layer further out: editing a TONES value to a class
+    #     that does not exist moves expectation and actual together and the full suite stays
+    #     green. Verified — `cta: "bg-app-cta"` -> `"bg-app-WRONG"` left 677 examples passing
+    #     with the render-based-but-interpolated form. Only the literal goes red.
+    #
+    # `eq` on the full attribute rather than `include`/`have_css`, matching the reasoning already
+    # used for `CODE_CLASSES`: `include` passes when an EXTRA tone class is also applied, so only
+    # equality catches "the class was dropped" as well as "a second tone was painted over it".
+    expected_tone_classes = {
+      cta: "bg-app-cta",
+      success: "bg-app-success",
+      warning: "bg-app-warning",
+      error: "bg-app-error",
+      info: "bg-app-info"
+    }.freeze
+
+    # The literals above are only a contract while they cover the whole enum. Without this, a
+    # sixth tone added to TONES renders untested and the loop below silently keeps passing.
+    it "states an expected class for every tone the component defines" do
+      expect(expected_tone_classes.keys).to match_array(UI::MeterComponent::TONES.keys)
+    end
+
+    expected_tone_classes.each do |tone, expected_class|
+      it "paints the bar element with #{expected_class} for the #{tone} tone" do
+        render_inline(described_class.new(value: 1, max: 2, tone: tone))
+
+        expect(page.find("[role='meter'] > div")[:class]).to eq("h-full rounded-full #{expected_class}")
       end
     end
 
     # `TONES.fetch(@tone, TONES[:cta])` — the default argument is the whole example. A `fetch`
     # without one raises `KeyError`, so this branch is the difference between a mistyped `tone:`
-    # rendering in the wrong colour and the repository dashboard 500ing.
-    it "falls back to the cta tone rather than raising when the tone is unknown" do
-      component = described_class.new(value: 1, max: 2, tone: :chartreuse)
+    # rendering in the wrong colour and the repository dashboard 500ing. Taken through the render
+    # too: the fallback's job is to put a real colour on the element, not merely to return a
+    # string, and `render_inline` raising is itself the KeyError half of the claim.
+    it "falls back to the cta tone on the element rather than raising when the tone is unknown" do
+      render_inline(described_class.new(value: 1, max: 2, tone: :chartreuse))
 
-      expect { component.bar_class }.not_to raise_error
-      expect(component.bar_class).to eq(described_class::TONES[:cta])
+      expect(page.find("[role='meter'] > div")[:class]).to eq("h-full rounded-full bg-app-cta")
     end
   end
 
