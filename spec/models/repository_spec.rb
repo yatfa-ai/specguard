@@ -3,6 +3,20 @@
 require "rails_helper"
 
 RSpec.describe Repository do
+  # Shared by every budget example below. Counting queries is how three separate criteria on this
+  # model are stated — `previous_test_run_on_branch` costs one, `suite_size_trajectory` costs one
+  # for a whole series — so it is defined once rather than re-spelled per block.
+  def count_queries
+    count = 0
+    subscriber = ActiveSupport::Notifications.subscribe("sql.active_record") do |_, _, _, _, payload|
+      count += 1 unless payload[:cached] || payload[:name].in?(["SCHEMA", "TRANSACTION"])
+    end
+    yield
+    count
+  ensure
+    ActiveSupport::Notifications.unsubscribe(subscriber)
+  end
+
   it "requires an org/repo shaped full name" do
     repository = create_user.repositories.new(github_full_name: "not-a-full-name")
 
@@ -260,17 +274,6 @@ RSpec.describe Repository do
     # and a page-level assertion stays green. This counts the method itself, where there is nothing
     # else in the block to hide behind.
     describe "what it costs to ask" do
-      def count_queries
-        count = 0
-        subscriber = ActiveSupport::Notifications.subscribe("sql.active_record") do |_, _, _, _, payload|
-          count += 1 unless payload[:cached] || payload[:name].in?(["SCHEMA", "TRANSACTION"])
-        end
-        yield
-        count
-      ensure
-        ActiveSupport::Notifications.unsubscribe(subscriber)
-      end
-
       it "is one query when there is a branch to look along" do
         repository = create_repository
         repository.test_runs.create!(commit_sha: "before", branch: "main", created_at: 2.days.ago)
@@ -288,6 +291,185 @@ RSpec.describe Repository do
         # pays nothing for a comparison it will never be shown.
         expect(count_queries { repository.previous_test_run_on_branch(anonymous) }).to eq(0)
         expect(count_queries { repository.previous_test_run_on_branch(nil) }).to eq(0)
+      end
+    end
+  end
+
+  describe "#suite_size_trajectory" do
+    def run(repository, commit, branch: "main", total: 100, at: 1.hour.ago)
+      repository.test_runs.create!(commit_sha: commit, branch: branch, total_specs_count: total,
+                                   created_at: at)
+    end
+
+    it "returns the branch's runs oldest first, so the series reads left to right" do
+      repository = create_repository
+      run(repository, "oldest", at: 3.days.ago)
+      run(repository, "middle", at: 2.days.ago)
+      latest = run(repository, "newest", at: 1.day.ago)
+
+      expect(repository.suite_size_trajectory(latest).map(&:commit_sha)).to eq(%w[oldest middle newest])
+    end
+
+    # The anchor is the newest point of its own trajectory, which is the only reason this is `<=`
+    # where `previous_test_run_on_branch` is `<`. Everything else about the comparison is identical.
+    it "includes the run it is anchored on" do
+      repository = create_repository
+      latest = run(repository, "anchor")
+
+      expect(repository.suite_size_trajectory(latest).map(&:commit_sha)).to eq(%w[anchor])
+    end
+
+    it "never reaches forward past the run it was anchored on" do
+      repository = create_repository
+      anchor = run(repository, "anchor", at: 2.days.ago)
+      run(repository, "later0", at: 1.day.ago)
+
+      expect(repository.suite_size_trajectory(anchor).map(&:commit_sha)).to eq(%w[anchor])
+    end
+
+    # The whole reason it is branch-scoped, and the reason the "Recent runs" panel disclaims being
+    # a series: `test_runs` is one interleaved history, so a line drawn across it would join a trunk
+    # run to a feature branch's and call the gap growth.
+    it "ignores other branches" do
+      repository = create_repository
+      run(repository, "trunk0", branch: "main", at: 2.days.ago)
+      run(repository, "featur", branch: "feature/x", at: 1.day.ago)
+      latest = run(repository, "trunk1", branch: "main", at: 1.hour.ago)
+
+      expect(repository.suite_size_trajectory(latest).map(&:commit_sha)).to eq(%w[trunk0 trunk1])
+    end
+
+    it "ignores another repository's runs on a branch of the same name" do
+      repository = create_repository
+      other = create_repository(user: create_user(github_uid: "2002", github_handle: "hubot"),
+                                github_full_name: "acme/ledger")
+      run(other, "notmine", at: 2.days.ago)
+      latest = run(repository, "mine00", at: 1.day.ago)
+
+      expect(repository.suite_size_trajectory(latest).map(&:commit_sha)).to eq(%w[mine00])
+    end
+
+    # `Ingest::Payload` writes `branch` through `.presence`, so an anonymous run is an ordinary live
+    # state. Pooling every one of them under `branch IS NULL` would draw one line through runs from
+    # every branch and every machine.
+    it "has no series for a run that named no branch, and asks nothing of the database" do
+      repository = create_repository
+      anonymous = run(repository, "anon00", branch: nil)
+
+      expect(count_queries { expect(repository.suite_size_trajectory(anonymous)).to eq([]) }).to eq(0)
+      expect(count_queries { expect(repository.suite_size_trajectory(nil)).to eq([]) }).to eq(0)
+    end
+
+    # DESC + LIMIT then reversed: the bound has to keep the NEWEST thirty and hand them back
+    # oldest-first. An implementation that ordered ascending and limited would return the oldest
+    # thirty — a chart of ancient history that stops before the run the page is about.
+    it "keeps the newest runs when the history is longer than the bound" do
+      repository = create_repository
+      40.times { |i| run(repository, "sha#{i.to_s.rjust(2, "0")}", at: (40 - i).days.ago) }
+      latest = repository.latest_test_run
+
+      series = repository.suite_size_trajectory(latest)
+
+      expect(series.size).to eq(Repository::TRAJECTORY_LIMIT)
+      expect(series.first.commit_sha).to eq("sha10")
+      expect(series.last.commit_sha).to eq("sha39")
+    end
+
+    it "honours a caller's own bound" do
+      repository = create_repository
+      5.times { |i| run(repository, "sha#{i}", at: (5 - i).days.ago) }
+
+      series = repository.suite_size_trajectory(repository.latest_test_run, limit: 2)
+
+      expect(series.map(&:commit_sha)).to eq(%w[sha3 sha4])
+    end
+
+    # The tie-break, which is the half of the ordering a bare `created_at` comparison loses. A
+    # series is where it does the most damage: a reversed same-instant pair draws the suite jumping
+    # up and back down between two runs ingested in the same second.
+    it "orders a same-instant pair by id, the same way every other reader of this history does" do
+      repository = create_repository
+      at = 1.hour.ago
+      run(repository, "tied_a", total: 10, at: at)
+      run(repository, "tied_b", total: 12, at: at)
+      latest = repository.latest_test_run
+
+      expect(latest.commit_sha).to eq("tied_b")
+      expect(repository.suite_size_trajectory(latest).map(&:commit_sha)).to eq(%w[tied_a tied_b])
+    end
+
+    describe "the shard count each point carries" do
+      # Every point has to answer `assembled_like?` before it may be plotted, and that routes
+      # through a memoized per-INSTANCE `pick`. Primed from the same query, it costs nothing.
+      it "primes every row, including the unsharded corpus" do
+        repository = create_repository
+        run(repository, "plain0", at: 2.days.ago)
+        sharded = run(repository, "sharded", at: 1.day.ago)
+        3.times { |i| sharded.test_run_shards.create!(shard_id: i.to_s, total_specs_count: 10) }
+
+        series = repository.suite_size_trajectory(repository.latest_test_run)
+
+        expect(count_queries { expect(series.map(&:shard_count)).to eq([0, 3]) }).to eq(0)
+      end
+
+      it "does not let one run's shards inflate another's count" do
+        repository = create_repository
+        first = run(repository, "first0", at: 2.days.ago)
+        second = run(repository, "second", at: 1.day.ago)
+        4.times { |i| first.test_run_shards.create!(shard_id: i.to_s, total_specs_count: 10) }
+        second.test_run_shards.create!(shard_id: "0", total_specs_count: 10)
+
+        expect(repository.suite_size_trajectory(repository.latest_test_run).map(&:shard_count))
+          .to eq([4, 1])
+      end
+
+      # A LEFT join, so a run that recorded no shard rows stays in its own history with a count of
+      # zero. An INNER join would silently delete the entire unsharded corpus from the chart.
+      it "does not drop a run that recorded no shards at all" do
+        repository = create_repository
+        run(repository, "plain0", at: 2.days.ago)
+        sharded = run(repository, "sharded", at: 1.day.ago)
+        sharded.test_run_shards.create!(shard_id: "0", total_specs_count: 10)
+
+        expect(repository.suite_size_trajectory(repository.latest_test_run).map(&:commit_sha))
+          .to eq(%w[plain0 sharded])
+      end
+    end
+
+    # Criterion: the panel adds ONE query. Asserted HERE rather than only through the page, for the
+    # reason spec/requests/repository_suite_growth_spec.rb states about its own budget examples: a
+    # render-versus-render difference has a control that walks the same code path, so an
+    # implementation which inflated both sides equally would leave the difference intact. This
+    # counts the method itself, where there is nothing else in the block to hide behind.
+    describe "what it costs to ask" do
+      it "is one query for the whole series, shard counts included" do
+        repository = create_repository
+        3.times { |i| run(repository, "sha#{i}", at: (3 - i).days.ago) }
+        latest = repository.latest_test_run
+
+        expect(count_queries { repository.suite_size_trajectory(latest) }).to eq(1)
+      end
+
+      # The N+1 that would otherwise ship green: `shard_count` is one `pick` per instance, so the
+      # cost would be invisible until a repository's history became sharded — which is exactly the
+      # history this panel exists to be careful about.
+      it "stays one query as the history grows and its runs become sharded" do
+        repository = create_repository
+        3.times { |i| run(repository, "sha#{i}", at: (20 - i).days.ago) }
+        early = repository.latest_test_run
+        expect(count_queries { repository.suite_size_trajectory(early) }).to eq(1)
+
+        10.times do |i|
+          sharded = run(repository, "shard#{i}", at: (10 - i).days.ago)
+          4.times { |s| sharded.test_run_shards.create!(shard_id: s.to_s, total_specs_count: 25) }
+        end
+        latest = repository.latest_test_run
+
+        series = nil
+        expect(count_queries { series = repository.suite_size_trajectory(latest) }).to eq(1)
+        # ...and reading the primed counts afterwards asks nothing either, which is the half a bare
+        # query count around the loader would miss.
+        expect(count_queries { series.each(&:shard_count) }).to eq(0)
       end
     end
   end

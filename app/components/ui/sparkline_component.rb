@@ -1,0 +1,129 @@
+# frozen_string_literal: true
+
+# A server-rendered inline-SVG trajectory: one line through a short series of figures, with the
+# same figures available as text.
+#
+# == Why inline SVG and no JavaScript
+#
+# `package.json` devDependencies is `daisyui` alone and `config/importmap.rb` pins only
+# stimulus/turbo, so a charting library is out of bounds — and it would be the wrong answer anyway.
+# The whole series is already loaded server-side by the time the page renders, so there is nothing
+# for a client library to fetch and nothing to hydrate; drawing the path in ERB keeps the chart
+# inside the design-system gate (`SpecGuard::DesignSystemLint` scans `app/components/**`, which a
+# canvas painted by a bundled library would sit outside of) and keeps it visible with scripting off.
+#
+# == The chart is data, so the figures are text too
+#
+# A line is a picture of numbers and cannot be read by anything that does not see. Every point is
+# therefore also a row of a real table — disclosed, not visually hidden, because a keyboard user
+# who wants the numbers and a screen-reader user who needs them want exactly the same thing. The
+# `<svg>` itself is `role="img"` and points at the label and summary rather than announcing its own
+# path data.
+#
+# == The vertical axis does not start at zero, and says so
+#
+# A suite of 20,000 that grew by 47 is a flat line on a zero-based axis — the change this exists to
+# show, rendered as no change. So the axis spans the series' own minimum to its own maximum, and
+# both bounds are printed beside the plot. The slope is then a picture of the change and NOT of its
+# share of the suite, which is a different claim; the caller's caption is where that gets said in
+# words.
+class UI::SparklineComponent < ApplicationComponent
+  # A point of the series. `label` identifies it (a short SHA), `value` is the figure plotted, and
+  # `detail` is what else the text alternative and the hover title say about it (an age).
+  Point = Struct.new(:label, :value, :detail, keyword_init: true)
+
+  # Chart-space units, not pixels. The `<svg>` is rendered `w-full h-auto` with the default
+  # `preserveAspectRatio`, so this fixes the aspect ratio and the browser does the scaling — no
+  # distortion of the stroke, and no dependence on knowing the container's width server-side.
+  VIEWBOX_WIDTH = 600
+  VIEWBOX_HEIGHT = 140
+  # Enough room that a marker sitting on the series' own minimum or maximum is not clipped in half
+  # by the viewBox edge.
+  PADDING_X = 8
+  PADDING_Y = 10
+  MARKER_RADIUS = 3
+
+  # `id` is required rather than generated. The `<svg>` has to reference its label and summary by
+  # id for `aria-labelledby`, and a generated one would make the markup non-deterministic — which
+  # is exactly the thing a request spec has to be able to name.
+  #
+  # `columns` are the three headings of the text alternative, in the caller's own vocabulary: this
+  # component knows it is drawing "points", and the page knows they are runs.
+  def initialize(id:, points:, label:, coverage:, summary:, columns:, **options)
+    @id = id
+    @points = Array(points)
+    @label = label
+    @coverage = coverage
+    @summary = summary
+    @columns = columns
+    @options = options
+    super
+  end
+
+  attr_reader :id, :points, :label, :coverage, :summary, :columns
+
+  # Two points or nothing. One point drawn as a line is a FLAT line, which is a picture of a suite
+  # that was measured twice and did not move — a claim a single measurement cannot support.
+  #
+  # A backstop and not the message: rendering nothing is honest but says nothing, so a caller owes
+  # its reader an explicit "not enough comparable runs yet" of its own rather than relying on this
+  # to fall silent. See `repositories/show`.
+  def render? = points.size >= 2
+
+  def label_id = "#{id}-label"
+
+  def summary_id = "#{id}-summary"
+
+  def values = points.map { |point| point.value.to_i }
+
+  def minimum = values.min
+
+  def maximum = values.max
+
+  # `M x,y L x,y …` through every point.
+  def line_path
+    coordinates.map.with_index { |(x, y), index| "#{index.zero? ? "M" : "L"}#{x},#{y}" }.join(" ")
+  end
+
+  # The same line closed down to the floor of the plot, so the area beneath it can be tinted. The
+  # tint is decoration — it carries no second figure — which is why it is drawn from the same
+  # coordinates rather than from a second pass over the data.
+  def area_path
+    floor = VIEWBOX_HEIGHT - PADDING_Y
+    "#{line_path} L#{coordinates.last.first},#{floor} L#{coordinates.first.first},#{floor} Z"
+  end
+
+  def coordinates
+    @coordinates ||= points.each_with_index.map { |point, index| [x_for(index), y_for(point.value.to_i)] }
+  end
+
+  def formatted(value) = helpers.number_with_delimiter(value.to_i)
+
+  # What one marker announces on hover. The text alternative below carries the same three facts as
+  # a row, so this is a convenience and never the only place a figure appears.
+  def point_title(point)
+    [point.label, "#{formatted(point.value)} #{"test".pluralize(point.value.to_i)}", point.detail]
+      .compact_blank.join(" — ")
+  end
+
+  def wrapper_class = merge_classes("space-y-2", @options.delete(:class))
+
+  private
+
+  def x_for(index)
+    span = VIEWBOX_WIDTH - (2 * PADDING_X)
+    (PADDING_X + (index.to_f / (points.size - 1) * span)).round(2)
+  end
+
+  # A series whose runs all measured the same suite has no range to scale against, and dividing by
+  # that range would be dividing by zero. It draws down the middle instead — a true flat line, which
+  # is what a suite that did not move looks like. Distinct from the one-point case `render?`
+  # refuses: this one was measured across comparable runs.
+  def y_for(value)
+    plot_height = VIEWBOX_HEIGHT - (2 * PADDING_Y)
+    range = maximum - minimum
+    return (VIEWBOX_HEIGHT / 2.0).round(2) if range.zero?
+
+    (VIEWBOX_HEIGHT - PADDING_Y - ((value - minimum).to_f / range * plot_height)).round(2)
+  end
+end

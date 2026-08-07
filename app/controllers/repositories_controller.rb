@@ -67,6 +67,27 @@ class RepositoriesController < ApplicationController
     # with its own shard count — see `preload_shard_counts`. Every reader in the view is `any?` /
     # `each`, so an Array answers them identically.
     @recent_test_runs = preload_shard_counts(@repository.recent_test_runs.to_a)
+    # The same branch history the delta above reads one row of, read as a series — what the suite
+    # has done over the last thirty runs rather than since the last one. ONE query, and it stays
+    # one: the shard count each point needs to answer `TestRun#assembled_like?` is folded into that
+    # query and primed onto the rows, so the panel costs the same whether the branch has three runs
+    # or thirty and whether they are sharded or not (pinned in
+    # spec/requests/repository_suite_trajectory_spec.rb, and as an absolute count around the model
+    # call itself in spec/models/repository_spec.rb).
+    #
+    # Empty — never a query — when there is no run at all or the latest named no branch, which are
+    # two of the states the Overview's basis line already distinguishes and which the panel
+    # distinguishes again rather than collapsing into one blank chart.
+    #
+    # Which of these rows may be *plotted* is a separate question from which were loaded, and it is
+    # asked by `SuiteTrajectory` rather than here: a run's count is the SUM over the shards recorded
+    # so far, so an in-flight or cancelled sharded row drawn beside a complete one is a cliff to a
+    # quarter of the suite and back. The view renders the object's own counts, so the caption's
+    # plotted/withheld figures cannot drift from the line.
+    @suite_trajectory = SuiteTrajectory.new(
+      runs: @repository.suite_size_trajectory(@latest_test_run),
+      branch: @latest_test_run&.branch
+    )
     # Set by ApiKeysController#create and readable exactly once — see ApiKeysController.
     @revealed_token = flash[:revealed_api_key]
     @revealed_token_name = flash[:revealed_api_key_name]
