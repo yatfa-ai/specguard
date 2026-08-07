@@ -148,7 +148,19 @@ class UI::SparklineComponent < ApplicationComponent
   # Because the wording is single-sourced on purpose. That lambda reaches the page four times — the
   # axis bounds, the caller's summary sentence, this cell, and the marker `<title>` — so widening it
   # re-prints three figures at a precision nothing else on the page uses in order to separate a pair
-  # of rows. This changes exactly one of the four, the one where the information is actually lost.
+  # of rows. This changes exactly one of the four.
+  #
+  # NOT because the other three keep the figure — they do not. Rendered against the 74.25s/74.30s
+  # pair, the axis bounds read `1m 14s` twice, both markers' `<title>`s read `1m 14s`, and the
+  # caller's sentence reads "between 1m 14s and 1m 14s". All four collapse the pair; do not read
+  # this comment as saying the other three were checked and found lossless.
+  #
+  # The table is the one that MAY NOT collapse it. The other three annotate a plot the reader is
+  # looking at, and a bound or a hover title a tenth coarser than the line beneath it is a rounded
+  # caption on a picture that still carries the movement. The table has no picture behind it — for
+  # the reader who cannot see the line it IS the chart, which is the equivalence stated in the
+  # section above — so the same rounding there is not a coarse caption but the finding deleted.
+  # Same loss, different contract; the contract is what decides the site.
   #
   # Disclosed as VISIBLE text, not as `title`/`data`/`aria`. Each of those reaches a hovering mouse,
   # or a screen reader, or a parser — none reaches all three, and a keyboard reader none of them.
@@ -157,20 +169,16 @@ class UI::SparklineComponent < ApplicationComponent
   # And the plotted value verbatim rather than formatted again: a format is an opinion about the
   # unit, this component holds none by construction, and a second wording of the same float is the
   # drift a single formatting seam exists to prevent. This is the number the chart was handed,
-  # printed as it was handed over.
+  # printed as it was handed over — decimals and all. `74.30` reaches Ruby as the Float `74.3` and
+  # discloses as `74.3`, so a column of these sits ragged under `tabular-nums`. That is not a bug to
+  # pad out: a fixed number of decimal places is a claim about the precision of the measurement,
+  # which is exactly the unit opinion this component holds none of.
   def tabulated(value)
-    return formatted(value) unless ambiguous_wording?(value)
+    wording = formatted(value)
+    return wording unless ambiguous_wordings.include?(wording)
 
-    "#{formatted(value)} (#{value})"
+    "#{wording} (#{value})"
   end
-
-  # Whether this point's wording is shared with a DIFFERENT plotted value on the same line.
-  #
-  # Two runs that measured the SAME figure are not an ambiguity to resolve: the line draws them at
-  # one height deliberately, so one wording repeated is the truth about them, and a float disclosed
-  # beside it would be noise printed to separate two things that are not different. Hence the
-  # comparison is over the DISTINCT values, not over the points.
-  def ambiguous_wording?(value) = ambiguous_wordings.include?(formatted(value))
 
   # What one marker announces on hover. The text alternative below carries the same three facts as
   # a row, so this is a convenience and never the only place a figure appears.
@@ -186,8 +194,14 @@ class UI::SparklineComponent < ApplicationComponent
 
   private
 
-  # The wordings that more than one distinct plotted value collapses onto. Memoised because the
-  # text alternative asks once per row and the answer is a property of the series.
+  # The wordings that more than one DISTINCT plotted value collapses onto. Memoised because the
+  # text alternative asks once per row and the answer is a property of the series, not of the row.
+  #
+  # Distinct, and that is the load-bearing word. Two runs that measured the SAME figure are not an
+  # ambiguity to resolve: the line draws them at one height deliberately, so one wording repeated is
+  # the truth about them, and a float disclosed beside it would be noise printed to separate two
+  # things that are not different. Hence `.uniq` — the grouping is over the values the series holds,
+  # not over its points.
   def ambiguous_wordings
     @ambiguous_wordings ||= values.uniq
                                   .group_by { |value| formatted(value) }

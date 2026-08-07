@@ -401,21 +401,34 @@ module RepositoriesHelper
   # says so — "the same float cannot render two ways on one page". It is an instance method because
   # the thing it words is a column, and the chart holds the floats rather than the rows, so the
   # value is wrapped in an unsaved run to ask it. That is deliberately the awkward half: the
-  # alternative is calling `humanized_seconds`, which is private and STAYS private
-  # (`TestRun` :470), and a fourth spelling of seconds on a page that already prints three is
-  # precisely the drift `duration_label`'s own comment exists to prevent.
+  # alternative is calling `humanized_seconds`, which is private and STAYS private (see the comment
+  # on `TestRun#shard_duration_labels`, which states the rule), and a fourth spelling of seconds on
+  # a page that already prints three is precisely the drift `duration_label`'s own comment exists to
+  # prevent.
   #
   # Two things about that `TestRun.new` that are not visible from here:
   #
   # - It is NEVER saved. It is a box for a float, built so an instance method can be asked about it,
   #   and it has no id, no repository and no shards.
-  # - It sits on a per-cell render path — roughly twice per plotted point (the text-alternative row
-  #   and the marker `<title>`), so a 30-run cohort builds ~60 throwaway runs per render. That is
-  #   cheap today and the panel's query-count guard proves it costs no round trips: `.new` builds an
-  #   `AttributeSet` and fires no callbacks. It stops being cheap the day `TestRun` gains an
-  #   `after_initialize` that touches an association, and nothing in `TestRun` warns of this caller —
-  #   so if that day comes, the fix is to move the wording to a value object rather than to keep
-  #   paying for a row here.
+  # - It sits on a per-cell render path — roughly THREE times per plotted point, so a 30-run cohort
+  #   builds ~90 throwaway runs per render. Measured, rendering the component over 30 points with a
+  #   counting lambda: 92. The three are the marker `<title>`, the text-alternative row, and
+  #   `UI::SparklineComponent#ambiguous_wordings`' pass over the series — which is what decides
+  #   whether a row's wording collides with a different plotted value, and so runs on every render
+  #   whether or not anything is disclosed. Exactly: `2n + distinct values + 2`, the trailing two
+  #   being the axis bounds; a cohort whose runs all measured the same duration costs 63, not 92.
+  #   Before the ambiguity pass existed this read twice per point and ~60, and it was 62 measured
+  #   the same way — the third traversal is what SPGD-232 bought the text alternative's equivalence
+  #   with, and it is the honest price of it. These figures are not on trust: the formula and both
+  #   counts are pinned by "how many times a render calls the caller's formatter" in
+  #   `spec/components/ui/sparkline_component_spec.rb`, so a fourth traversal fails a spec here
+  #   rather than quietly making this paragraph wrong — which is how it went wrong the first time.
+  #
+  #   That is cheap today and the panel's query-count guard proves it costs no round trips: `.new`
+  #   builds an `AttributeSet` and fires no callbacks. It stops being cheap the day `TestRun` gains
+  #   an `after_initialize` that touches an association, and nothing in `TestRun` warns of this
+  #   caller — so if that day comes, the fix is to move the wording to a value object rather than to
+  #   keep paying for a row here.
   def trajectory_runtime_formatter
     ->(value) { TestRun.new(duration_seconds: value).duration_label }
   end

@@ -260,4 +260,51 @@ RSpec.describe UI::SparklineComponent, type: :component do
       expect(marker).to eq("aaaaaaa — #{cell} — 3 days ago")
     end
   end
+
+  # `RepositoriesHelper#trajectory_runtime_formatter`'s comment is a bounded COST MODEL, not
+  # decoration: its formatter allocates an unsaved `TestRun` per call, and the comment states how
+  # many per render and warns what would make that stop being cheap. It went stale exactly once —
+  # SPGD-232 added a third traversal of the series and left the comment stating the pre-existing
+  # two — which is the same defect, one file over, that the ticket was written to close. Prose with
+  # a number in it that nothing checks rots silently; this is what checks it.
+  #
+  # Pinned as the FORMULA the comment states rather than as a bare 92, and exercised at two series
+  # shapes so the `distinct` term is not a constant in disguise: an all-equal cohort must cost
+  # strictly less, which is only true because `#ambiguous_wordings` groups over `values.uniq`.
+  describe "how many times a render calls the caller's formatter" do
+    def formatter_calls_for(values)
+      calls = 0
+      counting = lambda { |value|
+        calls += 1
+        "#{value.round(1)}s"
+      }
+      points = values.each_with_index.map { |value, index| build_point("sha#{index}", value) }
+      render_series(points: points, formatter: counting, point_formatter: nil)
+      calls
+    end
+
+    # Two per point (the marker `<title>` and the text-alternative row), one per DISTINCT value
+    # (`#ambiguous_wordings`' pass, which runs whether or not anything is disclosed), and two for
+    # the axis bounds.
+    def predicted(values) = (2 * values.size) + values.uniq.size + 2
+
+    it "costs two per point, one per distinct value, and two for the axis bounds" do
+      moving = (0...30).map { |index| 74.0 + (index * 0.9) }
+      flat = Array.new(30, 74.25)
+
+      expect(formatter_calls_for(moving)).to eq(predicted(moving)).and eq(92)
+      expect(formatter_calls_for(flat)).to eq(predicted(flat)).and eq(63)
+    end
+
+    # The regression the formula above cannot see on its own. `#tabulated` asked `formatted` twice
+    # per row before this guard existed — once to test the wording for a collision and once to
+    # print it — which is invisible in the rendered output and only shows up as a count. Measured as
+    # the MARGINAL cost of one more distinct point, so it holds at any series length: two per point
+    # plus the one distinct value it adds. A point that cost four would be the double-format back.
+    it "words a row once rather than formatting it to test it and again to print it" do
+      marginal = formatter_calls_for([74.25, 74.30, 74.90]) - formatter_calls_for([74.25, 74.30])
+
+      expect(marginal).to eq(3)
+    end
+  end
 end
