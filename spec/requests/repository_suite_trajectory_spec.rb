@@ -948,18 +948,27 @@ RSpec.describe "Repository suite-size trajectory", type: :request do
 
     # `?branch[]=main` and `?branch[x]=1` are a URL anyone can type, and neither is a branch name.
     # Handed to a `where` they raise — a 500 on the read-only page a reader arrived at by link.
-    it "does not fail on a branch parameter that is not a branch name" do
-      repository = repository_anchored_on_a_feature_branch
+    #
+    # The shapes are listed ONCE, in `spec/support/shared_examples/malformed_branch_param.rb`, and
+    # `GET /api/v1/repository` runs the same list against the same guard
+    # (`RequestedBranchParam#requested_branch`). This page pinned two of the three before that guard
+    # was shared; the third was never a live bug here, but the gap was the leading indicator that
+    # the two copies were being maintained apart.
+    #
+    # The assertion is the panel's own words rather than a bare 200, and its force comes from the
+    # example directly above: `?branch=main` IS honoured and renders no fallback, so a guard that
+    # simply threw the parameter away could not pass both.
+    describe "a branch parameter that is not a branch name" do
+      def expect_branch_param_treated_as_no_ask(query)
+        repository = repository_anchored_on_a_feature_branch
 
-      get repository_path(repository), params: { branch: ["main"] }
+        get repository_path(repository), params: query
 
-      expect(response).to have_http_status(:ok)
-      expect(trajectory_panel).to have_text("SpecGuard has 1 run on feature/x so far", normalize_ws: true)
+        expect(response).to have_http_status(:ok)
+        expect(trajectory_panel).to have_text("SpecGuard has 1 run on feature/x so far", normalize_ws: true)
+      end
 
-      get repository_path(repository), params: { branch: { name: "main" } }
-
-      expect(response).to have_http_status(:ok)
-      expect(trajectory_panel).to have_text("SpecGuard has 1 run on feature/x so far", normalize_ws: true)
+      it_behaves_like "a surface that treats a malformed branch parameter as no ask"
     end
 
     # The anonymous runs are not a branch and are not offered as one — pooling them is the failure

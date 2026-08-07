@@ -6,6 +6,11 @@ class RepositoriesController < ApplicationController
   # `history` block on `GET /api/v1/repository`.
   include ShardCountPreloading
 
+  # `?branch=` read as a branch name for the suite-trajectory panel. Shared with
+  # `Api::V1::RepositoriesController`, which reads the same parameter under the same guard to narrow
+  # the `history` block on `GET /api/v1/repository`.
+  include RequestedBranchParam
+
   before_action :require_authentication
 
   # The first four are per-card questions asked by repositories/index, once per repository in the
@@ -96,7 +101,7 @@ class RepositoriesController < ApplicationController
     # bookmark are all ordinary ways to arrive here. `@trajectory_branch_request` keeps the raw ask
     # so the panel can SAY the fallback happened, rather than quietly drawing a different branch
     # from the one the URL names.
-    @trajectory_branch_request = requested_trajectory_branch
+    @trajectory_branch_request = requested_branch
     @trajectory_run = @repository.latest_test_run_on_branch(@trajectory_branch_request) || @latest_test_run
     # The choices, each with how much history it holds — ONE bounded query, and specifically not a
     # `SELECT DISTINCT branch` over the whole run history, which is the O(history) scan
@@ -190,17 +195,6 @@ class RepositoriesController < ApplicationController
   end
 
   private
-
-  # `?branch=` read as a branch name, or `nil` for "no ask".
-  #
-  # `is_a?(String)` before `.presence`, and that guard is the whole method: `?branch[]=main` arrives
-  # here as an Array and `?branch[a]=1` as an ActionController::Parameters, and handing either to a
-  # `where` raises — a 500 on a URL anyone can type into the bar. Neither is a branch name, so both
-  # take the same fallback an unrecognised branch takes: the page renders what it always rendered.
-  def requested_trajectory_branch
-    value = params[:branch]
-    value.is_a?(String) ? value.presence : nil
-  end
 
   # `user_id` is already loaded on the record, so this asks nothing of the database.
   def owns_repository?(repository)
