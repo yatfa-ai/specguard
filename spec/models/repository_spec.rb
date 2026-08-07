@@ -91,6 +91,47 @@ RSpec.describe Repository do
     end
   end
 
+  describe "#recent_test_runs" do
+    it "returns the newest runs first" do
+      repository = create_repository
+      repository.test_runs.create!(commit_sha: "oldest", created_at: 2.days.ago)
+      repository.test_runs.create!(commit_sha: "middle", created_at: 1.day.ago)
+      repository.test_runs.create!(commit_sha: "newest", created_at: 1.hour.ago)
+
+      expect(repository.recent_test_runs.map(&:commit_sha)).to eq(%w[newest middle oldest])
+    end
+
+    it "breaks a same-instant tie on id, matching #latest_test_run" do
+      # The Overview panel names `latest_test_run` and this panel's top row names the same run.
+      # If the two orderings disagreed — and the id tie-break is the only thing that decides a
+      # same-instant pair — the page would print two different commits for one run.
+      repository = create_repository
+      at = 1.hour.ago
+      repository.test_runs.create!(commit_sha: "first", created_at: at)
+      repository.test_runs.create!(commit_sha: "second", created_at: at)
+
+      expect(repository.recent_test_runs.first).to eq(repository.latest_test_run)
+      expect(repository.recent_test_runs.map(&:commit_sha)).to eq(%w[second first])
+    end
+
+    it "honours the limit, defaulting to ten" do
+      repository = create_repository
+      12.times { |i| repository.test_runs.create!(commit_sha: "sha#{i}", created_at: i.hours.ago) }
+
+      expect(repository.recent_test_runs.count).to eq(10)
+      expect(repository.recent_test_runs(limit: 3).map(&:commit_sha)).to eq(%w[sha0 sha1 sha2])
+    end
+
+    it "ignores another repository's runs" do
+      repository = create_repository
+      other = create_repository(user: create_user(github_uid: "2002", github_handle: "hubot"),
+                                github_full_name: "acme/ledger")
+      other.test_runs.create!(commit_sha: "not-mine")
+
+      expect(repository.recent_test_runs).to be_empty
+    end
+  end
+
   it "takes its api keys, runs and intents with it when destroyed" do
     repository = create_repository
     repository.api_keys.create!

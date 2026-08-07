@@ -138,9 +138,10 @@ RSpec.describe "Repository registration and API keys", type: :request do
     #     pre-existing timestamp column deleted.
     #
     # Scoping to the key's own row and to the header cells makes both assertions load-bearing.
-    # `find("table")` is unambiguous today: the API-keys table is the only one on this page. A
-    # second table would raise Capybara::Ambiguous here, which is a loud failure, not a silent pass.
-    def api_keys_table = Capybara.string(response.body).find("table")
+    # Scoped to `#api-keys` because this page now renders a second table (Recent runs) — a bare
+    # `find("table")` would raise Capybara::Ambiguous. The `id` is the API-keys panel's own
+    # deep-link anchor (repositories/show.html.erb), not something added for this finder.
+    def api_keys_table = Capybara.string(response.body).find("#api-keys table")
 
     def api_key_headers = api_keys_table.all("thead th").map(&:text)
 

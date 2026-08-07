@@ -246,5 +246,68 @@
         <% end %>
       <% end %>
     <% end %>
+
+    <%# Read-only suite telemetry, deliberately OUTSIDE the `manage_keys` gate above — the same
+        class of information as the connection-health stat: a `view` member legitimately needs to
+        see whether CI is still reporting and what it reported. Nothing here is credential
+        metadata and nothing here actions anything, so it is not a "control" and has no business
+        in the `rendered_controls` matrix (spec/requests/repository_sharing_spec.rb).
+
+        Ten rows regardless of suite size: this is a history of *runs*, not of tests. A 20,000-test
+        suite still renders ten rows, and there is no per-spec aggregation behind any cell. %>
+    <%= render UI::PanelComponent.new(title: "Recent runs", id: "recent-runs", class: "lg:col-span-3") do %>
+      <% if @recent_test_runs.any? %>
+        <%= render UI::TableComponent.new(columns: ["Commit", "Branch", "Tests", "Duration", "Annotated", "Ingested"]) do %>
+          <% @recent_test_runs.each do |test_run| %>
+            <tr>
+              <td class="px-3 py-2 font-mono text-xs text-app-content"><%= test_run.commit_sha.first(7) %></td>
+              <td class="px-3 py-2 text-app-content-secondary">
+                <%# `branch` is nullable (db/schema.rb) and Ingest::Payload accepts a body without
+                    it, so a blank cell would be a client omission dressed up as a fact. %>
+                <%= test_run.branch.presence || tag.span("not reported", class: "text-app-muted") %>
+              </td>
+              <td class="px-3 py-2 text-app-content tabular-nums">
+                <%# Whole-suite size — Ingest::Payload derives it from every spec in the run, not
+                    only the annotated ones, so this is a real number on a suite with zero @intent
+                    annotations. %>
+                <%= number_with_delimiter(test_run.total_specs_count.to_i) %>
+              </td>
+              <td class="px-3 py-2 text-app-content-secondary tabular-nums">
+                <%# `duration_seconds` is nullable and Ingest::Payload accepts `nil` explicitly.
+                    Rendering `0.0s` for a run that never reported one would make "the client sent
+                    no timing" byte-identical to "the run took no time" — so the two states are
+                    kept visibly apart. %>
+                <% if test_run.duration_seconds.nil? %>
+                  <span class="text-app-muted">not reported</span>
+                <% else %>
+                  <%= number_with_precision(test_run.duration_seconds, precision: 1) %>s
+                <% end %>
+              </td>
+              <td class="px-3 py-2 text-app-content tabular-nums">
+                <%# The PERCENTAGE (`annotated_ratio`), never the 0–1 `annotated_fraction` the
+                    /ingest body reports — the two differ by 100×. And a run that reported no tests
+                    has no share to take: `annotated_ratio` floors at 0.0 by guard, which beside
+                    real percentages reads as a measured zero. %>
+                <% if test_run.total_specs_count.to_i.zero? %>
+                  <span class="text-app-muted">no tests</span>
+                <% else %>
+                  <%= test_run.annotated_ratio %>%
+                <% end %>
+              </td>
+              <td class="px-3 py-2 text-app-content-secondary tabular-nums">
+                <%= time_ago_in_words(test_run.created_at) %> ago
+              </td>
+            </tr>
+          <% end %>
+        <% end %>
+      <% else %>
+        <%# Not an empty table and not a row of zeros: a repository whose CI has never reported
+            must not look like one that reported and found nothing. %>
+        <%= render UI::EmptyStateComponent.new(
+              title: "No runs yet",
+              description: "Runs appear here once CI posts to /ingest. Nothing has been reported for this repository."
+            ) %>
+      <% end %>
+    <% end %>
   </div>
 <% end %>
