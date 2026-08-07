@@ -2,7 +2,8 @@
 
 # Every SpecGuard component consumes the caller's class with a MUTATING
 # `@options.delete(:class)`, memoised so the read happens exactly once. See the convention note on
-# `ApplicationComponent#merge_classes` for why `delete` cannot simply become `[]`.
+# `ApplicationComponent#merge_classes` for why the memoisation is load-bearing at all 19 sites while
+# the `delete` is load-bearing at only the eight that splat the remaining options onto an element.
 #
 # This pins both halves of that construct at once, so the 19 sites need one example group rather
 # than 19 hand-written pairs:
@@ -53,7 +54,7 @@ RSpec.shared_examples "a component that appends the caller's class" do |options|
 
     # The consume-once half, taken through the RENDER, because that is the only place this failure
     # shows. Two distinct regressions are covered, and `delete` -> `[]` trips one or the other at
-    # every site:
+    # the EIGHT sites that splat the remaining options onto the same element:
     #
     #   * a component that splats into `tag.attributes(html_options)` emits a SECOND `class`
     #     attribute on one element. Nokogiri keeps only the first, so the duplicate is counted on
@@ -61,6 +62,13 @@ RSpec.shared_examples "a component that appends the caller's class" do |options|
     #   * a component that splats `**@options` into the same tag lets the surviving `:class`
     #     override the earlier `class:` key outright (last key wins in a kwargs splat), silently
     #     dropping `base`. That one is caught by the root-element assertion.
+    #
+    # At the other eleven sites `@options` never reaches an element, so `delete` -> `[]` changes no
+    # output and this example CANNOT go red for it — verified, not assumed: the mutation leaves the
+    # render suite green at all eleven. That is a property of those components, not a gap in this
+    # assertion; there is no duplicate attribute and no displaced class to observe. What this
+    # example still pins at all 19 is that the caller's class lands on the root element, once,
+    # without displacing `base`. See `ApplicationComponent#merge_classes` for the split.
     it "lands on the root element exactly once, without displacing the component's own classes" do
       render_inline(instance_exec({ key => probe }, &build)) { body }
 

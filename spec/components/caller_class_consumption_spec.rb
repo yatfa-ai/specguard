@@ -113,12 +113,49 @@ RSpec.describe "caller-supplied component classes" do
     end
   end
 
+  # `Forms::FieldComponent` is the one component whose class-consuming method is not the only reader
+  # of its options hash: `#input` splats the REMAINING `@input_options` onto the form control. If
+  # `:wrapper_class` has not been consumed by the time that splat runs, it lands on the input as a
+  # stray, invalid `wrapper_class="..."` HTML attribute. `#input` therefore calls `wrapper_class`
+  # itself, so the guarantee is structural rather than a bet on the template reading the wrapper
+  # (line 1) before the input (line 3) — the same order-bet removed from `alert` and `panel`.
+  #
+  # Called in the HOSTILE order on purpose. Through the template this passes either way, which is
+  # precisely what makes the order-bet invisible and worth pinning here instead.
+  describe "Forms::FieldComponent#input", type: :component do
+    it "consumes :wrapper_class even when called before #wrapper_class" do
+      component = Forms::FieldComponent.new(
+        form: ActionView::Helpers::FormBuilder.new(
+          :repository, Repository.new, vc_test_controller.view_context, {}
+        ),
+        attribute: :github_full_name, wrapper_class: "spg-probe-wrapper-slot"
+      )
+
+      markup = component.input
+
+      expect(markup).to include("<input")
+      expect(markup).not_to include("wrapper_class")
+      expect(markup).not_to include("spg-probe-wrapper-slot")
+    end
+  end
+
   # A registry is only a guard while it is complete. This walks the components for the construct
   # itself and fails on any site the registry does not name, so the next component written this way
   # arrives with coverage rather than a silent gap. It also fails the other way, on a registry entry
   # whose component no longer consumes a class — a stale entry is a passing example that guards
   # nothing.
-  it "names every component that consumes a caller-supplied class" do
+  #
+  # MUTATION-RUN HAZARD, which is why this carries the `:construct_grep` tag. This example matches
+  # the SOURCE TEXT of the construct, not its behaviour, so ANY textual edit to `delete(:class)`
+  # fails it whether or not behaviour changed. Rewriting a site to `@options[:class]` — the exact
+  # mutation you would run to check that the duplicate-attribute assertion above still bites —
+  # deletes the string this greps for, so this example dies by construction at all 19 sites. At the
+  # 11 non-splat sites it is the ONLY example that dies, and a run that leaves it in reads as a
+  # clean behavioural sweep that never happened. Filter it out when mutating the construct:
+  #
+  #   bundle exec rspec spec/components --tag ~construct_grep
+  #
+  it "names every component that consumes a caller-supplied class", :construct_grep do
     consuming = Rails.root.glob("app/components/**/*.rb").filter_map { |path|
       # Whole-line comments dropped first: `ApplicationComponent` documents this very construct in
       # prose, and prose is not a site. Lines carrying code plus a trailing comment are kept, so

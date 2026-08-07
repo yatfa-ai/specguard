@@ -36,6 +36,14 @@ class Forms::FieldComponent < ApplicationComponent
   end
 
   def input
+    # `wrapper_class` is what consumes `:wrapper_class` out of `@input_options`, and the splat below
+    # would otherwise emit whatever is left as a stray `wrapper_class="..."` attribute on the form
+    # control. Calling it here makes that impossible structurally, instead of resting on the
+    # template reading the wrapper (line 1) before the input (line 3) — the same order-bet that was
+    # removed from `alert` and `panel`. Memoised, so this costs nothing and the template's own call
+    # is unaffected.
+    wrapper_class
+
     form.public_send(@as, attribute,
                      **@input_options,
                      class: merge_classes(INPUT_CLASS, @input_options[:class]))
