@@ -19,10 +19,12 @@
               <%= render UI::HeadingComponent.new(level: 3, class: "text-app-content min-w-0") { repository.github_full_name } %>
               <%# The list now mixes owned and shared repositories, and nothing else on the card
                   distinguishes them — which matters because `show` offers a destructive Remove to a
-                  member holding `repo.delete`. The owner login is the same one `show` names in its
-                  Overview panel. %>
+                  member holding `repo.delete`. The badge names the *owner account* — the person to
+                  ask for a wider permission set — which is the same one `show` names in its
+                  Overview panel. Not the slug's org segment, which names no SpecGuard account.
+                  `user` is preloaded by the controller, so this asks nothing per card. %>
               <% unless owns_repository?(repository) %>
-                <%= render UI::BadgeComponent.new(tone: :info, class: "shrink-0") { "Shared · #{repository.owner_login}" } %>
+                <%= render UI::BadgeComponent.new(tone: :info, class: "shrink-0") { "Shared · #{repository.user.display_name}" } %>
               <% end %>
             </div>
             <div class="flex items-center gap-2">

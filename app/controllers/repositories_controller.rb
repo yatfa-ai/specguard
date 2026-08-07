@@ -14,9 +14,14 @@ class RepositoriesController < ApplicationController
   # No `.distinct`: RepositoryMembership rejects a row for the owner outright
   # (`user_is_not_the_owner`), so the two sides cannot overlap. A defensive uniq here would mask
   # that invariant breaking rather than let it fail loudly.
+  #
+  # `includes(:user)` because every shared card names its owner. Without it that is one user query
+  # per shared card — the same footing `shared_permissions` puts its own per-card question on, so
+  # the page costs the same whether the list has one shared card or fifty.
   def index
     @repositories = Repository.where(user_id: current_user.id)
                               .or(Repository.where(id: current_user.repository_memberships.select(:repository_id)))
+                              .includes(:user)
                               .order(:github_full_name)
   end
 
