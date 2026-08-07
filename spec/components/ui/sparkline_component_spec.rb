@@ -13,6 +13,14 @@ RSpec.describe UI::SparklineComponent, type: :component do
      build_point("ccccccc", 1_047, "1 day ago")]
   end
 
+  # The suite-size wording the component used to hard-code, now supplied by its caller. Kept here
+  # verbatim so every assertion below is still a statement about the same rendered chart.
+  def size_formatter = ->(value) { ActiveSupport::NumberHelper.number_to_delimited(value.to_i) }
+
+  def size_point_formatter
+    ->(value) { "#{size_formatter.call(value)} #{"test".pluralize(value.to_i)}" }
+  end
+
   def render_series(points: three_points, **overrides)
     render_inline(described_class.new(**{
       id: "trajectory",
@@ -20,7 +28,9 @@ RSpec.describe UI::SparklineComponent, type: :component do
       label: "Tests in suite on main",
       coverage: "3 of 4 runs plotted",
       summary: "The suite measured between 1,000 and 1,047 tests.",
-      columns: ["Run", "Tests in suite", "Ingested"]
+      columns: ["Run", "Tests in suite", "Ingested"],
+      formatter: size_formatter,
+      point_formatter: size_point_formatter
     }.merge(overrides)))
   end
 
@@ -172,5 +182,82 @@ RSpec.describe UI::SparklineComponent, type: :component do
     render_series(class: "mt-4")
 
     expect(page).to have_css("div#trajectory.mt-4.space-y-2")
+  end
+
+  # == The component holds no unit
+  #
+  # It used to name one in three places — an integer coercion, `number_with_delimiter`, and a
+  # hard-coded `"test".pluralize` — while documenting itself as unit-agnostic. Each is a claim about
+  # what is being plotted, and each is false of a series of seconds.
+  describe "a series that is not a count of tests" do
+    # 74.25 → 74.80 is a real 0.55s regression. Coerced to integers it is 74 → 74: a flat line,
+    # which is the single shape that asserts the quantity did NOT move — and `flat?` copy on the
+    # page would then say so in words.
+    def duration_points
+      [build_point("aaaaaaa", 74.25, "3 days ago"),
+       build_point("bbbbbbb", 74.50, "2 days ago"),
+       build_point("ccccccc", 74.80, "1 day ago")]
+    end
+
+    def render_durations(**overrides)
+      render_series(points: duration_points,
+                    formatter: ->(value) { "#{value.round(1)}s" },
+                    point_formatter: nil,
+                    columns: ["Run", "Wall clock", "Ingested"],
+                    **overrides)
+    end
+
+    it "draws a sub-integer range as a slope rather than flattening it to a line" do
+      render_durations
+
+      ys = page.all("svg circle").map { |circle| circle[:cy].to_f }
+      expect(ys.uniq.size).to eq(3)
+      expect(ys.first).to be > ys[1]
+      expect(ys[1]).to be > ys.last
+    end
+
+    # The same series through the OLD `to_i` coercion is 74, 74, 74 — a zero-width range, drawn
+    # down the middle of the plot. Naming that value here is what makes the guard above fail if the
+    # coercion ever comes back, rather than merely testing that three floats differ.
+    it "does not park a moving series on the flat-line midpoint" do
+      render_durations
+
+      midpoint = described_class::VIEWBOX_HEIGHT / 2.0
+      expect(page.all("svg circle").map { |circle| circle[:cy].to_f }).not_to include(midpoint)
+    end
+
+    it "announces markers in the caller's unit and never as a count of tests" do
+      render_durations
+
+      titles = page.all("svg circle title").map(&:text)
+      expect(titles).to eq(["aaaaaaa — 74.3s — 3 days ago",
+                            "bbbbbbb — 74.5s — 2 days ago",
+                            "ccccccc — 74.8s — 1 day ago"])
+      expect(titles.join).not_to include("test")
+    end
+
+    it "prints the axis bounds and the table cells in the caller's unit" do
+      render_durations
+
+      expect(page).to have_text("74.8s")
+      expect(page).to have_text("74.3s")
+      cells = page.all("details table tbody tr", visible: :all)
+                  .map { |row| row.all("td", visible: :all)[1].text(:all) }
+      expect(cells).to eq(["74.3s", "74.5s", "74.8s"])
+    end
+
+    # A figure that already carries its unit needs no second spelling, so a caller that supplies
+    # only `formatter` — which is what the wall-clock series does — gets the same wording in the
+    # marker as in the table. A caller whose figure does not carry its unit (`20,013`) passes both,
+    # which is the suite-size shape every assertion above this block exercises.
+    it "words a marker exactly as the table when the caller supplies no marker wording" do
+      render_durations
+
+      marker = page.all("svg circle title").map(&:text).first
+      cell = page.all("details table tbody tr", visible: :all).first
+                 .all("td", visible: :all)[1].text(:all)
+      expect(marker).to include(cell)
+      expect(marker).to eq("aaaaaaa — #{cell} — 3 days ago")
+    end
   end
 end

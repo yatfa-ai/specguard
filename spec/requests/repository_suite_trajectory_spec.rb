@@ -1168,4 +1168,215 @@ RSpec.describe "Repository suite-size trajectory", type: :request do
     expect(response).to have_http_status(:ok)
     expect(plotted_labels).to eq(%w[aaaaaaa bbbbbbb])
   end
+
+  # == The second line: what the same runs COST
+  #
+  # Every row the size line is drawn through already carried its own `duration_seconds`, unread. The
+  # panel could say the suite has 20,013 tests and grew by 47; it could not say whether last month's
+  # run waited 40s.
+  describe "the wall-clock line" do
+    def runtime_chart = trajectory_panel.find("#suite-trajectory-runtime-chart")
+
+    # ELEMENT-scoped for the reason `basis_line` is: the two basis paragraphs in this panel share
+    # most of their vocabulary, and a panel-level matcher would read one for the other.
+    def runtime_basis = trajectory_panel.find("#suite-trajectory-runtime-basis")
+
+    def runtime_rows
+      runtime_chart.all("details table tbody tr", visible: :all).map do |row|
+        row.all("td", visible: :all).map { |cell| cell.text(:all).strip }
+      end
+    end
+
+    def timed_run(repository, commit, seconds:, total: 1_000, branch: "main", at: 1.hour.ago)
+      repository.test_runs.create!(commit_sha: commit, branch: branch, total_specs_count: total,
+                                   annotated_specs_count: total / 4, duration_seconds: seconds,
+                                   created_at: at)
+    end
+
+    # Criterion 1: the line goes through the same runs as the size line, and every plotted figure is
+    # the run's own `duration_seconds`.
+    it "draws each plotted run's wall clock beside the suite's size" do
+      repository = create_repository(user: @user)
+      timed_run(repository, "aaaaaaa1111", seconds: 40.2, total: 1_000, at: 20.days.ago)
+      timed_run(repository, "bbbbbbb2222", seconds: 61.5, total: 1_020, at: 10.days.ago)
+      timed_run(repository, "ccccccc3333", seconds: 74.25, total: 1_047, at: 1.hour.ago)
+
+      get repository_path(repository)
+
+      expect(runtime_chart).to have_css("svg circle", count: 3, visible: :all)
+      expect(runtime_rows).to eq([["aaaaaaa", "40.2s", "20 days ago"],
+                                  ["bbbbbbb", "1m 2s", "10 days ago"],
+                                  ["ccccccc", "1m 14s", "about 1 hour ago"]])
+      # The same three runs the size line drew through, so the two lines cannot describe different
+      # cohorts on the same page.
+      expect(plotted_labels).to eq(%w[aaaaaaa bbbbbbb ccccccc])
+    end
+
+    # Criterion 3: markers are durations and never "74 tests" — which is exactly what the component
+    # announced before it stopped naming the unit.
+    it "announces every marker as a duration and never as a count of tests" do
+      repository = create_repository(user: @user)
+      timed_run(repository, "aaaaaaa1111", seconds: 40.2, at: 2.days.ago)
+      timed_run(repository, "ccccccc3333", seconds: 74.25, total: 1_047, at: 1.hour.ago)
+
+      get repository_path(repository)
+
+      titles = runtime_chart.all("svg circle title", visible: :all).map { |t| t.text(:all) }
+      expect(titles).to eq(["aaaaaaa — 40.2s — 2 days ago",
+                            "ccccccc — 1m 14s — about 1 hour ago"])
+      expect(titles.join).not_to include("test")
+      # And the suite-size chart is untouched by the generalization: same figure, same noun.
+      expect(chart.all("svg circle title", visible: :all).map { |t| t.text(:all) })
+        .to eq(["aaaaaaa — 1,000 tests — 2 days ago", "ccccccc — 1,047 tests — about 1 hour ago"])
+    end
+
+    # Criterion 3 again, at the seam rather than at the output. `TestRun#duration_label` is the one
+    # place this column is worded — "the same float cannot render two ways on one page" — and the
+    # chart is the third reader. `74.25` reaching the page as `74.25s` or `74.3 s` would be a fourth
+    # spelling; it renders as `1m 14s` because it went through the same method the Recent-runs cell
+    # does.
+    it "words its figures through the one formatter this column has" do
+      repository = create_repository(user: @user)
+      timed_run(repository, "aaaaaaa1111", seconds: 40.2, at: 2.days.ago)
+      timed_run(repository, "ccccccc3333", seconds: 74.25, total: 1_047, at: 1.hour.ago)
+
+      get repository_path(repository)
+
+      newest = repository.test_runs.order(:created_at).last
+      expect(newest.duration_label).to eq("1m 14s")
+      expect(runtime_rows.last[1]).to eq(newest.duration_label)
+      expect(runtime_chart).to have_text(newest.duration_label)
+    end
+
+    # Criterion 4: the defect the integer coercion produced. 74.25 → 74.80 is a real 0.55s
+    # regression; coerced it is 74 → 74, drawn down the middle of the plot and described as a wait
+    # that "has not moved".
+    it "draws a sub-second regression as a slope and does not call it unmoved" do
+      repository = create_repository(user: @user)
+      timed_run(repository, "aaaaaaa1111", seconds: 74.25, at: 2.days.ago)
+      timed_run(repository, "ccccccc3333", seconds: 74.80, total: 1_047, at: 1.hour.ago)
+
+      get repository_path(repository)
+
+      ys = runtime_chart.all("svg circle", visible: :all).map { |circle| circle[:cy].to_f }
+      expect(ys.uniq.size).to eq(2)
+      expect(ys.first).to be > ys.last
+      expect(ys).not_to include(UI::SparklineComponent::VIEWBOX_HEIGHT / 2.0)
+      expect(runtime_basis).to have_no_text("has not moved")
+    end
+
+    # Criterion 2. Nullable by design, so a run that measured its suite and sent no clock is an
+    # ordinary state — off this line, counted here, and still on the size line above.
+    it "withholds an untimed run by name while leaving it on the size line" do
+      repository = create_repository(user: @user)
+      timed_run(repository, "aaaaaaa1111", seconds: 40.2, total: 1_000, at: 20.days.ago)
+      timed_run(repository, "silentcc222", seconds: nil, total: 1_020, at: 10.days.ago)
+      timed_run(repository, "ccccccc3333", seconds: 74.25, total: 1_047, at: 1.hour.ago)
+
+      get repository_path(repository)
+
+      expect(runtime_rows.map(&:first)).to eq(%w[aaaaaaa ccccccc])
+      expect(plotted_labels).to eq(%w[aaaaaaa silentcc ccccccc].map { |sha| sha.first(7) })
+      expect(runtime_chart).to have_text("2 of 3 plotted runs timed")
+      expect(runtime_basis)
+        .to have_text("1 run is withheld from this line for having reported no timing at all",
+                      normalize_ws: true)
+      expect(runtime_basis).to have_text("remains on the suite-size line above", normalize_ws: true)
+    end
+
+    # The line's own basis, in this panel's register. A wall clock on a sharded run is its SLOWEST
+    # SHARD and not what the suite cost in machine time, and a reader who takes it for the latter
+    # under-reads a four-shard suite by 3.4×.
+    it "states that a point is the run's wait and not the suite's machine time" do
+      repository = create_repository(user: @user)
+      timed_run(repository, "aaaaaaa1111", seconds: 40.2, at: 2.days.ago)
+      timed_run(repository, "ccccccc3333", seconds: 74.25, total: 1_047, at: 1.hour.ago)
+
+      get repository_path(repository)
+
+      expect(runtime_basis).to have_text("Drawn through 2 of the 2 runs", normalize_ws: true)
+      expect(runtime_basis).to have_text("on main", normalize_ws: true)
+      expect(runtime_basis).to have_text("slowest single shard and not the machine time",
+                                         normalize_ws: true)
+    end
+
+    # `plottable?` does not imply `runtime_plottable?`. The panel is not empty — the size line is
+    # drawn — so this is one sentence about what was reported rather than an empty state.
+    it "says why there is no line rather than drawing a flat one through a single clock" do
+      repository = create_repository(user: @user)
+      timed_run(repository, "aaaaaaa1111", seconds: nil, total: 1_000, at: 2.days.ago)
+      timed_run(repository, "ccccccc3333", seconds: 74.25, total: 1_047, at: 1.hour.ago)
+
+      get repository_path(repository)
+
+      expect(trajectory_panel).to have_css("#suite-trajectory-chart")
+      expect(trajectory_panel).to have_no_css("#suite-trajectory-runtime-chart")
+      expect(runtime_basis).to have_text("1 of the 2 plotted runs reported one, and a trajectory " \
+                                         "needs 2", normalize_ws: true)
+    end
+
+    # The count above reads correctly whether it is counted off `timed` or typed in as a literal,
+    # because with a threshold of two the shortfall branch can only be reached by exactly one timed
+    # run. That makes the assertion above unable to fail on the thing most likely to be wrong — so
+    # this moves the threshold and asks the same sentence again. A hard-coded "1 … needs two" prints
+    # a FALSE count here: two runs reported a clock, and the sentence explaining the shortfall would
+    # say one did.
+    it "counts the shortfall off the timed runs rather than assuming the threshold is two" do
+      stub_const("SuiteTrajectory::MINIMUM_POINTS", 3)
+      repository = create_repository(user: @user)
+      timed_run(repository, "aaaaaaa1111", seconds: nil, total: 1_000, at: 3.days.ago)
+      timed_run(repository, "bbbbbbb2222", seconds: 40.2, total: 1_020, at: 2.days.ago)
+      timed_run(repository, "ccccccc3333", seconds: 74.25, total: 1_047, at: 1.hour.ago)
+
+      get repository_path(repository)
+
+      expect(trajectory_panel).to have_no_css("#suite-trajectory-runtime-chart")
+      # Split from the threshold word deliberately: the COUNT is the half that can state a falsehood
+      # about the cohort, so it is pinned on its own and a failure here names which half drifted.
+      expect(runtime_basis).to have_text("2 of the 3 plotted runs reported one", normalize_ws: true)
+      expect(runtime_basis).to have_text("a trajectory needs 3", normalize_ws: true)
+    end
+
+    it "says so plainly when no plotted run reported a clock at all" do
+      repository = create_repository(user: @user)
+      run(repository, "aaaaaaa1111", total: 1_000, at: 2.days.ago)
+      run(repository, "ccccccc3333", total: 1_047, at: 1.hour.ago)
+
+      get repository_path(repository)
+
+      expect(trajectory_panel).to have_no_css("#suite-trajectory-runtime-chart")
+      expect(runtime_basis).to have_text("none of the 2 plotted runs reported one",
+                                         normalize_ws: true)
+    end
+
+    # Criterion 6. The rows were already loaded and already carried the column, so a second series
+    # over them is free — which is the argument for reading it here rather than anywhere else.
+    it "costs no query per plotted point" do
+      # The same counter `what the panel costs the page` uses, and defined here rather than hoisted:
+      # that block's own comment explains what a render-against-render budget can and cannot show,
+      # and sharing one helper across two describes is how a counter quietly outlives the argument
+      # for it.
+      count_queries = lambda do |&block|
+        count = 0
+        subscriber = ActiveSupport::Notifications.subscribe("sql.active_record") do |_, _, _, _, payload|
+          count += 1 unless payload[:cached] || payload[:name].in?(["SCHEMA", "TRANSACTION"])
+        end
+        block.call
+        count
+      ensure
+        ActiveSupport::Notifications.unsubscribe(subscriber)
+      end
+
+      repository = create_repository(user: @user)
+      2.times { |i| timed_run(repository, "seed#{i}0000000", seconds: 40.0 + i, at: (20 - i).days.ago) }
+      get repository_path(repository)
+      baseline = count_queries.call { get repository_path(repository) }
+      expect(runtime_chart).to have_css("svg circle", count: 2, visible: :all)
+
+      8.times { |i| timed_run(repository, "more#{i}0000000", seconds: 50.0 + i, at: (10 - i).days.ago) }
+
+      expect(count_queries.call { get repository_path(repository) }).to eq(baseline)
+      expect(runtime_chart).to have_css("svg circle", count: 10, visible: :all)
+    end
+  end
 end

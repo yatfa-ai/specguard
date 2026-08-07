@@ -367,4 +367,56 @@ module RepositoriesHelper
 
     "only #{plotted} of them can be compared with each other"
   end
+
+  # == The two units the "Suite growth" panel plots, worded once each
+  #
+  # `UI::SparklineComponent` holds no unit (see its `initialize`), so each series hands it the
+  # wording of its own figures. These are those two, kept beside each other because that is the
+  # whole reason the component stopped holding one: a chart of tests and a chart of seconds sit in
+  # the same panel, and the day a third series lands it must be impossible for it to inherit either
+  # of these by accident.
+  #
+  # One method per lambda, named for the seam it fills, and never a positional pair: the two size
+  # formatters differ only in whether they append the noun, so a call site that destructured them in
+  # the wrong order would render an axis reading `20,013 tests` and markers reading `20,013` — a
+  # silent swap with nothing at the call site able to catch it.
+
+  # The suite-size series' axis-and-table wording. Exactly what the component used to hard-code,
+  # moved out to its caller: the bare delimited figure, for the places that have a heading beside
+  # them to say what it counts.
+  def trajectory_size_formatter
+    ->(value) { number_with_delimiter(value.to_i) }
+  end
+
+  # The suite-size series' marker wording. A `<title>` is read on its own, with no heading beside it,
+  # so this is the one place the noun has to appear.
+  def trajectory_size_point_formatter
+    ->(value) { "#{number_with_delimiter(value.to_i)} #{"test".pluralize(value.to_i)}" }
+  end
+
+  # The runtime series. One lambda and not two: `1m 14s` names its own unit, so the marker needs no
+  # second spelling and must not get one.
+  #
+  # Routed through `TestRun#duration_label`, which is the single formatting seam for this column and
+  # says so — "the same float cannot render two ways on one page". It is an instance method because
+  # the thing it words is a column, and the chart holds the floats rather than the rows, so the
+  # value is wrapped in an unsaved run to ask it. That is deliberately the awkward half: the
+  # alternative is calling `humanized_seconds`, which is private and STAYS private
+  # (`TestRun` :470), and a fourth spelling of seconds on a page that already prints three is
+  # precisely the drift `duration_label`'s own comment exists to prevent.
+  #
+  # Two things about that `TestRun.new` that are not visible from here:
+  #
+  # - It is NEVER saved. It is a box for a float, built so an instance method can be asked about it,
+  #   and it has no id, no repository and no shards.
+  # - It sits on a per-cell render path — roughly twice per plotted point (the text-alternative row
+  #   and the marker `<title>`), so a 30-run cohort builds ~60 throwaway runs per render. That is
+  #   cheap today and the panel's query-count guard proves it costs no round trips: `.new` builds an
+  #   `AttributeSet` and fires no callbacks. It stops being cheap the day `TestRun` gains an
+  #   `after_initialize` that touches an association, and nothing in `TestRun` warns of this caller —
+  #   so if that day comes, the fix is to move the wording to a value object rather than to keep
+  #   paying for a row here.
+  def trajectory_runtime_formatter
+    ->(value) { TestRun.new(duration_seconds: value).duration_label }
+  end
 end
