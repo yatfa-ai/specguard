@@ -1446,12 +1446,14 @@ RSpec.describe "Repository registration and API keys", type: :request do
       # free is that it is still one `pluck` on one already-issued query. A number is the only
       # form of that claim that cannot drift.
       #
-      # 13 on `origin/main` at a7c7421 and 13 after — verified by running this example against the
-      # pre-change `app/models/test_run.rb`, `app/views/repositories/show.html.erb` and
+      # 13 on `origin/main` and 13 after — verified by running this example against the pre-change
+      # `app/models/test_run.rb`, `app/views/repositories/show.html.erb` and
       # `app/controllers/api/v1/repositories_controller.rb`, where it passes the count and fails
-      # only on the rendered-output assertion below. Recount it deliberately if it moves: a
-      # *lower* number is as much a change to explain as a higher one, since it usually means a
-      # figure stopped being read rather than that a query stopped being issued.
+      # only on the rendered-output assertion below. Re-verified that way at a7c7421 and again at
+      # a2ed333 after SPGD-226 and SPGD-228 landed on this page, so the number is a property of
+      # the change rather than of the base it was first measured on. Recount it deliberately if it
+      # moves: a *lower* number is as much a change to explain as a higher one, since it usually
+      # means a figure stopped being read rather than that a query stopped being issued.
       #
       # QUERY-CACHE HITS ARE COUNTED, unlike the panel's other budget guards. A repeated identical
       # SELECT inside one request costs no round trip and is invisible to a `payload[:cached]`
