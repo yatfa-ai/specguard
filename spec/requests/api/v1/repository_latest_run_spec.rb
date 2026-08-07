@@ -105,7 +105,8 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
     # per block would catch neither.
     it "serves exactly the top-level keys docs/DEVELOPMENT.md documents" do
       expect(get_repository.keys)
-        .to contain_exactly("repository", "api_key", "latest_run", "history_window", "history")
+        .to contain_exactly("repository", "api_key", "latest_run", "history_window", "history",
+                            "branches_window", "branches")
     end
 
     it "scopes latest_run to the key's own repository" do
@@ -809,7 +810,8 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
       body = get_repository(query: { branch: "main" })
 
       expect(body.keys)
-        .to contain_exactly("repository", "api_key", "latest_run", "history_window", "history")
+        .to contain_exactly("repository", "api_key", "latest_run", "history_window", "history",
+                            "branches_window", "branches")
       expect(body["history"].first.keys).to contain_exactly(
         "commit_sha", "branch", "total_specs", "annotated_specs", "annotated_ratio",
         "duration_seconds", "shard_count", "suite_size_measured", "ingested_at"
@@ -880,6 +882,346 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
       end).to eq(rows.map do |row|
         row.values_at("commit_sha", "branch", "total_specs_count", "annotated_specs_count")
       end)
+    end
+  end
+
+  # The half of `?branch=` that makes the other half reachable. Everything above assumes the client
+  # already knows a branch name; nothing in the response told it one.
+  describe "the branches catalogue" do
+    # The fixture the whole slice turns on, and its shape is the assertion. Twelve `main` runs
+    # FIRST, then ten `feature/*` runs, so the ten newest runs repository-wide are ALL non-`main`
+    # and the unfiltered `history` — bounded at ten — carries no `main` row at all. That is the one
+    # window an API client has, and `main` is exactly the name it does not contain.
+    #
+    # A fixture where `main` fell inside the newest ten could not observe the defect: `history`
+    # would already carry the name, and the example would pass with or without a catalogue. Twelve
+    # rather than ten `main` runs so the count served is neither bound and cannot have come from
+    # truncating anything.
+    def trunk_hidden_repository
+      main_runs = Array.new(12) do |index|
+        create_test_run(repository: repository, commit_sha: "main%08d" % index, branch: "main",
+                        total_specs_count: 100 + index, annotated_specs_count: 25)
+      end
+      feature_runs = Array.new(10) do |index|
+        create_test_run(repository: repository, commit_sha: "feat%08d" % index,
+                        branch: "feature/extract-billing-#{index}",
+                        total_specs_count: 7, annotated_specs_count: 1)
+      end
+
+      [main_runs, feature_runs]
+    end
+
+    it "sees the defect: the only window a client has holds no main row, so no response names it" do
+      trunk_hidden_repository
+
+      history = get_repository["history"]
+
+      expect(repository.test_runs.where(branch: "main").count).to eq(12)
+      expect(history.length).to eq(10)
+      expect(history.map { |row| row["branch"] }).to all(start_with("feature/"))
+    end
+
+    # AC1. The same repository, the same instant, NO query parameter — and the name that appears
+    # nowhere in `history` appears in `branches`, with the count that says why a client should care.
+    # Removing the catalogue turns this red; nothing else in the body can answer it.
+    it "names main, with its run count, on a repository whose whole history window hides it" do
+      trunk_hidden_repository
+
+      body = get_repository
+
+      expect(body["history"].map { |row| row["branch"] }).not_to include("main")
+      expect(body["branches"])
+        .to include("name" => "main", "run_count" => 12, "run_count_capped" => false)
+    end
+
+    # AC1's second half, and it is the sibling panel's stated rule rather than a convenience: the
+    # client that needs the catalogue most has not selected anything yet, so it cannot be a block
+    # that appears only once you already selected something.
+    it "serves the same catalogue whether or not a branch was asked for" do
+      trunk_hidden_repository
+
+      unfiltered = get_repository
+      filtered = get_repository(query: { branch: "main" })
+      unknown = get_repository(query: { branch: "release/does-not-exist" })
+
+      expect(unfiltered["branches"]).to be_present
+      expect(filtered["branches"]).to eq(unfiltered["branches"])
+      expect(unknown["branches"]).to eq(unfiltered["branches"])
+    end
+
+    # AC2. The cap is a BOOLEAN BESIDE THE NUMBER, never the panel's `"30+"` caption. A client
+    # comparing two branches' history must not have to strip a `+` before it can subtract, and a
+    # count that stopped is a different fact from a count that finished — so both are served and
+    # neither is spelled into the other.
+    it "serves a stopped count as a number and a flag, not as the panel's 30+ string" do
+      Array.new(35) do |index|
+        create_test_run(repository: repository, commit_sha: "deep%08d" % index, branch: "main")
+      end
+      create_test_run(repository: repository, commit_sha: "shallow00000", branch: "feature/small")
+
+      rows = get_repository["branches"].index_by { |row| row["name"] }
+
+      expect(repository.test_runs.where(branch: "main").count).to eq(35)
+      expect(rows.fetch("main"))
+        .to eq("name" => "main", "run_count" => 30, "run_count_capped" => true)
+      expect(rows.fetch("main")["run_count"]).to eq(Repository::TRAJECTORY_LIMIT)
+      # The branch that finished counting says so, so `run_count_capped` is a fact about the row
+      # rather than a constant the block always carries.
+      expect(rows.fetch("feature/small"))
+        .to eq("name" => "feature/small", "run_count" => 1, "run_count_capped" => false)
+      # No figure anywhere in the block is a rendered string — the caption lives on the dashboard.
+      expect(rows.values.flat_map(&:values).grep(String)).to all(satisfy { |v| !v.include?("+") })
+    end
+
+    # AC3. The walk's bound, as tokens. Whole-hash, because this block IS the contract — a key
+    # added without a line in docs/DEVELOPMENT.md fails here, and a documented key dropped fails
+    # here too.
+    it "states the walk's bound and its own ordering as tokens, not as the helper's prose" do
+      trunk_hidden_repository
+
+      expect(get_repository["branches_window"]).to eq(
+        "order" => "run_count_desc,last_run_at_desc,name_asc",
+        # The middle ordering key is not a field on a row, so the array's own order is the answer
+        # rather than a rendering of one — the same admission `history_window` makes.
+        "tie_break_served" => false,
+        "run_count_limit" => 30,
+        "walk_limit" => 500,
+        "walk_cut" => false,
+        "returned" => 11
+      )
+      # Read off the model's constants rather than restated, so the response cannot come to claim a
+      # bound the walk did not apply.
+      expect(get_repository.dig("branches_window", "walk_limit"))
+        .to eq(Repository::BRANCH_HISTORY_LIMIT)
+      expect(get_repository.dig("branches_window", "run_count_limit"))
+        .to eq(Repository::TRAJECTORY_LIMIT)
+    end
+
+    # AC3's load-bearing half, and the reason a bare list would be a lie past the bound. The walk is
+    # NAME-ORDERED, so a repository with more branches than it walks hands the history sort an
+    # alphabetical PREFIX — here `main` has a hundred runs and is not in the catalogue at all,
+    # because `feature/churn-*` fills the first five hundred names. Without `walk_cut` a client
+    # would read "`main` is absent" as "`main` has no runs", which is the exact inversion the
+    # ordering exists to prevent.
+    #
+    # `insert_all!` so the fixture costs one statement rather than three thousand.
+    it "says the walk stopped, on the repository where the trunk is missing because it did" do
+      now = Time.current
+      TestRun.insert_all!(Array.new(3000) do |index|
+        { repository_id: repository.id, commit_sha: "planned%09d" % index,
+          branch: (index % 30).zero? ? "main" : "feature/churn-#{index}",
+          total_specs_count: 10, annotated_specs_count: 1,
+          created_at: now - index.minutes, updated_at: now - index.minutes }
+      end)
+
+      body = get_repository
+
+      expect(repository.test_runs.where(branch: "main").count).to eq(100)
+      expect(body["branches"].length).to eq(Repository::BRANCH_HISTORY_LIMIT)
+      # The claim this flag has to carry: `main` really is absent, and it really does have runs.
+      expect(body["branches"].map { |row| row["name"] }).not_to include("main")
+      expect(body["branches_window"]).to include("walk_cut" => true, "returned" => 500)
+    end
+
+    # AC3's derivation, pinned as its own example because `>=` and `==` agree on every fixture but
+    # this one. A pinned branch is UNIONed into the walk's result, so a cut walk can hand back MORE
+    # rows than its own bound: 501 branches, the walk takes the alphabetically-first 500
+    # (`feature/000`…`feature/499`), and `?branch=feature/500` pins the one it did not reach.
+    # `returned` is then 501 and a `==` derivation would report a cut walk as complete — which is
+    # `RepositoriesHelper#trajectory_walk_cut?`'s stated reason for `>=`.
+    it "still reports a cut walk when a pinned branch pushed the row count past the bound" do
+      now = Time.current
+      TestRun.insert_all!(Array.new(501) do |index|
+        { repository_id: repository.id, commit_sha: "pinned%09d" % index,
+          branch: "feature/%03d" % index, total_specs_count: 10, annotated_specs_count: 1,
+          created_at: now - index.minutes, updated_at: now - index.minutes }
+      end)
+
+      body = get_repository(query: { branch: "feature/500" })
+
+      expect(body["branches_window"]).to include("returned" => 501, "walk_cut" => true)
+      expect(body["branches_window"]["returned"])
+        .to be > body["branches_window"]["walk_limit"]
+      # AC8. The pinned branch is the one the client filtered on, so the response that narrowed the
+      # history can also name the branch it narrowed to — one body that does not contradict itself.
+      expect(body["branches"].map { |row| row["name"] }).to include("feature/500")
+      expect(body["history"].map { |row| row["branch"] }.uniq).to eq(["feature/500"])
+    end
+
+    # AC8's other half: pinning cannot invent a branch. A pinned name with no runs behind it drops
+    # out with every other empty one, which is the same answer `history` gives it.
+    it "does not invent a branch for a ?branch= that has no runs" do
+      trunk_hidden_repository
+
+      body = get_repository(query: { branch: "release/does-not-exist" })
+
+      expect(body["history"]).to eq([])
+      expect(body["branches"].map { |row| row["name"] }).not_to include("release/does-not-exist")
+    end
+
+    # AC4. `RepositoriesHelper::TRAJECTORY_BRANCH_CHOICES` is about what a row of links can carry
+    # before it stops being a way to find a branch. A JSON array has no such limit, and a display
+    # bound leaking into a machine response would drop branches for a reason that does not apply.
+    it "serves every branch the walk reached, not the eight a row of links can hold" do
+      trunk_hidden_repository
+
+      names = get_repository["branches"].map { |row| row["name"] }
+
+      expect(RepositoriesHelper::TRAJECTORY_BRANCH_CHOICES).to eq(8)
+      expect(names.length).to eq(11)
+      expect(names.length).to be > RepositoriesHelper::TRAJECTORY_BRANCH_CHOICES
+    end
+
+    # AC5. `branch` is nullable and ingest accepts a body without it, so `null` means "the client
+    # did not say" — a different fact from any branch name. The anonymous runs of every machine are
+    # not one branch, and offering them a name here would offer a name `?branch=` refuses to match.
+    it "leaves runs that reported no branch out of the catalogue entirely" do
+      Array.new(5) { |index| create_test_run(repository: repository, commit_sha: "anon%08d" % index) }
+      create_test_run(repository: repository, commit_sha: "named0000000", branch: "main")
+
+      body = get_repository
+
+      expect(repository.test_runs.where(branch: nil).count).to eq(5)
+      expect(body["branches"]).to eq([{ "name" => "main", "run_count" => 1,
+                                        "run_count_capped" => false }])
+      expect(body["branches_window"]).to include("returned" => 1)
+    end
+
+    it "serves an empty catalogue, never null, for a repository whose CI has never reported" do
+      body = get_repository
+
+      expect(body["branches"]).to eq([])
+      expect(body["branches_window"]).to include("returned" => 0, "walk_cut" => false)
+      expect(body["latest_run"]).to be_nil
+    end
+
+    # AC. Re-derived straight from the table rather than from the same Ruby the serializer read, in
+    # the ordering the model documents — most history first, ties to the branch pushed to most
+    # recently, then to the name.
+    it "matches direct SQL over the same repository's branches" do
+      trunk_hidden_repository
+
+      sql = <<~SQL.squish
+        SELECT branch, COUNT(*) AS run_count
+        FROM test_runs WHERE repository_id = $1 AND branch IS NOT NULL
+        GROUP BY branch ORDER BY COUNT(*) DESC, MAX(created_at) DESC, branch ASC
+      SQL
+      rows = ActiveRecord::Base.connection
+                               .select_all(sql, "branch catalogue cross-check", [repository.id]).to_a
+      # Guards against the comparison passing on two empty arrays.
+      expect(rows.length).to eq(11)
+      expect(get_repository["branches"].map { |row| row.values_at("name", "run_count") })
+        .to eq(rows.map { |row| [row["branch"], row["run_count"]] })
+    end
+
+    # AC7. The catalogue is a TOP-LEVEL key and is not smuggled into the window beside it —
+    # `history_window` is asserted whole-hash, so a `branches` key folded in there would change a
+    # block clients already read. Pinned here with a populated catalogue, which is the only state
+    # where the mistake is possible.
+    it "leaves history_window exactly as it was, rather than growing a branches key" do
+      trunk_hidden_repository
+
+      body = get_repository
+
+      expect(body["branches"]).to be_present
+      expect(body["history_window"]).to eq(
+        "order" => "ingested_at_desc,ingest_sequence_desc",
+        "tie_break_served" => false,
+        "branch_scope" => "all_branches",
+        "branch" => nil,
+        "limit" => 10,
+        "returned" => 10
+      )
+    end
+  end
+
+  # AC6. What the catalogue costs, on the axis it actually moves along. The two budget blocks below
+  # vary shard count and run count, and BOTH build their runs with `branch: nil` — which the walk
+  # excludes, so a catalogue returns zero rows there and costs nothing however it was written.
+  # Neither can fail for a per-branch leak in principle. The branch axis is therefore written here
+  # rather than inherited, and every run in it names a branch explicitly.
+  describe "what the branches catalogue costs the endpoint" do
+    def create_branches(count, prefix:)
+      Array.new(count) do |index|
+        create_test_run(repository: repository, commit_sha: "#{prefix}%08d" % index,
+                        branch: "#{prefix}/branch-%03d" % index, total_specs_count: 10)
+      end
+    end
+
+    # The invariance, from a ONE-BRANCH baseline out to forty. One query per branch — the shape the
+    # `SELECT DISTINCT` this walk replaced would have invited — reads as thirty-nine extra
+    # statements at the top of this example and none at the bottom.
+    it "costs the same at 1 branch, at 10 and at 40" do
+      create_branches(1, prefix: "one")
+      get_repository
+      baseline = executed_sql { get_repository }.length
+
+      create_branches(9, prefix: "ten")
+      expect(repository.test_runs.where.not(branch: nil).distinct.count(:branch)).to eq(10)
+      expect(executed_sql { get_repository }.length).to eq(baseline)
+
+      create_branches(30, prefix: "forty")
+      expect(repository.test_runs.where.not(branch: nil).distinct.count(:branch)).to eq(40)
+      expect(executed_sql { get_repository }.length).to eq(baseline)
+      # The fixture really does carry the cardinality this example claims, so the invariance above
+      # is over a branch axis that moved rather than over one that never left zero.
+      expect(get_repository["branches"].length).to eq(40)
+    end
+
+    # The budget stated as ONE absolute query rather than only as "the same as before", because
+    # invariance alone would also hold for a catalogue that cost forty-one queries at every size.
+    it "pays exactly one query for the whole catalogue, at any branch count" do
+      create_branches(40, prefix: "budget")
+      # Warm the API-key lookup path so the auth queries do not vary between runs.
+      get_repository
+
+      walks = executed_sql { get_repository }.grep(/WITH RECURSIVE/)
+
+      expect(walks.length).to eq(1)
+      # One bounded walk, not a `SELECT DISTINCT branch` over the whole run history — the O(history)
+      # scan `Repository#branch_histories` documents at length for refusing.
+      expect(walks.first).to include("LIMIT")
+      expect(executed_sql { get_repository }.grep(/SELECT DISTINCT/)).to be_empty
+    end
+
+    # AC6's second half: the walk is served by
+    # `index_test_runs_on_repository_id_and_branch_and_created_at` (db/schema.rb), whose column
+    # order — `(repository_id, branch, created_at, id)` — is what makes it one index descent per
+    # BRANCH and none per run.
+    #
+    # THREE THOUSAND ROWS AND AN `ANALYZE`, not the forty above, and not `enable_seqscan = off`. On
+    # a forty-row table Postgres sequentially scans however good the index is, so the plan would say
+    # nothing; forcing the planner's hand only proves the index is *usable*, which is weaker than
+    # the claim that matters. At a size where the choice is real the planner picks it on its own.
+    #
+    # EXPLAINED ON THE STATEMENT THE REQUEST ACTUALLY RAN, captured off the notification rather than
+    # rebuilt here — `BRANCH_HISTORY_SQL` is `private_constant`, and a hand-copied query would be a
+    # plan for a string this endpoint never executes.
+    it "is served by the (repository_id, branch, created_at, id) index, with no sequential scan" do
+      now = Time.current
+      TestRun.insert_all!(Array.new(3000) do |index|
+        { repository_id: repository.id, commit_sha: "planned%09d" % index,
+          branch: (index % 30).zero? ? "main" : "feature/churn-#{index}",
+          total_specs_count: 10, annotated_specs_count: 1,
+          created_at: now - index.minutes, updated_at: now - index.minutes }
+      end)
+      ActiveRecord::Base.connection.execute("ANALYZE test_runs")
+
+      walk = executed_sql { get_repository }.grep(/WITH RECURSIVE/).first
+      # Proves the probe can produce a non-empty result at all: an unmatched grep and a clean plan
+      # are indistinguishable at the assertion below.
+      expect(walk).to be_present
+      plan = ActiveRecord::Base.connection.select_values("EXPLAIN #{walk}").join("\n")
+
+      expect(plan).to include("index_test_runs_on_repository_id_and_branch_and_created_at")
+      expect(plan).not_to include("Seq Scan")
+      # The branch is resolved by the index walk itself — an Index Cond and never a `Filter` applied
+      # to rows the index already handed back, which is the shape that makes the walk O(history).
+      # Matched LINE BY LINE: a multiline `.` would let the recursion's own
+      # `Filter: (branch IS NOT NULL)` node — which sits on the work table, not on a run — pair up
+      # with an Index Cond three lines away and report a leak that is not there.
+      expect(plan.lines.grep(/Index Cond:.*branch = /)).not_to be_empty
+      expect(plan.lines.grep(/Filter:.*branch = /)).to be_empty
     end
   end
 
