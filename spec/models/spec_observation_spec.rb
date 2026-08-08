@@ -91,6 +91,24 @@ RSpec.describe SpecObservation do
     describe "the plan Postgres chooses for each of them" do
       let(:runs) { 20 }
 
+      # One run's rows reached THROUGH `index_spec_observations_on_test_run_id` (or a composite
+      # that leads with it), rather than by walking every run's. Postgres reaches them two ways
+      # depending on how many dead tuples sit behind the live ones — a plain `Index Scan`, or a
+      # `Bitmap Index Scan` over the same index once the heap is scattered enough for one bitmap
+      # pass to price better than many random fetches. Each example here inserts ten thousand rows
+      # and rolls them back, so the table this runs against carries progressively more dead tuples
+      # the later in a suite run it is reached, and which of the two the planner picks is decided
+      # by that bloat and by RSpec's random ordering — NOT by anything about the query.
+      #
+      # Pinning the plain `Index Scan` spelling therefore pins a cost tiebreak that has no bearing
+      # on the criterion, and it reddens on ordering alone: this matcher was widened after exactly
+      # that happened. What these examples are about is stated in the comments on each of them —
+      # one run read through an index — and the `Seq Scan` assertion beside this one is what
+      # carries their reach: unscope any of these aggregates from a single run and the plan turns
+      # into a sequential scan of every run's rows, whichever access method it had before.
+      INDEXED_BY_RUN =
+        /(?:Index Scan using|Bitmap Index Scan on) index_spec_observations_on_test_run_id\w*/
+
       before do
         seed(run)
         (runs - 1).times { seed(create_test_run(repository: repository)) }
@@ -143,7 +161,7 @@ RSpec.describe SpecObservation do
       it "reads the by-file totals off an index rather than scanning the table" do
         plan = plan_for(by_file)
 
-        expect(plan).to match(/Index Scan using index_spec_observations_on_test_run_id\w* on spec_observations/)
+        expect(plan).to match(INDEXED_BY_RUN)
         expect(plan).not_to match(/Seq Scan on spec_observations/)
       end
 
@@ -166,7 +184,7 @@ RSpec.describe SpecObservation do
       it "reads the panel's by-file rollup off an index rather than scanning the table" do
         plan = plan_for_actual_sql { described_class.file_durations_in(run) }
 
-        expect(plan).to match(/Index Scan using index_spec_observations_on_test_run_id\w* on spec_observations/)
+        expect(plan).to match(INDEXED_BY_RUN)
         expect(plan).not_to match(/Seq Scan on spec_observations/)
       end
 
@@ -184,7 +202,7 @@ RSpec.describe SpecObservation do
       it "counts a whole run's outcomes off an index rather than scanning the table" do
         plan = plan_for(coverage)
 
-        expect(plan).to match(/Index Scan using index_spec_observations_on_test_run_id\w* on spec_observations/)
+        expect(plan).to match(INDEXED_BY_RUN)
         expect(plan).not_to match(/Seq Scan on spec_observations/)
       end
     end
