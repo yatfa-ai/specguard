@@ -630,8 +630,11 @@ class TestRun < ApplicationRecord
   #
   # **A shard is not a code area.** RSpec/Knapsack partitions are arbitrary with respect to
   # directory structure, so "which partition of this run is expensive per test" is the question
-  # answered here and "which directory is expensive" is not. Every string built from these has to
-  # be worded so a reader cannot mistake one for the other.
+  # answered here. "Which DIRECTORY is expensive" is a different question with a different answer,
+  # and it is answered elsewhere — `SpecObservation.directory_durations_in` rolls the same run's
+  # per-example rows up by code area. The two are not substitutes and cannot be read off each
+  # other: an area's cost is spread across every shard that happened to draw its files. Every
+  # string built from these has to be worded so a reader cannot mistake one for the other.
 
   # Below this, a spread is not a finding. Same reasoning as `NEGLIGIBLE_EXCESS_PERCENT` and
   # deliberately a separate constant rather than a reuse of it: that one thresholds the excess over

@@ -1493,6 +1493,15 @@ RSpec.describe "Repository registration and API keys", type: :request do
       # ordinary widening — is the equality across two suite sizes in
       # spec/requests/repository_spec_file_durations_spec.rb.
       #
+      # RECOUNTED AT 17 by SPGD-292, which added the "Heaviest spec directories" panel: ONE further
+      # read of `spec_observations`, a second grouped aggregate taking the same run's rows up one
+      # rung to the code area (see `SpecDirectoryDurations`). Not derivable from the by-file read
+      # and therefore not free: a by-file top ten shows ten files, and a directory outweighing all
+      # of them can have no row in it. Issued on this fixture for the same reason the three above
+      # are — the run recorded no examples, the aggregate comes back empty and the panel renders
+      # nothing. Its own N+1 guard is the equality across two suite sizes in
+      # spec/requests/repository_spec_file_durations_spec.rb, alongside the by-file panel's.
+      #
       # QUERY-CACHE HITS ARE COUNTED, unlike the panel's other budget guards. A repeated identical
       # SELECT inside one request costs no round trip and is invisible to a `payload[:cached]`
       # filter — which is exactly how a dropped `@shard_durations ||=` would slip through, and
@@ -1510,7 +1519,7 @@ RSpec.describe "Repository registration and API keys", type: :request do
         # first-request-only work cannot land in it.
         get repository_path(repository)
 
-        expect(count_all_queries { get repository_path(repository) }).to eq(16)
+        expect(count_all_queries { get repository_path(repository) }).to eq(17)
         # And the page really did render the thing being counted — an absolute count is satisfied
         # by a page that renders nothing at all.
         expect(distribution.all("li").size).to eq(4)
