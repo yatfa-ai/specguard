@@ -242,6 +242,29 @@ class RepositoriesController < ApplicationController
     # prints comes off one set of reads of one window.
     if trajectory_runs.any?
       @unstable_tests = UnstableTests.for(@repository, trajectory_runs, branch: @trajectory_run&.branch)
+      # The area grain of the panels above, asked of the WINDOW the two panels around it are already
+      # drawn on: not which area moved since the last push but which area moved across the branch's
+      # last thirty runs. The page had "growth over time" (the chart, one number per run, no area
+      # grain at all) and "growth by area" (the panel above, exactly one push) and never their
+      # intersection — an area gaining four examples a run is nobody's biggest mover on that panel
+      # and sorts below its cap thirty times running.
+      #
+      # The THIRD reader of this same local, for the reason stated where it is taken: three panels
+      # each fetching "the last thirty runs on this branch" would be three windows with no
+      # structural reason to keep agreeing, on a page where each captions the others' branch. So the
+      # window costs nothing here — it is handed over, not re-fetched.
+      #
+      # Guarded on the window having runs at all, and on nothing else. WHICH run in it can serve as
+      # a baseline, whether the two ends measured a suite, whether they were assembled the same way
+      # and whether each wrote per-example rows all belong to `SpecDirectoryWindowGrowth`, which
+      # names which condition failed so the panel can say so. Everything but the last is decided
+      # from rows already in memory, so a window with nothing to compare asks `spec_observations`
+      # nothing at all.
+      #
+      # ONE query when there is a comparison to make, none when there is not, and neither grows with
+      # the size of the suite or with the length of the window: see `SpecDirectoryWindowGrowth`.
+      @spec_directory_window_growth =
+        SpecDirectoryWindowGrowth.for(trajectory_runs, branch: @trajectory_run&.branch)
     end
     # Set by ApiKeysController#create and readable exactly once — see ApiKeysController.
     @revealed_token = flash[:revealed_api_key]

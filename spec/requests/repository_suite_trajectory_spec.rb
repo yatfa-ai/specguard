@@ -1400,16 +1400,26 @@ RSpec.describe "Repository suite-size trajectory", type: :request do
       # `count_queries` comes from spec/support/query_capture.rb — the same rule the block above
       # counts by. What a render-against-render budget can and cannot show is argued there; this
       # example holds the per-point half of it.
+      #
+      # THREE points on the control side rather than two, and the third one is load-bearing. "Areas
+      # that grew or shrank over the window" compares the newest run of this window against the
+      # OLDEST one it can use, and on a two-run branch that is the same pair the last-push panel
+      # above it compares — the identical statement, served from the query cache and therefore not
+      # a round trip this rule counts. Grown to ten points it becomes a different pair and a real
+      # query, so a two-point control would read one query lighter than the grown page for a reason
+      # that has nothing to do with plotted points, and this example would report a per-point cost
+      # that is not there. Both sides of the comparison hold three or more runs, so that neighbour
+      # costs exactly one query on each and the difference measured is the trajectory's own.
       repository = create_repository(user: @user)
-      2.times { |i| timed_run(repository, "seed#{i}0000000", seconds: 40.0 + i, at: (20 - i).days.ago) }
+      3.times { |i| timed_run(repository, "seed#{i}0000000", seconds: 40.0 + i, at: (20 - i).days.ago) }
       get repository_path(repository)
       baseline = count_queries { get repository_path(repository) }
-      expect(runtime_chart).to have_css("svg circle", count: 2, visible: :all)
+      expect(runtime_chart).to have_css("svg circle", count: 3, visible: :all)
 
       8.times { |i| timed_run(repository, "more#{i}0000000", seconds: 50.0 + i, at: (10 - i).days.ago) }
 
       expect(count_queries { get repository_path(repository) }).to eq(baseline)
-      expect(runtime_chart).to have_css("svg circle", count: 10, visible: :all)
+      expect(runtime_chart).to have_css("svg circle", count: 11, visible: :all)
     end
   end
 end

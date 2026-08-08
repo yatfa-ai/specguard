@@ -2102,6 +2102,198 @@
       <% end %>
     <% end %>
 
+    <%# The area grain of the two panels above, asked of the WINDOW instead of the last push: not
+        which area moved since the previous run but which area moved across the last thirty runs on
+        this branch.
+
+        The intersection the page never had. "Suite growth" above has the window and no area grain
+        at all — it plots one number per run — and "Areas that grew or shrank" has the area grain
+        over exactly one push. An area adding four examples a run is nobody's biggest mover on that
+        panel, so it sorts below the cap thirty times running while a hundred and twenty examples
+        arrive unremarked. Neither panel derives the other, in either direction: an area that gained
+        three hundred examples in the last push and had none before it heads that list, and if those
+        examples were deleted again a week later it is not on this one at all.
+
+        Drawn on the SAME loaded window as the "Suite growth" chart and the outcome panel below —
+        same `?branch=` anchor, same `Repository::TRAJECTORY_LIMIT`, literally the same rows (see
+        `RepositoriesController#show`), because three panels that each fetched "the last thirty runs
+        on this branch" would be three windows with no structural reason to keep agreeing.
+
+        TWO ENDPOINTS, and the caption says so. What happened between them is not read and cannot
+        be: an area that added three hundred examples in run 12 and deleted them in run 25 reads
+        `±0` here. The per-area series that would answer it is a whole-window scan this page has no
+        precedent for and does not make.
+
+        Everything about WHICH runs can be compared — and which run the walk actually landed on —
+        is decided in `SpecDirectoryWindowGrowth`, which names the condition that failed so the
+        panel can say which.
+
+        Same visibility rule as the panels above, and outside the `manage_keys` gate for the same
+        reason: read-only suite telemetry, nothing credential and nothing actionable. %>
+    <% if @spec_directory_window_growth %>
+      <% window_growth = @spec_directory_window_growth %>
+      <%= render UI::PanelComponent.new(title: "Areas that grew or shrank over the window",
+                                        id: "spec-directory-window-growth", class: "lg:col-span-3") do %>
+        <% if window_growth.comparable? && window_growth.any_movement? %>
+          <%# What was compared, against WHAT, over how much of the window, and what the figure is
+              not — all before the list, because each is a precondition for reading it rather than
+              a note about it.
+
+              The baseline sentence is the one with no counterpart on the panel above. There the
+              comparand is "the previous run on this branch" and there is only one candidate; here
+              it was WALKED past whatever could not be compared, so a reader who is not told which
+              run it landed on has been handed a figure over an unknown window. %>
+          <p class="text-xs text-app-muted mb-3" id="spec-directory-window-growth-basis">
+            <%# The list is CAPPED, so its own length says nothing about how much of the comparison
+                it covers. The total rides back on the same grouped aggregate, counted before the
+                LIMIT, so stating it costs no extra query. %>
+            <% if window_growth.truncated? %>
+              The <%= number_with_delimiter(window_growth.rows.size) %>
+              <%= "area".pluralize(window_growth.rows.size) %> that moved most across this window,
+              of the <%= number_with_delimiter(window_growth.directory_count) %> either end
+              recorded — largest movement first, in both directions.
+            <% else %>
+              All <%= number_with_delimiter(window_growth.directory_count) %>
+              <%= "area".pluralize(window_growth.directory_count) %> either end of this window
+              recorded — largest movement first, in both directions.
+            <% end %>
+            <%= spec_directory_window_growth_baseline_sentence(window_growth) %>
+            <%= spec_directory_window_growth_span_sentence(window_growth) %>
+            <%# The limitation the thirty-run heading would otherwise imply away. Two measurements
+                are not a series: everything the suite did between these two runs is invisible
+                here, in both directions, and an area that grew and shrank back reads as an area
+                that never moved. %>
+            Only the two ends are compared, so what an area did between them is not shown: an area
+            that grew and shrank back to where it started reads here as an area that did not move.
+            <%# Only where it is TRUE of the rows below. The ranking is by movement descending, so
+                an area that did not move can only appear once the movement has run out. %>
+            <% if window_growth.any_unmoved? %>
+              Where the movement runs out before the list does, areas that did not move are listed
+              too, as ±0.
+            <% end %>
+            Each area is the immediate parent directory of the files that ran its examples, so the
+            areas sit side by side rather than inside one another.
+            <%# The rename disclosure from the panel above, and STRONGER here rather than weaker: a
+                reader can often remember a rename that happened in the last push, and cannot be
+                expected to remember every rename across thirty runs of history. %>
+            A test that was MOVED is the same test, and this panel cannot see the difference: a
+            renamed or relocated directory appears here as one area growing and another shrinking
+            by the same amount, with nothing added and nothing deleted — and across a window this
+            long, that rename may be one nobody remembers.
+            Counted off the
+            <%= number_with_delimiter(window_growth.baseline_recorded_count) %> and
+            <%= number_with_delimiter(window_growth.anchor_recorded_count) %> example rows the two
+            ends recorded here, which may legitimately differ from the suite size on the Overview
+            panel above.
+          </p>
+          <%= render UI::TableComponent.new(columns: ["Directory", "Examples at baseline", "Examples now",
+                                                      "Change across window"],
+                                            describedby: "spec-directory-window-growth-basis") do %>
+            <% window_growth.rows.each do |area| %>
+              <tr>
+                <td class="px-3 py-2 font-mono text-xs text-app-content"><%= area.path %></td>
+                <%# Both operands, always, and never only the change. A signed number alone cannot
+                    say whether an area of forty tests gained twelve or an area of four thousand
+                    did, and those are different facts about the same `+12`. %>
+                <td class="px-3 py-2 text-app-content-secondary tabular-nums">
+                  <%= area.baseline_count_label %>
+                </td>
+                <td class="px-3 py-2 text-app-content-secondary tabular-nums">
+                  <%= area.anchor_count_label %>
+                </td>
+                <%# The `aria-label` carries what the glyph cannot, and names the BASELINE rather
+                    than "the previous run": this figure spans the window, and a screen-reader user
+                    told it is a change since the last push has the wrong measurement. %>
+                <td class="px-3 py-2 text-app-content tabular-nums" aria-label="<%= area.change_reading %>">
+                  <%= area.change_label %>
+                </td>
+              </tr>
+            <% end %>
+          <% end %>
+        <% elsif window_growth.comparable? %>
+          <%# Two comparable ends whose every area holds the same number of examples. Over a window
+              this is a stronger and more interesting statement than it is over one push — and it
+              is still only a statement about the two ENDS, so it says that too rather than letting
+              a reader take it for "this branch changed nothing". %>
+          <%= render UI::EmptyStateComponent.new(
+                title: "No area moved across this window",
+                description: "Every one of the " \
+                             "#{number_with_delimiter(window_growth.directory_count)} " \
+                             "#{'area'.pluralize(window_growth.directory_count)} the two ends of " \
+                             "this window recorded holds the same number of examples in both. Only " \
+                             "those two ends were compared, so an area that grew and shrank back " \
+                             "in between is counted here as an area that did not move."
+              ) %>
+        <% else %>
+          <%# The seven states in which there is no comparison to draw, said apart rather than
+              collapsed into one blank panel — the register the Overview delta and the panel above
+              set: withheld rather than hedged, and withholding means saying why. Four of them are
+              this panel's own, because the comparand here is chosen rather than given: the window
+              may hold one run, or none that measured a suite, or none assembled like this one.
+
+              `SpecDirectoryWindowGrowth#state` decides which; the wording lives here beside its
+              siblings' so the three panels cannot drift into describing the same run differently. %>
+          <% case window_growth.state %>
+          <% when :anchor_unmeasured %>
+            <%= render UI::EmptyStateComponent.new(
+                  title: "No comparison to draw",
+                  description: "This run reported no tests, so there is no suite to compare area " \
+                               "by area against anything earlier on this branch. A run that " \
+                               "reported zero tests has a count but not a measurement."
+                ) %>
+          <% when :no_earlier_run %>
+            <%# Not a fault and nothing to fix — a branch with one run has no window yet. Said as
+                what it is rather than as a failure, and distinct from the states below where there
+                ARE earlier runs and none of them could be used. %>
+            <%= render UI::EmptyStateComponent.new(
+                  title: "No window to compare across yet",
+                  description: "This branch has one run in the window so far, and a comparison " \
+                               "needs two ends. This panel fills in as soon as there is an earlier " \
+                               "run to measure against."
+                ) %>
+          <% when :no_measured_baseline, :no_comparable_composition %>
+            <%# The two states the WALK produces, and they are different repairs: a client that
+                stopped reporting totals, and a branch whose sharding changed. Both name how many
+                runs were examined, so the reader can size what was rejected. %>
+            <%= render UI::EmptyStateComponent.new(
+                  title: "No comparison to draw",
+                  description: spec_directory_window_growth_no_baseline_description(window_growth)
+                ) %>
+          <% when :baseline_unrecorded %>
+            <%= render UI::EmptyStateComponent.new(
+                  title: "No comparison to draw",
+                  description: "The run this comparison landed on " \
+                               "(#{window_growth.baseline_run.commit_sha.first(7)}, " \
+                               "#{window_growth.runs_back} back in this window) recorded no " \
+                               "per-example detail, so it has no areas to compare against — every " \
+                               "area of this run would read as new. A run ingested before that " \
+                               "detail was stored, or sent by a client that reports only totals, " \
+                               "has a suite size and none of these rows."
+                ) %>
+          <% when :anchor_unrecorded %>
+            <%= render UI::EmptyStateComponent.new(
+                  title: "No comparison to draw",
+                  description: "This run recorded no per-example detail, so it has no areas to " \
+                               "compare — every area of the earlier run would read as deleted. A " \
+                               "client that reports only totals sends a suite size and none of " \
+                               "these rows."
+                ) %>
+          <% else %>
+            <%# `:neither_recorded` — the aggregate came back empty, which for this read means
+                neither end wrote a row, since a group exists here if and only if a row does. %>
+            <%= render UI::EmptyStateComponent.new(
+                  title: "No comparison to draw",
+                  description: "Neither this run nor " \
+                               "#{window_growth.baseline_run.commit_sha.first(7)}, the run at the " \
+                               "far end of this window, recorded per-example detail, so there are " \
+                               "no areas to compare. Suite growth over the window as a whole is on " \
+                               "the chart above, which reads the run totals rather than these rows."
+                ) %>
+          <% end %>
+        <% end %>
+      <% end %>
+    <% end %>
+
     <%# The first panel on this page that MATCHES A TEST TO ITSELF across runs. Everything above it
         is either bounded to one run on purpose — the ranking, the by-file and by-directory
         rollups, the outcome counters, because "which tests were slow in this run" is a question
