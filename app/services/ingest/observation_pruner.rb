@@ -1,0 +1,152 @@
+# frozen_string_literal: true
+
+module Ingest
+  # Enforces `SpecObservation::BRANCH_RETENTION_RUNS` — the only thing that deletes a row from
+  # `spec_observations` for AGE, and the other half of the roadmap's *"retain outcome/duration
+  # across runs **with a stated retention rule**"*. Before this class the rule was retention
+  # by omission: {Ingest::ObservationRecorder} deletes only the delivery it is replacing, and
+  # rows otherwise left the table only when their repository or their run was destroyed.
+  #
+  # == Keyed per (repository, branch), which is the whole design
+  #
+  # The obvious rule — "keep the last N runs of this repository" — is worse than no rule at all.
+  # Recency across a repository is INTERLEAVED: `Api::V1::RepositoriesController
+  # #serialized_branches` records that on a repository whose CI reports on every PR, all ten most
+  # recent runs are routinely `feature/*` and the trunk never appears among them. A
+  # repository-wide bound would therefore evict `main`'s history FIRST — and `main` is what every
+  # cross-run read is anchored to. So the window is per branch: N runs of `main`, N runs of each
+  # `feature/*`, each bucket bounded on its own and unable to evict any other.
+  #
+  # A run with `branch: nil` is its own bucket, per repository. *"The anonymous runs of every
+  # machine are not one branch"* (`serialized_branches` again) — so they neither evict a named
+  # branch's history nor are evicted by it, and `branch IS NULL` is a bucket boundary here exactly
+  # as it is a series boundary in `Repository#suite_size_trajectory`.
+  #
+  # Bounded by ROWS and never by a date window, the choice `Repository::TRAJECTORY_LIMIT` argues
+  # for one layer up: a repository whose CI went quiet for a month has not stopped wanting its
+  # history, and a time-based rule would delete it for being idle.
+  #
+  # == Two steps, because the branch is not on the row
+  #
+  # `spec_observations` has no `branch` column — the branch is reached through `test_runs` — so
+  # this selects the run ids on the branch first and deletes observations BY `test_run_id`.
+  # Neither step needs a migration: `index_test_runs_on_repository_id_and_branch_and_created_at`
+  # (`[repository_id, branch, created_at, id]`) serves the boundary lookup, and
+  # `index_spec_observations_on_test_run_id` serves the delete.
+  #
+  # `test_runs` itself is UNTOUCHED, and so are both of a run's counters. A pruned run keeps its
+  # row, its `total_specs_count` and its `annotated_specs_count` — those are derived from
+  # `test_run_shards`, not from these rows — so the suite-size trajectory, which reads
+  # `test_runs` plus a shard-count subquery and touches this table nowhere, is unaffected at any
+  # depth. What a pruned run loses is the per-EXAMPLE detail: the slowest-examples and
+  # heaviest-files panels of a run that far back.
+  #
+  # == Convergence, and why one POST is bounded
+  #
+  # The first ingest after this ships meets an unbounded backlog — ~920M rows on the measured
+  # repository — and one POST must not attempt it. So the delete is issued in bounded batches
+  # with a hard per-invocation ceiling of `DELETE_BATCH_SIZE * MAX_BATCHES_PER_INGEST` rows, and
+  # the property that buys is CONVERGENCE rather than completeness: an ingest meeting a backlog
+  # bigger than its ceiling prunes as much of it as the ceiling allows and leaves the rest to the
+  # next one, and successive ingests walk the backlog down to the rule.
+  #
+  # The ceiling is stated against the design point rather than picked round: 20,000 examples is
+  # one run, so 50,000 rows per delivery is two and a half runs' worth of history removed per
+  # delivery against one run's worth arriving — and a sharded run POSTs once per shard, so a
+  # four-shard run prunes four times. Steady state is reached and held with slack; a backlog is
+  # walked down monotonically. It never *stalls*: each invocation deletes the oldest rows it can
+  # reach, so the work left for the next one is strictly smaller.
+  #
+  # == Outside the ingest transaction, on purpose
+  #
+  # Called AFTER the ingest transaction commits, never inside it. `Ingest::RunRecorder#record`
+  # holds `run.lock!` across its whole insert-and-recompute, and that lock's length is measured
+  # and load-bearing (8 concurrent shards, 6 of 8 lost to `PG::TRDeadlockDetected` before the lock
+  # moved). This work needs none of that protection — it touches only rows of runs OLDER than the
+  # window, which no concurrent delivery is writing — so it must not extend the hold. Both of
+  # `RunRecorder`'s paths call it, each after its own commit.
+  #
+  # It follows that a failure here surfaces as a 500 on an ingest whose data is already committed.
+  # That is deliberate rather than papered over with a rescue: an ingest is idempotent by
+  # construction (derived counters, delete-then-upsert observations), so the client's retry costs
+  # a duplicate delivery of a slice that replaces itself — and swallowing the error would leave
+  # the one rule bounding this table failing silently and invisibly.
+  class ObservationPruner
+    # How many rows one DELETE may remove. Half a design-point run, so a single statement is a
+    # bounded amount of work for the ingest request that pays for it rather than a table sweep.
+    DELETE_BATCH_SIZE = 10_000
+
+    # How many of those statements one ingest may issue. With the batch size above this is the
+    # per-invocation ceiling — 50,000 rows — that makes the paragraph on convergence true.
+    MAX_BATCHES_PER_INGEST = 5
+
+    def self.prune(run) = new(run).prune
+
+    def initialize(run)
+      @repository_id = run.repository_id
+      @branch = run.branch
+    end
+
+    # @return [Integer] how many rows this invocation deleted. Zero when the branch holds fewer
+    #   than `SpecObservation::BRANCH_RETENTION_RUNS` runs, which is every branch of every
+    #   repository until it has run that many times.
+    def prune
+      boundary = oldest_retained_run
+      return 0 if boundary.nil?
+
+      deleted = 0
+
+      MAX_BATCHES_PER_INGEST.times do
+        batch = delete_batch(boundary)
+        deleted += batch
+        # A short batch means the backlog is exhausted, so stop rather than spending the rest of
+        # the ceiling on statements that would delete nothing. A FULL batch means there may be
+        # more, and the ceiling is what stops this loop being unbounded.
+        break if batch < DELETE_BATCH_SIZE
+      end
+
+      deleted
+    end
+
+    private
+
+    # This branch's runs, in this repository. `branch` may be nil, and `nil` here compiles to
+    # `branch IS NULL` — the anonymous bucket, scoped to one repository like every other.
+    def branch_runs = TestRun.where(repository_id: @repository_id, branch: @branch)
+
+    # The oldest run the rule KEEPS: the Nth most recent on this branch, as `[created_at, id]`.
+    # Nil when the branch has fewer than N runs, which is the "nothing to do" case.
+    #
+    # `(created_at, id) DESC` with `id` breaking the tie, the same total ordering
+    # `Repository#previous_test_run_on_branch` and `#suite_size_trajectory` use — a bare
+    # `created_at` orders a same-instant pair arbitrarily, and here that would mean the boundary
+    # falling either side of two runs ingested in the same second, deleting one of them or not
+    # depending on the plan.
+    def oldest_retained_run
+      branch_runs.order(created_at: :desc, id: :desc)
+                 .offset(SpecObservation::BRANCH_RETENTION_RUNS - 1)
+                 .pick(:created_at, :id)
+    end
+
+    # The runs strictly older than the boundary — a relation, so it is a subquery rather than an
+    # id list loaded into Ruby. Strictly `<`, so the boundary run itself is retained: it is the
+    # Nth, and N runs are kept.
+    def expired_runs(boundary)
+      branch_runs
+        .where("(test_runs.created_at, test_runs.id) < (?, ?)", boundary.first, boundary.last)
+        .select(:id)
+    end
+
+    # One statement: `DELETE ... WHERE id IN (SELECT id ... LIMIT n)`. The inner LIMIT is what
+    # bounds it — `delete_all` on a `LIMIT`ed relation is not something Postgres accepts directly,
+    # so the bounded select of primary keys is nested inside the delete rather than run as its own
+    # round trip. Deleting by `id` also means the outer statement locks exactly the rows it names.
+    def delete_batch(boundary)
+      doomed = SpecObservation.where(test_run_id: expired_runs(boundary))
+                              .limit(DELETE_BATCH_SIZE)
+                              .select(:id)
+
+      SpecObservation.where(id: doomed).delete_all
+    end
+  end
+end
