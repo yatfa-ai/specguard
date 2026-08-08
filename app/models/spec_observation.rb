@@ -307,6 +307,182 @@ class SpecObservation < ApplicationRecord
       .limit(limit)
   end
 
+  # How many distinct descriptions one narrowing may hand the composition step below.
+  #
+  # A catastrophe valve, not a display limit. The candidate step asks for the descriptions that
+  # failed ANYWHERE in the window, and on a suite that went entirely red — a bad merge, a missing
+  # fixture, a service that would not boot — that is every test in it. At the roadmap's 20,000
+  # example design point an uncapped candidate list is a 20,000-element `IN` clause handed to the
+  # composition query, which is the O(suite) work the two-step shape exists to refuse. So the list
+  # stops here, and `UnstableTests#truncated?` carries the fact that it stopped: a cap that does
+  # not disclose itself turns "we looked at everything" and "we looked at the first two hundred"
+  # into the same panel.
+  UNSTABLE_CANDIDATE_LIMIT = 200
+
+  # Which runs of a window recorded example rows at all, and which of them said how any of those
+  # examples ended — the two facts a cross-run outcome comparison has to establish BEFORE it is
+  # allowed to compare anything.
+  #
+  # `outcome` is nullable and `Ingest::ObservationRecorder#attributes` writes it through
+  # `presence_of`, so a producer that sends no outcomes stores a nil on every row of every run.
+  # Such a window yields no failures, therefore no candidates, therefore an empty list — and an
+  # empty list rendered as "nothing is unstable" is *Vacuous Green* exactly: "nobody told us"
+  # wearing the spelling of "everything is fine". `reported_outcome_count` answers that hazard one
+  # grain down for a single run (see `COVERAGE_COUNTS`); this is the same question asked of a
+  # window, and its answer is counted in RUNS because the comparison it gates needs two of them.
+  #
+  # == Why this is an EXISTS per run and not one aggregate over the window
+  #
+  # `COUNT(DISTINCT test_run_id) FILTER (WHERE outcome IS NOT NULL)` is the obvious spelling and it
+  # reads every row in the window to produce two integers — 600,000 of them at thirty runs of a
+  # 20,000-example suite, for a question whose answer is decided by the FIRST matching row of each
+  # run. The lateral asks the index that question once per run instead: at most `2 × window` index
+  # probes, none of which touches a row past the one that answers it, and the cost follows the
+  # window's length rather than the suite's size. `index_spec_observations_on_test_run_id_and_outcome`
+  # answers the second probe without a heap visit at all.
+  WINDOW_OUTCOME_REPORTING_SQL = <<~SQL.squish.freeze
+    SELECT COUNT(*) FILTER (WHERE probe.has_rows) AS runs_with_rows,
+           COUNT(*) FILTER (WHERE probe.reported_outcome) AS runs_reporting_outcomes
+    FROM unnest(ARRAY[:run_ids]::bigint[]) AS window_run(id)
+    CROSS JOIN LATERAL (
+      SELECT EXISTS (SELECT 1 FROM spec_observations o
+                     WHERE o.test_run_id = window_run.id) AS has_rows,
+             EXISTS (SELECT 1 FROM spec_observations o
+                     WHERE o.test_run_id = window_run.id AND o.outcome IS NOT NULL) AS reported_outcome
+    ) probe
+  SQL
+
+  private_constant :WINDOW_OUTCOME_REPORTING_SQL
+
+  # @return [Hash{Symbol=>Integer}] `runs_with_rows` and `runs_reporting_outcomes`, both counted in
+  #   runs of the window handed in, never in rows.
+  def self.window_outcome_reporting(run_ids)
+    return { runs_with_rows: 0, runs_reporting_outcomes: 0 } if run_ids.empty?
+
+    row = connection.select_one(sanitize_sql_array([WINDOW_OUTCOME_REPORTING_SQL, { run_ids: run_ids }]))
+
+    { runs_with_rows: row["runs_with_rows"].to_i, runs_reporting_outcomes: row["runs_reporting_outcomes"].to_i }
+  end
+
+  # Step one of two: the descriptions that recorded a FAILURE somewhere in the window — the only
+  # descriptions whose outcome can have changed within it, since a test that never failed here has
+  # nothing to have changed from.
+  #
+  # This is the read `index_spec_observations_on_test_run_id_and_outcome` was built for and which
+  # `COVERAGE_COUNTS` above declines to use, in as many words: *"that index is built for NARROWING
+  # to the failures — the 'which tests failed' list a later slice will want"*. This is that later
+  # slice, and the narrowing is what makes the whole panel affordable. Grouping the window's rows
+  # by `name` directly is 600,000 rows aggregated per page load at the design point; grouping only
+  # the failures is a scan of the failures.
+  #
+  # Nothing correct is lost. A test that reported only non-failing outcomes across the window may
+  # well have varied — `pending` one run and `passed` the next — and that variance is deliberately
+  # out of this panel's scope, which the panel states rather than leaves to be discovered.
+  #
+  # A null `name` is excluded HERE rather than after the fact, because a null cannot be matched to
+  # itself across runs: two nulls are not known to be one test, and `GROUP BY name` would pool
+  # every unnamed example of every run of the window into one fictional test with a fictional
+  # history. How many rows that excludes is a separate question, asked by `.unnamed_row_count_in`
+  # and stated on the panel — silently dropping them is the reading this must not produce.
+  #
+  # == The ordering, and what the cap therefore keeps
+  #
+  # Fewest failures first. The cap is only ever reached by a window in which more than
+  # `UNSTABLE_CANDIDATE_LIMIT` distinct descriptions failed — a suite that has gone broadly red —
+  # and in that window the descriptions that failed in EVERY run are precisely the ones whose
+  # outcome did not change. Keeping the least-failing end of the list therefore keeps the end this
+  # panel can still say something true about, and `name` breaks ties so the kept set is stable
+  # between two requests rather than whatever the planner returned first.
+  #
+  # `COUNT(*) OVER ()` is evaluated AFTER `GROUP BY` and BEFORE `LIMIT`, so it counts candidate
+  # DESCRIPTIONS and counts all of them however few are returned — the truncation-disclosure shape
+  # `#file_durations_in` documents at length, riding back on every row for no second round trip.
+  #
+  # @return [Array<Array>] `[name, candidate_count]` per kept description, where `candidate_count`
+  #   is the same figure on every row: how many descriptions failed in the window in all.
+  def self.unstable_candidates_in(run_ids, limit: UNSTABLE_CANDIDATE_LIMIT)
+    return [] if run_ids.empty?
+
+    where(test_run_id: run_ids, outcome: "failed")
+      .where.not(name: nil)
+      .group(:name)
+      .order(Arel.sql("COUNT(*) ASC"), Arel.sql("name ASC"))
+      .limit(limit)
+      .pluck(Arel.sql("name"), Arel.sql("COUNT(*) OVER ()"))
+  end
+
+  # Everything the panel has to say about ONE description across the window, as one grouped
+  # aggregate over the candidates only — ordered, named, and kept in one constant for the reason
+  # `COVERAGE_COUNTS` is: the names are what the caller destructures and the expressions are what a
+  # plan assertion EXPLAINs, and two lists that drifted apart would be a row counting a column
+  # nobody selected.
+  #
+  # `run_count` beside `recorded_count` is the load-bearing pair. The grouping key is the
+  # description ALONE (see `.unstable_candidates_in`), and a description is not a key within a
+  # single run: a table-driven loop, a shared example group or two genuinely identical `it` strings
+  # put several examples under one description in the same run. Such a group holds a `failed` and a
+  # `passed` in one run and would read, through any figure that did not distinguish them, as a test
+  # that flipped between runs. `COUNT(*) > COUNT(DISTINCT test_run_id)` is that distinction, taken
+  # in the same pass — see `UnstableTests::Row#shared_description?`, which is what the surface says
+  # it with.
+  #
+  # `failed_run_count` beside `failed_count` for the same reason: "failed in 3 of the 12 runs it
+  # appeared in" is a sentence about runs, and counting rows would tell a reader that a description
+  # carried by four examples failed four times in one run.
+  #
+  # `ARRAY_AGG(DISTINCT …) FILTER (WHERE … IS NOT NULL)` for both lists, so a null never arrives as
+  # a nil element inside an array the surface iterates. The outcome words are echoed verbatim and
+  # never folded into a verdict, for the reason `#outcome_label` gives: nothing platform-side
+  # validates that string. The file paths are what makes a MOVED test visible — per the project's
+  # semantic-identity rule a test that moved is the same test and keeps its history, so a group
+  # spanning two files is a disclosure and not an error, but the reader is told.
+  UNSTABLE_COMPOSITION = {
+    recorded_count: "COUNT(*)",
+    run_count: "COUNT(DISTINCT test_run_id)",
+    reported_outcome_count: "COUNT(outcome)",
+    failed_count: "COUNT(*) FILTER (WHERE outcome = 'failed')",
+    failed_run_count: "COUNT(DISTINCT test_run_id) FILTER (WHERE outcome = 'failed')",
+    outcomes: "ARRAY_AGG(DISTINCT outcome) FILTER (WHERE outcome IS NOT NULL)",
+    file_paths: "ARRAY_AGG(DISTINCT spec_file_path) FILTER (WHERE spec_file_path IS NOT NULL)"
+  }.freeze
+
+  # Step two of two: how each candidate description behaved across the whole window — over the
+  # candidates only, which is what keeps this off the whole window's rows.
+  #
+  # Scoped by `repository_id` as well as by the window's runs, and that is not belt-and-braces: it
+  # is the leading column of `index_spec_observations_on_repository_id_and_name`, the index this
+  # read rides and the one `SpecObservation`'s own comments have been reserving. Without it there
+  # is no index on `name` to walk and the grouping falls back to reading the runs whole.
+  #
+  # @return [Array<Array>] `[name, *UNSTABLE_COMPOSITION.values]` per description, in that order.
+  def self.outcome_composition_in(repository_id:, run_ids:, names:)
+    return [] if names.empty? || run_ids.empty?
+
+    where(repository_id: repository_id, test_run_id: run_ids, name: names)
+      .group(:name)
+      .pluck(Arel.sql("name"), *UNSTABLE_COMPOSITION.values.map { |sql| Arel.sql(sql) })
+  end
+
+  # How many rows of the window carried no description at all — the figure the panel states when it
+  # excludes them.
+  #
+  # A null `name` is not a test this read can follow across runs: two nulls in two runs are not
+  # known to be one example, so they are dropped from the matching rather than pooled. Dropping
+  # them silently is the failure mode — a panel that examined a tenth of the window and said
+  # nothing about the other nine is a claim about a population it did not read. `Ingest::Payload`
+  # refuses a spec carrying neither intent nor name, but `Ingest::SpecSignal` records that
+  # pre-validator rows exist, and an annotated spec from a producer sending no name stores a null
+  # here today.
+  #
+  # `repository_id` leads for the same reason as above: `WHERE repository_id = ? AND name IS NULL`
+  # walks `index_spec_observations_on_repository_id_and_name` — a btree indexes its nulls — so the
+  # count costs what the unnamed rows cost and not what the window does.
+  def self.unnamed_row_count_in(repository_id:, run_ids:)
+    return 0 if run_ids.empty?
+
+    where(repository_id: repository_id, test_run_id: run_ids, name: nil).count
+  end
+
   # Where ONE run's wall clock went, rolled up by DIRECTORY — the rung directly above the rollup
   # above, and the grain the question is usually asked in. "Which area of this suite carries the
   # time" is not answerable from a ranked list of files any more than it was from a ranked list of
@@ -505,13 +681,19 @@ class SpecObservation < ApplicationRecord
 
   # Which `UI::BadgeComponent` tone that word wears, so the distinction above survives a reader who
   # is scanning the column rather than reading it.
+  def outcome_tone = self.class.outcome_tone(outcome)
+
+  # The same decision made about a bare string, for a surface holding outcome words that came back
+  # from an aggregate rather than off a row — the cross-run panel lists the DISTINCT words a
+  # description was seen wearing, and those arrive as text out of `ARRAY_AGG`. One seam for both,
+  # so a word cannot be coloured one way in a single run's column and another way across a window.
   #
   # Only the three RSpec names the producer is known to send are given a colour. Everything else —
   # an unrecognised string AND a nil — is `:neutral`, because a tone is a claim: green over a value
   # nobody validated would be this page asserting a pass it was never told about. The two neutral
   # cases are still distinguishable from each other by their text, which is what `#outcome_label`
   # is for; what they share is that neither of them is a pass.
-  def outcome_tone
+  def self.outcome_tone(outcome)
     case outcome
     when "failed" then :error
     when "pending" then :warning

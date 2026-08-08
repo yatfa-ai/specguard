@@ -339,6 +339,191 @@ RSpec.describe SpecObservation do
     end
   end
 
+  # The reads that span RUNS — everything above this point is bounded to one run on purpose, and
+  # these four are the first that are not. Each of them is a step of the "Tests whose outcome
+  # changed" panel; what they return is asserted here, and what the PAGE does with them is
+  # spec/requests/repository_unstable_tests_spec.rb.
+  describe "the questions a window of runs has to answer" do
+    let(:rows_per_run) { 300 }
+    let(:repository) { create_repository }
+    # Twenty runs in the table and six of them in the window, so "read the window through an index"
+    # is a decision the planner makes rather than a foregone conclusion — the same reason the
+    # single-run block above seeds twenty.
+    let(:runs) { (1..20).map { |i| create_test_run(repository: repository, commit_sha: "sha#{i}") } }
+    let(:window) { runs.first(6) }
+    let(:window_ids) { window.map(&:id) }
+
+    # `example 7` is the unstable one: it fails in every other run of the window and passes in the
+    # rest. `example 13` fails in all of them — a broken test, not an unstable one, and the row
+    # that keeps the candidate ordering honest. Every hundredth row carries no name at all.
+    def outcome_for(index, run_index)
+      return run_index.even? ? "failed" : "passed" if index == 7
+      return "failed" if index == 13
+
+      "passed"
+    end
+
+    def seed(test_run, run_index)
+      now = Time.current
+      rows = (1..rows_per_run).map do |index|
+        {
+          test_run_id: test_run.id, repository_id: repository.id,
+          example_id: "./spec/f#{index % 15}_spec.rb[1:#{index}]",
+          spec_file_path: "spec/f#{index % 15}_spec.rb", file_path: "spec/f#{index % 15}_spec.rb",
+          line_number: index, name: (index % 100).zero? ? nil : "example #{index}",
+          duration_seconds: 0.1, outcome: outcome_for(index, run_index),
+          status: "unannotated", created_at: now, updated_at: now
+        }
+      end
+
+      SpecObservation.insert_all(rows)
+    end
+
+    before { runs.each_with_index { |test_run, index| seed(test_run, index) } }
+
+    describe "what they return" do
+      it "counts the window's runs that recorded rows and those that reported an outcome" do
+        expect(described_class.window_outcome_reporting(window_ids))
+          .to eq(runs_with_rows: 6, runs_reporting_outcomes: 6)
+      end
+
+      # The gate the panel's whole honesty rests on. A window whose client sent no outcomes has
+      # rows in every run and reports in none of them, and the two figures are what tell those
+      # apart — a single count could not.
+      it "separates a window that recorded rows from one that said how they ended" do
+        SpecObservation.where(test_run_id: window_ids).update_all(outcome: nil)
+
+        expect(described_class.window_outcome_reporting(window_ids))
+          .to eq(runs_with_rows: 6, runs_reporting_outcomes: 0)
+      end
+
+      it "answers for a window of no runs without asking the database anything" do
+        expect(described_class.window_outcome_reporting([]))
+          .to eq(runs_with_rows: 0, runs_reporting_outcomes: 0)
+      end
+
+      # Only what failed, fewest failures first — and the total riding back on every row, counted
+      # after the grouping and before the limit.
+      it "names the descriptions that failed in the window, least-failing first" do
+        expect(described_class.unstable_candidates_in(window_ids))
+          .to eq([["example 7", 2], ["example 13", 2]])
+      end
+
+      it "keeps the least-failing end of the list when the cap bites" do
+        expect(described_class.unstable_candidates_in(window_ids, limit: 1))
+          .to eq([["example 7", 2]])
+      end
+
+      # A null name is not a test this read can follow across runs, so it never becomes a group.
+      it "never groups the unnamed rows into a description of their own" do
+        expect(described_class.unstable_candidates_in(window_ids).map(&:first)).to all(be_present)
+      end
+
+      it "composes each candidate over the whole window" do
+        composed = described_class.outcome_composition_in(
+          repository_id: repository.id, run_ids: window_ids, names: ["example 7"]
+        )
+
+        # name, recorded, runs, reported, failed, failed runs, outcomes, files —
+        # `SpecObservation::UNSTABLE_COMPOSITION`'s order, which is what the caller destructures by.
+        expect(composed).to eq([["example 7", 6, 6, 6, 3, 3, %w[failed passed], ["spec/f7_spec.rb"]]])
+      end
+
+      # The composition is bounded to the window, not to the repository's whole history — the seven
+      # runs outside it hold the same descriptions and must not be counted into these figures.
+      it "counts only the runs of the window it was given" do
+        composed = described_class.outcome_composition_in(
+          repository_id: repository.id, run_ids: window_ids.first(2), names: ["example 13"]
+        )
+
+        expect(composed).to eq([["example 13", 2, 2, 2, 2, 2, ["failed"], ["spec/f13_spec.rb"]]])
+      end
+
+      it "counts the rows of the window that carried no description" do
+        expect(described_class.unnamed_row_count_in(repository_id: repository.id, run_ids: window_ids))
+          .to eq(18)
+      end
+    end
+
+    # One index scan per step, and never a walk of every run's rows. Which index Postgres reaches
+    # for is left to Postgres — the matchers accept the plain scan, the index-only scan and the
+    # bitmap, for the reason `INDEXED_BY_RUN` above documents at length: the choice between them is
+    # decided by table bloat and RSpec ordering rather than by anything about the query. The
+    # `Seq Scan` refusal is what carries each assertion's reach: unscope any of these reads from
+    # its window and the plan turns into a sequential scan of the whole table.
+    describe "the plan Postgres chooses for each of them" do
+      SCAN = /(?:Index Only Scan using|Index Scan using|Bitmap Index Scan on)/
+
+      before { ActiveRecord::Base.connection.execute("ANALYZE spec_observations") }
+
+      # The plan for the SQL each read ACTUALLY runs, captured off the wire rather than EXPLAINed
+      # from a hand-written copy — a copy is a second definition of the query that can drift from
+      # the one the panel makes. `unprepared_statement` inlines the binds, because `EXPLAIN` cannot
+      # be handed a `$1`.
+      def plan_for_actual_sql
+        captured = nil
+        subscriber = ActiveSupport::Notifications.subscribe("sql.active_record") do |_, _, _, _, payload|
+          captured ||= payload[:sql] if payload[:name] != "SCHEMA" && payload[:sql].to_s.include?("spec_observations")
+        end
+        ActiveRecord::Base.connection.unprepared_statement { yield }
+
+        ActiveRecord::Base.connection.select_values("EXPLAIN #{captured}").join("\n")
+      ensure
+        ActiveSupport::Notifications.unsubscribe(subscriber)
+      end
+
+      # Observed: two index probes per run of the window, both off a `test_run_id` index, neither
+      # of them touching a row past the one that answers it. The point of the lateral is that the
+      # cost follows the window's LENGTH and not the suite's size — the aggregate spelling of this
+      # question reads every row in the window to produce two integers.
+      it "probes the window's runs through an index rather than reading the window" do
+        plan = plan_for_actual_sql { described_class.window_outcome_reporting(window_ids) }
+
+        expect(plan).to match(/#{SCAN} index_spec_observations_on_test_run_id\w*/)
+        expect(plan).not_to match(/Seq Scan on spec_observations/)
+      end
+
+      # Observed: `index_spec_observations_on_test_run_id_and_outcome` — the index
+      # `COVERAGE_COUNTS` declines to use and reserves in as many words for "the 'which tests
+      # failed' list a later slice will want". This is that read, and the narrowing it makes
+      # possible is what keeps the composition below off the whole window.
+      it "narrows to the window's failures off the by-outcome index" do
+        plan = plan_for_actual_sql { described_class.unstable_candidates_in(window_ids) }
+
+        expect(plan).to include("index_spec_observations_on_test_run_id_and_outcome")
+        expect(plan).to match(SCAN)
+        expect(plan).not_to match(/Seq Scan on spec_observations/)
+      end
+
+      # Observed: `index_spec_observations_on_repository_id_and_name`, the second index this table
+      # has carried unread. `repository_id` leads it, which is why the composition is scoped by
+      # repository as well as by window — without that column there is no index on `name` to walk
+      # and the grouping falls back to reading the runs whole.
+      it "composes the candidates off the by-name index rather than scanning the table" do
+        plan = plan_for_actual_sql do
+          described_class.outcome_composition_in(repository_id: repository.id, run_ids: window_ids,
+                                                 names: ["example 7", "example 13"])
+        end
+
+        expect(plan).to include("index_spec_observations_on_repository_id_and_name")
+        expect(plan).to match(SCAN)
+        expect(plan).not_to match(/Seq Scan on spec_observations/)
+      end
+
+      # A btree indexes its nulls, so `name IS NULL` is a range of that same index and the count
+      # costs what the unnamed rows cost rather than what the window does.
+      it "counts the unnamed rows off the by-name index too" do
+        plan = plan_for_actual_sql do
+          described_class.unnamed_row_count_in(repository_id: repository.id, run_ids: window_ids)
+        end
+
+        expect(plan).to include("index_spec_observations_on_repository_id_and_name")
+        expect(plan).to match(SCAN)
+        expect(plan).not_to match(/Seq Scan on spec_observations/)
+      end
+    end
+  end
+
   describe "what happens when the things it hangs off go away" do
     let(:repository) { create_repository }
     let(:run) { create_test_run(repository: repository) }

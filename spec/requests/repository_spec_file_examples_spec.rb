@@ -503,12 +503,14 @@ RSpec.describe "Repository spec file examples", type: :request do
       expect(rows.size).to eq(SpecObservation::FILE_EXAMPLES_LIMIT)
       expect(large_queries.size).to eq(small_queries.size)
       # An absolute ceiling too: equality alone would still hold if both pages regressed to a
-      # fixed-but-wasteful number of passes over the same table. FIVE reads serve this page with a
-      # file open — the four the page already took (the ranking and its coverage aggregate for
-      # "Slowest tests", one grouped aggregate each for the by-file and by-directory rollups) and
-      # ONE for this panel. The list and both figures in its caption come back on that one read:
-      # the counts are windows on it rather than a second aggregate.
-      expect(large_queries.size).to eq(5)
+      # fixed-but-wasteful number of passes over the same table. SIX reads serve this page with a
+      # file open — the five the page already took (the ranking and its coverage aggregate for
+      # "Slowest tests", one grouped aggregate each for the by-file and by-directory rollups, and
+      # the cross-run panel's gating probe, which on this single-run fixture establishes it cannot
+      # compare outcomes and asks nothing further) and ONE for this panel. The list and both figures
+      # in its caption come back on that one read: the counts are windows on it rather than a second
+      # aggregate.
+      expect(large_queries.size).to eq(6)
     end
 
     # The whole drill-down is off the default page's budget. A reader who never opens a file pays
@@ -522,7 +524,7 @@ RSpec.describe "Repository spec file examples", type: :request do
       unopened = queries_against("spec_observations") { get repository_path(repository) }
 
       expect(unopened.size).to eq(opened.size - 1)
-      expect(unopened.size).to eq(4)
+      expect(unopened.size).to eq(5)
     end
   end
 end

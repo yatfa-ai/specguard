@@ -350,7 +350,244 @@ module RepositoriesHelper
     end
   end
 
+  # == The "Tests whose outcome changed" panel's sentences
+
+  # What window every figure on the panel was drawn from — how many runs, on which branch, and how
+  # many of them said anything at all about how their examples ended.
+  #
+  # The third figure is the one that cannot be left out. `outcome` is nullable, so a run of nils is
+  # an ordinary state, and a window's LENGTH says nothing about how much of it reported. "Across
+  # the last 30 runs on main" over a window where three of them reported outcomes is a claim about
+  # thirty runs made from three, and every count under it inherits the overstatement.
+  #
+  # Reported in RUNS throughout, never in rows: the comparison this panel makes is between runs, so
+  # its denominator has to be one a reader can put the row counts beside.
+  def unstable_tests_window_sentence(unstable)
+    runs = "#{number_with_delimiter(unstable.run_count)} #{"run".pluralize(unstable.run_count)}"
+    reported =
+      if unstable.runs_reporting_outcomes == unstable.run_count
+        "every one of which reported an outcome for at least one example"
+      else
+        "#{number_with_delimiter(unstable.runs_reporting_outcomes)} of which reported an outcome " \
+          "for any example"
+      end
+
+    "Across the last #{runs}#{unstable_tests_branch_clause(unstable)}, #{reported}." \
+      "#{unstable_tests_silent_runs_clause(unstable)}"
+  end
+
+  # The matching rule, said on the panel rather than left in the code — because it is a rule a
+  # reader has to know to read the list at all, and because it is the one thing here that is a
+  # DECISION rather than a measurement. A test that moved keeps its history; a renamed one starts a
+  # new history and its old one stops at the rename. Both are consequences a reader can only check
+  # against their own repository if they are told the rule.
+  def unstable_tests_matching_sentence
+    "Tests are matched across those runs by their description alone — not by file and not by line, " \
+      "since both move under a test that did not change. So a test that moved keeps its history " \
+      "here, and a renamed test starts a new one."
+  end
+
+  # Where the panel stops looking, stated as a boundary rather than implied by an absence.
+  #
+  # The search begins at the runs' failures, which is what makes it affordable at the design point
+  # (see `SpecObservation.unstable_candidates_in`). The cost of that narrowing is real and specific:
+  # a test that alternated `pending` and `passed` and never failed varied its outcome and is not
+  # reported. A reader who is not told that reads this list as "every test whose outcome varied".
+  def unstable_tests_boundary_sentence
+    "The search starts from what failed, so a test that alternated between other outcomes — " \
+      "pending in one run, passed in the next — without ever failing is outcome variance this " \
+      "panel does not report."
+  end
+
+  # What the window held that the matching could not use, and what the narrowing did not reach.
+  # Both are silences, and a silence a reader cannot see is the one thing a panel counted off a
+  # partial population must not leave them to discover.
+  def unstable_tests_exclusion_sentence(unstable)
+    [unstable_tests_unnamed_clause(unstable), unstable_tests_truncation_clause(unstable)]
+      .compact.join(" ").presence
+  end
+
+  # Why there is no list and no zero: fewer than two runs of the window reported an outcome, so
+  # there is no comparison to make and nothing this panel could print that would not be a figure
+  # about silence.
+  #
+  # This is the panel's *Vacuous Green* refusal, and the description says which of the two states a
+  # reader is looking at, because they are indistinguishable in every other way. A window whose
+  # runs all passed and a window whose client sends no outcomes both produce an empty list; only
+  # this sentence separates "we compared and found nothing" from "there was nothing to compare".
+  #
+  # The gate is `runs_reporting_outcomes >= 2`, so it is false in TWO states, and they have
+  # different causes and different remedies. Silence is one of them; the other is a window that
+  # reported perfectly well and holds exactly one run to have reported it. Both the leading clause
+  # AND the explanation behind it are therefore per-state: "said nothing" is a claim about THIS
+  # window, and asserting it over a window that did say something is the mirror of the Vacuous
+  # Green hazard this method exists to refuse — a report read as silence, sending a reader to check
+  # their formatter config when what they need is a second run. The two branches are worded so that
+  # each names the thing its own reader has to change.
+  def unstable_tests_incomparable_description(unstable)
+    reported, cause =
+      if unstable.runs_reporting_outcomes.zero?
+        ["not one of them said how any example ended",
+         "What CI reports here is optional and nothing validates it, so a window that said " \
+           "nothing and a window with nothing wrong in it produce the same empty list. This one " \
+           "said nothing, and no count is printed over it."]
+      else
+        ["one of them said how an example ended",
+         "That report is real — it is simply the only one here, and an outcome needs an earlier " \
+           "outcome to have changed from. A second run that reports is what this window is short " \
+           "of, and no count is printed over it."]
+      end
+
+    "Comparing outcomes takes at least two runs that reported them — one run's outcome cannot have " \
+      "changed from anything. Of the #{number_with_delimiter(unstable.run_count)} " \
+      "#{"run".pluralize(unstable.run_count)}#{unstable_tests_branch_clause(unstable)}, " \
+      "#{reported}. #{cause}"
+  end
+
+  # The honest zero — reachable only behind `#comparable?`, and worded against the runs it was
+  # actually drawn from rather than against the length of the window.
+  #
+  # Three different zeroes, said differently, because they are three different facts about a
+  # repository: nothing failed at all, things failed but always failed, and something DID vary but
+  # under a description this panel cannot attribute to one example. Collapsing the first two would
+  # tell a reader with a permanently red test that their suite is stable. Collapsing the third
+  # would be worse than imprecise — "not one of them reported any other outcome" is FALSE over a
+  # window whose shared-description group reported two, and it would sit directly above the section
+  # saying so.
+  #
+  # Every one of them is also worded against the descriptions it was drawn from, and not only
+  # against the runs. A zero is a UNIVERSAL — "no description varied", "not one of them reported
+  # any other outcome" — and when the candidate cap bit, the population it quantifies over is the
+  # part of the window this panel examined rather than the window. Left unqualified it asserts a
+  # property of descriptions that were never read, inches under the clause disclosing that they
+  # were not read (`#unstable_tests_truncation_clause`). That is the same defect the shared-
+  # description branch exists to refuse, one silence over: a caption is a claim about the list it
+  # was counted off, so when the list is part of the candidates the caption says which part.
+  def unstable_tests_none_description(unstable)
+    reporting = "#{number_with_delimiter(unstable.runs_reporting_outcomes)} " \
+                "#{"run".pluralize(unstable.runs_reporting_outcomes)}" \
+                "#{unstable_tests_branch_clause(unstable)} that reported outcomes"
+
+    if unstable.shared_description_rows.any?
+      "No description belonging to a single example changed its outcome " \
+        "#{unstable_tests_examined_scope(unstable, reporting)}. What did vary, varied under a " \
+        "description more than one example answers to, which is reported below rather than " \
+        "counted here.#{unstable_tests_unexamined_caveat(unstable)}"
+    elsif unstable.candidate_count.zero?
+      # Unreachable under truncation by construction: the cap can only have bitten a window in
+      # which something failed, so there is no unexamined population to qualify this one against.
+      "No example failed in any of the #{reporting}, so there is nothing here whose outcome could " \
+        "have changed. That is a comparison this window supported and it came back empty."
+    elsif unstable.truncated?
+      "#{number_with_delimiter(unstable.examined_count)} of the " \
+        "#{number_with_delimiter(unstable.candidate_count)} descriptions that failed somewhere in " \
+        "the #{reporting} were the ones compared across runs, and not one of those reported any " \
+        "other outcome anywhere in them. Tests that fail consistently are not what this panel is " \
+        "looking for.#{unstable_tests_unexamined_caveat(unstable)}"
+    else
+      "#{number_with_delimiter(unstable.candidate_count)} " \
+        "#{"description".pluralize(unstable.candidate_count)} failed somewhere in the " \
+        "#{reporting}, and not one of them reported any other outcome anywhere in them. Tests that " \
+        "fail consistently are not what this panel is looking for."
+    end
+  end
+
+  # The population a zero on this panel quantifies over. "Across the window" is only true when
+  # every description that failed in it was compared; when the cap bit it is true of the examined
+  # part alone, and the phrase says which part rather than letting the reader supply the wrong one.
+  def unstable_tests_examined_scope(unstable, reporting)
+    return "across the #{reporting}" unless unstable.truncated?
+
+    "among the #{number_with_delimiter(unstable.examined_count)} of " \
+      "#{number_with_delimiter(unstable.candidate_count)} failing descriptions this panel compared " \
+      "across the #{reporting}"
+  end
+
+  # What a zero above a capped candidate list does NOT establish, said in the same breath as the
+  # zero. `#unstable_tests_truncation_clause` discloses the cap against the LIST — "not represented
+  # above" — which is a statement about rows that were printed; this one is about a claim, and the
+  # claim is the thing a reader would otherwise carry away as clean.
+  def unstable_tests_unexamined_caveat(unstable)
+    return "" unless unstable.truncated?
+
+    # `unexamined_count == 1` is one description past the cap, not a contrived state — the count is
+    # the pre-LIMIT total, so a window with `UNSTABLE_CANDIDATE_LIMIT + 1` failing descriptions
+    # lands here. Verb and pronoun agree with the noun, as at `#unstable_tests_shared_description_
+    # sentence` and the trajectory captions above.
+    one = unstable.unexamined_count == 1
+
+    " The other #{number_with_delimiter(unstable.unexamined_count)} " \
+      "#{"description".pluralize(unstable.unexamined_count)} that failed in this window " \
+      "#{one ? "was" : "were"} never compared across runs, so nothing here is a finding about " \
+      "#{one ? "it" : "them"}."
+  end
+
+  # The groups the matching rule could not rule on, said as what they are. Not flakiness and not
+  # dropped: a description carried by two examples in one run holds that run's `failed` and its
+  # `passed` at the same time, and either reading — listing it above, or omitting it — asserts
+  # something nothing here established.
+  def unstable_tests_shared_description_sentence(unstable)
+    count = unstable.shared_description_rows.size
+
+    "#{number_with_delimiter(count)} #{"description".pluralize(count)} varied in outcome across " \
+      "this window AND #{count == 1 ? "was" : "were"} carried by more than one example in at least " \
+      "one run of it. A description is not a key within a single run — a table-driven loop, or two " \
+      "examples simply given the same words, put several under one — so what varied may be which " \
+      "of those examples was which rather than a test that changed. Listed here rather than " \
+      "counted above, because calling them flaky would be a false positive manufactured by the " \
+      "matching rule."
+  end
+
   private
+
+  # " on main", or nothing at all. `suite_size_trajectory` returns an empty window for a run that
+  # named no branch, so the panel is not rendered without one — but a sentence that would read
+  # "the last 30 runs on " if that ever changed is worse than one that simply says less.
+  def unstable_tests_branch_clause(unstable)
+    unstable.branch.presence ? " on #{unstable.branch}" : ""
+  end
+
+  # Runs of the window that wrote no per-example rows at all — a different absence from "reported
+  # no outcome", and one the sentence above would otherwise fold into it. A run ingested before
+  # these rows existed, or one whose client sends no per-example detail, is a run of the window
+  # with nothing at this grain rather than a run that was quiet about outcomes.
+  def unstable_tests_silent_runs_clause(unstable)
+    silent = unstable.run_count - unstable.runs_with_rows
+    return "" unless silent.positive?
+
+    " #{number_with_delimiter(silent)} of them recorded no per-example rows at all."
+  end
+
+  # Rows the matching had to leave out, counted and stated. A null description cannot be matched to
+  # itself across runs — two nulls are not known to be one example — so pooling them under one
+  # group would invent a test with a history. Excluding them silently is the other failure: the
+  # panel would be a claim about the window made from part of it, with nothing saying which part.
+  #
+  # Counted in ROWS, deliberately, and worded that way. An unnamed row is precisely a row this
+  # panel cannot say is a test, so reporting a number of "tests" here would be the same identity
+  # claim the exclusion exists to decline.
+  def unstable_tests_unnamed_clause(unstable)
+    return nil unless unstable.unnamed_count.positive?
+
+    "#{number_with_delimiter(unstable.unnamed_count)} " \
+      "#{"row".pluralize(unstable.unnamed_count)} in this window carried no description; two of " \
+      "those are not known to be one test, so they are excluded from the matching rather than " \
+      "pooled into one."
+  end
+
+  # The cap, disclosed only when it bit — and stated as what was KEPT rather than as a bare number
+  # cut, because which end of the candidate list survived is the part that decides what this panel
+  # could still see. Fewest failures first: a description that failed in every run of the window is
+  # one whose outcome did not change, so the cap sheds that end first.
+  def unstable_tests_truncation_clause(unstable)
+    return nil unless unstable.truncated?
+
+    "#{number_with_delimiter(unstable.candidate_count)} descriptions failed somewhere in this " \
+      "window — more than this panel examines at once — so the " \
+      "#{number_with_delimiter(unstable.examined_count)} that failed fewest times were the ones " \
+      "compared across runs, and the other #{number_with_delimiter(unstable.unexamined_count)} " \
+      "#{unstable.unexamined_count == 1 ? "is" : "are"} not represented above."
+  end
 
   # The truncated file whose timed rows ran out before the cap did — a ranked head and an unranked
   # tail on one page, and the only shape here where the list shows part of BOTH populations.
