@@ -218,6 +218,34 @@ RSpec.describe "Repository spec file examples", type: :request do
         "recorded in it, slowest first", normalize_ws: true
       )
     end
+
+    # THE ORDINARY SHAPE OF THIS PANEL — a big file, a run that timed all of it — and the one the
+    # completeness sentence used to contradict itself on. `#complete?` is `timed_count ==
+    # recorded_count`, both counted before the cap, so it is true of a 50-row page of a 55-example
+    # file; spent as "the list covers the whole of what this run recorded here" it denies the
+    # sentence directly before it, which has just said the page holds 50 of 55.
+    #
+    # Nothing constructed this combination before: the truncation examples above assert only the
+    # scope sentence, and the completeness sentence is asserted only on the three-row untruncated
+    # file. Both halves are pinned here, so neither dropping the branch nor restoring the
+    # unconditional wording can pass.
+    it "does not call a truncated page the whole of what the run recorded" do
+      repository = create_repository(user: @user)
+      count = SpecObservation::FILE_EXAMPLES_LIMIT + 5
+      ingest(repository, (1..count).map do |i|
+        example_spec(file_path: ORDER_SPEC, duration: i.to_f, line_number: i, name: "example #{i}")
+      end)
+
+      get repository_path(repository, spec_file: ORDER_SPEC)
+
+      expect(rows.size).to eq(SpecObservation::FILE_EXAMPLES_LIMIT)
+      expect(basis_line).to have_no_text("the list covers the whole of what this run recorded here")
+      expect(basis_line).to have_text(
+        "Every one of the #{count} reported a duration, so the ranking these " \
+        "#{SpecObservation::FILE_EXAMPLES_LIMIT} were drawn from covers the whole of what this " \
+        "run recorded here", normalize_ws: true
+      )
+    end
   end
 
   # `spec_file_path` is the INCLUDING file and `file_path` the definition site, and they differ
@@ -339,6 +367,37 @@ RSpec.describe "Repository spec file examples", type: :request do
         "#{shown_untimed} of those are at the END of this list rather than at the head of it, " \
         "and the remaining #{untimed - shown_untimed} are not on this page at all",
         normalize_ws: true
+      )
+    end
+
+    # The OTHER side of that cap: a file with more timed examples than the limit shows none of its
+    # untimed rows at all, so the clause counting the ones "at the END of this list" counts zero of
+    # them. "0 of those are at the END of this list" is a sentence about arithmetic rather than
+    # about this run — the same reason `#slowest_examples_outcome_breakdown` omits its own
+    # remainder clause when that is zero — and it sits beside a clause naming the whole population
+    # as absent, which says the thing worth saying.
+    it "does not report a count of zero untimed rows at the end of the list" do
+      repository = create_repository(user: @user)
+      timed = SpecObservation::FILE_EXAMPLES_LIMIT + 5
+      untimed = 7
+      ingest(repository,
+             (1..timed).map do |i|
+               example_spec(file_path: ORDER_SPEC, duration: i.to_f, line_number: i,
+                            name: "timed #{i}")
+             end + (1..untimed).map do |i|
+               example_spec(file_path: ORDER_SPEC, duration: nil, line_number: 100 + i,
+                            name: "untimed #{i}")
+             end)
+
+      get repository_path(repository, spec_file: ORDER_SPEC)
+
+      expect(rows.count { |row| row[:duration] == "not reported" }).to eq(0)
+      expect(basis_line).to have_text("Durations here cover #{timed} of #{timed + untimed}",
+                                      normalize_ws: true)
+      expect(basis_line).to have_no_text("0 of those are at the END")
+      expect(basis_line).to have_text(
+        "The other #{untimed} reported none, and the cap was reached before the list got to any " \
+        "of them — none are on this page at all", normalize_ws: true
       )
     end
 

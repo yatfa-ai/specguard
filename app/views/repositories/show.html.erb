@@ -1622,8 +1622,30 @@
             <span class="font-mono text-app-content-secondary"><%= @spec_file_examples.path %></span>
             — <%= spec_file_examples_scope_sentence(@spec_file_examples) %>
             <% if @spec_file_examples.complete? %>
-              Every one of them reported a duration, so the list covers the whole of what this run
-              recorded here.
+              <%# Completeness is a claim about the file's TIMING, and it has to be spent on the
+                  population the page actually holds. `#complete?` is `timed_count ==
+                  recorded_count` — both windows counted before the cap — so it is true of a
+                  50-row page of a 340-example file, where "the list covers the whole of what this
+                  run recorded here" is false and contradicts the scope sentence immediately
+                  before it inside one paragraph. A fully-timed run over a file past the cap is
+                  this panel's ORDINARY shape, not an edge of it.
+
+                  Both siblings state the true version and this one has to match them: the
+                  "Slowest tests" panel says the RANKING covers what it reported, and the rollup
+                  above says each TOTAL covers its file — a claim about the population the head
+                  was drawn from, and a per-row claim, each of which survives truncation. What
+                  does not survive it is a claim about the rows on the page. %>
+              <% if @spec_file_examples.truncated? %>
+                Every one of the
+                <%= number_with_delimiter(@spec_file_examples.recorded_count) %> reported a
+                duration, so the ranking these
+                <%= number_with_delimiter(@spec_file_examples.rows.size) %> were drawn from covers
+                the whole of what this run recorded here — the cap is all that keeps the rest off
+                this page.
+              <% else %>
+                Every one of them reported a duration, so the list covers the whole of what this
+                run recorded here.
+              <% end %>
             <% elsif @spec_file_examples.any_timed? %>
               <%# The coverage fraction through `SpecFileExamples#coverage_label`, which is
                   `SpecFileDurations::Row#coverage_label` fixed for this panel — so the file's row
@@ -1636,18 +1658,29 @@
                   of those three hundred are at the end of the list and two hundred and ninety are
                   not on the page at all. Said unconditionally, that sentence asserts a whole
                   population is visible on exactly the files where most of it is not — and this
-                  panel's own rule is that a caption is a claim ABOUT the list. %>
+                  panel's own rule is that a caption is a claim ABOUT the list.
+
+                  There are three branches and not two because the cap can also stop before it
+                  reaches the untimed rows at all — a file with more timed examples than the limit
+                  shows none of them — and "0 of those are at the END of this list" is then a
+                  sentence about arithmetic rather than about this run. The same reason
+                  `#slowest_examples_outcome_breakdown` gives for dropping its own remainder
+                  clause when that is zero. %>
               Durations here cover <%= @spec_file_examples.coverage_label %> — the same fraction
               the row for this file states in the panel above.
               <% if @spec_file_examples.untimed_omitted_count.zero? %>
                 The other <%= number_with_delimiter(@spec_file_examples.untimed_count) %> reported
                 none and sit at the END of the list rather than at the head of it.
-              <% else %>
+              <% elsif @spec_file_examples.lists_untimed? %>
                 The other <%= number_with_delimiter(@spec_file_examples.untimed_count) %> reported
                 none:
                 <%= number_with_delimiter(@spec_file_examples.shown_untimed_count) %> of those are
                 at the END of this list rather than at the head of it, and the remaining
                 <%= number_with_delimiter(@spec_file_examples.untimed_omitted_count) %> are not on
+                this page at all.
+              <% else %>
+                The other <%= number_with_delimiter(@spec_file_examples.untimed_count) %> reported
+                none, and the cap was reached before the list got to any of them — none are on
                 this page at all.
               <% end %>
               An example that never ran has no duration to report, so a missing timing is a
