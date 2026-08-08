@@ -874,6 +874,8 @@ RSpec.describe "Repository members", type: :request do
 
     # Every api_keys SELECT the members page issues. The page touches no other key data, so this is
     # exactly the count the badge costs — one grouped query for the whole table, never one per row.
+    # Same predicate as `queries_against` in spec/support/query_capture.rb, but bound to the one
+    # table this page's badge can move, so the name says what the example is about at every call.
     def api_key_queries
       queries = []
       subscriber = ActiveSupport::Notifications.subscribe("sql.active_record") do |_, _, _, _, payload|
@@ -1290,6 +1292,8 @@ RSpec.describe "Repository members", type: :request do
     # That adds exactly ONE statement to every render regardless of member count, so both sides of
     # the comparison move together and the count stays flat. Detecting the query SHAPE is a
     # different job from counting, and the example does it separately, on the statement itself.
+    # Not `count_queries` from spec/support/query_capture.rb: that one also drops cached repeats,
+    # and this comparison is of statements issued, not of round trips.
     def request_queries
       queries = []
       subscriber = ActiveSupport::Notifications.subscribe("sql.active_record") do |_, _, _, _, payload|

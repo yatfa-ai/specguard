@@ -367,21 +367,8 @@ RSpec.describe "Repository slowest tests", type: :request do
   # The whole point of ranking in SQL against the composite index is that the page costs the same
   # on a 20,000-example suite as on a 20-example one. A `has_many` walked in the view is exactly
   # the shape that ships green on a three-row fixture and takes the page down on a real suite.
-  #
-  # Defined here rather than extracted, following spec/requests/repositories_spec.rb, which defines
-  # its own copy per describe for the same reason: the guard is about THIS page's budget and reads
-  # at the point of use.
   describe "what the panel costs" do
-    def queries_against(table)
-      queries = []
-      subscriber = ActiveSupport::Notifications.subscribe("sql.active_record") do |_, _, _, _, payload|
-        queries << payload[:sql] if payload[:name] != "SCHEMA" && payload[:sql].to_s.include?(table)
-      end
-      yield
-      queries
-    ensure
-      ActiveSupport::Notifications.unsubscribe(subscriber)
-    end
+    # `queries_against` comes from spec/support/query_capture.rb.
 
     it "costs the same number of queries at 200 examples as at 3" do
       small = create_repository(user: @user, github_full_name: "acme/small-suite")

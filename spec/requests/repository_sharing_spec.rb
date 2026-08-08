@@ -26,20 +26,10 @@ RSpec.describe "Repository sharing", type: :request do
     create_membership(repository: repository, user: member, permissions: permissions)
   end
 
-  # Captures the SQL a block issues, for the query-cost examples below to reduce however each one
-  # needs. Schema reads and cached repeats are excluded: neither is work the page chose to do.
-  # Each call site says in its own comment *why* it reduces the way it does — that reasoning is
-  # per-example and belongs there, not here.
-  def captured_sql
-    sql = []
-    subscriber = ActiveSupport::Notifications.subscribe("sql.active_record") do |_, _, _, _, payload|
-      sql << payload[:sql].to_s unless payload[:cached] || payload[:name].in?(["SCHEMA", "TRANSACTION"])
-    end
-    yield
-    sql
-  ensure
-    ActiveSupport::Notifications.unsubscribe(subscriber)
-  end
+  # `executed_sql` / `count_queries` come from spec/support/query_capture.rb, and capture the SQL a
+  # block issues for the query-cost examples below to reduce however each one needs. Schema reads
+  # and cached repeats are excluded there: neither is work the page chose to do. Each call site says
+  # in its own comment *why* it reduces the way it does — that reasoning is per-example.
 
   describe "a member with only 'view'" do
     before { sign_in_as_member(%w[view]) }
@@ -307,8 +297,8 @@ RSpec.describe "Repository sharing", type: :request do
     # row), and a total would move for reasons this example is not about. The delta example further
     # down covers the total from the other direction.
     #
-    # Counted through its own subscriber rather than `captured_sql`, and the difference is the whole
-    # point. `captured_sql` drops `payload[:cached]` because a cached repeat is not work the page
+    # Counted through its own subscriber rather than `executed_sql`, and the difference is the whole
+    # point. `executed_sql` drops `payload[:cached]` because a cached repeat is not work the page
     # chose to do — true of the queries it is used for, and false here: the likeliest wrong
     # implementation is a second `find_by` for the SAME row, which ActiveRecord's per-request query
     # cache serves byte-identically and therefore invisibly. Counting cached repeats is what makes
@@ -537,8 +527,8 @@ RSpec.describe "Repository sharing", type: :request do
     # `members.manage` viewer issues is the lookup this page declined to render.
     #
     # Reduces to a total count: this example is a delta between two viewers of the same page, so
-    # every query either of them issues is in scope.
-    def count_queries(&) = captured_sql(&).size
+    # every query either of them issues is in scope — which is `count_queries` from
+    # spec/support/query_capture.rb, unreduced.
 
     it "costs a 'members.manage' viewer who cannot see the panel no more than a 'view'-only one" do
       membership = sign_in_as_member(%w[view])
@@ -566,7 +556,7 @@ RSpec.describe "Repository sharing", type: :request do
     # preloaded newest run), and the key count that outlived it is grouped for the whole page too,
     # under its own guard in the block below. Reducing per table is now a matter of keeping each
     # example's failure legible, not of stepping around costs nobody was watching.
-    def user_table_queries(&) = captured_sql(&).grep(/from "users"/i).size
+    def user_table_queries(&) = executed_sql(&).grep(/from "users"/i).size
 
     it "reads the users table no more often for three shared cards than for one" do
       member = sign_in_via_github(uid: "9999", info: { nickname: "hubot" })
@@ -597,9 +587,9 @@ RSpec.describe "Repository sharing", type: :request do
   describe "what counting API keys costs the index per card" do
     # Reduces on reads of `api_keys` for the same reason the block above reduces on `users` — each
     # example watches the one table its own subject can move. A per-card `.size` on an unpreloaded
-    # association issues the COUNTs itself, so removing it removes the events `captured_sql` sees;
+    # association issues the COUNTs itself, so removing it removes the events `executed_sql` sees;
     # there is nothing here that a total would catch and this does not.
-    def api_key_queries(&) = captured_sql(&).grep(/from "api_keys"/i).size
+    def api_key_queries(&) = executed_sql(&).grep(/from "api_keys"/i).size
 
     it "reads the api_keys table no more often for three cards than for one" do
       member = sign_in_via_github(uid: "9999", info: { nickname: "hubot" })

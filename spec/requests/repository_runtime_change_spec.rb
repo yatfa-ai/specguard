@@ -483,16 +483,7 @@ RSpec.describe "Repository runtime change", type: :request do
   # hold is that the runtime comparison adds no work — it costs the same whether it renders a
   # change or withholds one, and the same on a sharded pair as on an unsharded one.
   describe "what the comparison costs the page" do
-    def count_queries
-      count = 0
-      subscriber = ActiveSupport::Notifications.subscribe("sql.active_record") do |_, _, _, _, payload|
-        count += 1 unless payload[:cached] || payload[:name].in?(["SCHEMA", "TRANSACTION"])
-      end
-      yield
-      count
-    ensure
-      ActiveSupport::Notifications.unsubscribe(subscriber)
-    end
+    # `count_queries` comes from spec/support/query_capture.rb.
 
     it "costs the same whether it renders the change or withholds it" do
       withheld = create_repository(user: @user, github_full_name: "acme/withheld")

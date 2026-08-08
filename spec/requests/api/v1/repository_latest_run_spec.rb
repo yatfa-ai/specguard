@@ -18,26 +18,12 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
     response.parsed_body
   end
 
-  # What counts as a query for every cost example in this file, defined once. The cost blocks below
-  # bound the endpoint on different axes — runs for a branch-scoped window, shards on one run — but
-  # they must agree on what they are counting, so the `cached` / SCHEMA / TRANSACTION exclusion
-  # lives here rather than being restated per block. RSpec scopes a `def` to its own example group,
-  # so a helper defined in either block is invisible to the other; that is how it came to be
-  # written twice, and hoisting is what stops a third copy landing with the next cost example.
-  def executed_sql
-    statements = []
-    subscriber = ActiveSupport::Notifications.subscribe("sql.active_record") do |_, _, _, _, payload|
-      statements << payload[:sql] unless payload[:cached] || payload[:name].in?(["SCHEMA", "TRANSACTION"])
-    end
-    yield
-    statements
-  ensure
-    ActiveSupport::Notifications.unsubscribe(subscriber)
-  end
-
-  # The count is the general helper's length — one rule, two readings, so a change to what counts
-  # as a query cannot drift between them.
-  def count_queries(&block) = executed_sql(&block).length
+  # `executed_sql` and `count_queries` come from spec/support/query_capture.rb. The cost blocks
+  # below bound the endpoint on different axes — runs for a branch-scoped window, shards on one run
+  # — but they must agree on what they are counting, so the `cached` / SCHEMA / TRANSACTION
+  # exclusion lives in the shared helper rather than being restated per block. RSpec scopes a `def`
+  # to its own example group, so a helper defined in either block is invisible to the other; that
+  # is how it came to be written twice here before it was hoisted out of the file entirely.
 
   describe "a repository with an ingested run" do
     let!(:test_run) do

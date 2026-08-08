@@ -161,6 +161,9 @@ RSpec.describe SpecObservation do
       # The plan for whatever SQL the block causes to be run against this table — for a read whose
       # projection is not on the relation (a `pluck` of aggregates) and therefore has no `to_sql`
       # worth EXPLAINing.
+      # Not a query counter, so none of the shared helpers in spec/support/query_capture.rb fit: it
+      # keeps the FIRST matching statement to feed EXPLAIN, and must run under
+      # `unprepared_statement` so the captured SQL carries its literals.
       def plan_for_actual_sql
         captured = nil
         subscriber = ActiveSupport::Notifications.subscribe("sql.active_record") do |_, _, _, _, payload|

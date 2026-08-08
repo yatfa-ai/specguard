@@ -3,19 +3,9 @@
 require "rails_helper"
 
 RSpec.describe Repository do
-  # Shared by every budget example below. Counting queries is how three separate criteria on this
-  # model are stated — `previous_test_run_on_branch` costs one, `suite_size_trajectory` costs one
-  # for a whole series — so it is defined once rather than re-spelled per block.
-  def count_queries
-    count = 0
-    subscriber = ActiveSupport::Notifications.subscribe("sql.active_record") do |_, _, _, _, payload|
-      count += 1 unless payload[:cached] || payload[:name].in?(["SCHEMA", "TRANSACTION"])
-    end
-    yield
-    count
-  ensure
-    ActiveSupport::Notifications.unsubscribe(subscriber)
-  end
+  # `count_queries` comes from spec/support/query_capture.rb, included into every example group.
+  # Counting queries is how three separate criteria on this model are stated —
+  # `previous_test_run_on_branch` costs one, `suite_size_trajectory` costs one for a whole series.
 
   it "requires an org/repo shaped full name" do
     repository = create_user.repositories.new(github_full_name: "not-a-full-name")
