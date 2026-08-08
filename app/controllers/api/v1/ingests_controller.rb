@@ -2,7 +2,7 @@
 
 # Phase 2's synchronous half: accept one CI run, validate it, record the run's counts, and answer
 # `202 Accepted` immediately. Nothing here blocks on embedding — that is asynchronous by design,
-# which is why `/check-intent` may not yet reflect a run that just landed.
+# so anything reading the embeddings will trail a run that just landed.
 #
 # One request is one *shard*, not necessarily one run: a sharded suite POSTs once per process, and
 # `Ingest::RunRecorder` is what folds those back into the single `TestRun` they came from.

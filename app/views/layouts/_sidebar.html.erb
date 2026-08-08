@@ -19,8 +19,11 @@
   </nav>
 
   <div class="border-t border-app-border p-3">
-    <p class="section-label text-app-content-secondary">Phase 1</p>
-    <p class="mt-1 text-xs text-app-muted">Foundation, auth &amp; data model. Ingestion and the
-      duplicate-detection engine land in later phases.</p>
+    <%# Rendered on the landing page too, beside the panels that state what is live — so it has to
+        agree with them. It previously put ingestion in "later phases", which has been shipped
+        since; a reader met two different answers on one screen. %>
+    <p class="section-label text-app-content-secondary">Early access</p>
+    <p class="mt-1 text-xs text-app-muted">Auth, the data model and run ingestion are shipped.
+      Per-test records and the duplicate-detection engine land later.</p>
   </div>
 </aside>
