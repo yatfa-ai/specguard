@@ -83,12 +83,18 @@ module ApplicationHelper
   # line for sitting at a fraction of its own suite — on the same page load this cell renders it.
   #
   # Zero is the exclusion, not one: an unsharded run arrived whole in a single POST
-  # (`TestRun#delivery_description`) and has no missing part to name. `multi_shard?` stays where it
-  # belongs — its own doc argues from MAX-vs-SUM, which is a DURATION argument (wall clock vs
-  # machine time), correct for the Overview's cost rows and meaningless for a count.
+  # (`TestRun#delivery_description`) and has no missing part to name.
   #
-  # The clause inflects with the count for the same reason `delivery_description` does: "covers
-  # those" over a single report promises more parts than the phrase before it just named.
+  # What is retired here is the imported RATIONALE, not the predicate. `multi_shard?`'s own doc
+  # argues from MAX-is-SUM, which is an argument about DURATION (wall clock vs machine time): it
+  # settles the Overview's cost rows and settles nothing about whether a count discloses its
+  # coverage, so it is the wrong reason to GATE this clause. That is the whole of the dispute.
+  # It says nothing against the predicate itself, which is `shard_count > 1` and is named, by that
+  # same doc, for the count and not the provenance — "is there more than one part to explain".
+  #
+  # Which is exactly the question three lines below, so it is what inflects the wording there. The
+  # clause inflects for the same reason `delivery_description` does: "covers those" over a single
+  # report promises more parts than the phrase before it just named.
   #
   # A plain String, not a `tag`, because the two callers put it in different containers — a table
   # cell and a card paragraph — and only the wording is shared. Neither predicate queries: every

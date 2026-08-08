@@ -223,7 +223,10 @@ RSpec.describe "Repository recent runs", type: :request do
       # settles it, and two spellings of one fact is how the two surfaces would drift apart.
       expect(cell).to include("assembled from 2 shard reports")
       # And the qualification that makes it not a whole-suite size. Readable from the row alone.
-      expect(cell).to include("not necessarily the whole suite")
+      # The full literal, not just the tail: the clause inflects now ("covers those" vs "covers
+      # that report"), so asserting only "not necessarily the whole suite" would stay green with
+      # the ternary swapped and leave this surface's multi-shard wording pinned nowhere.
+      expect(cell).to include("the count above covers those, not necessarily the whole suite")
     end
 
     it "inflects a single shard report rather than printing '1 shard reports'" do
