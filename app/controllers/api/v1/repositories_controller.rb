@@ -99,6 +99,9 @@ class Api::V1::RepositoriesController < Api::BaseController
       duration_seconds: test_run.duration_seconds,
       shards: serialized_shards(test_run),
       spec_files: serialized_spec_files(test_run),
+      # BESIDE `spec_files`, never in place of it: the two rank different populations and the
+      # second is not derivable from the first. See `serialized_spec_directories` below.
+      spec_directories: serialized_spec_directories(test_run),
       # `TestRun#suite_size_measured?`, the same predicate `serialized_history_row` serves below and
       # for the same reason: a run that reported zero tests has a `total_specs` but not a
       # measurement, and a difference taken against it describes the report rather than the suite.
@@ -368,6 +371,66 @@ class Api::V1::RepositoriesController < Api::BaseController
       end,
       file_count: durations.file_count,
       limit: SpecObservation::HEAVIEST_FILES_LIMIT
+    }
+  end
+
+  # WHERE the wall clock went, by code AREA — the block above one rung up, and the same
+  # decomposition `repositories#show` has rendered on its by-directory panel. Added BESIDE
+  # `spec_files` rather than in place of it, on this endpoint's standing rule: a client reading
+  # `spec_files` today reads the same key, type and values tomorrow.
+  #
+  # NOT DERIVABLE FROM THE BLOCK ABOVE, which is the whole reason it is served at all. That list
+  # stops at `HEAVIEST_FILES_LIMIT`, so an agent holding it has ten files out of a run that may
+  # have touched three hundred — and `SpecDirectoryDurations`' own comment states the arithmetic:
+  # *"a directory holding forty files at two seconds each is eighty seconds of the run with not one
+  # of its rows in that list. Concentration re-concentrates at every rung."* Summing the ten files
+  # a client can see by their parent directory answers a different question from summing the run.
+  # And a shard is not the substitute either — `TestRun#shard_durations`' comment is explicit that
+  # a CI partition is not a code area.
+  #
+  # THE SAME OBJECT THE PANEL READS, never a hand-written query — this file's governing rule,
+  # stated in full on `serialized_spec_files` above. `SpecDirectoryDurations` is view-free, so the
+  # API and the panel rank the same areas in the same order off the same rows of the same run.
+  #
+  # Every rule the by-file block states applies here unchanged, so it is not re-argued: `rows`
+  # MIRRORS the presenter and re-sorts nothing (the aggregate orders `SUM(duration_seconds) DESC
+  # NULLS LAST, <directory> ASC`, and a plain `desc` re-sort here would head a list captioned
+  # "heaviest first" with the area that reported NOTHING); STRUCTURED COUNTS, never `Row#duration_label`
+  # (`"1.23s"` / `"not reported"`) or `#coverage_label` (`"4 of 12"`); `total_seconds` is `null` and
+  # never `0.0` for an area none of whose examples reported a timing; `directory_count` is NOT
+  # `rows.size` but the `COUNT(*) OVER ()` counted in the same pass, with `limit` beside it read off
+  # `SpecObservation`'s own constant so the response cannot claim a bound the query did not apply;
+  # `null` — THE KEY STILL PRESENT — for a run that recorded no observation rows; and the gate is
+  # `#recorded?` ITSELF rather than a re-spelled `rows.any?`.
+  #
+  # What the grain changes is only what each of those costs when it is got wrong, and every one
+  # costs MORE here: an area is a bigger population than a file, so an all-untimed area rendered as
+  # `0.0` is a bigger invented measurement, and NULLS FIRST would name it the heaviest area in the
+  # suite rather than merely the heaviest file.
+  #
+  # EXACTLY ONE EXTRA QUERY, on every run, recorded or not — and constant in the size of the suite.
+  # `SpecDirectoryDurations.for` issues `directory_durations_in` unconditionally, so `#recorded?` is
+  # an answer DERIVED from the read rather than a gate in front of it; there is no cheaper way to
+  # ask, since no counter cache exists on `test_runs`. It needs no index of its own: the read groups
+  # on an EXPRESSION and narrows on a COLUMN, and only the second decides the access path, so
+  # `index_spec_observations_on_test_run_id` serves it — EXPLAIN-certified at the 20-run seed in
+  # `spec/models/spec_observation_spec.rb` rather than asserted here.
+  def serialized_spec_directories(test_run)
+    durations = SpecDirectoryDurations.for(test_run)
+
+    return nil unless durations.recorded?
+
+    {
+      rows: durations.rows.map do |row|
+        {
+          path: row.path,
+          total_seconds: row.total_seconds,
+          recorded_count: row.recorded_count,
+          timed_count: row.timed_count
+        }
+      end,
+      directory_count: durations.directory_count,
+      limit: SpecObservation::HEAVIEST_DIRECTORIES_LIMIT
     }
   end
 
