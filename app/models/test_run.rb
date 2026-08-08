@@ -748,6 +748,45 @@ class TestRun < ApplicationRecord
     "assembled from #{shard_count} shard #{"report".pluralize(shard_count)}"
   end
 
+  # Seconds below a minute keep their tenth, which is the precision the Recent-runs cell already
+  # rendered this column at. At a minute and above the tenth stops carrying anything a reader
+  # wants and `372.4s` stops being legible as "six minutes", so it becomes h/m/s parts instead.
+  #
+  # Only the *minutes* part survives a zero, and only when hours precede it, which keeps
+  # `1h 0m 12s` from collapsing into a misleading `1h 12s`. A trailing zero is dropped instead —
+  # `1h 0m`, not `1h 0m 0s` — because a last part has no following part to be misread as.
+  #
+  # The rounding happens BEFORE the sub-minute test, not after it. Rounding after would let
+  # `59.96` choose the seconds branch and then print as `60.0s`: a string this format can
+  # otherwise never produce, in exactly the raw-seconds shape the h/m/s branch exists to retire,
+  # at exactly the value where it decided raw seconds stop being legible.
+  #
+  # Shared by the wall clock and the machine time on purpose. They are the same quantity in the
+  # same unit sitting one row apart in the same list, and two formatters would eventually print
+  # them two ways — which is precisely the comparison the pair exists to let a reader make.
+  #
+  # ON THE CLASS rather than private on the instance, because a *third* reader arrived that holds
+  # no run: `ApplicationHelper#runtime_change` renders the signed difference between two runs'
+  # wall clocks, and a difference belongs to neither row. The alternative was a helper-side
+  # re-implementation of the branching above, which is the one outcome the "two formatters" note
+  # exists to prevent — the delta and the level sitting in the same cell are exactly the two
+  # figures that must not print seconds two ways. It takes a magnitude and knows nothing of sign:
+  # the caller special-cases zero and renders the sign, so nothing here has to grow a branch for
+  # a negative it would format as a bare `-` hyphen anyway.
+  def self.humanized_seconds(value)
+    seconds = value.to_f.round(1)
+    return "#{seconds}s" if seconds < 60
+
+    hours, remainder = seconds.round.divmod(3600)
+    minutes, whole_seconds = remainder.divmod(60)
+
+    parts = []
+    parts << "#{hours}h" if hours.positive?
+    parts << "#{minutes}m" if minutes.positive? || hours.positive?
+    parts << "#{whole_seconds}s" if whole_seconds.positive?
+    parts.join(" ")
+  end
+
   private
 
   # How far apart a set of per-shard values is, as a percentage of their own mean.
@@ -841,33 +880,9 @@ class TestRun < ApplicationRecord
     )
   end
 
-  # Seconds below a minute keep their tenth, which is the precision the Recent-runs cell already
-  # rendered this column at. At a minute and above the tenth stops carrying anything a reader
-  # wants and `372.4s` stops being legible as "six minutes", so it becomes h/m/s parts instead.
-  #
-  # Only the *minutes* part survives a zero, and only when hours precede it, which keeps
-  # `1h 0m 12s` from collapsing into a misleading `1h 12s`. A trailing zero is dropped instead —
-  # `1h 0m`, not `1h 0m 0s` — because a last part has no following part to be misread as.
-  #
-  # The rounding happens BEFORE the sub-minute test, not after it. Rounding after would let
-  # `59.96` choose the seconds branch and then print as `60.0s`: a string this format can
-  # otherwise never produce, in exactly the raw-seconds shape the h/m/s branch exists to retire,
-  # at exactly the value where it decided raw seconds stop being legible.
-  #
-  # Shared by the wall clock and the machine time on purpose. They are the same quantity in the
-  # same unit sitting one row apart in the same list, and two formatters would eventually print
-  # them two ways — which is precisely the comparison the pair exists to let a reader make.
-  def humanized_seconds(value)
-    seconds = value.to_f.round(1)
-    return "#{seconds}s" if seconds < 60
-
-    hours, remainder = seconds.round.divmod(3600)
-    minutes, whole_seconds = remainder.divmod(60)
-
-    parts = []
-    parts << "#{hours}h" if hours.positive?
-    parts << "#{minutes}m" if minutes.positive? || hours.positive?
-    parts << "#{whole_seconds}s" if whole_seconds.positive?
-    parts.join(" ")
-  end
+  # The instance-side spelling of the formatter above, so `duration_label` and
+  # `machine_seconds_label` read as they always did. Private because a run's own two labels are the
+  # only instance-side callers there have ever been, and the third reader — the signed change on
+  # the Overview panel — holds a difference rather than a run and reaches the class method directly.
+  def humanized_seconds(value) = self.class.humanized_seconds(value)
 end

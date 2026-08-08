@@ -63,6 +63,59 @@ module ApplicationHelper
       "than the previous run on this branch"
   end
 
+  # The cost change on the Overview panel, on exactly the rule `suite_size_change` above sets for
+  # the size: a change rendered as a change, sign carrying the meaning, `±0` a real answer.
+  #
+  # ONE helper for both cost rows, where `test_run_duration` and `test_run_machine_time` are two.
+  # Those are two because they read different columns and a run can have reported either without
+  # the other — a difference in the *data*. This is a difference between two seconds figures, and
+  # the wall clock's and the machine time's are the same quantity in the same unit sitting one row
+  # apart: the argument `TestRun.humanized_seconds` makes for being one formatter is the same
+  # argument for one signed rendering over it. What is NOT shared is the wording — a wall clock
+  # that grew is *slower*, machine time that grew is *more*, and those are the two readings below.
+  #
+  # Named for the pair of rows it renders and not as a general `signed_seconds`, for the reason
+  # `suite_size_change` gives: the `±0` reading is specific to "compared, and it did not move" on
+  # this panel, and a wider name would invite the next signed figure to inherit it somewhere that
+  # reading is wrong.
+  #
+  # A true minus (U+2212), the same character and for the same typographic reason as the size
+  # delta one method up — this sits in the same `tabular-nums` list, in a cell directly below it.
+  #
+  # The magnitude goes through `TestRun.humanized_seconds`, which is the single formatter the level
+  # in the very same cell is printed by. A second formatter here would let `1m 14s` and `74.3s`
+  # appear side by side in one `dd`.
+  def runtime_change(delta)
+    return "±0" if delta.zero?
+
+    "#{delta.negative? ? "−" : "+"}#{TestRun.humanized_seconds(delta.abs)}"
+  end
+
+  # The wall-clock change in words, for the `aria-label` on that figure — same job as
+  # `suite_size_change_reading`, and needed for the same two reasons: the `dd` announces as
+  # "1m 14s +3.2s" with nothing tying the second figure to the first, and U+2212 is announced
+  # inconsistently across screen readers, from "minus" to nothing at all.
+  #
+  # *Slower* and *faster*, not "more"/"less": the wall clock is the time a reader waited through,
+  # and a signed number read aloud beside it should say what it meant for them.
+  def wall_clock_change_reading(delta)
+    return "wall clock unchanged since the previous run on this branch" if delta.zero?
+
+    direction = delta.negative? ? "faster" : "slower"
+    "#{TestRun.humanized_seconds(delta.abs)} #{direction} than the previous run on this branch"
+  end
+
+  # The machine-time change in words. Its own reading rather than a flag on the one above, because
+  # the two are not the same claim: machine time is what the suite *cost*, not how long anyone
+  # waited, and calling a bigger bill "slower" would describe a four-shard split that got wider —
+  # more machine time, less wall clock — with the wrong word in both halves.
+  def machine_time_change_reading(delta)
+    return "machine time unchanged since the previous run on this branch" if delta.zero?
+
+    direction = delta.negative? ? "less" : "more"
+    "#{TestRun.humanized_seconds(delta.abs)} #{direction} machine time than the previous run on this branch"
+  end
+
   # The one rendering of how a run was assembled, and of what that means for the count sitting
   # above it. Two surfaces state this now — the Recent-runs table on `show` and the repositories
   # index card — and they must not state it in two sets of words: the fact is that

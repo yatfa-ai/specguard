@@ -214,6 +214,50 @@
           <% comparable = @latest_test_run.suite_size_measured? && comparison_measured && comparison_assembled_like %>
           <% suite_size_delta = total_specs - @previous_test_run.total_specs_count.to_i if comparable %>
 
+          <%# The same comparison asked of what the suite COSTS, and it does not get to reuse the
+              guard above. `comparable` is the right guard for a count and the wrong one for a
+              duration, because the two figures have different denominators: `total_specs_count` is
+              the SUM over the shards recorded so far, so `assembled_like?` — equal `shard_count` —
+              is exactly the question it needs. `duration_seconds` is the MAX over the shards that
+              REPORTED, and its denominator is `timed_shard_count`, which `assembled_like?` never
+              looks at.
+
+              Which is not a hypothetical gap. `Api::V1::RepositoriesController` documents the
+              precise shape: four timed shards (MAX 600s) against four shards whose two slowest
+              were cancelled (MAX 180s) — identical `shard_count`, identical `suite_size_measured`,
+              so `comparable` is true — and the panel would report a 70% speedup produced entirely
+              by telemetry loss. So the runtime asks for equal `timed_shard_count` on top of
+              everything the size delta asks, and that condition is the one nothing on this page
+              checked before.
+
+              `duration_reported?` and not `duration_seconds.present?`, on both sides: the
+              predicate is `!duration_seconds.nil?`, so a run that genuinely measured `0.0` HAS a
+              measurement and is differenced like any other. A blank check here would silently
+              re-file it as "no timing sent".
+
+              `comparison_assembled_like` is reused rather than re-spelled — one fact, one
+              evaluation, and the query it costs is already paid for at the line above.
+
+              Zero new queries. Every predicate below reads `TestRun#shard_totals`, which is
+              memoized per instance and has already been taken for both rows: for `@latest_test_run`
+              by the cost rows' `shard_count`, and for `@previous_test_run` by `assembled_like?`
+              itself. `spec/requests/repository_suite_growth_spec.rb`'s budget examples pin that. %>
+          <% runtime_comparable = comparison_assembled_like &&
+                                  @latest_test_run.duration_reported? &&
+                                  @previous_test_run.duration_reported? &&
+                                  @latest_test_run.timed_shard_count == @previous_test_run.timed_shard_count %>
+          <% wall_clock_delta = @latest_test_run.duration_seconds - @previous_test_run.duration_seconds if runtime_comparable %>
+          <%# The machine time rides the same guard plus its own reported-ness check on each side.
+              On the sharded path that check is implied rather than independent — `duration_seconds`
+              is the MAX over the timed shards, so a run with a wall clock has a timed shard, and an
+              equal `timed_shard_count` on the other side gives it one too — but it is asked anyway
+              rather than inferred, because the implication runs through three separate methods and
+              the failure it would hide is a SUM differenced against a nil. %>
+          <% machine_time_delta = if wall_clock_delta && @latest_test_run.machine_seconds_reported? &&
+                                     @previous_test_run.machine_seconds_reported?
+                                    @latest_test_run.machine_seconds - @previous_test_run.machine_seconds
+                                  end %>
+
           <%# A run reporting no tests has no share to display: 0/0 renders as a tidy `0%` headline
               that reads exactly like a real suite measured at zero annotations — the same
               conflation the never-ingested branch above refuses, one state over. So the meter is
@@ -247,11 +291,39 @@
               since a run with no `ci_run_id` records no shards at all — keeps the single row
               unchanged, because for it the MAX and the SUM are the same number. %>
           <% shard_count = @latest_test_run.shard_count %>
+          <%# Each cost delta rides in the same cell as the level it modifies, the same way the size
+              delta does below and for the same reason: a separate "Change since last run" row would
+              be a second figure a reader has to relate back to the first, where `1m 14s +3.2s` is
+              one statement.
+
+              The wall-clock figure is built once and used by BOTH shapes of the list — the sharded
+              run's "Wall clock" row and the unsharded run's "Total runtime" row. They are one
+              column under two labels (for a run with one shard or none the MAX and the SUM are the
+              same number, which is the whole reason the second label exists), so a change against
+              the previous run is the same fact in both and must not be assembled twice. %>
+          <% wall_clock_figure = if wall_clock_delta
+                                   safe_join([test_run_duration(@latest_test_run),
+                                              tag.span(runtime_change(wall_clock_delta), id: "runtime-delta",
+                                                       class: "text-app-content-secondary",
+                                                       "aria-label": wall_clock_change_reading(wall_clock_delta))], " ")
+                                 else
+                                   test_run_duration(@latest_test_run)
+                                 end %>
+          <% if @latest_test_run.multi_shard? %>
+            <% machine_time_figure = if machine_time_delta
+                                       safe_join([test_run_machine_time(@latest_test_run),
+                                                  tag.span(runtime_change(machine_time_delta), id: "machine-time-delta",
+                                                           class: "text-app-content-secondary",
+                                                           "aria-label": machine_time_change_reading(machine_time_delta))], " ")
+                                     else
+                                       test_run_machine_time(@latest_test_run)
+                                     end %>
+          <% end %>
           <% cost_rows = if @latest_test_run.multi_shard?
-                           [["Wall clock (#{@latest_test_run.wall_clock_coverage})", test_run_duration(@latest_test_run)],
-                            ["Machine time (#{@latest_test_run.machine_seconds_coverage})", test_run_machine_time(@latest_test_run)]]
+                           [["Wall clock (#{@latest_test_run.wall_clock_coverage})", wall_clock_figure],
+                            ["Machine time (#{@latest_test_run.machine_seconds_coverage})", machine_time_figure]]
                          else
-                           [["Total runtime", test_run_duration(@latest_test_run)]]
+                           [["Total runtime", wall_clock_figure]]
                          end %>
           <%# The delta rides in the same cell as the size it modifies rather than in a row of its
               own. A separate "Change since last run" row would be a second figure a reader has to
@@ -652,6 +724,73 @@
               taken across two compositions would report a change no commit made.
             <% end %>
           </p>
+
+          <%# The cost delta's own basis, on the rule the paragraph above is the other half of:
+              every figure on this panel names its own coverage, and a change names what it is a
+              change *from*.
+
+              Rendered only when the two runs were assembled alike, which is narrower than the
+              paragraph above and deliberately so. The three states it does not cover — no earlier
+              run on this branch, a run that named no branch, two runs assembled from different
+              numbers of shards — are not facts about the runtime at all. They are facts about
+              which rows exist and how they arrived, they withhold BOTH figures for one reason, and
+              that reason is stated in full in the sentence immediately above. Restating it here
+              would be two explanations for one absence, which is how a reader comes to believe
+              there are two things wrong.
+
+              What is left is the four states that ARE about the runtime — and the last of them is
+              the one the size delta has no equivalent of, because the size delta's denominator is
+              `shard_count` and the runtime's is `timed_shard_count`. %>
+          <% if comparison_assembled_like %>
+            <p class="text-xs text-app-muted" id="runtime-basis">
+              <% if wall_clock_delta %>
+                <%# Named for the row it modifies, which is "Wall clock" on a sharded run and
+                    "Total runtime" on every other — the same figure under two labels, and a basis
+                    line that used one word for both would be pointing at a row that is not there. %>
+                <%= @latest_test_run.multi_shard? ? "The wall clock" : "The total runtime" %> is
+                measured against
+                <span class="font-mono"><%= @previous_test_run.commit_sha.first(7) %></span>,
+                the previous run on <%= @latest_test_run.branch %>,
+                <%= time_ago_in_words(@previous_test_run.created_at) %> ago<%= ", and so is the machine time" if machine_time_delta %>.
+                <% if shard_count.positive? %>
+                  <%# The condition that separates this guard from the size delta's, said out loud
+                      on the surface where the number is. Suppressed on the unsharded corpus for
+                      the reason the shard clause above is: there is no composition to state, and
+                      "both timed 0 of 0 shards" describes a run that lost all its telemetry. %>
+                  Only runs that timed the same number of shards are compared, and both of these
+                  timed <%= @latest_test_run.timed_shard_count %> of their
+                  <%= shard_count %> <%= "shard".pluralize(shard_count) %>.
+                <% end %>
+              <% elsif !@latest_test_run.duration_reported? %>
+                This run reported no timing at all, so there is no runtime to take a change from —
+                which is not the same as a runtime of zero, and the row above says so in those
+                words rather than printing a number.
+              <% elsif !@previous_test_run.duration_reported? %>
+                The previous run on <%= @latest_test_run.branch %>
+                (<span class="font-mono"><%= @previous_test_run.commit_sha.first(7) %></span>)
+                reported no timing, so there is nothing to measure this run's runtime against.
+                Counting the whole wall clock as new cost would charge a commit for a gap in the
+                reporting.
+              <% else %>
+                <%# The state that would otherwise produce a wrong NUMBER rather than an honest
+                    absence — the runtime's version of the mid-delivery trap the paragraph above
+                    guards the size against, and invisible to the check that catches that one. Both
+                    runs were assembled from the same number of shards, so `assembled_like?` is
+                    satisfied and the suite-size delta above may well be rendering; what differs is
+                    how many of those shards came back with a timing, which is the denominator this
+                    figure and not that one is measured over. %>
+                This run timed <%= @latest_test_run.timed_shard_count %> of its
+                <%= shard_count %> <%= "shard".pluralize(shard_count) %>, while
+                <span class="font-mono"><%= @previous_test_run.commit_sha.first(7) %></span> timed
+                <%= @previous_test_run.timed_shard_count %> of its
+                <%= shard_count %> — so the two wall clocks were measured over different
+                denominators and no change is shown. A wall clock is the slowest shard that
+                <em>reported</em>, and a shard that reported nothing is usually a cancelled or
+                timed-out job, which is usually the slowest one: differencing the two would report
+                a speed-up produced by the missing telemetry rather than by the suite.
+              <% end %>
+            </p>
+          <% end %>
         <% end %>
 
         <%# NOT a test count, and never beside the suite figures unlabelled. This counts the intent
