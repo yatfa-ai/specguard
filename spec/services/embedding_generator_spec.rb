@@ -269,7 +269,7 @@ RSpec.describe EmbeddingGenerator do
       end
 
       it "tolerates a changed suffix, because n-grams overlap where words do not" do
-        # "expired"/"expires" share no word feature at all; they share five trigrams.
+        # "expired"/"expires" share no word feature at all; they share four of their five trigrams.
         expect(cosine(expired_card, described_class.call("rejects checkout on a card that expires")))
           .to be > 0.3
       end

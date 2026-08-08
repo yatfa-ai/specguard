@@ -125,8 +125,8 @@ class EmbeddingGenerator
   #      embed identically.
   #   2. Take two kinds of feature from that: the words themselves, and every 3-character n-gram of
   #      the rejoined string. N-grams are what make the vector tolerate a suffix, a plural or a
-  #      typo — "expired" and "expires" share five of their trigrams.
-  #   3. SHA-256 each feature. The first 8 bytes pick the dimension it lands in; a *different* 8
+  #      typo — "expired" and "expires" share four of their five trigrams.
+  #   3. SHA-256 each feature. The first 8 bytes pick the dimension it lands in; a *different* 4
   #      bytes pick a signed weight, so index and weight are independent rather than two views of
   #      the same number.
   #   4. Accumulate — several features legitimately land in the same dimension (see the collision
