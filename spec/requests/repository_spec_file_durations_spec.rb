@@ -69,6 +69,17 @@ RSpec.describe "Repository heaviest spec files", type: :request do
       repository
     end
 
+    # More files than the panel lists, so the listed count and the run's own count are different
+    # numbers and one caption cannot satisfy both by accident.
+    def twenty_five_file_run
+      repository = create_repository(user: @user)
+      specs = (1..25).map do |i|
+        example_spec(file_path: "spec/models/f#{format('%02d', i)}_spec.rb", duration: i.to_f, line_number: i)
+      end
+      ingest(repository, specs)
+      repository
+    end
+
     # The panel's whole claim: a file's wall clock is the SUM of its examples', so a file holding
     # two middling examples outranks one holding a single quicker one — a ranking of individual
     # examples orders these three files differently and is not this question.
@@ -92,17 +103,33 @@ RSpec.describe "Repository heaviest spec files", type: :request do
     # Bounded by `SpecObservation::HEAVIEST_FILES_LIMIT`: a list of the heaviest files, not a
     # rendering of the suite's directory tree.
     it "lists no more than the heaviest ten, however many files the run touched" do
-      repository = create_repository(user: @user)
-      specs = (1..25).map do |i|
-        example_spec(file_path: "spec/models/f#{format('%02d', i)}_spec.rb", duration: i.to_f, line_number: i)
-      end
-      ingest(repository, specs)
-
-      get repository_path(repository)
+      get repository_path(twenty_five_file_run)
 
       expect(rows.size).to eq(SpecObservation::HEAVIEST_FILES_LIMIT)
       expect(row_paths.first).to eq("spec/models/f25_spec.rb")
       expect(row_paths.last).to eq("spec/models/f16_spec.rb")
+    end
+
+    # A capped list that does not disclose its cap is read as the whole story, which is the same
+    # lie by omission the per-row coverage column refuses one grain down: on a run spread over
+    # three hundred files, ten rows captioned "the files this run spent the most wall clock in"
+    # describe three per cent of it and say so nowhere. The caption has to name what the list is
+    # the head OF — and `rows.size` cannot, because it is the truncated figure.
+    it "says how many files the run touched, not just how many it lists" do
+      get repository_path(twenty_five_file_run)
+
+      expect(basis_line).to have_text("The 10 heaviest of the 25 files the run named above recorded",
+                                      normalize_ws: true)
+    end
+
+    # And the other half of the disclosure: a run whose files all fit is not truncated, and saying
+    # "the 3 heaviest of the 3 files" would make a complete list look like a sample. The count is
+    # still stated — a reader should not have to count table rows to learn it.
+    it "says the list is all of them, where nothing was cut" do
+      get repository_path(timed_run)
+
+      expect(basis_line).to have_text("All 3 files the run named above recorded", normalize_ws: true)
+      expect(basis_line).to have_no_text("heaviest of the")
     end
 
     # A shared example group reports `spec/support/shared_examples.rb` as its definition site, and
@@ -197,6 +224,21 @@ RSpec.describe "Repository heaviest spec files", type: :request do
       expect(panel).to have_text("no wall clock to attribute to any file", normalize_ws: true)
       expect(panel).to have_no_css("tbody tr")
       expect(panel).to have_no_text("0.00s")
+    end
+
+    # The empty state says how much ran unmeasured, rather than only that something did — the same
+    # figure the ranking panel above states for its own absence. In FILES, because that is the
+    # count this read has exactly: an example count summed off the rows on hand would be summed
+    # over a capped ten of them and understate a wider run while looking suite-wide.
+    it "says how many files went unmeasured, counting past the limit" do
+      repository = create_repository(user: @user)
+      ingest(repository, (1..12).map do |i|
+        example_spec(file_path: "spec/models/f#{format('%02d', i)}_spec.rb", duration: nil, line_number: i)
+      end)
+
+      get repository_path(repository)
+
+      expect(panel).to have_text("This run recorded examples in 12 files", normalize_ws: true)
     end
   end
 

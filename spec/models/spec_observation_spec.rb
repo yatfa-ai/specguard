@@ -312,9 +312,9 @@ RSpec.describe SpecObservation do
         observe(run, duration: 0.5, line_number: 4, spec_file_path: "spec/models/user_spec.rb")
 
         expect(described_class.file_durations_in(run)).to eq(
-          [["spec/models/refund_spec.rb", 9.0, 1, 1],
-           ["spec/models/order_spec.rb", 4.0, 2, 2],
-           ["spec/models/user_spec.rb", 0.5, 1, 1]]
+          [["spec/models/refund_spec.rb", 9.0, 1, 1, 3],
+           ["spec/models/order_spec.rb", 4.0, 2, 2, 3],
+           ["spec/models/user_spec.rb", 0.5, 1, 1, 3]]
         )
       end
 
@@ -348,8 +348,8 @@ RSpec.describe SpecObservation do
 
         files = described_class.file_durations_in(run)
 
-        expect(files).to eq([["spec/models/quick_spec.rb", 0.25, 1, 1],
-                             ["spec/models/never_ran_spec.rb", nil, 2, 0]])
+        expect(files).to eq([["spec/models/quick_spec.rb", 0.25, 1, 1, 2],
+                             ["spec/models/never_ran_spec.rb", nil, 2, 0, 2]])
         expect(files.last[1]).to be_nil
       end
 
@@ -362,7 +362,7 @@ RSpec.describe SpecObservation do
         observe(run, duration: nil, line_number: 2, spec_file_path: "spec/models/order_spec.rb")
         observe(run, duration: nil, line_number: 3, spec_file_path: "spec/models/order_spec.rb")
 
-        expect(described_class.file_durations_in(run)).to eq([["spec/models/order_spec.rb", 4.0, 3, 1]])
+        expect(described_class.file_durations_in(run)).to eq([["spec/models/order_spec.rb", 4.0, 3, 1, 1]])
       end
 
       it "reads the run it was asked about and no other" do
@@ -370,7 +370,7 @@ RSpec.describe SpecObservation do
         observe(run, duration: 1.0, line_number: 1, spec_file_path: "spec/ours_spec.rb")
         observe(other, duration: 99.0, line_number: 1, spec_file_path: "spec/theirs_spec.rb")
 
-        expect(described_class.file_durations_in(run)).to eq([["spec/ours_spec.rb", 1.0, 1, 1]])
+        expect(described_class.file_durations_in(run)).to eq([["spec/ours_spec.rb", 1.0, 1, 1, 1]])
       end
 
       it "caps at the limit it was given, and defaults to the panel's own" do
@@ -379,6 +379,27 @@ RSpec.describe SpecObservation do
         expect(described_class.file_durations_in(run).size).to eq(described_class::HEAVIEST_FILES_LIMIT)
         expect(described_class.file_durations_in(run, limit: 3).map(&:first))
           .to eq(["spec/f11_spec.rb", "spec/f10_spec.rb", "spec/f9_spec.rb"])
+      end
+
+      # What the capped list is the head OF, in the same round trip. Without it the caller holds a
+      # length that equals its own limit and cannot tell three files from three hundred — and a
+      # count taken after the `LIMIT`, which is what `rows.size` is, reports the cap back as if it
+      # were the suite. `COUNT(*) OVER ()` runs after `GROUP BY` and before `LIMIT`, so it counts
+      # FILES rather than rows and counts all of them however few come back.
+      it "reports how many files the run touched in total, whatever the limit returns" do
+        12.times { |i| observe(run, duration: i.to_f + 1, line_number: i + 1, spec_file_path: "spec/f#{i}_spec.rb") }
+
+        expect(described_class.file_durations_in(run, limit: 3).map(&:last)).to eq([12, 12, 12])
+        expect(described_class.file_durations_in(run, limit: 100).map(&:last).uniq).to eq([12])
+      end
+
+      # Groups, not rows: a run whose twelve examples sit in two files touched two files. The
+      # cheapest wrong reading of this column is the row count, and one example per file cannot
+      # tell the two apart.
+      it "counts the files rather than the examples in them" do
+        12.times { |i| observe(run, duration: 1.0, line_number: i + 1, spec_file_path: "spec/f#{i % 2}_spec.rb") }
+
+        expect(described_class.file_durations_in(run).map(&:last)).to eq([2, 2])
       end
 
       # Two files totalling the same is ordinary — a run where several files hold one fast example

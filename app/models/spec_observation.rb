@@ -109,7 +109,9 @@ class SpecObservation < ApplicationRecord
   # `Ingest::ObservationRecorder#attributes` falls back to `file_path` for a producer old enough
   # not to send one, precisely so no row drops out of a by-file total.
   #
-  # @return [Array<Array>] `[spec_file_path, total_seconds, recorded_count, timed_count]` per file.
+  # @return [Array<Array>] `[spec_file_path, total_seconds, recorded_count, timed_count, file_count]`
+  #   per file, where `file_count` is the same figure on every row: how many files the run touched
+  #   in total, before the `LIMIT`.
   #
   # == Why four columns and not one SUM
   #
@@ -135,13 +137,27 @@ class SpecObservation < ApplicationRecord
   #
   # `spec_file_path` breaks ties, so a run whose files total equally has one stable order rather
   # than one the planner picks afresh per request.
+  #
+  # == Why the row count comes back on every row
+  #
+  # This read is `LIMIT`ed, so its own length is the TRUNCATED count and a caller holding it cannot
+  # tell "the ten heaviest of three hundred files" from "all three files this run touched". That is
+  # the same lie by omission the four columns above exist to refuse, one grain up: a figure that
+  # does not state what it was drawn from. A second `COUNT(DISTINCT spec_file_path)` would be a
+  # second round trip for one clause of one sentence — the objection `.timing_coverage_in` answers.
+  #
+  # `COUNT(*) OVER ()` is evaluated AFTER `GROUP BY` and BEFORE `LIMIT`, so it counts groups, not
+  # rows, and counts all of them however few are returned. It rides back on every row carrying the
+  # same value; the caller reads it off whichever row it has and gets nothing for an empty run,
+  # which is the correct answer there.
   def self.file_durations_in(test_run, limit: HEAVIEST_FILES_LIMIT)
     where(test_run_id: test_run.id)
       .group(:spec_file_path)
       .order(Arel.sql("SUM(duration_seconds) DESC NULLS LAST"), Arel.sql("spec_file_path ASC"))
       .limit(limit)
       .pluck(Arel.sql("spec_file_path"), Arel.sql("SUM(duration_seconds)"),
-             Arel.sql("COUNT(*)"), Arel.sql("COUNT(duration_seconds)"))
+             Arel.sql("COUNT(*)"), Arel.sql("COUNT(duration_seconds)"),
+             Arel.sql("COUNT(*) OVER ()"))
   end
 
   # What to call this row on a surface that lists it. `name` is what the client sent as the

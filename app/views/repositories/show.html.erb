@@ -1419,11 +1419,24 @@
               rows and their coverage together, so this sentence cannot end up describing a
               different row set from the one below it. %>
           <p class="text-xs text-app-muted mb-3" id="spec-file-durations-basis">
-            The <%= @spec_file_durations.rows.size %>
-            <%= "file".pluralize(@spec_file_durations.rows.size) %> the run named above spent the
-            most wall clock in, heaviest first — every example's duration summed onto the file that
-            ran it, so a shared example group counts against the file including it rather than
-            against the helper defining it.
+            <%# The list is CAPPED, so its own length says nothing about how much of the run it
+                covers. "The 10 files the run spent the most wall clock in" is read as the whole
+                story by a reader who cannot see the limit, and on a suite spread over three
+                hundred files it is three per cent of one — the same lie by omission the coverage
+                column refuses one grain down, which is why the total is stated whether or not
+                anything was cut. It costs no extra query: the count rides back on the same
+                grouped aggregate. %>
+            <% if @spec_file_durations.truncated? %>
+              The <%= number_with_delimiter(@spec_file_durations.rows.size) %> heaviest of the
+              <%= number_with_delimiter(@spec_file_durations.file_count) %> files the run named
+              above recorded, heaviest first
+            <% else %>
+              All <%= number_with_delimiter(@spec_file_durations.file_count) %>
+              <%= "file".pluralize(@spec_file_durations.file_count) %> the run named above
+              recorded, heaviest first
+            <% end %>
+            — every example's duration summed onto the file that ran it, so a shared example group
+            counts against the file including it rather than against the helper defining it.
             <% if @spec_file_durations.complete? %>
               Every example in every file listed reported a duration, so each total covers the
               whole of its file.
@@ -1463,12 +1476,20 @@
               there is a list of files and no ranking — and a column of "not reported" under a
               heading promising "heaviest first" would be a ranking of nothing. Not zeroes, for the
               reason the panel above gives: a zero is this surface inventing the measurement it is
-              missing. %>
+              missing.
+
+              Stated in FILES, where the panel above states the same absence in examples. Not a
+              stylistic choice: `file_count` is counted before the `LIMIT` and is exact, whereas
+              summing `recorded_count` over the rows on hand would total a capped ten of them and
+              print a suite-wide-looking figure covering part of the run — the understatement this
+              panel exists to refuse. %>
           <%= render UI::EmptyStateComponent.new(
                 title: "No timings on this run",
-                description: "This run recorded examples and a duration for none of them, so " \
-                             "there is no wall clock to attribute to any file. An example that " \
-                             "never ran reports no duration."
+                description: "This run recorded examples in " \
+                             "#{number_with_delimiter(@spec_file_durations.file_count)} " \
+                             "#{'file'.pluralize(@spec_file_durations.file_count)} and a duration " \
+                             "for none of them, so there is no wall clock to attribute to any " \
+                             "file. An example that never ran reports no duration."
               ) %>
         <% end %>
       <% end %>

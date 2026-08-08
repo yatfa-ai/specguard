@@ -16,8 +16,9 @@
 # counted off the same run's same rows the total was summed over. Fetched separately they are two
 # things that agree today with no structural reason to keep agreeing.
 #
-# It stores no figure of its own. Every number on the panel comes back from
-# `SpecObservation.file_durations_in` — one grouped aggregate, one round trip, constant in the
+# It derives no figure of its own. Every number on the panel — each file's total, what that total
+# was summed over, and how many files the run touched in all — comes back from
+# `SpecObservation.file_durations_in`: one grouped aggregate, one round trip, constant in the
 # size of the suite.
 #
 # == The denominator is the rows, not the suite size
@@ -38,19 +39,36 @@
 # measure — `SpecObservation.humanized_duration` is the one seam that decides that, at both grains.
 class SpecFileDurations
   def self.for(test_run, limit: SpecObservation::HEAVIEST_FILES_LIMIT)
-    rows = SpecObservation.file_durations_in(test_run, limit: limit).map do |path, total, recorded, timed|
+    tuples = SpecObservation.file_durations_in(test_run, limit: limit)
+    rows = tuples.map do |path, total, recorded, timed, _file_count|
       Row.new(path: path, total_seconds: total, recorded_count: recorded.to_i, timed_count: timed.to_i)
     end
 
-    new(rows: rows)
+    # Off any row, because the window carries the same total on all of them; `to_i` on the nil of
+    # an empty read, where "no files" is the honest count.
+    new(rows: rows, file_count: tuples.first&.last.to_i)
   end
 
-  def initialize(rows:)
+  def initialize(rows:, file_count:)
     @rows = rows
+    @file_count = file_count
   end
 
   # The rollup, heaviest first. Never longer than the limit it was built with.
   attr_reader :rows
+
+  # How many files the run touched IN TOTAL — the denominator `rows.size` is not. The list is
+  # capped, so its own length answers "how many rows am I looking at" and nothing else, and a
+  # caption built on it reads "the 10 files the run spent the most wall clock in" on a run that
+  # touched three hundred: a truncated list silently wearing the shape of a complete one, which is
+  # the reading this whole panel exists to refuse one grain down. Counted in the same pass as the
+  # totals, so it cannot describe a different row set from the one listed.
+  attr_reader :file_count
+
+  # There are files this run touched that the list does not show. The state the caption has to
+  # SAY rather than leave a reader to infer from a list whose length happens to equal a limit they
+  # cannot see — the same reason `#complete?` exists one column over.
+  def truncated? = file_count > rows.size
 
   # Whether this run recorded per-example rows AT ALL — the question that decides whether the
   # surface has anything to say. A group exists here if and only if a row exists, so this is `rows`
@@ -79,8 +97,6 @@ class SpecFileDurations
     def timed? = !total_seconds.nil?
 
     def complete? = timed_count == recorded_count
-
-    def untimed_count = recorded_count - timed_count
 
     # The total, rendered — through the same seam one example's duration is rendered through, so a
     # file total and an example measurement cannot disagree about how a duration is spelled, and an
