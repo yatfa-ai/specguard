@@ -13,7 +13,7 @@ RSpec.describe SpecObservation do
     # By `spec_file_path` — the file that *ran* the example — rather than by `file_path`, so a
     # shared example group's time lands on the including file and not on a `spec/support/` helper.
     let(:by_file) { run.spec_observations.group(:spec_file_path).select("spec_file_path, SUM(duration_seconds)") }
-    let(:one_file) { run.spec_observations.where(spec_file_path: "spec/f3_spec.rb") }
+    let(:one_file) { run.spec_observations.where(spec_file_path: "spec/d3/f3_spec.rb") }
     # The exact SELECT `SpecObservation.coverage_in` runs, built off the constant it runs it from
     # rather than retyped, so a sixth counter added there is a sixth counter EXPLAINed here. `pick`
     # is `limit(1).pluck`, hence the `.limit(1)`.
@@ -21,14 +21,18 @@ RSpec.describe SpecObservation do
       run.spec_observations.select(Arel.sql(SpecObservation::COVERAGE_COUNTS.values.join(", "))).limit(1)
     end
 
-    # One run's worth of rows, spread over 25 files so a by-file aggregate has something to group.
+    # One run's worth of rows, spread over 25 files in 5 DIRECTORIES so both rollups have something
+    # to group and neither is a single group wearing the shape of a rollup. Five files per
+    # directory, so the by-directory totals are not the by-file totals renamed: a directory here is
+    # five files' worth of wall clock and outranks any one of them.
     def seed(test_run)
       now = Time.current
       rows = (1..rows_per_run).map do |index|
+        path = "spec/d#{index % 5}/f#{index % 25}_spec.rb"
         {
           test_run_id: test_run.id, repository_id: test_run.repository_id,
-          example_id: "./spec/f#{index % 25}_spec.rb[1:#{index}]",
-          spec_file_path: "spec/f#{index % 25}_spec.rb", file_path: "spec/f#{index % 25}_spec.rb",
+          example_id: "./#{path}[1:#{index}]",
+          spec_file_path: path, file_path: path,
           line_number: index, name: "example #{index}",
           duration_seconds: (index % 97) / 10.0,
           outcome: (index % 50).zero? ? "failed" : "passed",
@@ -80,7 +84,37 @@ RSpec.describe SpecObservation do
 
       it "narrows to one file of one run" do
         expect(one_file.count).to eq(rows_per_run / 25)
-        expect(one_file.pluck(:spec_file_path).uniq).to eq(["spec/f3_spec.rb"])
+        expect(one_file.pluck(:spec_file_path).uniq).to eq(["spec/d3/f3_spec.rb"])
+      end
+
+      # The rung above, through the read the directory panel actually makes, and asserted the same
+      # way for the same reason: a rollup that loses or double-counts an area's rows is still a
+      # plausible-looking list of directories, and only the run's own total catches it. It is also
+      # what pins the two rollups to ONE population — the by-file totals above sum to this same
+      # figure, so a directory grouping that dropped the rows of a file it could not place would
+      # disagree with its own sibling rather than merely look short.
+      it "rolls the whole run up by directory through the read the panel makes" do
+        directories = described_class.directory_durations_in(run, limit: 100)
+
+        expect(directories.size).to eq(5)
+        expect(directories.sum { |_path, total, _recorded, _timed| total })
+          .to be_within(0.001).of(run.spec_observations.sum(:duration_seconds))
+        # And every row the run wrote is under exactly one of those areas.
+        expect(directories.sum { |_path, _total, recorded, _timed| recorded }).to eq(rows_per_run)
+      end
+
+      # The grain is genuinely coarser than the one below it, asserted rather than assumed: five
+      # files to a directory here, so a rollup that had silently stayed at the file grain (a
+      # grouping expression that captured the whole path) would come back with 25 rows and totals
+      # equal to the by-file ones.
+      it "groups the areas above the files, not alongside them" do
+        directories = described_class.directory_durations_in(run, limit: 100)
+        files = described_class.file_durations_in(run, limit: 100)
+
+        expect(directories.map(&:first).sort).to eq(%w[spec/d0 spec/d1 spec/d2 spec/d3 spec/d4])
+        expect(files.size).to eq(25)
+        expect(directories.sum { |_path, _total, recorded, _timed| recorded })
+          .to eq(files.sum { |_path, _total, recorded, _timed| recorded })
       end
     end
 
@@ -183,6 +217,26 @@ RSpec.describe SpecObservation do
       # that one run's rows are still reached through an index rather than by walking every run's.
       it "reads the panel's by-file rollup off an index rather than scanning the table" do
         plan = plan_for_actual_sql { described_class.file_durations_in(run) }
+
+        expect(plan).to match(INDEXED_BY_RUN)
+        expect(plan).not_to match(/Seq Scan on spec_observations/)
+      end
+
+      # The same certification for the rung above, and the reason no migration came with it. The
+      # view comment this slice deleted told future authors a subtree rollup was waiting on a
+      # `text_pattern_ops` index; that index type serves a prefix PREDICATE — "every row under
+      # `spec/models/`" — and this read issues none. It narrows on `test_run_id`, a plain column
+      # with a plain index, and GROUPS on an expression, which decides nothing about the access
+      # path. So the plan is the by-file one above: one run reached through an index, hash-aggregated
+      # on top, for the reason the bare grouping two examples up states — the aggregate has to touch
+      # the heap for `duration_seconds` either way, so no wider index buys a whole-run grouping
+      # anything.
+      #
+      # MEASURED here rather than argued from the sibling: this is the assertion that would have
+      # sent the slice to a migration had the premise been wrong, so it is the one that must run
+      # against a real planner with real statistics at the 20-run seed.
+      it "reads the panel's by-directory rollup off an index rather than scanning the table" do
+        plan = plan_for_actual_sql { described_class.directory_durations_in(run) }
 
         expect(plan).to match(INDEXED_BY_RUN)
         expect(plan).not_to match(/Seq Scan on spec_observations/)
@@ -493,6 +547,159 @@ RSpec.describe SpecObservation do
 
       it "reads no files for a run that recorded nothing" do
         expect(described_class.file_durations_in(run)).to eq([])
+      end
+    end
+
+    describe ".directory_durations_in" do
+      # The panel's whole claim, and the one thing that makes this rung worth its own query: an
+      # area's wall clock is the sum of every file under it, so a directory holding several
+      # middling files outranks one holding a single heavier one. The by-file read on the same rows
+      # orders these two areas the other way round — `refund_spec.rb` at 9.0 is the heaviest FILE
+      # in the run and `spec/models` is not the heaviest AREA — which is the assertion that would
+      # fail if this method were the by-file rollup relabelled.
+      it "totals each directory's examples, heaviest directory first" do
+        observe(run, duration: 1.5, line_number: 1, spec_file_path: "spec/models/order_spec.rb")
+        observe(run, duration: 2.5, line_number: 2, spec_file_path: "spec/models/refund_spec.rb")
+        observe(run, duration: 9.0, line_number: 3, spec_file_path: "spec/requests/checkout_spec.rb")
+        observe(run, duration: 4.0, line_number: 4, spec_file_path: "spec/requests/refunds_spec.rb")
+        observe(run, duration: 0.5, line_number: 5, spec_file_path: "spec/system/smoke_spec.rb")
+
+        expect(described_class.directory_durations_in(run)).to eq(
+          [["spec/requests", 13.0, 2, 2, 3],
+           ["spec/models", 4.0, 2, 2, 3],
+           ["spec/system", 0.5, 1, 1, 3]]
+        )
+      end
+
+      # The IMMEDIATE parent, not an ancestor and not the whole prefix: `spec/models/orders` is its
+      # own area and its time does not roll into `spec/models`. Every row therefore sits at the
+      # depth of its own file, the areas are disjoint, and the totals sum to the run — the property
+      # a nesting rollup would lose by counting the deep rows twice.
+      it "groups on the immediate parent, so nested areas do not roll into their ancestors" do
+        observe(run, duration: 1.0, line_number: 1, spec_file_path: "spec/models/order_spec.rb")
+        observe(run, duration: 2.0, line_number: 2, spec_file_path: "spec/models/orders/refund_spec.rb")
+
+        expect(described_class.directory_durations_in(run)).to eq(
+          [["spec/models/orders", 2.0, 1, 1, 2],
+           ["spec/models", 1.0, 1, 1, 2]]
+        )
+      end
+
+      # A spec file at the repository root has no parent segment to capture, and the expression
+      # comes back SQL NULL for it. An unnamed area on a ranked panel is worse than a named one, and
+      # DROPPING the row would understate the run's wall clock at the one grain that is supposed to
+      # account for all of it — so it is coalesced to `.`, which is what `Pathname#dirname` calls
+      # that directory.
+      it "names the repository root rather than losing the rows that sit in it" do
+        observe(run, duration: 3.0, line_number: 1, spec_file_path: "smoke_spec.rb")
+        observe(run, duration: 1.0, line_number: 2, spec_file_path: "spec/models/order_spec.rb")
+
+        expect(described_class.directory_durations_in(run)).to eq(
+          [[".", 3.0, 1, 1, 2],
+           ["spec/models", 1.0, 1, 1, 2]]
+        )
+      end
+
+      # Grouped by the area that RAN the example, so a shared example group's time lands on each
+      # including area rather than on `spec/support` — the rule `Ingest::ObservationRecorder` writes
+      # `spec_file_path` for, one rung up from where `.file_durations_in` asserts it.
+      it "attributes a shared example group's time to the area that included it" do
+        observe(run, duration: 1.5, line_number: 4, file_path: "spec/support/shared_examples.rb",
+                     spec_file_path: "spec/models/order_spec.rb",
+                     example_id: "./spec/models/order_spec.rb[1:1:1]")
+        observe(run, duration: 2.5, line_number: 4, file_path: "spec/support/shared_examples.rb",
+                     spec_file_path: "spec/requests/refund_spec.rb",
+                     example_id: "./spec/requests/refund_spec.rb[1:1:1]")
+
+        directories = described_class.directory_durations_in(run)
+
+        expect(directories.map(&:first)).to eq(["spec/requests", "spec/models"])
+        expect(directories.map(&:first)).not_to include("spec/support")
+      end
+
+      # THE example this read exists to get right, and the one the obvious implementation fails
+      # twice over — and it costs more here than one rung down, because an area is a bigger
+      # population than a file. `group(...).sum(:duration_seconds)` casts a NULL sum to `0.0` on the
+      # way back into Ruby, and `SUM(...) DESC` is NULLS FIRST in Postgres, so an area NONE of whose
+      # examples were timed comes back as a measured zero AND is named the heaviest area in the run.
+      # Both halves are asserted because they fail differently.
+      it "hands back a nil for an area that reported no timing at all, sorted below every total" do
+        observe(run, duration: nil, line_number: 1, spec_file_path: "spec/system/never_ran_spec.rb")
+        observe(run, duration: nil, line_number: 2, spec_file_path: "spec/system/also_never_spec.rb")
+        observe(run, duration: 0.25, line_number: 3, spec_file_path: "spec/models/quick_spec.rb")
+
+        directories = described_class.directory_durations_in(run)
+
+        expect(directories).to eq([["spec/models", 0.25, 1, 1, 2],
+                                   ["spec/system", nil, 2, 0, 2]])
+        expect(directories.last[1]).to be_nil
+      end
+
+      # An area whose examples were only partly timed has a total covering only part of it. The
+      # total alone cannot say so — it is an ordinary-looking number — so the two counts come back
+      # in the same pass, off the same rows, rather than as a second question a caller might not
+      # think to ask.
+      it "counts each area's rows against the ones that carried a duration" do
+        observe(run, duration: 4.0, line_number: 1, spec_file_path: "spec/models/order_spec.rb")
+        observe(run, duration: nil, line_number: 2, spec_file_path: "spec/models/order_spec.rb")
+        observe(run, duration: nil, line_number: 3, spec_file_path: "spec/models/refund_spec.rb")
+
+        expect(described_class.directory_durations_in(run)).to eq([["spec/models", 4.0, 3, 1, 1]])
+      end
+
+      it "reads the run it was asked about and no other" do
+        other = create_test_run(repository: repository, commit_sha: "0ther")
+        observe(run, duration: 1.0, line_number: 1, spec_file_path: "spec/ours/a_spec.rb")
+        observe(other, duration: 99.0, line_number: 1, spec_file_path: "spec/theirs/a_spec.rb")
+
+        expect(described_class.directory_durations_in(run)).to eq([["spec/ours", 1.0, 1, 1, 1]])
+      end
+
+      # Its OWN limit, not the by-file one. The two constants happen to be equal today, which is
+      # why the default is asserted through `HEAVIEST_DIRECTORIES_LIMIT` by name — a reuse of
+      # `HEAVIEST_FILES_LIMIT` would pass this example and silently make one edit move both rungs.
+      it "caps at the limit it was given, and defaults to the panel's own" do
+        12.times { |i| observe(run, duration: i.to_f + 1, line_number: i + 1, spec_file_path: "spec/d#{i}/a_spec.rb") }
+
+        expect(described_class.directory_durations_in(run).size)
+          .to eq(described_class::HEAVIEST_DIRECTORIES_LIMIT)
+        expect(described_class.directory_durations_in(run, limit: 3).map(&:first))
+          .to eq(["spec/d11", "spec/d10", "spec/d9"])
+      end
+
+      # What the capped list is the head OF, in the same round trip. Without it the caller holds a
+      # length that equals its own limit and cannot tell three areas from three hundred.
+      # `COUNT(*) OVER ()` runs after `GROUP BY` and before `LIMIT`, so it counts AREAS rather than
+      # rows and counts all of them however few come back.
+      it "reports how many directories the run touched in total, whatever the limit returns" do
+        12.times { |i| observe(run, duration: i.to_f + 1, line_number: i + 1, spec_file_path: "spec/d#{i}/a_spec.rb") }
+
+        expect(described_class.directory_durations_in(run, limit: 3).map(&:last)).to eq([12, 12, 12])
+        expect(described_class.directory_durations_in(run, limit: 100).map(&:last).uniq).to eq([12])
+      end
+
+      # Groups, not rows and not FILES: twelve examples in twelve files under two directories
+      # touched two areas. Both wrong readings — the row count and the file count — are ruled out
+      # at once, and neither would be distinguishable with one file per area.
+      it "counts the directories rather than the files or examples in them" do
+        12.times do |i|
+          observe(run, duration: 1.0, line_number: i + 1, spec_file_path: "spec/d#{i % 2}/f#{i}_spec.rb")
+        end
+
+        expect(described_class.directory_durations_in(run).map(&:last)).to eq([2, 2])
+      end
+
+      # Two areas totalling the same is ordinary, so the order has to be total, or two requests
+      # against unchanged rows list them differently.
+      it "breaks ties by directory, so equal totals have one order" do
+        observe(run, duration: 1.5, line_number: 1, spec_file_path: "spec/b/a_spec.rb")
+        observe(run, duration: 1.5, line_number: 2, spec_file_path: "spec/a/a_spec.rb")
+
+        expect(described_class.directory_durations_in(run).map(&:first)).to eq(["spec/a", "spec/b"])
+      end
+
+      it "reads no directories for a run that recorded nothing" do
+        expect(described_class.directory_durations_in(run)).to eq([])
       end
     end
 

@@ -164,6 +164,18 @@ class RepositoriesController < ApplicationController
     #
     # ONE query, not growing with the size of the suite: see `SpecFileDurations`.
     @spec_file_durations = SpecFileDurations.for(@latest_test_run) if @latest_test_run
+    # The rung above that one, off the same rows of the same run: not which FILES the wall clock
+    # went into but which AREAS. Not derivable from the panel above either — a by-file top ten
+    # shows ten files, and a directory holding forty files at two seconds each is eighty seconds of
+    # the run with none of its rows in that list. Concentration re-concentrates at every rung, so
+    # each rung is summed rather than read off the one below it.
+    #
+    # And specifically not `TestRun#shard_durations`, which rolls the same run up by CI partition:
+    # its own comment is explicit that a shard is not a code area.
+    #
+    # Guarded identically, and on nothing else. ONE query, not growing with the size of the suite:
+    # see `SpecDirectoryDurations`.
+    @spec_directory_durations = SpecDirectoryDurations.for(@latest_test_run) if @latest_test_run
     # Set by ApiKeysController#create and readable exactly once — see ApiKeysController.
     @revealed_token = flash[:revealed_api_key]
     @revealed_token_name = flash[:revealed_api_key_name]
