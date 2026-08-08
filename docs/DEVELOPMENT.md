@@ -547,7 +547,17 @@ drift. (The check skips itself where npm is unavailable.)
 
 ## Data model
 
-Four tables plus the `vector` extension, per the *SpecGuard — Data Model* spec. The load-bearing
-constraint is the unique index on `(repository_id, file_path, line_number)`: it is the identity of
-a spec intent and the backstop that makes Phase 2's ingestion idempotent. `spec_intents.embedding`
-is `vector(1536)` with an HNSW index for cosine similarity, queried through the `neighbor` gem.
+The domain tables, plus the `vector` extension, follow the *SpecGuard — Data Model* spec; read
+`db/schema.rb` for the current set rather than trusting a count written down here, which goes stale
+on the next migration.
+
+The load-bearing constraint is the unique index on `(repository_id, file_path, line_number)`: it is
+the identity of a spec intent, and the backstop an intent write path will need in order to be
+idempotent. **Nothing writes `spec_intents` today.** `Ingest::RunRecorder` — the only write path
+the ingest endpoint reaches — writes `test_runs` and `test_run_shards` and nothing per spec, which
+is pinned by `spec/requests/api/v1/ingest_spec.rb`. So the table is permanently empty outside the
+test suite, and anything reading it (the dashboard's "Searchable intents" figure, or
+`Repository#annotated_ratio` were it to count rows) reads a structural zero.
+
+`spec_intents.embedding` is `vector(1536)` with an HNSW index for cosine similarity. `SpecIntent`
+declares `has_neighbors :embedding`, so `nearest_neighbors` is available — no code calls it yet.
