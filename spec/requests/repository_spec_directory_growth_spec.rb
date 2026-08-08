@@ -415,7 +415,20 @@ RSpec.describe "Repository spec directory growth", type: :request do
     # The by-directory duration rollup above groups on the same expression but sums durations
     # across a single run, so it does not match; the cross-run outcome panel below counts per run
     # but never groups by directory.
-    def growth_aggregates(&) = executed_sql(&).select { |sql| sql.include?("COUNT(*) FILTER (WHERE test_run_id =") }
+    #
+    # The `SUM(duration_seconds)` clause is what keeps this selector naming ONE aggregate. The
+    # "Areas that got slower or faster" panel is the same comparison over the same two runs ranked
+    # by seconds instead of rows, and it carries per-run `COUNT(*) FILTER` counts of its own so that
+    # each of its totals can state what it was summed over — so the count above, alone, now matches
+    # two statements. A selector that names more than the guard means stops being a measurement of
+    # the guard: this budget would have read 2 the moment that panel shipped and said nothing about
+    # this gate. `spec/requests/repository_spec_directory_runtime_growth_spec.rb` pins the other
+    # one by its own `SUM(duration_seconds) FILTER`, which this read has none of.
+    def growth_aggregates(&)
+      executed_sql(&).select do |sql|
+        sql.include?("COUNT(*) FILTER (WHERE test_run_id =") && sql.exclude?("SUM(duration_seconds)")
+      end
+    end
 
     # ONE query for the whole comparison, and it does not grow with the suite. Measured as a
     # difference against the same page rendering ten times the examples, so an implementation that

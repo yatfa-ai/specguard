@@ -291,6 +291,27 @@ RSpec.describe SpecObservation do
         expect(plan).not_to match(/Seq Scan on spec_observations/)
       end
 
+      # The same certification for the two-run comparison that sums DURATIONS instead of counting
+      # rows, and it ships without a migration for the same reason the count read above does: it
+      # narrows on `test_run_id` with an `IN` list of two, which `index_spec_observations_on_test_run_id`
+      # serves exactly as it serves one, and groups on an EXPRESSION, which decides nothing about
+      # the access path. The `FILTER` aggregates and window totals are expressions over rows that
+      # scan already reads.
+      #
+      # The ONE honest difference from the read above, and the reason this asserts the SHARED
+      # matcher rather than the widened one beside it: `SUM(duration_seconds)` projects a column
+      # that is in no index leading with `test_run_id`, so Postgres has to touch the heap and an
+      # `Index Only Scan` is not available to this query at all. That is the same tradeoff
+      # `.directory_durations_in` carries — the two spellings are not interchangeable and using the
+      # wider one here would accept a plan this read cannot have.
+      it "reads the panel's two-run by-area RUNTIME comparison off an index rather than scanning" do
+        previous_run = repository.test_runs.where.not(id: run.id).first
+        plan = plan_for_actual_sql { described_class.directory_runtime_growth_between(run, previous_run) }
+
+        expect(plan).to match(INDEXED_BY_RUN)
+        expect(plan).not_to match(/Seq Scan on spec_observations/)
+      end
+
       # The "no extra cost" claim for the outcome counters, ASSERTED rather than reasoned about.
       # The two `FILTER` aggregates are new expressions over a row set the existing `COUNT(*)`
       # already reads, so they should add no scan — but that is a claim about a plan, and a query
@@ -1122,6 +1143,278 @@ RSpec.describe SpecObservation do
         observe(run, duration: 1.0, line_number: 2, spec_file_path: "smoke_spec.rb")
 
         expect(described_class.directory_growth_between(run, previous_run).map(&:first))
+          .to match_array([".", "spec/models", "spec/models/orders"])
+      end
+    end
+
+    # The second read that spans two runs, over the same rows and the same areas as the one above,
+    # ranking them by an INDEPENDENT quantity. Every fixture below is built so that the two rankings
+    # genuinely disagree — an area that moved in seconds and not in examples, and one that moved in
+    # examples and not in seconds — because a read that had quietly become the count read relabelled
+    # would be green under any fixture where the two happen to agree.
+    describe ".directory_runtime_growth_between" do
+      let(:previous_run) { create_test_run(repository: repository, commit_sha: "prev123") }
+
+      # One area's worth of rows in one run, at line numbers that cannot collide within it. Each
+      # example carries `each` seconds; a nil `each` is the row a client sent with no timing.
+      def observe_area(test_run, directory, count, each: 1.0, from: 1)
+        count.times do |i|
+          observe(test_run, duration: each, line_number: from + i,
+                            spec_file_path: "#{directory}/a_spec.rb")
+        end
+      end
+
+      # The pivot itself: one row per AREA carrying both runs' summed seconds and the coverage each
+      # was summed over, not one row per (area, run) pair left for a caller to fold together.
+      it "puts both runs' summed seconds for an area on one row" do
+        observe_area(previous_run, "spec/models", 2, each: 1.0)
+        observe_area(previous_run, "spec/requests", 1, each: 2.0, from: 10)
+        observe_area(run, "spec/models", 2, each: 4.0)
+        observe_area(run, "spec/requests", 1, each: 2.0, from: 10)
+
+        expect(described_class.directory_runtime_growth_between(run, previous_run)).to eq(
+          [["spec/models", 2.0, 8.0, 2, 2, 2, 2, 2, 3, 3, 3, 3],
+           ["spec/requests", 2.0, 2.0, 1, 1, 1, 1, 2, 3, 3, 3, 3]]
+        )
+      end
+
+      # THE example this whole read exists for, and the one the count read beside it cannot answer.
+      # `spec/models` gained no examples at all and got 30 seconds slower; `spec/system` gained two
+      # examples and a tenth of a second. Rank these areas by `ABS(latest_count - previous_count)`
+      # and the slowdown sorts LAST — which at the shipped cap of ten is off the panel entirely.
+      it "names an area that got slower without gaining a single example" do
+        observe_area(previous_run, "spec/models", 2, each: 1.0)
+        observe_area(previous_run, "spec/system", 1, each: 0.1, from: 20)
+        observe_area(run, "spec/models", 2, each: 16.0)
+        observe_area(run, "spec/system", 3, each: 0.1, from: 20)
+
+        rows = described_class.directory_runtime_growth_between(run, previous_run)
+
+        expect(rows.map(&:first)).to eq(["spec/models", "spec/system"])
+        expect(rows.first[1..2]).to eq([2.0, 32.0])
+        expect(rows.last[1]).to eq(0.1)
+        expect(rows.last[2]).to be_within(0.001).of(0.3)
+        # And the sibling read, over the very same rows, ranks them the other way round and puts
+        # the 30-second regression second.
+        expect(described_class.directory_growth_between(run, previous_run).map(&:first))
+          .to eq(["spec/system", "spec/models"])
+      end
+
+      # The other direction of the same independence: four fast specs where one slow one used to be
+      # is a GAIN of three examples and a LOSS of nine seconds. A panel ranking counts calls this
+      # the biggest growth in the suite; this one calls it the biggest win.
+      it "reports an area that gained examples and lost time" do
+        observe_area(previous_run, "spec/models", 1, each: 10.0)
+        observe_area(run, "spec/models", 4, each: 0.25)
+
+        expect(described_class.directory_runtime_growth_between(run, previous_run))
+          .to eq([["spec/models", 10.0, 1.0, 1, 4, 1, 4, 1, 1, 4, 1, 4]])
+      end
+
+      # Ranked by ABSOLUTE movement, both directions — a suite that took 300 seconds out of one area
+      # answers "which areas changed pace" exactly as much as one that added them, and a `DESC`-only
+      # ordering on the signed change would put every win below every regression and off the cap.
+      # Asserted at `limit: 1` too, so the claim is about which area SURVIVES the cap.
+      it "ranks by absolute movement, so a speedup outranks a smaller slowdown" do
+        observe_area(previous_run, "spec/legacy", 1, each: 12.0)
+        observe_area(previous_run, "spec/models", 1, each: 1.0, from: 20)
+        observe_area(run, "spec/legacy", 1, each: 2.0)
+        observe_area(run, "spec/models", 1, each: 4.0, from: 20)
+
+        expect(described_class.directory_runtime_growth_between(run, previous_run).map(&:first))
+          .to eq(["spec/legacy", "spec/models"])
+        expect(described_class.directory_runtime_growth_between(run, previous_run, limit: 1).map(&:first))
+          .to eq(["spec/legacy"])
+      end
+
+      # THE hazard this read is built around. An area none of whose examples were timed sums to SQL
+      # NULL, the subtraction against it is NULL, and `DESC` alone is NULLS FIRST in Postgres — so
+      # without `NULLS LAST` the area nobody MEASURED heads a panel about slowdowns, above a real
+      # 8-second regression. Both halves asserted: the nil comes back as a nil (never a 0.0 the
+      # caller would render "0.00s"), and it sorts last.
+      it "sums an untimed area to nil and ranks it last rather than first" do
+        observe_area(previous_run, "spec/quiet", 3, each: nil)
+        observe_area(previous_run, "spec/models", 1, each: 1.0, from: 20)
+        observe_area(run, "spec/quiet", 3, each: nil)
+        observe_area(run, "spec/models", 1, each: 9.0, from: 20)
+
+        rows = described_class.directory_runtime_growth_between(run, previous_run)
+
+        expect(rows.map(&:first)).to eq(["spec/models", "spec/quiet"])
+        expect(rows.last[1]).to be_nil
+        expect(rows.last[2]).to be_nil
+      end
+
+      # An area timed on ONE side only is the same hazard wearing a worse face: it is not a 12-second
+      # win, it is a run that stopped reporting. The subtraction is NULL either way, so it sorts last
+      # beside the never-timed area — and the caller gets the real total on the side that has one.
+      it "leaves an area timed on only one side unranked rather than calling it a win" do
+        observe_area(previous_run, "spec/models", 2, each: 6.0)
+        observe_area(previous_run, "spec/system", 1, each: 1.0, from: 20)
+        observe_area(run, "spec/models", 2, each: nil)
+        observe_area(run, "spec/system", 1, each: 3.0, from: 20)
+
+        rows = described_class.directory_runtime_growth_between(run, previous_run)
+
+        expect(rows.map(&:first)).to eq(["spec/system", "spec/models"])
+        expect(rows.last[1..2]).to eq([12.0, nil])
+        # And its coverage says which side went quiet: two rows recorded, none timed.
+        expect(rows.last[3..6]).to eq([2, 2, 2, 0])
+      end
+
+      # `SUM` skips NULLs silently, so a total covering half an area is indistinguishable from a
+      # total covering all of it unless the row says which. Both counts per side, so a caller can
+      # state a total against what it was summed over.
+      it "states how much of each side each total was summed over" do
+        observe_area(previous_run, "spec/models", 2, each: 1.0)
+        observe_area(previous_run, "spec/models", 2, each: nil, from: 50)
+        observe_area(run, "spec/models", 4, each: 1.0)
+
+        expect(described_class.directory_runtime_growth_between(run, previous_run))
+          .to eq([["spec/models", 2.0, 4.0, 4, 4, 2, 4, 1, 4, 4, 2, 4]])
+      end
+
+      # The two runs' rows are summed apart, which is the whole method: a single `SUM` over the `IN`
+      # list would give each area the total of both sides and every change would be zero. Same paths
+      # in both runs and different totals, so a read that conflated them would produce `[9.0, 9.0]`
+      # here rather than `[4.0, 5.0]`.
+      it "sums each run's rows against that run and not against the pair" do
+        observe_area(previous_run, "spec/models", 2, each: 2.0)
+        observe_area(run, "spec/models", 2, each: 2.5)
+
+        expect(described_class.directory_runtime_growth_between(run, previous_run).map { |row| row[1..2] })
+          .to eq([[4.0, 5.0]])
+      end
+
+      # A rollup that loses an area's rows, or counts one twice, is still a plausible-looking list of
+      # directories — and only each run's OWN total catches it. Asserted per side, because the two
+      # sides are separate `FILTER`s and a bug that leaked rows across the boundary would still
+      # reconcile against the pair's combined total.
+      it "reconciles each side against that run's own total, so no area's rows are lost or doubled" do
+        observe_area(previous_run, "spec/models", 3, each: 1.5)
+        observe_area(previous_run, "spec/system", 2, each: 0.25, from: 20)
+        observe_area(run, "spec/models", 3, each: 2.0, from: 40)
+        observe_area(run, "spec/system", 2, each: 0.5, from: 60)
+
+        rows = described_class.directory_runtime_growth_between(run, previous_run, limit: 100)
+
+        expect(rows.sum { |row| row[1] })
+          .to be_within(0.001).of(previous_run.spec_observations.sum(:duration_seconds))
+        expect(rows.sum { |row| row[2] })
+          .to be_within(0.001).of(run.spec_observations.sum(:duration_seconds))
+        # And every row each run wrote is under exactly one of those areas.
+        expect(rows.sum { |row| row[3] }).to eq(previous_run.spec_observations.count)
+        expect(rows.sum { |row| row[4] }).to eq(run.spec_observations.count)
+      end
+
+      # A third run on the same repository is not part of this comparison, and its seconds must not
+      # reach either column or either total. The obvious way to get this wrong — narrowing on
+      # `repository_id`, or on the branch — is what this rules out.
+      it "reads the two runs it was asked about and no others" do
+        other = create_test_run(repository: repository, commit_sha: "0ther99")
+        observe_area(previous_run, "spec/models", 1, each: 1.0)
+        observe_area(run, "spec/models", 1, each: 2.0)
+        observe_area(other, "spec/theirs", 50, each: 100.0)
+
+        expect(described_class.directory_runtime_growth_between(run, previous_run))
+          .to eq([["spec/models", 1.0, 2.0, 1, 1, 1, 1, 1, 1, 1, 1, 1]])
+      end
+
+      # Two areas that moved the same distance is ordinary — a rename moves exactly that way — so
+      # the order has to be total, or two requests against unchanged rows list them differently.
+      it "breaks ties by directory, so equal movements have one order" do
+        observe_area(previous_run, "spec/b", 1, each: 1.0)
+        observe_area(previous_run, "spec/a", 1, each: 1.0, from: 20)
+        observe_area(run, "spec/b", 1, each: 3.0)
+        observe_area(run, "spec/a", 1, each: 3.0, from: 20)
+
+        expect(described_class.directory_runtime_growth_between(run, previous_run).map(&:first))
+          .to eq(["spec/a", "spec/b"])
+      end
+
+      # Its OWN limit, not the count comparison's. The two constants happen to be equal today, which
+      # is exactly why the default is asserted through `RETIMED_DIRECTORIES_LIMIT` by name: a reuse
+      # of `MOVED_DIRECTORIES_LIMIT` would pass this example and silently make one edit move two
+      # panels that rank the same areas by different quantities.
+      #
+      # Every area is in BOTH runs, so every area has a real movement to be ranked by — a fixture
+      # where each area sat on one side only would rank nothing at all (the key is NULL and sorts
+      # last) and would be green under an implementation with no ordering to speak of.
+      it "caps at the limit it was given, and defaults to the panel's own" do
+        12.times { |i| observe_area(previous_run, "spec/d#{i}", 1, each: 1.0, from: (i * 40) + 1) }
+        12.times { |i| observe_area(run, "spec/d#{i}", 1, each: i + 1.0, from: (i * 40) + 20) }
+
+        expect(described_class.directory_runtime_growth_between(run, previous_run).size)
+          .to eq(described_class::RETIMED_DIRECTORIES_LIMIT)
+        expect(described_class.directory_runtime_growth_between(run, previous_run, limit: 3).map(&:first))
+          .to eq(["spec/d11", "spec/d10", "spec/d9"])
+      end
+
+      # What the capped list is the head OF, in the same round trip — counted across BOTH runs,
+      # which is the figure a caption saying "of the N areas either run recorded" needs. `COUNT(*)
+      # OVER ()` runs after `GROUP BY` and before `LIMIT`, so a truncated read reports the same
+      # total an untruncated one does. Twelve areas in the latest run and one only the previous run
+      # has: thirteen, which neither run alone could have produced.
+      it "reports how many areas the comparison covered, whatever the limit returns" do
+        12.times { |i| observe_area(run, "spec/d#{i}", 1, each: i + 1.0, from: (i * 20) + 1) }
+        observe_area(previous_run, "spec/gone", 1, each: 1.0)
+
+        expect(described_class.directory_runtime_growth_between(run, previous_run, limit: 3).map { |row| row[7] })
+          .to eq([13, 13, 13])
+        expect(described_class.directory_runtime_growth_between(run, previous_run, limit: 100)
+                              .map { |row| row[7] }.uniq).to eq([13])
+      end
+
+      # The four per-run totals, and the reason they are on the query rather than derived by the
+      # caller: summing the returned rows would total a CAPPED three of them and answer a question
+      # about the page instead of about the run.
+      #
+      # The previous run is what makes this sharp. It recorded two rows — one timed, one not — in an
+      # area whose movement does not survive the cap, so the rows on hand carry NONE of its examples
+      # while the run recorded two. A caller deriving these from the rows would read "the previous
+      # run recorded nothing" and withhold a comparison between two perfectly comparable runs.
+      it "reports what each run recorded and timed in total, before the limit" do
+        12.times { |i| observe_area(run, "spec/d#{i}", 1, each: i + 1.0, from: (i * 20) + 1) }
+        observe_area(run, "spec/d0", 1, each: nil, from: 500)
+        observe_area(previous_run, "spec/gone", 1, each: 1.0)
+        observe_area(previous_run, "spec/gone", 1, each: nil, from: 600)
+
+        rows = described_class.directory_runtime_growth_between(run, previous_run, limit: 3)
+
+        expect(rows.map { |row| row[8] }.uniq).to eq([2])
+        expect(rows.map { |row| row[9] }.uniq).to eq([13])
+        expect(rows.map { |row| row[10] }.uniq).to eq([1])
+        expect(rows.map { |row| row[11] }.uniq).to eq([12])
+        expect(rows.map(&:first)).not_to include("spec/gone")
+      end
+
+      # Zero groups, which for this read means neither run wrote a row — a group exists here if and
+      # only if a row does. The caller depends on that equivalence to name the state.
+      it "reads nothing at all for two runs that recorded no examples" do
+        expect(described_class.directory_runtime_growth_between(run, previous_run)).to eq([])
+      end
+
+      # Two runs that recorded rows and timed none of them is NOT an empty read: the groups are
+      # there, with real counts and nil sums. That is what lets the caller say "reported no timings"
+      # rather than "recorded no per-example detail" — one blank panel, two different things to fix.
+      it "reads real groups with nil sums for two runs that timed nothing" do
+        observe_area(previous_run, "spec/models", 2, each: nil)
+        observe_area(run, "spec/models", 3, each: nil, from: 50)
+
+        expect(described_class.directory_runtime_growth_between(run, previous_run))
+          .to eq([["spec/models", nil, nil, 2, 3, 0, 0, 1, 2, 3, 0, 0]])
+      end
+
+      # The same area key as every other rollup on this table, so this panel's areas cannot be a
+      # different partition of the suite from the other three. Asserted through the shape that would
+      # break first if the expression were re-derived here: the IMMEDIATE parent, with a root-level
+      # file coalesced rather than dropped.
+      it "areas the rows exactly as the by-duration rollup does" do
+        observe(previous_run, duration: 1.0, line_number: 1, spec_file_path: "spec/models/a_spec.rb")
+        observe(run, duration: 1.0, line_number: 1, spec_file_path: "spec/models/orders/a_spec.rb")
+        observe(run, duration: 1.0, line_number: 2, spec_file_path: "smoke_spec.rb")
+
+        expect(described_class.directory_runtime_growth_between(run, previous_run).map(&:first))
           .to match_array([".", "spec/models", "spec/models/orders"])
       end
     end

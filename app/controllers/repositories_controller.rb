@@ -195,6 +195,26 @@ class RepositoriesController < ApplicationController
     # the size of the suite: see `SpecDirectoryGrowth`.
     if @latest_test_run && @previous_test_run
       @spec_directory_growth = SpecDirectoryGrowth.for(@latest_test_run, @previous_test_run)
+      # The same two runs and the same areas, ranked by an INDEPENDENT quantity: not which area
+      # changed size but which area changed TIME. Neither panel derives the other — an area where
+      # somebody made an existing spec slow adds zero examples, so it sorts last on the panel above
+      # and falls off its cap entirely, and splitting one slow spec into four fast ones is a gain of
+      # three examples and a loss of time. A ranking by one quantity cannot also be a ranking by the
+      # other, which is why this is a second read beside that one rather than a column added to it.
+      #
+      # And specifically not the Overview panel's runtime delta, which is one number for the whole
+      # run: `test_runs.duration_seconds` has no area grain at all, so "the run got 90 seconds
+      # slower" cannot be asked where. The per-area grain only exists in `spec_observations`.
+      #
+      # Guarded identically, and on nothing else. Every further condition — did each side measure a
+      # suite, were they assembled the same way, did each write per-example rows, did each report
+      # any timings — belongs to `SpecDirectoryRuntimeGrowth`, which names WHICH of them failed so
+      # the panel can say so. The first three are decided before any query is issued.
+      #
+      # ONE query when there is a comparison to make, none when there is not, and neither grows
+      # with the size of the suite: see `SpecDirectoryRuntimeGrowth`.
+      @spec_directory_runtime_growth =
+        SpecDirectoryRuntimeGrowth.for(@latest_test_run, @previous_test_run)
     end
     # The first question this page asks that MATCHES A TEST TO ITSELF across runs: which tests
     # changed their outcome over the window the "Suite growth" panel above is already drawn on.

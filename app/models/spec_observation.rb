@@ -62,6 +62,20 @@ class SpecObservation < ApplicationRecord
   # make that a single edit nobody meant to make.
   MOVED_DIRECTORIES_LIMIT = 10
 
+  # How many spec DIRECTORIES a by-directory RUNTIME comparison returns. Its own constant, and the
+  # closest call of the five — the population it ranks is the same one `MOVED_DIRECTORIES_LIMIT`
+  # ranks, the union of two runs' areas, which is exactly why sharing that constant would look
+  # harmless and would not be.
+  #
+  # The two rank that population by INDEPENDENT quantities. Splitting one slow spec into four fast
+  # ones is `+3` examples and *less* time; adding a `sleep` to a shared `before` is `0` examples and
+  # minutes. So the ten areas whose example count moved most and the ten whose wall clock moved most
+  # are two different lists over the same areas, and a suite that wants ten of one has no reason to
+  # want ten of the other. One number standing for both would make that a single edit nobody meant
+  # to make — the rule the four constants above obey, at the one grain where the coincidence of
+  # populations makes it tempting to break.
+  RETIMED_DIRECTORIES_LIMIT = 10
+
   # **The retention rule.** How many runs OF ONE BRANCH keep their rows; everything older than the
   # Nth most recent run on that branch is deleted by {Ingest::ObservationPruner} after the ingest
   # that made it the N+1th. Until this constant existed, history here was retained by *omission* —
@@ -568,6 +582,93 @@ class SpecObservation < ApplicationRecord
       .pluck(Arel.sql(DIRECTORY_EXPRESSION), Arel.sql(previous), Arel.sql(latest),
              Arel.sql("COUNT(*) OVER ()"),
              Arel.sql("SUM(#{previous}) OVER ()"), Arel.sql("SUM(#{latest}) OVER ()"))
+  end
+
+  # How each code AREA's summed example DURATION moved between two runs — the same two runs and the
+  # same areas as `.directory_growth_between` above, ranked by an independent quantity.
+  #
+  # == Why this is a sibling of that read and not a column added to it
+  #
+  # An area where somebody made an existing spec slow adds no examples, so its `ABS(latest_count -
+  # previous_count)` is 0: it sorts last in that read and falls off its `LIMIT` entirely. The area
+  # is not a row missing a column on that panel — it is not on that panel at all. And the two
+  # motions are independent in both directions: splitting one slow spec into four fast ones is `+3`
+  # examples and *less* time; adding a `sleep` to a shared `before` is `0` examples and minutes.
+  #
+  # A ranking by one quantity cannot also be a ranking by the other, which is why `SpecFileDurations`
+  # and `SlowestExamples` are two objects over one run's rows for this same reason. Widening the
+  # count read would silently re-rank a shipped panel; this adds a second one.
+  #
+  # == What is compared, and what is NOT
+  #
+  # `SUM(duration_seconds)` over the rows THESE TWO RUNS wrote, per area, per side. Never
+  # `test_runs.duration_seconds`: that is a run's wall clock, a MAX over shard reports, and it has
+  # no area grain at all. Like the count read beside it this compares POPULATIONS — it sums each
+  # side's rows and subtracts two numbers — and pairs no example with any other example, so nothing
+  # here asserts that a given test is the same test. A future edit that joins these runs on
+  # `example_id` has left what this method is allowed to say.
+  #
+  # == A NULL sum is not a zero, and that decides the ranking
+  #
+  # `duration_seconds` is nullable by design (`Ingest::ObservationRecorder` writes `result&.run_time`),
+  # so `SUM` over an area none of whose examples were timed is SQL NULL — and so is the subtraction
+  # of a NULL, so the whole ordering key for such an area is NULL. `DESC` alone is NULLS FIRST,
+  # which would name the area nobody MEASURED the biggest mover in the suite and put it at the head
+  # of a panel about slowdowns. `NULLS LAST`, for the reason `.directory_durations_in` needs it one
+  # method up. The caller renders the sums through `.humanized_duration`, the one seam that spells
+  # an unmeasured total "not reported" rather than "0.00s".
+  #
+  # == Four counts per row, so every sum states what it was summed over
+  #
+  # `SUM` skips NULLs silently, so an area whose examples were half untimed reports a total covering
+  # half of it — and at THIS grain that has to hold on both sides at once, because an area that
+  # "got faster" between two runs may only have stopped reporting timings. So each side carries
+  # both its recorded count and its TIMED count, and the two window totals of each say the same
+  # thing about the runs as wholes: a run whose client sent no durations at all must read as "this
+  # run reported no timings" and never as "every area lost all its time".
+  #
+  # Window totals over both sides, counted BEFORE the `LIMIT` (`... OVER ()` runs after `GROUP BY`
+  # and before `LIMIT`), so a caption built on them cannot describe a different row set from the
+  # table under it — the rule `.directory_growth_between` states above and `SpecFileDurations`
+  # states first.
+  #
+  # == Why this needs no index of its own
+  #
+  # Verbatim the argument at `.directory_growth_between`: it narrows on `test_run_id` (an `IN` list
+  # of two) and groups on an EXPRESSION, and only the narrowing decides the access path. The
+  # `FILTER` aggregates and window totals are expressions over rows that scan already reads and add
+  # no scan of their own. The one honest difference from the count read is that `SUM(duration_seconds)`
+  # projects a column outside `index_spec_observations_on_test_run_id_and_spec_file_path`, so this
+  # can never be an `Index Only Scan` — neither can `.directory_durations_in`, and
+  # spec/models/spec_observation_spec.rb records that tradeoff for both.
+  #
+  # @return [Array<Array>] `[directory, previous_seconds, latest_seconds, previous_recorded,
+  #   latest_recorded, previous_timed, latest_timed, directory_count, previous_recorded_total,
+  #   latest_recorded_total, previous_timed_total, latest_timed_total]` per directory, ranked by
+  #   absolute movement in seconds. Either `_seconds` is nil where that side timed nothing in that
+  #   area. The last five are the same figures on every row, all counted before the `LIMIT`.
+  def self.directory_runtime_growth_between(test_run, previous_test_run,
+                                            limit: RETIMED_DIRECTORIES_LIMIT)
+    latest_seconds = sanitize_sql_array(["SUM(duration_seconds) FILTER (WHERE test_run_id = ?)", test_run.id])
+    previous_seconds = sanitize_sql_array(["SUM(duration_seconds) FILTER (WHERE test_run_id = ?)",
+                                           previous_test_run.id])
+    latest_recorded = sanitize_sql_array(["COUNT(*) FILTER (WHERE test_run_id = ?)", test_run.id])
+    previous_recorded = sanitize_sql_array(["COUNT(*) FILTER (WHERE test_run_id = ?)", previous_test_run.id])
+    latest_timed = sanitize_sql_array(["COUNT(duration_seconds) FILTER (WHERE test_run_id = ?)", test_run.id])
+    previous_timed = sanitize_sql_array(["COUNT(duration_seconds) FILTER (WHERE test_run_id = ?)",
+                                         previous_test_run.id])
+
+    where(test_run_id: [test_run.id, previous_test_run.id])
+      .group(Arel.sql(DIRECTORY_EXPRESSION))
+      .order(Arel.sql("ABS(#{latest_seconds} - #{previous_seconds}) DESC NULLS LAST"),
+             Arel.sql("#{DIRECTORY_EXPRESSION} ASC"))
+      .limit(limit)
+      .pluck(Arel.sql(DIRECTORY_EXPRESSION), Arel.sql(previous_seconds), Arel.sql(latest_seconds),
+             Arel.sql(previous_recorded), Arel.sql(latest_recorded),
+             Arel.sql(previous_timed), Arel.sql(latest_timed),
+             Arel.sql("COUNT(*) OVER ()"),
+             Arel.sql("SUM(#{previous_recorded}) OVER ()"), Arel.sql("SUM(#{latest_recorded}) OVER ()"),
+             Arel.sql("SUM(#{previous_timed}) OVER ()"), Arel.sql("SUM(#{latest_timed}) OVER ()"))
   end
 
   # What to call this row on a surface that lists it. `name` is what the client sent as the

@@ -1845,6 +1845,263 @@
       <% end %>
     <% end %>
 
+    <%# The same two runs and the same areas as the panel above, ranked by an INDEPENDENT quantity:
+        not which area changed SIZE but which area changed TIME.
+
+        Neither panel derives the other, and the independence runs both ways. An area where somebody
+        made an existing spec slow adds zero examples, so `ABS(latest_count - previous_count)` is 0
+        — it sorts last above and falls off that cap entirely, which means the area is not a row up
+        there missing a column, it is not on that list at all. And splitting one slow spec into four
+        fast ones is three examples MORE and time LESS. A ranking by one quantity cannot also be a
+        ranking by the other.
+
+        Nor is this the Overview panel's runtime delta at a finer grain. That figure is a MAX over a
+        run's shards — one number for the whole run — and `test_runs.duration_seconds` has no area
+        column to break down. Every figure here is `SUM(duration_seconds)` over the per-example rows
+        THESE TWO RUNS wrote: machine time, summed, never the run wall clock.
+
+        The previous run ON THIS BRANCH, never the row above in "Recent runs", for the reason the
+        panel above states: that list is one interleaved history across every branch CI reports
+        from.
+
+        Everything about whether the two runs CAN be compared is decided in
+        `SpecDirectoryRuntimeGrowth`, including why its gate is the count panel's three conditions
+        and deliberately NOT the Overview runtime delta's fourth — that guard is the denominator of
+        a MAX, and this read sums rows.
+
+        Same visibility rule as the panels above, and outside the `manage_keys` gate for the same
+        reason: read-only suite telemetry, nothing credential and nothing actionable. %>
+    <% if @spec_directory_runtime_growth %>
+      <%= render UI::PanelComponent.new(title: "Areas that got slower or faster",
+                                        id: "spec-directory-runtime-growth", class: "lg:col-span-3") do %>
+        <% if @spec_directory_runtime_growth.comparable? && @spec_directory_runtime_growth.anything_to_show? %>
+          <%# What the movement is, what it was measured over, and — as much as the page can
+              establish — what it is NOT.
+
+              A test that MOVES is the same test: `file_path` is only "last known path", so a
+              directory rename or a batch of specs moved one directory over reads here as one area
+              gaining time and another losing the same amount, with nothing having got slower and
+              nothing faster. Nothing in the schema tells that apart from a real regression and a
+              real win, so this says so rather than letting a signed column imply an authorship it
+              cannot see.
+
+              And the coverage, on both sides, because `SUM` skips NULLs silently: an area that
+              stopped reporting timings loses time in this table without anything having got
+              faster. `SpecDirectoryRuntimeGrowth` holds the rows and this sentence together, so the
+              caption cannot end up describing a different row set from the table below it. %>
+          <p class="text-xs text-app-muted mb-3" id="spec-directory-runtime-growth-basis">
+            <%# The list is CAPPED, so its own length says nothing about how much of the comparison
+                it covers. The total rides back on the same grouped aggregate, counted before the
+                LIMIT, so stating it costs no extra query. %>
+            <% if @spec_directory_runtime_growth.truncated? %>
+              The <%= number_with_delimiter(@spec_directory_runtime_growth.rows.size) %>
+              <%= "area".pluralize(@spec_directory_runtime_growth.rows.size) %> whose time moved
+              most, of the <%= number_with_delimiter(@spec_directory_runtime_growth.directory_count) %>
+              either run recorded — largest movement first, in both directions
+            <% else %>
+              All <%= number_with_delimiter(@spec_directory_runtime_growth.directory_count) %>
+              <%= "area".pluralize(@spec_directory_runtime_growth.directory_count) %> either run
+              recorded — largest movement first, in both directions
+            <% end %>
+            — measured between this run and
+            <span class="font-mono"><%= @previous_test_run.commit_sha.first(7) %></span>, the
+            previous run on this branch.
+            <%# Only where it is TRUE of the rows below, in both clauses. The ranking is by movement
+                descending with untimed areas last, so an area that did not move — and an area with
+                no movement to state at all — can only appear once the movement has run out. A list
+                headed "the areas whose time moved most" holding either has to say which. %>
+            <% if @spec_directory_runtime_growth.any_unmoved? %>
+              Where the movement runs out before the list does, areas whose time did not move are
+              listed too, as ±0.
+            <% end %>
+            <% if @spec_directory_runtime_growth.any_timing_gap? %>
+              Areas one of the two runs reported no timing for are listed last, as "Not timed" —
+              nothing about them got faster.
+            <% end %>
+            Each area is the immediate parent directory of the files that ran its examples, so the
+            areas sit side by side rather than inside one another.
+            A test that was MOVED is the same test, and this panel cannot see the difference: a
+            renamed or relocated directory appears here as one area gaining time and another losing
+            the same amount, with nothing having got slower and nothing faster.
+            Summed off the
+            <%= number_with_delimiter(@spec_directory_runtime_growth.previous_timed_count) %> of
+            <%= number_with_delimiter(@spec_directory_runtime_growth.previous_recorded_count) %> and
+            <%= number_with_delimiter(@spec_directory_runtime_growth.latest_timed_count) %> of
+            <%= number_with_delimiter(@spec_directory_runtime_growth.latest_recorded_count) %>
+            example rows the two runs recorded here that reported a timing — never the run wall
+            clock on the Overview panel above, which is a maximum over the run's shards.
+          </p>
+          <%= render UI::TableComponent.new(columns: ["Directory", "Time then", "Time now", "Change", "Timed"],
+                                            describedby: "spec-directory-runtime-growth-basis") do %>
+            <% @spec_directory_runtime_growth.rows.each do |area| %>
+              <tr>
+                <td class="px-3 py-2 font-mono text-xs text-app-content"><%= area.path %></td>
+                <%# Both operands, always, and never only the change. A signed duration alone cannot
+                    say whether an area of four seconds gained twelve or an area of four hundred
+                    did, and those are different facts about the same `+12.00s`. A side that timed
+                    nothing reads "not reported" through `SpecObservation.humanized_duration` — the
+                    one seam that keeps an unmeasured area from wearing the spelling of a fast one. %>
+                <td class="px-3 py-2 text-app-content-secondary tabular-nums">
+                  <%= area.previous_label %>
+                </td>
+                <td class="px-3 py-2 text-app-content-secondary tabular-nums">
+                  <%= area.latest_label %>
+                </td>
+                <%# The `aria-label` carries what the glyph cannot: U+2212 is announced
+                    inconsistently across screen readers, and "Not timed" beside four unattached
+                    figures is not a sentence. Same treatment the signed figures one panel up get. %>
+                <td class="px-3 py-2 text-app-content tabular-nums" aria-label="<%= area.change_reading %>">
+                  <%= area.change_label %>
+                </td>
+                <%# What each total was summed OVER, as a fraction on both sides. `SUM` skips NULLs,
+                    so an area whose examples were half untimed reports a total covering half of it
+                    — and a "speedup" between two sides of unequal coverage is the reading this
+                    column exists to let a reader catch. %>
+                <td class="px-3 py-2 text-app-content-secondary tabular-nums text-xs">
+                  <%= area.coverage_label %>
+                </td>
+              </tr>
+            <% end %>
+          <% end %>
+        <% elsif @spec_directory_runtime_growth.comparable? %>
+          <%# Two comparable runs where every area had BOTH sides timed and neither side moved. A
+              real and unremarkable answer — and precisely the one a reader wants confirmed — so it
+              is said in words rather than shown as a table of `±0` under a heading promising areas
+              that changed pace. Reached only through `anything_to_show?`, which is what keeps this
+              sentence from being said over a suite half of which stopped reporting timings: an area
+              with an absence to disclose is listed rather than folded into "nothing changed".
+
+              It states its COVERAGE and deliberately not `directory_count`. That figure counts every
+              area either run RECORDED, timed or not — and the list is capped, so on a suite where
+              nothing moved anywhere the ten rows on hand are ten areas that did not move while an
+              untimed eleventh sits past the cap unseen. "Every one of the 63 areas took the same
+              time" would then be a claim about areas nobody measured. The two fractions are the
+              claim this state can actually support, and they are the same two the caption above
+              states, off the same window totals. %>
+          <%= render UI::EmptyStateComponent.new(
+                title: "No area changed pace",
+                description: "Every area these two runs timed took the same time in both, so no " \
+                             "area of the suite got slower or faster between them. Summed off the " \
+                             "#{number_with_delimiter(@spec_directory_runtime_growth.previous_timed_count)} " \
+                             "of " \
+                             "#{number_with_delimiter(@spec_directory_runtime_growth.previous_recorded_count)} " \
+                             "and " \
+                             "#{number_with_delimiter(@spec_directory_runtime_growth.latest_timed_count)} " \
+                             "of " \
+                             "#{number_with_delimiter(@spec_directory_runtime_growth.latest_recorded_count)} " \
+                             "example rows the two runs recorded here that reported a timing."
+              ) %>
+        <% else %>
+          <%# The nine states in which there is no comparison to draw, said apart rather than
+              collapsed into one blank panel — the register the Overview delta's own no-comparison
+              states set above: withheld rather than hedged, and withholding means saying why.
+
+              Three more than the count panel above has, and the three extra are the point of the
+              grain: "recorded no per-example rows" and "reported no timings" produce the same empty
+              panel, are two different things to go and fix, and only this panel can tell them
+              apart. A run whose client posts rows without durations is fully recorded and has
+              nothing to sum.
+
+              `SpecDirectoryRuntimeGrowth#state` decides which; the wording lives here, beside the
+              other two panels', so the three cannot drift into describing the same run
+              differently. %>
+          <% case @spec_directory_runtime_growth.state %>
+          <% when :latest_unmeasured %>
+            <%= render UI::EmptyStateComponent.new(
+                  title: "No comparison to draw",
+                  description: "This run reported no tests, so there is no suite to time area by " \
+                               "area. A run that reported zero tests has a count but not a " \
+                               "measurement."
+                ) %>
+          <% when :previous_unmeasured %>
+            <%= render UI::EmptyStateComponent.new(
+                  title: "No comparison to draw",
+                  description: "The previous run on this branch " \
+                               "(#{@previous_test_run.commit_sha.first(7)}) reported no tests, so " \
+                               "there is nothing to time this run's areas against. Counting the " \
+                               "whole suite as new time would charge a commit for a gap in the " \
+                               "reporting."
+                ) %>
+          <% when :assembled_differently %>
+            <%# The state that would otherwise produce a wrong NUMBER rather than an honest absence,
+                and here it would produce one per area: a run's rows arrive shard by shard, so a
+                partial build differenced against a complete one reports every area getting faster.
+                Both compositions are named through `TestRun#delivery_description`, the same seam
+                the two panels above word this with. %>
+            <%= render UI::EmptyStateComponent.new(
+                  title: "No comparison to draw",
+                  description: "This run was #{@latest_test_run.delivery_description}, while " \
+                               "#{@previous_test_run.commit_sha.first(7)} was " \
+                               "#{@previous_test_run.delivery_description} — so the two are not " \
+                               "measuring the same thing. A run's examples arrive shard by shard, " \
+                               "so a difference taken across two compositions would report areas " \
+                               "getting slower and faster that no commit touched."
+                ) %>
+          <% when :previous_unrecorded %>
+            <%= render UI::EmptyStateComponent.new(
+                  title: "No comparison to draw",
+                  description: "The previous run on this branch " \
+                               "(#{@previous_test_run.commit_sha.first(7)}) recorded no per-example " \
+                               "detail, so it has no areas to time against — every area of this " \
+                               "run would read as time newly appearing. A run ingested before that " \
+                               "detail was stored, or sent by a client that reports only totals, " \
+                               "has a suite size and none of these rows."
+                ) %>
+          <% when :latest_unrecorded %>
+            <%= render UI::EmptyStateComponent.new(
+                  title: "No comparison to draw",
+                  description: "This run recorded no per-example detail, so it has no areas to " \
+                               "time — every area of the previous run would read as time " \
+                               "disappearing. A client that reports only totals sends a suite size " \
+                               "and none of these rows."
+                ) %>
+          <% when :previous_untimed %>
+            <%# The condition this grain adds over the count panel, on the earlier side. The run
+                wrote its rows and sent no durations with them, so it is fully "recorded" there and
+                has nothing to sum here — and an ungated comparison would report every area of this
+                run as a slowdown that no commit caused. %>
+            <%= render UI::EmptyStateComponent.new(
+                  title: "No comparison to draw",
+                  description: "The previous run on this branch " \
+                               "(#{@previous_test_run.commit_sha.first(7)}) reported no timings — " \
+                               "it recorded " \
+                               "#{number_with_delimiter(@spec_directory_runtime_growth.previous_recorded_count)} " \
+                               "examples and a duration for none of them — so there is nothing to " \
+                               "measure this run's areas against. Every area would otherwise read " \
+                               "as time newly appearing."
+                ) %>
+          <% when :latest_untimed %>
+            <%= render UI::EmptyStateComponent.new(
+                  title: "No comparison to draw",
+                  description: "This run reported no timings — it recorded " \
+                               "#{number_with_delimiter(@spec_directory_runtime_growth.latest_recorded_count)} " \
+                               "examples and a duration for none of them — so its areas cannot be " \
+                               "timed. Every area of the previous run would otherwise read as time " \
+                               "disappearing, which is a reporting gap and not a speedup."
+                ) %>
+          <% when :neither_timed %>
+            <%= render UI::EmptyStateComponent.new(
+                  title: "No comparison to draw",
+                  description: "Neither this run nor the previous run on this branch reported a " \
+                               "duration for any example, so there is no time to compare area by " \
+                               "area. Both recorded their examples; neither client sent timings " \
+                               "with them."
+                ) %>
+          <% else %>
+            <%# `:neither_recorded` — the aggregate came back empty, which for this read means
+                neither run wrote a row, since a group exists here if and only if a row does. %>
+            <%= render UI::EmptyStateComponent.new(
+                  title: "No comparison to draw",
+                  description: "Neither this run nor the previous run on this branch recorded " \
+                               "per-example detail, so there are no areas to time. The change in " \
+                               "the run's total wall clock is on the Overview panel above, which " \
+                               "reads the run totals rather than these rows."
+                ) %>
+          <% end %>
+        <% end %>
+      <% end %>
+    <% end %>
+
     <%# The first panel on this page that MATCHES A TEST TO ITSELF across runs. Everything above it
         is either bounded to one run on purpose — the ranking, the by-file and by-directory
         rollups, the outcome counters, because "which tests were slow in this run" is a question
