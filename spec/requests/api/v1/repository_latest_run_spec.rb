@@ -64,6 +64,7 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
         # explain and the MAX the key above reports *is* the SUM. The key is still present, on the
         # same rule `latest_run` itself follows one describe-block down.
         "shards" => nil,
+        "suite_size_measured" => true,
         "ingested_at" => test_run.created_at.iso8601
       )
     end
@@ -195,6 +196,50 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
 
     it "still reports the counts, so a client can see the suite was empty" do
       expect(get_repository["latest_run"]).to include("total_specs" => 0, "annotated_specs" => 0)
+    end
+
+    # The counts above are the whole problem: `total_specs: 0` is a report, not a measurement, and
+    # nothing else in the block distinguishes "the suite is empty" from "the run never measured a
+    # suite". `false` — not a missing key, not `null` — is what says so, on the same rule
+    # `timed_shard_count` follows on a history row: a guard a client must first test for the
+    # presence of is not a guard.
+    it "flags a run that reported no tests as not a measurement of the suite" do
+      expect(get_repository["latest_run"]).to include("suite_size_measured" => false)
+    end
+
+    # THE IDENTITY. In the unfiltered window `history[0]` is the SAME ROW as `latest_run` — pinned
+    # in docs/DEVELOPMENT.md and protected by `history_runs`' shared ordering — so one response body
+    # here describes one database row twice. Before this key was served on `latest_run`, those two
+    # descriptions could disagree: the row said `suite_size_measured: false` as `history[0]` and
+    # could not say it at all thirty lines up.
+    #
+    # Read off the two blocks and compared to each other rather than against a hard-coded `false`,
+    # because the claim is agreement and not a value: a serializer that hard-codes `true` on
+    # `latest_run` is caught by the example above, and one that stops reading the same row is caught
+    # only here. `commit_sha` is asserted equal first so the comparison cannot pass by comparing two
+    # blocks that describe DIFFERENT rows which happen to agree.
+    it "agrees with history[0] about the same row it serializes twice" do
+      body = get_repository
+
+      expect(body["history_window"]["branch_scope"]).to eq("all_branches")
+      expect(body["latest_run"]["commit_sha"]).to eq(body["history"].first["commit_sha"])
+      expect(body["latest_run"]["suite_size_measured"])
+        .to eq(body["history"].first["suite_size_measured"])
+      # Stated, so the example cannot go vacuously green on two rows that both measured a suite —
+      # `false` is the only value on which the two blocks could ever have disagreed.
+      expect(body["latest_run"]["suite_size_measured"]).to be(false)
+    end
+  end
+
+  # The other half of the predicate, stated under its own name. The exact-body example at the top of
+  # this file already carries `true`, but it carries it among eight other keys and fails under any
+  # of them; this is the one example whose name says which value drifted.
+  describe "a run that measured a suite" do
+    it "reports latest_run.suite_size_measured as true" do
+      create_test_run(repository: repository, commit_sha: "measured0000", total_specs_count: 40,
+                      annotated_specs_count: 10)
+
+      expect(get_repository["latest_run"]).to include("suite_size_measured" => true)
     end
   end
 
@@ -328,7 +373,8 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
 
       expect(get_repository["latest_run"].keys)
         .to contain_exactly("commit_sha", "branch", "total_specs", "annotated_specs",
-                            "annotated_ratio", "duration_seconds", "shards", "ingested_at")
+                            "annotated_ratio", "duration_seconds", "shards",
+                            "suite_size_measured", "ingested_at")
     end
 
     it "serves exactly the documented shards keys once the decomposition is open" do
@@ -1060,7 +1106,8 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
       expect(body["latest_run"]).to eq(
         "commit_sha" => third.commit_sha, "branch" => "main", "total_specs" => 40,
         "annotated_specs" => 10, "annotated_ratio" => 0.25, "duration_seconds" => 42.5,
-        "shards" => nil, "ingested_at" => third.created_at.iso8601
+        "shards" => nil, "suite_size_measured" => true,
+        "ingested_at" => third.created_at.iso8601
       )
       expect(body["api_key"]).to have_key("last_used_at")
     end
