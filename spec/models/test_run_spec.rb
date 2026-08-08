@@ -309,9 +309,11 @@ RSpec.describe TestRun do
     end
 
     # APPENDED, never prepended. `#longest_shard_label` reads `shard_durations.first&.first` and
-    # `#shard_distribution_labels` destructures `|shard_id, seconds, spec_count|`, so a count in
-    # position 0 would make the panel name a number as a shard. Pinned as the whole tuple rather
-    # than as "includes the count", which a reordered pluck would also satisfy.
+    # `#shard_distribution_labels` binds the tuple positionally — `|(shard_id, seconds,
+    # spec_count), rate|`, the inner parentheses being the zip against `#shard_seconds_per_spec`
+    # rather than a change of order — so a count in position 0 would make the panel name a number
+    # as a shard. Pinned as the whole tuple rather than as "includes the count", which a reordered
+    # pluck would also satisfy.
     it "carries the count as the third element, slowest first" do
       run = sharded_run([{ total: 5000, seconds: 61.0 }, { total: 4000, seconds: 74.25 }])
 

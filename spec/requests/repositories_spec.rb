@@ -1442,9 +1442,9 @@ RSpec.describe "Repository registration and API keys", type: :request do
       # over `test_run_shards`. Neither can see a query added anywhere ELSE on the page, and
       # neither can see a fourth pass over a different table — a relative guard is only ever as
       # wide as the thing it compares. SPGD-230 widened `TestRun#shard_durations` from two columns
-      # to three and added a second reader of the same tuple, and the property that makes that
-      # free is that it is still one `pluck` on one already-issued query. A number is the only
-      # form of that claim that cannot drift.
+      # to three, and the property that makes that free is that the third column rides a `pluck`
+      # the page already issued rather than adding one. A number is the only form of that claim
+      # that cannot drift.
       #
       # 13 on `origin/main` and 13 after — verified by running this example against the pre-change
       # `app/models/test_run.rb`, `app/views/repositories/show.html.erb` and
@@ -1457,10 +1457,13 @@ RSpec.describe "Repository registration and API keys", type: :request do
       #
       # QUERY-CACHE HITS ARE COUNTED, unlike the panel's other budget guards. A repeated identical
       # SELECT inside one request costs no round trip and is invisible to a `payload[:cached]`
-      # filter — which is exactly how a dropped `@shard_durations ||=` would slip through, and this
-      # slice added three more readers of that tuple. Counting the hits makes this a count of
-      # READS rather than of round trips, which is the property that degrades when a widened tuple
-      # acquires callers.
+      # filter — which is exactly how a dropped `@shard_durations ||=` would slip through, and
+      # every reader this slice added reads that tuple again. Stated as a rule and not as a tally
+      # on purpose: an earlier draft counted the new readers here and got the number wrong on the
+      # day it was written, because a rename in the same commit is indistinguishable from an
+      # addition when you count the diff instead of the readers. A rule cannot rot on the next
+      # widening. Counting the hits makes this a count of READS rather than of round trips, which
+      # is the property that degrades when a widened tuple acquires callers.
       it "issues exactly the queries the page issued before the shard counts were read" do
         repository = create_repository(user: @user)
         sharded_run(repository, [61.0, 58.5, 74.25, 60.0], commit_sha: "feedfacecafe0068")
