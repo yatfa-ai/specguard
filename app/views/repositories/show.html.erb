@@ -1462,6 +1462,44 @@
                     kept visibly apart. Through the same seam as the Overview panel's runtime
                     figure, so this column has exactly one rendering on this page. %>
                 <%= test_run_duration(test_run) %>
+                <%# And what that figure was measured OVER, on the rule the `Tests` cell beside it
+                    already follows: a row assembled from parts says what its number covers.
+
+                    `duration_seconds` is the MAX over the run's shards, and SQL's `MAX` skips
+                    NULLs — `test_run_shards.duration_seconds` is nullable and `Ingest::Payload`
+                    accepts nil explicitly. So on a run where a shard went silent the printed wall
+                    clock is a maximum over a SUBSET, rendered until now in the same type and the
+                    same wording as a complete one. The bias runs one way: the silent shard is
+                    disproportionately the slow one, because it is the job still running when it is
+                    cancelled or times out. Unqualified, this column shows a reader a speedup
+                    produced entirely by telemetry loss.
+
+                    Through `TestRun#wall_clock_coverage` — the seam the Overview panel's own wall
+                    clock label reads — and never re-spelled here. The top row of this table IS the
+                    run that panel names (`Repository#recent_test_runs` shares `latest_test_run`'s
+                    ordering including the tie-break), so one page renders one float twice and the
+                    two renderings must not word it differently.
+
+                    Gated on `multi_shard?`, which is the Overview's own gate and deliberately NOT
+                    the `shard_count.positive?` the Tests cell uses one column over. That predicate
+                    is about the gap between the shards recorded and the shards the suite has,
+                    which is a fact about a COUNT; this is the MAX-vs-SUM rule, which belongs to
+                    durations — for one shard the MAX *is* its SUM and there is nothing to qualify.
+                    Ungated it would be worse than silent: `some_shard_untimed?` is vacuously false
+                    at `shard_count == 0`, so the entire unsharded corpus would read
+                    "slowest of 0 shards".
+
+                    And gated on the figure existing at all, because `duration_seconds` is nullable
+                    independently of the shard rows: a coverage printed beside "not reported" is a
+                    denominator for a number that is not there.
+
+                    Free — `multi_shard?` and the coverage's `timed_shard_count` both read counts
+                    `RepositoriesController#preload_shard_counts` already primed on every row of
+                    this panel, in the one grouped aggregate it was running anyway. The query-budget
+                    example in spec/requests/repository_runs_spec.rb pins that. %>
+                <% if test_run.multi_shard? && test_run.duration_reported? %>
+                  <span class="block text-xs text-app-muted"><%= test_run.wall_clock_coverage %></span>
+                <% end %>
               </td>
               <td class="px-3 py-2 text-app-content tabular-nums">
                 <%# The PERCENTAGE (`annotated_ratio`), never the 0–1 `annotated_fraction` the

@@ -35,6 +35,21 @@ RSpec.describe "Repository recent runs", type: :request do
 
   def runs_panel = Capybara.string(response.body).find("#recent-runs")
 
+  # File-level rather than inside one describe: two blocks below hold a query-budget example — the
+  # composition sub-line's and the duration coverage's — and they pin the same panel's budget
+  # against the same N+1 shape. Two copies of a subscriber this fiddly is how the two would end up
+  # counting different things.
+  def count_queries
+    count = 0
+    subscriber = ActiveSupport::Notifications.subscribe("sql.active_record") do |_, _, _, _, payload|
+      count += 1 unless payload[:cached] || payload[:name].in?(["SCHEMA", "TRANSACTION"])
+    end
+    yield
+    count
+  ensure
+    ActiveSupport::Notifications.unsubscribe(subscriber)
+  end
+
   it "lists a run's commit, branch, suite size, duration, annotation share and age" do
     repository = create_repository(user: @user)
     repository.test_runs.create!(commit_sha: "a1b2c3d4e5f6", branch: "main", total_specs_count: 3,
@@ -318,16 +333,158 @@ RSpec.describe "Repository recent runs", type: :request do
       expect(runs_table.all("tbody tr").size).to eq(7)
       expect(run_cells("shrdrn0")[TESTS]).to include("assembled from 4 shard reports")
     end
+  end
 
-    def count_queries
-      count = 0
-      subscriber = ActiveSupport::Notifications.subscribe("sql.active_record") do |_, _, _, _, payload|
-        count += 1 unless payload[:cached] || payload[:name].in?(["SCHEMA", "TRANSACTION"])
+  # Honest state 5, and the same defect one column over. `test_runs.duration_seconds` is the MAX
+  # over the run's shards (`Ingest::RunRecorder#recompute_totals`), `test_run_shards.duration_seconds`
+  # is nullable, and SQL's `MAX` skips NULLs — so a run where a shard went silent prints a maximum
+  # over a SUBSET in the same type and the same words as a complete one. The bias runs one way: the
+  # silent shard is disproportionately the slow one, because it is the job still running when it is
+  # cancelled or times out, so an unqualified column shows a reader a speedup made of telemetry loss.
+  describe "what each duration was measured over" do
+    # The TIMED sibling of the composition block's `sharded_run` above, and deliberately a second
+    # helper rather than an option on it: that one writes shard rows with no `duration_seconds` and
+    # passes none to the parent, which is exactly the nil-duration shape the last example here needs
+    # left untouched.
+    #
+    # The parent's `duration_seconds` is DERIVED from the shards written below and never asserted
+    # beside them — the MAX over the ones that reported, which is what `#recompute_totals` re-derives
+    # after every ingest. A fixture that set it independently could build the one run this column
+    # cannot have: a wall clock no shard measured.
+    def timed_sharded_run(repository, durations, commit:, per_shard: 5_000, **attributes)
+      run = repository.test_runs.create!(commit_sha: commit, branch: "main", ci_run_id: commit,
+                                         total_specs_count: durations.length * per_shard,
+                                         annotated_specs_count: durations.length * (per_shard / 2),
+                                         duration_seconds: durations.compact.max, **attributes)
+      durations.each_with_index do |seconds, index|
+        run.test_run_shards.create!(shard_id: index.to_s, total_specs_count: per_shard,
+                                    duration_seconds: seconds)
       end
-      yield
-      count
-    ensure
-      ActiveSupport::Notifications.unsubscribe(subscriber)
+      run
+    end
+
+    # The project's canonical four-shard fixture, whole: 74.25s is the MAX and the run's wall clock.
+    it "says a complete run's wall clock is the slowest of all its shards" do
+      repository = create_repository(user: @user)
+      timed_sharded_run(repository, [61.0, 58.5, 74.25, 60.0], commit: "allshrd")
+
+      get repository_path(repository)
+
+      # The figure itself is unchanged — the coverage qualifies it, it does not restate it.
+      expect(run_cells("allshrd")[DURATION]).to eq("1m 14s slowest of 4 shards")
+    end
+
+    # The same run with its slowest shard silent instead of reported would print `1m 1s` here and
+    # look like a 13-second improvement. What separates the two rows is this clause and nothing else.
+    it "says a run with a silent shard was measured over only the shards that reported" do
+      repository = create_repository(user: @user)
+      timed_sharded_run(repository, [61.0, 58.5, 74.25, nil], commit: "silentx")
+
+      get repository_path(repository)
+
+      expect(run_cells("silentx")[DURATION]).to eq("1m 14s slowest of the 3 that reported")
+      # And the qualifier is a sub-line in the existing cell, not a seventh column: the header set
+      # asserted at the top of this file is what a new column would break.
+      expect(run_row("silentx").all("td")[DURATION])
+        .to have_css("span.text-xs.text-app-muted", text: "slowest of the 3 that reported")
+    end
+
+    # The top row of this table IS the run the Overview panel names — `Repository#recent_test_runs`
+    # shares `latest_test_run`'s ordering including the tie-break, and the controller loads both off
+    # the one repository. So this page renders one float twice, and before this slice it worded it
+    # two ways: qualified above, bare below. ONE literal, asserted on both surfaces, so neither can
+    # be re-worded without the other.
+    it "words the top row's coverage exactly as the Overview panel words the same run" do
+      repository = create_repository(user: @user)
+      timed_sharded_run(repository, [61.0, 58.5, 74.25, nil], commit: "toprow0")
+
+      get repository_path(repository)
+
+      coverage = "slowest of the 3 that reported"
+      expect(runs_table.all("tbody tr").first).to have_text("toprow0")
+      expect(run_cells("toprow0")[DURATION]).to eq("1m 14s #{coverage}")
+      expect(Capybara.string(response.body).find("#overview"))
+        .to have_text("Wall clock (#{coverage}) 1m 14s", normalize_ws: true)
+    end
+
+    # Gated on `multi_shard?`, and NOT on the `shard_count.positive?` the Tests cell one column over
+    # uses. That predicate is about the gap between the shards recorded and the shards the suite
+    # has, which is a fact about a count; this is the MAX-vs-SUM rule, which belongs to durations.
+    # One shard's MAX *is* its SUM, so there is no coverage to disclose and nothing to say.
+    it "adds no qualifier to a one-shard run" do
+      repository = create_repository(user: @user)
+      timed_sharded_run(repository, [61.0], commit: "oneshrd")
+
+      get repository_path(repository)
+
+      expect(run_cells("oneshrd")[DURATION]).to eq("1m 1s")
+    end
+
+    # The load-bearing half of that gate. `some_shard_untimed?` is vacuously false at
+    # `shard_count == 0` (`0 < 0`), so an ungated `wall_clock_coverage` would tell the ENTIRE
+    # unsharded corpus — every run that named no `ci_run_id`, which is every laptop `rspec` — that
+    # its wall clock was the "slowest of 0 shards".
+    it "adds no qualifier to an unsharded run, and never says 'slowest of 0 shards'" do
+      repository = create_repository(user: @user)
+      repository.test_runs.create!(commit_sha: "laptop9", branch: "main", total_specs_count: 12,
+                                   annotated_specs_count: 6, duration_seconds: 12.5)
+
+      get repository_path(repository)
+
+      expect(run_cells("laptop9")[DURATION]).to eq("12.5s")
+      expect(run_cells("laptop9")[DURATION]).not_to include("shard")
+    end
+
+    # `duration_seconds` is nullable independently of the shard rows, so the two conditions are
+    # separate: this run is sharded — it has a coverage to state — and has no figure to state it
+    # about. A denominator printed beside "not reported" is worse than neither, and the string it
+    # would print here is `0 of 4 reported`.
+    it "prints no coverage beside a duration that does not exist" do
+      repository = create_repository(user: @user)
+      timed_sharded_run(repository, [nil, nil, nil, nil], commit: "notimd0")
+
+      get repository_path(repository)
+
+      expect(run_cells("notimd0")[DURATION]).to eq("not reported")
+      # Named as the literal that branch would print, so this stays red for the right reason if the
+      # gate is dropped rather than merely for the cell being longer than expected.
+      expect(run_cells("notimd0")[DURATION]).not_to include("0 of 4 reported")
+      # And the absent figure keeps the muted treatment this table gives absent facts.
+      expect(run_row("notimd0").all("td")[DURATION]).to have_css("span.text-app-muted", text: "not reported")
+    end
+
+    # The mechanical proof the qualifier is free. Its sibling in the block above pins the same
+    # budget against the composition sub-line, and cannot see this one: its fixture's shards carry
+    # no `duration_seconds` and its parents carry none either, so `duration_reported?` is false on
+    # every row and `wall_clock_coverage` — the only reader of `timed_shard_count` here — is never
+    # called at all. This fixture is timed, so it is.
+    #
+    # Verified by mutation: dropping `.preload_timed_shard_count(timed_count)` from
+    # `ShardCountPreloading#preload_shard_counts` turns this example red by exactly the four sharded
+    # rows added below, and leaves the composition block's budget example green.
+    it "asks what each duration covered once for the whole panel, not once per row" do
+      repository = create_repository(user: @user)
+      # The newest row is a plain run in BOTH measurements, for the reason its sibling states: the
+      # Overview panel reads `latest_test_run` and its predecessor through their own unprimed shard
+      # aggregates, so holding those rows fixed keeps it identical either side of the change.
+      3.times do |i|
+        repository.test_runs.create!(commit_sha: "plainrun000#{i}", branch: "main",
+                                     total_specs_count: 100, duration_seconds: 9.0,
+                                     created_at: (i + 1).hours.ago)
+      end
+
+      get repository_path(repository)
+      baseline = count_queries { get repository_path(repository) }
+      expect(runs_table.all("tbody tr").size).to eq(3)
+
+      4.times do |i|
+        timed_sharded_run(repository, [61.0, 58.5, 74.25, nil], commit: "timdrn#{i}",
+                          created_at: (i + 4).hours.ago)
+      end
+
+      expect(count_queries { get repository_path(repository) }).to eq(baseline)
+      expect(runs_table.all("tbody tr").size).to eq(7)
+      expect(run_cells("timdrn0")[DURATION]).to eq("1m 14s slowest of the 3 that reported")
     end
   end
 
