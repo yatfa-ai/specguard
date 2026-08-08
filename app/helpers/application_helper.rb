@@ -74,17 +74,37 @@ module ApplicationHelper
   # a hand-rolled count of parts would print "0 shards" for the unsharded corpus, which is every run
   # that named no `ci_run_id`.
   #
-  # The qualifier is `multi_shard?` and not `shard_count.positive?`: one shard's SUM is its own
-  # whole report, so a single-shard run has no coverage gap to disclose and gets no sentence about
-  # one.
+  # The qualifier is `shard_count.positive?` and not `multi_shard?`. The clause is not about
+  # arithmetic WITHIN what arrived — one shard's SUM is indeed its own whole report — it is about
+  # the gap between the shards RECORDED and the shards the suite HAS. A four-way split whose first
+  # POST has landed sits at `shard_count == 1` and a quarter of its suite: three parts missing,
+  # strictly more than the two-shard case this already warns about. `SuiteTrajectory#withheld_part_way`
+  # answers the identical question with `positive?` and withholds that very row from the growth
+  # line for sitting at a fraction of its own suite — on the same page load this cell renders it.
+  #
+  # Zero is the exclusion, not one: an unsharded run arrived whole in a single POST
+  # (`TestRun#delivery_description`) and has no missing part to name.
+  #
+  # What is retired here is the imported RATIONALE, not the predicate. `multi_shard?`'s own doc
+  # argues from MAX-is-SUM, which is an argument about DURATION (wall clock vs machine time): it
+  # settles the Overview's cost rows and settles nothing about whether a count discloses its
+  # coverage, so it is the wrong reason to GATE this clause. That is the whole of the dispute.
+  # It says nothing against the predicate itself, which is `shard_count > 1` and is named, by that
+  # same doc, for the count and not the provenance — "is there more than one part to explain".
+  #
+  # Which is exactly the question three lines below, so it is what inflects the wording there. The
+  # clause inflects for the same reason `delivery_description` does: "covers those" over a single
+  # report promises more parts than the phrase before it just named.
   #
   # A plain String, not a `tag`, because the two callers put it in different containers — a table
   # cell and a card paragraph — and only the wording is shared. Neither predicate queries: every
   # run reaching here was primed with its shard count by
   # `RepositoriesController#preload_shard_counts`.
   def test_run_delivery_note(test_run)
-    return test_run.delivery_description unless test_run.multi_shard?
+    return test_run.delivery_description unless test_run.shard_count.positive?
 
-    "#{test_run.delivery_description} — the count above covers those, not necessarily the whole suite"
+    covered = test_run.multi_shard? ? "those" : "that report"
+    "#{test_run.delivery_description} — the count above covers #{covered}, " \
+      "not necessarily the whole suite"
   end
 end
