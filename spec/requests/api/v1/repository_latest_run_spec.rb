@@ -361,7 +361,7 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
     # whose numbers change, and says out loud what a new key owes the doc before it ships.
     def documented_shard_keys
       %w[count timed_count machine_seconds coverage rows balanced_wall_clock_seconds
-         wall_clock_excess_seconds]
+         wall_clock_excess_seconds per_shard]
     end
 
     it "serves exactly the latest_run keys docs/DEVELOPMENT.md documents, on a sharded run" do
@@ -397,7 +397,7 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
 
       shards = get_repository.dig("latest_run", "shards")
 
-      # The same seven names as the open gate, from the same list: withholding a figure withholds
+      # The same eight names as the open gate, from the same list: withholding a figure withholds
       # its VALUE, not its name. That is `serialized_shards`' stated contract and the reason a
       # client tests one thing (`rows == null`) rather than distinguishing an absent key from a
       # null one — and a guard written only against the open gate would pass a change that made
