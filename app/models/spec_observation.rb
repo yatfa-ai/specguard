@@ -63,7 +63,7 @@ class SpecObservation < ApplicationRecord
   MOVED_DIRECTORIES_LIMIT = 10
 
   # How many EXAMPLES a single spec file's drill-down returns. Its own constant, by the rule the
-  # three above it obey and for a difference that is the reverse of theirs: those cap RANKINGS —
+  # four above it obey and for a difference that is the reverse of theirs: those cap RANKINGS —
   # lists whose whole purpose is to show the head of a population and stop — and this caps a
   # LISTING, the rows of one file a reader has already picked out of such a ranking. A reader who
   # opened a file to get past a top ten is not served by another top ten, and one file's examples
@@ -90,6 +90,39 @@ class SpecObservation < ApplicationRecord
   # counters ride along or not.
   FILE_POPULATION_COUNTS = "COUNT(*) OVER () AS file_recorded_count, " \
                            "COUNT(duration_seconds) OVER () AS file_timed_count"
+
+  # **The retention rule.** How many runs OF ONE BRANCH keep their rows; everything older than the
+  # Nth most recent run on that branch is deleted by {Ingest::ObservationPruner} after the ingest
+  # that made it the N+1th. Until this constant existed, history here was retained by *omission* —
+  # nothing ever deleted a row for age, so the table grew by one row per example per run forever,
+  # and on the 46,000-run repository `Repository::BRANCH_HISTORY_LIMIT` was measured against, at
+  # the 20,000-example design point, that is ~920M rows serving reads that reach thirty runs back.
+  #
+  # == The floor, and why this is not a reuse of `Repository::TRAJECTORY_LIMIT`
+  #
+  # The floor is `Repository::TRAJECTORY_LIMIT`, because that is the DEEPEST READER: SPGD-282's
+  # branch-anchored flakiness window is `TRAJECTORY_LIMIT` runs of one branch, at the same 20,000
+  # example design point, and a retention rule below the depth a shipping panel reads is that panel
+  # rendering blanks. So this may never be lowered beneath it — `spec/services/ingest/
+  # observation_pruner_spec.rb` pins that as an assertion rather than leaving it to a comment.
+  #
+  # But equal to it is wrong too, and quietly: retention of exactly 30 would delete the 30th run's
+  # rows the instant a 31st landed, emptying the last point of a 30-deep window *underneath a
+  # reader*. A window that is exactly full is the normal state of a busy branch, not an edge case.
+  # So the retention is a MULTIPLE of the floor and not the floor — twice it, which leaves a
+  # whole window of slack between the deepest read and the first deletion.
+  #
+  # And it is its own constant rather than a reference at every call site, by the rule the five
+  # `_LIMIT`s above already obey: `TRAJECTORY_LIMIT` bounds how far a CHART is DRAWN, this bounds
+  # how far the DATA is KEPT. They move for different reasons — a panel showing fifty points is a
+  # display decision, keeping fifty runs of 20,000 rows per branch is a storage one — and one
+  # number standing for both would make that a single edit nobody meant to make.
+  #
+  # Per branch and never per repository: recency across a repository is interleaved (see
+  # `Api::V1::RepositoriesController#serialized_branches` — on a repository whose CI reports on
+  # every PR, the ten most recent runs are routinely all `feature/*`), so a repository-wide bound
+  # would evict `main`'s history first, and `main` is what every cross-run read is anchored to.
+  BRANCH_RETENTION_RUNS = 2 * Repository::TRAJECTORY_LIMIT
 
   # The code area a row belongs to: the IMMEDIATE PARENT directory of the including file.
   #
