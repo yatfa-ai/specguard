@@ -848,8 +848,8 @@ RSpec.describe "POST /api/v1/ingest", type: :request do
 
     # An anonymous slice — sharded, but with no `shard_id` to tell the slices apart — gets a fresh
     # `TestRunShard` row per POST, so the shard *counters* double on a redelivery and cannot not.
-    # The rows do not, because their key is the run and the example rather than the delivery. That
-    # asymmetry is documented in `Ingest::ObservationRecorder`; this is the assertion behind it.
+    # The rows are saved by the conflict key instead, which is keyed on the run and the example
+    # rather than on the delivery.
     it "does not double an anonymous slice's rows, though it doubles its counters" do
       body = ingest_payload(ci_run_id: "gha-9", specs: [unannotated_spec(file_path: "spec/a_spec.rb", line_number: 1)])
 
@@ -860,6 +860,32 @@ RSpec.describe "POST /api/v1/ingest", type: :request do
       expect(run.test_run_shards.count).to eq(2)
       expect(run.total_specs_count).to eq(2)
       expect(run.spec_observations.count).to eq(1)
+    end
+
+    # ...and the precondition of the example above, asserted rather than assumed, because the two
+    # halves are one fact: Postgres treats NULLs as distinct in a unique index, which is what lets
+    # an id-less producer keep one row per example instead of collapsing to one row per run, and is
+    # equally what leaves an id-less redelivery nothing to conflict with. An anonymous slice is the
+    # one shape where the delete matches nothing, so the two meet and the rows double.
+    #
+    # This is a KNOWN GAP, pinned here so it stays deliberate. It is not fixable by keying: the
+    # only other candidate is `(file_path, line_number)`, which is the coordinate a table-driven
+    # loop puts N examples on — the guard two examples up exists precisely to stop that key ever
+    # being adopted. The fix is the client-side one `Ingest::RunRecorder#upsert_shard` already
+    # prescribes for the doubled counters: name the shards, or send ids.
+    it "does double an id-less anonymous slice's rows, having no key with which not to" do
+      body = ingest_payload(
+        ci_run_id: "gha-10",
+        specs: [unannotated_spec(file_path: "spec/a_spec.rb", line_number: 1, id: "")]
+      )
+
+      ingest(body)
+      ingest(body)
+
+      run = TestRun.sole
+      expect(run.test_run_shards.count).to eq(2)
+      expect(run.spec_observations.count).to eq(2)
+      expect(run.spec_observations.pluck(:example_id)).to eq([nil, nil])
     end
 
     describe "a four-shard run, one shard of which is re-run" do
@@ -922,9 +948,90 @@ RSpec.describe "POST /api/v1/ingest", type: :request do
         expect(TestRun.sole).to have_attributes(total_specs_count: 12, annotated_specs_count: 0)
       end
     end
+
+    # Everything above models a *static* split: `shard_payload` gives each shard its own
+    # `spec/shard#{n}/` namespace, so the four slices are disjoint by construction and every row a
+    # redelivery touches is one its own delete already reached. A queue-based splitter — Knapsack
+    # Pro queue mode, `parallel_tests --group-by runtime` — rebalances between runs, which is the
+    # entire reason to use one, and `example_id` is `./spec/foo_spec.rb[1:1]`, so it travels with
+    # the file. That puts an example on the far side of a delete keyed on the shard, where the
+    # conflict clause is the only thing that can reach it — and which of the two colliding rows
+    # wins is then a decision, not a detail.
+    describe "a splitter that moves an example from one shard to another between runs" do
+      def deliver(shard, examples)
+        specs = examples.map do |name, duration|
+          unannotated_spec(file_path: "spec/#{name}_spec.rb", line_number: 1,
+                           id: "./spec/#{name}_spec.rb[1:1]", duration: duration)
+        end
+
+        ingest(ingest_payload(ci_run_id: "gha-queue", shard_id: shard, specs: specs))
+      end
+
+      def measurements = TestRun.sole.spec_observations.pluck(:example_id, :duration_seconds)
+
+      def shard_of(name)
+        TestRun.sole.spec_observations.find_by!(example_id: "./spec/#{name}_spec.rb[1:1]").test_run_shard_id
+      end
+
+      # A owns e1; B owns e2 and e3.
+      before do
+        deliver("A", [["e1", 1.0]])
+        deliver("B", [["e2", 9.0], ["e3", 2.0]])
+      end
+
+      # The measurement this whole clause is for. Under `DO NOTHING` the platform kept the 9.0 and
+      # threw the 0.5 away: A's delete could not reach a row owned by B, so the fresh measurement
+      # arrived as a conflict and lost it to the stale one — silently, with nothing in the data to
+      # say the number was a run out of date.
+      it "keeps the newest measurement, not the row the delete could not reach" do
+        deliver("A", [["e1", 1.0], ["e2", 0.5]])
+
+        expect(measurements).to match_array(
+          [["./spec/e1_spec.rb[1:1]", 1.0], ["./spec/e2_spec.rb[1:1]", 0.5], ["./spec/e3_spec.rb[1:1]", 2.0]]
+        )
+      end
+
+      # Ownership moves with the measurement, or the row would report a duration taken by a shard
+      # the data says never ran it.
+      it "re-points the moved example at the shard that actually ran it" do
+        deliver("A", [["e1", 1.0], ["e2", 0.5]])
+
+        expect(shard_of("e2")).to eq(TestRun.sole.test_run_shards.find_by!(shard_id: "A").id)
+      end
+
+      # The other side of the move, asserted so it is not mistaken for loss: B re-running without
+      # the example it gave away does not take that row with it, because the row is A's now and B's
+      # delete no longer matches it.
+      it "does not take the moved example back when the shard it left re-runs without it" do
+        deliver("A", [["e1", 1.0], ["e2", 0.5]])
+        deliver("B", [["e3", 2.0]])
+
+        expect(measurements).to match_array(
+          [["./spec/e1_spec.rb[1:1]", 1.0], ["./spec/e2_spec.rb[1:1]", 0.5], ["./spec/e3_spec.rb[1:1]", 2.0]]
+        )
+      end
+
+      # The consequence `Ingest::ObservationRecorder` states rather than hides: an example moving
+      # the *other* way is absent between the two deliveries, because the shard that gave it up
+      # deletes it and the shard that took it has not reported yet. A sharded run is whole only
+      # once every shard has reported — the counters have had this property all along — so it
+      # converges rather than drifting.
+      it "loses an example only between the delivery that gave it up and the one that took it" do
+        deliver("A", [])
+
+        expect(measurements.map(&:first)).to match_array(["./spec/e2_spec.rb[1:1]", "./spec/e3_spec.rb[1:1]"])
+
+        deliver("B", [["e1", 4.0], ["e2", 9.0], ["e3", 2.0]])
+
+        expect(measurements).to match_array(
+          [["./spec/e1_spec.rb[1:1]", 4.0], ["./spec/e2_spec.rb[1:1]", 9.0], ["./spec/e3_spec.rb[1:1]", 2.0]]
+        )
+      end
+    end
   end
 
-
+  # The full auth matrix is proved once in spec/requests/api/v1/repositories_spec.rb. All this
+  # endpoint owes is evidence that it inherits the filter rather than re-plumbing it.
   describe "authentication" do
     it "rejects a request with no Authorization header with 401" do
       expect { ingest(ingest_payload, key: nil) }.not_to change(TestRun, :count)

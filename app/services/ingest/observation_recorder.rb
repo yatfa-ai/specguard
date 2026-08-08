@@ -6,50 +6,101 @@ module Ingest
   # Split out of {Ingest::RunRecorder} rather than inlined so the re-delivery doctrine stays in one
   # place: the run's counters are *derived* from `test_run_shards` and therefore idempotent by
   # construction, but rows written per POST inherit none of that protection unless they are keyed
-  # the same way. So they are — **delete this shard's rows, then insert them** — which is the whole
-  # of this class.
+  # the same way. So the write is **delete this shard's rows, then upsert the delivery** — and the
+  # two halves of that sentence are keyed differently on purpose, for a reason that took a
+  # measurement to find.
   #
-  # == The three shapes, and what each one gets
+  # == Why the delete is per-shard and the conflict key is per-run
+  #
+  # The delete can only be per-shard. A delivery knows its own slice and nothing about the others,
+  # so deleting the run's rows would make shard 2 erase shard 1.
+  #
+  # The conflict key cannot be per-shard, because **examples move between shards**. A queue-based
+  # splitter — Knapsack Pro queue mode, `parallel_tests --group-by runtime` — rebalances slices
+  # between runs, which is the entire reason to use one. `example_id` is
+  # `"./spec/foo_spec.rb[1:1]"`, so it travels with the file. Re-running shard A after the splitter
+  # has handed it an example shard B used to own leaves a row the delete cannot reach, and the
+  # fresh measurement arrives on top of it.
+  #
+  # So a collision **updates** rather than being skipped: last writer wins, which is the same
+  # semantic `RunRecorder#upsert_shard` already chose for a shard reporting twice. Measured on the
+  # `DO NOTHING` version of this class — shard A holding an example at 1.0s, shard B holding
+  # another at 9.0s, then A re-run with B's example coming back at 0.5s — the platform kept the
+  # 9.0s, discarded the 0.5s, and went on attributing the example to the shard that no longer ran
+  # it, with nothing in the data to say so. `DO UPDATE` also re-points `test_run_shard_id` at the
+  # slice that actually ran the example, so ownership and measurement move together.
+  #
+  # One consequence to state rather than let someone find: an example that leaves shard A for
+  # shard B is absent from the run between A's redelivery and B's. It returns when B delivers. The
+  # counters have exactly this property for exactly this reason — a sharded run is whole only once
+  # every shard has reported — so it converges rather than drifting.
+  #
+  # == A repeated id inside one payload is a different event, handled a different way
+  #
+  # `example_id` arrives **unvalidated**: `Ingest::Payload` checks `file_path`, `line_number`,
+  # `status` and `intent`, and nothing else. A payload repeating an id would make Postgres raise
+  # `ON CONFLICT DO UPDATE command cannot affect row a second time` and take the whole ingest down
+  # with a 500, so the repeat is collapsed **in Ruby**, first occurrence winning, before the
+  # statement is built. Deliberately not left to `DO UPDATE`: two rows in one payload are a
+  # producer bug and the second is no more trustworthy than the first, whereas two deliveries are a
+  # remeasurement and the newer one is precisely what is wanted. Rejecting the payload outright is
+  # envelope validation's call, not this class's.
+  #
+  # == The three shapes, and the one that has no answer
   #
   # * **Named shard** (`shard_id` present) — `RunRecorder#upsert_shard` returns the *same*
   #   `TestRunShard` row on redelivery, so deleting by `test_run_shard_id` removes exactly the
-  #   previous delivery and the insert replaces it. Re-running shard 2 of a four-shard run leaves
+  #   previous delivery and the upsert replaces it. Re-running shard 2 of a four-shard run leaves
   #   the suite counted once. Fully idempotent.
-  # * **Anonymous slice** (`ci_run_id` present, `shard_id` nil) — a fresh `TestRunShard` row per
-  #   POST, because a client that shards without naming its slices sends nothing to tell them
-  #   apart. The delete therefore matches nothing. `RunRecorder` documents that the shard
-  #   *counters* double in this case and cannot not; the observations do **not** double, because
-  #   their key is `(test_run_id, example_id)` and the conflicting rows are skipped rather than
-  #   inserted. That asymmetry is worth stating plainly rather than being discovered: this class
-  #   does not fix the anonymous-slice hazard, it is merely not exposed to it.
   # * **No `ci_run_id`** — no shard rows exist at all, `test_run_shard_id` is null, and every POST
   #   is its own `TestRun`. There is nothing to collide with.
+  # * **Anonymous slice** (`ci_run_id` present, `shard_id` nil) — a fresh `TestRunShard` row per
+  #   POST, because a client that shards without naming its slices sends nothing to tell them
+  #   apart. The delete therefore matches nothing, and the conflict key is the only thing standing
+  #   between a redelivery and a doubled run.
   #
-  # == Two decisions the wire format forces
+  #   It stands there **only for a producer that sends `id`s**, and that precondition is the whole
+  #   reason this paragraph exists. Postgres treats NULLs as distinct in a unique index — which is
+  #   what lets an id-less producer keep one row per example instead of collapsing to one row per
+  #   run — and it is the very same property that leaves an id-less redelivery nothing to conflict
+  #   *with*. Measured: an anonymous slice carrying one id-less example, delivered twice, leaves
+  #   two rows. No key fixes that. The only candidate is `(file_path, line_number)`, which is the
+  #   coordinate a table-driven loop puts N examples on and the exact collapse this table exists to
+  #   avoid — so paying for redelivery safety there would cost the grain, permanently, for every
+  #   producer. It is therefore a **known gap**, asserted as one in
+  #   `spec/requests/api/v1/ingest_spec.rb` rather than left to be discovered, and its fix is the
+  #   same client-side fix as for the doubled counters `RunRecorder#upsert_shard` documents: name
+  #   the shards, or send ids.
   #
-  # `example_id` arrives **unvalidated** — `Ingest::Payload` checks `file_path`, `line_number`,
-  # `status` and `intent`, and nothing else. A payload with a repeated `id` would violate the
-  # unique index and take the whole ingest down with a 500, which is a far worse answer than
-  # storing one row for a duplicated id. So the write is tolerant: `insert_all` conflicting on
-  # `(test_run_id, example_id)` does nothing rather than raising, and the first row wins. A
-  # producer that sends no `id` at all is unaffected — the unique index is not partial and
-  # Postgres treats NULLs as distinct, so those examples each get their own row. Rejecting the run
-  # instead is envelope validation's call to make, not this class's.
+  # == Mechanics
   #
-  # `insert_all` runs no callbacks and derives nothing, so `created_at` / `updated_at` are written
+  # `upsert_all` runs no callbacks and derives nothing, so `created_at` / `updated_at` are written
   # by hand and `repository_id` — denormalised onto the row so repository-scoped reads need no
-  # join — is written explicitly rather than inherited from an association.
+  # join — is written explicitly rather than inherited from an association. `created_at` is kept
+  # out of the update list because the columns a collision may move are the *measurement*, not the
+  # row's own history — so a row remeasured through the `DO UPDATE` branch keeps when it first
+  # appeared and moves only its `updated_at`. A row its own shard re-delivers is deleted and
+  # written afresh instead, and starts a new history, which is the honest record of what happened
+  # to it.
   #
   # == The trade
   #
   # This runs inside the transaction already holding the run's `FOR UPDATE` lock (see
   # `RunRecorder#record` for why that lock is taken where it is). N shards therefore **serialize**
   # their bulk inserts rather than running them concurrently. That is the price of the paragraph
-  # above: a delete-then-insert keyed on the shard is only atomic against a concurrent delivery if
-  # something is holding the run still while it happens. Bulk `insert_all` rather than N
+  # above: a delete-then-upsert keyed on the shard is only atomic against a concurrent delivery if
+  # something is holding the run still while it happens. One bulk `upsert_all` rather than N
   # `create!`s is what keeps the serialized section short — 20,000 examples is the design point,
   # and it is one statement.
   class ObservationRecorder
+    # Everything a redelivery is allowed to move. `created_at` is absent so a remeasured row keeps
+    # when it first appeared, and the conflict key itself is absent because Postgres will not let
+    # `DO UPDATE` touch the columns it matched on.
+    REMEASURABLE = %i[
+      test_run_shard_id spec_file_path file_path line_number name duration_seconds outcome status
+      updated_at
+    ].freeze
+
     def self.record(run, specs, shard: nil) = new(run, specs, shard: shard).record
 
     def initialize(run, specs, shard: nil)
@@ -58,28 +109,39 @@ module Ingest
       @shard = shard
     end
 
-    # @return [Integer] how many rows this delivery actually inserted — which is not always
-    #   `specs.size`, since a conflicting id is skipped rather than stored.
+    # @return [Integer] how many rows this delivery wrote, inserted and remeasured together. Not
+    #   always `specs.size`: a payload that repeats an example id contributes one row for it.
     def record
       @run.spec_observations.where(test_run_shard_id: @shard&.id).delete_all
 
       rows = build_rows
       return 0 if rows.empty?
 
-      # `insert_all` (as against `insert_all!`) emits `ON CONFLICT … DO NOTHING`, and naming the
-      # conflict target says out loud which key is being tolerated rather than leaving "any
-      # constraint at all" implied. First row wins, both within one payload and against a delivery
-      # this one could not delete.
-      SpecObservation.insert_all(rows, unique_by: %i[test_run_id example_id]).count
+      # Naming the conflict target says out loud which key is being reconciled rather than leaving
+      # "any constraint at all" implied. `record_timestamps: false` because the rows already carry
+      # theirs and the pair above decides which of them a collision may move.
+      SpecObservation.upsert_all(
+        rows, unique_by: %i[test_run_id example_id], update_only: REMEASURABLE, record_timestamps: false
+      ).count
     end
 
     private
 
+    # One row per example, with a repeated `example_id` collapsed to its first occurrence — see the
+    # class comment for why that is a Ruby-side concern rather than the conflict clause's. Rows
+    # carrying no id are all kept: they cannot collide with each other, in this statement or any
+    # other, which is the same fact from both directions.
     def build_rows
       now = Time.current
+      claimed = Set.new
 
       @specs.filter_map do |spec|
-        attributes(spec, now) if spec.is_a?(Hash)
+        next unless spec.is_a?(Hash)
+
+        row = attributes(spec, now)
+        next if row[:example_id] && !claimed.add?(row[:example_id])
+
+        row
       end
     end
 

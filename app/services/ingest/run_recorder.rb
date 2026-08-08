@@ -49,12 +49,15 @@ module Ingest
   # == The other half of a delivery
   #
   # Each POST also lands one row per example in `spec_observations`, written by
-  # {Ingest::ObservationRecorder} inside this same transaction. Those rows are keyed by the shard
-  # that delivered them and replaced rather than appended, for exactly the reason the counters are
-  # derived rather than accumulated — the 25,100 denominator above is what a per-delivery append
-  # looks like, and rows inherit none of the counters' protection unless they are keyed the same
-  # way. The run's own `total_specs_count` / `annotated_specs_count` are **not** re-derived from
-  # them: those stay a function of `test_run_shards`, unchanged.
+  # {Ingest::ObservationRecorder} inside this same transaction. Those rows are replaced rather than
+  # appended, for exactly the reason the counters are derived rather than accumulated — the 25,100
+  # denominator above is what a per-delivery append looks like, and rows inherit none of the
+  # counters' protection unless they are keyed the same way. Replacing them takes two keys rather
+  # than one: the delete is per-shard, because a delivery knows only its own slice, while the
+  # conflict clause is per-run, because a queue-based splitter moves examples between shards and an
+  # example on the far side of the delete is reachable only there. `ObservationRecorder` carries
+  # the argument. The run's own `total_specs_count` / `annotated_specs_count` are **not** re-derived
+  # from those rows: those stay a function of `test_run_shards`, unchanged.
   class RunRecorder
     # Two shards racing is the ordinary case; three collisions in a row on the same key would mean
     # the row is being created and rolled back repeatedly, which is not something retrying fixes.

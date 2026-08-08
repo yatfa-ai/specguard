@@ -68,8 +68,10 @@ class CreateSpecObservations < ActiveRecord::Migration[8.1]
     #
     # Not partial, and it does not need to be: Postgres treats NULLs as distinct in a unique
     # index, so a producer that sends no `id` at all still gets one row per example rather than
-    # one row per run. Keeping it whole is also what lets `insert_all(unique_by:)` name it as a
-    # plain conflict target.
+    # one row per run. Keeping it whole is also what lets `upsert_all(unique_by:)` name it as a
+    # plain conflict target. The same NULL-distinctness is why an id-less producer gets no
+    # redelivery protection from this index either — `Ingest::ObservationRecorder` documents that
+    # as a known gap, since the only key that would close it is the coordinate above.
     add_index :spec_observations, %i[test_run_id example_id],
               unique: true,
               name: "index_spec_observations_on_test_run_id_and_example_id"

@@ -4,29 +4,21 @@ require "rails_helper"
 
 RSpec.describe SpecObservation do
   describe "the questions one run's rows have to answer" do
-    # Big enough that the planner has a real choice to make. A single run is ~5% of the table, so
-    # "use the index" is a decision rather than a foregone conclusion — on a table of three rows
-    # Postgres sequentially scans everything and an EXPLAIN assertion would prove nothing about
-    # the indexes at all.
-    RUNS = 20
-    ROWS_PER_RUN = 500
-
+    let(:rows_per_run) { 500 }
     let(:repository) { create_repository }
-    let(:run) { create_test_run(repository: repository, total_specs_count: ROWS_PER_RUN) }
+    let(:run) { create_test_run(repository: repository, total_specs_count: rows_per_run) }
 
-    before do
-      seed(run)
-      (RUNS - 1).times { seed(create_test_run(repository: repository)) }
-
-      # Without stats the planner works off hard-coded defaults and its choice says nothing about
-      # the data. `ANALYZE` is legal inside the transaction the suite wraps each example in.
-      ActiveRecord::Base.connection.execute("ANALYZE spec_observations")
-    end
+    let(:slowest) { run.spec_observations.order(duration_seconds: :desc).limit(20) }
+    let(:failures) { run.spec_observations.where(outcome: "failed") }
+    # By `spec_file_path` — the file that *ran* the example — rather than by `file_path`, so a
+    # shared example group's time lands on the including file and not on a `spec/support/` helper.
+    let(:by_file) { run.spec_observations.group(:spec_file_path).select("spec_file_path, SUM(duration_seconds)") }
+    let(:one_file) { run.spec_observations.where(spec_file_path: "spec/f3_spec.rb") }
 
     # One run's worth of rows, spread over 25 files so a by-file aggregate has something to group.
     def seed(test_run)
       now = Time.current
-      rows = (1..ROWS_PER_RUN).map do |index|
+      rows = (1..rows_per_run).map do |index|
         {
           test_run_id: test_run.id, repository_id: test_run.repository_id,
           example_id: "./spec/f#{index % 25}_spec.rb[1:#{index}]",
@@ -41,54 +33,72 @@ RSpec.describe SpecObservation do
       SpecObservation.insert_all(rows)
     end
 
-    # Postgres's own plan for the exact SQL the relation would run, rather than
-    # `ActiveRecord::Relation#explain`, whose proxy renders the plan only when inspected.
-    def plan_for(relation)
-      ActiveRecord::Base.connection.select_values("EXPLAIN #{relation.to_sql}").join("\n")
-    end
+    # What the reads return needs one run's rows and nothing else — so this half seeds one run.
+    # The planner half below is the only part that has to pay for nineteen more.
+    describe "what they return" do
+      before { seed(run) }
 
-    describe "the 20 slowest examples" do
-      let(:relation) { run.spec_observations.order(duration_seconds: :desc).limit(20) }
-
-      it "returns them in order, scoped to the run" do
-        rows = relation.to_a
+      it "gives the 20 slowest examples, in order, scoped to the run" do
+        rows = slowest.to_a
 
         expect(rows.size).to eq(20)
         expect(rows.map(&:test_run_id).uniq).to eq([run.id])
         expect(rows.map(&:duration_seconds)).to eq(rows.map(&:duration_seconds).sort.reverse)
       end
 
-      it "reads it off the index rather than scanning the table" do
-        expect(plan_for(relation)).to include("index_spec_observations_on_test_run_id_and_duration_seconds")
-        expect(plan_for(relation)).not_to match(/Seq Scan on spec_observations/)
-      end
-    end
-
-    describe "the examples that failed" do
-      let(:relation) { run.spec_observations.where(outcome: "failed") }
-
-      it "returns this run's failures and nobody else's" do
-        expect(relation.count).to eq(ROWS_PER_RUN / 50)
-        expect(relation.pluck(:outcome).uniq).to eq(["failed"])
-        expect(relation.pluck(:test_run_id).uniq).to eq([run.id])
+      it "gives this run's failures and nobody else's" do
+        expect(failures.count).to eq(rows_per_run / 50)
+        expect(failures.pluck(:outcome).uniq).to eq(["failed"])
+        expect(failures.pluck(:test_run_id).uniq).to eq([run.id])
       end
 
-      it "reads them off the index rather than scanning the table" do
-        expect(plan_for(relation)).to include("index_spec_observations_on_test_run_id_and_outcome")
-        expect(plan_for(relation)).not_to match(/Seq Scan on spec_observations/)
-      end
-    end
-
-    # By `spec_file_path` — the file that *ran* the example — rather than by `file_path`, so a
-    # shared example group's time lands on the including file and not on a `spec/support/` helper.
-    describe "total duration by file" do
-      let(:relation) { run.spec_observations.group(:spec_file_path).select("spec_file_path, SUM(duration_seconds)") }
-
-      it "totals every file of the run and only the run" do
+      it "totals duration for every file of the run, and only the run" do
         totals = run.spec_observations.group(:spec_file_path).sum(:duration_seconds)
 
         expect(totals.size).to eq(25)
         expect(totals.values.sum).to be_within(0.001).of(run.spec_observations.sum(:duration_seconds))
+      end
+
+      it "narrows to one file of one run" do
+        expect(one_file.count).to eq(rows_per_run / 25)
+        expect(one_file.pluck(:spec_file_path).uniq).to eq(["spec/f3_spec.rb"])
+      end
+    end
+
+    # The only examples that need a populated table: a planner given three rows sequentially scans
+    # everything, and an EXPLAIN assertion over that would say nothing about the indexes at all. At
+    # twenty runs a single run is ~5% of the table, so "use the index" is a decision rather than a
+    # foregone conclusion.
+    describe "the plan Postgres chooses for each of them" do
+      let(:runs) { 20 }
+
+      before do
+        seed(run)
+        (runs - 1).times { seed(create_test_run(repository: repository)) }
+
+        # Without stats the planner works off hard-coded defaults and its choice says nothing about
+        # the data. `ANALYZE` is legal inside the transaction the suite wraps each example in.
+        ActiveRecord::Base.connection.execute("ANALYZE spec_observations")
+      end
+
+      # Postgres's own plan for the exact SQL the relation would run, rather than
+      # `ActiveRecord::Relation#explain`, whose proxy renders the plan only when inspected.
+      def plan_for(relation)
+        ActiveRecord::Base.connection.select_values("EXPLAIN #{relation.to_sql}").join("\n")
+      end
+
+      it "reads the slowest examples off the by-duration index" do
+        plan = plan_for(slowest)
+
+        expect(plan).to include("index_spec_observations_on_test_run_id_and_duration_seconds")
+        expect(plan).not_to match(/Seq Scan on spec_observations/)
+      end
+
+      it "reads the failures off the by-outcome index" do
+        plan = plan_for(failures)
+
+        expect(plan).to include("index_spec_observations_on_test_run_id_and_outcome")
+        expect(plan).not_to match(/Seq Scan on spec_observations/)
       end
 
       # Postgres picks the narrower `test_run_id` index here and hash-aggregates on top of it: the
@@ -96,16 +106,18 @@ RSpec.describe SpecObservation do
       # it nothing for a whole-run grouping. What matters for this criterion is that one run is
       # read through an index rather than by walking every run's rows, and that is what the plan
       # says. The composite index earns its place on the *narrowed* read below.
-      it "reads it off an index rather than scanning the table" do
-        expect(plan_for(relation)).to match(/Index Scan using index_spec_observations_on_test_run_id\w* on spec_observations/)
-        expect(plan_for(relation)).not_to match(/Seq Scan on spec_observations/)
+      it "reads the by-file totals off an index rather than scanning the table" do
+        plan = plan_for(by_file)
+
+        expect(plan).to match(/Index Scan using index_spec_observations_on_test_run_id\w* on spec_observations/)
+        expect(plan).not_to match(/Seq Scan on spec_observations/)
       end
 
       it "reads one file of one run straight off the by-file index" do
-        narrowed = run.spec_observations.where(spec_file_path: "spec/f3_spec.rb")
+        plan = plan_for(one_file)
 
-        expect(narrowed.count).to eq(ROWS_PER_RUN / 25)
-        expect(plan_for(narrowed)).to include("index_spec_observations_on_test_run_id_and_spec_file_path")
+        expect(plan).to include("index_spec_observations_on_test_run_id_and_spec_file_path")
+        expect(plan).not_to match(/Seq Scan on spec_observations/)
       end
     end
   end
