@@ -40,6 +40,12 @@ class SpecObservation < ApplicationRecord
   # the reader, and a sentence explaining a list's length must not be able to disagree with it.
   SLOWEST_LIMIT = 10
 
+  # How many spec FILES a by-file rollup returns. Its own constant rather than a reuse of
+  # `SLOWEST_LIMIT`: the two rank different populations — one run has far fewer files than
+  # examples — so a suite that wants twenty files ranked has no reason to want twenty examples
+  # ranked, and one number standing for both would make that a single edit nobody meant to make.
+  HEAVIEST_FILES_LIMIT = 10
+
   # Rows that carry a measurement. **The exclusion is in SQL, and it is load-bearing.**
   #
   # `duration_seconds` is nullable by design: `Ingest::ObservationRecorder#attributes` writes
@@ -90,6 +96,54 @@ class SpecObservation < ApplicationRecord
     where(test_run_id: test_run.id).pick(Arel.sql("COUNT(*)"), Arel.sql("COUNT(duration_seconds)"))
   end
 
+  # Where ONE run's wall clock went, rolled up by spec file, heaviest first — the question the
+  # class comment above says this table exists to answer and which nothing in `app/` had ever
+  # asked. A ranking of individual examples cannot answer it: at the 20,000-example design point
+  # `SLOWEST_LIMIT` shows 0.05% of the suite ordered by *individual* cost, and a file holding 400
+  # examples at 50ms each is twenty seconds of the run with every one of its rows far below the
+  # head. Outliers and concentration are different questions.
+  #
+  # Grouped on `spec_file_path` — the INCLUDING file — so a shared example group's time lands on
+  # the file that ran it rather than on a `spec/support/` helper (see "Two paths, two meanings"
+  # above, and the end-to-end pin in spec/requests/api/v1/ingest_spec.rb). The key cannot be null:
+  # `Ingest::ObservationRecorder#attributes` falls back to `file_path` for a producer old enough
+  # not to send one, precisely so no row drops out of a by-file total.
+  #
+  # @return [Array<Array>] `[spec_file_path, total_seconds, recorded_count, timed_count]` per file.
+  #
+  # == Why four columns and not one SUM
+  #
+  # `SUM` skips NULLs SILENTLY, and `duration_seconds` is nullable by design — an example that
+  # never ran records a faithful nil. Unlike `#slowest_in`, exclusion is not available here:
+  # dropping untimed rows changes each surviving group's own POPULATION, so a file with 400
+  # examples of which 200 went untimed would report a total that understates by half and say
+  # nothing about it. So every group carries how many of its rows reported a timing, counted in
+  # the same pass: `COUNT(*)` against `COUNT(duration_seconds)`, which counts non-nulls. One
+  # grouped aggregate for the whole panel — a per-file follow-up query would be a trip per row.
+  #
+  # == `pluck`, deliberately, and `NULLS LAST`
+  #
+  # Both are about the file whose examples were ALL untimed, whose SUM is SQL NULL:
+  #
+  # * `group(...).sum(:duration_seconds)` casts that NULL to `0.0` on the way back into Ruby, and
+  #   a surface handed a zero renders "0.00s" — a run that measured nothing wearing the spelling
+  #   of a measurement. `#duration_label` refuses exactly that reading one grain down. `pluck`
+  #   hands the nil back intact so the caller can tell the two apart.
+  # * `SUM(...) DESC` is NULLS FIRST in Postgres, so the naive ordering does not merely include
+  #   that file — it names it the heaviest file in the suite. Same hazard `scope :timed` documents
+  #   at the example grain, and the ordering has to answer it here because the row is not excluded.
+  #
+  # `spec_file_path` breaks ties, so a run whose files total equally has one stable order rather
+  # than one the planner picks afresh per request.
+  def self.file_durations_in(test_run, limit: HEAVIEST_FILES_LIMIT)
+    where(test_run_id: test_run.id)
+      .group(:spec_file_path)
+      .order(Arel.sql("SUM(duration_seconds) DESC NULLS LAST"), Arel.sql("spec_file_path ASC"))
+      .limit(limit)
+      .pluck(Arel.sql("spec_file_path"), Arel.sql("SUM(duration_seconds)"),
+             Arel.sql("COUNT(*)"), Arel.sql("COUNT(duration_seconds)"))
+  end
+
   # What to call this row on a surface that lists it. `name` is what the client sent as the
   # example's full description and is the only label a reader recognises — but it is nullable
   # (`Ingest::ObservationRecorder#attributes` writes it through `presence_of`, so a producer that
@@ -110,6 +164,14 @@ class SpecObservation < ApplicationRecord
 
   # This row's duration, rendered.
   #
+  # Guarded on nil even though `.timed` excludes those rows from every ranking: the column is
+  # nullable and this is a public method on the record, so an ungated `nil` here would format as
+  # "0.00s" — "the client sent no timing" made byte-identical to "this test took no time".
+  def duration_label = self.class.humanized_duration(duration_seconds)
+
+  # A number of seconds at THIS table's grain, rendered — the one formatting seam for every
+  # duration read off these rows, whether it is one example's measurement or a whole file's total.
+  #
   # Per-example durations sit two orders of magnitude below the run and shard figures the rest of
   # the dashboard prints, and `TestRun.humanized_seconds` rounds to a tenth of a second: a real
   # 0.04s measurement renders "0.0s" through it. At the head of a list captioned "slowest", a
@@ -120,14 +182,14 @@ class SpecObservation < ApplicationRecord
   # A minute and over delegates to `TestRun.humanized_seconds`, so a four-minute example reads
   # "4m 12s" — the same words this page already gives a run or a shard of that length.
   #
-  # Guarded on nil even though `.timed` excludes those rows from every ranking: the column is
-  # nullable and this is a public method on the record, so an ungated `nil` here would format as
-  # "0.00s" — "the client sent no timing" made byte-identical to "this test took no time".
-  def duration_label
-    return "not reported" if duration_seconds.nil?
-    return TestRun.humanized_seconds(duration_seconds) if duration_seconds >= 60
-    return "< 0.01s" if duration_seconds.positive? && duration_seconds < 0.01
+  # A nil says so in words. Both callers can produce one and they mean the same thing: an example
+  # the client never timed, and a whole file none of whose examples were timed — in both cases
+  # nothing was measured, which is not a zero and must not be spelled like one.
+  def self.humanized_duration(seconds)
+    return "not reported" if seconds.nil?
+    return TestRun.humanized_seconds(seconds) if seconds >= 60
+    return "< 0.01s" if seconds.positive? && seconds < 0.01
 
-    format("%.2fs", duration_seconds)
+    format("%.2fs", seconds)
   end
 end

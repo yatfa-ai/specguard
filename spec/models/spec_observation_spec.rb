@@ -59,6 +59,19 @@ RSpec.describe SpecObservation do
         expect(totals.values.sum).to be_within(0.001).of(run.spec_observations.sum(:duration_seconds))
       end
 
+      # The same aggregate through the read the panel actually makes. Asserted against the run's
+      # own total for the reason the example above is: a rollup that loses or double-counts a
+      # file's rows is still a plausible-looking list of files, and the sum is what catches it.
+      it "rolls the whole run up by file through the read the panel makes" do
+        files = described_class.file_durations_in(run, limit: 100)
+
+        expect(files.size).to eq(25)
+        expect(files.sum { |_path, total, _recorded, _timed| total })
+          .to be_within(0.001).of(run.spec_observations.sum(:duration_seconds))
+        # And every row the run wrote is under exactly one of those files.
+        expect(files.sum { |_path, _total, recorded, _timed| recorded }).to eq(rows_per_run)
+      end
+
       it "narrows to one file of one run" do
         expect(one_file.count).to eq(rows_per_run / 25)
         expect(one_file.pluck(:spec_file_path).uniq).to eq(["spec/f3_spec.rb"])
@@ -85,6 +98,21 @@ RSpec.describe SpecObservation do
       # `ActiveRecord::Relation#explain`, whose proxy renders the plan only when inspected.
       def plan_for(relation)
         ActiveRecord::Base.connection.select_values("EXPLAIN #{relation.to_sql}").join("\n")
+      end
+
+      # The plan for whatever SQL the block causes to be run against this table — for a read whose
+      # projection is not on the relation (a `pluck` of aggregates) and therefore has no `to_sql`
+      # worth EXPLAINing.
+      def plan_for_actual_sql
+        captured = nil
+        subscriber = ActiveSupport::Notifications.subscribe("sql.active_record") do |_, _, _, _, payload|
+          captured ||= payload[:sql] if payload[:name] != "SCHEMA" && payload[:sql].to_s.include?("spec_observations")
+        end
+        ActiveRecord::Base.connection.unprepared_statement { yield }
+
+        ActiveRecord::Base.connection.select_values("EXPLAIN #{captured}").join("\n")
+      ensure
+        ActiveSupport::Notifications.unsubscribe(subscriber)
       end
 
       it "reads the slowest examples off the by-duration index" do
@@ -117,6 +145,22 @@ RSpec.describe SpecObservation do
         plan = plan_for(one_file)
 
         expect(plan).to include("index_spec_observations_on_test_run_id_and_spec_file_path")
+        expect(plan).not_to match(/Seq Scan on spec_observations/)
+      end
+
+      # The plan for the SQL `.file_durations_in` ACTUALLY runs, captured off the wire rather than
+      # EXPLAINed from a hand-written copy of it — a copy is a second definition of the query that
+      # can drift from the one the panel makes, and a plan assertion against the copy would then be
+      # asserting nothing about the page. `unprepared_statement` inlines the bind, because `EXPLAIN`
+      # cannot be handed a `$1`.
+      #
+      # The ORDER BY and LIMIT this read adds over the bare grouping above sort the AGGREGATE'S
+      # output — one row per file, not per example — so what has to stay true at the design point is
+      # that one run's rows are still reached through an index rather than by walking every run's.
+      it "reads the panel's by-file rollup off an index rather than scanning the table" do
+        plan = plan_for_actual_sql { described_class.file_durations_in(run) }
+
+        expect(plan).to match(/Index Scan using index_spec_observations_on_test_run_id\w* on spec_observations/)
         expect(plan).not_to match(/Seq Scan on spec_observations/)
       end
     end
@@ -257,6 +301,98 @@ RSpec.describe SpecObservation do
         observe(run, duration: 1.0, line_number: 1)
 
         expect(described_class.timing_coverage_in(run)).to eq([1, 1])
+      end
+    end
+
+    describe ".file_durations_in" do
+      it "totals each file's examples, heaviest file first" do
+        observe(run, duration: 1.5, line_number: 1, spec_file_path: "spec/models/order_spec.rb")
+        observe(run, duration: 2.5, line_number: 2, spec_file_path: "spec/models/order_spec.rb")
+        observe(run, duration: 9.0, line_number: 3, spec_file_path: "spec/models/refund_spec.rb")
+        observe(run, duration: 0.5, line_number: 4, spec_file_path: "spec/models/user_spec.rb")
+
+        expect(described_class.file_durations_in(run)).to eq(
+          [["spec/models/refund_spec.rb", 9.0, 1, 1],
+           ["spec/models/order_spec.rb", 4.0, 2, 2],
+           ["spec/models/user_spec.rb", 0.5, 1, 1]]
+        )
+      end
+
+      # The row is grouped by the file that RAN the example, so a shared example group's time lands
+      # on each including file rather than on the `spec/support/` helper that defines it — the rule
+      # `Ingest::ObservationRecorder` writes `spec_file_path` for, pinned end-to-end in
+      # spec/requests/api/v1/ingest_spec.rb.
+      it "attributes a shared example group's time to the file that included it" do
+        observe(run, duration: 1.5, line_number: 4, file_path: "spec/support/shared_examples.rb",
+                     spec_file_path: "spec/models/order_spec.rb",
+                     example_id: "./spec/models/order_spec.rb[1:1:1]")
+        observe(run, duration: 2.5, line_number: 4, file_path: "spec/support/shared_examples.rb",
+                     spec_file_path: "spec/models/refund_spec.rb",
+                     example_id: "./spec/models/refund_spec.rb[1:1:1]")
+
+        files = described_class.file_durations_in(run)
+
+        expect(files.map(&:first)).to eq(["spec/models/refund_spec.rb", "spec/models/order_spec.rb"])
+        expect(files.map(&:first)).not_to include("spec/support/shared_examples.rb")
+      end
+
+      # THE example this read exists to get right, and the one the obvious implementation fails
+      # twice over. `group(...).sum(:duration_seconds)` casts a NULL sum to `0.0` on the way back
+      # into Ruby, and `SUM(...) DESC` is NULLS FIRST in Postgres — so a file NONE of whose
+      # examples were timed comes back as a measured zero AND is named the heaviest file in the
+      # run. Both halves are asserted because they fail differently.
+      it "hands back a nil for a file that reported no timing at all, sorted below every total" do
+        observe(run, duration: nil, line_number: 1, spec_file_path: "spec/models/never_ran_spec.rb")
+        observe(run, duration: nil, line_number: 2, spec_file_path: "spec/models/never_ran_spec.rb")
+        observe(run, duration: 0.25, line_number: 3, spec_file_path: "spec/models/quick_spec.rb")
+
+        files = described_class.file_durations_in(run)
+
+        expect(files).to eq([["spec/models/quick_spec.rb", 0.25, 1, 1],
+                             ["spec/models/never_ran_spec.rb", nil, 2, 0]])
+        expect(files.last[1]).to be_nil
+      end
+
+      # A file whose examples were only partly timed has a total covering only part of it. The
+      # total alone cannot say so — it is an ordinary-looking number — so the two counts come back
+      # in the same pass, off the same rows, rather than as a second question a caller might not
+      # think to ask.
+      it "counts each file's rows against the ones that carried a duration" do
+        observe(run, duration: 4.0, line_number: 1, spec_file_path: "spec/models/order_spec.rb")
+        observe(run, duration: nil, line_number: 2, spec_file_path: "spec/models/order_spec.rb")
+        observe(run, duration: nil, line_number: 3, spec_file_path: "spec/models/order_spec.rb")
+
+        expect(described_class.file_durations_in(run)).to eq([["spec/models/order_spec.rb", 4.0, 3, 1]])
+      end
+
+      it "reads the run it was asked about and no other" do
+        other = create_test_run(repository: repository, commit_sha: "0ther")
+        observe(run, duration: 1.0, line_number: 1, spec_file_path: "spec/ours_spec.rb")
+        observe(other, duration: 99.0, line_number: 1, spec_file_path: "spec/theirs_spec.rb")
+
+        expect(described_class.file_durations_in(run)).to eq([["spec/ours_spec.rb", 1.0, 1, 1]])
+      end
+
+      it "caps at the limit it was given, and defaults to the panel's own" do
+        12.times { |i| observe(run, duration: i.to_f + 1, line_number: i + 1, spec_file_path: "spec/f#{i}_spec.rb") }
+
+        expect(described_class.file_durations_in(run).size).to eq(described_class::HEAVIEST_FILES_LIMIT)
+        expect(described_class.file_durations_in(run, limit: 3).map(&:first))
+          .to eq(["spec/f11_spec.rb", "spec/f10_spec.rb", "spec/f9_spec.rb"])
+      end
+
+      # Two files totalling the same is ordinary — a run where several files hold one fast example
+      # each — so the order has to be total, or two requests against unchanged rows list them
+      # differently.
+      it "breaks ties by path, so equal totals have one order" do
+        observe(run, duration: 1.5, line_number: 1, spec_file_path: "spec/b_spec.rb")
+        observe(run, duration: 1.5, line_number: 2, spec_file_path: "spec/a_spec.rb")
+
+        expect(described_class.file_durations_in(run).map(&:first)).to eq(["spec/a_spec.rb", "spec/b_spec.rb"])
+      end
+
+      it "reads no files for a run that recorded nothing" do
+        expect(described_class.file_durations_in(run)).to eq([])
       end
     end
 

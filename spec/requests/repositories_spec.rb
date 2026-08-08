@@ -1492,6 +1492,15 @@ RSpec.describe "Repository registration and API keys", type: :request do
       # suite sizes in spec/requests/repository_slowest_examples_spec.rb, since that is the failure
       # an absolute count here cannot distinguish from an ordinary widening.
       #
+      # RECOUNTED AT 16 by SPGD-275, which added the "Heaviest spec files" panel: ONE further read
+      # of `spec_observations` for the whole page — a single grouped aggregate rolling the run's
+      # wall clock up by file, four columns in one pass rather than a SUM followed by a COUNT (see
+      # `SpecFileDurations`). Issued on this fixture for the same reason the two above are: the run
+      # recorded no examples, the aggregate comes back empty and the panel renders nothing. The
+      # per-file panel's own N+1 guard — the failure an absolute count here cannot tell from an
+      # ordinary widening — is the equality across two suite sizes in
+      # spec/requests/repository_spec_file_durations_spec.rb.
+      #
       # QUERY-CACHE HITS ARE COUNTED, unlike the panel's other budget guards. A repeated identical
       # SELECT inside one request costs no round trip and is invisible to a `payload[:cached]`
       # filter — which is exactly how a dropped `@shard_durations ||=` would slip through, and
@@ -1509,7 +1518,7 @@ RSpec.describe "Repository registration and API keys", type: :request do
         # first-request-only work cannot land in it.
         get repository_path(repository)
 
-        expect(count_all_queries { get repository_path(repository) }).to eq(15)
+        expect(count_all_queries { get repository_path(repository) }).to eq(16)
         # And the page really did render the thing being counted — an absolute count is satisfied
         # by a page that renders nothing at all.
         expect(distribution.all("li").size).to eq(4)

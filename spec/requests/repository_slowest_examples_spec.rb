@@ -248,8 +248,12 @@ RSpec.describe "Repository slowest tests", type: :request do
       expect(rows.size).to eq(SpecObservation::SLOWEST_LIMIT)
       expect(large_queries.size).to eq(small_queries.size)
       # An absolute ceiling too: equality alone would still hold if both pages regressed to a
-      # fixed-but-wasteful number of passes over the same table. One ranking, one aggregate.
-      expect(large_queries.size).to eq(2)
+      # fixed-but-wasteful number of passes over the same table. This panel is two of these — one
+      # ranking, one aggregate — and the third is the "Heaviest spec files" panel's single grouped
+      # rollup, whose own budget is asserted in spec/requests/repository_spec_file_durations_spec.rb.
+      # Page-wide rather than panel-scoped on purpose: what must not grow is the number of times
+      # ONE page walks this table, and only a count taken across the whole request can say that.
+      expect(large_queries.size).to eq(3)
     end
   end
 

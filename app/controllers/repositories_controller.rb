@@ -153,6 +153,17 @@ class RepositoriesController < ApplicationController
     #
     # Two bounded queries, neither growing with the size of the suite: see `SlowestExamples`.
     @slowest_examples = SlowestExamples.for(@latest_test_run) if @latest_test_run
+    # The other half of the same question, off the same rows of the same run: not which individual
+    # examples were slow but which FILES the wall clock went into. Neither panel derives the other
+    # — a ten-row ranking by individual cost cannot surface a file that is heavy because it holds
+    # four hundred cheap examples — so they are two reads, side by side, each stating its own basis.
+    #
+    # Guarded identically, and on nothing else: with no run there is nothing to roll up. Whether
+    # the run recorded examples, and whether any of them were timed, are questions the object
+    # answers so the panel branches on one read rather than the controller taking a second.
+    #
+    # ONE query, not growing with the size of the suite: see `SpecFileDurations`.
+    @spec_file_durations = SpecFileDurations.for(@latest_test_run) if @latest_test_run
     # Set by ApiKeysController#create and readable exactly once — see ApiKeysController.
     @revealed_token = flash[:revealed_api_key]
     @revealed_token_name = flash[:revealed_api_key_name]
