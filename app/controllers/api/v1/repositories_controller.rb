@@ -98,6 +98,22 @@ class Api::V1::RepositoriesController < Api::BaseController
       # than in place of it, so nothing a client reads today changes meaning.
       duration_seconds: test_run.duration_seconds,
       shards: serialized_shards(test_run),
+      # `TestRun#suite_size_measured?`, the same predicate `serialized_history_row` serves below and
+      # for the same reason: a run that reported zero tests has a `total_specs` but not a
+      # measurement, and a difference taken against it describes the report rather than the suite.
+      # Served from the predicate and never re-derived inline from `total_specs`, so the endpoint,
+      # the history row and the panel cannot drift on what "measured" means.
+      #
+      # It belongs HERE and not only on the history row, because in the unfiltered window
+      # `history[0]` is the SAME ROW as this one — the identity `docs/DEVELOPMENT.md` pins and the
+      # ordering comment on `history_runs` protects. Withholding the key from one of the two blocks
+      # let a single response body describe one row twice and disagree with itself: `history[0]`
+      # saying the suite was never measured while `latest_run`, thirty lines up, could not say it.
+      #
+      # Present on EVERY response that has a run — never absent, never null — on the rule
+      # `timed_shard_count` follows: a guard a client has to test for before it can trust is not a
+      # guard. A repository whose CI never reported has no `latest_run` block at all.
+      suite_size_measured: test_run.suite_size_measured?,
       ingested_at: test_run.created_at.iso8601
     }
   end

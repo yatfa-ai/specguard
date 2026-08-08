@@ -128,6 +128,7 @@ here is the response with **no** parameter.
         { "shard_id": "4", "duration_seconds": 60.0, "total_specs": 5000 }
       ]
     },
+    "suite_size_measured": true,
     "ingested_at": "2026-08-07T11:01:58Z"
   },
   "history_window": {
@@ -194,7 +195,8 @@ reported" from a real zero, because a client cannot tell them apart after the fa
 | `latest_run.shards.rows` / `.balanced_wall_clock_seconds` / `.wall_clock_excess_seconds` | the wall clock **cannot honestly be decomposed yet**, for one of two reasons the payload does not distinguish — see below. All three null *together*, never individually: they are three readings of one decomposition, and a floor without the rows it was taken over is a figure a client cannot check. `rows` is `null` rather than a partial list, because a list ordered "slowest first" that is missing shards names the wrong head. Note that `per_shard` below is **not** null in this state: it claims no ordering, so nothing about it goes wrong when a shard is silent. |
 | `latest_run.shards.per_shard[].shard_id` | the client did not name that slice. A positional index would be a name nothing in CI answers to, and it would point at a different slice on the next run. |
 | `latest_run.shards.per_shard[].duration_seconds` | that shard reported no timing. `total_specs` beside it is still a real count, and `0` there is a real count too — a shard that loaded no specs, not a shard that said nothing. |
-| `history[].branch` / `.duration_seconds` / `.annotated_ratio` | exactly what the same-named `latest_run` field means. A history row is the same row `latest_run` serializes, minus the per-shard cost figures. |
+| `latest_run.suite_size_measured` | **never `null`**, and never absent from a `latest_run` block. `false` — not `null` — is what a run that reported **zero tests** carries: it has a `total_specs` but not a measurement. A guard a client must first test for the presence of is not a guard, which is the rule `history[].timed_shard_count` follows too. A repository whose CI never reported has no `latest_run` block at all, and that is the `null` this row is not. |
+| `history[].branch` / `.duration_seconds` / `.annotated_ratio` | exactly what the same-named `latest_run` field means. A history row and `latest_run` serialize the same shape of row, differing only in the composition detail each carries: a row trades `latest_run`'s `shards` sub-block — the per-shard cost figures — for the flat `shard_count` and `timed_shard_count` it can afford over a whole window. `suite_size_measured` is on **both**, which is what stops one response body from describing one row twice and disagreeing with itself. |
 | `branches` | **never `null`** — `[]` instead, by the list rule below. No field on a row is nullable either: a row exists because a branch has runs, so `name`, `run_count` and `run_count_capped` are always present. |
 | `branches_window` | **never `null`**, and served on every request — with or without `?branch=`, and including one whose `branches` came back empty. Its fields are bounds on the walk, which are facts about how SpecGuard looked rather than about what it found, so there is no state in which they are unknown. |
 
@@ -365,10 +367,15 @@ Four things worth knowing before you use it:
   No `?branch=` value matches those rows, because pooling every anonymous run from every branch and
   every machine into one "series" would be fiction. They still appear in the unfiltered window.
 
-Before differencing two rows, check both:
+Before differencing two rows, check all three. `suite_size_measured` is served on **both** blocks —
+every history row and `latest_run` — so the first check is available wherever you took the figures
+from. The two shard counts are history-row fields only; `latest_run` answers the same composition
+question through its `shards` sub-block:
 
 - `suite_size_measured` — `false` when the run reported **zero tests**. It has a count but not a
-  measurement, and a difference taken against it describes the report rather than the suite.
+  measurement, and a difference taken against it describes the report rather than the suite. On
+  `latest_run` as well as on every history row, so differencing the newest run against an older one
+  can apply the check to both operands rather than to whichever of them arrived as a row.
 - `shard_count` — how many shards the row was assembled from. A run's `total_specs` is the SUM over
   the shards recorded *so far*, so differencing an in-flight sharded run against a complete one
   reports a deletion no commit made. Equal counts is the same rule `TestRun#assembled_like?`
