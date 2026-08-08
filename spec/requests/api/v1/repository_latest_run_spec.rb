@@ -1153,6 +1153,37 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
       [main_runs, feature_runs]
     end
 
+    # Used by the two examples below that compare one response against another response — and by
+    # nothing else in this file. Both of those issue TWO real requests and assert the second is
+    # identical to the first; `api_key.last_used_at` is the one field that is *supposed* to differ
+    # between them, so it is the one field they exclude.
+    #
+    # Why it moves: every authenticated request bumps the key (`Api::BaseController` calls
+    # `ApiKey#touch_last_used!`), and `Api::V1::RepositoriesController#show` serializes it with
+    # argument-less `iso8601` — SECOND precision. So the value changes once per second no matter
+    # how fast the two requests are, and any pair that straddles a second boundary disagrees on it.
+    # That made this file randomly red (~1 in 5 full-file runs, never in isolation) on tickets that
+    # touched none of this, for the endpoint behaving exactly as specified.
+    #
+    # The contract those examples assert is "a blank/filtered branch param changes nothing ELSE
+    # about the payload". A field that advances because a second request genuinely happened was
+    # never part of that contract, so asserting it was asserting something the endpoint does not
+    # promise. Excluded here rather than the three fixes that look easier:
+    #
+    #   * `freeze_time` / `travel_to` — hides the exclusion at the call site, and would also
+    #     suppress a genuine regression in `last_used_at` being bumped at all;
+    #   * loosening `eq` to `include` / `match` — destroys the "changes NOTHING else" assertion
+    #     that is the entire reason both examples exist;
+    #   * widening the `iso8601` precision in `app/` — the serialization is a published API
+    #     contract, and a spec's timing problem does not get fixed on the wire.
+    #
+    # Deliberately one named key off one block, not a general "drop the volatile stuff" scrub:
+    # `api_key.name` and every other key in the payload stay under strict `eq`, so these examples
+    # still go red for any other field that moves. Do not widen this, and do not restore the field.
+    def except_last_used_at(body)
+      body.merge("api_key" => body.fetch("api_key").except("last_used_at"))
+    end
+
     it "sees the defect: the unfiltered window holds no main rows at all, so filtering it answers []" do
       branch_starved_repository
 
@@ -1262,7 +1293,7 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
       blank = get_repository(query: { branch: "" })
       absent = get_repository
 
-      expect(blank).to eq(absent)
+      expect(except_last_used_at(blank)).to eq(except_last_used_at(absent))
       expect(blank["history_window"]).to include("branch_scope" => "all_branches", "branch" => nil,
                                                  "limit" => 10)
       expect(blank["history"].length).to eq(10)
@@ -1327,8 +1358,8 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
       filtered = get_repository(query: { branch: "main" })
       unfiltered = get_repository
 
-      expect(filtered.values_at("repository", "api_key", "latest_run"))
-        .to eq(unfiltered.values_at("repository", "api_key", "latest_run"))
+      expect(except_last_used_at(filtered).values_at("repository", "api_key", "latest_run"))
+        .to eq(except_last_used_at(unfiltered).values_at("repository", "api_key", "latest_run"))
       expect(filtered.dig("latest_run", "commit_sha")).to eq(feature_runs.last.commit_sha)
       expect(filtered.dig("latest_run", "branch")).to eq(feature_runs.last.branch)
       expect(filtered.dig("latest_run", "shards")).to be_nil
