@@ -176,6 +176,23 @@ class RepositoriesController < ApplicationController
     # Guarded identically, and on nothing else. ONE query, not growing with the size of the suite:
     # see `SpecDirectoryDurations`.
     @spec_directory_durations = SpecDirectoryDurations.for(@latest_test_run) if @latest_test_run
+    # The same areas, asked of TWO runs instead of one: not which area carries the time but which
+    # area got bigger or smaller since the previous run ON THIS BRANCH. `@previous_test_run` above
+    # is that run and is already in memory, so riding it costs nothing and keeps this panel on the
+    # one comparison the page is allowed to make — `@recent_test_runs` is one interleaved history
+    # across every branch, where two consecutive rows are routinely two different branches.
+    #
+    # Guarded on both sides existing and on nothing else. Every further condition — did each side
+    # measure a suite, were they assembled the same way, did each actually write per-example rows —
+    # belongs to `SpecDirectoryGrowth`, which names WHICH of them failed so the panel can say so.
+    # Those first three are decided before any query is issued, so a page with nothing to compare
+    # asks `spec_observations` nothing at all.
+    #
+    # ONE query when there is a comparison to make, none when there is not, and neither grows with
+    # the size of the suite: see `SpecDirectoryGrowth`.
+    if @latest_test_run && @previous_test_run
+      @spec_directory_growth = SpecDirectoryGrowth.for(@latest_test_run, @previous_test_run)
+    end
     # Set by ApiKeysController#create and readable exactly once — see ApiKeysController.
     @revealed_token = flash[:revealed_api_key]
     @revealed_token_name = flash[:revealed_api_key_name]
