@@ -393,10 +393,12 @@ class Api::V1::RepositoriesController < Api::BaseController
   # FLAT and side by side rather than under a `coverage:` sub-object, because the row is otherwise
   # flat and there are only two of them to keep straight.
   #
-  # Both are cheap here only because `ShardCountPreloading` primes both from ONE grouped aggregate
-  # over the whole window (see `history_runs`). Anything further down `shard_totals` —
-  # `machine_seconds`, `MAX(updated_at)` — is still one `pick` per row, which is the concrete
-  # reason as well as the semantic one that this row stops at the two counts.
+  # The three are cheap here only because `ShardCountPreloading` primes all of them from ONE grouped
+  # aggregate over the whole window (see `history_runs`). What is left further down `shard_totals` —
+  # `MAX(updated_at)` — is still one `pick` per row. The reason this row stops at the two counts is
+  # now the semantic one alone: `machine_seconds` became affordable on a window when the repositories
+  # grid needed it, and a client differencing two rows still needs to know they were assembled from
+  # the same number of parts, not what each part cost.
   #
   # `suite_size_measured` is `TestRun#suite_size_measured?` — a run that reported zero tests has a
   # count but not a measurement, and a difference taken against it describes the report rather than
@@ -444,11 +446,11 @@ class Api::V1::RepositoriesController < Api::BaseController
   # ONE grouped aggregate for the whole window primes BOTH of the row's counts on every row —
   # `COUNT(*)` for `shard_count` and `COUNT(duration_seconds)` for `timed_shard_count`, two columns
   # of the same `GROUP BY` rather than two queries — see `ShardCountPreloading`, shared with the
-  # human panel, which asks the same question of the same rows and reads only the first of the two
-  # facts the aggregate carries. So `history` costs two queries at ten rows and the same two at one,
-  # instead of one `pick` per row. A narrowed window primes identically: `preload_shard_counts` keys
-  # off the ids it is handed and does not care how they were selected, so `?branch=` costs the same
-  # two queries at thirty rows.
+  # human panel, which asks the same question of the same rows and reads only the first of the three
+  # facts the aggregate now carries. So `history` costs two queries at ten rows and the same two at
+  # one, instead of one `pick` per row. A narrowed window primes identically: `preload_shard_counts`
+  # keys off the ids it is handed and does not care how they were selected, so `?branch=` costs the
+  # same two queries at thirty rows.
   #
   # The branch predicate is passed INTO the model call, and that placement is the whole feature. The
   # `WHERE` and the `LIMIT` have to be one query: bounding first and filtering the result is what
