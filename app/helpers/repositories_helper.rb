@@ -299,6 +299,57 @@ module RepositoriesHelper
       "#{slowest_examples_unreported_clause(slowest_examples)}"
   end
 
+  # == The opened spec file's basis sentence
+
+  # What the drill-down list under a single spec file IS — how much of the file it shows, and
+  # whether it is ordered by anything.
+  #
+  # Two axes, and the four sentences they make are written out rather than assembled from clauses,
+  # because three of the four are wrong in a way only the fourth's wording hides.
+  #
+  # TRUNCATION is the axis every capped list on this page discloses: the cap is
+  # `SpecObservation::FILE_EXAMPLES_LIMIT` and a reader cannot see it, so a list whose length
+  # happens to equal it reads as the whole file. It is stated whether or not anything was cut, for
+  # the reason `SpecFileDurations#truncated?` gives one grain up — "all 12 examples" and "the 50
+  # heaviest of 340" are the two facts, and a bare list is neither.
+  #
+  # ORDER is the axis that is new here. Every sibling list on this page EXCLUDES untimed rows, so
+  # "slowest first" is unconditionally true of them; this one lists them, because a file's untimed
+  # examples are part of that file's population and hiding them would leave the list disagreeing
+  # with the `recorded_count` printed beside it. On a file that reported no timing at all there is
+  # therefore a list and no ranking — every row ties — and "slowest first" over it would be
+  # promising an order nothing measured. It says "in the order this run recorded them" instead,
+  # which is what `id` ascending actually gives.
+  #
+  # The truncated-and-unranked sentence is the one this exists for: "the 50 slowest of 340" is
+  # false on a file nothing timed, and it is the sentence a reader is most likely to act on.
+  #
+  # The two axes are not independent where they MEET, which is why there are five sentences and not
+  # four. A truncated file that timed SOME of its examples runs the timed rows out before the cap
+  # does, and the page then ends in untimed rows: on 340 examples of which 40 are timed, the list
+  # is 40 ranked rows followed by 10 of 300 that nothing ranked. "The 50 slowest" is false of that
+  # page twice over — those last ten are not the slowest of anything, and the 290 untimed rows it
+  # does not mention are not on the page at all. `#lists_untimed?` is that meeting, and it gets its
+  # own sentence naming both populations and what was cut from each.
+  def spec_file_examples_scope_sentence(examples)
+    recorded = number_with_delimiter(examples.recorded_count)
+    shown = number_with_delimiter(examples.rows.size)
+    plural = "example".pluralize(examples.recorded_count)
+
+    if examples.any_timed?
+      return "All #{recorded} #{plural} this run recorded in it, slowest first." unless examples.truncated?
+      return spec_file_examples_mixed_tail_sentence(examples) if examples.lists_untimed?
+
+      "The #{shown} slowest of the #{recorded} examples this run recorded in it, slowest first."
+    elsif examples.truncated?
+      "The first #{shown} of the #{recorded} examples this run recorded in it, in the order this " \
+        "run recorded them — nothing here was timed, so there is no order to rank them in."
+    else
+      "All #{recorded} #{plural} this run recorded in it, in the order this run recorded them — " \
+        "nothing here was timed, so there is no order to rank them in."
+    end
+  end
+
   # == The "Tests whose outcome changed" panel's sentences
 
   # What window every figure on the panel was drawn from — how many runs, on which branch, and how
@@ -536,6 +587,23 @@ module RepositoriesHelper
       "#{number_with_delimiter(unstable.examined_count)} that failed fewest times were the ones " \
       "compared across runs, and the other #{number_with_delimiter(unstable.unexamined_count)} " \
       "#{unstable.unexamined_count == 1 ? "is" : "are"} not represented above."
+  end
+
+  # The truncated file whose timed rows ran out before the cap did — a ranked head and an unranked
+  # tail on one page, and the only shape here where the list shows part of BOTH populations.
+  #
+  # It counts each population separately because one figure cannot describe both: the timed rows
+  # are ranked and complete (a listed untimed row means the cap never reached the timed ones), the
+  # untimed rows are a sample of a population nothing ordered, and the remainder is the part of the
+  # file this page does not have. Said as one number — "the 50 slowest" — every one of those three
+  # facts is lost and the first is stated backwards.
+  def spec_file_examples_mixed_tail_sentence(examples)
+    "The #{number_with_delimiter(examples.shown_timed_count)} timed examples of the " \
+      "#{number_with_delimiter(examples.recorded_count)} this run recorded in it, slowest first, " \
+      "then #{number_with_delimiter(examples.shown_untimed_count)} of the " \
+      "#{number_with_delimiter(examples.untimed_count)} that reported no duration and nothing " \
+      "ranked — the remaining #{number_with_delimiter(examples.untimed_omitted_count)} are not " \
+      "shown."
   end
 
   # How much of the run the breakdown after it covers. Worded "Every one of the …" when it covers

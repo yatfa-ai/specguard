@@ -76,6 +76,35 @@ class SpecObservation < ApplicationRecord
   # populations makes it tempting to break.
   RETIMED_DIRECTORIES_LIMIT = 10
 
+  # How many EXAMPLES a single spec file's drill-down returns. Its own constant, by the rule the
+  # five above it obey and for a difference that is the reverse of theirs: those cap RANKINGS —
+  # lists whose whole purpose is to show the head of a population and stop — and this caps a
+  # LISTING, the rows of one file a reader has already picked out of such a ranking. A reader who
+  # opened a file to get past a top ten is not served by another top ten, and one file's examples
+  # are a far smaller population than the run's, so this sits well above `SLOWEST_LIMIT` and is not
+  # it under another name. Named because the panel's caption reports the figure back to the reader,
+  # and a sentence explaining a list's length must not be able to disagree with it.
+  FILE_EXAMPLES_LIMIT = 50
+
+  # What the drill-down's caption has to say ABOUT the rows under it, counted in the SAME read that
+  # returns them — `COUNT(*) OVER ()` and `COUNT(duration_seconds) OVER ()`, which count non-nulls.
+  #
+  # Windows are evaluated after the WHERE and before the LIMIT, so both figures cover the whole
+  # FILE however few rows come back: the cap is disclosed against the file's real population rather
+  # than against itself, and the timing coverage is the file's rather than the listed head's.
+  #
+  # Riding on the listed rows rather than taken as a second aggregate, and that is available here
+  # in a way it was not for `SlowestExamples`. That panel's ranking EXCLUDES untimed rows in the
+  # WHERE clause, so no window over it could ever have counted them and its coverage had to be a
+  # second read. This list excludes nothing — the file's untimed examples ARE part of what it shows
+  # — so the population the caption describes is exactly the population the window sees, and one
+  # round trip gives a caption that cannot come to describe a different row set from the one below
+  # it. It also costs nothing: the ORDER BY is on `duration_seconds`, which no index here leads on,
+  # so every one of the file's rows is read before the LIMIT can be applied whether these two
+  # counters ride along or not.
+  FILE_POPULATION_COUNTS = "COUNT(*) OVER () AS file_recorded_count, " \
+                           "COUNT(duration_seconds) OVER () AS file_timed_count"
+
   # **The retention rule.** How many runs OF ONE BRANCH keep their rows; everything older than the
   # Nth most recent run on that branch is deleted by {Ingest::ObservationPruner} after the ingest
   # that made it the N+1th. Until this constant existed, history here was retained by *omission* —
@@ -97,7 +126,7 @@ class SpecObservation < ApplicationRecord
   # So the retention is a MULTIPLE of the floor and not the floor — twice it, which leaves a
   # whole window of slack between the deepest read and the first deletion.
   #
-  # And it is its own constant rather than a reference at every call site, by the rule the four
+  # And it is its own constant rather than a reference at every call site, by the rule the six
   # `_LIMIT`s above already obey: `TRAJECTORY_LIMIT` bounds how far a CHART is DRAWN, this bounds
   # how far the DATA is KEPT. They move for different reasons — a panel showing fifty points is a
   # display decision, keeping fifty runs of 20,000 rows per branch is a storage one — and one
@@ -276,6 +305,53 @@ class SpecObservation < ApplicationRecord
       .pluck(Arel.sql("spec_file_path"), Arel.sql("SUM(duration_seconds)"),
              Arel.sql("COUNT(*)"), Arel.sql("COUNT(duration_seconds)"),
              Arel.sql("COUNT(*) OVER ()"))
+  end
+
+  # ONE spec file's examples in ONE run, slowest first — the rung BELOW the rollup above, and the
+  # read `index_spec_observations_on_test_run_id_and_spec_file_path` exists for. The by-file rollup
+  # says `spec/models/order_spec.rb` cost six minutes across 340 examples; nothing until now could
+  # say WHICH 340, at a design point where every panel on the page is a capped ten.
+  #
+  # == It leads with the by-file index, and must go on doing so
+  #
+  # `.slowest_in` is a backward scan on `index_spec_observations_on_test_run_id_and_duration_seconds`
+  # and its comment calls that plan *"constant in suite size"*. Adding `spec_file_path` to THAT scan
+  # would destroy exactly the property the comment claims: the scan would walk the run from its
+  # slowest example downward discarding every row belonging to another file, which on a small file
+  # in a 20,000-example run is most of the run to fill a page. This narrows on
+  # `(test_run_id, spec_file_path)` first — an equality predicate on both columns of the composite
+  # index, so the rows read are the file's and only the file's — and sorts that handful. Cost is
+  # bounded by the size of the FILE, not of the suite. EXPLAIN-certified against a real planner at
+  # the 20-run seed in spec/models/spec_observation_spec.rb.
+  #
+  # Deliberately an EQUALITY predicate and deliberately not a subtree. "Every row under
+  # `spec/models/`" is a PREFIX predicate, which wants a `text_pattern_ops` index and therefore a
+  # migration; this read issues none and needs none. That boundary is recorded in the same spec.
+  #
+  # == Untimed rows are LISTED, which is why the ordering carries `NULLS LAST`
+  #
+  # `scope :timed` excludes them from every RANKING because a row with nothing to compare cannot be
+  # the slowest of anything. This is not a ranking of the suite; it is the file's population, and an
+  # example the client never timed is part of that population — hiding it would make a file's list
+  # disagree with the `recorded_count` printed above it. So the rows stay, and `duration_seconds:
+  # :desc` alone would then be **NULLS FIRST** in Postgres: the examples that reported no duration
+  # at the head of a list captioned "slowest first". They sort to the END instead, which is the
+  # hazard `scope :timed` documents answered by the other of the two ways it names.
+  #
+  # `id` breaks ties, so a file whose examples tie — and a file all of whose examples went untimed,
+  # where every row ties — has one stable order rather than one the planner picks afresh per
+  # request.
+  #
+  # The projection carries `FILE_POPULATION_COUNTS`, so a caller gets the file's recorded and timed
+  # counts off the same read as the rows; see that constant for why they are windows rather than a
+  # second aggregate. Those two are ATTRIBUTES of the returned records rather than a separate
+  # value, which makes this relation one to load and read — `SpecFileExamples` is its one caller —
+  # rather than one to count or paginate further.
+  def self.in_file(test_run, spec_file_path, limit: FILE_EXAMPLES_LIMIT)
+    where(test_run_id: test_run.id, spec_file_path: spec_file_path)
+      .select(Arel.sql("spec_observations.*, #{FILE_POPULATION_COUNTS}"))
+      .order(Arel.sql("duration_seconds DESC NULLS LAST"), id: :asc)
+      .limit(limit)
   end
 
   # How many distinct descriptions one narrowing may hand the composition step below.
