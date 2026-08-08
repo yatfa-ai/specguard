@@ -410,6 +410,13 @@ RSpec.describe "Repository spec directory growth", type: :request do
   describe "what the panel costs the page" do
     # `count_queries` comes from spec/support/query_capture.rb.
 
+    # The statements THIS panel issued, picked out of everything the page asked by the one thing
+    # only this aggregate does: count rows per run with `COUNT(*) FILTER (WHERE test_run_id = ...)`.
+    # The by-directory duration rollup above groups on the same expression but sums durations
+    # across a single run, so it does not match; the cross-run outcome panel below counts per run
+    # but never groups by directory.
+    def growth_aggregates(&) = executed_sql(&).select { |sql| sql.include?("COUNT(*) FILTER (WHERE test_run_id =") }
+
     # ONE query for the whole comparison, and it does not grow with the suite. Measured as a
     # difference against the same page rendering ten times the examples, so an implementation that
     # read a run's areas per row — or issued a second round trip to count them — shows up here
@@ -435,11 +442,20 @@ RSpec.describe "Repository spec directory growth", type: :request do
     # runs before the query rather than filtering its results. An implementation that queried and
     # then discarded would be green on every rendering example above and one query heavier here on
     # exactly the pages that have nothing to show.
+    #
+    # Counted as THIS panel's own statement rather than as a page-wide difference of one. A
+    # page-wide subtraction says "the comparable page asked one more question than the incomparable
+    # one", which is only a claim about this gate while this panel is the sole thing that differs
+    # between the two fixtures — and it is not: the "Tests whose outcome changed" panel below gates
+    # on the same two runs and sheds its own reads on the incomparable side too. Matching the
+    # growth aggregate by its `COUNT(*) FILTER (WHERE test_run_id = ...)` — the per-run counting
+    # that is this panel's alone, and which the by-directory duration rollup above does not use —
+    # asserts the gate directly, and keeps asserting it however many neighbours arrive.
     it "asks the observations table nothing where the runs are not comparable" do
       comparable = two_runs(previous_specs: area_specs("spec/models", 3),
                             latest_specs: area_specs("spec/models", 5, offset: 100))
       get repository_path(comparable)
-      with_comparison = count_queries { get repository_path(comparable) }
+      expect(growth_aggregates { get repository_path(comparable) }.size).to eq(1)
       expect(rows.size).to eq(1)
 
       incomparable = new_repository
@@ -448,7 +464,7 @@ RSpec.describe "Repository spec directory growth", type: :request do
       ingest(incomparable, commit_sha: "late00000000002", specs: area_specs("spec/models", 5))
       get repository_path(incomparable)
 
-      expect(count_queries { get repository_path(incomparable) }).to eq(with_comparison - 1)
+      expect(growth_aggregates { get repository_path(incomparable) }).to be_empty
       expect(panel).to have_no_css("tbody tr")
     end
   end

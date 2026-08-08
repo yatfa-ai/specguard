@@ -1845,6 +1845,162 @@
       <% end %>
     <% end %>
 
+    <%# The first panel on this page that MATCHES A TEST TO ITSELF across runs. Everything above it
+        is either bounded to one run on purpose — the ranking, the by-file and by-directory
+        rollups, the outcome counters, because "which tests were slow in this run" is a question
+        one run's rows answer — or, in the "Areas that grew or shrank" panel directly above,
+        spans two runs while pairing nothing inside them: it counts rows per area on each side and
+        subtracts, and says in its own caption that it matches no tests. "Which tests changed their
+        outcome" cannot be asked that way. It needs at least two runs AND a rule for deciding that
+        a row in one of them and a row in another are the same test, which is why this panel states
+        that rule below rather than assuming the reader shares it.
+
+        Drawn on the SAME window as the "Suite growth" panel above — same `?branch=` anchor, same
+        `Repository::TRAJECTORY_LIMIT`, and literally the same loaded runs (see
+        `RepositoriesController#show`). Branch-anchored because outcomes compared across branches
+        are outcomes of different code; sharing the window because two panels that each fetched
+        "the last thirty runs on this branch" would be two windows with no structural reason to
+        keep agreeing.
+
+        Rendered when the window has per-example rows AT ALL. A repository whose CI has never sent
+        per-example detail has no cross-run test history to discuss, and this panel explaining that
+        at length would be discussing a table it has no rows in — the same line the three
+        single-run panels above draw with their own `recorded?`. Outside the `manage_keys` gate for
+        the same reason they are: read-only suite telemetry, nothing credential and nothing
+        actionable. %>
+    <% if @unstable_tests&.recorded? %>
+      <%= render UI::PanelComponent.new(title: "Tests whose outcome changed", id: "unstable-tests",
+                                        class: "lg:col-span-3") do %>
+        <% if @unstable_tests.comparable? %>
+          <%# What was compared, by what rule, and what the comparison could not reach — all before
+              the list, because every one of them is a precondition for reading it rather than a
+              note about it.
+
+              The window figures are counted off the same runs the groups below were grouped over
+              (`UnstableTests` holds both), so this paragraph cannot end up describing a different
+              window from the one the rows came from. The matching rule is stated because it is the
+              one DECISION on this panel rather than a measurement: everything else here was
+              counted, but "the same description in two runs is the same test" is a rule the reader
+              has to be able to check against their own repository. %>
+          <p class="text-xs text-app-muted mb-3" id="unstable-tests-basis">
+            <%= unstable_tests_window_sentence(@unstable_tests) %>
+            <%= unstable_tests_matching_sentence %>
+            <%= unstable_tests_boundary_sentence %>
+            <%# The two silences: rows the rule could not use, and candidates the narrowing did not
+                reach. Rendered only when there are any — a clause reading "0 rows carried no
+                description" is a sentence about arithmetic rather than about this window. %>
+            <%= unstable_tests_exclusion_sentence(@unstable_tests) %>
+          </p>
+          <% if @unstable_tests.any? %>
+            <%= render UI::TableComponent.new(columns: ["Test", "Runs seen", "Runs failed", "Outcomes seen"],
+                                              describedby: "unstable-tests-basis") do %>
+              <% @unstable_tests.rows.each do |test| %>
+                <tr>
+                  <td class="px-3 py-2 text-app-content">
+                    <%= test.name %>
+                    <%# A group spanning more than one spec file. Per the project's identity rule a
+                        test that MOVED is the same test and keeps its history, so this is not an
+                        error to flag — but a reader hunting a flaky test in one file needs to know
+                        the history they are reading spans two. The files are named rather than
+                        counted, because "recorded under 2 files" sends the reader looking without
+                        saying where. %>
+                    <% if test.multi_file? %>
+                      <span class="block font-mono text-xs text-app-muted">
+                        recorded under <%= test.files_seen.to_sentence %>
+                      </span>
+                    <% end %>
+                  </td>
+                  <%# Always the fraction. "12" alone reads as twelve of something unstated, and on
+                      this panel the denominator IS the claim: a test seen in 12 of 30 runs is a
+                      test whose history covers less than half the window. %>
+                  <td class="px-3 py-2 text-app-content-secondary tabular-nums">
+                    <%= test.appearance_label(@unstable_tests.run_count) %>
+                  </td>
+                  <%# Over the runs it APPEARED in, never over the window: a test added halfway
+                      through failed in two of the fifteen runs that ran it, and dividing by thirty
+                      would report a stability it was never measured for. %>
+                  <td class="px-3 py-2 text-app-content tabular-nums"><%= test.failure_label %></td>
+                  <td class="px-3 py-2">
+                    <%# The words the runs used, echoed verbatim and never folded into a verdict —
+                        nothing platform-side validates this string, so quoting what arrived is the
+                        only reading that cannot be wrong. Toned through
+                        `SpecObservation.outcome_tone`, the same seam the single-run column above
+                        renders through, so a word cannot be coloured one way in one run's list and
+                        another way across a window. %>
+                    <span class="flex flex-wrap gap-1">
+                      <% test.outcome_words.each do |word| %>
+                        <%= render UI::BadgeComponent.new(tone: SpecObservation.outcome_tone(word)) do %>
+                          <%= word %>
+                        <% end %>
+                      <% end %>
+                      <%# Runs that recorded this test and said nothing about how it ended. Silence
+                          inside a population that reported is not covered by the words beside it,
+                          and it is not a pass — it wears `#outcome_label`'s own vocabulary and its
+                          neutral tone for exactly that reason. %>
+                      <% if test.unreported_outcome_count.positive? %>
+                        <%= render UI::BadgeComponent.new(tone: :neutral) do %>
+                          not reported ×<%= test.unreported_outcome_count %>
+                        <% end %>
+                      <% end %>
+                    </span>
+                  </td>
+                </tr>
+              <% end %>
+            <% end %>
+          <% else %>
+            <%# The honest zero, reachable only behind `comparable?` above — so it is only ever
+                printed over a window that DID report outcomes, and never over one that was silent.
+                Worded against the runs it was drawn from, and worded differently for each of the
+                three different facts it can stand for: nothing failed at all, things failed and
+                always failed, and something varied but under a description this panel cannot
+                attribute to one example. See `RepositoriesHelper#unstable_tests_none_description`. %>
+            <div id="unstable-tests-none">
+              <%= render UI::EmptyStateComponent.new(
+                    title: "No test changed its outcome in this window",
+                    description: unstable_tests_none_description(@unstable_tests)
+                  ) %>
+            </div>
+          <% end %>
+          <%# The groups the rule could not rule on. Below the list rather than inside it, because
+              they are not the same kind of finding: the list above says "this test's outcome
+              changed", and about these the only honest statement is that something under one
+              description did. %>
+          <% if @unstable_tests.shared_description_rows.any? %>
+            <div id="unstable-tests-shared" class="mt-4 border-t border-app-border-light pt-3">
+              <p class="text-xs text-app-muted" id="unstable-tests-shared-basis">
+                <%= unstable_tests_shared_description_sentence(@unstable_tests) %>
+              </p>
+              <ul class="mt-2 space-y-1 text-sm text-app-content">
+                <% @unstable_tests.shared_description_rows.each do |test| %>
+                  <li>
+                    <%= test.name %>
+                    <span class="text-xs text-app-muted">
+                      — <%= test.recorded_count %> examples under this description across
+                      <%= test.appearance_label(@unstable_tests.run_count) %> runs
+                    </span>
+                  </li>
+                <% end %>
+              </ul>
+            </div>
+          <% end %>
+        <% else %>
+          <%# Fewer than two runs of the window reported an outcome, so there is no comparison to
+              make. No zero and no empty list styled as a result: `outcome` is nullable and nothing
+              validates it, so a window whose client sends none produces exactly the empty list a
+              perfectly stable window does, and "0 unstable tests" printed over it would be
+              "nobody told us" wearing the spelling of "everything is fine". That is Vacuous Green
+              verbatim, and `SlowestExamples#outcomes_reported?` refuses it one grain down for a
+              single run. %>
+          <div id="unstable-tests-incomparable">
+            <%= render UI::EmptyStateComponent.new(
+                  title: "Not enough runs reported outcomes to compare",
+                  description: unstable_tests_incomparable_description(@unstable_tests)
+                ) %>
+          </div>
+        <% end %>
+      <% end %>
+    <% end %>
+
     <%# Read-only suite telemetry, deliberately OUTSIDE the `manage_keys` gate above — the same
         class of information as the connection-health stat: a `view` member legitimately needs to
         see whether CI is still reporting and what it reported. Nothing here is credential

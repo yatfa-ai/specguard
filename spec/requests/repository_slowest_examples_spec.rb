@@ -388,10 +388,13 @@ RSpec.describe "Repository slowest tests", type: :request do
       # ranking, one aggregate — and the other two are the rollup panels below it: the "Heaviest
       # spec files" grouped read and the "Heaviest spec directories" one that takes the same rows
       # up to the code area. Both of those budgets are asserted in
-      # spec/requests/repository_spec_file_durations_spec.rb.
+      # spec/requests/repository_spec_file_durations_spec.rb. The fifth is the cross-run panel's
+      # gating probe, which on this single-run fixture establishes that outcomes cannot be compared
+      # and asks nothing further; its own budget is asserted in
+      # spec/requests/repository_unstable_tests_spec.rb.
       # Page-wide rather than panel-scoped on purpose: what must not grow is the number of times
       # ONE page walks this table, and only a count taken across the whole request can say that.
-      expect(large_queries.size).to eq(4)
+      expect(large_queries.size).to eq(5)
     end
   end
 
