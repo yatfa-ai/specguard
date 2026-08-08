@@ -1286,9 +1286,10 @@
         `SpecObservation#example_id` is RSpec's positional id and explicitly not stable across
         refactors, so a ranking that spanned runs would be comparing rows that are not known to be
         the same test. The model draws that boundary; this panel stays on the near side of it. It
-        also rolls nothing up by directory, which is a different question with a different index
-        behind it — the by-FILE half of that claim was true until the panel below this one shipped,
-        and the subtree half stays true until an index exists that can answer it.
+        rolls nothing up at all — neither by file nor by directory — because a ranking of
+        individual examples answers a different question from either: outliers, not concentration.
+        Both rollups now exist, in the two panels below this one, and neither is derivable from
+        this list.
 
         Rendered only when the run WROTE example rows. A run ingested before those rows existed, or
         one whose client sends no per-example detail, has no per-test grain to disclose — and an
@@ -1430,10 +1431,13 @@
         `SpecObservation`'s class comment states and spec/requests/api/v1/ingest_spec.rb pins
         end-to-end.
 
-        By FILE and not by directory. There is no `text_pattern_ops` index in db/schema.rb, so
-        under this database's collation a prefix rollup has no indexed path at all; by-file is
-        indexed and constant-cost, and a subtree rollup needs its own migration before it can be
-        asked here at this suite size.
+        By FILE, and the panel below this one takes the same rows up to the DIRECTORY. Two rungs,
+        two reads, neither derived from the other: a by-file top ten shows ten files, and a
+        directory holding forty files at two seconds each outweighs every one of them without
+        appearing here at all. Both narrow on `test_run_id` and group on top of that index, so
+        neither needed an index of its own — the `text_pattern_ops` index this comment once said a
+        subtree rollup was waiting on governs a prefix PREDICATE, and a whole-run rollup has none
+        to serve (EXPLAIN-certified in spec/models/spec_observation_spec.rb).
 
         ONE run, like the panel above, and for the same reason: `example_id` is positional and not
         stable across refactors, so anything spanning runs would be comparing rows not known to be
@@ -1534,11 +1538,322 @@
       <% end %>
     <% end %>
 
-    <%# The first panel on this page whose question spans RUNS. Everything above it — the ranking,
-        the by-file rollup, the outcome counters — is bounded to one run on purpose, because "which
-        tests were slow in this run" is a question one run's rows answer. "Which tests changed their
-        outcome" is not: it needs at least two runs and a rule for deciding that a row in one of
-        them and a row in another are the same test.
+    <%# == Where this run's wall clock went, by directory
+        The rung directly above the panel above, off the same rows of the same run, and NOT
+        derivable from it. That ranking is by FILE and ten rows long: a directory holding forty
+        files at two seconds each is eighty seconds of the run with not one of its files near the
+        head of it. Concentration re-concentrates at every rung — which is why each rung is summed
+        rather than read off the one below — and this panel asks the question the reader usually
+        arrives with: which AREA of this suite carries the time.
+
+        Grouped on the immediate parent of the INCLUDING file (`spec_file_path`), so a shared
+        example group's time lands on the area that ran it rather than on `spec/support` — the same
+        rule the two panels above obey, one rung up. Every row sits at the same depth as its own
+        file, so the areas partition the run rather than nesting inside one another and the totals
+        sum to it. Depth selection and drill-down trees are a different question and not this one.
+
+        NOT the shard rollup on the Overview panel. `TestRun#shard_durations` splits the same run by
+        CI partition and its own comment is explicit that a shard is not a code area: RSpec/Knapsack
+        partitions are arbitrary with respect to directory structure, so "which partition ran long"
+        and "which area costs" are two questions and this is the second.
+
+        ONE run, like the panels above, and for the same reason: `example_id` is positional and not
+        stable across refactors, so anything spanning runs would be comparing rows not known to be
+        the same tests.
+
+        Same visibility rule as the panels above — rendered when the run WROTE example rows, and a
+        run with rows but no timings renders and says so. Outside the `manage_keys` gate: read-only
+        suite telemetry, nothing credential and nothing actionable. %>
+    <% if @spec_directory_durations&.recorded? %>
+      <%= render UI::PanelComponent.new(title: "Heaviest spec directories", id: "spec-directory-durations",
+                                        class: "lg:col-span-3") do %>
+        <% if @spec_directory_durations.any_timed? %>
+          <%# What the totals COVER, before the totals themselves — the argument the panel above
+              makes, where it costs more. `SUM` skips a missing timing silently, and an area is a
+              bigger population than a file, so an area whose examples were half untimed prints a
+              total covering half of it that is indistinguishable, as a number, from a complete one.
+              The per-area coverage column is the answer, and this paragraph is what tells a reader
+              the column is a denominator rather than decoration.
+
+              Every figure is counted off THIS RUN'S ROWS, never off `TestRun#total_specs_count` on
+              the Overview panel above — that count is re-derived by SUM over shard reports and the
+              two can legitimately differ. `SpecDirectoryDurations` carries the argument and holds
+              the rows and their coverage together, so this sentence cannot end up describing a
+              different row set from the one below it. %>
+          <p class="text-xs text-app-muted mb-3" id="spec-directory-durations-basis">
+            <%# The list is CAPPED, so its own length says nothing about how much of the run it
+                covers — the same lie by omission the coverage column refuses one grain down, which
+                is why the total is stated whether or not anything was cut. It costs no extra
+                query: the count rides back on the same grouped aggregate. %>
+            <% if @spec_directory_durations.truncated? %>
+              The <%= number_with_delimiter(@spec_directory_durations.rows.size) %> heaviest of the
+              <%= number_with_delimiter(@spec_directory_durations.directory_count) %> directories
+              the run named above recorded, heaviest first
+            <% else %>
+              All <%= number_with_delimiter(@spec_directory_durations.directory_count) %>
+              <%= "directory".pluralize(@spec_directory_durations.directory_count) %> the run named
+              above recorded, heaviest first
+            <% end %>
+            — every example's duration summed onto the directory holding the file that ran it, so a
+            shared example group counts against the area including it rather than against the one
+            defining it. Each area is the immediate parent of its own files, so these totals sit
+            side by side rather than inside one another.
+            <% if @spec_directory_durations.complete? %>
+              Every example in every directory listed reported a duration, so each total covers the
+              whole of its area.
+            <% else %>
+              The "Examples timed" column is what each total was summed over: an area whose examples
+              did not all report a duration has a total covering only the ones that did, and an area
+              that reported none has no total to state rather than a zero. An example that never ran
+              has no duration to report, so a missing timing is a faithful record rather than a gap.
+            <% end %>
+            Counted off the rows this run wrote here, which is a different figure from the suite
+            size on the Overview panel above and may legitimately differ from it. It is also not the
+            shard split on that panel: a CI partition is not a code area.
+          </p>
+          <%= render UI::TableComponent.new(columns: ["Directory", "Examples timed", "Total duration"],
+                                            describedby: "spec-directory-durations-basis") do %>
+            <% @spec_directory_durations.rows.each do |directory| %>
+              <tr>
+                <td class="px-3 py-2 font-mono text-xs text-app-content"><%= directory.path %></td>
+                <td class="px-3 py-2 text-app-content-secondary tabular-nums">
+                  <%# Always a fraction, never a bare count: the denominator is the point of the
+                      column, and a complete area has to be visibly complete rather than merely
+                      unremarked. %>
+                  <%= directory.coverage_label %>
+                </td>
+                <td class="px-3 py-2 text-app-content tabular-nums">
+                  <%# Through `SpecObservation.humanized_duration`, the same seam the per-example
+                      and per-file columns above render through — so no two grains on this page can
+                      disagree about how a duration is spelled, and an area that measured nothing
+                      says "not reported" rather than wearing the spelling of a zero. %>
+                  <%= directory.duration_label %>
+                </td>
+              </tr>
+            <% end %>
+          <% end %>
+        <% else %>
+          <%# Directories exist and not one of their examples was timed. Every group's SUM is NULL,
+              so there is a list of areas and no ranking — and a column of "not reported" under a
+              heading promising "heaviest first" would be a ranking of nothing. Not zeroes, for the
+              reason the panels above give: a zero is this surface inventing the measurement it is
+              missing.
+
+              Stated in DIRECTORIES, where the panel above states the same absence in files. Not a
+              stylistic choice: `directory_count` is counted before the `LIMIT` and is exact,
+              whereas summing `recorded_count` over the rows on hand would total a capped ten of
+              them and print a suite-wide-looking figure covering part of the run. %>
+          <%= render UI::EmptyStateComponent.new(
+                title: "No timings on this run",
+                description: "This run recorded examples in " \
+                             "#{number_with_delimiter(@spec_directory_durations.directory_count)} " \
+                             "#{'directory'.pluralize(@spec_directory_durations.directory_count)} " \
+                             "and a duration for none of them, so there is no wall clock to " \
+                             "attribute to any area. An example that never ran reports no duration."
+              ) %>
+        <% end %>
+      <% end %>
+    <% end %>
+
+    <%# == Which AREAS of the suite grew or shrank since the previous run on this branch
+        The first panel here to read the per-example table across TWO runs, and the boundary it
+        crosses is worth being precise about, because the panel directly above says panels here are
+        ONE run and gives a reason that is still true.
+
+        That reason is about matching ROWS: `example_id` is positional and not stable across
+        refactors, so a ranking spanning runs would be pairing rows not known to be the same test.
+        This panel pairs none. It counts the rows in each area of one run and the rows in each area
+        of the other and subtracts two integers — no per-example key crosses the boundary, and
+        nothing here claims a given test is the same test. Comparing two POPULATIONS is not the
+        thing that caution forbids, and `SpecObservation.directory_growth_between` states where the
+        line is: an edit that joins these runs on `example_id`, or any other per-example key, has
+        left what this panel is allowed to say.
+
+        The previous run ON THIS BRANCH, never the row above in "Recent runs". That list is one
+        interleaved history across every branch CI reports from, and its own caption says two
+        consecutive rows are routinely two different branches — a feature branch that deleted a
+        directory would read here as the trunk suite shrinking.
+
+        Everything about whether the two runs CAN be compared is decided in `SpecDirectoryGrowth`,
+        including the condition this grain adds over the Overview delta's: both runs must have
+        written per-example rows, because a run can have a `total_specs_count` and none of these,
+        and comparing against it renders the whole suite as deleted area by area.
+
+        Same visibility rule as the panels above, and outside the `manage_keys` gate for the same
+        reason: read-only suite telemetry, nothing credential and nothing actionable. %>
+    <% if @spec_directory_growth %>
+      <%= render UI::PanelComponent.new(title: "Areas that grew or shrank", id: "spec-directory-growth",
+                                        class: "lg:col-span-3") do %>
+        <% if @spec_directory_growth.comparable? && @spec_directory_growth.any_movement? %>
+          <%# What the movement is and — as much as the page can establish — what it is NOT.
+
+              A test that MOVES is the same test: `file_path` is only "last known path", so a
+              directory rename or a batch of specs moved one directory over reads here as one area
+              growing and another shrinking by the same amount, with nothing added and nothing
+              deleted. Nothing in the schema tells those apart from a real gain and a real loss, so
+              this says so rather than letting a signed column imply an authorship it cannot see.
+
+              Every figure is counted off the rows these two runs wrote here, never off
+              `TestRun#total_specs_count` on the Overview panel above — that count is re-derived by
+              SUM over shard reports and the two can legitimately differ. `SpecDirectoryGrowth`
+              holds the rows and this sentence together, so the caption cannot end up describing a
+              different row set from the table below it. %>
+          <p class="text-xs text-app-muted mb-3" id="spec-directory-growth-basis">
+            <%# The list is CAPPED, so its own length says nothing about how much of the comparison
+                it covers. The total rides back on the same grouped aggregate, counted before the
+                LIMIT, so stating it costs no extra query. %>
+            <% if @spec_directory_growth.truncated? %>
+              The <%= number_with_delimiter(@spec_directory_growth.rows.size) %>
+              <%= "area".pluralize(@spec_directory_growth.rows.size) %> that moved
+              most, of the <%= number_with_delimiter(@spec_directory_growth.directory_count) %>
+              either run recorded — largest movement first, in both directions
+            <% else %>
+              All <%= number_with_delimiter(@spec_directory_growth.directory_count) %>
+              <%= "area".pluralize(@spec_directory_growth.directory_count) %> either run recorded —
+              largest movement first, in both directions
+            <% end %>
+            — measured between this run and
+            <span class="font-mono"><%= @previous_test_run.commit_sha.first(7) %></span>, the
+            previous run on this branch.
+            <%# Only where it is TRUE of the rows below. The ranking is by movement descending, so
+                an area that did not move can only appear once the movement has run out — and a
+                list headed "the areas that moved most" holding rows that moved by nothing needs to
+                say which it is rather than leave the reader to reconcile the two. %>
+            <% if @spec_directory_growth.any_unmoved? %>
+              Where the movement runs out before the list does, areas that did not move are listed
+              too, as ±0.
+            <% end %>
+            Each area is the immediate parent directory of the files
+            that ran its examples, so the areas sit side by side rather than inside one another.
+            A test that was MOVED is the same test, and this panel cannot see the difference: a
+            renamed or relocated directory appears here as one area growing and another shrinking
+            by the same amount, with nothing added and nothing deleted.
+            Counted off the
+            <%= number_with_delimiter(@spec_directory_growth.previous_recorded_count) %> and
+            <%= number_with_delimiter(@spec_directory_growth.latest_recorded_count) %> example rows
+            the two runs recorded here, which may legitimately differ from the suite size on the
+            Overview panel above.
+          </p>
+          <%= render UI::TableComponent.new(columns: ["Directory", "Examples then", "Examples now", "Change"],
+                                            describedby: "spec-directory-growth-basis") do %>
+            <% @spec_directory_growth.rows.each do |area| %>
+              <tr>
+                <td class="px-3 py-2 font-mono text-xs text-app-content"><%= area.path %></td>
+                <%# Both operands, always, and never only the change. A signed number alone cannot
+                    say whether an area of forty tests gained twelve or an area of four thousand
+                    did, and those are different facts about the same `+12`. %>
+                <td class="px-3 py-2 text-app-content-secondary tabular-nums">
+                  <%= area.previous_count_label %>
+                </td>
+                <td class="px-3 py-2 text-app-content-secondary tabular-nums">
+                  <%= area.latest_count_label %>
+                </td>
+                <%# The `aria-label` carries what the glyph cannot: U+2212 is announced
+                    inconsistently across screen readers, and "New area" beside three unattached
+                    numbers is not a sentence. Same treatment the Overview panel's signed figures
+                    get, for the same two reasons. %>
+                <td class="px-3 py-2 text-app-content tabular-nums" aria-label="<%= area.change_reading %>">
+                  <%= area.change_label %>
+                </td>
+              </tr>
+            <% end %>
+          <% end %>
+        <% elsif @spec_directory_growth.comparable? %>
+          <%# Two comparable runs whose every area recorded the same number of examples. A real and
+              unremarkable answer — and precisely the one a reader wants confirmed — so it is said
+              in words rather than shown as a table of `±0` under a heading promising areas that
+              grew or shrank. Stated in AREAS, which is exact: `directory_count` is counted before
+              the LIMIT. %>
+          <%= render UI::EmptyStateComponent.new(
+                title: "No area moved",
+                description: "Every one of the " \
+                             "#{number_with_delimiter(@spec_directory_growth.directory_count)} " \
+                             "#{'area'.pluralize(@spec_directory_growth.directory_count)} these two " \
+                             "runs recorded holds the same number of examples in both, so the suite " \
+                             "did not grow or shrink anywhere between them."
+              ) %>
+        <% else %>
+          <%# The five states in which there is no comparison to draw, said apart rather than
+              collapsed into one blank panel — the register the Overview delta's own no-comparison
+              states set above: withheld rather than hedged, and withholding means saying why. They
+              are not one fact. "The earlier run reported no tests" and "the earlier run recorded no
+              per-example rows" produce the same empty panel and are two different things to go and
+              fix, and only the second is invisible everywhere else on this page.
+
+              `SpecDirectoryGrowth#state` decides which; the wording lives here, beside the
+              Overview panel's, so the two cannot drift into describing the same run differently. %>
+          <% case @spec_directory_growth.state %>
+          <% when :latest_unmeasured %>
+            <%= render UI::EmptyStateComponent.new(
+                  title: "No comparison to draw",
+                  description: "This run reported no tests, so there is no suite to compare area " \
+                               "by area. A run that reported zero tests has a count but not a " \
+                               "measurement."
+                ) %>
+          <% when :previous_unmeasured %>
+            <%= render UI::EmptyStateComponent.new(
+                  title: "No comparison to draw",
+                  description: "The previous run on this branch " \
+                               "(#{@previous_test_run.commit_sha.first(7)}) reported no tests, so " \
+                               "there is nothing to measure this run's areas against. Counting the " \
+                               "whole suite as growth would charge a commit for a gap in the " \
+                               "reporting."
+                ) %>
+          <% when :assembled_differently %>
+            <%# The state that would otherwise produce a wrong NUMBER rather than an honest absence,
+                and here it would produce one per area. Both compositions are named through
+                `TestRun#delivery_description`, the same seam the Overview panel words this with. %>
+            <%= render UI::EmptyStateComponent.new(
+                  title: "No comparison to draw",
+                  description: "This run was #{@latest_test_run.delivery_description}, while " \
+                               "#{@previous_test_run.commit_sha.first(7)} was " \
+                               "#{@previous_test_run.delivery_description} — so the two are not " \
+                               "measuring the same thing. A run's examples arrive shard by shard, " \
+                               "so a difference taken across two compositions would report areas " \
+                               "growing and shrinking that no commit touched."
+                ) %>
+          <% when :previous_unrecorded %>
+            <%= render UI::EmptyStateComponent.new(
+                  title: "No comparison to draw",
+                  description: "The previous run on this branch " \
+                               "(#{@previous_test_run.commit_sha.first(7)}) recorded no per-example " \
+                               "detail, so it has no areas to compare against — every area of this " \
+                               "run would read as new. A run ingested before that detail was " \
+                               "stored, or sent by a client that reports only totals, has a suite " \
+                               "size and none of these rows."
+                ) %>
+          <% when :latest_unrecorded %>
+            <%= render UI::EmptyStateComponent.new(
+                  title: "No comparison to draw",
+                  description: "This run recorded no per-example detail, so it has no areas to " \
+                               "compare — every area of the previous run would read as deleted. A " \
+                               "client that reports only totals sends a suite size and none of " \
+                               "these rows."
+                ) %>
+          <% else %>
+            <%# `:neither_recorded` — the aggregate came back empty, which for this read means
+                neither run wrote a row, since a group exists here if and only if a row does. %>
+            <%= render UI::EmptyStateComponent.new(
+                  title: "No comparison to draw",
+                  description: "Neither this run nor the previous run on this branch recorded " \
+                               "per-example detail, so there are no areas to compare. Suite growth " \
+                               "as a whole is on the Overview panel above, which reads the run " \
+                               "totals rather than these rows."
+                ) %>
+          <% end %>
+        <% end %>
+      <% end %>
+    <% end %>
+
+    <%# The first panel on this page that MATCHES A TEST TO ITSELF across runs. Everything above it
+        is either bounded to one run on purpose — the ranking, the by-file and by-directory
+        rollups, the outcome counters, because "which tests were slow in this run" is a question
+        one run's rows answer — or, in the "Areas that grew or shrank" panel directly above,
+        spans two runs while pairing nothing inside them: it counts rows per area on each side and
+        subtracts, and says in its own caption that it matches no tests. "Which tests changed their
+        outcome" cannot be asked that way. It needs at least two runs AND a rule for deciding that
+        a row in one of them and a row in another are the same test, which is why this panel states
+        that rule below rather than assuming the reader shares it.
 
         Drawn on the SAME window as the "Suite growth" panel above — same `?branch=` anchor, same
         `Repository::TRAJECTORY_LIMIT`, and literally the same loaded runs (see
@@ -1549,9 +1864,10 @@
 
         Rendered when the window has per-example rows AT ALL. A repository whose CI has never sent
         per-example detail has no cross-run test history to discuss, and this panel explaining that
-        at length would be discussing a table it has no rows in — the same line the two panels
-        above draw with their own `recorded?`. Outside the `manage_keys` gate for the same reason
-        they are: read-only suite telemetry, nothing credential and nothing actionable. %>
+        at length would be discussing a table it has no rows in — the same line the three
+        single-run panels above draw with their own `recorded?`. Outside the `manage_keys` gate for
+        the same reason they are: read-only suite telemetry, nothing credential and nothing
+        actionable. %>
     <% if @unstable_tests&.recorded? %>
       <%= render UI::PanelComponent.new(title: "Tests whose outcome changed", id: "unstable-tests",
                                         class: "lg:col-span-3") do %>

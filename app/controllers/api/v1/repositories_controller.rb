@@ -105,10 +105,11 @@ class Api::V1::RepositoriesController < Api::BaseController
       # the history row and the panel cannot drift on what "measured" means.
       #
       # It belongs HERE and not only on the history row, because in the unfiltered window
-      # `history[0]` is the SAME ROW as this one — the identity `docs/DEVELOPMENT.md` pins and the
-      # ordering comment on `history_runs` protects. Withholding the key from one of the two blocks
-      # let a single response body describe one row twice and disagree with itself: `history[0]`
-      # saying the suite was never measured while `latest_run`, thirty lines up, could not say it.
+      # `history[0]` is the SAME ROW as this one — the identity `repository_latest_run_spec.rb`
+      # pins and the ordering comment on `history_runs` protects. Withholding the key from one of
+      # the two blocks let a single response body describe one row twice and disagree with itself:
+      # `history[0]` saying the suite was never measured while `latest_run`, thirty lines up,
+      # could not say it.
       #
       # Present on EVERY response that has a run — never absent, never null — on the rule
       # `timed_shard_count` follows: a guard a client has to test for before it can trust is not a

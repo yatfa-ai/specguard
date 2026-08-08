@@ -379,20 +379,17 @@ RSpec.describe SuiteTrajectory do
             point(repository, "whole02", total: 20_010, shards: 4, at: 1.hour.ago)]
     series = trajectory(runs)
 
-    count = 0
-    subscriber = ActiveSupport::Notifications.subscribe("sql.active_record") do |_, _, _, _, payload|
-      count += 1 unless payload[:cached] || payload[:name].in?(["SCHEMA", "TRANSACTION"])
+    count = count_queries do
+      series.plottable?
+      series.coverage
+      series.cohort_description
+      series.withheld_count
+      series.withheld_part_way
+      series.withheld_other_composition
+      series.shared_delivery_description(series.withheld_composition)
+      series.plots_newest?
+      series.values
     end
-    series.plottable?
-    series.coverage
-    series.cohort_description
-    series.withheld_count
-    series.withheld_part_way
-    series.withheld_other_composition
-    series.shared_delivery_description(series.withheld_composition)
-    series.plots_newest?
-    series.values
-    ActiveSupport::Notifications.unsubscribe(subscriber)
 
     expect(count).to eq(0)
     expect(series.plotted.map(&:commit_sha)).to eq(%w[whole01 whole02])
@@ -527,20 +524,17 @@ RSpec.describe SuiteTrajectory do
               timed_point(repository, "ccccccc", total: 1_047, seconds: 74.25, at: 1.day.ago)]
       series = trajectory(runs)
 
-      count = 0
-      subscriber = ActiveSupport::Notifications.subscribe("sql.active_record") do |_, _, _, _, payload|
-        count += 1 unless payload[:cached] || payload[:name].in?(["SCHEMA", "TRANSACTION"])
+      count = count_queries do
+        series.runtime_plottable?
+        series.runtime_coverage
+        series.runtime_values
+        series.runtime_minimum
+        series.runtime_maximum
+        series.runtime_flat?
+        series.withheld_untimed
+        series.first_timed_run
+        series.last_timed_run
       end
-      series.runtime_plottable?
-      series.runtime_coverage
-      series.runtime_values
-      series.runtime_minimum
-      series.runtime_maximum
-      series.runtime_flat?
-      series.withheld_untimed
-      series.first_timed_run
-      series.last_timed_run
-      ActiveSupport::Notifications.unsubscribe(subscriber)
 
       expect(count).to eq(0)
     end

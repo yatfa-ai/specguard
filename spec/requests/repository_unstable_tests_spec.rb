@@ -3,8 +3,9 @@
 require "rails_helper"
 
 # The "Tests whose outcome changed" panel on repositories#show — the first read this application
-# makes of `spec_observations` ACROSS runs, and the first answer it gives about a test's HISTORY
-# rather than about one run of it.
+# makes that matches a test to ITSELF across runs, and the first answer it gives about a test's
+# HISTORY rather than about one run of it. "Areas that grew or shrank" spans two runs before it but
+# pairs nothing inside them: it subtracts two per-area counts and matches no tests.
 #
 # Its own file, alongside the siblings that each took one panel of this page
 # (repository_slowest_examples_spec.rb, repository_spec_file_durations_spec.rb,
@@ -675,12 +676,14 @@ RSpec.describe "Repository unstable tests", type: :request do
       ActiveSupport::Notifications.unsubscribe(subscriber)
     end
 
-    # An ABSOLUTE count, not a difference against a control. Seven reads of this table serve this
+    # An ABSOLUTE count, not a difference against a control. Nine reads of this table serve this
     # page in the state that costs the most: two for the "Slowest tests" panel, one for "Heaviest
-    # spec files", and four for this one — the gating probe, the candidate narrowing, the
-    # composition of those candidates, and the unnamed-row count. Equality against a smaller
-    # fixture alone would still hold if both pages regressed to a fixed-but-wasteful number of
-    # passes over the same table.
+    # spec files", one for "Heaviest spec directories", one for "Areas that grew or shrank", and
+    # four for this one — the gating probe, the candidate narrowing, the composition of those
+    # candidates, and the unnamed-row count. Five of those nine belong to panels this slice did not
+    # write; what this example pins for THIS panel is the four, and that they stay four. Equality
+    # against a smaller fixture alone would still hold if both pages regressed to a
+    # fixed-but-wasteful number of passes over the same table.
     it "costs the same four reads at 30 runs of 200 examples as at 3 runs of 3" do
       small = create_repository(user: @user, github_full_name: "acme/small-suite")
       3.times do |index|
@@ -707,7 +710,7 @@ RSpec.describe "Repository unstable tests", type: :request do
       # panels would be equal and worthless.
       expect(rows.size).to eq(4)
       expect(large_queries.size).to eq(small_queries.size)
-      expect(large_queries.size).to eq(7)
+      expect(large_queries.size).to eq(9)
     end
 
     # The candidate narrowing is what makes the composition affordable, and its `IN` list is capped
@@ -722,7 +725,7 @@ RSpec.describe "Repository unstable tests", type: :request do
         ingest(repository, specs, commit_sha: "red#{format("%011d", index)}", at: (30 - index).days.ago)
       end
 
-      expect(queries_against("spec_observations") { get repository_path(repository) }.size).to eq(7)
+      expect(queries_against("spec_observations") { get repository_path(repository) }.size).to eq(9)
     end
 
     # The gate is what it says it is: a window that cannot be compared asks nothing past the probe
@@ -732,9 +735,10 @@ RSpec.describe "Repository unstable tests", type: :request do
 
       queries = queries_against("spec_observations") { get repository_path(repository) }
 
-      # Three of these belong to the panels above, which read the latest run regardless; the fourth
-      # is this panel's gating probe, and there is no fifth.
-      expect(queries.size).to eq(4)
+      # Five of these belong to the panels above, which read the latest run (and, for "Areas that
+      # grew or shrank", the previous one) regardless; the sixth is this panel's gating probe, and
+      # there is no seventh.
+      expect(queries.size).to eq(6)
       expect(queries.none? { |sql| sql.include?("GROUP BY") && sql.include?("name") }).to be(true)
     end
   end

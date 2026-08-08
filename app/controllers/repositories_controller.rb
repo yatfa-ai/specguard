@@ -167,15 +167,51 @@ class RepositoriesController < ApplicationController
     #
     # ONE query, not growing with the size of the suite: see `SpecFileDurations`.
     @spec_file_durations = SpecFileDurations.for(@latest_test_run) if @latest_test_run
-    # The first question this application asks of `spec_observations` ACROSS runs: which tests
+    # The rung above that one, off the same rows of the same run: not which FILES the wall clock
+    # went into but which AREAS. Not derivable from the panel above either — a by-file top ten
+    # shows ten files, and a directory holding forty files at two seconds each is eighty seconds of
+    # the run with none of its rows in that list. Concentration re-concentrates at every rung, so
+    # each rung is summed rather than read off the one below it.
+    #
+    # And specifically not `TestRun#shard_durations`, which rolls the same run up by CI partition:
+    # its own comment is explicit that a shard is not a code area.
+    #
+    # Guarded identically, and on nothing else. ONE query, not growing with the size of the suite:
+    # see `SpecDirectoryDurations`.
+    @spec_directory_durations = SpecDirectoryDurations.for(@latest_test_run) if @latest_test_run
+    # The same areas, asked of TWO runs instead of one: not which area carries the time but which
+    # area got bigger or smaller since the previous run ON THIS BRANCH. `@previous_test_run` above
+    # is that run and is already in memory, so riding it costs nothing and keeps this panel on the
+    # one comparison the page is allowed to make — `@recent_test_runs` is one interleaved history
+    # across every branch, where two consecutive rows are routinely two different branches.
+    #
+    # Guarded on both sides existing and on nothing else. Every further condition — did each side
+    # measure a suite, were they assembled the same way, did each actually write per-example rows —
+    # belongs to `SpecDirectoryGrowth`, which names WHICH of them failed so the panel can say so.
+    # Those first three are decided before any query is issued, so a page with nothing to compare
+    # asks `spec_observations` nothing at all.
+    #
+    # ONE query when there is a comparison to make, none when there is not, and neither grows with
+    # the size of the suite: see `SpecDirectoryGrowth`.
+    if @latest_test_run && @previous_test_run
+      @spec_directory_growth = SpecDirectoryGrowth.for(@latest_test_run, @previous_test_run)
+    end
+    # The first question this page asks that MATCHES A TEST TO ITSELF across runs: which tests
     # changed their outcome over the window the "Suite growth" panel above is already drawn on.
     #
+    # Not the first cross-run read — `SpecDirectoryGrowth` directly above compares two runs. But
+    # that panel's own comment is explicit that it compares POPULATIONS and matches no tests: it
+    # counts rows per area in each run and subtracts two integers, and nothing in it asserts that a
+    # given test is the same test. This one does exactly that, by `name` and by nothing else, and
+    # everything below follows from it — which is why the panel states the rule in its own caption
+    # rather than leaving the reader to infer it.
+    #
     # Anchored to `trajectory_runs` and not to `@latest_test_run`, and the difference is the whole
-    # point. The panels above answer questions ONE run's rows answer; this one cannot be asked of a
-    # single run at all — an outcome that changed is a statement about at least two of them. The
-    # window is the trajectory's window, branch and all, because outcomes compared across branches
-    # are outcomes of different code, and this page already has a branch of record and a `?branch=`
-    # selector rather than needing a second one.
+    # point. The panels above answer questions ONE run's rows answer, or questions two runs answer
+    # without pairing anything; an outcome that CHANGED is a statement about one test across at
+    # least two runs. The window is the trajectory's window, branch and all, because outcomes
+    # compared across branches are outcomes of different code, and this page already has a branch
+    # of record and a `?branch=` selector rather than needing a second one.
     #
     # The loaded runs are handed over rather than re-fetched, so this panel adds no query for its
     # own window and cannot end up captioning a different one from the chart above it.

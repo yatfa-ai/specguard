@@ -7,7 +7,7 @@ require "tmpdir"
 module SpecGuard
   # Guards the committed `app/assets/builds/tailwind.css`.
   #
-  # That file is a build artifact that is nevertheless committed (docs/DEVELOPMENT.md) so a
+  # That file is a build artifact that is nevertheless committed (see the README) so a
   # Node-free clone can boot — Propshaft raises on a missing stylesheet. The cost of committing a
   # build artifact is that it can drift from its sources, shipping markup whose utilities were
   # never compiled. This lint is what makes the drift loud.

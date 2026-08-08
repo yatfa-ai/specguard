@@ -18,26 +18,12 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
     response.parsed_body
   end
 
-  # What counts as a query for every cost example in this file, defined once. The cost blocks below
-  # bound the endpoint on different axes — runs for a branch-scoped window, shards on one run — but
-  # they must agree on what they are counting, so the `cached` / SCHEMA / TRANSACTION exclusion
-  # lives here rather than being restated per block. RSpec scopes a `def` to its own example group,
-  # so a helper defined in either block is invisible to the other; that is how it came to be
-  # written twice, and hoisting is what stops a third copy landing with the next cost example.
-  def executed_sql
-    statements = []
-    subscriber = ActiveSupport::Notifications.subscribe("sql.active_record") do |_, _, _, _, payload|
-      statements << payload[:sql] unless payload[:cached] || payload[:name].in?(["SCHEMA", "TRANSACTION"])
-    end
-    yield
-    statements
-  ensure
-    ActiveSupport::Notifications.unsubscribe(subscriber)
-  end
-
-  # The count is the general helper's length — one rule, two readings, so a change to what counts
-  # as a query cannot drift between them.
-  def count_queries(&block) = executed_sql(&block).length
+  # `executed_sql` and `count_queries` come from spec/support/query_capture.rb. The cost blocks
+  # below bound the endpoint on different axes — runs for a branch-scoped window, shards on one run
+  # — but they must agree on what they are counting, so the `cached` / SCHEMA / TRANSACTION
+  # exclusion lives in the shared helper rather than being restated per block. RSpec scopes a `def`
+  # to its own example group, so a helper defined in either block is invisible to the other; that
+  # is how it came to be written twice here before it was hoisted out of the file entirely.
 
   describe "a repository with an ingested run" do
     let!(:test_run) do
@@ -99,12 +85,12 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
       expect(body["api_key"]).to have_key("last_used_at")
     end
 
-    # The documented body is the whole feature here — an agent finds out `history` exists by reading
-    # `docs/DEVELOPMENT.md`, not by diffing responses. So the top level is pinned EXACTLY rather
-    # than key by key: a sixth key added without a line in that doc fails here, and a documented key
-    # quietly dropped fails here too. `contain_exactly` is what makes it bidirectional; `have_key`
-    # per block would catch neither.
-    it "serves exactly the top-level keys docs/DEVELOPMENT.md documents" do
+    # The body is the whole feature here, and THIS FILE IS ITS CONTRACT — there is no prose copy to
+    # read it off, so an agent finds out `history` exists by reading the list below, not by diffing
+    # responses. So the top level is pinned EXACTLY rather than key by key: a key added without a
+    # line in that list fails here, and a listed key quietly dropped fails here too.
+    # `contain_exactly` is what makes it bidirectional; `have_key` per block would catch neither.
+    it "serves exactly the top-level keys this contract pins" do
       expect(get_repository.keys)
         .to contain_exactly("repository", "api_key", "latest_run", "history_window", "history",
                             "branches_window", "branches")
@@ -208,9 +194,9 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
     end
 
     # THE IDENTITY. In the unfiltered window `history[0]` is the SAME ROW as `latest_run` — pinned
-    # in docs/DEVELOPMENT.md and protected by `history_runs`' shared ordering — so one response body
-    # here describes one database row twice. Before this key was served on `latest_run`, those two
-    # descriptions could disagree: the row said `suite_size_measured: false` as `history[0]` and
+    # by the guards in this file and protected by `history_runs`' shared ordering — so one response
+    # body here describes one database row twice. Before this key was served on `latest_run`, those
+    # two descriptions could disagree: the row said `suite_size_measured: false` as `history[0]` and
     # could not say it at all thirty lines up.
     #
     # Read off the two blocks and compared to each other rather than against a hard-coded `false`,
@@ -333,11 +319,11 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
       run
     end
 
-    # The doc-drift guard at the top of this file, carried down to the levels its SELECTOR cannot
+    # The key-set guard at the top of this file, carried down to the levels its SELECTOR cannot
     # reach. `get_repository.keys` is depth 1: it pins the seven top-level names and nothing inside
-    # them, so SPGD-234 added three keys at depth 3 with no line in `docs/DEVELOPMENT.md` and went
-    # green straight past it. A reviewer caught that by hand on a 6/6 git precedent, and `bin/ci`
-    # has no doc-drift step (`config/ci.rb` confirms) — hand-review was the only signal there was.
+    # them, so SPGD-234 added three keys at depth 3 that no guard here named, and went green
+    # straight past it. A reviewer caught that by hand on a 6/6 git precedent, and `bin/ci` has no
+    # contract-drift step (`config/ci.rb` confirms) — hand-review was the only signal there was.
     #
     # WHAT WAS ACTUALLY UNGUARDED, established by mutation rather than by reading. The value
     # assertions in this block are full-hash `eq`s, so they DO pin these key sets today: appending
@@ -348,7 +334,7 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
     # under `if decomposable` leaves this whole file green, and so does a `latest_run` key served
     # only `if multi_shard?`. That is precisely where SPGD-234's three keys landed. They were
     # caught only because their contract makes them present-and-null when withheld; written the
-    # natural way — absent when withheld — they would have shipped with no doc line and no red
+    # natural way — absent when withheld — they would have shipped named by nothing and with no red
     # spec at all.
     #
     # So these guards are stated on the OPEN gate, where nothing was watching, and the closed gate
@@ -358,13 +344,13 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
     # KEYS, NOT VALUES, on the precedent the `history[]` row guard sets further down. The `eq`s
     # above pin these names only as a side effect of asserting one fixture's arithmetic, and they
     # read as cost-figure examples; a guard whose stated subject IS the key set survives a fixture
-    # whose numbers change, and says out loud what a new key owes the doc before it ships.
-    def documented_shard_keys
+    # whose numbers change, and says out loud what a new key owes this list before it ships.
+    def contract_shard_keys
       %w[count timed_count machine_seconds coverage rows balanced_wall_clock_seconds
          wall_clock_excess_seconds per_shard]
     end
 
-    it "serves exactly the latest_run keys docs/DEVELOPMENT.md documents, on a sharded run" do
+    it "serves exactly the latest_run keys this contract pins, on a sharded run" do
       sharded_run([61.0, 58.5, 74.25, 60.0], commit_sha: "feedfacecafe0198", settled: true)
       # The composition neither existing `latest_run` pin sees — both are written against the
       # unsharded fixture. Asserted BEFORE the keys are read, so this cannot quietly become a
@@ -377,7 +363,7 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
                             "suite_size_measured", "ingested_at")
     end
 
-    it "serves exactly the documented shards keys once the decomposition is open" do
+    it "serves exactly the shards keys this contract pins once the decomposition is open" do
       sharded_run([61.0, 58.5, 74.25, 60.0], commit_sha: "feedfacecafe0199", settled: true)
       # `shards` is `null` on an unsharded run, so a key-set assertion that never checked the
       # fixture would be reading `.keys` off `nil` — Vacuous Green, in the file that exists to
@@ -386,7 +372,7 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
       expect(repository.latest_test_run).to be_wall_clock_decomposable
 
       expect(get_repository.dig("latest_run", "shards").keys)
-        .to contain_exactly(*documented_shard_keys)
+        .to contain_exactly(*contract_shard_keys)
     end
 
     it "serves those same keys while the decomposition is withheld" do
@@ -402,7 +388,7 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
       # client tests one thing (`rows == null`) rather than distinguishing an absent key from a
       # null one — and a guard written only against the open gate would pass a change that made
       # the three keys absent here instead, which is the regression the contract exists to stop.
-      expect(shards.keys).to contain_exactly(*documented_shard_keys)
+      expect(shards.keys).to contain_exactly(*contract_shard_keys)
       expect(shards.values_at("rows", "balanced_wall_clock_seconds", "wall_clock_excess_seconds"))
         .to all(be_nil)
     end
@@ -1538,7 +1524,7 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
     end
 
     # AC3. The walk's bound, as tokens. Whole-hash, because this block IS the contract — a key
-    # added without a line in docs/DEVELOPMENT.md fails here, and a documented key dropped fails
+    # added without a line in the hash below fails here, and a pinned key dropped fails
     # here too.
     it "states the walk's bound and its own ordering as tokens, not as the helper's prose" do
       trunk_hidden_repository

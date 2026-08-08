@@ -46,6 +46,42 @@ class SpecObservation < ApplicationRecord
   # ranked, and one number standing for both would make that a single edit nobody meant to make.
   HEAVIEST_FILES_LIMIT = 10
 
+  # How many spec DIRECTORIES a by-directory rollup returns. Its own constant for the reason
+  # `HEAVIEST_FILES_LIMIT` gives one grain down and by the same rule: a rollup at a different grain
+  # ranks a different population. One run has fewer directories than files and far fewer than
+  # examples, so a suite that wants twenty files ranked has no reason to want twenty areas ranked,
+  # and one number standing for both would make that a single edit nobody meant to make.
+  HEAVIEST_DIRECTORIES_LIMIT = 10
+
+  # How many spec DIRECTORIES a by-directory COMPARISON returns. Its own constant, by the same rule
+  # the three above it obey and for a difference that is bigger here than any of theirs: those rank
+  # ONE run's areas by what they cost, this ranks the areas of TWO runs by how far their example
+  # counts MOVED. The population is the union of two runs' directories rather than one run's, and
+  # the quantity ranked is a signed change rather than a total — so a suite that wants ten areas by
+  # wall clock has no reason to want ten areas by movement, and one number standing for both would
+  # make that a single edit nobody meant to make.
+  MOVED_DIRECTORIES_LIMIT = 10
+
+  # The code area a row belongs to: the IMMEDIATE PARENT directory of the including file.
+  #
+  # Off `spec_file_path` and never `file_path`, for the reason `#file_durations_in` states and the
+  # class comment above states first — a shared example group's time has to land on the area that
+  # RAN it, not on the `spec/support/` area that defines it.
+  #
+  # `substring(... from '^(.*)/[^/]*$')` rather than a `regexp_replace` of the trailing segment,
+  # because the two differ on the row that has no directory at all. `.*` is greedy, so the capture
+  # ends at the LAST separator and the parent is immediate rather than the root. A path carrying no
+  # separator — a spec file sitting at the repository root — matches nothing and comes back SQL
+  # NULL, which as a GROUP BY key would be an unnamed area on the panel; `COALESCE` names it `.`,
+  # which is what `Pathname#dirname` calls that directory and what the reader will recognise.
+  # Coalescing rather than filtering, because dropping those rows would silently understate the
+  # run's wall clock at the one grain that is supposed to account for all of it.
+  #
+  # One constant, referenced by the GROUP BY, the ORDER BY tiebreak and the projection alike: three
+  # hand-copies of one expression is three definitions of what an area IS, and Postgres would
+  # happily group by one and select another.
+  DIRECTORY_EXPRESSION = "COALESCE(substring(spec_file_path from '^(.*)/[^/]*$'), '.')"
+
   # Rows that carry a measurement. **The exclusion is in SQL, and it is load-bearing.**
   #
   # `duration_seconds` is nullable by design: `Ingest::ObservationRecorder#attributes` writes
@@ -369,6 +405,136 @@ class SpecObservation < ApplicationRecord
     return 0 if run_ids.empty?
 
     where(repository_id: repository_id, test_run_id: run_ids, name: nil).count
+  end
+
+  # Where ONE run's wall clock went, rolled up by DIRECTORY — the rung directly above the rollup
+  # above, and the grain the question is usually asked in. "Which area of this suite carries the
+  # time" is not answerable from a ranked list of files any more than it was from a ranked list of
+  # examples: a directory holding forty files at two seconds each is eighty seconds of the run with
+  # not one of its files near the head of a by-file top ten. Concentration re-concentrates one rung
+  # up, and each rung has to be summed to be seen.
+  #
+  # Grouped on `DIRECTORY_EXPRESSION` — the immediate parent of the INCLUDING file — so a shared
+  # example group's time lands on the area that ran it rather than on `spec/support`, and so the
+  # areas listed partition the run rather than nesting inside one another. Depth selection and
+  # drill-down trees are a different question and deliberately not this one: every row here is at
+  # the same depth as its own file, so the totals are disjoint and sum to the run.
+  #
+  # NOT a shard. `TestRun#shard_durations` rolls a run up by CI partition and its comment is
+  # explicit that "a shard is not a code area" — RSpec/Knapsack partitions are arbitrary with
+  # respect to directory structure. That grain answers "which partition ran long"; this one answers
+  # "which area of the codebase costs", and neither is derivable from the other.
+  #
+  # @return [Array<Array>] `[directory, total_seconds, recorded_count, timed_count, directory_count]`
+  #   per directory, where `directory_count` is the same figure on every row: how many directories
+  #   the run touched in total, before the `LIMIT`.
+  #
+  # == Every hazard the by-file read documents, at this grain
+  #
+  # The four columns, `pluck` over `.sum`, and `NULLS LAST` are all here for the reasons spelled
+  # out on `.file_durations_in` above — read that comment, it is not repeated. What changes with
+  # the grain is only how much each one costs when it is got wrong: an area is a bigger population
+  # than a file, so an all-untimed area rendered as `0.00s` is a bigger invented measurement, and
+  # `SUM(...) DESC`'s NULLS FIRST would name that area the heaviest in the suite.
+  #
+  # == Why this needs no index of its own
+  #
+  # It groups on an EXPRESSION and narrows on a COLUMN, and only the second decides the access
+  # path. `where(test_run_id:)` is served by `index_spec_observations_on_test_run_id` and the
+  # grouping hash-aggregates on top of it — the same plan `.file_durations_in` gets and for the
+  # same reason spec/models/spec_observation_spec.rb states there: the aggregate has to touch the
+  # heap for `duration_seconds` either way, so no wider index buys a whole-run grouping anything.
+  # A `text_pattern_ops` index governs a prefix PREDICATE — "every row under `spec/models/`" — and
+  # this read has no prefix predicate to serve. Both claims are EXPLAIN-certified at the 20-run
+  # seed in that spec rather than argued for here.
+  def self.directory_durations_in(test_run, limit: HEAVIEST_DIRECTORIES_LIMIT)
+    where(test_run_id: test_run.id)
+      .group(Arel.sql(DIRECTORY_EXPRESSION))
+      .order(Arel.sql("SUM(duration_seconds) DESC NULLS LAST"), Arel.sql("#{DIRECTORY_EXPRESSION} ASC"))
+      .limit(limit)
+      .pluck(Arel.sql(DIRECTORY_EXPRESSION), Arel.sql("SUM(duration_seconds)"),
+             Arel.sql("COUNT(*)"), Arel.sql("COUNT(duration_seconds)"),
+             Arel.sql("COUNT(*) OVER ()"))
+  end
+
+  # How each code AREA's example count MOVED between two runs — the first read on this table that
+  # spans more than one `test_run_id`, and the reason it is allowed to is worth stating precisely.
+  #
+  # == It compares POPULATIONS, and matches no rows
+  #
+  # Every other read here is scoped to one run because `example_id` is positional and explicitly
+  # not stable across refactors (see the class comment and `.slowest_in`), so a ranking spanning
+  # runs would be pairing rows not known to be the same test. **This pairs none.** It counts the
+  # rows in each area of run A and the rows in each area of run B and subtracts the two integers.
+  # No per-example key crosses the boundary, no example is matched to another example, and nothing
+  # here claims a given test is the same test. That caution is about matching ROWS and this read
+  # matches none of them — which is why it does not reopen the question the caution closes. A
+  # future edit that joins these runs on `example_id`, or on any other per-example key, has left
+  # what this method is allowed to say.
+  #
+  # == What a count here is, and is not
+  #
+  # `COUNT(*)` over each run's own rows, never `TestRun#total_specs_count`: that column is
+  # re-derived by SUM over shard reports and `Ingest::ObservationRecorder#record` returns a row
+  # count *"not always `specs.size`"*, so the two can legitimately differ — and there is no
+  # by-directory counter anywhere else to borrow in any case. The caller is responsible for having
+  # established that a difference between the two runs is a change in the SUITE rather than in how
+  # much of it has been reported; `SpecDirectoryGrowth` is where that gate lives.
+  #
+  # == FILTER aggregates, not a two-key grouping pivoted in Ruby
+  #
+  # One group per AREA with each side counted by its own `FILTER`, rather than grouping on
+  # `(directory, test_run_id)` and pivoting the pairs afterwards. The two read the same rows and
+  # cost the same scan; what only this shape can do is rank and cap in SQL. `ABS(...) DESC` needs
+  # both sides of the subtraction on ONE row, and with them there the `COUNT(*) OVER ()` counts
+  # AREAS before the `LIMIT` — the same total-before-cap the by-directory rollup above uses, for
+  # the same reason: a caption reading "the 10 of 63 areas that moved most" cannot then be
+  # describing a different row set from the table under it. A pivot would have to take its ranking
+  # and its cap in Ruby over every group of both runs, and count its areas off a Hash built after
+  # the fact.
+  #
+  # `FILTER` over `CASE WHEN`/`SUM` because it is the same construct the outcome counters on this
+  # table already use, and the plan certification there records what it costs: new expressions over
+  # a row set the surrounding `COUNT(*)` already reads add no scan of their own.
+  #
+  # == An absent area is not a zero, and the caller is told which
+  #
+  # A group exists here if and only if at least ONE of the two runs wrote a row for that area, so a
+  # side reading 0 wrote nothing for it. Whether that means "new area" or "this run recorded
+  # nothing at all" is not decidable from the row — so the two `SUM(...) OVER ()` totals report
+  # each run's whole recorded population, before the `LIMIT` and independent of it. A caller
+  # holding a zero on one of those knows the side is empty and can withhold the comparison instead
+  # of rendering an entire suite as deleted.
+  #
+  # Ranked by ABSOLUTE movement, both directions. A suite that deleted 300 examples from one area
+  # answers "which areas moved" exactly as much as one that added them, and a `DESC`-only ranking
+  # on the signed change would put every deletion below every addition and off the end of the cap.
+  # `DIRECTORY_EXPRESSION` breaks ties, so two areas that moved equally have a stable order rather
+  # than one the planner picks afresh per request.
+  #
+  # == Why this needs no index of its own
+  #
+  # It narrows on `test_run_id` — an `IN` list of two — and groups on an EXPRESSION, and only the
+  # first decides the access path. `index_spec_observations_on_test_run_id` serves it and the
+  # grouping hash-aggregates on top, which is the plan `.directory_durations_in` gets one method
+  # up; two runs is twice the rows, not a different shape. EXPLAIN-certified at the 20-run seed in
+  # spec/models/spec_observation_spec.rb rather than argued for here.
+  #
+  # @return [Array<Array>] `[directory, previous_count, latest_count, directory_count,
+  #   previous_recorded, latest_recorded]` per directory, ranked by absolute movement. The last
+  #   three are the same figures on every row: how many areas the two runs touched between them,
+  #   and how many rows each run recorded in total — all three counted before the `LIMIT`.
+  def self.directory_growth_between(test_run, previous_test_run, limit: MOVED_DIRECTORIES_LIMIT)
+    latest = sanitize_sql_array(["COUNT(*) FILTER (WHERE test_run_id = ?)", test_run.id])
+    previous = sanitize_sql_array(["COUNT(*) FILTER (WHERE test_run_id = ?)", previous_test_run.id])
+
+    where(test_run_id: [test_run.id, previous_test_run.id])
+      .group(Arel.sql(DIRECTORY_EXPRESSION))
+      .order(Arel.sql("ABS(#{latest} - #{previous}) DESC"), Arel.sql("#{DIRECTORY_EXPRESSION} ASC"))
+      .limit(limit)
+      .pluck(Arel.sql(DIRECTORY_EXPRESSION), Arel.sql(previous), Arel.sql(latest),
+             Arel.sql("COUNT(*) OVER ()"),
+             Arel.sql("SUM(#{previous}) OVER ()"), Arel.sql("SUM(#{latest}) OVER ()"))
   end
 
   # What to call this row on a surface that lists it. `name` is what the client sent as the

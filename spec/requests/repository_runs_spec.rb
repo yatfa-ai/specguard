@@ -35,20 +35,9 @@ RSpec.describe "Repository recent runs", type: :request do
 
   def runs_panel = Capybara.string(response.body).find("#recent-runs")
 
-  # File-level rather than inside one describe: two blocks below hold a query-budget example — the
-  # composition sub-line's and the duration coverage's — and they pin the same panel's budget
-  # against the same N+1 shape. Two copies of a subscriber this fiddly is how the two would end up
-  # counting different things.
-  def count_queries
-    count = 0
-    subscriber = ActiveSupport::Notifications.subscribe("sql.active_record") do |_, _, _, _, payload|
-      count += 1 unless payload[:cached] || payload[:name].in?(["SCHEMA", "TRANSACTION"])
-    end
-    yield
-    count
-  ensure
-    ActiveSupport::Notifications.unsubscribe(subscriber)
-  end
+  # `count_queries` comes from spec/support/query_capture.rb. Two blocks below hold a query-budget
+  # example — the composition sub-line's and the duration coverage's — and they pin the same panel's
+  # budget against the same N+1 shape, so they must agree on what a query is.
 
   it "lists a run's commit, branch, suite size, duration, annotation share and age" do
     repository = create_repository(user: @user)

@@ -269,16 +269,7 @@ RSpec.describe "Repository heaviest spec files", type: :request do
   # as on a 20-example one. A `group_by` over `has_many` walked in Ruby is exactly the shape that
   # ships green on a three-row fixture and takes the page down on a real suite.
   describe "what the panel costs" do
-    def queries_against(table)
-      queries = []
-      subscriber = ActiveSupport::Notifications.subscribe("sql.active_record") do |_, _, _, _, payload|
-        queries << payload[:sql] if payload[:name] != "SCHEMA" && payload[:sql].to_s.include?(table)
-      end
-      yield
-      queries
-    ensure
-      ActiveSupport::Notifications.unsubscribe(subscriber)
-    end
+    # `queries_against` comes from spec/support/query_capture.rb.
 
     it "costs the same number of queries at 200 examples over 25 files as at 3 over 3" do
       small = create_repository(user: @user, github_full_name: "acme/small-suite")
@@ -298,29 +289,36 @@ RSpec.describe "Repository heaviest spec files", type: :request do
       expect(rows.size).to eq(SpecObservation::HEAVIEST_FILES_LIMIT)
       expect(large_queries.size).to eq(small_queries.size)
       # An absolute ceiling too: equality alone would still hold if both pages regressed to a
-      # fixed-but-wasteful number of passes over the same table. Four reads of this table serve
+      # fixed-but-wasteful number of passes over the same table. FIVE reads of this table serve
       # this page — the ranking and its coverage aggregate for the "Slowest tests" panel above, ONE
-      # grouped aggregate for this one, and the cross-run panel's gating probe (this fixture holds
-      # a single run, so that panel establishes it cannot compare outcomes and asks nothing
-      # further; its own budget is asserted in spec/requests/repository_unstable_tests_spec.rb).
-      # That third query is this panel's entire budget.
-      expect(large_queries.size).to eq(4)
-      expect(large_queries.count { |sql| sql.include?("GROUP BY") }).to eq(1)
+      # grouped aggregate for this one, ONE more for the "Heaviest spec directories" panel below
+      # it, which takes these same rows up to the code area, and the cross-run panel's gating probe
+      # (this fixture holds a single run, so that panel establishes it cannot compare outcomes and
+      # asks nothing further; its own budget is asserted in
+      # spec/requests/repository_unstable_tests_spec.rb). That fourth query is the directory
+      # panel's entire budget, as the third is this one's: each rung is one grouped aggregate and
+      # neither is derivable from the other.
+      expect(large_queries.size).to eq(5)
+      expect(large_queries.count { |sql| sql.include?("GROUP BY") }).to eq(2)
     end
   end
 
-  # The panel above this one used to declare a by-file rollup something this page does not do, in a
-  # comment addressed to future authors. Half of that claim is now false and the other half — by
-  # DIRECTORY — is still true and still load-bearing: there is no `text_pattern_ops` index, so a
-  # subtree rollup has no indexed path under this database's collation. A stale disclosure is a live
-  # instruction not to build the thing that is now built; a deleted one loses the reason the
-  # remaining half is excluded.
-  describe "the carve-out the panel above states" do
-    it "no longer tells its authors the page rolls nothing up by file" do
+  # The panel above this one used to declare a by-file rollup something this page does not do, and
+  # the panel itself used to defer the by-DIRECTORY rollup to an index that was never needed. Both
+  # halves are now false: the two rollups sit on this page as two panels. A stale disclosure is a
+  # live instruction not to build the thing that is now built, so neither claim may survive — and
+  # the by-directory one may not survive in the softened spelling either, since "rolls nothing up
+  # by directory" is exactly the sentence a reader would take as a standing prohibition.
+  describe "the carve-outs the panels above state" do
+    it "no longer tells its authors the page rolls nothing up by file or by directory" do
       source = Rails.root.join("app/views/repositories/show.html.erb").read
 
       expect(source).not_to include("rolls nothing up by file or directory")
-      expect(source).to include("rolls nothing up by directory")
+      expect(source).not_to include("rolls nothing up by directory")
+      # And the migration the by-file panel deferred the subtree rollup to is not still being
+      # waited on: the rollup shipped without one, because the index that comment named governs a
+      # prefix predicate this read does not issue.
+      expect(source).not_to include("needs its own migration")
     end
   end
 end

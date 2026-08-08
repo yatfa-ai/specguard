@@ -187,18 +187,8 @@ RSpec.describe "Repository registration and API keys", type: :request do
     # The marker for a creator who no longer holds access. Its own describe rather than more
     # examples above, because every one of these needs the same two-people-and-a-revocation setup.
     describe "a key whose creator has since lost access" do
-      # Counts the SELECTs a block issues, so "no per-row query" is asserted rather than eyeballed.
-      # Schema reads and cached repeats are excluded: neither is work this page chose to do.
-      def count_queries
-        count = 0
-        subscriber = ActiveSupport::Notifications.subscribe("sql.active_record") do |_, _, _, _, payload|
-          count += 1 unless payload[:cached] || payload[:name].in?(["SCHEMA", "TRANSACTION"])
-        end
-        yield
-        count
-      ensure
-        ActiveSupport::Notifications.unsubscribe(subscriber)
-      end
+      # `count_queries` comes from spec/support/query_capture.rb: schema reads and cached repeats
+      # are excluded, so "no per-row query" is asserted rather than eyeballed.
 
       # A colleague who minted a key and whose membership was then destroyed — reachable on main
       # today: MembershipsController#destroy touches no api_keys row, so the key outlives the
@@ -1493,6 +1483,15 @@ RSpec.describe "Repository registration and API keys", type: :request do
       # ordinary widening — is the equality across two suite sizes in
       # spec/requests/repository_spec_file_durations_spec.rb.
       #
+      # RECOUNTED AT 17 by SPGD-292, which added the "Heaviest spec directories" panel: ONE further
+      # read of `spec_observations`, a second grouped aggregate taking the same run's rows up one
+      # rung to the code area (see `SpecDirectoryDurations`). Not derivable from the by-file read
+      # and therefore not free: a by-file top ten shows ten files, and a directory outweighing all
+      # of them can have no row in it. Issued on this fixture for the same reason the three above
+      # are — the run recorded no examples, the aggregate comes back empty and the panel renders
+      # nothing. Its own N+1 guard is the equality across two suite sizes in
+      # spec/requests/repository_spec_file_durations_spec.rb, alongside the by-file panel's.
+      #
       # QUERY-CACHE HITS ARE COUNTED, unlike the panel's other budget guards. A repeated identical
       # SELECT inside one request costs no round trip and is invisible to a `payload[:cached]`
       # filter — which is exactly how a dropped `@shard_durations ||=` would slip through, and
@@ -1510,13 +1509,15 @@ RSpec.describe "Repository registration and API keys", type: :request do
         # first-request-only work cannot land in it.
         get repository_path(repository)
 
-        expect(count_all_queries { get repository_path(repository) }).to eq(16)
+        expect(count_all_queries { get repository_path(repository) }).to eq(17)
         # And the page really did render the thing being counted — an absolute count is satisfied
         # by a page that renders nothing at all.
         expect(distribution.all("li").size).to eq(4)
         expect(distribution).to have_text("5,000 tests", normalize_ws: true)
       end
 
+      # NOT `count_queries` from spec/support/query_capture.rb: this one keeps the `payload[:cached]`
+      # repeats the shared helper drops, for the reason the example above gives.
       def count_all_queries
         count = 0
         subscriber = ActiveSupport::Notifications.subscribe("sql.active_record") do |_, _, _, _, payload|

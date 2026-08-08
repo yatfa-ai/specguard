@@ -4,10 +4,16 @@
 # surface listing them has to state about the window they were drawn from and the rule they were
 # matched by.
 #
-# The first read this application makes of `spec_observations` ACROSS runs. Every reader before it
-# — `SlowestExamples`, `SpecFileDurations`, `SpecObservation::COVERAGE_COUNTS` — is bounded to one
-# run on purpose, because "the slowest tests in this run" is a question one run's rows answer and
-# "is this test flaky" is not. This is the second question, and it needs a matching rule to ask.
+# The first read this application makes that MATCHES A TEST TO ITSELF across runs. Every reader
+# before it either bounds itself to one run on purpose — `SlowestExamples`, `SpecFileDurations`,
+# `SpecDirectoryDurations`, `SpecObservation::COVERAGE_COUNTS` — or, in `SpecDirectoryGrowth`'s
+# case, spans two runs while pairing nothing inside them: it counts rows per area on each side and
+# subtracts two integers, and its own comment is explicit that no example crosses the run boundary.
+# That is the difference this object turns on. "The slowest tests in this run" is a question one
+# run's rows answer and "did this area grow" is a question two populations answer, but "is this
+# test flaky" is a question about ONE test seen in several runs, and it cannot be asked without a
+# rule for deciding that two rows in two runs are the same test. This is that question, and the
+# rule it needs is the next section.
 #
 # == The rule is the description, and the panel says so
 #

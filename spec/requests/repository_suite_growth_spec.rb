@@ -419,16 +419,7 @@ RSpec.describe "Repository suite-size growth", type: :request do
   # examples can honestly hold is that the comparison adds no per-row work: it costs the same
   # whether it finds a predecessor or not, and the same however long the branch's history is.
   describe "what the comparison costs the page" do
-    def count_queries
-      count = 0
-      subscriber = ActiveSupport::Notifications.subscribe("sql.active_record") do |_, _, _, _, payload|
-        count += 1 unless payload[:cached] || payload[:name].in?(["SCHEMA", "TRANSACTION"])
-      end
-      yield
-      count
-    ensure
-      ActiveSupport::Notifications.unsubscribe(subscriber)
-    end
+    # `count_queries` comes from spec/support/query_capture.rb.
 
     it "costs one query more when it finds a run to compare against — the coverage check on it" do
       repository = create_repository(user: @user)
@@ -446,12 +437,25 @@ RSpec.describe "Repository suite-size growth", type: :request do
                                    created_at: 1.minute.ago)
       get repository_path(repository)
 
-      # Exactly one, and it is named rather than absorbed: the shard aggregate on the comparison
-      # run, which is what `TestRun#assembled_like?` reads and what stops the panel differencing
-      # two rows of unequal coverage. The latest run's own aggregate is not new — the cost rows
-      # already paid for it — and this one is bounded by a run's shard count, so the Overview stays
-      # O(1) in suite size exactly as before.
-      expect(count_queries { get repository_path(repository) }).to eq(baseline + 1)
+      # TWO, and both are named rather than absorbed, because finding a predecessor is what unlocks
+      # both of the page's cross-run comparisons and they are separate reads:
+      #
+      #   1. the shard aggregate on the comparison run, which is what `TestRun#assembled_like?`
+      #      reads and what stops THIS panel differencing two rows of unequal coverage;
+      #   2. the by-area comparison behind the "Areas that grew or shrank" panel
+      #      (`SpecDirectoryGrowth`), which rides the same `@previous_test_run` this panel found.
+      #
+      # The second is counted here even though these two runs wrote no per-example rows and that
+      # panel therefore renders no table: whether either run recorded any is not decidable without
+      # asking, so the query is the answer rather than a cost paid on top of it. Its own file
+      # (spec/requests/repository_spec_directory_growth_spec.rb) is where that panel's budget is
+      # pinned — including the three states it decides WITHOUT a query, which is what stops this
+      # number growing to three.
+      #
+      # The latest run's own shard aggregate is not new — the cost rows already paid for it — and
+      # neither of these grows with the size of the suite, so the page stays O(1) in it exactly as
+      # before. A second predecessor lookup, or one aggregate per candidate, still shows up here.
+      expect(count_queries { get repository_path(repository) }).to eq(baseline + 2)
       expect(delta_figure.text).to eq("+2")
     end
 
