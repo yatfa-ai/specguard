@@ -281,7 +281,7 @@ RSpec.describe EmbeddingGenerator do
       # The documented limitation, asserted rather than merely written down. This is lexical
       # similarity: two names for the same behaviour that share no vocabulary are near-orthogonal,
       # exactly as if they were unrelated. Duplicate detection built on this provider sees only the
-      # duplicates that were phrased alike. See docs/embedding-collision-audit.md.
+      # duplicates that were phrased alike. See the LocalProvider class documentation.
       it "does NOT match the same behaviour described in different words" do
         payment_required = described_class.call("returns 402 payment required")
         rejection = described_class.call("declines the purchase")

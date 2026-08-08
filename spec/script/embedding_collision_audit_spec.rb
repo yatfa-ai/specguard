@@ -4,7 +4,7 @@ require "rails_helper"
 require "tmpdir"
 require_relative "../../script/embedding_collision_audit"
 
-# The audit script produces a number that docs/embedding-collision-audit.md records as fact and that
+# The audit script produces a number that ticket SPGD-252 records as fact and that
 # roadmap SPGD-72 is expected to pick a similarity threshold from. These specs are what make that
 # number trustworthy: they pin the two places the measurement could be quietly wrong — a corpus of
 # names RSpec would never produce, and a "hashed" vector that is not the one production stores.

@@ -176,10 +176,10 @@ class EmbeddingGenerator
   #
   # 1536 buckets is a small target for an unbounded feature space, so distinct features do land on
   # the same dimension. `script/embedding_collision_audit.rb` measures what that costs at this
-  # product's scale — 20,000 real RSpec example names from a single codebase — and
-  # `docs/embedding-collision-audit.md` records the corpus, the method and the result. Read the
-  # result before choosing any similarity threshold; it is the evidence a threshold should be
-  # picked from.
+  # product's scale — 20,000 real RSpec example names from a single codebase — printing the corpus
+  # it used, the method and the result; ticket SPGD-252 records the run it was measured on. Read
+  # that result before choosing any similarity threshold; it is the evidence a threshold should be
+  # picked from, and the script re-derives it on whatever corpus you point it at.
   class LocalProvider
     NGRAM_SIZE = 3
 

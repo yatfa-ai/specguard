@@ -551,17 +551,3 @@ Four tables plus the `vector` extension, per the *SpecGuard — Data Model* spec
 constraint is the unique index on `(repository_id, file_path, line_number)`: it is the identity of
 a spec intent and the backstop that makes Phase 2's ingestion idempotent. `spec_intents.embedding`
 is `vector(1536)` with an HNSW index for cosine similarity, queried through the `neighbor` gem.
-
-## Embeddings
-
-`EmbeddingGenerator.call(text)` returns a 1536-wide unit vector. It needs **no API key, no network
-and no service to run**: the default provider (`EmbeddingGenerator::LocalProvider`) hashes words and
-3-character n-grams into the vector in-process, in pure Ruby, at zero cost. `OpenAIProvider` remains
-in the codebase as the interface's other implementation; install it explicitly in an initializer if
-you want to pay for embeddings.
-
-The trade is that this measures **lexical** overlap, not meaning: two tests describing the same
-behaviour in different words do not match. See the class documentation for the full statement of
-that, and [`docs/embedding-collision-audit.md`](embedding-collision-audit.md) for the measured cost
-of hashing 13,544 features into 1,536 dimensions at 20,000 tests — the evidence any similarity
-threshold should be chosen from.

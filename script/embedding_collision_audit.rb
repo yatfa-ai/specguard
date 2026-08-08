@@ -56,8 +56,8 @@
 #     WORKERS     forked processes for the pair sweep (default: processor count)
 #     THRESHOLDS  comma-separated cosine thresholds to report (default 0.95,0.88,0.80,0.75)
 #
-# The corpus, the commit it was taken from, and the numbers this printed are recorded in
-# docs/embedding-collision-audit.md.
+# The corpus, the commit it was taken from, and the numbers this printed are recorded on ticket
+# SPGD-252. Re-running the script reproduces them from scratch.
 
 require "digest"
 require "etc"
