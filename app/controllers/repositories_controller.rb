@@ -140,6 +140,19 @@ class RepositoriesController < ApplicationController
       runs: @repository.suite_size_trajectory(@trajectory_run),
       branch: @trajectory_run&.branch
     )
+    # The slowest examples of the run every panel above names, with the coverage the panel states
+    # them to. The first read this application has ever made of `spec_observations` — until those
+    # rows landed, "which tests are slow" was a question the schema could not answer, and this page
+    # said so in as many words.
+    #
+    # Guarded on there being a run at all, and on nothing else: with no run there is nothing to
+    # rank, and the Overview's "No CI run has reported yet" is this page's one statement of that.
+    # Whether the run recorded any examples, and whether any of them were timed, are questions the
+    # object answers — the panel branches on them rather than the controller, so the figures it
+    # prints and the rows it lists come from one read of one run.
+    #
+    # Two bounded queries, neither growing with the size of the suite: see `SlowestExamples`.
+    @slowest_examples = SlowestExamples.for(@latest_test_run) if @latest_test_run
     # Set by ApiKeysController#create and readable exactly once — see ApiKeysController.
     @revealed_token = flash[:revealed_api_key]
     @revealed_token_name = flash[:revealed_api_key_name]

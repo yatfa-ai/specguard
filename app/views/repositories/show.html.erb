@@ -456,9 +456,20 @@
                 between a run worth acting on and one that is not, and the part no surface has ever
                 been able to say.
 
-                About SHARDS, never about tests. Nothing in the schema records how long any single
-                test took, so "which tests are slow" stays unanswerable and no wording here may
-                imply otherwise: every noun below is a shard, a split, or the suite as a whole. %>
+                About SHARDS, never about tests: every noun below is a shard, a split, or the suite
+                as a whole, and no wording here may imply otherwise. The rule is unchanged; its old
+                justification is not. This paragraph used to say that nothing in the schema recorded
+                how long any single test took and that "which tests are slow" was therefore
+                unanswerable — true when it was written, and false since `spec_observations` began
+                retaining one timed row per example per run. The "Slowest tests" panel further down
+                this page answers exactly that question off those rows.
+
+                So the rule now stands on the stronger footing rather than on a missing table: these
+                figures are a MAX and a SUM over shard rows, and no arithmetic over them recovers
+                what any one test cost. A per-test claim here would not merely overreach — it would
+                compete, in different numbers, with a surface that answers the question properly.
+                (Retiring a note the moment its premise lapses is what
+                `app/controllers/concerns/shard_count_preloading.rb` did for its own.) %>
             <% if @latest_test_run.wall_clock_decomposable? %>
               <%# One condition read once and branched on twice, so the sentence between the two —
                   the floor, and what a floor is — exists in exactly one copy. It is the same
@@ -1262,6 +1273,107 @@
                 ) %>
           <% end %>
         </div>
+      <% end %>
+    <% end %>
+
+    <%# == The slowest tests of the latest run
+        The first surface SpecGuard renders off `spec_observations`. Every other panel on this page
+        is about runs or about SHARDS: the Overview can say a slice ran long and cannot say which
+        test made it, because until these rows landed there was nothing that knew.
+
+        ONE run — the same run the Overview names — and deliberately not the repository's history.
+        `SpecObservation#example_id` is RSpec's positional id and explicitly not stable across
+        refactors, so a ranking that spanned runs would be comparing rows that are not known to be
+        the same test. The model draws that boundary; this panel stays on the near side of it. It
+        also rolls nothing up by file or directory, which is a different question with a different
+        index behind it.
+
+        Rendered only when the run WROTE example rows. A run ingested before those rows existed, or
+        one whose client sends no per-example detail, has no per-test grain to disclose — and an
+        empty panel on every such run would read as a finding about the suite when it is a fact
+        about the payload. Where rows exist and none carried a timing, the panel renders and says
+        so: that IS a fact about the run.
+
+        Outside the `manage_keys` gate, like the Overview, Suite growth and Recent runs — read-only
+        suite telemetry, nothing credential and nothing actionable. %>
+    <% if @slowest_examples&.recorded? %>
+      <%= render UI::PanelComponent.new(title: "Slowest tests", id: "slowest-examples",
+                                        class: "lg:col-span-3") do %>
+        <% if @slowest_examples.any? %>
+          <%# What the list covers, stated before it rather than left to be inferred from its
+              length. A ranked list is read as "the worst of everything" unless it says what
+              everything was, and the two runs this panel most has to keep apart — one where every
+              example reported a duration and one where a tenth of them did not — print an
+              identical ten rows.
+
+              Every figure here is counted off THIS RUN'S ROWS in `spec_observations`, never off
+              `TestRun#total_specs_count` on the Overview panel above. That count is re-derived by
+              SUM over shard reports and the two can legitimately differ, so borrowing it would put
+              a denominator from one measurement under a numerator from another. `SlowestExamples`
+              carries the argument, and holds the list and these figures together so the sentence
+              cannot end up describing a different row set from the one below it. %>
+          <p class="text-xs text-app-muted mb-3" id="slowest-examples-basis">
+            The <%= @slowest_examples.rows.size %>
+            slowest <%= "test".pluralize(@slowest_examples.rows.size) %> of the run named above,
+            slowest first.
+            <% if @slowest_examples.complete? %>
+              Every one of the <%= number_with_delimiter(@slowest_examples.recorded_count) %>
+              <%= "example".pluralize(@slowest_examples.recorded_count) %> this run recorded
+              reported a duration, so the ranking covers the whole of what it reported.
+            <% else %>
+              Ranked over the <%= number_with_delimiter(@slowest_examples.timed_count) %> of
+              <%= number_with_delimiter(@slowest_examples.recorded_count) %> examples this run
+              recorded that reported a duration;
+              <%= number_with_delimiter(@slowest_examples.untimed_count) %> reported none and
+              stayed out of the ranking rather than sorting to the head of it. An example that
+              never ran has no duration to report, so a missing timing is a faithful record rather
+              than a gap — and a row with nothing to compare cannot be the slowest of anything.
+            <% end %>
+            Counted off the rows this run wrote here, which is a different figure from the suite
+            size on the Overview panel and may legitimately differ from it.
+          </p>
+          <%= render UI::TableComponent.new(columns: ["Test", "Duration"],
+                                            describedby: "slowest-examples-basis") do %>
+            <% @slowest_examples.rows.each do |observation| %>
+              <tr>
+                <td class="px-3 py-2 text-app-content">
+                  <%# `name` is nullable — `Ingest::ObservationRecorder` stores a nil for a producer
+                      that sends none — and a blank cell in a ranked list is a row the reader can
+                      neither identify nor go and find. `SpecObservation#label` falls back to the
+                      definition site for exactly that row.
+
+                      The location line below is therefore rendered only when there IS a name to
+                      locate: the fallback already IS the location, and a row wearing it must not
+                      be made to wear it twice. %>
+                  <%= observation.label %>
+                  <% if observation.name.present? %>
+                    <span class="block font-mono text-xs text-app-muted">
+                      <%= observation.location_label %>
+                    </span>
+                  <% end %>
+                </td>
+                <td class="px-3 py-2 text-app-content tabular-nums">
+                  <%# Through `SpecObservation#duration_label`, which is this column's one
+                      formatting seam and carries why a per-example figure is not rendered at the
+                      tenth-of-a-second the run and shard figures on this page use. %>
+                  <%= observation.duration_label %>
+                </td>
+              </tr>
+            <% end %>
+          <% end %>
+        <% else %>
+          <%# Rows exist and not one of them was timed. Not a list of zeroes and not a hidden panel:
+              a zero would be this surface inventing the measurement it is missing, and hiding it
+              would file "this run reported no timings" under "this run reported no tests". %>
+          <%= render UI::EmptyStateComponent.new(
+                title: "No timings on this run",
+                description: "This run recorded " \
+                             "#{number_with_delimiter(@slowest_examples.recorded_count)} " \
+                             "#{'example'.pluralize(@slowest_examples.recorded_count)} and a " \
+                             "duration for none of them, so there is nothing to rank. An example " \
+                             "that never ran reports no duration."
+              ) %>
+        <% end %>
       <% end %>
     <% end %>
 
