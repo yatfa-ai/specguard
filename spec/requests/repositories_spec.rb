@@ -1483,6 +1483,15 @@ RSpec.describe "Repository registration and API keys", type: :request do
       # change to explain as a higher one, since it usually means a figure stopped being read
       # rather than that a query stopped being issued.
       #
+      # RECOUNTED AT 15 by SPGD-266, which added the "Slowest tests" panel: two reads of
+      # `spec_observations` for the whole page — one ranking and one aggregate, neither growing
+      # with the size of the suite (see `SlowestExamples`). Both are issued on this fixture even
+      # though its run recorded no examples and the panel therefore renders nothing, which is the
+      # honest shape of the count: the page asks, finds nothing, and says nothing. The panel's own
+      # guard against the N+1 shape — a `has_many` walked in the view — is an equality across two
+      # suite sizes in spec/requests/repository_slowest_examples_spec.rb, since that is the failure
+      # an absolute count here cannot distinguish from an ordinary widening.
+      #
       # QUERY-CACHE HITS ARE COUNTED, unlike the panel's other budget guards. A repeated identical
       # SELECT inside one request costs no round trip and is invisible to a `payload[:cached]`
       # filter — which is exactly how a dropped `@shard_durations ||=` would slip through, and
@@ -1500,7 +1509,7 @@ RSpec.describe "Repository registration and API keys", type: :request do
         # first-request-only work cannot land in it.
         get repository_path(repository)
 
-        expect(count_all_queries { get repository_path(repository) }).to eq(13)
+        expect(count_all_queries { get repository_path(repository) }).to eq(15)
         # And the page really did render the thing being counted — an absolute count is satisfied
         # by a page that renders nothing at all.
         expect(distribution.all("li").size).to eq(4)

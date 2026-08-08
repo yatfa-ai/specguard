@@ -159,6 +159,158 @@ RSpec.describe SpecObservation do
     end
   end
 
+  # The read `repositories#show` makes off these rows — the first read anything in the application
+  # has ever made of this table.
+  describe "the ranking the by-duration index was built for" do
+    let(:repository) { create_repository }
+    let(:run) { create_test_run(repository: repository) }
+
+    # One example of one run. `duration_seconds:` is passed explicitly at every call site,
+    # including the nils: an untimed row is the state this whole section turns on, and a builder
+    # that defaulted it would let a caller write one without meaning to.
+    def observe(test_run, duration:, line_number:, name: "example #{line_number}", **attrs)
+      SpecObservation.create!(
+        { test_run: test_run, repository: test_run.repository, name: name,
+          example_id: "./spec/a_spec.rb[1:#{line_number}]", file_path: "spec/a_spec.rb",
+          spec_file_path: "spec/a_spec.rb", line_number: line_number, status: "unannotated",
+          duration_seconds: duration }.merge(attrs)
+      )
+    end
+
+    it "returns one run's examples slowest first" do
+      observe(run, duration: 0.5, line_number: 1)
+      observe(run, duration: 9.5, line_number: 2)
+      observe(run, duration: 3.0, line_number: 3)
+
+      expect(described_class.slowest_in(run).map(&:duration_seconds)).to eq([9.5, 3.0, 0.5])
+    end
+
+    # THE example this read exists to get right. `duration_seconds: :desc` is NULLS FIRST in
+    # Postgres, so a naive ordering does not merely include the untimed row — it puts it at the
+    # HEAD of a list captioned "slowest", naming an example that never ran as the slowest thing in
+    # the suite. Both halves are asserted, because "absent" and "not first" fail differently: a
+    # `NULLS LAST` ordering with no exclusion passes the second and fails the first.
+    it "excludes an untimed example rather than sorting it to the head" do
+      observe(run, duration: nil, line_number: 1, name: "never ran")
+      observe(run, duration: 2.0, line_number: 2, name: "ran")
+
+      names = described_class.slowest_in(run).map(&:name)
+
+      expect(names.first).to eq("ran")
+      expect(names).not_to include("never ran")
+    end
+
+    # The exclusion is in the WHERE clause, and that is what this asserts — not merely that the nil
+    # is gone. Rejected in Ruby after a `LIMIT`, the same fixture hands back 2 rows instead of 3:
+    # the untimed rows are fetched, counted against the cap, and only then discarded, so the list
+    # gets shorter on exactly the runs the exclusion matters for.
+    it "fills the limit from timed rows, however many untimed ones sit above them" do
+      observe(run, duration: nil, line_number: 1)
+      observe(run, duration: nil, line_number: 2)
+      3.times { |i| observe(run, duration: (i + 1).to_f, line_number: 10 + i) }
+
+      expect(described_class.slowest_in(run, limit: 3).count).to eq(3)
+    end
+
+    it "caps at the limit it was given" do
+      12.times { |i| observe(run, duration: i.to_f + 1, line_number: i + 1) }
+
+      expect(described_class.slowest_in(run).size).to eq(described_class::SLOWEST_LIMIT)
+      expect(described_class.slowest_in(run, limit: 3).size).to eq(3)
+    end
+
+    it "reads the run it was asked about and no other" do
+      other = create_test_run(repository: repository, commit_sha: "0ther")
+      observe(run, duration: 1.0, line_number: 1, name: "ours")
+      observe(other, duration: 99.0, line_number: 1, name: "theirs")
+
+      expect(described_class.slowest_in(run).map(&:name)).to eq(["ours"])
+    end
+
+    # Ties are ordinary at this grain — a suite's fast examples cluster on the same rounded float —
+    # so the order has to be total, or two requests against unchanged rows can list them
+    # differently.
+    it "breaks ties by id, so equal durations have one order" do
+      first = observe(run, duration: 1.5, line_number: 1)
+      second = observe(run, duration: 1.5, line_number: 2)
+
+      expect(described_class.slowest_in(run).map(&:id)).to eq([first.id, second.id])
+    end
+
+    describe ".timing_coverage_in" do
+      it "counts this run's rows and the ones that carried a duration" do
+        observe(run, duration: 1.0, line_number: 1)
+        observe(run, duration: nil, line_number: 2)
+        observe(run, duration: 3.0, line_number: 3)
+
+        expect(described_class.timing_coverage_in(run)).to eq([3, 2])
+      end
+
+      it "reads zeroes for a run that recorded nothing, rather than nils" do
+        expect(described_class.timing_coverage_in(run)).to eq([0, 0])
+      end
+
+      # The denominator is the rows, never `TestRun#total_specs_count` — which is derived from
+      # shard reports and can legitimately disagree with how many rows the run wrote.
+      it "counts rows even where the run's own suite size says otherwise" do
+        run.update!(total_specs_count: 4_000)
+        observe(run, duration: 1.0, line_number: 1)
+
+        expect(described_class.timing_coverage_in(run)).to eq([1, 1])
+      end
+    end
+
+    describe "how a row states itself" do
+      it "labels itself by name" do
+        row = observe(run, duration: 1.0, line_number: 12, name: "Invoice finalize locks the items")
+
+        expect(row.label).to eq("Invoice finalize locks the items")
+      end
+
+      # `name` is nullable — `Ingest::ObservationRecorder` writes it through `presence_of` — and a
+      # blank label is a row the reader can neither identify nor go and find.
+      it "falls back to its definition site where the client sent no name" do
+        row = observe(run, duration: 1.0, line_number: 12, name: nil)
+
+        expect(row.label).to eq("spec/a_spec.rb:12")
+      end
+
+      it "treats a blank name as no name" do
+        expect(observe(run, duration: 1.0, line_number: 12, name: "").label).to eq("spec/a_spec.rb:12")
+      end
+
+      # `line_number` is the DEFINITION site's line, so the coordinate is built from `file_path`.
+      # Pairing it with `spec_file_path` — the including file, different only for a shared example
+      # group — would print two halves that come from different files.
+      it "locates itself by the file the line number belongs to" do
+        row = observe(run, duration: 1.0, line_number: 7, file_path: "spec/support/shared.rb",
+                           spec_file_path: "spec/models/invoice_spec.rb")
+
+        expect(row.location_label).to eq("spec/support/shared.rb:7")
+      end
+
+      # `TestRun.humanized_seconds` rounds to a tenth, which renders a real 0.04s measurement as
+      # "0.0s" — a measurement wearing the spelling of a zero, at the head of a "slowest" list.
+      it "renders a sub-minute duration at a precision that cannot print a real measurement as zero" do
+        expect(observe(run, duration: 0.04, line_number: 1).duration_label).to eq("0.04s")
+        expect(observe(run, duration: 12.5, line_number: 2).duration_label).to eq("12.50s")
+      end
+
+      it "says a duration is below its own resolution rather than printing a zero" do
+        expect(observe(run, duration: 0.004, line_number: 1).duration_label).to eq("< 0.01s")
+      end
+
+      # A minute and over reads in the words this page already gives a run or a shard.
+      it "hands a long example to the page's own duration wording" do
+        expect(observe(run, duration: 252.0, line_number: 1).duration_label).to eq("4m 12s")
+      end
+
+      it "says an untimed row reported nothing, rather than formatting a nil as zero" do
+        expect(observe(run, duration: nil, line_number: 1).duration_label).to eq("not reported")
+      end
+    end
+  end
+
   # The coordinate identifies the *code*, and a table-driven loop or a shared example group puts
   # many examples on one. `spec_intents` carries a unique index on exactly that triple; repeating
   # it here would collapse the grain this table exists to hold.
