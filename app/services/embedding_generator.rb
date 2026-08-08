@@ -1,8 +1,9 @@
 # frozen_string_literal: true
 
 # Turns a string into an embedding vector. The whole duplicate-detection engine rests on this:
-# ingestion embeds "{entity} {action} {behavior}" for every intent, and /check-intent embeds the
-# proposed one and compares.
+# ingestion embeds "{entity} {action} {behavior}" for every intent, and a lookup embeds the text it
+# is asking about and compares. (Both of those callers are still unbuilt — see the *Overview &
+# Architecture* article for what is actually wired.)
 #
 # ## Contract
 #

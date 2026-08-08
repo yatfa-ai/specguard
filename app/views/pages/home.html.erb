@@ -1,9 +1,15 @@
 <% content_for :title, "SpecGuard" %>
 
 <%= render UI::PageComponent.new do %>
+  <%# The subtitle names the product's purpose (Project Goals: suite intelligence for suites at
+      20,000+ tests) and deliberately claims no capability. It used to read "Semantic test
+      telemetry and duplicate prevention" — prevention was demoted by the owner on 2026-08-06 and
+      the Goals article now says it "is explicitly not what the product is for". Which of the
+      capabilities are actually available is answered by the two panels below, not here: a tagline
+      is the wrong place to draw that line, because a reader cannot tell availability from tense. %>
   <%= render UI::PageHeaderComponent.new(
         title: "SpecGuard",
-        subtitle: "Semantic test telemetry and duplicate prevention, built for AI agents first."
+        subtitle: "Suite intelligence for 20,000-test suites — built for AI agents first."
       ) %>
 
   <div class="grid gap-4 lg:grid-cols-2">
@@ -27,11 +33,60 @@
       </div>
     <% end %>
 
-    <%= render UI::PanelComponent.new(title: "What SpecGuard answers") do %>
-      <%= render UI::DefListComponent.new(rows: [
-            ["Is this behaviour already tested?", "Prevention — /check-intent"],
-            ["Where is the suite duplicated or thin?", "Telemetry — /ingest + dashboard"]
-          ]) %>
+    <%# == Why this is two panels rather than one ==================================================
+        The single "What SpecGuard answers" panel this replaces led with
+        ["Is this behaviour already tested?", "Prevention — /check-intent"]. Both halves of that row
+        were wrong and they compounded: the route is not mounted (`config/routes.rb` carries exactly
+        `get "repository"` and `post "ingest"` under api/v1), and prevention is no longer the
+        product — a visitor who believed the panel went looking for a 404.
+
+        The correction is NOT to swap one unbuilt promise for the five suite-intelligence
+        deliverables, because four of them are equally unanswerable today: `Ingest::RunRecorder`
+        writes `test_runs` and `test_run_shards` and nothing per test, so what a 20,000-example run
+        persists is two integers. Per-test duration, duplicate clusters and everything built on
+        them have no data behind them yet.
+
+        So availability is the axis the page is split on, and the split is carried by the panel
+        TITLES and by a warning at the top of the second one — never by a footnote or by a change of
+        tense, which is what a hurried reader skips. The rule for anything added here: a row belongs
+        in the first panel only if a signed-in user can go and read that figure off the dashboard or
+        the API today.
+
+        The telemetry half of the old panel survives in substance; it was directionally right.
+     %>
+    <%= render UI::PanelComponent.new(title: "What SpecGuard answers today") do %>
+      <div class="space-y-3">
+        <%= render UI::DefListComponent.new(rows: [
+              ["How much of the suite can SpecGuard see?", "Annotated share, over the run's own total"],
+              ["Where does the wall-clock go?", "Per run and per shard"],
+              ["Is the suite growing, and how fast?", "Run over run, per branch"],
+              ["Can an agent read that without a browser?", "GET /api/v1/repository"]
+            ]) %>
+
+        <p class="text-xs text-app-muted">
+          Every figure is read off runs your CI has posted to <code>POST /api/v1/ingest</code>.
+          SpecGuard does not run your tests, and ingestion never fails a build.
+        </p>
+      </div>
     <% end %>
   </div>
+
+  <%= render UI::PanelComponent.new(title: "What SpecGuard is being built to answer") do %>
+    <div class="space-y-4">
+      <%# Leading with the warning rather than closing on it, because this panel's rows read exactly
+          like the ones above and the whole point is that they are not the same kind of claim. %>
+      <%= render UI::AlertComponent.new(tone: :warning, title: "Not available yet") do %>
+        This is the product's direction, not its feature list. Ingestion currently records a run's
+        totals and its shards and stores nothing about individual tests, so none of the answers
+        below can be given today — and none of them is a surface you can call.
+      <% end %>
+
+      <%= render UI::DefListComponent.new(rows: [
+            ["Which tests are slow, and which areas dominate the clock?", "Needs per-test duration"],
+            ["Which groups of tests are potentially redundant?", "Needs suite-wide clustering"],
+            ["What already exists for this area, and at which layers?", "Needs a row per test"],
+            ["Which of those duplicates is safe to collapse?", "Needs both of the above"]
+          ]) %>
+    </div>
+  <% end %>
 <% end %>
