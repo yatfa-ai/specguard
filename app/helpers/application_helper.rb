@@ -85,8 +85,14 @@ module ApplicationHelper
   # The magnitude goes through `TestRun.humanized_seconds`, which is the single formatter the level
   # in the very same cell is printed by. A second formatter here would let `1m 14s` and `74.3s`
   # appear side by side in one `dd`.
+  #
+  # And the zero test goes through `TestRun.seconds_unchanged?`, which is that same formatter's own
+  # precision asked as a question. `delta.zero?` would be the raw float's answer, not the printed
+  # figure's: a 0.03s difference is real in the column and invisible at a tenth, so it fell out of
+  # the unchanged branch and rendered `+0.0s` — the panel's second spelling of the one thing `±0`
+  # is reserved to say.
   def runtime_change(delta)
-    return "±0" if delta.zero?
+    return "±0" if TestRun.seconds_unchanged?(delta)
 
     "#{delta.negative? ? "−" : "+"}#{TestRun.humanized_seconds(delta.abs)}"
   end
@@ -98,8 +104,12 @@ module ApplicationHelper
   #
   # *Slower* and *faster*, not "more"/"less": the wall clock is the time a reader waited through,
   # and a signed number read aloud beside it should say what it meant for them.
+  #
+  # Unchanged on the same predicate the visible figure uses, so the two cannot answer the question
+  # differently — a cell reading `+0.0s` announced as "0.0s slower" is a sentence that contradicts
+  # itself, and a cell reading `±0` announced as "0.0s slower" is worse.
   def wall_clock_change_reading(delta)
-    return "wall clock unchanged since the previous run on this branch" if delta.zero?
+    return "wall clock unchanged since the previous run on this branch" if TestRun.seconds_unchanged?(delta)
 
     direction = delta.negative? ? "faster" : "slower"
     "#{TestRun.humanized_seconds(delta.abs)} #{direction} than the previous run on this branch"
@@ -110,7 +120,7 @@ module ApplicationHelper
   # waited, and calling a bigger bill "slower" would describe a four-shard split that got wider —
   # more machine time, less wall clock — with the wrong word in both halves.
   def machine_time_change_reading(delta)
-    return "machine time unchanged since the previous run on this branch" if delta.zero?
+    return "machine time unchanged since the previous run on this branch" if TestRun.seconds_unchanged?(delta)
 
     direction = delta.negative? ? "less" : "more"
     "#{TestRun.humanized_seconds(delta.abs)} #{direction} machine time than the previous run on this branch"

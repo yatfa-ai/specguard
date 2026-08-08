@@ -787,6 +787,21 @@ class TestRun < ApplicationRecord
     parts.join(" ")
   end
 
+  # "Is this difference one the formatter above can print?" — the zero test, asked at the precision
+  # the figure is RENDERED at rather than the precision the column stores it at, and living here
+  # because that precision is `humanized_seconds`' own and belongs beside it.
+  #
+  # `duration_seconds` is a float of arbitrary precision; the formatter rounds to a tenth. So a
+  # 0.03s difference is real in the column and invisible in the string, and a caller that asked
+  # `delta.zero?` of the raw float sent it down the *changed* branch to render `+0.0s` — a second
+  # spelling of "it did not move" in a panel that reserves exactly one (`±0`), beside an
+  # `aria-label` reading "0.0s slower", which contradicts itself in four words.
+  #
+  # A predicate rather than each caller rounding for itself: `ApplicationHelper` asks this three
+  # times (the figure and the two readings), and three spellings of one precision is how they
+  # would eventually disagree about whether the same delta moved.
+  def self.seconds_unchanged?(value) = value.to_f.round(1).zero?
+
   private
 
   # How far apart a set of per-shard values is, as a percentage of their own mean.

@@ -247,13 +247,39 @@
                                   @previous_test_run.duration_reported? &&
                                   @latest_test_run.timed_shard_count == @previous_test_run.timed_shard_count %>
           <% wall_clock_delta = @latest_test_run.duration_seconds - @previous_test_run.duration_seconds if runtime_comparable %>
+          <%# Is this run PRESENTED as sharded — does the panel put a composition and a second cost
+              row in front of a reader at all. Derived once, here, and read by every branch below
+              that depends on it: the cost list's shape, the label the wall clock wears, whether a
+              machine-time change is computed, and what the basis sentence is allowed to claim.
+
+              One local rather than `@latest_test_run.multi_shard?` re-spelled at each of those,
+              because they are not four decisions, they are four readings of one — and this panel's
+              rule is one fact, one evaluation. The two-spellings version had a real cost: the
+              machine-time ROW is a presentation question (`multi_shard?`, i.e. `shard_count > 1`)
+              while `machine_seconds_reported?` is a DATA question, and they disagree on exactly
+              one shape. A run of exactly ONE shard has a `machine_seconds` — it is the SUM over its
+              one shard row — so every data predicate says yes while the panel deliberately shows
+              no machine time, because for one shard the MAX and the SUM are the same number and a
+              second row would print it twice. A sentence gated on the data promised a reader a
+              figure that was not on the page. `spec/requests/repository_runtime_change_spec.rb`
+              holds the one-shard pair that says so.
+
+              Free: `multi_shard?` reads `shard_count` out of the same memoized `shard_totals` the
+              guard above has already taken. %>
+          <% presented_as_sharded = @latest_test_run.multi_shard? %>
           <%# The machine time rides the same guard plus its own reported-ness check on each side.
               On the sharded path that check is implied rather than independent — `duration_seconds`
               is the MAX over the timed shards, so a run with a wall clock has a timed shard, and an
               equal `timed_shard_count` on the other side gives it one too — but it is asked anyway
               rather than inferred, because the implication runs through three separate methods and
-              the failure it would hide is a SUM differenced against a nil. %>
-          <% machine_time_delta = if wall_clock_delta && @latest_test_run.machine_seconds_reported? &&
+              the failure it would hide is a SUM differenced against a nil.
+
+              And it is gated on the row existing, not merely on the data existing, so that
+              `machine_time_delta` answers one question — *is there a machine-time change on this
+              page* — for the figure at :313 and for the basis sentence below alike. A delta
+              computed for a row the panel does not render is a fact nothing can honestly say. %>
+          <% machine_time_delta = if presented_as_sharded && wall_clock_delta &&
+                                     @latest_test_run.machine_seconds_reported? &&
                                      @previous_test_run.machine_seconds_reported?
                                     @latest_test_run.machine_seconds - @previous_test_run.machine_seconds
                                   end %>
@@ -309,7 +335,7 @@
                                  else
                                    test_run_duration(@latest_test_run)
                                  end %>
-          <% if @latest_test_run.multi_shard? %>
+          <% if presented_as_sharded %>
             <% machine_time_figure = if machine_time_delta
                                        safe_join([test_run_machine_time(@latest_test_run),
                                                   tag.span(runtime_change(machine_time_delta), id: "machine-time-delta",
@@ -319,7 +345,7 @@
                                        test_run_machine_time(@latest_test_run)
                                      end %>
           <% end %>
-          <% cost_rows = if @latest_test_run.multi_shard?
+          <% cost_rows = if presented_as_sharded
                            [["Wall clock (#{@latest_test_run.wall_clock_coverage})", wall_clock_figure],
                             ["Machine time (#{@latest_test_run.machine_seconds_coverage})", machine_time_figure]]
                          else
@@ -375,8 +401,12 @@
               clock as much as to the machine time: "the wall clock is the slowest single shard" is
               a confident sentence about a figure the page has just declined to print when not one
               shard reported a timing, and it overclaims its denominator when only some did. Three
-              mutually exclusive branches, each describing both figures as they actually stand. %>
-          <% if @latest_test_run.multi_shard? %>
+              mutually exclusive branches, each describing both figures as they actually stand.
+
+              The same local the cost rows above are shaped by — this paragraph explains those two
+              rows, so it appears exactly when they do, by construction rather than by two
+              predicates that happen to agree today. %>
+          <% if presented_as_sharded %>
             <% untimed_shards = @latest_test_run.untimed_shard_count %>
             <% timed_shards = @latest_test_run.timed_shard_count %>
             <p class="text-xs text-app-muted">
@@ -747,16 +777,25 @@
                 <%# Named for the row it modifies, which is "Wall clock" on a sharded run and
                     "Total runtime" on every other — the same figure under two labels, and a basis
                     line that used one word for both would be pointing at a row that is not there. %>
-                <%= @latest_test_run.multi_shard? ? "The wall clock" : "The total runtime" %> is
+                <%= presented_as_sharded ? "The wall clock" : "The total runtime" %> is
                 measured against
                 <span class="font-mono"><%= @previous_test_run.commit_sha.first(7) %></span>,
                 the previous run on <%= @latest_test_run.branch %>,
                 <%= time_ago_in_words(@previous_test_run.created_at) %> ago<%= ", and so is the machine time" if machine_time_delta %>.
-                <% if shard_count.positive? %>
+                <% if presented_as_sharded %>
                   <%# The condition that separates this guard from the size delta's, said out loud
-                      on the surface where the number is. Suppressed on the unsharded corpus for
-                      the reason the shard clause above is: there is no composition to state, and
-                      "both timed 0 of 0 shards" describes a run that lost all its telemetry. %>
+                      on the surface where the number is.
+
+                      On `presented_as_sharded` and not on `shard_count.positive?`, because the
+                      question this clause answers is "is there a composition on the page for this
+                      sentence to be ABOUT" — and the panel shows one only for a run of more than
+                      one shard. `shard_count.positive?` is the right predicate where the question
+                      is "did this arrive in pieces at all" (the delivery note on the Recent-runs
+                      table asks exactly that, and rightly); here it fired on a one-shard run and
+                      printed "both of these timed 1 of their 1 shard" under a row labelled
+                      "Total runtime", introducing shards as an idea to a reader whose panel has
+                      none. Suppressed on the unsharded corpus for the same reason plus one more:
+                      "both timed 0 of 0 shards" describes two runs that lost all their telemetry. %>
                   Only runs that timed the same number of shards are compared, and both of these
                   timed <%= @latest_test_run.timed_shard_count %> of their
                   <%= shard_count %> <%= "shard".pluralize(shard_count) %>.

@@ -144,6 +144,30 @@ RSpec.describe "Repository runtime change", type: :request do
     expect(runtime_basis).to have_text("measured against steadyt", normalize_ws: true)
   end
 
+  # `±0` and `+0.0s` are two spellings of "it did not move" and this panel reserves one, so the
+  # question "did it move" has to be asked at the precision the answer is PRINTED at, not at the
+  # precision the column stores. `TestRun.humanized_seconds` rounds to a tenth, so a delta of
+  # 0.03s is invisible in the figure — and asking `delta.zero?` of the raw float lets it out of
+  # the unchanged branch anyway, into a cell reading `+0.0s` beside an `aria-label` that says
+  # "0.0s slower", which is a sentence contradicting itself in four words.
+  #
+  # Both rows, in one fixture: the wall clock is the MAX and moves by 0.02s, the machine time is
+  # the SUM of the same four shards and moves by the same 0.02s. One zero test, asked twice.
+  it "reads a difference too small to print as no change rather than as a signed zero" do
+    repository = create_repository(user: @user)
+    sharded_run(repository, commit_sha: "hairsplitold", durations: [60.0, 60.0, 60.0, 60.0])
+    sharded_run(repository, commit_sha: "hairsplitnew", durations: [60.02, 60.0, 60.0, 60.0])
+
+    get repository_path(repository)
+
+    expect(runtime_delta.text).to eq("±0")
+    expect(machine_time_delta.text).to eq("±0")
+    expect(runtime_delta["aria-label"])
+      .to eq("wall clock unchanged since the previous run on this branch")
+    expect(machine_time_delta["aria-label"])
+      .to eq("machine time unchanged since the previous run on this branch")
+  end
+
   # `duration_reported?` is `!duration_seconds.nil?`, so a run that genuinely measured nothing in
   # no time at all HAS a measurement. A `present?` check would re-file it as "no timing sent" and
   # the page would withhold a change it can stand behind.
@@ -298,6 +322,56 @@ RSpec.describe "Repository runtime change", type: :request do
       get repository_path(repository)
 
       expect(runtime_basis).to have_no_text("The total runtime", normalize_ws: true)
+    end
+  end
+
+  # == The run with exactly one shard
+  #
+  # The band where "is this run sharded?" and "does it have a machine time?" stop agreeing, and the
+  # only fixture that reaches it. `multi_shard?` is `shard_count > 1`, so a one-shard run renders
+  # the single "Total runtime" row and no machine time at all — but `machine_seconds` is the SUM
+  # over its one shard row, so `machine_seconds_reported?` is true and every DATA predicate about
+  # the machine time answers yes. A sentence gated on the data rather than on the presentation
+  # promises a reader a figure the panel deliberately did not print.
+  #
+  # Not a hypothetical shape: `Ingest::RunRecorder.record(..., shard_id:)` is the ordinary sharded
+  # path, and a CI matrix of one — or a repository that shards and is currently running one job —
+  # produces these indefinitely.
+  describe "on a run assembled from exactly one shard" do
+    def one_shard_pair(repository)
+      sharded_run(repository, commit_sha: "oneshardold1", durations: [60.0])
+      sharded_run(repository, commit_sha: "oneshardnew1", durations: [90.0])
+    end
+
+    it "changes the one cost row it has, and puts no change on a row that is not there" do
+      repository = create_repository(user: @user)
+      one_shard_pair(repository)
+
+      get repository_path(repository)
+
+      expect(runtime_delta.text).to eq("+30.0s")
+      expect(cost_cell("Total runtime").text).to eq("1m 30s +30.0s")
+      # For one shard the MAX and the SUM are the same number, which is exactly why this panel
+      # shows one row — so there is no machine-time cell for a delta to live in.
+      expect(overview_panel).to have_no_css("#machine-time-delta")
+      expect(overview_panel).to have_no_text("Machine time", normalize_ws: true)
+    end
+
+    it "does not name a machine time the panel withheld, or a composition it never showed" do
+      repository = create_repository(user: @user)
+      one_shard_pair(repository)
+
+      get repository_path(repository)
+
+      expect(runtime_basis).to have_text("The total runtime is measured against oneshar",
+                                         normalize_ws: true)
+      # The clause the sharded pair above asserts. Here it would send a reader looking for a
+      # figure that is not on the page.
+      expect(runtime_basis).to have_no_text("and so is the machine time", normalize_ws: true)
+      # And the composition clause: "both of these timed 1 of their 1 shard" introduces shards as
+      # an idea to a reader whose panel shows none.
+      expect(runtime_basis).to have_no_text("timed the same number of shards", normalize_ws: true)
+      expect(runtime_basis).to have_no_text("of their 1 shard", normalize_ws: true)
     end
   end
 
