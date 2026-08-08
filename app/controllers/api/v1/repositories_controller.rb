@@ -174,8 +174,9 @@ class Api::V1::RepositoriesController < Api::BaseController
   # and is paid by every multi-shard run, while `#shard_durations` feeds the three gated keys and
   # is paid only when `#wall_clock_decomposable?` passes. So an ungated multi-shard run costs one
   # extra, a gated one costs two, and a shardless run pays nothing at all. What is bounded is that
-  # neither scales: a 40-shard matrix costs exactly what a 4-shard one does. `#wall_clock_
-  # decomposable?` itself adds nothing (it reads the already memoized `shard_totals`).
+  # neither scales: a 40-shard matrix costs exactly what a 4-shard one does. The gate
+  # `#wall_clock_decomposable?` itself adds nothing (it reads the already memoized
+  # `shard_totals`).
   def serialized_shards(test_run)
     return nil unless test_run.multi_shard?
 

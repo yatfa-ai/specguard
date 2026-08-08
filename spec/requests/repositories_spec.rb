@@ -912,11 +912,21 @@ RSpec.describe "Repository registration and API keys", type: :request do
       end
 
       # WHICH of the two things the spread is, which is the half a reader can act on. A shard runs
-      # long because it holds more tests than its siblings — re-divide the suite — or because it
-      # holds the same number of individually dearer ones, where re-dividing moves the wait to a
-      # different shard and changes nothing. `duration = count x cost per test`, so the durations
-      # alone print identically in both cases and the panel advised the first in both until the
-      # counts were read.
+      # long because it holds more tests than its siblings, or because it holds the same number of
+      # individually dearer ones. `duration = count x cost per test`, so the durations alone print
+      # identically in both cases and the panel advised the first in both until the counts were
+      # read.
+      #
+      # What separates them is WHICH partitioner closes the gap, never whether re-dividing can.
+      # Machine time is invariant under re-partitioning and the floor is `machine / shard_count`,
+      # so a duration-weighted split reaches the floor in both cases; a split by count reaches it
+      # only where the per-test costs are already even. The examples below pin that distinction
+      # rather than a verdict on re-dividing, because an earlier round shipped "re-dividing the
+      # suite moves the wait to another shard rather than removing it" in the cost-driven branch —
+      # which the floor sentence this same panel prints on the same fixture ("1m 3s is the shortest
+      # wall clock any arrangement of them could have produced") flatly contradicts. A guard that
+      # quotes a sentence verbatim goes green on a wrong sentence just as readily as a right one,
+      # so each branch below also asserts the false form is absent.
       #
       # ELEMENT-scoped on `#shard-imbalance-cause` throughout, for the reason this whole describe
       # block states: the panel carries several sentences sharing this vocabulary, and a
@@ -926,9 +936,12 @@ RSpec.describe "Repository registration and API keys", type: :request do
         def cause = overview_panel.find("#shard-imbalance-cause")
 
         # The canonical fixture: every shard holds 5,000 tests, so NONE of its 14.6% imbalance is
-        # the split. 74.25s over 5,000 is 14.9ms a test against 11.7ms on the fastest shard — the
-        # tests in that partition are individually dearer, and re-dividing the suite would move the
-        # wait rather than remove it. The panel said "how the suite was divided" and stopped.
+        # an uneven count. 74.25s over 5,000 is 14.9ms a test against 11.7ms on the fastest shard —
+        # the tests in that partition are individually dearer, so a count-based partitioner has
+        # nothing left to even out and hands back the same four shards. It does NOT follow that the
+        # 10.8s is lost: moving 727 of the dear shard's own tests onto its siblings lands all four
+        # within 0.02s of the 63.4375s floor, which is what a duration-weighted split is for. The
+        # panel said "how the suite was divided" and stopped.
         it "names the per-test cost when the shards hold equal numbers of tests" do
           repository = create_repository(user: @user)
           sharded_run(repository, [61.0, 58.5, 74.25, 60.0], commit_sha: "feedfacecafe0060")
@@ -941,17 +954,24 @@ RSpec.describe "Repository registration and API keys", type: :request do
             normalize_ws: true
           )
           expect(cause).to have_text(
-            "re-dividing the suite moves the wait to another shard rather than removing it",
+            "a split that divides the suite evenly by test count reproduces this gap however " \
+            "often it re-runs. Closing it takes a split that weighs each test's recorded " \
+            "duration, or cheaper tests in that partition.",
             normalize_ws: true
           )
           # The advice the panel used to give unconditionally must not be reachable here.
           expect(cause).to have_no_text("came from how many tests each shard got:", normalize_ws: true)
           expect(cause).to have_no_text("Re-dividing the suite across the same shards", normalize_ws: true)
+          # Nor the advice an earlier round of THIS slice gave: the excess is recoverable, and the
+          # decomposition two paragraphs up already tells the reader so.
+          expect(cause).to have_no_text("rather than removing it", normalize_ws: true)
+          expect(cause).to have_no_text("moves the wait to another shard", normalize_ws: true)
         end
 
         # The other cause, and the one the panel always assumed. Same 4 shards, same ~254s of
         # machine time, per-test costs within 3.3% of each other — and one shard holding 6,000
-        # tests against 4,800 on the smallest. Here re-dividing IS the fix.
+        # tests against 4,800 on the smallest. Here evening the COUNTS out is the fix: with the
+        # per-test costs already level, a count-based partitioner reaches the floor on its own.
         it "names the split when the counts are uneven and the per-test costs are not" do
           repository = create_repository(user: @user)
           sharded_run(repository, [72.0, 61.0, 59.04, 62.0], spec_counts: [6000, 5000, 4800, 5000],
@@ -971,8 +991,9 @@ RSpec.describe "Repository registration and API keys", type: :request do
 
         # Both, which is a real shape and not a tie-break: one shard holding 8,000 tests that also
         # cost 15.0ms each against 12.0ms elsewhere. Naming only the larger of the two spreads
-        # would send a reader to re-divide a suite whose tests are also unevenly priced, and the
-        # second half of their problem would survive the fix.
+        # would send a reader to even out the counts of a suite whose tests are also unevenly
+        # priced, and the second half of their problem would survive that fix — the 75s floor here
+        # is reachable, but only by a split that weighs the durations.
         it "names both when both spreads clear the floor" do
           repository = create_repository(user: @user)
           sharded_run(repository, [120.0, 60.0, 60.0, 60.0], spec_counts: [8000, 5000, 5000, 5000],
@@ -982,10 +1003,15 @@ RSpec.describe "Repository registration and API keys", type: :request do
 
           expect(cause).to have_text(
             "Both halves moved: these shards' test counts spread 52.2% and their per-test costs " \
-            "spread 23.5%, from 12.0ms/test to 15.0ms/test. Re-dividing the suite addresses one " \
-            "of them and leaves the other where it is.",
+            "spread 23.5%, from 12.0ms/test to 15.0ms/test. Evening the counts out addresses the " \
+            "first and leaves the second, so it takes a split that weighs each test's recorded " \
+            "duration — or cheaper tests in the dearest partition — to close the whole gap.",
             normalize_ws: true
           )
+          # Same false claim as the branch above, in its softer form: the cost spread survives
+          # re-division as a property of the TESTS, not as wait. The 45s excess over this
+          # fixture's 75s floor is recoverable in full by a duration-weighted split.
+          expect(cause).to have_no_text("leaves the other where it is", normalize_ws: true)
         end
 
         # NEITHER, which is reachable and is the branch a panel that always picked a winner would

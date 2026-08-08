@@ -571,9 +571,19 @@ class TestRun < ApplicationRecord
   # it cost. It cannot say what caused it, and the two causes take opposite actions:
   #
   # - the slow shard holds more tests than its siblings — the work is fine, the *split* is wrong,
-  #   and re-dividing the suite is what moves the number;
-  # - the slow shard holds the same number of individually dearer tests — the split is fine, and
-  #   re-dividing only moves the wait to a different shard. The tests are where the cost is.
+  #   and evening the counts out across the same shards is what moves the number;
+  # - the slow shard holds the same number of individually dearer tests — the counts are already
+  #   even, so a partitioner splitting by COUNT has nothing left to even out and reproduces the gap
+  #   however often it re-runs. A duration-weighted split, or cheaper tests in that partition, is
+  #   what moves it.
+  #
+  # Note what is NOT different between the two, because an earlier draft of these strings got it
+  # wrong and shipped operational advice this model's own arithmetic falsifies: machine time is
+  # invariant under re-partitioning and the balanced floor is `machine / shard_count`
+  # (`#balanced_wall_clock_seconds`), so a duration-weighted split reaches the floor in BOTH cases
+  # and `#wall_clock_excess_seconds` is recoverable in BOTH. What the count spread decides is which
+  # partitioner can get there — never whether re-dividing helps at all. Any string built from these
+  # names a partitioner; none of them may tell a reader the excess is unrecoverable.
   #
   # `duration = count × cost-per-test`, so the two are separately computable from the tuple
   # `#shard_durations` now carries, and the panel is entitled to name whichever of them the numbers

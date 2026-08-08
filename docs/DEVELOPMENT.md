@@ -259,9 +259,11 @@ is not what the suite *cost*. Four shards of 61.0s, 58.5s, 74.25s and 60.0s are 
 - `shards.per_shard` — **each shard's duration beside the test count it was measured over.** The
   figures above say how much the run's wait exceeded an even split; they cannot say *why*, and the
   two causes take opposite actions. `duration = test count × cost per test`, so a shard that ran
-  long either held more tests than its siblings — re-divide the suite — or held the same number of
-  individually dearer ones, where re-dividing moves the wait to a different shard and removes
-  nothing. Both print identically from durations alone.
+  long either held more tests than its siblings, or held the same number of individually dearer
+  ones. Both print identically from durations alone. What separates them is **which partitioner
+  closes the gap**, not whether one can: machine time is invariant under re-partitioning and the
+  floor is `machine ÷ shard_count`, so a duration-weighted split reaches the floor either way,
+  while a split by count only reaches it when the per-test costs are already even.
   - `shard_id` — `null` when the client did not name the slice, never a positional index: a name
     nothing in CI answers to is worse than no name.
   - `duration_seconds` — `null`, never `0.0`, for a shard that reported no timing.

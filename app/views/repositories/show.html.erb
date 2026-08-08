@@ -421,10 +421,23 @@
 
               <%# WHICH of the two things that spread is, which is the half a reader can act on.
                   `duration = test count x cost per test`, so a shard that ran long did so because
-                  it held more tests than its siblings — re-divide the suite — or because it held
-                  the same number of individually dearer ones, where re-dividing moves the wait to
-                  another shard and changes nothing. The durations alone print identically in both
-                  cases, and the panel advised the first in both until the counts were read.
+                  it held more tests than its siblings, or because it held the same number of
+                  individually dearer ones. The durations alone print identically in both cases,
+                  and the panel advised the first in both until the counts were read.
+
+                  What separates them is WHICH re-division works — not whether one does. Machine
+                  time is invariant under re-partitioning and the balanced floor is
+                  `machine / shard_count`, so a split that weighs each test's recorded duration
+                  reaches that floor in either case. What the count spread decides is whether a
+                  partitioner splitting by COUNT gets there too: even counts over uneven per-test
+                  costs is exactly the state a count-based split cannot improve on, however often
+                  it re-runs. So each branch below names a partitioner, not a verdict on
+                  re-dividing. "Re-dividing achieves nothing" would be the stronger claim, and this
+                  panel's own floor arithmetic falsifies it — on the canonical fixture
+                  (`[61.0, 58.5, 74.25, 60.0]` at 5,000 tests each) moving 727 of the dear shard's
+                  own tests onto its siblings lands all four within 0.02s of the 63.4375s floor,
+                  taking the 74.25s wall clock to 63.45s and recovering the 10.8s the paragraph
+                  above attributes to the division.
 
                   Rendered only in the imbalanced branch. The balanced branch has no spread to
                   attribute a cause to, and offering one there would be answering a question the
@@ -465,8 +478,10 @@
                     <%= @latest_test_run.spec_count_spread_label %> and their per-test costs spread
                     <%= @latest_test_run.seconds_per_spec_spread_label %>, from
                     <%= @latest_test_run.cheapest_seconds_per_spec_label %> to
-                    <%= @latest_test_run.dearest_seconds_per_spec_label %>. Re-dividing the suite
-                    addresses one of them and leaves the other where it is.
+                    <%= @latest_test_run.dearest_seconds_per_spec_label %>. Evening the counts out
+                    addresses the first and leaves the second, so it takes a split that weighs each
+                    test's recorded duration — or cheaper tests in the dearest partition — to close
+                    the whole gap.
                   <% elsif @latest_test_run.spec_count_spread_material? %>
                     That came from how many tests each shard got: their counts spread
                     <%= @latest_test_run.spec_count_spread_label %>, while every shard's tests cost
@@ -481,8 +496,10 @@
                     costs spread <%= @latest_test_run.seconds_per_spec_spread_label %>, from
                     <%= @latest_test_run.cheapest_seconds_per_spec_label %> to
                     <%= @latest_test_run.dearest_seconds_per_spec_label %>: the expensive work is in
-                    what that partition holds, not in how much of it there is, so re-dividing the
-                    suite moves the wait to another shard rather than removing it.
+                    what that partition holds, not in how much of it there is, so a split that
+                    divides the suite evenly by test count reproduces this gap however often it
+                    re-runs. Closing it takes a split that weighs each test's recorded duration, or
+                    cheaper tests in that partition.
                   <% else %>
                     Neither half accounts for it on its own: these shards' test counts are within
                     <%= @latest_test_run.spec_count_spread_label %> of each other and their per-test
