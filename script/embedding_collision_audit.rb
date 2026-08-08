@@ -199,8 +199,6 @@ module EmbeddingCollisionAudit
   Document = Struct.new(:name, :hashed_ids, :hashed_weights, :exact_ids, :exact_weights)
 
   class Vectoriser
-    attr_reader :feature_count
-
     def initialize
       @feature_ids = {}
     end
@@ -256,7 +254,17 @@ module EmbeddingCollisionAudit
 
     def run(workers:)
       slices = (0...@documents.size).group_by { |i| i % workers }.values
-      merge(slices.map { |slice| fork_worker(slice) }.map { |io| JSON.parse(io.read, symbolize_names: true) })
+      children = slices.map { |slice| fork_worker(slice) }
+
+      # Drain every pipe before reaping any child. A tally is far larger than a pipe buffer, so a
+      # child blocks mid-write until its reader catches up; waiting on it first would deadlock.
+      tallies = children.map { |_pid, reader| JSON.parse(reader.read, symbolize_names: true) }
+      children.each do |pid, reader|
+        reader.close
+        Process.wait(pid)
+      end
+
+      merge(tallies)
     end
 
     private
@@ -275,14 +283,14 @@ module EmbeddingCollisionAudit
 
     def fork_worker(slice)
       reader, writer = IO.pipe
-      Process.fork do
+      pid = Process.fork do
         reader.close
         writer.write(JSON.generate(tally(slice)))
         writer.close
         exit!(0)
       end
       writer.close
-      reader
+      [ pid, reader ]
     end
 
     def tally(slice)
@@ -457,10 +465,18 @@ module EmbeddingCollisionAudit
       puts "  mean |hashed - exact| cosine error: #{(result[:error_sum] / pairs).round(6)}"
       puts
       puts "  distribution of |hashed - exact|"
-      edges = ERROR_BINS.map { |edge| "< #{edge}" } + [ ">= #{ERROR_BINS.last}" ]
-      edges.each_with_index do |label, k|
+      # The bins are DISJOINT half-open ranges, not a cumulative histogram: `score` files a pair in
+      # the first bucket whose edge exceeds its error, so bin k is [ERROR_BINS[k-1], ERROR_BINS[k]).
+      # Labelling them "< edge" invited exactly one misreading too many, so they are labelled as the
+      # ranges they are and the running total is printed beside them.
+      labels = ERROR_BINS.each_with_index.map { |edge, k| k.zero? ? "[0, #{edge})" : "[#{ERROR_BINS[k - 1]}, #{edge})" }
+      labels += [ ">= #{ERROR_BINS.last}" ]
+      running = 0
+      puts format("    %-18s %14s %10s %12s", "range", "pairs", "share", "cumulative")
+      labels.each_with_index do |label, k|
         count = result[:error_bins][k]
-        puts format("    %-10s %14d  %8.4f%%", label, count, 100.0 * count / pairs)
+        running += count
+        puts format("    %-18s %14d %9.4f%% %11.4f%%", label, count, 100.0 * count / pairs, 100.0 * running / pairs)
       end
       puts
       puts "  at each threshold t, over #{pairs} pairs"

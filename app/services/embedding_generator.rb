@@ -140,10 +140,18 @@ class EmbeddingGenerator
   #
   # ## Determinism
   #
-  # Same text in, same vector out — byte-identical across examples, processes, machines and Ruby
-  # versions. Nothing here reads a seed, a clock or a random source: the vector is a pure function
-  # of the string. That is what lets the identity half of the product work at all — an unchanged
-  # test name embeds to an unchanged vector between two runs a week apart.
+  # Same text in, same vector out. Nothing here reads a seed, a clock or a random source: the vector
+  # is a pure function of the string, so it is byte-identical across examples, processes, restarts
+  # and machines running the same platform. That is what lets the identity half of the product work
+  # at all — an unchanged test name embeds to an unchanged vector between two runs a week apart.
+  #
+  # The claim stops at the platform boundary, and deliberately. Every step up to the weight is exact
+  # integer work — SHA-256, byte slicing, modulo — but `Math.sin` delegates to the host's libm, and
+  # glibc, musl and Darwin are not guaranteed to agree in the last ULP for the same double. So a
+  # change of C library or CPU architecture (a base image moving from glibc to musl, say) may perturb
+  # the low bits of a weight even though the algorithm is unchanged. Within one deployment platform
+  # the output is exact and reproducible; *across* platforms, treat it as reproducible to within
+  # floating-point rounding rather than bit-for-bit.
   #
   # One deviation from a literal reading of the reference, and the reason for it: the weight is
   # `sin` of a hash-derived *phase in [0, 2π)*, not `sin` of the raw hash. `Math.sin` of a number

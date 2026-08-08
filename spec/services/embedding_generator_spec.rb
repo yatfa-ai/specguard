@@ -199,10 +199,16 @@ RSpec.describe EmbeddingGenerator do
 
     describe "determinism" do
       it "returns a byte-identical vector for the same text, pinned by checksum" do
-        # A golden checksum rather than a re-run comparison: this pins the mapping across runs,
-        # processes, machines and Ruby versions, which is what the identity half of the product
-        # rests on. If this fails, the embedding of every stored intent has silently changed and
-        # every row needs re-embedding — it is not a spec to "just update".
+        # A golden checksum rather than a re-run comparison: this pins the mapping across runs and
+        # processes ON THIS PLATFORM, which is what the identity half of the product rests on.
+        #
+        # What it does NOT pin is cross-platform bit-equality. Everything up to the weight is exact
+        # integer work, but `Math.sin` delegates to the host libm and glibc/musl/Darwin may differ
+        # in the last ULP. So read a failure in the order: if the C library or CPU architecture
+        # changed (a new base image), suspect a benign rounding difference and confirm by checking
+        # whether the vectors differ only in their low bits. Otherwise the mapping itself changed —
+        # the embedding of every stored intent has silently moved and every row needs re-embedding.
+        # In neither case is this a spec to "just update" to whatever the new value happens to be.
         vector = described_class.call("Order checkout returns 402 payment required on expired card")
 
         expect(Digest::SHA256.hexdigest(vector.pack("E*")))

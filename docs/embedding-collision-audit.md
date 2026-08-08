@@ -97,21 +97,24 @@ name already loses ~3% of its own features to self-collision before it is compar
 
 ### Error distribution over all 199,990,000 pairs
 
-| \|hashed − exact\| | pairs | share |
-|---|---:|---:|
-| < 0.001 | 9,806,366 | 4.90% |
-| < 0.005 | 28,841,375 | 14.42% |
-| < 0.01 | 31,964,396 | 15.98% |
-| < 0.05 | 117,184,507 | 58.60% |
-| < 0.1 | 11,762,694 | 5.88% |
-| < 0.2 | 429,480 | 0.215% |
-| < 0.4 | 1,182 | 0.0006% |
-| ≥ 0.4 | **0** | 0% |
+The bins are **disjoint half-open ranges**, not a cumulative histogram — each pair is counted once,
+so the *share* column sums to 100%. The running total is given beside it.
 
-Cosine error is tightly concentrated: 94% of pairs are within 0.05, and the tail stops dead before
-0.4. Because the weights are **signed**, colliding features cancel about as often as they reinforce
-— a collision perturbs an inner product rather than inflating it. All-positive weights would have
-made every collision a one-way push toward a false match.
+| \|hashed − exact\| | pairs | share | cumulative |
+|---|---:|---:|---:|
+| [0, 0.001) | 9,806,366 | 4.90% | 4.90% |
+| [0.001, 0.005) | 28,841,375 | 14.42% | 19.32% |
+| [0.005, 0.01) | 31,964,396 | 15.98% | 35.31% |
+| [0.01, 0.05) | 117,184,507 | 58.60% | **93.90%** |
+| [0.05, 0.1) | 11,762,694 | 5.88% | 99.78% |
+| [0.1, 0.2) | 429,480 | 0.215% | 99.9994% |
+| [0.2, 0.4) | 1,182 | 0.0006% | 100% |
+| ≥ 0.4 | **0** | 0% | 100% |
+
+Cosine error is tightly concentrated: 93.90% of pairs are within 0.05, and the tail stops dead
+before 0.4. Because the weights are **signed**, colliding features cancel about as often as they
+reinforce — a collision perturbs an inner product rather than inflating it. All-positive weights
+would have made every collision a one-way push toward a false match.
 
 ### Verdict flips at each threshold
 
@@ -173,8 +176,16 @@ Two further honest bounds on this measurement:
   times* worse.
 * Names inside a `shared_examples` block are extracted once under the shared block's own
   description, rather than once per including context, since the static parser cannot resolve
-  inclusion. That slightly reduces near-duplicate density — in the direction of a *harder* corpus,
-  not an easier one.
+  inclusion. This makes the corpus **easier**, not harder. Expanding a shared example per inclusion
+  would yield names identical but for their parent-context prefix — the largest single source of
+  near-duplicate pairs in a real suite, and pairs that land in the 0.7–0.95 band where a hashing
+  perturbation is capable of flipping a verdict. Pairs far from a threshold cannot become false
+  matches; pairs just below one are the entire false-match population, and collapsing shared
+  examples removes some of that mass before it is counted. The headline verdict absorbs this with
+  room to spare — false matches are ~3 orders of magnitude below 1 in 1,000, and the worst
+  overstatement anywhere in the census (+0.274, landing at 0.34) is far below any usable threshold —
+  but the true false-match count on a shared-example-expanded corpus would be somewhat **higher**
+  than the number reported here, not lower.
 
 ## What this means for thresholds
 
