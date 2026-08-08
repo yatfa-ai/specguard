@@ -1141,6 +1141,135 @@ RSpec.describe "POST /api/v1/ingest", type: :request do
     end
   end
 
+  # The other end of the sentence above: rows arrive here one per example per run, and until
+  # `Ingest::ObservationPruner` existed nothing ever took one away for age. The rule is
+  # `SpecObservation::BRANCH_RETENTION_RUNS` runs OF ONE BRANCH, enforced at the write path
+  # because that is where the growth happens — there is no scheduler and no recurring job.
+  describe "the retention rule the ingest path enforces" do
+    # Two rather than the shipped sixty, so an example is three POSTs rather than sixty-one. What
+    # the number IS, and the floor it may never go under, is pinned in
+    # spec/services/ingest/observation_pruner_spec.rb against the real constants.
+    before { stub_const("SpecObservation::BRANCH_RETENTION_RUNS", 2) }
+
+    def ingest_on(branch, name:)
+      ingest(ingest_payload(branch: branch, specs: [unannotated_spec(file_path: "spec/#{name}_spec.rb")]))
+      TestRun.order(:id).last
+    end
+
+    it "empties the run that falls out of the branch's window when the next one lands" do
+      first = ingest_on("main", name: "a")
+      second = ingest_on("main", name: "b")
+      third = ingest_on("main", name: "c")
+
+      expect(first.spec_observations.count).to eq(0)
+      expect(second.spec_observations.count).to eq(1)
+      expect(third.spec_observations.count).to eq(1)
+    end
+
+    # The pruned run is still a run. Its row and both counters are derived from `test_run_shards`
+    # and are no business of this rule, so the suite-size trajectory reads it exactly as before.
+    # Every attribute is compared, `updated_at` included: nothing in the prune path writes to the
+    # pruned run — `recompute_totals` writes `update_columns` on the CURRENT run, and
+    # `SpecObservation belongs_to :test_run` carries no `touch:` — so an exclusion here would only
+    # hide a regression that gave the rule a reach over `test_runs` it is not supposed to have.
+    it "leaves the pruned run's row and both counters exactly as they were" do
+      first = ingest_on("main", name: "a")
+      before_prune = first.attributes
+
+      ingest_on("main", name: "b")
+      ingest_on("main", name: "c")
+
+      expect(first.reload.attributes).to eq(before_prune)
+    end
+
+    it "bounds a sharded run's branch too, after the shard's own transaction" do
+      3.times do |index|
+        ingest(ingest_payload(branch: "main", ci_run_id: "gha-#{index}", shard_id: "1",
+                              specs: [unannotated_spec(file_path: "spec/s_spec.rb")]))
+      end
+
+      runs = TestRun.order(:id).to_a
+      expect(runs.map { |run| run.spec_observations.count }).to eq([0, 1, 1])
+      expect(runs.map { |run| run.test_run_shards.count }).to eq([1, 1, 1])
+    end
+
+    it "does not let a feature branch's runs evict the trunk's" do
+      main = ingest_on("main", name: "a")
+      3.times { |index| ingest_on("feature/#{index}", name: "f#{index}") }
+
+      expect(main.spec_observations.count).to eq(1)
+    end
+
+    it "keeps branch-less runs in their own bucket" do
+      anonymous = ingest_on(nil, name: "a")
+      ingest_on("main", name: "b")
+      ingest_on("main", name: "c")
+
+      expect(anonymous.spec_observations.count).to eq(1)
+    end
+
+    # ⚠️ The prune must run AFTER the ingest transaction commits, never inside it.
+    # `Ingest::RunRecorder#record` holds `run.lock!` across its whole insert-and-recompute, and
+    # the length of that hold is measured and load-bearing — 8 concurrent shards, 6 of 8 lost to
+    # `PG::TRDeadlockDetected`, before the lock moved to where it is. The prune needs none of that
+    # protection, since the only rows it touches belong to runs older than the retained window.
+    #
+    # Transaction DEPTH is what discriminates here and a spy on call order would not: under
+    # transactional tests the example's own transaction is non-joinable, so `RunRecorder`'s block
+    # opens a savepoint and everything inside it runs one level deeper than everything outside.
+    it "prunes outside the transaction that recorded the run" do
+      depths = {}
+
+      allow(Ingest::ObservationRecorder).to receive(:record).and_wrap_original do |original, *args, **options|
+        depths[:record] = ActiveRecord::Base.connection.open_transactions
+        original.call(*args, **options)
+      end
+      allow(Ingest::ObservationPruner).to receive(:prune).and_wrap_original do |original, *args|
+        depths[:prune] = ActiveRecord::Base.connection.open_transactions
+        original.call(*args)
+      end
+
+      ingest(ingest_payload(branch: "main"))
+
+      expect(depths[:prune]).to be < depths[:record]
+      expect(depths[:prune]).to eq(ActiveRecord::Base.connection.open_transactions)
+    end
+
+    # A query budget on the ingest path — ADDED here rather than updated, because this file had
+    # none. `count_queries` comes from spec/support/query_capture.rb, the same subscriber the
+    # dashboard's page budgets use.
+    #
+    # Pinned as ABSOLUTES and in a pair, so the prune's own statements are ATTRIBUTED rather than
+    # silently absorbed into a single total that could hide any number of them. The difference
+    # between the two figures is exactly one statement, and it is the prune's:
+    #
+    #   * a branch that has not yet filled its window costs ONE — the boundary lookup, which comes
+    #     back empty and issues no delete at all;
+    #   * a branch at its window costs TWO — the boundary lookup plus one bounded delete, which
+    #     comes back short and stops the loop rather than spending the rest of the ceiling.
+    #
+    # Neither figure follows the size of the backlog: the ceiling on the delete statements is
+    # `Ingest::ObservationPruner::MAX_BATCHES_PER_INGEST`, and it is asserted directly against a
+    # backlog several times its size in the pruner's own spec.
+    describe "what one ingest costs" do
+      # The repository and its key are lazy `let`s, so touching them here keeps their inserts out
+      # of the counted block — otherwise the first measurement counts the fixture rather than the
+      # request.
+      before { api_key }
+
+      it "spends a fixed budget, of which the prune is one statement on an unfilled window" do
+        expect(count_queries { ingest(ingest_payload(branch: "main")) }).to eq(7)
+      end
+
+      it "spends exactly one more once the window is full and a run falls out of it" do
+        ingest(ingest_payload(branch: "main"))
+        ingest(ingest_payload(branch: "main"))
+
+        expect(count_queries { ingest(ingest_payload(branch: "main")) }).to eq(8)
+      end
+    end
+  end
+
   # The full auth matrix is proved once in spec/requests/api/v1/repositories_spec.rb. All this
   # endpoint owes is evidence that it inherits the filter rather than re-plumbing it.
   describe "authentication" do

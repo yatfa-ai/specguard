@@ -58,6 +58,13 @@ module Ingest
   # example on the far side of the delete is reachable only there. `ObservationRecorder` carries
   # the argument. The run's own `total_specs_count` / `annotated_specs_count` are **not** re-derived
   # from those rows: those stay a function of `test_run_shards`, unchanged.
+  #
+  # Those rows are also the only thing here that grows without bound, so this class is where the
+  # bound is applied: after the transaction below commits — never inside it — the delivery's own
+  # branch is pruned back to `SpecObservation::BRANCH_RETENTION_RUNS` runs by
+  # {Ingest::ObservationPruner}. Enforcement lives at the write path rather than in a scheduled
+  # job, because the write path is where the growth happens and it is the one place guaranteed to
+  # run whenever it does.
   class RunRecorder
     # Two shards racing is the ordinary case; three collisions in a row on the same key would mean
     # the row is being created and rolled back repeatedly, which is not something retrying fixes.
@@ -118,10 +125,23 @@ module Ingest
         recompute_totals(run)
       end
 
+      prune_observations(run)
+
       run.reload
     end
 
     private
+
+    # Enforces the retention rule on the branch this run is on — see {Ingest::ObservationPruner}
+    # for the rule and for why it is keyed per branch rather than per repository.
+    #
+    # **After the transaction above has committed, and outside it.** The lock that transaction
+    # holds is measured and load-bearing (see `#record`), and lengthening it is how this ingest
+    # path deadlocks; the prune needs none of its protection, because the only rows it touches
+    # belong to runs OLDER than the retained window, which no concurrent delivery is writing.
+    # Called on both paths — here and in `#record_unsharded_run` — each after its own commit,
+    # because a laptop `bundle exec rspec` grows this table exactly as a CI matrix does.
+    def prune_observations(run) = Ingest::ObservationPruner.prune(run)
 
     # A run no CI provider named: one `create!`, no shard rows, nothing derived — the path this
     # class had before sharding existed. The only addition is that its examples are recorded too,
@@ -129,9 +149,13 @@ module Ingest
     # null on every one of these rows because there is no shard row to point at, and each POST is
     # its own `TestRun`, so there is nothing for a redelivery to collide with.
     def record_unsharded_run
-      TestRun.transaction do
-        create_run.tap { |run| Ingest::ObservationRecorder.record(run, @specs) }
+      run = TestRun.transaction do
+        create_run.tap { |unsharded| Ingest::ObservationRecorder.record(unsharded, @specs) }
       end
+
+      prune_observations(run)
+
+      run
     end
 
     def find_or_create_run
