@@ -364,20 +364,33 @@ module RepositoriesHelper
   # reader is looking at, because they are indistinguishable in every other way. A window whose
   # runs all passed and a window whose client sends no outcomes both produce an empty list; only
   # this sentence separates "we compared and found nothing" from "there was nothing to compare".
+  #
+  # The gate is `runs_reporting_outcomes >= 2`, so it is false in TWO states, and they have
+  # different causes and different remedies. Silence is one of them; the other is a window that
+  # reported perfectly well and holds exactly one run to have reported it. Both the leading clause
+  # AND the explanation behind it are therefore per-state: "said nothing" is a claim about THIS
+  # window, and asserting it over a window that did say something is the mirror of the Vacuous
+  # Green hazard this method exists to refuse — a report read as silence, sending a reader to check
+  # their formatter config when what they need is a second run. The two branches are worded so that
+  # each names the thing its own reader has to change.
   def unstable_tests_incomparable_description(unstable)
-    reported =
+    reported, cause =
       if unstable.runs_reporting_outcomes.zero?
-        "not one of them said how any example ended"
+        ["not one of them said how any example ended",
+         "What CI reports here is optional and nothing validates it, so a window that said " \
+           "nothing and a window with nothing wrong in it produce the same empty list. This one " \
+           "said nothing, and no count is printed over it."]
       else
-        "one of them said how an example ended"
+        ["one of them said how an example ended",
+         "That report is real — it is simply the only one here, and an outcome needs an earlier " \
+           "outcome to have changed from. A second run that reports is what this window is short " \
+           "of, and no count is printed over it."]
       end
 
     "Comparing outcomes takes at least two runs that reported them — one run's outcome cannot have " \
       "changed from anything. Of the #{number_with_delimiter(unstable.run_count)} " \
       "#{"run".pluralize(unstable.run_count)}#{unstable_tests_branch_clause(unstable)}, " \
-      "#{reported}. What CI reports here is optional and nothing validates it, so a window that " \
-      "said nothing and a window with nothing wrong in it produce the same empty list. This one " \
-      "said nothing, and no count is printed over it."
+      "#{reported}. #{cause}"
   end
 
   # The honest zero — reachable only behind `#comparable?`, and worded against the runs it was

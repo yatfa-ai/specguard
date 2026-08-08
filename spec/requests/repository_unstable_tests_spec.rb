@@ -261,8 +261,17 @@ RSpec.describe "Repository unstable tests", type: :request do
       expect(incomparable).to have_text("at least two runs that reported them", normalize_ws: true)
       expect(incomparable).to have_text("Of the 3 runs on main, not one of them said how any " \
                                         "example ended", normalize_ws: true)
+      # The silence explanation belongs to THIS state and is asserted present only here, so that
+      # the `have_no_text` controls below are the absence of something the suite knows renders.
+      expect(incomparable).to have_text("This one said nothing", normalize_ws: true)
     end
 
+    # The gate is false in two states, not one, and the second is not silence: the window reported,
+    # and holds one run to have reported it. The explanation must move with the leading clause —
+    # "This one said nothing" over a window that DID say something is the Vacuous Green hazard
+    # mirrored, a report read as silence, and it contradicts the "Slowest tests" panel drawn from
+    # the same window directly above. Asserted here in BOTH directions, because a clause asserted
+    # present and never asserted absent where it does not apply is how the false one shipped green.
     it "says it again over a window where exactly one run reported" do
       repository = repository_with([nil, "failed", nil])
 
@@ -270,6 +279,11 @@ RSpec.describe "Repository unstable tests", type: :request do
 
       expect(incomparable).to have_text("Of the 3 runs on main, one of them said how an example " \
                                         "ended", normalize_ws: true)
+      expect(incomparable).to have_text("That report is real — it is simply the only one here",
+                                        normalize_ws: true)
+      expect(incomparable).to have_text("A second run that reports is what this window is short of",
+                                        normalize_ws: true)
+      expect(incomparable).to have_no_text("This one said nothing", normalize_ws: true)
     end
 
     # The whole point of the clause: no zero, and no empty list wearing the shape of a result. The
@@ -288,6 +302,12 @@ RSpec.describe "Repository unstable tests", type: :request do
 
     # One run cannot be compared against itself however much it reported, which is the arithmetic
     # the gate exists for rather than a nullability detail.
+    #
+    # This is the state where reading the report as silence is worst: the "Slowest tests" panel
+    # directly above is drawn from the same window and says every example of that run reported an
+    # outcome. Two panels on one page cannot disagree about whether CI said anything, so the
+    # absence is asserted here as well as on the multi-run window above — one red example would
+    # not show that both states have reach.
     it "says it over a single run that reported everything" do
       repository = repository_with(%w[failed])
 
@@ -295,6 +315,9 @@ RSpec.describe "Repository unstable tests", type: :request do
 
       expect(incomparable).to have_text("one run's outcome cannot have changed from anything",
                                         normalize_ws: true)
+      expect(incomparable).to have_text("A second run that reports is what this window is short of",
+                                        normalize_ws: true)
+      expect(incomparable).to have_no_text("This one said nothing", normalize_ws: true)
     end
 
     # A window with no per-example rows at all is not this state — it is a repository with no
