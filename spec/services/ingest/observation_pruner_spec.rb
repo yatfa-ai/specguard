@@ -111,6 +111,13 @@ RSpec.describe Ingest::ObservationPruner do
       expect(observation_counts(features)).to all(eq(1))
     end
 
+    # The protection above read from the other side, where it is a LIMITATION rather than a
+    # guarantee: `main`'s two runs past the window keep their rows through a prune on
+    # `feature/x`, because no invocation reaches a branch other than the one it was handed. Since
+    # the only caller is the write path, a branch stops being pruned at all the moment it stops
+    # receiving runs — this rule bounds growth on LIVE branches and leaves a merged branch's
+    # history frozen where it stands. `Ingest::ObservationPruner`'s class comment says so at
+    # length; this is the executable half of that sentence.
     it "bounds the branch the run is on and no other" do
       main = history(branch: "main", count: 5)
       feature = history(branch: "feature/x", count: 5, from: 90.days.ago)

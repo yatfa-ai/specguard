@@ -41,21 +41,41 @@ module Ingest
   # depth. What a pruned run loses is the per-EXAMPLE detail: the slowest-examples and
   # heaviest-files panels of a run that far back.
   #
-  # == Convergence, and why one POST is bounded
+  # == What converges, and what does not
   #
-  # The first ingest after this ships meets an unbounded backlog — ~920M rows on the measured
-  # repository — and one POST must not attempt it. So the delete is issued in bounded batches
-  # with a hard per-invocation ceiling of `DELETE_BATCH_SIZE * MAX_BATCHES_PER_INGEST` rows, and
-  # the property that buys is CONVERGENCE rather than completeness: an ingest meeting a backlog
-  # bigger than its ceiling prunes as much of it as the ceiling allows and leaves the rest to the
-  # next one, and successive ingests walk the backlog down to the rule.
+  # One POST must not attempt an unbounded delete: the first ingest after this ships can meet a
+  # backlog accumulated over the whole life of a repository, ~920M rows on the measured one,
+  # because nothing has ever deleted a row here for age. So the delete is issued in bounded
+  # batches with a hard per-invocation ceiling of `DELETE_BATCH_SIZE * MAX_BATCHES_PER_INGEST`
+  # rows, and what that buys is CONVERGENCE rather than completeness: an invocation meeting more
+  # than its ceiling prunes what the ceiling allows and leaves the rest, and successive ingests
+  # ON THAT BRANCH walk that branch's backlog down to the rule.
+  #
+  # ⚠️ The branch qualifier is the whole of the claim, not a footnote to it. An invocation reaches
+  # only the rows of the branch of the run it was handed, and the only caller is the write path —
+  # so a branch converges while it is being written to and STOPS CONVERGING the moment it stops
+  # receiving runs. The measured repository is 46,000 runs across 2,001 branches, and most of
+  # those branches are merged `feature/*` that will never see another POST: their history is not
+  # walked down by this class over time. It is frozen at whatever it held, out of this rule's
+  # reach by construction. What this bounds is FUTURE GROWTH ON LIVE BRANCHES — on a healthy
+  # repository, a handful of them. It is not a backfill and must not be provisioned for as one.
+  #
+  # That is a scope decision rather than an oversight. Enforcement lives at the write path because
+  # that is where the growth happens, and this slice deliberately adds no scheduler and no
+  # recurring job — which is also the only thing that could ever visit a branch nothing is writing
+  # to. Draining the pre-existing tail on branches that have gone quiet therefore needs a
+  # different mechanism than this one, and that is separate work rather than a fold-in here.
   #
   # The ceiling is stated against the design point rather than picked round: 20,000 examples is
   # one run, so 50,000 rows per delivery is two and a half runs' worth of history removed per
   # delivery against one run's worth arriving — and a sharded run POSTs once per shard, so a
-  # four-shard run prunes four times. Steady state is reached and held with slack; a backlog is
-  # walked down monotonically. It never *stalls*: each invocation deletes the oldest rows it can
-  # reach, so the work left for the next one is strictly smaller.
+  # four-shard run prunes four times. A live branch reaches steady state and holds it with slack.
+  #
+  # The loop cannot stall, and the reason is NOT that a batch takes the oldest rows it can reach:
+  # `delete_batch` issues no `ORDER BY`, and WHICH of the expired rows a batch reaches is the
+  # planner's business. It is that every row in the candidate set is already past the window, so
+  # any batch is progress — the work left for the next invocation is strictly smaller by exactly
+  # what this one deleted, whichever rows those were.
   #
   # == Outside the ingest transaction, on purpose
   #
@@ -66,11 +86,26 @@ module Ingest
   # window, which no concurrent delivery is writing — so it must not extend the hold. Both of
   # `RunRecorder`'s paths call it, each after its own commit.
   #
-  # It follows that a failure here surfaces as a 500 on an ingest whose data is already committed.
-  # That is deliberate rather than papered over with a rescue: an ingest is idempotent by
-  # construction (derived counters, delete-then-upsert observations), so the client's retry costs
-  # a duplicate delivery of a slice that replaces itself — and swallowing the error would leave
-  # the one rule bounding this table failing silently and invisibly.
+  # == A prune failure fails the ingest, which is a policy choice rather than a default
+  #
+  # Nothing rescues this call, so a prune that raises turns an ingest whose data ALREADY COMMITTED
+  # into a 500. The tail of that deserves naming rather than glossing: the failures this will
+  # actually meet are the persistent ones — a `statement_timeout` or a lock wait on a 10,000-row
+  # delete against a table this rule arrived too late to have kept small. Persistent means every
+  # POST answers 500, for housekeeping the client never asked for, and the client's retry re-runs
+  # the whole insert path and dies on the same delete. A prune that cannot keep up is, as this
+  # stands, an ingest outage.
+  #
+  # It is left that way rather than rescued because an ingest is idempotent by construction
+  # (derived counters, delete-then-upsert observations), so a retry costs a duplicate delivery of a
+  # slice that replaces itself — and because that failure mode IS the table having outgrown the one
+  # rule bounding it, which is the last thing that should fail invisibly. The choice is not the
+  # two-way one between raising and a bare rescue, though: `Rails.error.report` is a third option
+  # available here today (Rails 8, no new dependency, no new seam to invent) that would fail the
+  # rule loudly in the error reporter while the ingest still answers 202 for work that genuinely
+  # succeeded. Reach for it if the outage risk above stops being an acceptable trade — but that
+  # changes what the write path promises a client on a request it accepted, so it belongs to
+  # whoever owns that contract rather than being decided quietly inside this class.
   class ObservationPruner
     # How many rows one DELETE may remove. Half a design-point run, so a single statement is a
     # bounded amount of work for the ingest request that pays for it rather than a table sweep.

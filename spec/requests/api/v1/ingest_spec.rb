@@ -1168,6 +1168,10 @@ RSpec.describe "POST /api/v1/ingest", type: :request do
 
     # The pruned run is still a run. Its row and both counters are derived from `test_run_shards`
     # and are no business of this rule, so the suite-size trajectory reads it exactly as before.
+    # Every attribute is compared, `updated_at` included: nothing in the prune path writes to the
+    # pruned run — `recompute_totals` writes `update_columns` on the CURRENT run, and
+    # `SpecObservation belongs_to :test_run` carries no `touch:` — so an exclusion here would only
+    # hide a regression that gave the rule a reach over `test_runs` it is not supposed to have.
     it "leaves the pruned run's row and both counters exactly as they were" do
       first = ingest_on("main", name: "a")
       before_prune = first.attributes
@@ -1175,7 +1179,7 @@ RSpec.describe "POST /api/v1/ingest", type: :request do
       ingest_on("main", name: "b")
       ingest_on("main", name: "c")
 
-      expect(first.reload.attributes.except("updated_at")).to eq(before_prune.except("updated_at"))
+      expect(first.reload.attributes).to eq(before_prune)
     end
 
     it "bounds a sharded run's branch too, after the shard's own transaction" do
