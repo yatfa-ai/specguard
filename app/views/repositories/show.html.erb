@@ -1286,8 +1286,9 @@
         `SpecObservation#example_id` is RSpec's positional id and explicitly not stable across
         refactors, so a ranking that spanned runs would be comparing rows that are not known to be
         the same test. The model draws that boundary; this panel stays on the near side of it. It
-        also rolls nothing up by file or directory, which is a different question with a different
-        index behind it.
+        also rolls nothing up by directory, which is a different question with a different index
+        behind it — the by-FILE half of that claim was true until the panel below this one shipped,
+        and the subtree half stays true until an index exists that can answer it.
 
         Rendered only when the run WROTE example rows. A run ingested before those rows existed, or
         one whose client sends no per-example detail, has no per-test grain to disclose — and an
@@ -1373,6 +1374,123 @@
                              "#{'example'.pluralize(@slowest_examples.recorded_count)} and a " \
                              "duration for none of them, so there is nothing to rank. An example " \
                              "that never ran reports no duration."
+              ) %>
+        <% end %>
+      <% end %>
+    <% end %>
+
+    <%# == Where this run's wall clock went, by spec file
+        The other half of the question the panel above answers, off the same rows of the same run,
+        and NOT derivable from it. That ranking is by INDIVIDUAL cost and ten rows long: on a
+        20,000-example suite it shows 0.05% of the run, and a file holding four hundred examples at
+        fifty milliseconds each is twenty seconds of wall clock with every one of its rows far
+        below the head. Outliers and concentration are different questions and this panel asks the
+        second one.
+
+        Grouped on the INCLUDING file (`spec_file_path`), so a shared example group's time lands on
+        the file that ran it rather than on a `spec/support/` helper that ran nothing — the rule
+        `SpecObservation`'s class comment states and spec/requests/api/v1/ingest_spec.rb pins
+        end-to-end.
+
+        By FILE and not by directory. There is no `text_pattern_ops` index in db/schema.rb, so
+        under this database's collation a prefix rollup has no indexed path at all; by-file is
+        indexed and constant-cost, and a subtree rollup needs its own migration before it can be
+        asked here at this suite size.
+
+        ONE run, like the panel above, and for the same reason: `example_id` is positional and not
+        stable across refactors, so anything spanning runs would be comparing rows not known to be
+        the same tests.
+
+        Same visibility rule as the panel above — rendered when the run WROTE example rows, and a
+        run with rows but no timings renders and says so. Outside the `manage_keys` gate: read-only
+        suite telemetry, nothing credential and nothing actionable. %>
+    <% if @spec_file_durations&.recorded? %>
+      <%= render UI::PanelComponent.new(title: "Heaviest spec files", id: "spec-file-durations",
+                                        class: "lg:col-span-3") do %>
+        <% if @spec_file_durations.any_timed? %>
+          <%# What the totals COVER, before the totals themselves. `SUM` skips a missing timing
+              silently, so a file whose examples were half untimed prints a total covering half of
+              it that is indistinguishable, as a number, from a complete one. The per-file coverage
+              column is the answer, and this paragraph is what tells a reader the column is a
+              denominator rather than decoration.
+
+              Every figure is counted off THIS RUN'S ROWS, never off `TestRun#total_specs_count` on
+              the Overview panel above — that count is re-derived by SUM over shard reports and the
+              two can legitimately differ. `SpecFileDurations` carries the argument and holds the
+              rows and their coverage together, so this sentence cannot end up describing a
+              different row set from the one below it. %>
+          <p class="text-xs text-app-muted mb-3" id="spec-file-durations-basis">
+            <%# The list is CAPPED, so its own length says nothing about how much of the run it
+                covers. "The 10 files the run spent the most wall clock in" is read as the whole
+                story by a reader who cannot see the limit, and on a suite spread over three
+                hundred files it is three per cent of one — the same lie by omission the coverage
+                column refuses one grain down, which is why the total is stated whether or not
+                anything was cut. It costs no extra query: the count rides back on the same
+                grouped aggregate. %>
+            <% if @spec_file_durations.truncated? %>
+              The <%= number_with_delimiter(@spec_file_durations.rows.size) %> heaviest of the
+              <%= number_with_delimiter(@spec_file_durations.file_count) %> files the run named
+              above recorded, heaviest first
+            <% else %>
+              All <%= number_with_delimiter(@spec_file_durations.file_count) %>
+              <%= "file".pluralize(@spec_file_durations.file_count) %> the run named above
+              recorded, heaviest first
+            <% end %>
+            — every example's duration summed onto the file that ran it, so a shared example group
+            counts against the file including it rather than against the helper defining it.
+            <% if @spec_file_durations.complete? %>
+              Every example in every file listed reported a duration, so each total covers the
+              whole of its file.
+            <% else %>
+              The "Examples timed" column is what each total was summed over: a file whose examples
+              did not all report a duration has a total covering only the ones that did, and a file
+              that reported none has no total to state rather than a zero. An example that never
+              ran has no duration to report, so a missing timing is a faithful record rather than a
+              gap.
+            <% end %>
+            Counted off the rows this run wrote here, which is a different figure from the suite
+            size on the Overview panel above and may legitimately differ from it.
+          </p>
+          <%= render UI::TableComponent.new(columns: ["Spec file", "Examples timed", "Total duration"],
+                                            describedby: "spec-file-durations-basis") do %>
+            <% @spec_file_durations.rows.each do |file| %>
+              <tr>
+                <td class="px-3 py-2 font-mono text-xs text-app-content"><%= file.path %></td>
+                <td class="px-3 py-2 text-app-content-secondary tabular-nums">
+                  <%# Always a fraction, never a bare count: the denominator is the point of the
+                      column, and a complete file has to be visibly complete rather than merely
+                      unremarked. %>
+                  <%= file.coverage_label %>
+                </td>
+                <td class="px-3 py-2 text-app-content tabular-nums">
+                  <%# Through `SpecObservation.humanized_duration`, the same seam the per-example
+                      column above renders through — so a file total and an example measurement
+                      cannot disagree about how a duration is spelled, and a file that measured
+                      nothing says "not reported" rather than wearing the spelling of a zero. %>
+                  <%= file.duration_label %>
+                </td>
+              </tr>
+            <% end %>
+          <% end %>
+        <% else %>
+          <%# Files exist and not one of their examples was timed. Every group's SUM is NULL, so
+              there is a list of files and no ranking — and a column of "not reported" under a
+              heading promising "heaviest first" would be a ranking of nothing. Not zeroes, for the
+              reason the panel above gives: a zero is this surface inventing the measurement it is
+              missing.
+
+              Stated in FILES, where the panel above states the same absence in examples. Not a
+              stylistic choice: `file_count` is counted before the `LIMIT` and is exact, whereas
+              summing `recorded_count` over the rows on hand would total a capped ten of them and
+              print a suite-wide-looking figure covering part of the run — the understatement this
+              panel exists to refuse. %>
+          <%= render UI::EmptyStateComponent.new(
+                title: "No timings on this run",
+                description: "This run recorded examples in " \
+                             "#{number_with_delimiter(@spec_file_durations.file_count)} " \
+                             "#{'file'.pluralize(@spec_file_durations.file_count)} and a duration " \
+                             "for none of them, so there is no wall clock to attribute to any " \
+                             "file. An example that never ran reports no duration."
               ) %>
         <% end %>
       <% end %>
