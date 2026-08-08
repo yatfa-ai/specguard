@@ -11,9 +11,13 @@ is growing, and a Hotwire dashboard renders the same figures.
 reference, and landing a feature should not require editing it. What it does not carry lives in
 exactly one place each:
 
-- **What is built, and what is only designed** — the yatfa knowledge base (*Project Goals*,
-  *Overview & Architecture*, *Data Model*, *Duplicate-Detection Engine*, *Roadmap*). Single source:
-  there is no second copy in this repository to drift against it.
+- **What is built, and what is only designed** — the yatfa knowledge base. Start at *Project
+  Goals*: it is the repositioned statement of what SpecGuard is for and it wins wherever an older
+  article disagrees with it. *Data Model*, *Duplicate-Detection Engine* and *API Reference* (the
+  auth model, the ingest envelope, the error shapes) carry the detail. *Overview & Architecture*
+  and *Roadmap* are annotated there as superseded — on framing and on the phase plan respectively
+  — so read them for history, not for status. Single source: there is no second copy in this
+  repository to drift against them.
 - **The API contract** — `spec/requests/api/v1/*`. Those request specs pin each response's keys
   exactly, and are reviewed on every change, so they are the live contract rather than a
   description of one.
