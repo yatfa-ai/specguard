@@ -12,7 +12,9 @@ module Ingest
   # names the spec it came from, so a client fixing a malformed suite sees the whole list at once.
   #
   # A run with *zero* annotations is valid. Missing annotations are never an ingestion failure —
-  # only malformed ones are — because adoption has to be opt-in and gradual.
+  # only malformed ones are — because adoption has to be opt-in and gradual. What every spec does
+  # owe is *something that represents it*: an intent or a `name` (see {#validate_name}), the pair
+  # `Ingest::SpecSignal` chooses between.
   class Payload
     STATUSES = %w[annotated unannotated].freeze
 
@@ -33,8 +35,12 @@ module Ingest
     # per-example facts (duration, outcome, name) are worth keeping for every example regardless.
     def specs = @specs
 
-    # The specs carrying an intent — what slice 3's embed + upsert job will consume. Only
-    # meaningful once `valid?`, which is what guarantees every status is one of STATUSES and so
+    # The specs carrying an intent — the numerator of the run's annotation ratio, which is the one
+    # thing this slice is for. Deliberately *not* what the embedding seam is handed: a spec's
+    # representable text can come from its `name` too (`Ingest::SpecSignal`), so narrowing to this
+    # slice at that call site would decide that a suite mid-adoption has nothing to say.
+    #
+    # Only meaningful once `valid?`, which is what guarantees every status is one of STATUSES and so
     # makes "not unannotated" the same set as "annotated".
     def annotated_specs = @specs.reject { |spec| spec["status"] == "unannotated" }
 
@@ -146,6 +152,7 @@ module Ingest
       validate_line_number(spec, index)
       validate_status(spec, index)
       validate_intent(spec, index)
+      validate_name(spec, index)
     end
 
     def validate_file_path(spec, index)
@@ -189,6 +196,36 @@ module Ingest
 
         @errors << "#{label(spec, index)}: intent must be null when status is \"unannotated\""
       end
+    end
+
+    # `name` is the example's `full_description` — the only thing describing a test in a suite that
+    # annotates nothing, and therefore the field the cold-start case rests on. The shipped RSpec
+    # formatter has always sent it for every example; the envelope simply never looked.
+    #
+    # Two rules, and a spec breaks at most one of them:
+    #
+    # 1. Present but not a non-empty string — a client bug, rejected the way every other ill-typed
+    #    field is, whether or not the spec also carries an intent that would outrank it.
+    # 2. Absent *and* no intent — rejected. Such a test can be counted and nothing else: there is
+    #    no text for `Ingest::SpecSignal` to return (its `:none` case), so no consumer could ever
+    #    say anything about it, and there is no field on which to record that condition. Accepting
+    #    it and flagging it is the alternative, and it needs storage that does not exist.
+    #
+    # This is deliberately *not* the same rule as "annotations are optional". An unannotated spec
+    # carrying a name is accepted, which is the ordinary shape of a suite mid-adoption and what
+    # keeps the zero-annotation run valid.
+    def validate_name(spec, index)
+      value = spec["name"]
+
+      if value.nil?
+        return if spec["intent"]
+
+        return @errors << "#{label(spec, index)}: name is required when the spec carries no intent"
+      end
+
+      return if value.is_a?(String) && value.strip.present?
+
+      @errors << "#{label(spec, index)}: name must be a non-empty string when present"
     end
 
     # Names the offending spec by its own coordinates, falling back to the index alone when the

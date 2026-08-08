@@ -28,21 +28,28 @@ class Api::V1::IngestsController < Api::BaseController
       # percentage via `TestRun#annotated_ratio`; the API and the UI differ in unit on purpose,
       # so neither side has to guess which one it is holding.
       annotated_ratio: test_run.annotated_fraction,
-      embedding_status: enqueue_embeddings(test_run, payload.annotated_specs)
+      embedding_status: enqueue_embeddings(test_run, payload.specs)
     }, status: :accepted
   end
 
   private
 
-  # The named seam slice 3 (SPGD-84) fills in: it will enqueue the embed + upsert job for each
-  # annotated spec and report "queued". Until that job class and the queue behind it exist there
+  # The named seam slice 3 (SPGD-84) fills in: it will enqueue the embed + upsert job for each spec
+  # it can represent and report "queued". Until that job class and the queue behind it exist there
   # is nothing to schedule, so this reports "pending" and enqueues nothing.
+  #
+  # It is handed the **whole** population rather than `payload.annotated_specs`, because the text
+  # that represents a test is not only an intent: `Ingest::SpecSignal` answers for an unannotated
+  # example out of its `name`, and passing the annotated slice here would decide — at the caller,
+  # silently, and before the seam exists — that a suite mid-adoption has nothing to embed. That is
+  # exactly the cold-start case the platform is for. The seam filters on
+  # `Ingest::SpecSignal#present?` and reports the source it used; it does not re-derive the rule.
   #
   # Reporting "queued" from here would be the cheapest possible lie: the client would read a
   # success value for work that was never scheduled, and would keep reading it for as long as the
   # seam stays empty. Deliberately no reference to a job constant either — eager loading a
   # constant that does not exist yet would take the whole endpoint down at boot.
-  def enqueue_embeddings(_test_run, _annotated_specs)
+  def enqueue_embeddings(_test_run, _specs)
     "pending"
   end
 end

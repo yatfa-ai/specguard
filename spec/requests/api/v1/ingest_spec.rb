@@ -423,6 +423,117 @@ RSpec.describe "POST /api/v1/ingest", type: :request do
     end
   end
 
+  # `name` is RSpec's `full_description`, sent by the shipped formatter for every example. In a
+  # suite that annotates nothing it is the only thing describing a test, so it is the field the
+  # cold-start case rests on — and the envelope used to drop it at the door.
+  describe "the text that represents a test" do
+    it "accepts an unannotated spec carrying a name" do
+      ingest(ingest_payload(specs: [unannotated_spec(name: "User is valid with a handle")]))
+
+      expect(response).to have_http_status(:accepted)
+      expect(TestRun.sole.spec_observations.sole.name).to eq("User is valid with a handle")
+    end
+
+    # A test with neither can be counted and nothing else: nothing downstream could ever say a
+    # word about it, and there is no field on which to record that condition. Rejected and named,
+    # rather than accepted and silently unrepresentable. No conforming client is affected — the
+    # formatter has always sent `name`.
+    it "rejects a spec with neither an intent nor a name, naming the offending spec" do
+      ingest(ingest_payload(specs: [unannotated_spec(file_path: "spec/models/user_spec.rb",
+                                                     line_number: 40).except(:name)]))
+
+      expect(response).to have_http_status(:bad_request)
+      expect(response.parsed_body["message"]).to include("spec/models/user_spec.rb:40", "name is required")
+      expect(TestRun.count).to eq(0)
+    end
+
+    # The annotation is a different field from the name, and this is what keeps the rejection above
+    # from quietly becoming "annotations are mandatory".
+    it "accepts an annotated spec that carries no name, because its intent already represents it" do
+      ingest(ingest_payload(specs: [annotated_spec.except(:name)]))
+
+      expect(response).to have_http_status(:accepted)
+    end
+
+    it "rejects a name that is present but not a non-empty string" do
+      ingest(ingest_payload(specs: [unannotated_spec(name: "   ")]))
+
+      expect(response).to have_http_status(:bad_request)
+      expect(response.parsed_body["message"]).to include("name must be a non-empty string")
+      expect(TestRun.count).to eq(0)
+    end
+
+    it "rejects a name of the wrong type even when an intent would outrank it" do
+      ingest(ingest_payload(specs: [annotated_spec(name: 42)]))
+
+      expect(response).to have_http_status(:bad_request)
+      expect(response.parsed_body["message"]).to include("name must be a non-empty string")
+    end
+
+    # The class's stated contract is *collect every failure, never raise on the first* — a client
+    # fixing a malformed suite has to see the whole list, not one entry per round trip.
+    it "reports one error per offending spec, collected alongside the envelope's other errors" do
+      ingest(ingest_payload(specs: [unannotated_spec(line_number: 1, name: ""),
+                                    unannotated_spec(line_number: 2, name: 42),
+                                    unannotated_spec(line_number: 3).except(:name),
+                                    annotated_spec(line_number: 4, behavior: "no")]))
+
+      details = response.parsed_body["details"]
+
+      expect(response).to have_http_status(:bad_request)
+      expect(details.size).to eq(4)
+      expect(details.grep(/name/).size).to eq(3)
+    end
+
+    # One error, not two: a blank name on a spec with no intent breaks one rule about one field.
+    it "does not double-report a spec that is both nameless and unrepresentable" do
+      ingest(ingest_payload(specs: [unannotated_spec(name: "")]))
+
+      expect(response.parsed_body["details"].size).to eq(1)
+    end
+  end
+
+  # The seam slice 3 fills in is handed the *whole* population, not the annotated slice: an
+  # unannotated example is represented by its name (Ingest::SpecSignal), so narrowing here would
+  # decide — before the seam exists — that a suite mid-adoption has nothing to embed.
+  describe "what the embedding seam is handed" do
+    let(:specs) do
+      [annotated_spec(file_path: "spec/models/invoice_spec.rb", line_number: 1),
+       annotated_spec(file_path: "spec/models/order_spec.rb", line_number: 2),
+       unannotated_spec(file_path: "spec/models/user_spec.rb", line_number: 3)]
+    end
+
+    it "receives every spec in the run, annotated or not" do
+      handed = nil
+      allow_any_instance_of(Api::V1::IngestsController)
+        .to receive(:enqueue_embeddings).and_wrap_original do |original, run, given|
+          handed = given
+          original.call(run, given)
+        end
+
+      ingest(ingest_payload(specs: specs))
+
+      expect(handed.size).to eq(3)
+      expect(handed.map { |spec| spec["file_path"] })
+        .to eq(%w[spec/models/invoice_spec.rb spec/models/order_spec.rb spec/models/user_spec.rb])
+    end
+
+    # Nothing is scheduled, so nothing may claim to be. Widening what the seam sees must not move
+    # this: reporting "queued" for work that was never enqueued is the cheapest possible lie.
+    it "still reports pending, because nothing is enqueued yet" do
+      ingest(ingest_payload(specs: specs))
+
+      expect(response.parsed_body["embedding_status"]).to eq("pending")
+    end
+
+    it "counts the whole population and the annotated slice separately" do
+      ingest(ingest_payload(specs: specs))
+
+      expect(response).to have_http_status(:accepted)
+      expect(response.parsed_body).to include("total_specs" => 3, "annotated_specs" => 2)
+    end
+  end
+
   describe "an intent that fails the OpenTestIntent schema" do
     it "rejects a behavior below the schema's minimum length, naming the offending spec" do
       ingest(ingest_payload(specs: [annotated_spec(line_number: 12),
