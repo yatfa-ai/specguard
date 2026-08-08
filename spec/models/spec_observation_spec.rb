@@ -245,6 +245,52 @@ RSpec.describe SpecObservation do
         expect(plan).not_to match(/Seq Scan on spec_observations/)
       end
 
+      # The same certification for the read that spans TWO runs, and the reason it ships without a
+      # migration. Twice the rows is not a different shape: it narrows on `test_run_id` with an `IN`
+      # list of two, which `index_spec_observations_on_test_run_id` serves exactly as it serves one,
+      # and the `FILTER` aggregates and window totals are expressions over the rows that scan
+      # already reads. The `text_pattern_ops` index a subtree rollup would want serves a prefix
+      # PREDICATE and this read issues none.
+      #
+      # A two-value `IN` list makes the `Bitmap Index Scan` branch of `INDEXED_BY_RUN` MORE likely
+      # than the single-id reads above do, and that is not a regression: the comment on that matcher
+      # records that it was widened deliberately because which of the two Postgres picks is decided
+      # by dead-tuple bloat and RSpec ordering rather than by the query. Narrowing it back to the
+      # plain `Index Scan` spelling would redden this example on ordering alone. The reach here is
+      # carried by the `Seq Scan` assertion beside it: unscope this aggregate from its two runs and
+      # the plan walks every run's rows whatever access method it had before.
+      #
+      # == A THIRD access path, which only this read can have
+      #
+      # It has its own matcher rather than the shared `INDEXED_BY_RUN`, and the extra spelling is
+      # `Index Only Scan`. This is the one read here that projects NOTHING outside an index: it
+      # narrows on `test_run_id` and groups and counts on `spec_file_path`, both columns of
+      # `index_spec_observations_on_test_run_id_and_spec_file_path`, so Postgres can answer it
+      # without touching the heap at all. Every sibling above has to fetch `duration_seconds` or
+      # `outcome` and therefore never can — which is why the shared constant is left exactly as it
+      # is rather than widened on their behalf.
+      #
+      # Whether that path is TAKEN depends on the visibility map, which depends on when the table
+      # was last vacuumed — the same class of planner tiebreak, decided by the same suite-ordering
+      # accident, that the shared matcher was widened for. Observed here both ways. It is a
+      # STRONGER plan than the two the shared matcher already accepts, not a weaker one, so
+      # accepting it concedes nothing: all three spellings say the rows were reached through an
+      # index leading with `test_run_id`, and the `Seq Scan` assertion is what makes that claim
+      # falsifiable.
+      INDEXED_OR_COVERED_BY_RUN =
+        /(?:Index Scan using|Index Only Scan using|Bitmap Index Scan on) index_spec_observations_on_test_run_id\w*/
+
+      # The second run is one of the nineteen the seed already built rather than a twenty-first,
+      # so this example certifies the plan at exactly the table size and statistics the examples
+      # above are certified at.
+      it "reads the panel's two-run by-area comparison off an index rather than scanning the table" do
+        previous_run = repository.test_runs.where.not(id: run.id).first
+        plan = plan_for_actual_sql { described_class.directory_growth_between(run, previous_run) }
+
+        expect(plan).to match(INDEXED_OR_COVERED_BY_RUN)
+        expect(plan).not_to match(/Seq Scan on spec_observations/)
+      end
+
       # The "no extra cost" claim for the outcome counters, ASSERTED rather than reasoned about.
       # The two `FILTER` aggregates are new expressions over a row set the existing `COUNT(*)`
       # already reads, so they should add no scan — but that is a claim about a plan, and a query
@@ -703,6 +749,195 @@ RSpec.describe SpecObservation do
 
       it "reads no directories for a run that recorded nothing" do
         expect(described_class.directory_durations_in(run)).to eq([])
+      end
+    end
+
+    # The one read on this table that spans two runs. Everything above is scoped to a single
+    # `test_run_id`; this counts each area's rows in each of two runs and subtracts the integers.
+    #
+    # The examples deliberately never assert anything about a particular EXAMPLE surviving from one
+    # run to the other, because the method cannot and must not know: `example_id` is positional, so
+    # the two populations are compared as populations. Every fixture below is written so that the
+    # per-example rows of the two runs are unrelated — same paths, different line numbers — and the
+    # expected counts hold regardless.
+    describe ".directory_growth_between" do
+      let(:previous_run) { create_test_run(repository: repository, commit_sha: "prev123") }
+
+      # One area's worth of rows in one run, at line numbers that cannot collide within it.
+      def observe_area(test_run, directory, count, from: 1)
+        count.times do |i|
+          observe(test_run, duration: 1.0, line_number: from + i,
+                            spec_file_path: "#{directory}/a_spec.rb")
+        end
+      end
+
+      # The pivot itself: one row per AREA carrying both runs' counts, not one row per (area, run)
+      # pair left for a caller to fold together.
+      it "puts both runs' counts for an area on one row" do
+        observe_area(previous_run, "spec/models", 2)
+        observe_area(previous_run, "spec/requests", 1, from: 10)
+        observe_area(run, "spec/models", 5)
+        observe_area(run, "spec/requests", 1, from: 10)
+
+        expect(described_class.directory_growth_between(run, previous_run)).to eq(
+          [["spec/models", 2, 5, 2, 3, 6],
+           ["spec/requests", 1, 1, 2, 3, 6]]
+        )
+      end
+
+      # THE example this ranking exists for, and the one a `DESC`-only ordering on the signed change
+      # passes right over. `spec/legacy` lost four examples and `spec/models` gained two: the bigger
+      # movement is the deletion, and a panel asking "which areas moved" that ranked the signed
+      # change would put every shrinkage below every growth and off the end of the cap. Asserted at
+      # `limit: 1` as well, so the claim is about which area SURVIVES the cap rather than only about
+      # the order two surviving rows happen to sit in.
+      it "ranks by absolute movement, so a shrinkage outranks a smaller growth" do
+        observe_area(previous_run, "spec/legacy", 6)
+        observe_area(previous_run, "spec/models", 1, from: 20)
+        observe_area(run, "spec/legacy", 2)
+        observe_area(run, "spec/models", 3, from: 20)
+
+        expect(described_class.directory_growth_between(run, previous_run)).to eq(
+          [["spec/legacy", 6, 2, 2, 7, 5],
+           ["spec/models", 1, 3, 2, 7, 5]]
+        )
+        expect(described_class.directory_growth_between(run, previous_run, limit: 1).map(&:first))
+          .to eq(["spec/legacy"])
+      end
+
+      # An area the earlier run never wrote a row for comes back with a real 0 on that side rather
+      # than being dropped — the caller needs the row in order to say "new area" at all. It is the
+      # SUM totals beside it that let the caller tell this from a run that recorded nothing
+      # anywhere, which is why they are asserted here rather than only in their own example.
+      it "reports an area only the latest run recorded, with a zero for the run that did not" do
+        observe_area(previous_run, "spec/models", 3)
+        observe_area(run, "spec/models", 3)
+        observe_area(run, "spec/system", 4, from: 20)
+
+        expect(described_class.directory_growth_between(run, previous_run)).to eq(
+          [["spec/system", 0, 4, 2, 3, 7],
+           ["spec/models", 3, 3, 2, 3, 7]]
+        )
+      end
+
+      it "reports an area only the previous run recorded, with a zero for the run that did not" do
+        observe_area(previous_run, "spec/models", 3)
+        observe_area(previous_run, "spec/system", 4, from: 20)
+        observe_area(run, "spec/models", 3)
+
+        expect(described_class.directory_growth_between(run, previous_run)).to eq(
+          [["spec/system", 4, 0, 2, 7, 3],
+           ["spec/models", 3, 3, 2, 7, 3]]
+        )
+      end
+
+      # The two runs' rows are counted apart, which is the whole method: a single `COUNT(*)` over
+      # the `IN` list would give each area the SUM of both sides and every change would be zero.
+      # Same paths in both runs and different totals, so a read that conflated them would produce
+      # `[9, 9]` here rather than `[4, 5]`.
+      it "counts each run's rows against that run and not against the pair" do
+        observe_area(previous_run, "spec/models", 4)
+        observe_area(run, "spec/models", 5)
+
+        expect(described_class.directory_growth_between(run, previous_run))
+          .to eq([["spec/models", 4, 5, 1, 4, 5]])
+      end
+
+      # A third run on the same repository is not part of this comparison, and its rows must not
+      # reach either column or either total. The obvious way to get this wrong — narrowing on
+      # `repository_id`, or on the branch — is what this rules out.
+      it "reads the two runs it was asked about and no others" do
+        other = create_test_run(repository: repository, commit_sha: "0ther99")
+        observe_area(previous_run, "spec/models", 1)
+        observe_area(run, "spec/models", 2)
+        observe_area(other, "spec/theirs", 50)
+
+        expect(described_class.directory_growth_between(run, previous_run))
+          .to eq([["spec/models", 1, 2, 1, 1, 2]])
+      end
+
+      # Two areas that moved the same distance is ordinary — a rename moves exactly that way — so
+      # the order has to be total, or two requests against unchanged rows list them differently.
+      it "breaks ties by directory, so equal movements have one order" do
+        observe_area(previous_run, "spec/b", 3)
+        observe_area(previous_run, "spec/a", 3, from: 20)
+        observe_area(run, "spec/b", 5)
+        observe_area(run, "spec/a", 5, from: 20)
+
+        expect(described_class.directory_growth_between(run, previous_run).map(&:first))
+          .to eq(["spec/a", "spec/b"])
+      end
+
+      # Its OWN limit, not the by-duration one. The two constants happen to be equal today, which is
+      # exactly why the default is asserted through `MOVED_DIRECTORIES_LIMIT` by name: a reuse of
+      # `HEAVIEST_DIRECTORIES_LIMIT` would pass this example and silently make one edit move both
+      # panels.
+      it "caps at the limit it was given, and defaults to the panel's own" do
+        12.times { |i| observe_area(run, "spec/d#{i}", i + 1, from: (i * 20) + 1) }
+        observe_area(previous_run, "spec/models", 1)
+
+        expect(described_class.directory_growth_between(run, previous_run).size)
+          .to eq(described_class::MOVED_DIRECTORIES_LIMIT)
+        expect(described_class.directory_growth_between(run, previous_run, limit: 3).map(&:first))
+          .to eq(["spec/d11", "spec/d10", "spec/d9"])
+      end
+
+      # What the capped list is the head OF, in the same round trip — and it counts AREAS across
+      # BOTH runs, which is the figure a caption saying "of the N areas either run recorded" needs.
+      # `COUNT(*) OVER ()` runs after `GROUP BY` and before `LIMIT`, so a truncated read reports the
+      # same total an untruncated one does. Twelve areas in the latest run and one that only the
+      # previous run has: thirteen, which neither run alone could have produced.
+      it "reports how many areas the comparison covered, whatever the limit returns" do
+        12.times { |i| observe_area(run, "spec/d#{i}", i + 1, from: (i * 20) + 1) }
+        observe_area(previous_run, "spec/gone", 1)
+
+        expect(described_class.directory_growth_between(run, previous_run, limit: 3).map { |row| row[3] })
+          .to eq([13, 13, 13])
+        expect(described_class.directory_growth_between(run, previous_run, limit: 100).map { |row| row[3] }.uniq)
+          .to eq([13])
+      end
+
+      # The two per-run totals, and the reason they are on the query rather than derived by the
+      # caller: summing the returned rows' counts would total a CAPPED three of them and answer a
+      # question about the page instead of about the run.
+      #
+      # The previous run is what makes this sharp rather than merely tidy. It recorded one row, in
+      # an area whose movement does not survive the cap — so the rows on hand carry ZERO of its
+      # examples while the run recorded one. A caller deriving the figure from the rows would read
+      # "the previous run recorded nothing", which is precisely the state the panel withholds the
+      # whole comparison for: the defect would be a page announcing no comparison on two runs that
+      # are perfectly comparable.
+      it "reports what each run recorded in total, before the limit" do
+        12.times { |i| observe_area(run, "spec/d#{i}", 1, from: (i * 20) + 1) }
+        observe_area(run, "spec/d0", 1, from: 500)
+        observe_area(previous_run, "spec/gone", 1)
+
+        rows = described_class.directory_growth_between(run, previous_run, limit: 3)
+
+        expect(rows.map { |row| row[4] }.uniq).to eq([1])
+        expect(rows.map { |row| row[5] }.uniq).to eq([13])
+        expect(rows.sum { |row| row[1] }).to eq(0)
+        expect(rows.sum { |row| row[2] }).to eq(4)
+      end
+
+      # Zero groups, which for this read means neither run wrote a row — a group exists here if and
+      # only if a row does. The caller depends on that equivalence to name the state, so it is
+      # pinned rather than left as a property of the SQL.
+      it "reads nothing at all for two runs that recorded no examples" do
+        expect(described_class.directory_growth_between(run, previous_run)).to eq([])
+      end
+
+      # The same area key as every other rollup on this table, so the panel's areas cannot be a
+      # different partition of the suite from the by-duration panel's. Asserted through the shape
+      # that would break first if the expression were re-derived here: the IMMEDIATE parent, with a
+      # root-level file coalesced rather than dropped.
+      it "areas the rows exactly as the by-duration rollup does" do
+        observe(previous_run, duration: 1.0, line_number: 1, spec_file_path: "spec/models/a_spec.rb")
+        observe(run, duration: 1.0, line_number: 1, spec_file_path: "spec/models/orders/a_spec.rb")
+        observe(run, duration: 1.0, line_number: 2, spec_file_path: "smoke_spec.rb")
+
+        expect(described_class.directory_growth_between(run, previous_run).map(&:first))
+          .to match_array([".", "spec/models", "spec/models/orders"])
       end
     end
 

@@ -53,6 +53,15 @@ class SpecObservation < ApplicationRecord
   # and one number standing for both would make that a single edit nobody meant to make.
   HEAVIEST_DIRECTORIES_LIMIT = 10
 
+  # How many spec DIRECTORIES a by-directory COMPARISON returns. Its own constant, by the same rule
+  # the three above it obey and for a difference that is bigger here than any of theirs: those rank
+  # ONE run's areas by what they cost, this ranks the areas of TWO runs by how far their example
+  # counts MOVED. The population is the union of two runs' directories rather than one run's, and
+  # the quantity ranked is a signed change rather than a total — so a suite that wants ten areas by
+  # wall clock has no reason to want ten areas by movement, and one number standing for both would
+  # make that a single edit nobody meant to make.
+  MOVED_DIRECTORIES_LIMIT = 10
+
   # The code area a row belongs to: the IMMEDIATE PARENT directory of the including file.
   #
   # Off `spec_file_path` and never `file_path`, for the reason `#file_durations_in` states and the
@@ -270,6 +279,86 @@ class SpecObservation < ApplicationRecord
       .pluck(Arel.sql(DIRECTORY_EXPRESSION), Arel.sql("SUM(duration_seconds)"),
              Arel.sql("COUNT(*)"), Arel.sql("COUNT(duration_seconds)"),
              Arel.sql("COUNT(*) OVER ()"))
+  end
+
+  # How each code AREA's example count MOVED between two runs — the first read on this table that
+  # spans more than one `test_run_id`, and the reason it is allowed to is worth stating precisely.
+  #
+  # == It compares POPULATIONS, and matches no rows
+  #
+  # Every other read here is scoped to one run because `example_id` is positional and explicitly
+  # not stable across refactors (see the class comment and `.slowest_in`), so a ranking spanning
+  # runs would be pairing rows not known to be the same test. **This pairs none.** It counts the
+  # rows in each area of run A and the rows in each area of run B and subtracts the two integers.
+  # No per-example key crosses the boundary, no example is matched to another example, and nothing
+  # here claims a given test is the same test. That caution is about matching ROWS and this read
+  # matches none of them — which is why it does not reopen the question the caution closes. A
+  # future edit that joins these runs on `example_id`, or on any other per-example key, has left
+  # what this method is allowed to say.
+  #
+  # == What a count here is, and is not
+  #
+  # `COUNT(*)` over each run's own rows, never `TestRun#total_specs_count`: that column is
+  # re-derived by SUM over shard reports and `Ingest::ObservationRecorder#record` returns a row
+  # count *"not always `specs.size`"*, so the two can legitimately differ — and there is no
+  # by-directory counter anywhere else to borrow in any case. The caller is responsible for having
+  # established that a difference between the two runs is a change in the SUITE rather than in how
+  # much of it has been reported; `SpecDirectoryGrowth` is where that gate lives.
+  #
+  # == FILTER aggregates, not a two-key grouping pivoted in Ruby
+  #
+  # One group per AREA with each side counted by its own `FILTER`, rather than grouping on
+  # `(directory, test_run_id)` and pivoting the pairs afterwards. The two read the same rows and
+  # cost the same scan; what only this shape can do is rank and cap in SQL. `ABS(...) DESC` needs
+  # both sides of the subtraction on ONE row, and with them there the `COUNT(*) OVER ()` counts
+  # AREAS before the `LIMIT` — the same total-before-cap the by-directory rollup above uses, for
+  # the same reason: a caption reading "the 10 of 63 areas that moved most" cannot then be
+  # describing a different row set from the table under it. A pivot would have to take its ranking
+  # and its cap in Ruby over every group of both runs, and count its areas off a Hash built after
+  # the fact.
+  #
+  # `FILTER` over `CASE WHEN`/`SUM` because it is the same construct the outcome counters on this
+  # table already use, and the plan certification there records what it costs: new expressions over
+  # a row set the surrounding `COUNT(*)` already reads add no scan of their own.
+  #
+  # == An absent area is not a zero, and the caller is told which
+  #
+  # A group exists here if and only if at least ONE of the two runs wrote a row for that area, so a
+  # side reading 0 wrote nothing for it. Whether that means "new area" or "this run recorded
+  # nothing at all" is not decidable from the row — so the two `SUM(...) OVER ()` totals report
+  # each run's whole recorded population, before the `LIMIT` and independent of it. A caller
+  # holding a zero on one of those knows the side is empty and can withhold the comparison instead
+  # of rendering an entire suite as deleted.
+  #
+  # Ranked by ABSOLUTE movement, both directions. A suite that deleted 300 examples from one area
+  # answers "which areas moved" exactly as much as one that added them, and a `DESC`-only ranking
+  # on the signed change would put every deletion below every addition and off the end of the cap.
+  # `DIRECTORY_EXPRESSION` breaks ties, so two areas that moved equally have a stable order rather
+  # than one the planner picks afresh per request.
+  #
+  # == Why this needs no index of its own
+  #
+  # It narrows on `test_run_id` — an `IN` list of two — and groups on an EXPRESSION, and only the
+  # first decides the access path. `index_spec_observations_on_test_run_id` serves it and the
+  # grouping hash-aggregates on top, which is the plan `.directory_durations_in` gets one method
+  # up; two runs is twice the rows, not a different shape. EXPLAIN-certified at the 20-run seed in
+  # spec/models/spec_observation_spec.rb rather than argued for here.
+  #
+  # @return [Array<Array>] `[directory, previous_count, latest_count, directory_count,
+  #   previous_recorded, latest_recorded]` per directory, ranked by absolute movement. The last
+  #   three are the same figures on every row: how many areas the two runs touched between them,
+  #   and how many rows each run recorded in total — all three counted before the `LIMIT`.
+  def self.directory_growth_between(test_run, previous_test_run, limit: MOVED_DIRECTORIES_LIMIT)
+    latest = sanitize_sql_array(["COUNT(*) FILTER (WHERE test_run_id = ?)", test_run.id])
+    previous = sanitize_sql_array(["COUNT(*) FILTER (WHERE test_run_id = ?)", previous_test_run.id])
+
+    where(test_run_id: [test_run.id, previous_test_run.id])
+      .group(Arel.sql(DIRECTORY_EXPRESSION))
+      .order(Arel.sql("ABS(#{latest} - #{previous}) DESC"), Arel.sql("#{DIRECTORY_EXPRESSION} ASC"))
+      .limit(limit)
+      .pluck(Arel.sql(DIRECTORY_EXPRESSION), Arel.sql(previous), Arel.sql(latest),
+             Arel.sql("COUNT(*) OVER ()"),
+             Arel.sql("SUM(#{previous}) OVER ()"), Arel.sql("SUM(#{latest}) OVER ()"))
   end
 
   # What to call this row on a surface that lists it. `name` is what the client sent as the
