@@ -1331,10 +1331,23 @@
               never ran has no duration to report, so a missing timing is a faithful record rather
               than a gap — and a row with nothing to compare cannot be the slowest of anything.
             <% end %>
+            <%# What the run REPORTED, beside what it measured. The ranking above is ordered on
+                duration alone and deliberately is not filtered by outcome — a failed example that
+                burned sixty seconds before blowing up spent that time and belongs in a list of
+                where the suite's wall clock went. What the page must not do is let it sit at the
+                head of that list indistinguishable from the most expensive PASSING test, and this
+                sentence plus the Outcome column below are the two halves of telling them apart.
+
+                Counted off the same rows in the same round trip as the timing figures above —
+                `SpecObservation::COVERAGE_COUNTS` is one SELECT — so the two sentences cannot end
+                up describing different row sets. `RepositoriesHelper#slowest_examples_outcome_sentence`
+                carries why `failed` and `pending` are counted by name, why the remainder is not
+                called a pass, and why a run of nil outcomes is not reported as zero failures. %>
+            <%= slowest_examples_outcome_sentence(@slowest_examples) %>
             Counted off the rows this run wrote here, which is a different figure from the suite
             size on the Overview panel and may legitimately differ from it.
           </p>
-          <%= render UI::TableComponent.new(columns: ["Test", "Duration"],
+          <%= render UI::TableComponent.new(columns: ["Test", "Duration", "Outcome"],
                                             describedby: "slowest-examples-basis") do %>
             <% @slowest_examples.rows.each do |observation| %>
               <tr>
@@ -1360,20 +1373,45 @@
                       tenth-of-a-second the run and shard figures on this page use. %>
                   <%= observation.duration_label %>
                 </td>
+                <td class="px-3 py-2">
+                  <%# What CI reported for this example, through `SpecObservation#outcome_label`
+                      and `#outcome_tone` — the pair that keeps a nil out of the colour a pass
+                      wears. A row whose client sent no outcome reads "not reported" in the neutral
+                      tone; only the three names the producer is known to send are given a colour,
+                      because a green badge over an unvalidated string would be this page asserting
+                      a pass it was never told about.
+
+                      The badge, rather than bare text, is what makes the distinction survive a
+                      reader scanning the column: this list is READ down its rows, and "failed"
+                      set in the same ink as "passed" is a difference nobody scanning finds. %>
+                  <%= render UI::BadgeComponent.new(tone: observation.outcome_tone) do %>
+                    <%= observation.outcome_label %>
+                  <% end %>
+                </td>
               </tr>
             <% end %>
           <% end %>
         <% else %>
           <%# Rows exist and not one of them was timed. Not a list of zeroes and not a hidden panel:
               a zero would be this surface inventing the measurement it is missing, and hiding it
-              would file "this run reported no timings" under "this run reported no tests". %>
+              would file "this run reported no timings" under "this run reported no tests".
+
+              The outcome sentence appears HERE TOO, and that is a decision rather than an
+              oversight. There is no ranking in this branch and so no Outcome column — but the
+              composition is a fact about the rows, not about the ranking, and "nothing was timed"
+              says nothing whatever about how those examples ended. This is precisely the run shape
+              where the outcome is the only thing left to report: a delivery that carried no
+              durations and four failures would otherwise render as an empty state and disclose
+              nothing at all. Same sentence, same helper, so this branch and the caption above
+              cannot quote different failure counts for the same rows. %>
           <%= render UI::EmptyStateComponent.new(
                 title: "No timings on this run",
                 description: "This run recorded " \
                              "#{number_with_delimiter(@slowest_examples.recorded_count)} " \
                              "#{'example'.pluralize(@slowest_examples.recorded_count)} and a " \
                              "duration for none of them, so there is nothing to rank. An example " \
-                             "that never ran reports no duration."
+                             "that never ran reports no duration. " \
+                             "#{slowest_examples_outcome_sentence(@slowest_examples)}"
               ) %>
         <% end %>
       <% end %>
