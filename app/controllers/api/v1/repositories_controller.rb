@@ -167,12 +167,16 @@ class Api::V1::RepositoriesController < Api::BaseController
   # ungated `rows` would put the shard that reported *nothing* at the head of a list whose whole
   # contract is "slowest first".
   #
-  # ONE EXTRA QUERY, and constant rather than minimal. `#shard_durations` is documented as a second
-  # read beside the memoized `shard_totals` aggregate, kept separate so widening `shard_totals`
-  # does not change what its other callers load — so this necessarily costs one more statement on
-  # gated multi-shard runs. What is bounded is that it stays ONE: a 40-shard matrix costs exactly
-  # what a 4-shard one does. `#wall_clock_decomposable?` itself adds nothing (it reads the already
-  # memoized `shard_totals`), and an ungated run pays nothing at all.
+  # TWO EXTRA QUERIES AT MOST, and constant rather than minimal. Both `#shard_durations` and
+  # `#shard_reports` are documented as reads beside the memoized `shard_totals` aggregate, kept
+  # separate so widening `shard_totals` does not change what its other callers load — so each
+  # costs one more statement. They do not fall on the same runs: `#shard_reports` feeds `per_shard`
+  # and is paid by every multi-shard run, while `#shard_durations` feeds the three gated keys and
+  # is paid only when `#wall_clock_decomposable?` passes. So an ungated multi-shard run costs one
+  # extra, a gated one costs two, and a shardless run pays nothing at all. What is bounded is that
+  # neither scales: a 40-shard matrix costs exactly what a 4-shard one does. The gate
+  # `#wall_clock_decomposable?` itself adds nothing (it reads the already memoized
+  # `shard_totals`).
   def serialized_shards(test_run)
     return nil unless test_run.multi_shard?
 
@@ -194,13 +198,62 @@ class Api::V1::RepositoriesController < Api::BaseController
       },
       rows: decomposable ? serialized_shard_rows(test_run) : nil,
       balanced_wall_clock_seconds: decomposable ? test_run.balanced_wall_clock_seconds : nil,
-      wall_clock_excess_seconds: decomposable ? test_run.wall_clock_excess_seconds : nil
+      wall_clock_excess_seconds: decomposable ? test_run.wall_clock_excess_seconds : nil,
+      # The denominator of every duration above, per shard — the block's own STRUCTURED COUNTS,
+      # NOT PROSE rule taken one level down. `machine_seconds` says what the run cost and
+      # `coverage` says over how many shards; neither says whether the expensive shard was
+      # expensive because it held more tests or because its tests cost more each, and the two take
+      # opposite actions. `duration = count x cost per test`, so serving both columns lets a client
+      # divide and decide — the Overview panel words that division in English, and this endpoint
+      # exists so an agent does not have to parse the sentence.
+      #
+      # Two raw columns and no derived rate, deliberately: a `seconds_per_spec` key would be this
+      # block shipping the arithmetic instead of the operands, and it would have to invent an
+      # answer for a shard whose `total_specs` is `0` — a real row, since the column is
+      # `null: false, default: 0`. A client dividing for itself sees the zero and decides.
+      #
+      # ADDED BESIDE the keys above, which keep their names, their types and their values, on the
+      # rule `shards` itself followed when it was added beside `duration_seconds`.
+      #
+      # OVERLAPS `rows` ABOVE, and the overlap is the point rather than an oversight. SPGD-234
+      # landed `rows` while this slice was in review; both list shards, and every row `rows` serves
+      # appears here too with one more column. They are kept apart because they answer under
+      # DIFFERENT GATES, and collapsing them would have to sacrifice one of the two:
+      #
+      #   - `rows` is RANKED and gated on `#wall_clock_decomposable?`. Its contract is
+      #     "slowest first", and `duration_seconds: :desc` is NULLS FIRST in Postgres, so it is
+      #     `null` whenever a shard reported no timing — the ordering would otherwise put the
+      #     silent shard at the head of a list a client reads as the slowest one.
+      #   - `per_shard` is UNRANKED delivery order, gated on `multi_shard?` alone. It makes no
+      #     claim to rank, so it needs no such gate, and a test COUNT does not depend on a timing:
+      #     `Ingest::RunRecorder#upsert_shard` writes `total_specs_count` on every sharded POST
+      #     whether or not that shard timed itself.
+      #
+      # So moving `total_specs` onto `rows` would withhold a count that is perfectly well known on
+      # exactly the runs where a reader most wants it — the half-delivered and partly-untimed ones
+      # — and dropping `per_shard` in favour of `rows` would do the same. A client that wants the
+      # ranking reads `rows`; one that wants a complete census of what each shard reported reads
+      # `per_shard` and sorts for itself.
+      per_shard: test_run.shard_reports.map do |shard_id, duration_seconds, total_specs|
+        {
+          # Nullable, and a nil one is an ordinary state rather than an omission —
+          # `Ingest::RunRecorder#upsert_shard` records one row per delivery for a client that
+          # shards without exposing an index the gem recognises. `null` says the client did not
+          # name this slice; a positional index would hand back a name nothing in CI answers to.
+          shard_id: shard_id,
+          # `null`, never `0.0`, on the same rule the run's own `duration_seconds` follows.
+          duration_seconds: duration_seconds,
+          total_specs: total_specs
+        }
+      end
     }
   end
 
-  # `#shard_durations` is `[shard_id, duration_seconds]` pairs and this names both halves, because
-  # a positional array would make a client index into a tuple whose order it can only learn from
-  # prose — and the second field is the one every reader sorts on.
+  # `#shard_durations` yields `[shard_id, duration_seconds, total_specs_count]` and this names the
+  # two halves it serves, because a positional array would make a client index into a tuple whose
+  # order it can only learn from prose — and `duration_seconds` is the one every reader sorts on.
+  # The third column is deliberately dropped here rather than served: the counts go out on
+  # `per_shard`, which is not behind this method's gate. See the reconciliation on `per_shard`.
   #
   # Called only from the gated branch above; it does no gating of its own, so do not call it from
   # anywhere that has not already asked `#wall_clock_decomposable?`.
