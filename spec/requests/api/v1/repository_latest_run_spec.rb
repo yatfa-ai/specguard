@@ -288,6 +288,79 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
       run
     end
 
+    # The doc-drift guard at the top of this file, carried down to the levels its SELECTOR cannot
+    # reach. `get_repository.keys` is depth 1: it pins the seven top-level names and nothing inside
+    # them, so SPGD-234 added three keys at depth 3 with no line in `docs/DEVELOPMENT.md` and went
+    # green straight past it. A reviewer caught that by hand on a 6/6 git precedent, and `bin/ci`
+    # has no doc-drift step (`config/ci.rb` confirms) — hand-review was the only signal there was.
+    #
+    # WHAT WAS ACTUALLY UNGUARDED, established by mutation rather than by reading. The value
+    # assertions in this block are full-hash `eq`s, so they DO pin these key sets today: appending
+    # a key to `serialized_shards` turns three of them red, and one to `serialized_latest_run`
+    # turns two red. The hole is one axis over. Every one of those five pins is written against a
+    # run where the conditional branch is CLOSED — unsharded for `latest_run`, un-settled for
+    # `shards` — so a key served only on the OPEN branch is invisible to all five: appending one
+    # under `if decomposable` leaves this whole file green, and so does a `latest_run` key served
+    # only `if multi_shard?`. That is precisely where SPGD-234's three keys landed. They were
+    # caught only because their contract makes them present-and-null when withheld; written the
+    # natural way — absent when withheld — they would have shipped with no doc line and no red
+    # spec at all.
+    #
+    # So these guards are stated on the OPEN gate, where nothing was watching, and the closed gate
+    # is re-asserted from the SAME list so the two states cannot drift into disagreeing about what
+    # the block contains.
+    #
+    # KEYS, NOT VALUES, on the precedent the `history[]` row guard sets further down. The `eq`s
+    # above pin these names only as a side effect of asserting one fixture's arithmetic, and they
+    # read as cost-figure examples; a guard whose stated subject IS the key set survives a fixture
+    # whose numbers change, and says out loud what a new key owes the doc before it ships.
+    def documented_shard_keys
+      %w[count timed_count machine_seconds coverage rows balanced_wall_clock_seconds
+         wall_clock_excess_seconds]
+    end
+
+    it "serves exactly the latest_run keys docs/DEVELOPMENT.md documents, on a sharded run" do
+      sharded_run([61.0, 58.5, 74.25, 60.0], commit_sha: "feedfacecafe0198", settled: true)
+      # The composition neither existing `latest_run` pin sees — both are written against the
+      # unsharded fixture. Asserted BEFORE the keys are read, so this cannot quietly become a
+      # second copy of a guard that already passes on the run it means to exclude.
+      expect(repository.latest_test_run).to be_multi_shard
+
+      expect(get_repository["latest_run"].keys)
+        .to contain_exactly("commit_sha", "branch", "total_specs", "annotated_specs",
+                            "annotated_ratio", "duration_seconds", "shards", "ingested_at")
+    end
+
+    it "serves exactly the documented shards keys once the decomposition is open" do
+      sharded_run([61.0, 58.5, 74.25, 60.0], commit_sha: "feedfacecafe0199", settled: true)
+      # `shards` is `null` on an unsharded run, so a key-set assertion that never checked the
+      # fixture would be reading `.keys` off `nil` — Vacuous Green, in the file that exists to
+      # avoid it. `wall_clock_decomposable?` is the stronger of the two states to assert, since it
+      # implies `multi_shard?` and is the branch the mutation above proved unguarded.
+      expect(repository.latest_test_run).to be_wall_clock_decomposable
+
+      expect(get_repository.dig("latest_run", "shards").keys)
+        .to contain_exactly(*documented_shard_keys)
+    end
+
+    it "serves those same keys while the decomposition is withheld" do
+      sharded_run([61.0, 58.5, 74.25, 60.0], commit_sha: "feedfacecafe0200")
+      shown = repository.latest_test_run
+      expect(shown).to be_multi_shard
+      expect(shown).to be_wall_clock_decomposition_pending
+
+      shards = get_repository.dig("latest_run", "shards")
+
+      # The same seven names as the open gate, from the same list: withholding a figure withholds
+      # its VALUE, not its name. That is `serialized_shards`' stated contract and the reason a
+      # client tests one thing (`rows == null`) rather than distinguishing an absent key from a
+      # null one — and a guard written only against the open gate would pass a change that made
+      # the three keys absent here instead, which is the regression the contract exists to stop.
+      expect(shards.keys).to contain_exactly(*documented_shard_keys)
+      expect(shards.values_at("rows", "balanced_wall_clock_seconds", "wall_clock_excess_seconds"))
+        .to all(be_nil)
+    end
+
     # The defect, stated as an expectation. 74.25s of waiting against 253.75s of machine time is a
     # 3.4× gap on this fixture, and until now the endpoint served only the smaller number.
     it "serves the machine time beside the wall clock, and states what each was computed over" do
