@@ -1,7 +1,7 @@
 # frozen_string_literal: true
 
-# Deliberately plain builders rather than a factory gem — the Phase-1 schema is four tables and
-# a fixture DSL would be more machinery than the models justify.
+# Deliberately plain builders rather than a factory gem — the domain models are few and simple
+# enough that a fixture DSL would be more machinery than they justify.
 module Builders
   def create_user(github_uid: "1001", github_handle: "octocat")
     User.create!(github_uid: github_uid, github_handle: github_handle)

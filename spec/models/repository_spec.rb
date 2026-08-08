@@ -43,9 +43,11 @@ RSpec.describe Repository do
   end
 
   describe "#annotated_ratio" do
-    # Sourced from the latest TestRun's counters, not from `spec_intents`. Real ingestion persists
-    # only annotated intents — the four intent columns are NOT NULL, so an unannotated spec is not
-    # a row that can exist — which means counting rows here could only ever return 100%.
+    # Sourced from the latest TestRun's counters, not from `spec_intents`, and a row count could
+    # not stand in for either half of the ratio. Ingestion writes no `spec_intents` row at all
+    # today (pinned by spec/requests/api/v1/ingest_spec.rb), so counting rows would report 0%; and
+    # once something does write them, the four intent columns are NOT NULL, so an unannotated spec
+    # is not a row that can exist and the count could only ever return 100%.
     it "reports the annotated share of the most recent run" do
       repository = create_repository
       repository.test_runs.create!(commit_sha: "abc123", total_specs_count: 3,
@@ -54,12 +56,13 @@ RSpec.describe Repository do
       expect(repository.annotated_ratio).to eq(66.7)
     end
 
-    it "is not pinned to 100% by the intents ingestion actually persists" do
+    it "is not pinned to 100% by the intent rows sitting beside the run" do
       repository = create_repository
       repository.test_runs.create!(commit_sha: "abc123", total_specs_count: 3,
                                    annotated_specs_count: 2)
-      # Exactly what /ingest writes for that run once slice 3 lands: the two annotated specs, and
-      # nothing at all for the third.
+      # Written here by the factory, not by ingestion — /ingest persists no `spec_intents`. This is
+      # the shape a write path would leave once one exists: a row for each of the two annotated
+      # specs, and nothing at all for the third.
       create_spec_intent(repository: repository, line_number: 1)
       create_spec_intent(repository: repository, line_number: 2)
 

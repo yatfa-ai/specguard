@@ -1,11 +1,16 @@
 # frozen_string_literal: true
 
-# The whole SpecGuard schema, per the "SpecGuard — Data Model" spec: four domain tables plus the
-# `vector` extension. Tables are created in dependency order.
+# The first cut of the SpecGuard schema, per the "SpecGuard — Data Model" spec: `users`,
+# `repositories`, `api_keys`, `test_runs` and `spec_intents`, plus the `vector` extension. Tables
+# are created in dependency order. Later migrations add to this set, so `db/schema.rb` — not this
+# header — is what the schema currently holds.
 #
-# The unique index on (repository_id, file_path, line_number) is the identity of an intent and the
-# correctness backstop for idempotent ingestion in Phase 2 — a re-run of the same commit upserts
-# rather than duplicating. Get it wrong here and every later phase inherits the bug.
+# The unique index on (repository_id, file_path, line_number) is the identity of an intent: a given
+# test location in a repository has at most one current row. It is the correctness backstop an
+# intent write path will need in order to be idempotent, so that a re-run of the same commit
+# upserts rather than duplicating. No such path exists — nothing writes `spec_intents` today — so
+# the index constrains nothing yet; get it wrong here and whichever phase builds that path inherits
+# the bug.
 class CreateSpecGuardTables < ActiveRecord::Migration[8.1]
   def up
     enable_extension "vector" unless extension_enabled?("vector")
