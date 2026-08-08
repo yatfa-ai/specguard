@@ -72,8 +72,36 @@ class SpecFileExamples
   # Rows this run recorded here and did not time. Not a defect and not a gap to paper over: an
   # example that never ran has no duration to report, so the nil is a faithful record — see
   # `Ingest::ObservationRecorder#attributes`. They are LISTED rather than excluded, at the end of
-  # the list rather than the head of it; this is how many of them a reader is looking at.
+  # the list rather than the head of it; this is how many of them the FILE holds.
   def untimed_count = recorded_count - timed_count
+
+  # == What is actually on the page, as against what the file holds
+  #
+  # The three figures above are windows counted before the cap, which is what makes them true of
+  # the FILE. That is the whole point of them and it is also the trap: on a truncated file they
+  # describe rows a reader cannot see, and a caption that spends them as though they were the list
+  # says "the other 300 sit at the end of this list" over a page holding ten of them.
+  #
+  # These two are counted off the LOADED ROWS instead — the ones rendered — so a caption can say
+  # how much of each population it is showing. Counted rather than derived from the ordering: it is
+  # true that `NULLS LAST` puts every timed row ahead of every untimed one and therefore that a
+  # listed untimed row implies every timed row is listed, but a count off the rows on hand is the
+  # same cost and stays right if the ordering is ever revisited.
+  def shown_timed_count = rows.count { |row| !row.duration_seconds.nil? }
+
+  def shown_untimed_count = rows.size - shown_timed_count
+
+  # Untimed examples this file holds that the cap left off the page ENTIRELY — not at the end of
+  # the list, not anywhere in it. The figure that has to be said out loud, because the sentence a
+  # reader would otherwise be given ("the other 300 reported none and sit at the END of the list")
+  # is the one shape of this panel where it is false.
+  def untimed_omitted_count = untimed_count - shown_untimed_count
+
+  # The list's tail is untimed rows. Decides whether "the 50 slowest" is a description of this page
+  # or a claim about it that is false: those rows are not the slowest of anything, they are the
+  # lowest-`id` rows of a population nothing ranked, and they only reach the page at all because
+  # the timed rows ran out before the cap did.
+  def lists_untimed? = shown_untimed_count.positive?
 
   # Every example this run recorded in this file reported a duration — the state worth SAYING
   # rather than leaving a reader to compare two numbers to reach.

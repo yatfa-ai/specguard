@@ -291,12 +291,55 @@ RSpec.describe "Repository spec file examples", type: :request do
       expect(panel).to have_no_text("0.00s")
     end
 
+    # In the spelling `SpecFileDurations::Row#coverage_label` fixed for the row above, through
+    # `SpecFileExamples#coverage_label` — so the file's line in the rollup and the file opened out
+    # of it cannot state the same coverage two different ways.
     it "states how much of the file the durations cover" do
       get repository_path(mixed_run, spec_file: ORDER_SPEC)
 
-      expect(basis_line).to have_text("2 of them reported a duration", normalize_ws: true)
-      expect(basis_line).to have_text("the other 1 reported none", normalize_ws: true)
+      expect(basis_line).to have_text("Durations here cover 2 of 3", normalize_ws: true)
+      expect(basis_line).to have_text("The other 1 reported none and sit at the END",
+                                      normalize_ws: true)
       expect(basis_line).to have_no_text("Every one of them reported a duration")
+    end
+
+    # THE SHAPE THIS PANEL WAS BUILT FOR, and the one both captions used to lie about: the big file
+    # a partial or interrupted client run left with a large untimed tail. The timed rows run out
+    # before the cap does, so the page ends in untimed rows and MOST of the untimed population is
+    # not on it.
+    #
+    # "The 50 slowest of the 104" is false of that page twice — the tail rows are the lowest-`id`
+    # rows of something nothing ranked, and are not the slowest of anything — and "the other 100
+    # reported none and sit at the END of the list" asserts a population is visible where 54 of it
+    # is absent. A reader acting on either concludes this file's untimed population is 46 examples.
+    it "does not call an untimed tail the slowest, nor place absent rows at the end of the list" do
+      repository = create_repository(user: @user)
+      untimed = SpecObservation::FILE_EXAMPLES_LIMIT * 2
+      ingest(repository,
+             (1..4).map do |i|
+               example_spec(file_path: ORDER_SPEC, duration: i.to_f, line_number: i,
+                            name: "timed #{i}")
+             end + (1..untimed).map do |i|
+               example_spec(file_path: ORDER_SPEC, duration: nil, line_number: 100 + i,
+                            name: "untimed #{i}")
+             end)
+
+      get repository_path(repository, spec_file: ORDER_SPEC)
+
+      shown_untimed = SpecObservation::FILE_EXAMPLES_LIMIT - 4
+      expect(rows.size).to eq(SpecObservation::FILE_EXAMPLES_LIMIT)
+      expect(rows.count { |row| row[:duration] == "not reported" }).to eq(shown_untimed)
+      expect(basis_line).to have_no_text("#{SpecObservation::FILE_EXAMPLES_LIMIT} slowest")
+      expect(basis_line).to have_text(
+        "The 4 timed examples of the #{untimed + 4} this run recorded in it, slowest first, then " \
+        "#{shown_untimed} of the #{untimed} that reported no duration and nothing ranked — the " \
+        "remaining #{untimed - shown_untimed} are not shown.", normalize_ws: true
+      )
+      expect(basis_line).to have_text(
+        "#{shown_untimed} of those are at the END of this list rather than at the head of it, " \
+        "and the remaining #{untimed - shown_untimed} are not on this page at all",
+        normalize_ws: true
+      )
     end
 
     # The denominator is this file's rows, never the Overview's suite size — that figure is
@@ -353,6 +396,27 @@ RSpec.describe "Repository spec file examples", type: :request do
       get repository_path(untimed_run, spec_file: ORDER_SPEC)
 
       expect(rows.map { |row| row[:outcome] }).to eq(["failed", "not reported"])
+    end
+
+    # The two axes MEETING — the sentence `RepositoriesHelper#spec_file_examples_scope_sentence`
+    # says it exists for, and which no example above constructs: the truncation examples are all
+    # timed and the untimed examples are all under the cap, so nothing stood where "the 50 slowest
+    # of 340" could be written over a file nothing ranked.
+    it "does not call a truncated list of untimed examples the slowest of anything" do
+      repository = create_repository(user: @user)
+      count = SpecObservation::FILE_EXAMPLES_LIMIT + 5
+      ingest(repository, (1..count).map do |i|
+        example_spec(file_path: ORDER_SPEC, duration: nil, line_number: i, name: "example #{i}")
+      end)
+
+      get repository_path(repository, spec_file: ORDER_SPEC)
+
+      expect(rows.size).to eq(SpecObservation::FILE_EXAMPLES_LIMIT)
+      expect(basis_line).to have_text(
+        "The first #{SpecObservation::FILE_EXAMPLES_LIMIT} of the #{count} examples this run " \
+        "recorded in it, in the order this run recorded them", normalize_ws: true
+      )
+      expect(basis_line).to have_no_text("slowest")
     end
   end
 

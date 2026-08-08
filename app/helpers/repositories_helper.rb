@@ -323,6 +323,14 @@ module RepositoriesHelper
   #
   # The truncated-and-unranked sentence is the one this exists for: "the 50 slowest of 340" is
   # false on a file nothing timed, and it is the sentence a reader is most likely to act on.
+  #
+  # The two axes are not independent where they MEET, which is why there are five sentences and not
+  # four. A truncated file that timed SOME of its examples runs the timed rows out before the cap
+  # does, and the page then ends in untimed rows: on 340 examples of which 40 are timed, the list
+  # is 40 ranked rows followed by 10 of 300 that nothing ranked. "The 50 slowest" is false of that
+  # page twice over — those last ten are not the slowest of anything, and the 290 untimed rows it
+  # does not mention are not on the page at all. `#lists_untimed?` is that meeting, and it gets its
+  # own sentence naming both populations and what was cut from each.
   def spec_file_examples_scope_sentence(examples)
     recorded = number_with_delimiter(examples.recorded_count)
     shown = number_with_delimiter(examples.rows.size)
@@ -330,6 +338,7 @@ module RepositoriesHelper
 
     if examples.any_timed?
       return "All #{recorded} #{plural} this run recorded in it, slowest first." unless examples.truncated?
+      return spec_file_examples_mixed_tail_sentence(examples) if examples.lists_untimed?
 
       "The #{shown} slowest of the #{recorded} examples this run recorded in it, slowest first."
     elsif examples.truncated?
@@ -342,6 +351,23 @@ module RepositoriesHelper
   end
 
   private
+
+  # The truncated file whose timed rows ran out before the cap did — a ranked head and an unranked
+  # tail on one page, and the only shape here where the list shows part of BOTH populations.
+  #
+  # It counts each population separately because one figure cannot describe both: the timed rows
+  # are ranked and complete (a listed untimed row means the cap never reached the timed ones), the
+  # untimed rows are a sample of a population nothing ordered, and the remainder is the part of the
+  # file this page does not have. Said as one number — "the 50 slowest" — every one of those three
+  # facts is lost and the first is stated backwards.
+  def spec_file_examples_mixed_tail_sentence(examples)
+    "The #{number_with_delimiter(examples.shown_timed_count)} timed examples of the " \
+      "#{number_with_delimiter(examples.recorded_count)} this run recorded in it, slowest first, " \
+      "then #{number_with_delimiter(examples.shown_untimed_count)} of the " \
+      "#{number_with_delimiter(examples.untimed_count)} that reported no duration and nothing " \
+      "ranked — the remaining #{number_with_delimiter(examples.untimed_omitted_count)} are not " \
+      "shown."
+  end
 
   # How much of the run the breakdown after it covers. Worded "Every one of the …" when it covers
   # all of them, matching the timing sentence directly above it on the page rather than inventing a

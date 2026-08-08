@@ -1625,11 +1625,33 @@
               Every one of them reported a duration, so the list covers the whole of what this run
               recorded here.
             <% elsif @spec_file_examples.any_timed? %>
-              <%= number_with_delimiter(@spec_file_examples.timed_count) %> of them reported a
-              duration; the other <%= number_with_delimiter(@spec_file_examples.untimed_count) %>
-              reported none and sit at the END of the list rather than at the head of it. An
-              example that never ran has no duration to report, so a missing timing is a faithful
-              record rather than a gap — and it is not a zero.
+              <%# The coverage fraction through `SpecFileExamples#coverage_label`, which is
+                  `SpecFileDurations::Row#coverage_label` fixed for this panel — so the file's row
+                  in the rollup above and the file opened out of it state the same coverage in the
+                  same spelling rather than in two prose inventions that agree today.
+
+                  The sentence after it BRANCHES, and the branch is the point. "The other 300
+                  reported none and sit at the END of the list" is true only while the list holds
+                  all of them; on a truncated file whose timed rows ran out before the cap did, ten
+                  of those three hundred are at the end of the list and two hundred and ninety are
+                  not on the page at all. Said unconditionally, that sentence asserts a whole
+                  population is visible on exactly the files where most of it is not — and this
+                  panel's own rule is that a caption is a claim ABOUT the list. %>
+              Durations here cover <%= @spec_file_examples.coverage_label %> — the same fraction
+              the row for this file states in the panel above.
+              <% if @spec_file_examples.untimed_omitted_count.zero? %>
+                The other <%= number_with_delimiter(@spec_file_examples.untimed_count) %> reported
+                none and sit at the END of the list rather than at the head of it.
+              <% else %>
+                The other <%= number_with_delimiter(@spec_file_examples.untimed_count) %> reported
+                none:
+                <%= number_with_delimiter(@spec_file_examples.shown_untimed_count) %> of those are
+                at the END of this list rather than at the head of it, and the remaining
+                <%= number_with_delimiter(@spec_file_examples.untimed_omitted_count) %> are not on
+                this page at all.
+              <% end %>
+              An example that never ran has no duration to report, so a missing timing is a
+              faithful record rather than a gap — and it is not a zero.
             <% end %>
             <%# The two paths, said once, where a reader meets the column that shows them. This
                 panel is keyed on the INCLUDING file, so an example a shared example group defines
