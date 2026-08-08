@@ -101,6 +101,40 @@
                   <span class="block"><%= test_run_delivery_note(run) %></span>
                 <% end %>
               </p>
+              <%# What that run COST, beside what it contains. The badge above says how BIG each
+                  suite is; nothing on this grid said what any of them is worth in CI minutes, which
+                  is the question a page rendering N repositories at once exists to answer — the
+                  reader with eight cards wants to know which one is burning their budget, and no
+                  amount of suite size answers it.
+
+                  THE SAME TWO SEAMS `show` RENDERS, under the same labels and the same pairing with
+                  their denominators (`show.html.erb`'s cost rows), so a card cannot word a figure
+                  differently from the page it links to — the rule the `test_run_delivery_note`
+                  above is already held to. `test_run_duration` and `test_run_machine_time` carry
+                  the treatment with them: an absent figure is styled and worded as absent, and a
+                  PARTIAL machine time is deliberately not muted, because "at least 3m 15s" is a
+                  real measurement whose incompleteness is carried by the wording.
+
+                  Gated on `multi_shard?` and not on the data, for the reason `show` gives: a run of
+                  exactly one shard HAS a `machine_seconds` — the SUM over its one row — but for it
+                  the MAX and the SUM are the same number, and a second row would print the same
+                  figure twice under two labels. One shard or none keeps the single "Total runtime"
+                  row unchanged, which is every unsharded run there has ever been.
+
+                  Free of queries. `duration_seconds` is a column on the row
+                  `RepositoriesController#latest_test_runs` already selected, and every shard fact
+                  under these two labels — the count, the timed count, the SUM — is primed for the
+                  whole grid by the one grouped aggregate that method takes
+                  (`ShardCountPreloading`). `spec/requests/repositories_spec.rb` pins that at one
+                  `test_run_shards` SELECT for a grid of four four-shard cards, and the same one
+                  when the grid is doubled to eight. %>
+              <% cost_rows = if run.multi_shard?
+                               [["Wall clock (#{run.wall_clock_coverage})", test_run_duration(run)],
+                                ["Machine time (#{run.machine_seconds_coverage})", test_run_machine_time(run)]]
+                             else
+                               [["Total runtime", test_run_duration(run)]]
+                             end %>
+              <%= render UI::DefListComponent.new(rows: cost_rows) %>
             <% end %>
           </div>
         <% end %>

@@ -97,11 +97,11 @@ class TestRun < ApplicationRecord
   #
   # Deliberately narrow: it primes ONE COUNT and never the whole `shard_totals` tuple, so nothing
   # can end up answering a question out of a number that did not measure it. Priming the tuple with
-  # nils would do exactly that, and it would do it silently. `machine_seconds` and the shards'
-  # `MAX(updated_at)` therefore keep reading their own row of facts; the timed count has its own
-  # narrow seam beside this one (`#preload_timed_shard_count`) rather than riding along here,
-  # because it is a separately-counted number and a caller must not be able to prime one from the
-  # other.
+  # nils would do exactly that, and it would do it silently. The shards' `MAX(updated_at)` therefore
+  # keeps reading its own row of facts; the timed count and the machine time each have their own
+  # narrow seam beside this one (`#preload_timed_shard_count`, `#preload_machine_seconds`) rather
+  # than riding along here, because they are separately-derived numbers and a caller must not be
+  # able to prime one from the other.
   #
   # A named method rather than `attr_writer :shard_count`: a writer named for a non-column would be
   # reachable through `TestRun.new(shard_count: 4)`, which looks like it persists something and
@@ -162,7 +162,40 @@ class TestRun < ApplicationRecord
   # SUM over the shards' durations, or nil when not one of them reported a timing. SQL's SUM skips
   # nulls and returns NULL over an empty set, which is the distinction wanted here: nil means "no
   # shard reported", never "the shards added up to nothing".
-  def machine_seconds = shard_totals[2]
+  #
+  # Memoized on PRESENCE OF ASSIGNMENT rather than on truthiness, which is the one thing that
+  # separates this from the two counts above. `||=` is safe over a count because the only falsey
+  # answer a count has is a nil that never occurs; here BOTH of the answers `||=` would re-ask on
+  # are real and distinct. `nil` is "no shard reported" and `0.0` is "the shards were measured and
+  # they cost nothing" — `0.0` is truthy so `||=` would in fact hold it, but it would re-query the
+  # nil on every call, and a primed nil is exactly what the seam below exists to make stick.
+  # `defined?` holds both, which is what lets a caller prime "not reported" without a query.
+  def machine_seconds
+    return @machine_seconds if defined?(@machine_seconds)
+
+    @machine_seconds = shard_totals[2]
+  end
+
+  # Hand this run a machine time a caller has already summed, so `machine_seconds` — and the
+  # `machine_seconds_reported?` / `machine_seconds_label` / `machine_seconds_coverage` that route
+  # through it — answer without a query. The seam beside the two above, and it exists for the same
+  # reason: one `pick` per instance is right for a single already-loaded run and wrong for a window
+  # of them. The caller that needed it is the repositories grid, which states what each of N suites
+  # cost and would otherwise pay one SELECT per card for this SUM alone.
+  #
+  # SEPARATE from the two count seams rather than one call taking all three, on
+  # `#preload_timed_shard_count`'s rule: a caller must not be able to prime a timing figure out of a
+  # number that measured no timing.
+  #
+  # NO `.to_i`, which is the other thing that sets this apart from its siblings. Their `.to_i` turns
+  # "absent from the grouped result" into the really-counted `0` it means; here that absence means
+  # NO SHARD REPORTED, and a `0` would render as a measurement of zero seconds —
+  # `#machine_seconds_reported?` below is deliberately a `nil?` check and not a `present?` one for
+  # exactly that reason. The value is assigned through unchanged: nil stays nil, `0.0` stays `0.0`.
+  def preload_machine_seconds(sum)
+    @machine_seconds = sum
+    self
+  end
 
   # Deliberately `nil?` and not `present?`, for the same reason `duration_reported?` is: a suite
   # whose shards genuinely measured 0.0 has a measurement, and a blank check would render it as an

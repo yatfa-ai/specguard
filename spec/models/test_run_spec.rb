@@ -165,6 +165,83 @@ RSpec.describe TestRun do
     end
   end
 
+  # The SUM over a run's shards, and the seam that lets a caller holding a WINDOW of runs hand it
+  # in from one grouped aggregate instead of paying a `pick` per row (`ShardCountPreloading`, for
+  # the repositories grid). These are the two states the request specs cannot separate cheaply and
+  # that the sibling count seams get wrong by design: an absence, and a measured zero.
+  describe "#machine_seconds and its preload seam" do
+    def shard_queries
+      queries = []
+      subscriber = ActiveSupport::Notifications.subscribe("sql.active_record") do |_, _, _, _, payload|
+        queries << payload[:sql] if payload[:name] != "SCHEMA" && payload[:sql].to_s.include?("test_run_shards")
+      end
+      yield
+      queries
+    ensure
+      ActiveSupport::Notifications.unsubscribe(subscriber)
+    end
+
+    def run_with_shards(*durations)
+      run = repository.test_runs.create!(commit_sha: "machinesecs0", ci_run_id: "gha-machine",
+                                         duration_seconds: durations.compact.max)
+      durations.each_with_index do |seconds, index|
+        run.test_run_shards.create!(shard_id: (index + 1).to_s, duration_seconds: seconds)
+      end
+      run
+    end
+
+    it "sums the shards that reported when nothing primed it" do
+      run = run_with_shards(61.0, 58.5, 74.25, 60.0)
+
+      expect(run.machine_seconds).to eq(253.75)
+      expect(run).to be_machine_seconds_reported
+    end
+
+    it "answers a primed sum without asking the shards" do
+      run = run_with_shards(61.0, 58.5, 74.25, 60.0)
+      primed = TestRun.find(run.id).preload_machine_seconds(253.75)
+
+      queries = shard_queries { expect(primed.machine_seconds).to eq(253.75) }
+
+      expect(queries).to be_empty
+    end
+
+    # The seam returns the run so it can be chained behind the two count seams, which is how
+    # `ShardCountPreloading` primes a row.
+    it "returns the run so the three seams chain" do
+      run = repository.test_runs.create!(commit_sha: "machinesecs1")
+
+      expect(run.preload_machine_seconds(1.0)).to be(run)
+    end
+
+    # A run with no shard rows is absent from the grouped result entirely. That absence means "no
+    # shard reported" and NOT the really-counted zero the two count seams turn it into — so the nil
+    # is primed through unchanged, and it has to STICK: a truthiness memo would accept it and then
+    # re-ask the database for it on the first read.
+    it "holds a primed nil as an absence, without re-asking for it" do
+      run = run_with_shards(61.0)
+      primed = TestRun.find(run.id).preload_machine_seconds(nil)
+
+      queries = shard_queries do
+        expect(primed.machine_seconds).to be_nil
+        expect(primed).not_to be_machine_seconds_reported
+        expect(primed.machine_seconds_label).to eq("not reported")
+      end
+
+      expect(queries).to be_empty
+    end
+
+    # And the state that absence is not. `0.0` is a measurement, so it keeps its type and renders
+    # as the zero it is — never as the "not reported" a `present?` check would file it under.
+    it "holds a primed zero as the measurement it is" do
+      run = repository.test_runs.create!(commit_sha: "machinesecs2").preload_machine_seconds(0.0)
+
+      expect(run.machine_seconds).to eq(0.0)
+      expect(run).to be_machine_seconds_reported
+      expect(run.machine_seconds_label).to eq("0.0s")
+    end
+  end
+
   # Whether a run's `total_specs_count` may be differenced against another run's. Both predicates
   # ask one question of one side of that subtraction — *is this a measurement of the whole suite?*
   # — and the Overview withholds its delta unless both sides answer yes.
