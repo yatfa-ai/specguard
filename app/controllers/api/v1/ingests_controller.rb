@@ -13,7 +13,7 @@ class Api::V1::IngestsController < Api::BaseController
     return render_bad_request(payload.errors) unless payload.valid?
 
     test_run = Ingest::RunRecorder.record(current_repository, payload.test_run_attributes,
-                                          shard_id: payload.shard_id)
+                                          shard_id: payload.shard_id, specs: payload.specs)
 
     render json: {
       test_run_id: test_run.id,

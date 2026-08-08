@@ -45,26 +45,40 @@ module Ingest
   # A run with **no** `ci_run_id` — a laptop `bundle exec rspec`, an unrecognised provider — takes
   # the old path untouched: one `create!`, no shard rows, nothing derived. Nothing folds onto an
   # unnamed run, because there is nothing to tell it apart from the next unnamed run.
+  #
+  # == The other half of a delivery
+  #
+  # Each POST also lands one row per example in `spec_observations`, written by
+  # {Ingest::ObservationRecorder} inside this same transaction. Those rows are replaced rather than
+  # appended, for exactly the reason the counters are derived rather than accumulated — the 25,100
+  # denominator above is what a per-delivery append looks like, and rows inherit none of the
+  # counters' protection unless they are keyed the same way. Replacing them takes two keys rather
+  # than one: the delete is per-shard, because a delivery knows only its own slice, while the
+  # conflict clause is per-run, because a queue-based splitter moves examples between shards and an
+  # example on the far side of the delete is reachable only there. `ObservationRecorder` carries
+  # the argument. The run's own `total_specs_count` / `annotated_specs_count` are **not** re-derived
+  # from those rows: those stay a function of `test_run_shards`, unchanged.
   class RunRecorder
     # Two shards racing is the ordinary case; three collisions in a row on the same key would mean
     # the row is being created and rolled back repeatedly, which is not something retrying fixes.
     MAX_ATTEMPTS = 3
 
-    def self.record(repository, attributes, shard_id: nil)
-      new(repository, attributes, shard_id: shard_id).record
+    def self.record(repository, attributes, shard_id: nil, specs: [])
+      new(repository, attributes, shard_id: shard_id, specs: specs).record
     end
 
-    def initialize(repository, attributes, shard_id: nil)
+    def initialize(repository, attributes, shard_id: nil, specs: [])
       @repository = repository
       @attributes = attributes
       @shard_id = shard_id
+      @specs = specs
       @ci_run_id = attributes[:ci_run_id]
     end
 
     # @return [TestRun] the row this request landed in, with the run's derived totals already
     #   loaded — the controller renders them straight back to the client.
     def record
-      return create_run if @ci_run_id.blank?
+      return record_unsharded_run if @ci_run_id.blank?
 
       run = nil
 
@@ -99,7 +113,8 @@ module Ingest
         # and real connections.
         run.lock!
 
-        upsert_shard(run)
+        shard = upsert_shard(run)
+        Ingest::ObservationRecorder.record(run, @specs, shard: shard)
         recompute_totals(run)
       end
 
@@ -107,6 +122,17 @@ module Ingest
     end
 
     private
+
+    # A run no CI provider named: one `create!`, no shard rows, nothing derived — the path this
+    # class had before sharding existed. The only addition is that its examples are recorded too,
+    # in the same transaction, so a run either has both halves or neither. `test_run_shard_id` is
+    # null on every one of these rows because there is no shard row to point at, and each POST is
+    # its own `TestRun`, so there is nothing for a redelivery to collide with.
+    def record_unsharded_run
+      TestRun.transaction do
+        create_run.tap { |run| Ingest::ObservationRecorder.record(run, @specs) }
+      end
+    end
 
     def find_or_create_run
       attempts = 0
@@ -155,6 +181,13 @@ module Ingest
     # correctly), but a redelivered anonymous slice *is* counted twice, and no amount of care here
     # can detect it. The fix is on the client: name the shards. The client README's sharding
     # section says so in those terms, and this is the other end of that sentence.
+    #
+    # @return [TestRunShard] the row this delivery landed in — not the return of `create!` or
+    #   `update!`, which the caller used to discard. `Ingest::ObservationRecorder` keys its
+    #   delete-then-insert on this row's **primary key** rather than on the client's `shard_id`
+    #   string, which is what makes all three shapes above fall out uniformly: a named shard
+    #   resolves to the same row twice and replaces its own observations, an anonymous slice
+    #   resolves to a new row and inherits exactly the non-idempotency described above.
     def upsert_shard(run)
       contribution = {
         total_specs_count: @attributes[:total_specs_count].to_i,
@@ -166,13 +199,14 @@ module Ingest
 
       shard = run.test_run_shards.find_or_initialize_by(shard_id: @shard_id)
       shard.update!(contribution)
+      shard
     rescue ActiveRecord::RecordNotUnique
       # Two deliveries of the *same* shard racing each other — a retried job overlapping the
       # original, a client retrying a timed-out POST. Both are writing the same slice, so the
       # loser simply re-reads the winner's row and overwrites it; last writer wins is the intended
       # semantic for a shard reporting twice, whether the two reports are a minute or a
       # millisecond apart.
-      run.test_run_shards.find_by!(shard_id: @shard_id).update!(contribution)
+      run.test_run_shards.find_by!(shard_id: @shard_id).tap { |winner| winner.update!(contribution) }
     end
 
     # Re-derives the run's headline numbers from its slices.

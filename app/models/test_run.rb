@@ -12,6 +12,10 @@
 class TestRun < ApplicationRecord
   belongs_to :repository
   has_many :spec_intents, dependent: :nullify
+  # Declared BEFORE `test_run_shards` on purpose. Observations reference the shard that delivered
+  # them, so they have to go first — and `delete_all` rather than `destroy_all` because a run is
+  # 20,000 of these and there is no callback on them worth 20,000 round trips.
+  has_many :spec_observations, dependent: :delete_all
   has_many :test_run_shards, dependent: :destroy
 
   validates :commit_sha, presence: true
