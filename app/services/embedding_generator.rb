@@ -158,7 +158,8 @@ class EmbeddingGenerator
   # the size of a SHA-256 digest is not portable — argument reduction that far out is
   # libm-specific, and a 256-bit integer does not survive `to_f` at all (it is `Infinity`). Keeping
   # the argument inside one period preserves the property that matters — a deterministic,
-  # pseudo-random, signed weight per feature — and makes it reproducible everywhere.
+  # pseudo-random, signed weight per feature — and makes it computable at all, to within the
+  # platform bound stated above.
   #
   # ## What this measures, and what it does not
   #
