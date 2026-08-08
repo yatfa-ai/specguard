@@ -170,16 +170,9 @@ RSpec.describe TestRun do
   # the repositories grid). These are the two states the request specs cannot separate cheaply and
   # that the sibling count seams get wrong by design: an absence, and a measured zero.
   describe "#machine_seconds and its preload seam" do
-    def shard_queries
-      queries = []
-      subscriber = ActiveSupport::Notifications.subscribe("sql.active_record") do |_, _, _, _, payload|
-        queries << payload[:sql] if payload[:name] != "SCHEMA" && payload[:sql].to_s.include?("test_run_shards")
-      end
-      yield
-      queries
-    ensure
-      ActiveSupport::Notifications.unsubscribe(subscriber)
-    end
+    # `queries_against` is the shared subscriber in `spec/support/query_capture.rb`, the same one
+    # the repositories grid's budget guard counts with. One subscriber for both levels of the same
+    # guard: there it bounds what a PAGE asks across a window of rows, here what ONE primed row asks.
 
     def run_with_shards(*durations)
       run = repository.test_runs.create!(commit_sha: "machinesecs0", ci_run_id: "gha-machine",
@@ -201,7 +194,7 @@ RSpec.describe TestRun do
       run = run_with_shards(61.0, 58.5, 74.25, 60.0)
       primed = TestRun.find(run.id).preload_machine_seconds(253.75)
 
-      queries = shard_queries { expect(primed.machine_seconds).to eq(253.75) }
+      queries = queries_against("test_run_shards") { expect(primed.machine_seconds).to eq(253.75) }
 
       expect(queries).to be_empty
     end
@@ -222,7 +215,7 @@ RSpec.describe TestRun do
       run = run_with_shards(61.0)
       primed = TestRun.find(run.id).preload_machine_seconds(nil)
 
-      queries = shard_queries do
+      queries = queries_against("test_run_shards") do
         expect(primed.machine_seconds).to be_nil
         expect(primed).not_to be_machine_seconds_reported
         expect(primed.machine_seconds_label).to eq("not reported")
