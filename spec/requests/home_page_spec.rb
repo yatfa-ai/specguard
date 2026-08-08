@@ -21,10 +21,14 @@ require "rails_helper"
 RSpec.describe "The signed-out landing page", type: :request do
   before { get "/" }
 
+  # Both panels, asserted as nodes rather than as two strings anywhere in the body: the split is the
+  # product change, so "one panel that happens to contain both titles" has to fail here.
   it "answers with the two availability panels" do
     expect(response).to have_http_status(:ok)
-    expect(response.body).to include("What SpecGuard answers today")
-    expect(response.body).to include("What SpecGuard is being built to answer")
+
+    page = Capybara.string(response.body)
+    expect(page).to have_css("#answers-today", text: "What SpecGuard answers today")
+    expect(page).to have_css("#roadmap", text: "What SpecGuard is being built to answer")
   end
 
   it "does not sell prevention or the unmounted /check-intent endpoint" do
@@ -42,21 +46,36 @@ RSpec.describe "The signed-out landing page", type: :request do
   it "names no api/v1 path that the router does not serve" do
     advertised = response.body.scan(%r{/api/v1/[a-z0-9_-]+}).uniq
 
-    # Without this the example passes on a page that mentions no endpoint at all — including a page
-    # that failed to render.
-    expect(advertised).to match_array(%w[/api/v1/ingest /api/v1/repository])
+    # Non-vacuity ONLY. Without it the example passes on a page that names no endpoint at all,
+    # including a page that failed to render. It is deliberately not a literal allowlist: pinning
+    # `advertised` to an exact set decides the next assertion's answer in advance, which leaves the
+    # route-set comparison below decorative and makes the literal the real guard — the opposite of
+    # what this example is for. It would also fail the day `/check-intent` is legitimately mounted
+    # AND advertised, and "a mounted path is advertised" is not a violation of this contract.
+    expect(advertised).not_to be_empty
 
     mounted = Rails.application.routes.routes.map { |route| route.path.spec.to_s.chomp("(.:format)") }
     expect(advertised - mounted).to be_empty
   end
 
+  # The warning is only worth anything if it sits WITH the rows it qualifies, so the window has to
+  # be the panel itself. An earlier revision cut the window out of the response body with
+  # `/What SpecGuard is being built to answer.*?\z/m` — lazy, but anchored at `\z`, so the engine is
+  # forced to consume to the end of the document and the "panel" was really the whole tail of the
+  # page. Verified: move the alert out of the panel and down the page and that version stays green,
+  # because the string is still somewhere in the tail.
+  #
+  # The fix is not a better regex. Containment is a structural property, and a text window cannot
+  # express it at any length — so this selects the panel's own DOM node (`id:` + `Capybara.string`,
+  # the convention `repositories_spec.rb` uses) and the scoping is guaranteed by the parser rather
+  # than by where the panel happens to sit on the page. `find` raises if `#roadmap` is missing, so
+  # there is no vacuous path: the node has to render for the assertions to mean anything.
   it "labels the answers it cannot give yet as unavailable, on the panel that lists them" do
-    roadmap_panel = response.body[/What SpecGuard is being built to answer.*?\z/m]
+    panel = Capybara.string(response.body).find("#roadmap")
 
-    expect(roadmap_panel).to be_present
-    expect(roadmap_panel).to include("Not available yet")
+    expect(panel).to have_text("Not available yet")
     # The claim that dates fastest: it is true only while nothing writes a per-test row. Whoever
     # builds that write path is meant to land here.
-    expect(roadmap_panel).to include("stores nothing about individual tests")
+    expect(panel).to have_text("stores nothing about individual tests")
   end
 end

@@ -2,16 +2,20 @@
 
 > Suite intelligence for very large test suites — primarily for AI coding agents.
 
-SpecGuard tells you the truth about a test suite too large for anyone to hold in their head: what
-it costs to run, where it is growing, and where it repeats itself. It reads what each test is
-called and what it declares it verifies (the optional
-[`@intent`](https://github.com/yatfa-ai/open-test-intent) annotation) plus runtime facts from CI,
-and turns that into a map an agent can navigate. It does not run your tests and does not gate CI on
-missing annotations.
+SpecGuard is telemetry infrastructure for a test suite too large for anyone to hold in their head.
+It does not run your tests and does not gate CI on missing annotations.
 
-**Status:** early. Ingestion and the dashboard are live; the per-test data model behind most of the
-suite-intelligence answers is not built yet — see [what's here](#whats-here) for the line between
-the two.
+**Live today.** Your CI posts each run; SpecGuard records the run's totals and its shards and
+answers what the suite costs to run, how much of it SpecGuard can see, and how fast it is growing —
+in a dashboard, and at `GET /api/v1/repository` for agents.
+
+**The direction, not yet built.** Reading what each test is called and what it declares it verifies
+(the optional [`@intent`](https://github.com/yatfa-ai/open-test-intent) annotation) into a row per
+test, and building per-test duration, suite-wide duplicate clustering and refactoring guidance on
+top of it — the map an agent navigates. Ingestion stores nothing per test today, so none of those
+answers has data behind it and nothing in this repository serves them.
+
+The line between the two, file by file, is in [what's here](#whats-here).
 
 ## What's here
 

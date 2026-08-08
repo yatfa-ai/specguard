@@ -1,9 +1,9 @@
 # frozen_string_literal: true
 
-# Turns a string into an embedding vector. The whole duplicate-detection engine rests on this:
-# ingestion embeds "{entity} {action} {behavior}" for every intent, and a lookup embeds the text it
-# is asking about and compares. (Both of those callers are still unbuilt — see the *Overview &
-# Architecture* article for what is actually wired.)
+# Turns a string into an embedding vector. Nothing in the application calls it yet — see the
+# *Overview & Architecture* article for what is actually wired. It exists for the duplicate-
+# detection engine that is meant to rest on it: ingestion would embed "{entity} {action} {behavior}"
+# for every intent, and a lookup would embed the text it is asking about and compare.
 #
 # ## Contract
 #
