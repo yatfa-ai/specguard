@@ -81,19 +81,54 @@ class SpecObservation < ApplicationRecord
     where(test_run_id: test_run.id).timed.order(duration_seconds: :desc, id: :asc).limit(limit)
   end
 
-  # `[recorded, timed]` for one run — how many rows it wrote here, and how many of those carried a
-  # duration — in a single round trip, because a surface that ranks rows has to state what it
-  # ranked over and two separate COUNTs would be two trips for one sentence.
+  # Everything a surface has to say ABOUT one run's slice before it is allowed to show ten rows of
+  # it, as one SELECT. Ordered, named, and kept in one constant because the names are what the
+  # caller destructures and the expressions are what a plan assertion EXPLAINs — two lists that
+  # drifted apart would be a caption counting a column nobody selected.
   #
-  # `COUNT(duration_seconds)` counts non-nulls, which is exactly the population `.timed` selects,
-  # so the caption cannot describe a different row set from the one the ranking scanned.
+  # `COUNT(duration_seconds)` and `COUNT(outcome)` count NON-NULLS. The first is exactly the
+  # population `.timed` selects, so the caption cannot describe a different row set from the one
+  # the ranking scanned. The second is the population that said anything at all about how its
+  # example ended — and it is separate from the failure count on purpose. `outcome` is nullable and
+  # `Ingest::ObservationRecorder#attributes` writes it through `presence_of`, so a run whose client
+  # sends no outcomes stores a nil on every row; without this figure the only thing distinguishing
+  # that run from a clean one is a zero, and "nothing to check" wearing the spelling of "everything
+  # passed" is the one reading this table must not produce.
   #
-  # Deliberately NOT `TestRun#total_specs_count`. That figure is re-derived by SUM over
-  # `test_run_shards` and the class comment above is explicit that nothing here re-derives it; the
-  # two can legitimately disagree, since `Ingest::ObservationRecorder#record` writes a row count
+  # `failed` and `pending` are counted BY NAME, and there is deliberately no third counter for
+  # "passed". Nothing platform-side validates the string — `Ingest::Payload` does not, and the
+  # client sends `result&.status&.to_s` — so a remainder computed as `reported - failed - pending`
+  # is a population this code has not read a verdict into, and that is the honest shape for it.
+  #
+  # NOT `where(outcome: "failed").count`, even though `index_spec_observations_on_test_run_id_and_outcome`
+  # exists and is certified for exactly that predicate. That index is built for NARROWING to the
+  # failures — the "which tests failed" list a later slice will want — and using it here would mean
+  # a second round trip for a figure the scan below already has the rows for. The one-read rule is
+  # `SlowestExamples`': a caption fetched separately from the list it describes is a claim with no
+  # structural reason to keep agreeing with it. Leave this as a FILTER aggregate.
+  COVERAGE_COUNTS = {
+    recorded_count: "COUNT(*)",
+    timed_count: "COUNT(duration_seconds)",
+    reported_outcome_count: "COUNT(outcome)",
+    failed_count: "COUNT(*) FILTER (WHERE outcome = 'failed')",
+    pending_count: "COUNT(*) FILTER (WHERE outcome = 'pending')"
+  }.freeze
+
+  # One run's slice, counted every way the panel above it has to state — in a single round trip.
+  #
+  # Deliberately NOT `TestRun#total_specs_count` for any of it. That figure is re-derived by SUM
+  # over `test_run_shards` and the class comment above is explicit that nothing here re-derives it;
+  # the two can legitimately disagree, since `Ingest::ObservationRecorder#record` writes a row count
   # that is *"not always `specs.size`"*. Coverage of a ranking is a fact about the rows ranked.
-  def self.timing_coverage_in(test_run)
-    where(test_run_id: test_run.id).pick(Arel.sql("COUNT(*)"), Arel.sql("COUNT(duration_seconds)"))
+  #
+  # Every value is `to_i`'d: a run that recorded nothing still returns a row of zeroes from an
+  # aggregate, and the caller wants integers rather than a mix of those and nils.
+  #
+  # @return [Hash{Symbol=>Integer}] keyed by `COVERAGE_COUNTS`' names, in its order.
+  def self.coverage_in(test_run)
+    counts = where(test_run_id: test_run.id).pick(*COVERAGE_COUNTS.values.map { |sql| Arel.sql(sql) })
+
+    COVERAGE_COUNTS.keys.zip(Array(counts)).to_h { |name, count| [name, count.to_i] }
   end
 
   # Where ONE run's wall clock went, rolled up by spec file, heaviest first — the question the
@@ -144,7 +179,7 @@ class SpecObservation < ApplicationRecord
   # tell "the ten heaviest of three hundred files" from "all three files this run touched". That is
   # the same lie by omission the four columns above exist to refuse, one grain up: a figure that
   # does not state what it was drawn from. A second `COUNT(DISTINCT spec_file_path)` would be a
-  # second round trip for one clause of one sentence — the objection `.timing_coverage_in` answers.
+  # second round trip for one clause of one sentence — the objection `.coverage_in` answers.
   #
   # `COUNT(*) OVER ()` is evaluated AFTER `GROUP BY` and BEFORE `LIMIT`, so it counts groups, not
   # rows, and counts all of them however few are returned. It rides back on every row carrying the
@@ -207,5 +242,39 @@ class SpecObservation < ApplicationRecord
     return "< 0.01s" if seconds.positive? && seconds < 0.01
 
     format("%.2fs", seconds)
+  end
+
+  # What CI said happened to this example, rendered — and NOTHING this application decided.
+  # SpecGuard does not run tests; it reports what a client sent, which makes this a stability
+  # observation and never a verdict on whether the example is correct.
+  #
+  # The known names are echoed verbatim rather than reworded, so the cell says the word the reader
+  # will see in their own CI log. An UNKNOWN string is echoed too: nothing platform-side validates
+  # this column — `Ingest::Payload` does not, and `Ingest::ObservationRecorder#attributes` stores
+  # `result&.status&.to_s` through `presence_of` — so quoting what arrived is the only reading that
+  # cannot be wrong. What this must not do is fold an unrecognised value into "passed".
+  #
+  # Nil is the one that decides whether this column is worth having. It is the exact hazard
+  # `#duration_label` above carries a guard and a paragraph for, wearing the worse colour: a blank
+  # cell, or one silently reading as green, would make "the client sent no outcome" byte-identical
+  # to "this test passed" — on a row that is in this list precisely because it was slow, and may
+  # have been slow because it was hanging on its way to failing.
+  def outcome_label = outcome.presence || "not reported"
+
+  # Which `UI::BadgeComponent` tone that word wears, so the distinction above survives a reader who
+  # is scanning the column rather than reading it.
+  #
+  # Only the three RSpec names the producer is known to send are given a colour. Everything else —
+  # an unrecognised string AND a nil — is `:neutral`, because a tone is a claim: green over a value
+  # nobody validated would be this page asserting a pass it was never told about. The two neutral
+  # cases are still distinguishable from each other by their text, which is what `#outcome_label`
+  # is for; what they share is that neither of them is a pass.
+  def outcome_tone
+    case outcome
+    when "failed" then :error
+    when "pending" then :warning
+    when "passed" then :success
+    else :neutral
+    end
   end
 end

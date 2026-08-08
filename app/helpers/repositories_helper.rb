@@ -259,7 +259,85 @@ module RepositoriesHelper
       "branch of the repository's latest run — instead."
   end
 
+  # == The "Slowest tests" panel's outcome sentence
+
+  # What this run's rows said HAPPENED to the examples they recorded — counted off those rows and
+  # never off the Overview's suite size, which is re-derived by SUM over shard reports and can
+  # legitimately disagree with them.
+  #
+  # ONE method for BOTH branches of the panel, which is a deliberate decision and not an accident
+  # of extraction. The `else` branch — rows exist, not one of them timed — renders an empty state
+  # instead of a ranking, and it would have been easy to let this sentence fall through with the
+  # table. It must not: "nothing was timed" is a fact about DURATIONS and says nothing whatever
+  # about outcomes, and a run that reported no timings and four failures is exactly the run whose
+  # reader most needs the second half. Sharing the method also means the caption and the empty
+  # state cannot end up quoting different failure counts for the same rows — the contradiction
+  # `remove_confirmation`/`remove_notice` live together to avoid.
+  #
+  # `failed` and `pending` are counted BY NAME and the remainder is worded as "something other
+  # than either", never as "passed". Nothing platform-side validates that string (see
+  # `SpecObservation::COVERAGE_COUNTS`), so calling the remainder a pass would be asserting a value
+  # nobody checked.
+  #
+  # The no-outcomes case is worded as an ABSENCE and gets no zero. `outcome` is nullable, so a run
+  # whose client sends none stores a nil on every row and `failed_count` is legitimately 0 — and
+  # "0 failed" printed over that run is "nothing to check" wearing the spelling of "everything
+  # passed". It is the same separation `SlowestExamples#recorded?` draws between "no rows" and "no
+  # timings", made on the outcome axis by `#outcomes_reported?`.
+  def slowest_examples_outcome_sentence(slowest_examples)
+    recorded = slowest_examples.recorded_count
+    examples = "#{number_with_delimiter(recorded)} #{"example".pluralize(recorded)} this run recorded"
+
+    unless slowest_examples.outcomes_reported?
+      return "Not one of the #{examples} reported an outcome, so nothing here says whether any of " \
+             "them passed. That is a run which did not say, rather than a run with nothing wrong " \
+             "in it."
+    end
+
+    "#{slowest_examples_outcome_scope(slowest_examples, examples)}: " \
+      "#{slowest_examples_outcome_breakdown(slowest_examples)}." \
+      "#{slowest_examples_unreported_clause(slowest_examples)}"
+  end
+
   private
+
+  # How much of the run the breakdown after it covers. Worded "Every one of the …" when it covers
+  # all of them, matching the timing sentence directly above it on the page rather than inventing a
+  # second way to say the same shape of thing.
+  def slowest_examples_outcome_scope(slowest_examples, examples)
+    reported = slowest_examples.reported_outcome_count
+    return "Every one of the #{examples} reported an outcome" if reported == slowest_examples.recorded_count
+
+    "#{number_with_delimiter(reported)} of the #{examples} reported an outcome"
+  end
+
+  # The two counted names, plus the remainder when there is one.
+  #
+  # The zeroes here are honest zeroes and are printed: they sit behind `#outcomes_reported?`, so
+  # "0 failed" is only ever reached on a run that DID report outcomes and reported no failures
+  # among them. The remainder clause is omitted entirely when it is zero, because "0 reported
+  # something other than either" is a sentence about arithmetic rather than about this run.
+  def slowest_examples_outcome_breakdown(slowest_examples)
+    counted = ["#{number_with_delimiter(slowest_examples.failed_count)} failed",
+               "#{number_with_delimiter(slowest_examples.pending_count)} pending"]
+
+    other = slowest_examples.other_outcome_count
+    return counted.to_sentence unless other.positive?
+
+    counted << "#{number_with_delimiter(other)} reported something other than either — not read " \
+               "as a pass, since nothing validates what CI sends here"
+    counted.to_sentence
+  end
+
+  # The rows that said nothing, on a run where some rows did. Silence inside a population that
+  # reported is not covered by the counts before it, and leaving it to be reached by subtraction is
+  # how a reader concludes a failure count was taken over more rows than it was.
+  def slowest_examples_unreported_clause(slowest_examples)
+    unreported = slowest_examples.unreported_outcome_count
+    return "" unless unreported.positive?
+
+    " The other #{number_with_delimiter(unreported)} reported none."
+  end
 
   # One branch as one item, for BOTH the row and the menu.
   #

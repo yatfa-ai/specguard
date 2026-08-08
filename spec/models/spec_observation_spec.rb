@@ -14,6 +14,12 @@ RSpec.describe SpecObservation do
     # shared example group's time lands on the including file and not on a `spec/support/` helper.
     let(:by_file) { run.spec_observations.group(:spec_file_path).select("spec_file_path, SUM(duration_seconds)") }
     let(:one_file) { run.spec_observations.where(spec_file_path: "spec/f3_spec.rb") }
+    # The exact SELECT `SpecObservation.coverage_in` runs, built off the constant it runs it from
+    # rather than retyped, so a sixth counter added there is a sixth counter EXPLAINed here. `pick`
+    # is `limit(1).pluck`, hence the `.limit(1)`.
+    let(:coverage) do
+      run.spec_observations.select(Arel.sql(SpecObservation::COVERAGE_COUNTS.values.join(", "))).limit(1)
+    end
 
     # One run's worth of rows, spread over 25 files so a by-file aggregate has something to group.
     def seed(test_run)
@@ -163,6 +169,24 @@ RSpec.describe SpecObservation do
         expect(plan).to match(/Index Scan using index_spec_observations_on_test_run_id\w* on spec_observations/)
         expect(plan).not_to match(/Seq Scan on spec_observations/)
       end
+
+      # The "no extra cost" claim for the outcome counters, ASSERTED rather than reasoned about.
+      # The two `FILTER` aggregates are new expressions over a row set the existing `COUNT(*)`
+      # already reads, so they should add no scan — but that is a claim about a plan, and a query
+      # count alone would accept a plan that had quietly fallen back to reading every run's rows.
+      #
+      # Postgres picks the narrow `test_run_id` index and aggregates on top, for the reason the
+      # by-file case above states: `outcome` and `duration_seconds` have to come off the heap
+      # either way, so the wider indexes buy the aggregate nothing on a whole-run grouping. It is
+      # specifically NOT `index_spec_observations_on_test_run_id_and_outcome` — that index is for
+      # NARROWING to the failures, and reaching for it here would mean a second round trip for a
+      # figure this one scan already has the rows for.
+      it "counts a whole run's outcomes off an index rather than scanning the table" do
+        plan = plan_for(coverage)
+
+        expect(plan).to match(/Index Scan using index_spec_observations_on_test_run_id\w* on spec_observations/)
+        expect(plan).not_to match(/Seq Scan on spec_observations/)
+      end
     end
   end
 
@@ -281,17 +305,17 @@ RSpec.describe SpecObservation do
       expect(described_class.slowest_in(run).map(&:id)).to eq([first.id, second.id])
     end
 
-    describe ".timing_coverage_in" do
+    describe ".coverage_in" do
       it "counts this run's rows and the ones that carried a duration" do
         observe(run, duration: 1.0, line_number: 1)
         observe(run, duration: nil, line_number: 2)
         observe(run, duration: 3.0, line_number: 3)
 
-        expect(described_class.timing_coverage_in(run)).to eq([3, 2])
+        expect(described_class.coverage_in(run)).to include(recorded_count: 3, timed_count: 2)
       end
 
       it "reads zeroes for a run that recorded nothing, rather than nils" do
-        expect(described_class.timing_coverage_in(run)).to eq([0, 0])
+        expect(described_class.coverage_in(run).values).to all(eq(0))
       end
 
       # The denominator is the rows, never `TestRun#total_specs_count` — which is derived from
@@ -300,7 +324,44 @@ RSpec.describe SpecObservation do
         run.update!(total_specs_count: 4_000)
         observe(run, duration: 1.0, line_number: 1)
 
-        expect(described_class.timing_coverage_in(run)).to eq([1, 1])
+        expect(described_class.coverage_in(run)).to include(recorded_count: 1, timed_count: 1)
+      end
+
+      it "counts the outcomes it reads by name, off the same rows" do
+        observe(run, duration: 1.0, line_number: 1, outcome: "failed")
+        observe(run, duration: 1.0, line_number: 2, outcome: "pending")
+        observe(run, duration: 1.0, line_number: 3, outcome: "passed")
+        observe(run, duration: 1.0, line_number: 4, outcome: "passed")
+
+        expect(described_class.coverage_in(run))
+          .to eq(recorded_count: 4, timed_count: 4, reported_outcome_count: 4,
+                 failed_count: 1, pending_count: 1)
+      end
+
+      # THE state the outcome half of this aggregate exists to keep separable. `outcome` is
+      # nullable and nothing platform-side validates it, so a run whose client sends none stores a
+      # nil on every row — and `failed_count` is then a legitimate zero that means "this run said
+      # nothing", not "this run had no failures". Only `reported_outcome_count` can tell a caller
+      # which zero it is holding, so both halves are asserted.
+      it "separates a run that reported no outcome at all from one that reported no failure" do
+        observe(run, duration: 1.0, line_number: 1, outcome: nil)
+        observe(run, duration: 1.0, line_number: 2, outcome: nil)
+
+        expect(described_class.coverage_in(run))
+          .to include(recorded_count: 2, reported_outcome_count: 0, failed_count: 0)
+      end
+
+      # `Ingest::ObservationRecorder#attributes` collapses `""` to nil through `presence_of`, so
+      # "the client sent nothing" and "the client sent a blank" are ONE state in this column and
+      # there is deliberately no example for a second one — a fixture writing `""` here would be
+      # asserting against a row nothing in production can produce.
+
+      it "counts one run's outcomes and no other run's" do
+        other = create_test_run(repository: repository, commit_sha: "0ther")
+        observe(run, duration: 1.0, line_number: 1, outcome: "passed")
+        observe(other, duration: 1.0, line_number: 1, outcome: "failed")
+
+        expect(described_class.coverage_in(run)).to include(failed_count: 0, reported_outcome_count: 1)
       end
     end
 
@@ -464,6 +525,41 @@ RSpec.describe SpecObservation do
 
       it "says an untimed row reported nothing, rather than formatting a nil as zero" do
         expect(observe(run, duration: nil, line_number: 1).duration_label).to eq("not reported")
+      end
+
+      # The row half of the outcome disclosure. `outcome` is nullable and nothing platform-side
+      # validates the string, so the cell quotes what arrived rather than interpreting it.
+      it "quotes the outcome CI reported, in CI's own word for it" do
+        expect(observe(run, duration: 1.0, line_number: 1, outcome: "failed").outcome_label).to eq("failed")
+        expect(observe(run, duration: 1.0, line_number: 2, outcome: "passed").outcome_label).to eq("passed")
+      end
+
+      # THE example this column exists for, and the `#duration_label` nil-guard wearing the worse
+      # colour: "the client sent no outcome" made indistinguishable from "this test passed", on a
+      # row that is in a "slowest" list and may have been slow because it was hanging.
+      it "says a row with no outcome reported none, and does not wear a pass's colour" do
+        row = observe(run, duration: 1.0, line_number: 1, outcome: nil)
+
+        expect(row.outcome_label).to eq("not reported")
+        expect(row.outcome_tone).to eq(:neutral)
+        expect(row.outcome_tone).not_to eq(observe(run, duration: 1.0, line_number: 2,
+                                                        outcome: "passed").outcome_tone)
+      end
+
+      it "tones the three names the producer is known to send" do
+        expect(observe(run, duration: 1.0, line_number: 1, outcome: "failed").outcome_tone).to eq(:error)
+        expect(observe(run, duration: 1.0, line_number: 2, outcome: "pending").outcome_tone).to eq(:warning)
+        expect(observe(run, duration: 1.0, line_number: 3, outcome: "passed").outcome_tone).to eq(:success)
+      end
+
+      # Nothing platform-side validates this string — `Ingest::Payload` does not — so an
+      # unrecognised value has to be echoed and left uncoloured. Folding it into the pass tone
+      # would be the page asserting a verdict over a value nobody checked.
+      it "echoes an outcome it does not recognise without colouring it as a pass" do
+        row = observe(run, duration: 1.0, line_number: 1, outcome: "aborted")
+
+        expect(row.outcome_label).to eq("aborted")
+        expect(row.outcome_tone).to eq(:neutral)
       end
     end
   end

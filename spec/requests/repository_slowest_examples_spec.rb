@@ -30,17 +30,18 @@ RSpec.describe "Repository slowest tests", type: :request do
   def basis_line = panel.find("#slowest-examples-basis")
 
   # One row as a reader meets it: the label, the location line under it (absent for a row whose
-  # label already IS its location), and the duration. Whitespace-collapsed, because a label and a
-  # location assembled across two ERB tags are two readings on the page whatever the source did
-  # with indentation.
+  # label already IS its location), the duration, and what CI reported happened to it.
+  # Whitespace-collapsed, because a label and a location assembled across two ERB tags are two
+  # readings on the page whatever the source did with indentation.
   def rows
     panel.all("tbody tr").map do |row|
-      label_cell, duration_cell = row.all("td")
+      label_cell, duration_cell, outcome_cell = row.all("td")
       location = label_cell.all("span").map { |span| span.text.gsub(/\s+/, " ").strip }.first
       label = label_cell.text.gsub(/\s+/, " ").strip
       label = label.delete_suffix(location).strip if location
 
-      { label: label, location: location, duration: duration_cell.text.strip }
+      { label: label, location: location, duration: duration_cell.text.strip,
+        outcome: outcome_cell.text.strip, outcome_class: outcome_cell.find("span")[:class] }
     end
   end
 
@@ -127,6 +128,125 @@ RSpec.describe "Repository slowest tests", type: :request do
     end
   end
 
+  # The outcome half of the panel — the read this slice adds. `spec_observations.outcome` is
+  # written on every example row of every ingest and was, until now, read by nothing: the page
+  # ranked ten wall clocks and could not say whether any of them passed. `#slowest_in` still does
+  # not filter on outcome and must not — a failed example that burned sixty seconds spent that time
+  # — so the whole job here is that the reader can tell the run's most expensive test from its most
+  # broken one.
+  describe "what the ranked examples reported" do
+    def outcome_run(specs)
+      repository = create_repository(user: @user)
+      ingest(repository, specs)
+      get repository_path(repository)
+    end
+
+    it "reports each ranked example's outcome, in the word CI sent" do
+      outcome_run([example_spec(name: "blew up", duration: 9.0, line_number: 1, outcome: "failed"),
+                   example_spec(name: "skipped", duration: 5.0, line_number: 2, outcome: "pending"),
+                   example_spec(name: "fine", duration: 1.0, line_number: 3, outcome: "passed")])
+
+      expect(rows.map { |row| row[:outcome] }).to eq(%w[failed pending passed])
+    end
+
+    # THE row this column exists for. `outcome` is nullable — the client sends
+    # `result&.status&.to_s`, so an example that never ran carries none — and a blank cell, or one
+    # silently wearing a pass's colour, is "the client said nothing" made byte-identical to "this
+    # test passed" at the head of a list of the suite's slowest tests.
+    it "reads a row with no outcome as not-reported, and not in the colour a pass wears" do
+      outcome_run([example_spec(name: "silent", duration: 9.0, line_number: 1, outcome: nil),
+                   example_spec(name: "fine", duration: 1.0, line_number: 2, outcome: "passed")])
+
+      silent, passed = rows
+
+      expect(silent[:outcome]).to eq("not reported")
+      expect(silent[:outcome_class]).not_to eq(passed[:outcome_class])
+      # Named tokens, not merely "different": a nil must not land on the success tone, and the
+      # difference between two rows would survive it landing on any other colour at all.
+      expect(silent[:outcome_class]).to include("text-app-content-secondary")
+      expect(passed[:outcome_class]).to include("text-app-success")
+    end
+
+    it "colours a failure as a failure rather than leaving it to be read" do
+      outcome_run([example_spec(name: "blew up", duration: 9.0, line_number: 1, outcome: "failed")])
+
+      expect(rows.first[:outcome_class]).to include("text-app-error")
+    end
+
+    # Nothing platform-side validates this string — `Ingest::Payload` does not — so an
+    # unrecognised value is echoed and left uncoloured rather than folded into a pass.
+    it "echoes an outcome it does not recognise without colouring it as a pass" do
+      outcome_run([example_spec(name: "odd", duration: 9.0, line_number: 1, outcome: "aborted")])
+
+      expect(rows.first[:outcome]).to eq("aborted")
+      expect(rows.first[:outcome_class]).not_to include("text-app-success")
+    end
+
+    # One grain up: nothing on this page said whether the latest run was red, so every figure the
+    # panel prints was computed off a run that may have aborted a third of the way through.
+    # Counted off the rows THIS RUN wrote, never off `TestRun#total_specs_count`.
+    it "states how many of the rows it recorded reported failed and pending" do
+      outcome_run([example_spec(name: "one", duration: 9.0, line_number: 1, outcome: "failed"),
+                   example_spec(name: "two", duration: 5.0, line_number: 2, outcome: "pending"),
+                   example_spec(name: "three", duration: 3.0, line_number: 3, outcome: "passed"),
+                   example_spec(name: "four", duration: 1.0, line_number: 4, outcome: "passed")])
+
+      expect(basis_line).to have_text("Every one of the 4 examples this run recorded reported an " \
+                                      "outcome: 1 failed, 1 pending", normalize_ws: true)
+    end
+
+    # The remainder is stated as neither of the two counted names and specifically not as a pass.
+    # Nothing validates the string, so "2 passed" would be a verdict over a value nobody checked.
+    # The `0 pending` here is an HONEST zero and is printed: it sits on a run that DID report
+    # outcomes, so it counts pendings rather than silence — which is the distinction the
+    # no-outcomes example below turns on.
+    it "words the remainder as something other than failed or pending, never as passes" do
+      outcome_run([example_spec(name: "one", duration: 9.0, line_number: 1, outcome: "failed"),
+                   example_spec(name: "two", duration: 3.0, line_number: 2, outcome: "passed"),
+                   example_spec(name: "three", duration: 1.0, line_number: 3, outcome: "passed")])
+
+      expect(basis_line).to have_text("1 failed, 0 pending, and 2 reported something other than either",
+                                      normalize_ws: true)
+      expect(basis_line).to have_no_text("2 passed")
+    end
+
+    it "counts the rows that said nothing separately from the ones that did" do
+      outcome_run([example_spec(name: "one", duration: 9.0, line_number: 1, outcome: "failed"),
+                   example_spec(name: "two", duration: 3.0, line_number: 2, outcome: nil),
+                   example_spec(name: "three", duration: 1.0, line_number: 3, outcome: nil)])
+
+      expect(basis_line).to have_text("1 of the 3 examples this run recorded reported an outcome: " \
+                                      "1 failed and 0 pending. The other 2 reported none.",
+                                      normalize_ws: true)
+    end
+
+    # VACUOUS GREEN, refused explicitly. A run whose every row carries a nil outcome has a
+    # legitimate `failed_count` of 0 — and printing that zero renders "this run said nothing" in
+    # the words of "everything passed". The count must not appear at all on such a run.
+    it "says a run that reported no outcome at all did not say, rather than printing zero failures" do
+      outcome_run([example_spec(name: "one", duration: 9.0, line_number: 1, outcome: nil),
+                   example_spec(name: "two", duration: 1.0, line_number: 2, outcome: nil)])
+
+      expect(basis_line).to have_text("Not one of the 2 examples this run recorded reported an " \
+                                      "outcome", normalize_ws: true)
+      expect(basis_line).to have_no_text("0 failed")
+      expect(rows.map { |row| row[:outcome] }).to eq(["not reported", "not reported"])
+    end
+
+    # The denominator is the rows this run wrote here, never the Overview's suite size.
+    it "counts outcomes off its own rows rather than the run's suite size" do
+      repository = create_repository(user: @user)
+      ingest(repository, [example_spec(name: "one", duration: 1.0, line_number: 1, outcome: "failed")],
+             total_specs_count: 4_000)
+
+      get repository_path(repository)
+
+      expect(basis_line).to have_text("Every one of the 1 example this run recorded reported an " \
+                                      "outcome: 1 failed", normalize_ws: true)
+      expect(basis_line).to have_no_text("4,000")
+    end
+  end
+
   # THE hazard this slice exists to refuse. `duration_seconds` is nullable by design, and
   # `duration_seconds: :desc` is NULLS FIRST in Postgres — so the naive ranking does not merely
   # include the example that never ran, it names it as the slowest test in the suite.
@@ -189,6 +309,35 @@ RSpec.describe "Repository slowest tests", type: :request do
       # A zero here would be the panel inventing the measurement it is missing.
       expect(panel).to have_no_css("tbody tr")
       expect(panel).to have_no_text("0.00s")
+    end
+
+    # The composition appears in THIS branch too, deliberately. There is no ranking here and so no
+    # Outcome column, but "nothing was timed" is a fact about durations and says nothing whatever
+    # about how those examples ended — and a delivery carrying no timings and a failure is exactly
+    # the run that would otherwise disclose nothing at all.
+    it "still says what those examples reported, having nothing to rank them by" do
+      repository = create_repository(user: @user)
+      ingest(repository, [example_spec(name: "never ran", duration: nil, line_number: 1, outcome: "failed"),
+                          example_spec(name: "nor this", duration: nil, line_number: 2, outcome: "passed")])
+
+      get repository_path(repository)
+
+      expect(panel).to have_text("Every one of the 2 examples this run recorded reported an " \
+                                 "outcome: 1 failed, 0 pending", normalize_ws: true)
+    end
+
+    # And the same Vacuous Green refusal as the ranked branch: no timings AND no outcomes is a run
+    # that said nothing, not a run with no failures.
+    it "does not print a zero failure count where those examples reported no outcome either" do
+      repository = create_repository(user: @user)
+      ingest(repository, [example_spec(name: "never ran", duration: nil, line_number: 1, outcome: nil),
+                          example_spec(name: "nor this", duration: nil, line_number: 2, outcome: nil)])
+
+      get repository_path(repository)
+
+      expect(panel).to have_text("Not one of the 2 examples this run recorded reported an outcome",
+                                 normalize_ws: true)
+      expect(panel).to have_no_text("0 failed")
     end
   end
 
