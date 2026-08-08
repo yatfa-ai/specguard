@@ -135,8 +135,12 @@ RSpec.describe EmbeddingCollisionAudit do
     end
 
     it "shows the hashed space losing dimensions the exact space keeps — the effect under test" do
-      # A long name has more features than 1536 has room for near-uniformly, so hashed nnz < exact.
-      document = vectoriser.call(File.read(Rails.root.join("README.md"))[0, 20_000])
+      # 3,000 distinct words is nearly 2x DIMENSIONS (1536), so the hashed space *must* bucket two
+      # features into one dimension while the exact space keeps them apart — pigeonhole, not luck.
+      # The text is synthetic and its feature count stated on purpose: the premise of this example
+      # is the count, so it must be owned here rather than inherited from a file this spec does not
+      # own (a real document that someone later trims would turn this example red for no reason).
+      document = vectoriser.call(Array.new(3_000) { |i| "t#{i.to_s.rjust(4, "0")}" }.join(" "))
 
       expect(document.hashed_ids.size).to be < document.exact_ids.size
       expect(document.hashed_ids.size).to be <= EmbeddingGenerator::DIMENSIONS
