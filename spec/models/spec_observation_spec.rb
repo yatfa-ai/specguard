@@ -209,6 +209,34 @@ RSpec.describe SpecObservation do
         expect(plan).not_to match(/Seq Scan on spec_observations/)
       end
 
+      # The same certification for the SQL the drill-down panel ACTUALLY runs, captured off the
+      # wire rather than EXPLAINed from the hand-written `one_file` above it — that relation is the
+      # predicate alone, and the panel's read adds a projection, an ordering and a cap on top of
+      # it. A plan assertion against the shorter copy would be asserting nothing about the panel.
+      #
+      # This is the read the composite index exists FOR, which the by-file ROLLUP's example above
+      # says in as many words: a whole-run grouping gets nothing from the wider index, and this
+      # equality predicate on both of its columns is what earns it. So the assertion names that
+      # index specifically rather than matching the shared `INDEXED_BY_RUN` — falling back to the
+      # narrow `test_run_id` index here would mean reading every row of the run to answer a
+      # question about one file, which at the design point is the whole cost this panel avoids.
+      #
+      # The ORDER BY is on `duration_seconds`, which no index here leads on, so the file's rows are
+      # sorted after they are read. That is bounded by the size of the FILE — twenty rows at this
+      # seed — and is exactly why the read must not instead ride
+      # `index_spec_observations_on_test_run_id_and_duration_seconds`, whose backward scan would
+      # walk the run from its slowest example down, discarding every row belonging to another file.
+      #
+      # An EQUALITY predicate, and deliberately not a subtree: "every row under `spec/d3/`" is a
+      # PREFIX predicate, which is what a `text_pattern_ops` index serves and this read issues none
+      # of. That is what let the panel ship with no migration.
+      it "reads the panel's one-file drill-down off the by-file index" do
+        plan = plan_for_actual_sql { described_class.in_file(run, "spec/d3/f3_spec.rb").to_a }
+
+        expect(plan).to include("index_spec_observations_on_test_run_id_and_spec_file_path")
+        expect(plan).not_to match(/Seq Scan on spec_observations/)
+      end
+
       # The plan for the SQL `.file_durations_in` ACTUALLY runs, captured off the wire rather than
       # EXPLAINed from a hand-written copy of it — a copy is a second definition of the query that
       # can drift from the one the panel makes, and a plan assertion against the copy would then be
