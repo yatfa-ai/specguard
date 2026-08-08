@@ -357,16 +357,7 @@ RSpec.describe "Repository heaviest spec directories", type: :request do
   # both rollups together; what this one guards is that THIS panel's cost does not grow with the
   # suite.
   describe "what the panel costs" do
-    def queries_against(table)
-      queries = []
-      subscriber = ActiveSupport::Notifications.subscribe("sql.active_record") do |_, _, _, _, payload|
-        queries << payload[:sql] if payload[:name] != "SCHEMA" && payload[:sql].to_s.include?(table)
-      end
-      yield
-      queries
-    ensure
-      ActiveSupport::Notifications.unsubscribe(subscriber)
-    end
+    # `queries_against` comes from spec/support/query_capture.rb.
 
     it "costs the same number of queries at 200 examples over 25 directories as at 3 over 3" do
       small = create_repository(user: @user, github_full_name: "acme/small-suite")

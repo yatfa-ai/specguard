@@ -269,16 +269,7 @@ RSpec.describe "Repository heaviest spec files", type: :request do
   # as on a 20-example one. A `group_by` over `has_many` walked in Ruby is exactly the shape that
   # ships green on a three-row fixture and takes the page down on a real suite.
   describe "what the panel costs" do
-    def queries_against(table)
-      queries = []
-      subscriber = ActiveSupport::Notifications.subscribe("sql.active_record") do |_, _, _, _, payload|
-        queries << payload[:sql] if payload[:name] != "SCHEMA" && payload[:sql].to_s.include?(table)
-      end
-      yield
-      queries
-    ensure
-      ActiveSupport::Notifications.unsubscribe(subscriber)
-    end
+    # `queries_against` comes from spec/support/query_capture.rb.
 
     it "costs the same number of queries at 200 examples over 25 files as at 3 over 3" do
       small = create_repository(user: @user, github_full_name: "acme/small-suite")

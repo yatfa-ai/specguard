@@ -419,16 +419,7 @@ RSpec.describe "Repository suite-size growth", type: :request do
   # examples can honestly hold is that the comparison adds no per-row work: it costs the same
   # whether it finds a predecessor or not, and the same however long the branch's history is.
   describe "what the comparison costs the page" do
-    def count_queries
-      count = 0
-      subscriber = ActiveSupport::Notifications.subscribe("sql.active_record") do |_, _, _, _, payload|
-        count += 1 unless payload[:cached] || payload[:name].in?(["SCHEMA", "TRANSACTION"])
-      end
-      yield
-      count
-    ensure
-      ActiveSupport::Notifications.unsubscribe(subscriber)
-    end
+    # `count_queries` comes from spec/support/query_capture.rb.
 
     it "costs one query more when it finds a run to compare against — the coverage check on it" do
       repository = create_repository(user: @user)

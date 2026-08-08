@@ -1080,16 +1080,7 @@ RSpec.describe "Repository suite-size trajectory", type: :request do
   # that only a page can show: the panel adds no PER-ROW work, however long the branch's history is
   # and however its runs were assembled.
   describe "what the panel costs the page" do
-    def count_queries
-      count = 0
-      subscriber = ActiveSupport::Notifications.subscribe("sql.active_record") do |_, _, _, _, payload|
-        count += 1 unless payload[:cached] || payload[:name].in?(["SCHEMA", "TRANSACTION"])
-      end
-      yield
-      count
-    ensure
-      ActiveSupport::Notifications.unsubscribe(subscriber)
-    end
+    # `count_queries` comes from spec/support/query_capture.rb.
 
     it "costs the same however long the branch's history is" do
       repository = create_repository(user: @user)
@@ -1406,30 +1397,18 @@ RSpec.describe "Repository suite-size trajectory", type: :request do
     # Criterion 6. The rows were already loaded and already carried the column, so a second series
     # over them is free — which is the argument for reading it here rather than anywhere else.
     it "costs no query per plotted point" do
-      # The same counter `what the panel costs the page` uses, and defined here rather than hoisted:
-      # that block's own comment explains what a render-against-render budget can and cannot show,
-      # and sharing one helper across two describes is how a counter quietly outlives the argument
-      # for it.
-      count_queries = lambda do |&block|
-        count = 0
-        subscriber = ActiveSupport::Notifications.subscribe("sql.active_record") do |_, _, _, _, payload|
-          count += 1 unless payload[:cached] || payload[:name].in?(["SCHEMA", "TRANSACTION"])
-        end
-        block.call
-        count
-      ensure
-        ActiveSupport::Notifications.unsubscribe(subscriber)
-      end
-
+      # `count_queries` comes from spec/support/query_capture.rb — the same rule the block above
+      # counts by. What a render-against-render budget can and cannot show is argued there; this
+      # example holds the per-point half of it.
       repository = create_repository(user: @user)
       2.times { |i| timed_run(repository, "seed#{i}0000000", seconds: 40.0 + i, at: (20 - i).days.ago) }
       get repository_path(repository)
-      baseline = count_queries.call { get repository_path(repository) }
+      baseline = count_queries { get repository_path(repository) }
       expect(runtime_chart).to have_css("svg circle", count: 2, visible: :all)
 
       8.times { |i| timed_run(repository, "more#{i}0000000", seconds: 50.0 + i, at: (10 - i).days.ago) }
 
-      expect(count_queries.call { get repository_path(repository) }).to eq(baseline)
+      expect(count_queries { get repository_path(repository) }).to eq(baseline)
       expect(runtime_chart).to have_css("svg circle", count: 10, visible: :all)
     end
   end
