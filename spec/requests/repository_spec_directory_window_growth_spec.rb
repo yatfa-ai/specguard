@@ -269,6 +269,32 @@ RSpec.describe "Repository spec directory window growth", type: :request do
       # And the panel beside it, over the same fixture, reports the 297 examples that just left.
       expect(push_rows).to eq("spec/models" => "−297")
     end
+
+    # The panel's one NEGATIVE claim, and therefore the one that most needs its window stated: a
+    # reader cannot check "no area moved" against anything shown, the way they can check a table of
+    # numbers. Here the walk stepped over two of the four runs and landed on the run immediately
+    # before this one, so an unqualified "no area moved across this window" would assert over four
+    # runs a result taken across two.
+    it "names the baseline and the span it actually covered when nothing moved" do
+      repository = new_repository
+      unmeasured_run(repository, "zero0000000001", minutes_ago: 240)
+      ingest(repository, "shard000000002", minutes_ago: 180, ci_run_id: "gha-1", shard_id: "0",
+                         specs: area_specs("spec/models", 4))
+      ingest(repository, "base0000000003", minutes_ago: 120, specs: area_specs("spec/models", 5, offset: 100))
+      ingest(repository, "head0000000004", minutes_ago: 60, specs: area_specs("spec/models", 5, offset: 200))
+
+      get repository_path(repository)
+
+      expect(panel).to have_no_css("tbody tr")
+      expect(empty_state_text).to include("No area moved across this window")
+      # WHICH run, and how far back — the walk landed one back, not three.
+      expect(empty_state_text).to include("Measured against base000 — the run immediately before " \
+                                          "it in this window")
+      # And how much of the window that leaves, with both rejections named apart.
+      expect(empty_state_text).to include("It spans 2 of the last 4 runs on main")
+      expect(empty_state_text).to include("1 reported no tests and 1 was assembled from a " \
+                                          "different number of parts")
+    end
   end
 
   # The walk: the baseline is the OLDEST run of the window that can be compared against this one,
@@ -379,9 +405,15 @@ RSpec.describe "Repository spec directory window growth", type: :request do
       expect(empty_state_text).to include("reported in one piece")
     end
 
-    # Both walk rejections in one window: the composition sentence is about the runs it describes,
-    # and the runs rejected before it ever got there are counted separately rather than folded in.
-    it "counts the runs that never reached the composition question separately" do
+    # Both walk rejections in one window, asserted as ONE WHOLE SENTENCE rather than by its trailing
+    # clause. The walk `next`s past an unmeasured run before composition is ever asked of it, so the
+    # two counts describe two different subsets and a sentence sized to the window as a whole gets
+    # both of them wrong at once: it says "not one of the 2 earlier runs was assembled the way this
+    # run was" — false of the unmeasured one, which reports zero shards and is assembled exactly
+    # like this unsharded anchor — and then counts that same run again in "a further 1", implying a
+    # third run this window does not hold. A clause-level assertion is green under both spellings,
+    # which is why this one pins the leading count and the qualifier too.
+    it "blames each walk rejection only for the runs it applied to, and counts them once" do
       repository = new_repository
       unmeasured_run(repository, "zero0000000001", minutes_ago: 180)
       ingest(repository, "one0000000002", minutes_ago: 120, ci_run_id: "gha-1", shard_id: "0",
@@ -390,7 +422,11 @@ RSpec.describe "Repository spec directory window growth", type: :request do
 
       get repository_path(repository)
 
+      expect(empty_state_text).to include("The 1 earlier run in this window on main that reported " \
+                                          "tests was not assembled the way this run was")
       expect(empty_state_text).to include("A further 1 run in the window reported no tests at all")
+      # The count that was wrong: two earlier runs, only one of them ever composition-checked.
+      expect(empty_state_text).not_to include("2 earlier runs")
     end
 
     # The condition neither comparability predicate covers and which is decidable only from the

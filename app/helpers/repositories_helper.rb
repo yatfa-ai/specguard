@@ -542,26 +542,50 @@ module RepositoriesHelper
   # The composition branch names this run's own delivery, through the same `TestRun#delivery_description`
   # seam the Overview delta and the last-push panel word this with, so a reader is told what the
   # earlier runs would have had to match rather than only that they did not.
+  # Each branch counts the runs ITS OWN condition rejected, off the split counters, rather than
+  # every earlier run in the window. The walk rejects on two conditions and `next`s past the
+  # unmeasured ones before composition is ever asked of them, so a composition sentence sized to
+  # the whole window makes two wrong claims at once: it blames sharding for runs whose sharding was
+  # never looked at (and is often fine — an unmeasured run reports zero shards, which is assembled
+  # exactly like an unsharded anchor), and it then counts those same runs a second time in the
+  # clause below. Both are the rule the `#..._skipped_reasons` comment sets: a reason given for
+  # runs it did not apply to is a wrong explanation, not a vague one.
+  #
+  # `:no_measured_baseline` was previously right only by accident — it is unreachable while any run
+  # mismatched, so "every earlier run" happened to equal the unmeasured count. Deriving it makes
+  # the accident a guarantee.
   def spec_directory_window_growth_no_baseline_description(growth)
-    earlier = growth.window_run_count - 1
-    runs = "#{number_with_delimiter(earlier)} earlier #{"run".pluralize(earlier)} in this window" \
-           "#{window_branch_clause(growth)}"
-
     if growth.state == :no_measured_baseline
-      return "#{earlier == 1 ? "The" : "Every one of the"} #{runs} reported no tests, so there is " \
-             "no measured end to compare this run against. A run that reported zero tests has a " \
-             "count but not a measurement, and differencing against it would charge this branch " \
-             "for a gap in the reporting."
+      unmeasured = growth.skipped_unmeasured_count
+      return "#{unmeasured == 1 ? "The" : "Every one of the"} " \
+             "#{spec_directory_window_growth_earlier_runs(growth, unmeasured)} reported no tests, " \
+             "so there is no measured end to compare this run against. A run that reported zero " \
+             "tests has a count but not a measurement, and differencing against it would charge " \
+             "this branch for a gap in the reporting."
     end
 
-    "#{earlier == 1 ? "The" : "Not one of the"} #{runs} " \
-      "#{earlier == 1 ? "was not" : "was"} assembled the way this run was — this run was " \
+    # Qualified as the runs that got PAST the measured check, but only where some run did not —
+    # where none was rejected earlier the qualifier would distinguish nothing.
+    mismatched = growth.skipped_assembled_differently_count
+    runs = spec_directory_window_growth_earlier_runs(growth, mismatched)
+    runs += " that reported tests" if growth.skipped_unmeasured_count.positive?
+
+    "#{mismatched == 1 ? "The" : "Not one of the"} #{runs} " \
+      "#{mismatched == 1 ? "was not" : "was"} assembled the way this run was — this run was " \
       "#{growth.anchor_run.delivery_description}. A run's examples arrive shard by shard, so a " \
       "difference taken across two compositions would report areas growing and shrinking that no " \
       "commit touched.#{spec_directory_window_growth_unmeasured_clause(growth)}"
   end
 
   private
+
+  # "2 earlier runs in this window on main" — the noun phrase both no-baseline branches count with,
+  # written once so the two of them cannot drift into describing the same window differently. The
+  # COUNT is the caller's, because the two branches are about different subsets of the window.
+  def spec_directory_window_growth_earlier_runs(growth, count)
+    "#{number_with_delimiter(count)} earlier #{"run".pluralize(count)} in this window" \
+      "#{window_branch_clause(growth)}"
+  end
 
   # The walk's two rejections, in the words of what each one is. Joined rather than templated
   # per-state so a window that hit both says both, and neither clause is printed where its count is
@@ -604,13 +628,12 @@ module RepositoriesHelper
   # named no branch, so the panel is not rendered without one — but a sentence that would read
   # "the last 30 runs on " if that ever changed is worse than one that simply says less.
   #
-  # Shared by both panels drawn on that window — the outcome panel and the area-movement one — for
-  # the reason every seam on this page is shared: two spellings of "on main" is two things that
-  # agree today with no structural reason to keep agreeing.
-  def window_branch_clause(unstable)
-    unstable.branch.presence ? " on #{unstable.branch}" : ""
+  # Shared by all three panels drawn on that window — the outcome panel, the area-movement one and
+  # its no-baseline states — for the reason every seam on this page is shared: two spellings of
+  # "on main" is two things that agree today with no structural reason to keep agreeing.
+  def window_branch_clause(panel)
+    panel.branch.presence ? " on #{panel.branch}" : ""
   end
-
 
   # Runs of the window that wrote no per-example rows at all — a different absence from "reported
   # no outcome", and one the sentence above would otherwise fold into it. A run ingested before

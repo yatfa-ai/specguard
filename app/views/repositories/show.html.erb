@@ -2214,13 +2214,22 @@
           <%# Two comparable ends whose every area holds the same number of examples. Over a window
               this is a stronger and more interesting statement than it is over one push — and it
               is still only a statement about the two ENDS, so it says that too rather than letting
-              a reader take it for "this branch changed nothing". %>
+              a reader take it for "this branch changed nothing".
+
+              It names its baseline and its span for the same reason the table above does, and with
+              MORE at stake rather than less: this is the panel's one negative claim, and a
+              negative claim over an unstated window is the one thing on this page a reader cannot
+              check against anything shown. "No area moved across this window" is a very different
+              statement where the walk landed twenty-nine runs back and where it stepped over
+              twenty-seven to land on the run immediately before this one. %>
           <%= render UI::EmptyStateComponent.new(
                 title: "No area moved across this window",
                 description: "Every one of the " \
                              "#{number_with_delimiter(window_growth.directory_count)} " \
                              "#{'area'.pluralize(window_growth.directory_count)} the two ends of " \
-                             "this window recorded holds the same number of examples in both. Only " \
+                             "this window recorded holds the same number of examples in both. " \
+                             "#{spec_directory_window_growth_baseline_sentence(window_growth)} " \
+                             "#{spec_directory_window_growth_span_sentence(window_growth)} Only " \
                              "those two ends were compared, so an area that grew and shrank back " \
                              "in between is counted here as an area that did not move."
               ) %>
