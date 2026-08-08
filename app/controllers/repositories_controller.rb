@@ -136,10 +136,13 @@ class RepositoriesController < ApplicationController
     # so far, so an in-flight or cancelled sharded row drawn beside a complete one is a cliff to a
     # quarter of the suite and back. The view renders the object's own counts, so the caption's
     # plotted/withheld figures cannot drift from the line.
-    @suite_trajectory = SuiteTrajectory.new(
-      runs: @repository.suite_size_trajectory(@trajectory_run),
-      branch: @trajectory_run&.branch
-    )
+    #
+    # Held in a local because the panel below reads the SAME window. Two panels that each fetched
+    # "the last thirty runs on this branch" would be two windows with no structural reason to keep
+    # agreeing, on a page where one of them captions the other one's branch — and it would be a
+    # second copy of a query that is already the page's most carefully bounded read.
+    trajectory_runs = @repository.suite_size_trajectory(@trajectory_run)
+    @suite_trajectory = SuiteTrajectory.new(runs: trajectory_runs, branch: @trajectory_run&.branch)
     # The slowest examples of the run every panel above names, with the coverage the panel states
     # them to. The first read this application has ever made of `spec_observations` — until those
     # rows landed, "which tests are slow" was a question the schema could not answer, and this page
@@ -164,6 +167,26 @@ class RepositoriesController < ApplicationController
     #
     # ONE query, not growing with the size of the suite: see `SpecFileDurations`.
     @spec_file_durations = SpecFileDurations.for(@latest_test_run) if @latest_test_run
+    # The first question this application asks of `spec_observations` ACROSS runs: which tests
+    # changed their outcome over the window the "Suite growth" panel above is already drawn on.
+    #
+    # Anchored to `trajectory_runs` and not to `@latest_test_run`, and the difference is the whole
+    # point. The panels above answer questions ONE run's rows answer; this one cannot be asked of a
+    # single run at all — an outcome that changed is a statement about at least two of them. The
+    # window is the trajectory's window, branch and all, because outcomes compared across branches
+    # are outcomes of different code, and this page already has a branch of record and a `?branch=`
+    # selector rather than needing a second one.
+    #
+    # The loaded runs are handed over rather than re-fetched, so this panel adds no query for its
+    # own window and cannot end up captioning a different one from the chart above it.
+    #
+    # Guarded on the window having runs at all, and on nothing else. Whether those runs recorded
+    # examples, whether two of them reported outcomes, and whether anything in them was unstable
+    # are questions the object answers — the panel branches on its predicates, so every figure it
+    # prints comes off one set of reads of one window.
+    if trajectory_runs.any?
+      @unstable_tests = UnstableTests.for(@repository, trajectory_runs, branch: @trajectory_run&.branch)
+    end
     # Set by ApiKeysController#create and readable exactly once — see ApiKeysController.
     @revealed_token = flash[:revealed_api_key]
     @revealed_token_name = flash[:revealed_api_key_name]

@@ -298,10 +298,13 @@ RSpec.describe "Repository heaviest spec files", type: :request do
       expect(rows.size).to eq(SpecObservation::HEAVIEST_FILES_LIMIT)
       expect(large_queries.size).to eq(small_queries.size)
       # An absolute ceiling too: equality alone would still hold if both pages regressed to a
-      # fixed-but-wasteful number of passes over the same table. Three reads of this table serve
-      # this page — the ranking and its coverage aggregate for the "Slowest tests" panel above, and
-      # ONE grouped aggregate for this one. That third query is this panel's entire budget.
-      expect(large_queries.size).to eq(3)
+      # fixed-but-wasteful number of passes over the same table. Four reads of this table serve
+      # this page — the ranking and its coverage aggregate for the "Slowest tests" panel above, ONE
+      # grouped aggregate for this one, and the cross-run panel's gating probe (this fixture holds
+      # a single run, so that panel establishes it cannot compare outcomes and asks nothing
+      # further; its own budget is asserted in spec/requests/repository_unstable_tests_spec.rb).
+      # That third query is this panel's entire budget.
+      expect(large_queries.size).to eq(4)
       expect(large_queries.count { |sql| sql.include?("GROUP BY") }).to eq(1)
     end
   end
