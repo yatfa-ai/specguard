@@ -1431,18 +1431,10 @@ RSpec.describe "Repository registration and API keys", type: :request do
       end
 
       # Rendering per-shard rows is exactly the shape that becomes a query per shard, and a
-      # 40-shard matrix is an ordinary CI configuration rather than a pathological one. Same
-      # subscriber the index's per-card guard uses, so the failure is a count and not a timeout.
-      def queries_against(table)
-        queries = []
-        subscriber = ActiveSupport::Notifications.subscribe("sql.active_record") do |_, _, _, _, payload|
-          queries << payload[:sql] if payload[:name] != "SCHEMA" && payload[:sql].to_s.include?(table)
-        end
-        yield
-        queries
-      ensure
-        ActiveSupport::Notifications.unsubscribe(subscriber)
-      end
+      # 40-shard matrix is an ordinary CI configuration rather than a pathological one.
+      # `queries_against` is the shared subscriber in `spec/support/query_capture.rb` — the same one
+      # the index's per-card guard and the model's preload examples use, so the failure is a count
+      # and not a timeout, and three guards on the same table cannot count it three different ways.
 
       it "costs the same number of shard queries at 40 shards as at 3" do
         small = create_repository(user: @user, github_full_name: "acme/three-way")
@@ -1551,17 +1543,55 @@ RSpec.describe "Repository registration and API keys", type: :request do
   # ingestion, an empty state that does not impersonate a measured zero, and a bounded query count
   # so the per-card COUNT this removed cannot quietly return as a per-card SELECT.
   describe "the suite size on the repositories index" do
-    # Every SELECT the index issues against one table, so a per-card query shows up as N of them
-    # rather than as a passing test. Same shape as the members page's key-count guard.
-    def queries_against(table)
-      queries = []
-      subscriber = ActiveSupport::Notifications.subscribe("sql.active_record") do |_, _, _, _, payload|
-        queries << payload[:sql] if payload[:name] != "SCHEMA" && payload[:sql].to_s.include?(table)
+    # `queries_against` — every SELECT the index issues against one table, so a per-card query shows
+    # up as N of them rather than as a passing test — is the shared subscriber in
+    # `spec/support/query_capture.rb`.
+
+    # The rendered copy as a reader sees it, with the ERB's own line breaks and indentation
+    # collapsed — the examples below are about sentences, and a sentence assembled across two ERB
+    # tags is one sentence on the page whatever the source did with whitespace.
+    def page_text = Capybara.string(response.body).text.gsub(/\s+/, " ")
+
+    # The card's cost rows, asserted against `test_run_cost_rows` — the seam `show` renders too —
+    # rather than only against literals spelled out here.
+    #
+    # The difference matters, and it is the ordinary next change on this code. Literals on both
+    # surfaces are agreement that merely HOLDS: rename "Total runtime" on the panel, update the
+    # panel's own literals, and the grid's literals still pass against a card that still renders the
+    # old word — two surfaces wording one column two ways, with nothing in the suite able to see it.
+    # Asserting the rendered rows against the seam's output makes the card's markup, not a copy of
+    # it, the thing under test. Both figures come through with their treatment, so `response.body`
+    # and not `page_text` for those.
+    def expect_cost_rows_from_seam(run)
+      rows = ApplicationController.helpers.test_run_cost_rows(run)
+
+      rows.each do |label, figure|
+        expect(page_text).to include("#{label} #{Capybara.string(figure.to_s).text}")
+        expect(response.body).to include(figure.to_s)
       end
-      yield
-      queries
-    ensure
-      ActiveSupport::Notifications.unsubscribe(subscriber)
+      rows
+    end
+
+    # A run assembled from `shards` parts, built the way ingestion builds one: the parent's count
+    # is DERIVED as the SUM over the shard rows written below it, never asserted beside them —
+    # `Ingest::RunRecorder#recompute_totals` re-derives it after every POST. A fixture that
+    # hard-coded the whole-suite figure here would build a row the producer cannot, which is
+    # exactly the state these examples exist to render.
+    #
+    # `durations` is per-shard and derives the parent's `duration_seconds` as the MAX over the
+    # rows that reported, which is what `#recompute_totals` writes — so the two cost figures a card
+    # prints stand in the real relationship (MAX under SUM) rather than in one a fixture invented,
+    # and a shorter list than `shards` is the ordinary half-timed run. Defaulting to `[]` leaves
+    # every run with no shard timing at all, which is what the composition examples were built on.
+    def sharded_run(repository, shards:, per_shard: 5_000, durations: [], **attributes)
+      run = create_test_run(repository: repository, ci_run_id: "gha-#{repository.id}",
+                            total_specs_count: per_shard * shards,
+                            duration_seconds: durations.compact.max, **attributes)
+      shards.times do |index|
+        run.test_run_shards.create!(shard_id: (index + 1).to_s, total_specs_count: per_shard,
+                                    annotated_specs_count: 0, duration_seconds: durations[index])
+      end
+      run
     end
 
     it "shows the ingested suite size, delimited, in place of the intent count" do
@@ -1623,26 +1653,6 @@ RSpec.describe "Repository registration and API keys", type: :request do
     # runs table and GET /api/v1/repository all already carry this; the card was the one surface
     # that did not.
     describe "the basis of that figure" do
-      # The rendered copy as a reader sees it, with the ERB's own line breaks and indentation
-      # collapsed — these examples are about sentences, and a sentence assembled across two ERB
-      # tags is one sentence on the page whatever the source did with whitespace.
-      def page_text = Capybara.string(response.body).text.gsub(/\s+/, " ")
-
-      # A run assembled from `shards` parts, built the way ingestion builds one: the parent's count
-      # is DERIVED as the SUM over the shard rows written below it, never asserted beside them —
-      # `Ingest::RunRecorder#recompute_totals` re-derives it after every POST. A fixture that
-      # hard-coded the whole-suite figure here would build a row the producer cannot, which is
-      # exactly the state these examples exist to render.
-      def sharded_run(repository, shards:, per_shard: 5_000, **attributes)
-        run = create_test_run(repository: repository, ci_run_id: "gha-#{repository.id}",
-                              total_specs_count: per_shard * shards, **attributes)
-        shards.times do |index|
-          run.test_run_shards.create!(shard_id: (index + 1).to_s, total_specs_count: per_shard,
-                                      annotated_specs_count: 0)
-        end
-        run
-      end
-
       it "says how old the reading is and which branch reported it" do
         repository = create_repository(user: @user)
         create_test_run(repository: repository, commit_sha: "feedfacecafe0201",
@@ -1735,10 +1745,17 @@ RSpec.describe "Repository registration and API keys", type: :request do
       # "test_runs", which `test_run_shards` does not contain — so a per-card `shard_count` (a
       # memoized per-instance `pick`, one query per card) sails past it green. This is the sibling
       # that catches it: every card here has a sharded latest run, so every card would ask.
+      #
+      # Every card also prints a MACHINE TIME, which is a SUM over the same shard rows and reached
+      # through the same `pick`. That figure is asserted here rather than left to the cost examples
+      # below, because a budget guard whose page never renders the expensive read is green for the
+      # wrong reason — the count is only a bound on what the page ASKS, and the two assertions
+      # above it are what tie it to what the page SAYS.
       it "asks the shard question once for the whole grid, however long the list is" do
         %w[acme/one acme/two acme/three acme/four].each_with_index do |full_name, index|
           sharded_run(create_repository(user: @user, github_full_name: full_name),
-                      shards: 4, commit_sha: "cafe010#{index}", branch: "main")
+                      shards: 4, commit_sha: "cafe010#{index}", branch: "main",
+                      durations: [61.0, 58.5, 74.25, 60.0])
         end
 
         shard_queries = queries_against("test_run_shards") { get repositories_path }
@@ -1746,8 +1763,171 @@ RSpec.describe "Repository registration and API keys", type: :request do
         expect(response).to have_http_status(:ok)
         # Every card rendered its composition, so every card really did ask the question.
         expect(page_text.scan("assembled from 4 shard reports").size).to eq(4)
-        # One grouped COUNT for the whole page — four cards must not cost four SELECTs.
+        # ...and every card summed its shards' durations, which is the read with no column of its
+        # own on the rows the controller selected.
+        expect(page_text.scan("Machine time (all 4 added up) 4m 14s").size).to eq(4)
+        # One grouped aggregate for the whole page — four cards must not cost four SELECTs.
         expect(shard_queries.size).to eq(1)
+
+        # And the count is a bound rather than a coincidence of this fixture's size: double the
+        # grid, and the same single aggregate answers all sixteen shard rows' worth of questions.
+        # An absolute number asserted at one N is satisfied by a page whose cost is N/4.
+        %w[acme/five acme/six acme/seven acme/eight].each_with_index do |full_name, index|
+          sharded_run(create_repository(user: @user, github_full_name: full_name),
+                      shards: 4, commit_sha: "cafe020#{index}", branch: "main",
+                      durations: [61.0, 58.5, 74.25, 60.0])
+        end
+
+        doubled = queries_against("test_run_shards") { get repositories_path }
+
+        expect(page_text.scan("Machine time (all 4 added up) 4m 14s").size).to eq(8)
+        expect(doubled.size).to eq(1)
+      end
+    end
+
+    # The grid renders N suites at once and said nothing about what any of them COST — the one
+    # question a reader with eight repositories brings to a list of them, and the one their CI bill
+    # is denominated in. The wall clock was already on every card object (`DISTINCT ON … test_runs.*`)
+    # and printing it alone would have understated every sharded suite by up to 3.4×, so the machine
+    # time rides the grid's existing grouped aggregate rather than a `pick` per card.
+    describe "what each of those runs cost" do
+      # The canonical 4-shard fixture: a 1m 14s wait that burned 4m 14s of machine time. The whole
+      # reason a card cannot print the MAX and call it a total.
+      it "names the MAX as a wall clock and puts the machine time beside it" do
+        repository = create_repository(user: @user)
+        run = sharded_run(repository, shards: 4, commit_sha: "feedfacecafe0301", branch: "main",
+                          durations: [61.0, 58.5, 74.25, 60.0])
+
+        get repositories_path
+
+        expect(page_text).to include("Wall clock (slowest of 4 shards) 1m 14s")
+        expect(page_text).to include("Machine time (all 4 added up) 4m 14s")
+        # The label this card may never wear over a MAX: 1m 14s is not what the suite cost.
+        expect(page_text).not_to include("Total runtime")
+        # And those two sentences are the seam's own output, not markup inlined here. The literals
+        # above pin the WORDING; this pins that the card is not free to word it its own way.
+        expect_cost_rows_from_seam(run)
+      end
+
+      # A shard went silent, so BOTH figures cover less than the run: the SUM is a floor and the MAX
+      # is a maximum over a subset. Each says so through the model's own coverage vocabulary rather
+      # than through a phrase re-derived on this card.
+      it "states how many shards a partial cost figure covers" do
+        repository = create_repository(user: @user)
+        run = sharded_run(repository, shards: 4, commit_sha: "feedfacecafe0302", branch: "main",
+                          durations: [61.0, 58.5, nil, 60.0])
+
+        get repositories_path
+
+        expect(page_text).to include("Wall clock (slowest of the 3 that reported) 1m 1s")
+        # "at least" — a floor, and never rendered as the total it is not.
+        expect(page_text).to include("Machine time (3 of 4 added up) at least 3m")
+        expect(page_text).to include(run.machine_seconds_coverage)
+      end
+
+      # The unsharded corpus — every `bundle exec rspec` that named no `ci_run_id`. For it the MAX
+      # and the SUM are the same number, so a second row would print one figure twice under two
+      # labels, and a "slowest of 0 shards" would be a composition the run does not have.
+      it "renders a plain duration, with no shard wording, for a run with no shard rows" do
+        repository = create_repository(user: @user)
+        run = create_test_run(repository: repository, commit_sha: "feedfacecafe0303",
+                              total_specs_count: 7, duration_seconds: 45.0)
+
+        get repositories_path
+
+        expect(page_text).to include("Total runtime 45.0s")
+        expect(page_text).not_to include("Wall clock")
+        expect(page_text).not_to include("Machine time")
+        # The one-row shape is the seam's decision, not this card's — so the card cannot start
+        # splitting an unsharded run into two rows while the panel keeps giving it one.
+        expect(expect_cost_rows_from_seam(run).size).to eq(1)
+      end
+
+      # The property the two surfaces have to hold jointly, and the one no pair of independently
+      # asserted literals can: the card and the page it links to state a run's cost in the SAME
+      # words. Both render `test_run_cost_rows`, so this is a fact about the code rather than about
+      # two sets of strings that happen to match — rename a label and both surfaces move together,
+      # while re-spelling either one inline reddens this example.
+      #
+      # A run with no predecessor on its branch, so the panel has no delta to decorate its figures
+      # with and the two pages' sentences are comparable character for character. The decoration is
+      # exactly what the seam's `wall_clock:` / `machine_time:` arguments exist to keep page-specific,
+      # and `repository_runtime_change_spec` covers it where it applies.
+      it "states a run's cost in the same words as the page the card links to" do
+        repository = create_repository(user: @user)
+        run = sharded_run(repository, shards: 4, commit_sha: "feedfacecafe0307", branch: "main",
+                          durations: [61.0, 58.5, 74.25, 60.0])
+
+        get repositories_path
+        card_rows = expect_cost_rows_from_seam(run)
+
+        get repository_path(repository)
+        panel_text = page_text
+
+        expect(card_rows.map(&:first)).to eq(["Wall clock (slowest of 4 shards)",
+                                              "Machine time (all 4 added up)"])
+        card_rows.each do |label, figure|
+          expect(panel_text).to include("#{label} #{Capybara.string(figure.to_s).text}")
+        end
+      end
+
+      # `Ingest::Payload#validate_duration_seconds` accepts nil explicitly, so "the client sent no
+      # timing" is an ordinary state — and it has to read as an absence rather than as a suite that
+      # cost nothing.
+      it "words a run that reported no timing as an absence, never as a zero" do
+        repository = create_repository(user: @user)
+        create_test_run(repository: repository, commit_sha: "feedfacecafe0304", total_specs_count: 7)
+
+        get repositories_path
+
+        expect(page_text).to include("Total runtime not reported")
+        expect(page_text).not_to include("0.0s")
+      end
+
+      # The other half of that distinction, and the one a `.to_i` anywhere on the priming path
+      # would destroy: four shards recorded, not one of them timed. `machine_seconds` is nil — no
+      # shard reported — and a primed `0` here would print a suite that cost nothing.
+      #
+      # The query count is asserted on THIS fixture and not only on the four-card guard above,
+      # because nil is the value a truthiness memo cannot hold: `@machine_seconds ||= …` would
+      # accept the primed nil and then re-ask for it on the first read, and a card whose shards
+      # reported no timing is the only shape that exercises it. One SELECT covers the whole page.
+      it "words a sharded run whose shards reported no timing as an absence too" do
+        repository = create_repository(user: @user)
+        sharded_run(repository, shards: 4, commit_sha: "feedfacecafe0305", branch: "main")
+
+        shard_queries = queries_against("test_run_shards") { get repositories_path }
+
+        expect(page_text).to include("Machine time (0 of 4 added up) not reported")
+        expect(page_text).not_to include("0.0s")
+        expect(shard_queries.size).to eq(1)
+      end
+
+      # And the state that absence is not: shards that really were measured and really did add up
+      # to nothing. `machine_seconds_reported?` is a `nil?` check and not a `present?` one for
+      # exactly this row, and the SUM must survive priming as the `0.0` it is.
+      it "renders a genuinely measured zero as the measurement it is" do
+        repository = create_repository(user: @user)
+        sharded_run(repository, shards: 2, commit_sha: "feedfacecafe0306", branch: "main",
+                    durations: [0.0, 0.0])
+
+        get repositories_path
+
+        expect(page_text).to include("Machine time (all 2 added up) 0.0s")
+        expect(page_text).not_to include("Machine time (all 2 added up) not reported")
+      end
+
+      # A card with no run has no cost to state, on the same rule its missing basis line follows: a
+      # "not reported" beside "No runs yet" would be a second rendering of one absence.
+      it "states no cost for a repository that has never ingested" do
+        create_repository(user: @user)
+
+        get repositories_path
+
+        expect(response.body).to include("No runs yet")
+        expect(page_text).not_to include("Total runtime")
+        expect(page_text).not_to include("Wall clock")
+        expect(page_text).not_to include("Machine time")
       end
     end
   end

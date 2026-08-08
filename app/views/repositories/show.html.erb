@@ -345,12 +345,13 @@
                                        test_run_machine_time(@latest_test_run)
                                      end %>
           <% end %>
-          <% cost_rows = if presented_as_sharded
-                           [["Wall clock (#{@latest_test_run.wall_clock_coverage})", wall_clock_figure],
-                            ["Machine time (#{@latest_test_run.machine_seconds_coverage})", machine_time_figure]]
-                         else
-                           [["Total runtime", wall_clock_figure]]
-                         end %>
+          <%# The labels, the denominators and the one-row/two-row branch come from
+              `test_run_cost_rows`, which the repositories grid's card renders too — so this panel
+              and the card that links to it cannot state the same column under two different
+              wordings. What stays here is only what is SPECIFIC to this page: the signed change
+              riding in each cell, handed to the seam as the figure to pair with its label. %>
+          <% cost_rows = test_run_cost_rows(@latest_test_run, wall_clock: wall_clock_figure,
+                                                              machine_time: machine_time_figure) %>
           <%# The delta rides in the same cell as the size it modifies rather than in a row of its
               own. A separate "Change since last run" row would be a second figure a reader has to
               relate back to the first; here 20,013 and +47 are one statement, and the row's

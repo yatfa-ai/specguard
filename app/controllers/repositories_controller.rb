@@ -323,12 +323,14 @@ class RepositoriesController < ApplicationController
   # it never scans `test_runs` globally.
   #
   # Primed through `preload_shard_counts` at the point the rows are loaded, because the card asks
-  # each run whether it is `multi_shard?` and `TestRun#shard_count` is a memoized per-instance
-  # `pick` (`test_run.rb`) — asked in the card loop that is one `test_run_shards` query per card,
-  # the same N+1 shape this page has already been cleaned of twice. One grouped `COUNT(*)` over
-  # `index_test_run_shards_on_test_run_id` answers it for the whole grid, exactly as the Recent-runs
-  # table on `show` already does. Primed HERE and not in `#index`, so the aggregate is taken only
-  # when something actually reads the runs and a page of no repositories still pays nothing.
+  # each run whether it is `multi_shard?` and what it COST, and both `TestRun#shard_count` and
+  # `#machine_seconds` are memoized per-instance reads of one `pick` (`test_run.rb`) — asked in the
+  # card loop that is one `test_run_shards` query per card, the same N+1 shape this page has already
+  # been cleaned of twice. One grouped aggregate answers all of it for the whole grid in a single
+  # round trip, exactly as the Recent-runs table on `show` already does. The wall clock needs no
+  # priming at all: `duration_seconds` is a column on the rows selected below. Primed HERE and not
+  # in `#index`, so the aggregate is taken only when something actually reads the runs and a page of
+  # no repositories still pays nothing.
   def latest_test_runs
     @latest_test_runs ||= begin
       repository_ids = @repositories.map(&:id)

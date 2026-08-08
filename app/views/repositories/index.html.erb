@@ -101,6 +101,35 @@
                   <span class="block"><%= test_run_delivery_note(run) %></span>
                 <% end %>
               </p>
+              <%# What that run COST, beside what it contains. The badge above says how BIG each
+                  suite is; nothing on this grid said what any of them is worth in CI minutes, which
+                  is the question a page rendering N repositories at once exists to answer — the
+                  reader with eight cards wants to know which one is burning their budget, and no
+                  amount of suite size answers it.
+
+                  THE SAME SEAM `show` RENDERS — `test_run_cost_rows` owns the labels, the pairing
+                  with their denominators and the one-row/two-row branch, and both surfaces call it,
+                  so a card CANNOT word a figure differently from the page it links to. That is the
+                  rule the `test_run_delivery_note` above is already held to, and it is a property of
+                  the code rather than of two sets of literals that happen to agree: re-spelling the
+                  labels here would leave the next rename free to move one surface and not the other,
+                  with nothing in the suite able to see it. The figures come with their treatment —
+                  an absent one is styled and worded as absent, and a PARTIAL machine time is
+                  deliberately not muted, because "at least 3m 15s" is a real measurement whose
+                  incompleteness is carried by the wording.
+
+                  The card passes no figures, so it gets the bare seams; `show` passes its
+                  delta-decorated ones. The two surfaces differ in what they DECORATE and cannot
+                  differ in what they SAY.
+
+                  Free of queries. `duration_seconds` is a column on the row
+                  `RepositoriesController#latest_test_runs` already selected, and every shard fact
+                  the seam reads — the count, the timed count, the SUM — is primed for the whole grid
+                  by the one grouped aggregate that method takes (`ShardCountPreloading`).
+                  `spec/requests/repositories_spec.rb` pins that at one `test_run_shards` SELECT for
+                  a grid of four four-shard cards, and the same one when the grid is doubled to
+                  eight. %>
+              <%= render UI::DefListComponent.new(rows: test_run_cost_rows(run)) %>
             <% end %>
           </div>
         <% end %>

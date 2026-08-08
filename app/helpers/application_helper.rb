@@ -24,6 +24,42 @@ module ApplicationHelper
              class: ("text-app-muted" unless test_run.machine_seconds_reported?))
   end
 
+  # What a run COST, as the rows of a definition list — the labels, the pairing with their
+  # denominators, and the choice between one row and two. Every surface that states a run's cost
+  # renders these: the single-repository Overview panel and the repositories grid's card.
+  #
+  # A helper and not two copies of the same six lines of ERB, for the reason `test_run_delivery_note`
+  # above is one: the card must not be able to word a figure differently from the page it links to.
+  # The two helpers above already made that true of the FIGURES; this makes it true of the labels,
+  # the denominators and the branch as well. Sharing it by hand — the same literals typed on both
+  # surfaces — is agreement that merely *holds today*, and nothing in the suite can see the next
+  # rename move one surface and not the other, because each side asserts its own literal.
+  #
+  # Which row shape is a question about the RUN, so it is asked here rather than by each caller:
+  # `multi_shard?`, never `shard_count.positive?`. A run of exactly one shard has a `machine_seconds`
+  # — the SUM over its one row — but for it the MAX and the SUM are the same number, and a second row
+  # would print one figure twice under two labels. One shard or none keeps the single "Total runtime"
+  # row, which is every unsharded run there has ever been.
+  #
+  # `wall_clock:` and `machine_time:` are how the Overview panel keeps its delta decoration: it
+  # renders the same two seams with a signed change riding in the same cell, and passes the decorated
+  # figure in rather than forking the labels to get it. Omitted — the card's case — each falls back to
+  # the bare seam. So the two surfaces can differ in what they DECORATE while being unable to differ
+  # in what they SAY.
+  #
+  # Free of queries on either caller. `duration_label` reads a column on the run; `multi_shard?`,
+  # `machine_seconds_label` and both coverage phrases read shard facts that the grid primes for the
+  # whole page through one grouped aggregate (`ShardCountPreloading`) and `show` primes for its one
+  # run — so routing the card through here does not move the grid's shard-query budget off 1.
+  def test_run_cost_rows(test_run, wall_clock: nil, machine_time: nil)
+    wall_clock ||= test_run_duration(test_run)
+    return [["Total runtime", wall_clock]] unless test_run.multi_shard?
+
+    machine_time ||= test_run_machine_time(test_run)
+    [["Wall clock (#{test_run.wall_clock_coverage})", wall_clock],
+     ["Machine time (#{test_run.machine_seconds_coverage})", machine_time]]
+  end
+
   # The suite-size change on the Overview panel, rendered as a change rather than as a magnitude.
   # The sign carries the whole meaning: a suite that gained 47 tests and one that lost 47 are
   # opposite facts, and a bare `47` sitting beside a suite size is neither — it reads as a second,
