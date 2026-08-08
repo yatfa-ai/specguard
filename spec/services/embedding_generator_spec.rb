@@ -44,10 +44,10 @@ RSpec.describe EmbeddingGenerator do
       expect(described_class.call("abcd")).to eq(Array.new(1536) { 4.0 })
     end
 
-    it "falls back to the OpenAI provider when nothing is installed" do
+    it "falls back to the local provider when nothing is installed" do
       described_class.provider = nil
 
-      expect(described_class.provider).to eq(described_class::OpenAIProvider)
+      expect(described_class.provider).to eq(described_class::LocalProvider)
     end
 
     it "does not memoize the default, so a reloaded class is never left stale" do
@@ -150,9 +150,168 @@ RSpec.describe EmbeddingGenerator do
     end
   end
 
+  # The provider that ships as the default: in-process feature hashing, no key, no network, no
+  # cost. Exercised through the interface (`described_class.call`) wherever the assertion is about
+  # the production path, because that is what every caller will actually reach.
+  describe "the local provider (the default)" do
+    before { described_class.provider = described_class::LocalProvider }
+
+    def cosine(one, two)
+      one.each_with_index.sum { |value, index| value * two[index] }
+    end
+
+    def magnitude(vector)
+      Math.sqrt(vector.sum { |value| value * value })
+    end
+
+    describe "the vector it produces" do
+      it "is 1536 floats wide, matching the spec_intents.embedding column" do
+        vector = described_class.call("Order checkout returns 402 payment required on expired card")
+
+        expect(vector.size).to eq(described_class::DIMENSIONS)
+        expect(vector).to all(be_a(Float))
+      end
+
+      it "is unit-normalised, so pgvector's cosine operator ranks it against any other vector" do
+        vector = described_class.call("Repository#annotated_ratio counts only annotated intents")
+
+        expect(magnitude(vector)).to be_within(1e-12).of(1.0)
+      end
+
+      it "is sparse — a short name touches far fewer than 1536 dimensions" do
+        # Not a curiosity: it is why the collision audit's inverted-index sweep is tractable, and
+        # why collisions are possible at all. A ~60-character name yields ~70 features.
+        vector = described_class.call("rejects checkout on an expired card")
+
+        expect(vector.count { |value| value != 0.0 }).to be_between(1, 100)
+      end
+
+      it "stays a unit vector when a text has far more features than there are dimensions" do
+        # 1536 buckets, thousands of features: every dimension is hit many times and the weights
+        # sum. The result must still be normalised, still finite, still the right width.
+        vector = described_class.call(("the quick brown fox jumps over the lazy dog " * 200))
+
+        expect(vector.size).to eq(1536)
+        expect(vector).to all(be_finite)
+        expect(magnitude(vector)).to be_within(1e-12).of(1.0)
+      end
+    end
+
+    describe "determinism" do
+      it "returns a byte-identical vector for the same text, pinned by checksum" do
+        # A golden checksum rather than a re-run comparison: this pins the mapping across runs,
+        # processes, machines and Ruby versions, which is what the identity half of the product
+        # rests on. If this fails, the embedding of every stored intent has silently changed and
+        # every row needs re-embedding — it is not a spec to "just update".
+        vector = described_class.call("Order checkout returns 402 payment required on expired card")
+
+        expect(Digest::SHA256.hexdigest(vector.pack("E*")))
+          .to eq("4497315d864dba8b2f3426861dc0e7dc8d590968879901a1d315f33f65f376a4")
+      end
+
+      it "produces the same vector in a fresh process with a scrubbed environment" do
+        # The in-process checksum above cannot see a hidden dependency on process state (a seed, a
+        # hash-randomisation salt, an ENV var). This can: a separate Ruby, no Rails, no ENV.
+        script = <<~RUBY
+          require "digest"
+          require "#{Rails.root.join('app/services/embedding_generator')}"
+          vector = EmbeddingGenerator::LocalProvider.call(ARGV[0])
+          print Digest::SHA256.hexdigest(vector.pack("E*"))
+        RUBY
+
+        checksum = IO.popen(
+          { "OPENAI_API_KEY" => nil, "RUBYOPT" => nil },
+          [ RbConfig.ruby, "-e", script, "Order checkout returns 402 payment required on expired card" ],
+          unsetenv_others: true, &:read
+        )
+
+        expect($?).to be_success
+        expect(checksum).to eq("4497315d864dba8b2f3426861dc0e7dc8d590968879901a1d315f33f65f376a4")
+      end
+
+      it "gives different text a different vector" do
+        expect(described_class.call("charges the card")).not_to eq(described_class.call("refunds the card"))
+      end
+    end
+
+    describe "costing nothing and reaching nothing" do
+      it "reports itself configured with no API key anywhere" do
+        allow(Rails.application.credentials).to receive(:dig).with(:openai, :api_key).and_return(nil)
+
+        with_api_key(nil) do
+          expect(described_class).to be_configured
+          expect(described_class.call("no key needed").size).to eq(1536)
+        end
+      end
+
+      it "never builds an HTTP client" do
+        allow(OpenAI::Client).to receive(:new)
+
+        described_class.call("Order checkout")
+
+        expect(OpenAI::Client).not_to have_received(:new)
+      end
+    end
+
+    describe "what it actually measures" do
+      let(:expired_card) { described_class.call("rejects checkout on an expired card") }
+
+      it "clusters two names that share vocabulary" do
+        restated = described_class.call("rejects checkout when the card is expired")
+
+        expect(cosine(expired_card, restated)).to be > 0.5
+      end
+
+      it "tolerates a changed suffix, because n-grams overlap where words do not" do
+        # "expired"/"expires" share no word feature at all; they share five trigrams.
+        expect(cosine(expired_card, described_class.call("rejects checkout on a card that expires")))
+          .to be > 0.3
+      end
+
+      it "ignores punctuation and repeated whitespace" do
+        expect(described_class.call("Order#checkout")).to eq(described_class.call("  order   CHECKOUT!  "))
+      end
+
+      # The documented limitation, asserted rather than merely written down. This is lexical
+      # similarity: two names for the same behaviour that share no vocabulary are near-orthogonal,
+      # exactly as if they were unrelated. Duplicate detection built on this provider sees only the
+      # duplicates that were phrased alike. See docs/embedding-collision-audit.md.
+      it "does NOT match the same behaviour described in different words" do
+        payment_required = described_class.call("returns 402 payment required")
+        rejection = described_class.call("declines the purchase")
+
+        expect(cosine(payment_required, rejection)).to be < 0.1
+      end
+
+      it "gives unrelated names a low similarity" do
+        expect(cosine(expired_card, described_class.call("paginates the audit log"))).to be < 0.2
+      end
+    end
+
+    describe "text with nothing in it" do
+      # No alphanumeric content means no features and so no direction. Zero is the honest answer,
+      # and it must still clear the interface's width and finiteness validation rather than
+      # blowing up somewhere downstream.
+      it "returns a finite zero vector of the right width for punctuation-only text" do
+        vector = described_class.call("--- !!! ---")
+
+        expect(vector.size).to eq(1536)
+        expect(vector).to all(eq(0.0))
+      end
+
+      it "returns a zero vector for an empty string rather than raising" do
+        expect(described_class.call("")).to eq(Array.new(1536, 0.0))
+      end
+
+      it "accepts a nil the same way, since callers build text by interpolation" do
+        expect(described_class.call(nil)).to eq(Array.new(1536, 0.0))
+      end
+    end
+  end
+
   describe "configuration" do
-    # The suite installs the deterministic stub for every example; these are about the default
-    # provider, so put it back.
+    # OpenAIProvider is no longer the default — the suite installs the deterministic stub for every
+    # example, and these are about the paid provider, so install it explicitly.
     before { described_class.provider = described_class::OpenAIProvider }
 
     it "reads the API key from ENV first" do
@@ -186,7 +345,7 @@ RSpec.describe EmbeddingGenerator do
     end
   end
 
-  describe "the default provider" do
+  describe "the OpenAI provider" do
     let(:client) { instance_double(OpenAI::Client) }
 
     around do |example|
