@@ -532,10 +532,10 @@ RSpec.describe "Repository unstable tests", type: :request do
     # honest zero is never rendered beside the truncation clause. Here every description fails in
     # both runs, so the two sentences print inches apart — and a zero that quantified over all
     # seven would assert a property of the two the clause directly above it says were never read.
-    def uniformly_red_window(limit)
+    def uniformly_red_window(limit, candidates: limit + 2)
       repository = create_repository(user: @user)
       2.times do |run_index|
-        specs = (0..(limit + 1)).map do |i|
+        specs = (0...candidates).map do |i|
           example_spec(name: "candidate #{format("%04d", i)}", outcome: "failed", line_number: i + 1)
         end
         ingest(repository, specs, commit_sha: "run#{format("%010d", run_index)}",
@@ -568,6 +568,25 @@ RSpec.describe "Repository unstable tests", type: :request do
                                       "about them", normalize_ws: true)
       expect(none_state).to have_no_text("7 descriptions failed somewhere in the")
       expect(none_state).to have_no_text("not one of them reported any other outcome")
+    end
+
+    # One description past the cap — `UNSTABLE_CANDIDATE_LIMIT + 1` failing descriptions — which is
+    # the boundary both truncation clauses read worst at. `candidate_count` is the pre-LIMIT total,
+    # so this is an ordinary state of the broadly-red suite the cap exists to survive, not a
+    # contrived one, and it is the only state in which either sentence takes its singular. Both
+    # clauses are pinned in one example because one window renders both: the caveat under the zero,
+    # and the disclosure on the basis line.
+    it "keeps both truncation clauses grammatical where exactly one description went unexamined" do
+      stub_const("SpecObservation::UNSTABLE_CANDIDATE_LIMIT", 5)
+
+      get repository_path(uniformly_red_window(5, candidates: 6))
+
+      expect(none_state).to have_text("The other 1 description that failed in this window was " \
+                                      "never compared across runs, so nothing here is a finding " \
+                                      "about it", normalize_ws: true)
+      expect(basis_line).to have_text("the other 1 is not represented above", normalize_ws: true)
+      expect(none_state).to have_no_text("description that failed in this window were never")
+      expect(basis_line).to have_no_text("the other 1 are not represented above")
     end
 
     # The other zero branch is a universal too — "NO description ... changed its outcome" — and is
@@ -608,8 +627,19 @@ RSpec.describe "Repository unstable tests", type: :request do
     end
 
     # And says none of that where the cap did not bite — the qualification is a disclosure, not a
-    # hedge the panel wears permanently. `have_no_text("among the")` is what reddens on a branch
-    # that stopped consulting `#truncated?` and qualified every zero unconditionally.
+    # hedge the panel wears permanently. What carries that here is the POSITIVE expectation: the
+    # unqualified wording is a whole branch of `#unstable_tests_none_description`, so a branch
+    # order that took the truncated wording unconditionally reddens on this full text (checked by
+    # mutation — it reddens here and at :129 and :330, and nowhere else).
+    #
+    # The `have_no_text` below it is not a mutation guard, and this comment previously claimed
+    # otherwise. This fixture has no shared-description rows, so `#unstable_tests_examined_scope`
+    # is never called on this path at all — the guard for a scope that qualified every zero
+    # unconditionally is the full-text expectation on "across the 3 runs on main" at :442, which is
+    # the only example that reddens for it. `#unstable_tests_unexamined_caveat` is not reached on
+    # this path either: the unqualified branch does not call it. The assertion below is a forward
+    # guard on the rendered text rather than on the method — it reddens if a later change routes a
+    # window the cap did not bite through a branch that appends the caveat.
     it "leaves both zeroes unqualified where every failing description was examined" do
       get repository_path(repository_with(%w[failed failed]))
 

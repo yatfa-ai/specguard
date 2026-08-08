@@ -446,9 +446,16 @@ module RepositoriesHelper
   def unstable_tests_unexamined_caveat(unstable)
     return "" unless unstable.truncated?
 
+    # `unexamined_count == 1` is one description past the cap, not a contrived state — the count is
+    # the pre-LIMIT total, so a window with `UNSTABLE_CANDIDATE_LIMIT + 1` failing descriptions
+    # lands here. Verb and pronoun agree with the noun, as at `#unstable_tests_shared_description_
+    # sentence` and the trajectory captions above.
+    one = unstable.unexamined_count == 1
+
     " The other #{number_with_delimiter(unstable.unexamined_count)} " \
-      "#{"description".pluralize(unstable.unexamined_count)} that failed in this window were never " \
-      "compared across runs, so nothing here is a finding about them."
+      "#{"description".pluralize(unstable.unexamined_count)} that failed in this window " \
+      "#{one ? "was" : "were"} never compared across runs, so nothing here is a finding about " \
+      "#{one ? "it" : "them"}."
   end
 
   # The groups the matching rule could not rule on, said as what they are. Not flakiness and not
@@ -514,8 +521,8 @@ module RepositoriesHelper
     "#{number_with_delimiter(unstable.candidate_count)} descriptions failed somewhere in this " \
       "window — more than this panel examines at once — so the " \
       "#{number_with_delimiter(unstable.examined_count)} that failed fewest times were the ones " \
-      "compared across runs, and the other #{number_with_delimiter(unstable.unexamined_count)} are " \
-      "not represented above."
+      "compared across runs, and the other #{number_with_delimiter(unstable.unexamined_count)} " \
+      "#{unstable.unexamined_count == 1 ? "is" : "are"} not represented above."
   end
 
   # How much of the run the breakdown after it covers. Worded "Every one of the …" when it covers
