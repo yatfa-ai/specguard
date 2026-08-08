@@ -257,14 +257,34 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
     # Written directly, in the shape `repositories_spec.rb`'s own `sharded_run` helper uses. The
     # recorder is exercised in the ingest spec; the question here is only what the serializer does
     # with the rows it leaves behind.
-    def sharded_run(durations, commit_sha:)
+    #
+    # `settled:` backdates the shard rows' `updated_at`, and it exists because the naive fixture
+    # cannot reach the decomposition at all. `TestRun#shard_delivery_settled?` reads
+    # `MAX(updated_at)` over these rows against a 15-minute window, so a run whose shards were
+    # created inline is a run something wrote to a moment ago — still arriving, by that proxy.
+    # Every example below that asserts a NON-null `rows` / floor / excess must pass `settled: true`
+    # or it gets three nulls and passes for the wrong reason, which is the Vacuous Green shape this
+    # file is otherwise careful about.
+    #
+    # It DEFAULTS to false so the examples written before the decomposition landed keep the exact
+    # fixture they were written against — their four-key assertions are the byte-identical
+    # regression check on the original block, and silently settling their runs would change what
+    # they cover.
+    #
+    # `update_all` rather than `travel_to`: the fixture states the fact it needs (these rows were
+    # last written to half an hour ago) instead of moving the whole clock under every other query
+    # in the example, and it leaves the frozen-vs-real-time question — which no spec in this suite
+    # has had to answer yet — unasked.
+    def sharded_run(durations, commit_sha:, settled: false, shard_ids: nil)
       run = repository.test_runs.create!(commit_sha: commit_sha, ci_run_id: "gha-#{commit_sha}",
                                          total_specs_count: 20_000, annotated_specs_count: 5000,
                                          duration_seconds: durations.compact.max)
       durations.each_with_index do |seconds, index|
-        run.test_run_shards.create!(shard_id: (index + 1).to_s, total_specs_count: 5000,
+        run.test_run_shards.create!(shard_id: shard_ids ? shard_ids[index] : (index + 1).to_s,
+                                    total_specs_count: 5000,
                                     annotated_specs_count: 1250, duration_seconds: seconds)
       end
+      run.test_run_shards.update_all(updated_at: 30.minutes.ago) if settled
       run
     end
 
@@ -282,10 +302,25 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
         "timed_count" => 4,
         "machine_seconds" => 253.75,
         "coverage" => { "duration_seconds" => 4, "machine_seconds" => 4 },
-        # ADDED BESIDE the four keys above, which keep their names, their types and their values.
-        # The pin is extended rather than rewritten, so the byte-for-byte guarantee those four
+        # Present and null, not absent: this fixture's shards were written a moment ago, so
+        # `shard_delivery_settled?` reads the run as still arriving and the decomposition is
+        # withheld exactly where the Overview panel withholds it. The settled shape of these three
+        # keys is asserted in "names which shard the run waited on" below — which is the example
+        # that would go red if the gate were nailed shut, since this one cannot tell a correct gate
+        # from a permanently closed one.
+        "rows" => nil,
+        "balanced_wall_clock_seconds" => nil,
+        "wall_clock_excess_seconds" => nil,
+        # ADDED BESIDE the keys above, which keep their names, their types and their values.
+        # The pin is extended rather than rewritten, so the byte-for-byte guarantee those keys
         # carried is still the same guarantee: `eq` over the whole hash fails on a changed value
         # and on a missing key alike.
+        #
+        # SERVED HERE WHILE `rows` IS NULL, which is the whole reason the two lists are separate.
+        # The gate above withholds the RANKING because a duration-ranked read cannot be trusted
+        # mid-delivery; it says nothing about the counts, which were written by
+        # `Ingest::RunRecorder#upsert_shard` on every POST that has landed. A client still learns
+        # how big each delivered shard was.
         #
         # DELIVERY ORDER, not slowest-first. The panel's list ranks, and a ranked read is NULLS
         # FIRST in Postgres and therefore safe only behind `TestRun#wall_clock_decomposable?`;
@@ -409,10 +444,18 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
         # 179.5s" with no way to learn that both were measured over three of four shards — the
         # caption the Overview panel has and JSON does not.
         "coverage" => { "duration_seconds" => 3, "machine_seconds" => 3 },
+        # Two of the gate's three conditions fail on this fixture at once (a shard is untimed AND
+        # the rows were just written), so it is not the example that isolates either. The untimed
+        # condition gets a settled fixture of its own below.
+        "rows" => nil,
+        "balanced_wall_clock_seconds" => nil,
+        "wall_clock_excess_seconds" => nil,
         # The silent shard keeps its row and its `total_specs`, with `duration_seconds` null. This
         # is why the array is served in DELIVERY order rather than ranked: a duration-ranked read
         # is NULLS FIRST in Postgres, so `"3"` — the shard that reported nothing — would sit at
-        # the head of a list a client is entitled to read as slowest-first.
+        # the head of a list a client is entitled to read as slowest-first. `rows` above is null
+        # for exactly that reason; this list survives the same fixture because it never claimed an
+        # order in the first place.
         "per_shard" => [
           { "shard_id" => "1", "duration_seconds" => 61.0, "total_specs" => 5000 },
           { "shard_id" => "2", "duration_seconds" => 58.5, "total_specs" => 5000 },
@@ -453,10 +496,19 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
         "timed_count" => 0,
         "machine_seconds" => nil,
         "coverage" => { "duration_seconds" => 0, "machine_seconds" => 0 },
+        # The composition that makes the gate a CORRECTNESS requirement rather than only an honesty
+        # one. `duration_seconds` is nil here, and `TestRun#wall_clock_excess_seconds` subtracts
+        # from it unguarded — so a serializer that computed these three keys before checking
+        # `wall_clock_decomposable?` would not serve a wrong number, it would raise and 500 the
+        # whole endpoint for every client reading this run.
+        "rows" => nil,
+        "balanced_wall_clock_seconds" => nil,
+        "wall_clock_excess_seconds" => nil,
         # Every row still served, every duration still null. A run that reported no timings still
         # reported its SIZE, and those counts are the one half of the cost picture that survived —
         # zeroing the durations here would be the same assertion-that-the-suite-was-free the
-        # `machine_seconds` null refuses one line up.
+        # `machine_seconds` null refuses one line up. This is the fixture where the two lists are
+        # furthest apart: `rows` is withheld to avoid raising, and `per_shard` still answers.
         "per_shard" => [
           { "shard_id" => "1", "duration_seconds" => nil, "total_specs" => 5000 },
           { "shard_id" => "2", "duration_seconds" => nil, "total_specs" => 5000 },
@@ -464,6 +516,154 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
           { "shard_id" => "4", "duration_seconds" => nil, "total_specs" => 5000 }
         ]
       )
+    end
+
+    # The decomposition itself: WHICH shard, not just how many.
+    #
+    # Everything above this point can tell a client a run was assembled from four parts and cost
+    # 253.75s between them without ever naming the part it waited on. `repositories#show` has
+    # rendered the rows, the floor and the excess since SPGD-192; these examples are the assertion
+    # that the API and that panel cannot drift apart about which shard was longest.
+    describe "the per-shard decomposition behind wall_clock_decomposable?" do
+      # The gate this whole block turns on, asserted POSITIVELY and first. Without it every example
+      # below would pass just as well against a serializer that hard-coded three nulls — the shards
+      # are created inline, so the default fixture is un-settled and the honest answer to all three
+      # keys really is `null`. This is the example that says the fixture got past the gate.
+      it "reaches the gate only once its shards have stopped arriving" do
+        sharded_run([61.0, 58.5, 74.25, 60.0], commit_sha: "feedfacecafe0190")
+        expect(repository.latest_test_run).not_to be_wall_clock_decomposable
+        expect(repository.latest_test_run).to be_wall_clock_decomposition_pending
+
+        sharded_run([61.0, 58.5, 74.25, 60.0], commit_sha: "feedfacecafe0191", settled: true)
+        expect(repository.latest_test_run).to be_wall_clock_decomposable
+      end
+
+      # The head of the list is the load-bearing row: it is the shard the run's `duration_seconds`
+      # MAX came from, and it is the one the panel names in prose. Compared against
+      # `longest_shard_label` rather than against `"3"`, because a hard-coded name would still pass
+      # if the API sorted its own way and happened to agree on this fixture — the property is that
+      # the two orderings are the SAME ordering, not that they coincide once.
+      it "names which shard the run waited on, slowest first, in the panel's own order" do
+        run = sharded_run([61.0, 58.5, 74.25, 60.0], commit_sha: "feedfacecafe0192", settled: true)
+        shown = repository.latest_test_run
+        expect(shown).to be_wall_clock_decomposable
+
+        rows = get_repository.dig("latest_run", "shards", "rows")
+
+        expect(rows.length).to eq(4)
+        expect(rows.map { it["duration_seconds"] }).to eq([74.25, 61.0, 60.0, 58.5])
+        # The same shard the panel calls the longest, read off the panel's own accessor.
+        expect(shown.shard_label(rows.first["shard_id"])).to eq(shown.longest_shard_label)
+        expect(rows.map { it["shard_id"] }).to eq(run.shard_durations.map(&:first))
+      end
+
+      # AC: the floor and the excess are the figures behind `balanced_wall_clock_label` /
+      # `wall_clock_excess_label`. Read off the accessors, not restated as fixture arithmetic —
+      # the precedent the "reports the same cost figures repositories#show renders" example above
+      # sets, and for the same reason: `63.4375` written out here would still pass if the endpoint
+      # divided a different SUM by a different count.
+      it "reports the floor and the excess repositories#show renders for the same run" do
+        sharded_run([61.0, 58.5, 74.25, 60.0], commit_sha: "feedfacecafe0193", settled: true)
+
+        shown = repository.latest_test_run
+        shards = get_repository.dig("latest_run", "shards")
+
+        expect(shards["balanced_wall_clock_seconds"]).to eq(shown.balanced_wall_clock_seconds)
+        expect(shards["wall_clock_excess_seconds"]).to eq(shown.wall_clock_excess_seconds)
+        # Both non-trivial on this fixture, so an endpoint serving zeros could not pass the pair
+        # above by accident: 253.75/4 is a floor the 74.25s wait sits well clear of.
+        expect(shards["balanced_wall_clock_seconds"]).to be > 0
+        expect(shards["wall_clock_excess_seconds"]).to be > 0
+      end
+
+      # Raw floats, not the panel's prose — the rule `duration_seconds` and `machine_seconds`
+      # already follow here, extended to the keys that are likeliest to break it, since the model
+      # side of this decomposition exposes `shard_distribution_labels` and `balanced_wall_clock_label`
+      # that a serializer could reach for by name.
+      it "serves the decomposition as numbers, not as the panel's labels" do
+        run = sharded_run([61.0, 58.5, 74.25, 60.0], commit_sha: "feedfacecafe0194", settled: true)
+
+        shards = get_repository.dig("latest_run", "shards")
+
+        expect(shards["balanced_wall_clock_seconds"]).to be_a(Float)
+        expect(shards["wall_clock_excess_seconds"]).to be_a(Float)
+        expect(shards["rows"].map { it["duration_seconds"] }).to all(be_a(Float))
+        # Asserted one at a time, on the note the coverage example above leaves: `not_to include(a,
+        # b)` negates "includes BOTH", so it would pass on a body carrying one of the two labels.
+        expect(shards.to_json).not_to include(run.balanced_wall_clock_label)
+        expect(shards.to_json).not_to include(run.wall_clock_excess_label)
+        # Every label the panel renders for these shards, not just the duration one. SPGD-230 added
+        # a size and a per-test-cost label to this same tuple, and an endpoint that served either
+        # as prose would fail this example's own title while satisfying a duration-only check.
+        # `compact` because the rate label is nil on a shard with no denominator.
+        run.shard_distribution_labels.each do |labels|
+          labels.compact.each { |label| expect(shards.to_json).not_to include(label) }
+        end
+        # And no prose shard names either: `shard_label` formatting stays view-side.
+        expect(shards["rows"].map { it["shard_id"] }).to eq(%w[3 1 4 2])
+        expect(shards.to_json).not_to include("shard 3")
+      end
+
+      # The untimed condition, ISOLATED. The example above in this file that covers an untimed
+      # shard has an un-settled fixture too, so it cannot tell which of the two conditions did the
+      # work. This one settles the rows, leaving `!some_shard_untimed?` as the only thing standing
+      # between the request and a decomposition — and it is the composition where an ungated
+      # `rows` is actively misleading rather than merely early: `duration_seconds: :desc` is NULLS
+      # FIRST in Postgres, so the shard that reported NOTHING would head a list whose contract is
+      # "slowest first".
+      it "withholds all three keys when a shard reported no timing, even once delivery settled" do
+        sharded_run([61.0, 58.5, nil, 60.0], commit_sha: "feedfacecafe0195", settled: true)
+        shown = repository.latest_test_run
+        expect(shown).to be_shard_delivery_settled
+        expect(shown).not_to be_wall_clock_decomposable
+
+        shards = get_repository.dig("latest_run", "shards")
+
+        expect(shards).to include("rows" => nil, "balanced_wall_clock_seconds" => nil,
+                                  "wall_clock_excess_seconds" => nil)
+        # The keys are PRESENT and null, not absent: a client tests one thing.
+        expect(shards.keys).to include("rows", "balanced_wall_clock_seconds",
+                                       "wall_clock_excess_seconds")
+        # And the four that were always here are untouched by the gate.
+        expect(shards.values_at("count", "timed_count", "machine_seconds")).to eq([4, 3, 179.5])
+      end
+
+      # The settling condition, ISOLATED — every shard present is timed, so a two-condition gate
+      # would wave this run straight through with a partial SUM over a partial count. That is the
+      # state `Repository#latest_test_run` puts every sharded run in for the first minutes of its
+      # own delivery, which makes it the common case rather than the edge one.
+      it "withholds all three keys while the shards are still arriving" do
+        sharded_run([61.0, 58.5, 74.25, 60.0], commit_sha: "feedfacecafe0196")
+        shown = repository.latest_test_run
+        expect(shown).not_to be_some_shard_untimed
+        expect(shown).to be_wall_clock_decomposition_pending
+
+        shards = get_repository.dig("latest_run", "shards")
+
+        expect(shards).to include("rows" => nil, "balanced_wall_clock_seconds" => nil,
+                                  "wall_clock_excess_seconds" => nil)
+        # The API withholds exactly where the panel does, and not one figure further: the four
+        # keys that never depended on the decomposition are still served.
+        expect(shards.values_at("count", "timed_count", "machine_seconds")).to eq([4, 4, 253.75])
+      end
+
+      # `shard_id` is nullable and a nil one is an ordinary state — `Ingest::RunRecorder#upsert_shard`
+      # says a client that shards without exposing an index the gem recognises sends nothing to tell
+      # its slices apart. Serving `null` rather than a position number is the whole point: "shard 2"
+      # is unactionable advice when nothing in CI is called shard 2, and it would name a different
+      # slice on the next run.
+      it "serves an unnamed shard's id as null, never as its position in the list" do
+        sharded_run([61.0, 58.5, 74.25, 60.0], commit_sha: "feedfacecafe0197", settled: true,
+                                               shard_ids: ["1", nil, "3", "4"])
+
+        rows = get_repository.dig("latest_run", "shards", "rows")
+
+        expect(rows.length).to eq(4)
+        expect(rows.map { it["shard_id"] }).to eq(["3", "1", "4", nil])
+        # The unnamed row is served, with its timing, and is not dropped or renumbered.
+        unnamed = rows.find { it["shard_id"].nil? }
+        expect(unnamed["duration_seconds"]).to eq(58.5)
+      end
     end
   end
 
@@ -1581,13 +1781,14 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
   # count incidentally. The run-count example is therefore its own, named, and starts from a
   # one-run baseline that the shard example never establishes.
   describe "what the shard figures and the history cost the endpoint" do
-    def sharded_run(shard_count, commit_sha:)
+    def sharded_run(shard_count, commit_sha:, settled: false)
       run = repository.test_runs.create!(commit_sha: commit_sha, ci_run_id: "gha-#{commit_sha}",
                                          total_specs_count: 20_000, duration_seconds: 74.25)
       shard_count.times do |index|
         run.test_run_shards.create!(shard_id: (index + 1).to_s, total_specs_count: 5000,
                                     duration_seconds: 60.0 + index)
       end
+      run.test_run_shards.update_all(updated_at: 30.minutes.ago) if settled
       run
     end
 
@@ -1625,6 +1826,40 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
       # And the rows really were served at 40 — a serializer that quietly stopped emitting them
       # above some width would satisfy every query count above.
       expect(get_repository.dig("latest_run", "shards", "per_shard").length).to eq(40)
+    end
+
+    # The decomposition's own axis, and it is stated as CONSTANT rather than as minimal — the
+    # example above cannot state it, because on its un-settled fixtures the gate short-circuits and
+    # `shard_durations` never fires at all.
+    #
+    # TWO extra reads here against the example above's one, and the difference between the two
+    # numbers is the whole point of the pair. `#shard_reports` feeds `per_shard` and is paid by
+    # every multi-shard run, gated or not — that is the `+ 1` above. `TestRun#shard_durations`
+    # feeds `rows` and the two derived figures and is paid only once the gate opens, which is the
+    # second read here and the only one this example can see. Both are documented as reads beside
+    # the memoized `shard_totals` aggregate, deliberately kept separate so widening `shard_totals`
+    # does not change what its other callers load.
+    #
+    # Written as `+ 2` rather than rebaselined, so a read that stopped being issued shows up as a
+    # failure rather than as a quietly smaller baseline. What must not move is the number of reads
+    # as the matrix grows — a per-shard `pick` reads as 40 statements here and as one everywhere
+    # else, so this is the only place it is visible.
+    it "costs two extra queries on a decomposable run, and the same two whether it has 4 shards or 40" do
+      create_test_run(repository: repository, commit_sha: "gated0000000", duration_seconds: 42.5)
+      get_repository
+      baseline = count_queries { get_repository }
+
+      four = sharded_run(4, commit_sha: "gatedfour000", settled: true)
+      # The gate is open, so the cost below is the cost of actually serving the rows and not the
+      # cost of declining to. Without this the example passes at `baseline` and asserts nothing.
+      expect(four.reload).to be_wall_clock_decomposable
+      expect(count_queries { get_repository }).to eq(baseline + 2)
+      expect(get_repository.dig("latest_run", "shards", "rows").length).to eq(4)
+
+      forty = sharded_run(40, commit_sha: "gatedforty00", settled: true)
+      expect(forty.reload).to be_wall_clock_decomposable
+      expect(count_queries { get_repository }).to eq(baseline + 2)
+      expect(get_repository.dig("latest_run", "shards", "rows").length).to eq(40)
     end
 
     # The run-count axis, stated rather than inherited. `history` serves ten rows and each one

@@ -125,8 +125,60 @@ class UI::SparklineComponent < ApplicationComponent
   end
 
   # The figure as the axis bounds and the table cells state it — both under a heading that names
-  # the unit, so this is the number and nothing else.
+  # the unit, so this is the number and nothing else. The table cells reach it through `#tabulated`
+  # rather than directly, which adds to this and never rewords it.
   def formatted(value) = formatter.call(value)
+
+  # The figure as the TEXT ALTERNATIVE states it: the wording, plus the plotted value itself on the
+  # rows whose wording cannot tell them apart from another point on the same line.
+  #
+  # == The equivalence this exists to keep
+  #
+  # The table is not a caption for the chart, it is the chart — the half a reader who cannot see the
+  # line has to work from, which is the whole argument two sections up. That equivalence holds only
+  # while `formatter` maps distinct plotted values to distinct strings, and one caller's does not:
+  # `TestRun#duration_label` keeps the tenth below a minute and drops it at a minute and above, so a
+  # cohort moving 74.25s → 74.30s is two `cy` values and a visible slope on the line, and `1m 14s`
+  # printed twice underneath it. The picture says the wait moved and the text says it did not, and
+  # only the reader who can see the picture is told the truth. `#values` refuses to coerce for
+  # exactly this movement; losing it one row further down is the same defect wearing the other half.
+  #
+  # == Why the disclosure lands here and not in the wording
+  #
+  # Because the wording is single-sourced on purpose. That lambda reaches the page four times — the
+  # axis bounds, the caller's summary sentence, this cell, and the marker `<title>` — so widening it
+  # re-prints three figures at a precision nothing else on the page uses in order to separate a pair
+  # of rows. This changes exactly one of the four.
+  #
+  # NOT because the other three keep the figure — they do not. Rendered against the 74.25s/74.30s
+  # pair, the axis bounds read `1m 14s` twice, both markers' `<title>`s read `1m 14s`, and the
+  # caller's sentence reads "between 1m 14s and 1m 14s". All four collapse the pair; do not read
+  # this comment as saying the other three were checked and found lossless.
+  #
+  # The table is the one that MAY NOT collapse it. The other three annotate a plot the reader is
+  # looking at, and a bound or a hover title a tenth coarser than the line beneath it is a rounded
+  # caption on a picture that still carries the movement. The table has no picture behind it — for
+  # the reader who cannot see the line it IS the chart, which is the equivalence stated in the
+  # section above — so the same rounding there is not a coarse caption but the finding deleted.
+  # Same loss, different contract; the contract is what decides the site.
+  #
+  # Disclosed as VISIBLE text, not as `title`/`data`/`aria`. Each of those reaches a hovering mouse,
+  # or a screen reader, or a parser — none reaches all three, and a keyboard reader none of them.
+  # An accessibility gap is not closed by moving it to a different reader.
+  #
+  # And the plotted value verbatim rather than formatted again: a format is an opinion about the
+  # unit, this component holds none by construction, and a second wording of the same float is the
+  # drift a single formatting seam exists to prevent. This is the number the chart was handed,
+  # printed as it was handed over — decimals and all. `74.30` reaches Ruby as the Float `74.3` and
+  # discloses as `74.3`, so a column of these sits ragged under `tabular-nums`. That is not a bug to
+  # pad out: a fixed number of decimal places is a claim about the precision of the measurement,
+  # which is exactly the unit opinion this component holds none of.
+  def tabulated(value)
+    wording = formatted(value)
+    return wording unless ambiguous_wordings.include?(wording)
+
+    "#{wording} (#{value})"
+  end
 
   # What one marker announces on hover. The text alternative below carries the same three facts as
   # a row, so this is a convenience and never the only place a figure appears.
@@ -141,6 +193,20 @@ class UI::SparklineComponent < ApplicationComponent
   def wrapper_class = @wrapper_class ||= merge_classes("space-y-2", @options.delete(:class))
 
   private
+
+  # The wordings that more than one DISTINCT plotted value collapses onto. Memoised because the
+  # text alternative asks once per row and the answer is a property of the series, not of the row.
+  #
+  # Distinct, and that is the load-bearing word. Two runs that measured the SAME figure are not an
+  # ambiguity to resolve: the line draws them at one height deliberately, so one wording repeated is
+  # the truth about them, and a float disclosed beside it would be noise printed to separate two
+  # things that are not different. Hence `.uniq` — the grouping is over the values the series holds,
+  # not over its points.
+  def ambiguous_wordings
+    @ambiguous_wordings ||= values.uniq
+                                  .group_by { |value| formatted(value) }
+                                  .filter_map { |wording, sharing| wording if sharing.size > 1 }
+  end
 
   def x_for(index)
     span = VIEWBOX_WIDTH - (2 * PADDING_X)

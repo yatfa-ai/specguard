@@ -1447,13 +1447,15 @@ RSpec.describe "Repository registration and API keys", type: :request do
       # that cannot drift.
       #
       # 13 on `origin/main` and 13 after — verified by running this example against the pre-change
-      # `app/models/test_run.rb`, `app/views/repositories/show.html.erb` and
+      # `app/models/test_run.rb`, `app/views/repositories/show.html.erb`,
+      # `app/helpers/repositories_helper.rb` and
       # `app/controllers/api/v1/repositories_controller.rb`, where it passes the count and fails
-      # only on the rendered-output assertion below. Re-verified that way at a7c7421 and again at
-      # a2ed333 after SPGD-226 and SPGD-228 landed on this page, so the number is a property of
-      # the change rather than of the base it was first measured on. Recount it deliberately if it
-      # moves: a *lower* number is as much a change to explain as a higher one, since it usually
-      # means a figure stopped being read rather than that a query stopped being issued.
+      # only on the rendered-output assertion below. Re-verified that way at each base this branch
+      # has been rebuilt on — a7c7421, then a2ed333, then 632f692 after SPGD-232 and SPGD-237
+      # landed on this page — so the number is a property of the change rather than of the base it
+      # was first measured on. Recount it deliberately if it moves: a *lower* number is as much a
+      # change to explain as a higher one, since it usually means a figure stopped being read
+      # rather than that a query stopped being issued.
       #
       # QUERY-CACHE HITS ARE COUNTED, unlike the panel's other budget guards. A repeated identical
       # SELECT inside one request costs no round trip and is invisible to a `payload[:cached]`
@@ -1650,19 +1652,37 @@ RSpec.describe "Repository registration and API keys", type: :request do
         expect(page_text).to include(ApplicationController.helpers.test_run_delivery_note(run))
       end
 
-      # A single-shard run's SUM *is* its own whole report, and the unsharded corpus has no
-      # composition at all. Neither has a coverage gap to disclose, and a grid of cards each
-      # repeating "reported in one piece" would bury the one card that does.
-      it "says nothing about composition for a run with no coverage gap" do
+      # The unsharded corpus has no composition at all — it arrived whole in a single POST — and a
+      # grid of cards each repeating "reported in one piece" would bury the one card that has
+      # something to disclose. Zero is the exclusion `shard_count.positive?` makes, and the only
+      # one.
+      it "says nothing about composition for a run that arrived whole" do
         whole = create_repository(user: @user, github_full_name: "acme/laptop-run")
         create_test_run(repository: whole, commit_sha: "feedfacecafe0204", total_specs_count: 7)
-        single = create_repository(user: @user, github_full_name: "acme/one-shard")
-        sharded_run(single, shards: 1, commit_sha: "feedfacecafe0205")
 
         get repositories_path
 
         expect(page_text).not_to include("reported in one piece")
         expect(page_text).not_to include("assembled from")
+      end
+
+      # And the card that is NOT excluded. A one-shard run is a four-way split whose first POST has
+      # landed — a quarter of its suite, printed in the same type as a whole one — so it gets a
+      # basis line at all here, and that line discloses its coverage. `multi_shard?` printed
+      # nothing whatsoever on this card while `SuiteTrajectory#withheld_part_way` withheld the very
+      # same row for sitting at a fraction of its own suite.
+      it "states what a one-shard figure covers, the card most understating its suite" do
+        single = create_repository(user: @user, github_full_name: "acme/one-shard")
+        run = sharded_run(single, shards: 1, commit_sha: "feedfacecafe0205")
+
+        get repositories_path
+
+        expect(page_text).to include(
+          "assembled from 1 shard report — the count above covers that report, " \
+          "not necessarily the whole suite"
+        )
+        # The one wording, shared with the Recent-runs table on `show`.
+        expect(page_text).to include(ApplicationController.helpers.test_run_delivery_note(run))
       end
 
       # A never-ingested card has no basis to state, and a "never" beside "No runs yet" would be a

@@ -223,7 +223,10 @@ RSpec.describe "Repository recent runs", type: :request do
       # settles it, and two spellings of one fact is how the two surfaces would drift apart.
       expect(cell).to include("assembled from 2 shard reports")
       # And the qualification that makes it not a whole-suite size. Readable from the row alone.
-      expect(cell).to include("not necessarily the whole suite")
+      # The full literal, not just the tail: the clause inflects now ("covers those" vs "covers
+      # that report"), so asserting only "not necessarily the whole suite" would stay green with
+      # the ternary swapped and leave this surface's multi-shard wording pinned nowhere.
+      expect(cell).to include("the count above covers those, not necessarily the whole suite")
     end
 
     it "inflects a single shard report rather than printing '1 shard reports'" do
@@ -233,10 +236,15 @@ RSpec.describe "Repository recent runs", type: :request do
       get repository_path(repository)
 
       expect(run_cells("one1shd")[TESTS]).to include("assembled from 1 shard report")
-      # One shard's SUM is its own whole report, so there is no coverage gap to disclose and the
-      # row reads as it always did. `multi_shard?` is the predicate for exactly this reason;
-      # `shard_count.positive?` would apologise here for nothing.
-      expect(run_cells("one1shd")[TESTS]).not_to include("not necessarily the whole suite")
+      # And it still discloses its coverage. A one-shard row is not a whole report — it is the most
+      # understated row there is, a four-way split whose first POST has landed, printing a quarter
+      # of its suite. The predicate is `shard_count.positive?` for exactly that reason;
+      # `multi_shard?` would go silent on a larger gap than the two-shard row it does warn about.
+      # The clause inflects with the count: "covers those" would promise more reports than the
+      # phrase before it just named.
+      expect(run_cells("one1shd")[TESTS]).to include(
+        "the count above covers that report, not necessarily the whole suite"
+      )
     end
 
     it "says an unsharded run arrived in one piece, never as '0 shards'" do

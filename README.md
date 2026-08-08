@@ -30,4 +30,11 @@ Rails 8 · PostgreSQL 16 + pgvector · Solid Queue · OmniAuth (GitHub) · OpenA
 
 - [`specguard-rspec`](https://github.com/yatfa-ai/specguard-rspec) — client Ruby gem (linter + formatter)
 - [`open-test-intent`](https://github.com/yatfa-ai/open-test-intent) — the annotation protocol SpecGuard consumes
-- [`specguard-infra`](https://github.com/yatfa-ai/specguard-infra) — deployment
+
+---
+
+<p align="center">
+  <a href="https://yatfa.com">
+    <img src="assets/built-with-yatfa.png" alt="Built with yatfa — a team of AI agents that plans, builds &amp; ships software." width="620">
+  </a>
+</p>

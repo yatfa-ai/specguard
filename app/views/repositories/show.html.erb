@@ -1129,8 +1129,8 @@
                     row here permanently. `TestRun#suite_size_measured?` carries the argument
                     in full, in the model's own words.
 
-                    So every row states how it was assembled, and a multi-shard row says what its
-                    figure therefore covers. Through `ApplicationHelper#test_run_delivery_note`,
+                    So every row states how it was assembled, and a row that arrived in parts says
+                    what its figure therefore covers. Through `ApplicationHelper#test_run_delivery_note`,
                     which wraps the `TestRun#delivery_description` the Overview panel already words
                     this with — and which answers "reported in one piece" for a `shard_count` of
                     zero, the entire unsharded corpus. A hand-rolled count of parts would render
@@ -1139,9 +1139,10 @@
                     The helper rather than the two fragments inline, because the repositories index
                     card now says this too and the qualifier is a fact about the column, not about
                     this table — see the helper for that argument, and for why the predicate behind
-                    it is `multi_shard?`. Neither predicate queries here — every row was primed with
-                    its shard count by `RepositoriesController#preload_shard_counts`, in one
-                    aggregate for the whole panel. %>
+                    it is `shard_count.positive?` and not `multi_shard?`. Neither predicate queries
+                    here — every row was primed with its shard count by
+                    `RepositoriesController#preload_shard_counts`, in one aggregate for the whole
+                    panel. %>
                 <%= number_with_delimiter(test_run.total_specs_count.to_i) %>
                 <span class="block text-xs text-app-muted">
                   <%= test_run_delivery_note(test_run) %>

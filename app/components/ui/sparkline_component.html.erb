@@ -60,7 +60,7 @@
         <% points.each do |point| %>
           <tr>
             <td class="px-3 py-1.5 font-mono text-xs text-app-content"><%= point.label %></td>
-            <td class="px-3 py-1.5 tabular-nums text-app-content"><%= formatted(point.value) %></td>
+            <td class="px-3 py-1.5 tabular-nums text-app-content"><%= tabulated(point.value) %></td>
             <td class="px-3 py-1.5 text-app-content-secondary"><%= point.detail %></td>
           </tr>
         <% end %>
