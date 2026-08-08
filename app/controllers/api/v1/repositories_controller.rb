@@ -98,6 +98,7 @@ class Api::V1::RepositoriesController < Api::BaseController
       # than in place of it, so nothing a client reads today changes meaning.
       duration_seconds: test_run.duration_seconds,
       shards: serialized_shards(test_run),
+      spec_files: serialized_spec_files(test_run),
       # `TestRun#suite_size_measured?`, the same predicate `serialized_history_row` serves below and
       # for the same reason: a run that reported zero tests has a `total_specs` but not a
       # measurement, and a difference taken against it describes the report rather than the suite.
@@ -278,6 +279,96 @@ class Api::V1::RepositoriesController < Api::BaseController
     test_run.shard_durations.map do |shard_id, duration_seconds|
       { shard_id: shard_id, duration_seconds: duration_seconds }
     end
+  end
+
+  # WHICH FILE the run spent its wall clock in — the same decomposition `repositories#show` has
+  # rendered since SPGD-275, served to the client that has no page to read.
+  #
+  # This is `serialized_shards`' argument one axis over, and the substitution is exact. The scalars
+  # above say a run cost 253.75s; not one of them is a file, so an agent reading only those cannot
+  # learn WHERE the suite is slow — it can learn that it is. And a shard is not the answer: a shard
+  # is a CI partition, `TestRun#shard_durations`' own comment is explicit that it is not a code
+  # area, and "shard 3 was slow" names a machine while "spec/models/invoice_spec.rb was slow" names
+  # something a reader can go and edit.
+  #
+  # THE SAME OBJECT THE PANEL READS, never a hand-written query. `SpecFileDurations` is already
+  # view-free — `repositories_controller.rb` is its only other caller — so the API and the panel
+  # rank the same files in the same order off the same rows of the same run, which is this file's
+  # governing rule at the top and the one thing a second copy of the query could not promise.
+  #
+  # `rows` MIRRORS `SpecFileDurations#rows` VERBATIM and re-sorts nothing, on the rule
+  # `serialized_shard_rows` follows: the aggregate orders `SUM(duration_seconds) DESC NULLS LAST,
+  # spec_file_path ASC`, and that NULLS LAST is load-bearing rather than incidental — a re-sort
+  # here on a plain `desc` would put the file that reported NOTHING at the head of a list whose
+  # whole contract is "heaviest first". Inheriting the order is what makes `rows.first` and the
+  # panel's heaviest file the same file by construction instead of by coincidence.
+  #
+  # STRUCTURED COUNTS, NOT PROSE, the rule `serialized_shards` states and this block obeys one
+  # grain down. `Row#coverage_label` words this same coverage as `"4 of 12"` and `#duration_label`
+  # words the total as `"1.23s"` / `"not reported"`; a machine-readable client cannot act on either
+  # without parsing it. So `recorded_count` and `timed_count` go out as the integers those
+  # sentences are built from and `total_seconds` as a raw float. This is also how the honesty
+  # constraint is met PER ROW rather than only for the block: `SUM` skips NULLs silently, so a file
+  # whose examples were half untimed reports a total covering half of it, and every row states what
+  # its own total was summed over instead of leaving one caption to cover a list of mixed coverage.
+  #
+  # `total_seconds` is `null`, NEVER `0.0`, for a file none of whose examples reported a timing —
+  # `duration_seconds` above and `shards.machine_seconds` already follow this rule, and
+  # `SpecObservation.file_durations_in` deliberately uses `pluck` over `group(...).sum` so the SQL
+  # NULL survives the trip rather than being helpfully zeroed on the way. A measured `0.0` is a
+  # measurement; "nobody reported" is not, and the row still carries its counts so a client can see
+  # which it got.
+  #
+  # `file_count` IS NOT `rows.size`, and serving only the array would reintroduce the exact lie the
+  # aggregate was widened to close. The list stops at `HEAVIEST_FILES_LIMIT`, so its own length
+  # cannot tell "the 10 heaviest of 300" from "all 3 this run touched" — a truncated list silently
+  # wearing the shape of a complete one. `COUNT(*) OVER ()` is evaluated after `GROUP BY` and
+  # before `LIMIT` precisely so this figure comes back on every row of the same pass, which is also
+  # why it cannot describe a different row set from the one listed.
+  #
+  # `limit` beside it is the bound that PRODUCED the list, so a client learns that it stopped
+  # without knowing this constant. Read off `SpecObservation`'s own constant rather than restated
+  # here, on the precedent `branches_window.run_count_limit` sets: the model's default is taken as
+  # given, and a locally-bound fourth number would let the response claim a bound the query did not
+  # apply. `file_count > limit` is how a client detects truncation, which is `#truncated?` without
+  # this endpoint shipping the comparison instead of the operands.
+  #
+  # `null` — THE KEY STILL PRESENT — for a run that recorded no observation rows at all: one
+  # ingested before SPGD-255, or one whose client sends no per-example detail. Never a zeroed
+  # block, on `shards`' rule verbatim: a client tests one thing (`spec_files == null` → "this run
+  # disclosed no per-example grain") rather than distinguishing an absent key from a null one, and
+  # a `file_count: 0` beside an empty array would assert a run that touched no spec files.
+  #
+  # GATED ON `#recorded?` ITSELF — called, not re-spelled as `rows.any?` here. The object's own
+  # answer to its own question: a group exists in that aggregate if and only if a row exists, so
+  # the predicate and the emptiness of `rows` cannot come apart, and a controller re-spelling it
+  # would be a second copy free to drift the day the presenter learns to hold rows it did not read.
+  #
+  # EXACTLY ONE EXTRA QUERY, on every run, recorded or not — and constant in the size of the suite.
+  # `SpecFileDurations.for` issues `file_durations_in` unconditionally, so `#recorded?` is an answer
+  # DERIVED from the read rather than a gate in front of it; there is no cheaper way to ask, since
+  # no counter cache exists on `test_runs`. That is the honest cost and it is stated as constant
+  # rather than minimal: one grouped aggregate behind
+  # `index_spec_observations_on_test_run_id_and_spec_file_path`, EXPLAIN-certified in
+  # `spec/models/spec_observation_spec.rb`, so a 20,000-example suite costs exactly what a
+  # 40-example one does. It sits inside the budget `serialized_shards` states above.
+  def serialized_spec_files(test_run)
+    durations = SpecFileDurations.for(test_run)
+
+    return nil unless durations.recorded?
+
+    {
+      rows: durations.rows.map do |row|
+        {
+          path: row.path,
+          total_seconds: row.total_seconds,
+          recorded_count: row.recorded_count,
+          timed_count: row.timed_count
+        }
+      end,
+      file_count: durations.file_count,
+      limit: SpecObservation::HEAVIEST_FILES_LIMIT
+    }
   end
 
   # The contract the array below is served under, stated as tokens a client can compare rather
