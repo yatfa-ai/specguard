@@ -17,4 +17,8 @@
 # still one POST and one `TestRun` with nothing to fold, exactly as before.
 class TestRunShard < ApplicationRecord
   belongs_to :test_run
+  # The examples this delivery brought in. Deleting them is *not* declared here: the foreign key
+  # is `ON DELETE SET NULL`, so a shard row going away leaves its observations attached to the run
+  # they still belong to rather than taking them with it.
+  has_many :spec_observations
 end

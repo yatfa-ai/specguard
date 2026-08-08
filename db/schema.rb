@@ -10,7 +10,7 @@
 #
 # It's strongly recommended that you check this file into your version control system.
 
-ActiveRecord::Schema[8.1].define(version: 2026_08_07_120000) do
+ActiveRecord::Schema[8.1].define(version: 2026_08_08_120000) do
   # These are extensions that must be enabled in order to support this database
   enable_extension "pg_catalog.plpgsql"
   enable_extension "vector"
@@ -193,6 +193,30 @@ ActiveRecord::Schema[8.1].define(version: 2026_08_07_120000) do
     t.index ["test_run_id"], name: "index_spec_intents_on_test_run_id"
   end
 
+  create_table "spec_observations", force: :cascade do |t|
+    t.datetime "created_at", null: false
+    t.float "duration_seconds"
+    t.string "example_id"
+    t.string "file_path", null: false
+    t.integer "line_number", null: false
+    t.text "name"
+    t.string "outcome"
+    t.bigint "repository_id", null: false
+    t.string "spec_file_path"
+    t.string "status", null: false
+    t.bigint "test_run_id", null: false
+    t.bigint "test_run_shard_id"
+    t.datetime "updated_at", null: false
+    t.index ["repository_id", "name"], name: "index_spec_observations_on_repository_id_and_name"
+    t.index ["repository_id"], name: "index_spec_observations_on_repository_id"
+    t.index ["test_run_id", "duration_seconds"], name: "index_spec_observations_on_test_run_id_and_duration_seconds"
+    t.index ["test_run_id", "example_id"], name: "index_spec_observations_on_test_run_id_and_example_id", unique: true
+    t.index ["test_run_id", "outcome"], name: "index_spec_observations_on_test_run_id_and_outcome"
+    t.index ["test_run_id", "spec_file_path"], name: "index_spec_observations_on_test_run_id_and_spec_file_path"
+    t.index ["test_run_id"], name: "index_spec_observations_on_test_run_id"
+    t.index ["test_run_shard_id"], name: "index_spec_observations_on_test_run_shard_id"
+  end
+
   create_table "test_run_shards", force: :cascade do |t|
     t.integer "annotated_specs_count", default: 0, null: false
     t.datetime "created_at", null: false
@@ -245,6 +269,9 @@ ActiveRecord::Schema[8.1].define(version: 2026_08_07_120000) do
   add_foreign_key "solid_queue_scheduled_executions", "solid_queue_jobs", column: "job_id", on_delete: :cascade
   add_foreign_key "spec_intents", "repositories"
   add_foreign_key "spec_intents", "test_runs"
+  add_foreign_key "spec_observations", "repositories"
+  add_foreign_key "spec_observations", "test_run_shards", on_delete: :nullify
+  add_foreign_key "spec_observations", "test_runs"
   add_foreign_key "test_run_shards", "test_runs"
   add_foreign_key "test_runs", "repositories"
 end

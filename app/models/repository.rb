@@ -12,6 +12,11 @@ class Repository < ApplicationRecord
   # validated only for presence, uniqueness and shape, so any user may register any slug.
   belongs_to :user
   has_many :api_keys, dependent: :destroy
+  # Deleted before the runs that own them: `spec_observations.repository_id` is denormalised, so
+  # the rows hang off both, and clearing them here is one statement per repository rather than one
+  # per run. `delete_all` for the same reason it is `delete_all` on `TestRun` — the volume is a
+  # row per example per run.
+  has_many :spec_observations, dependent: :delete_all
   has_many :test_runs, dependent: :destroy
   has_many :spec_intents, dependent: :destroy
   has_many :repository_memberships, dependent: :destroy

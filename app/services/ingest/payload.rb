@@ -27,6 +27,12 @@ module Ingest
 
     def valid? = @errors.empty?
 
+    # Every spec the client reported, annotated or not — the population `Ingest::RunRecorder`
+    # writes one `SpecObservation` per. Distinct from {#annotated_specs}, which is the slice
+    # carrying an intent: a run is mostly unannotated for as long as adoption is gradual, and the
+    # per-example facts (duration, outcome, name) are worth keeping for every example regardless.
+    def specs = @specs
+
     # The specs carrying an intent — what slice 3's embed + upsert job will consume. Only
     # meaningful once `valid?`, which is what guarantees every status is one of STATUSES and so
     # makes "not unannotated" the same set as "annotated".

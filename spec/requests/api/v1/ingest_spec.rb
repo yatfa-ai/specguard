@@ -714,8 +714,217 @@ RSpec.describe "POST /api/v1/ingest", type: :request do
     end
   end
 
-  # The full auth matrix is proved once in spec/requests/api/v1/repositories_spec.rb. All this
-  # endpoint owes is evidence that it inherits the filter rather than re-plumbing it.
+  # The grain everything about *tests* rather than about suites has to be asked at. Before
+  # `spec_observations` a 20,000-example run retained two integers, and the five per-example fields
+  # the shipped formatter has always sent — `id`, `spec_file_path`, `name`, `duration`, `outcome` —
+  # were read off the wire and dropped.
+  describe "the per-example rows a run leaves behind" do
+    it "leaves one row per spec, annotated or not, each carrying the name the client sent" do
+      body = ingest_payload(
+        specs: [
+          unannotated_spec(file_path: "spec/models/a_spec.rb", line_number: 3, name: "A is quiet"),
+          unannotated_spec(file_path: "spec/models/b_spec.rb", line_number: 4, name: "B is quiet"),
+          unannotated_spec(file_path: "spec/models/c_spec.rb", line_number: 5, name: "C is quiet"),
+          annotated_spec(file_path: "spec/models/d_spec.rb", line_number: 6, name: "D is annotated")
+        ]
+      )
+
+      expect { ingest(body) }.to change(SpecObservation, :count).by(4)
+
+      run = TestRun.sole
+      expect(run.spec_observations.pluck(:name)).to match_array(
+        ["A is quiet", "B is quiet", "C is quiet", "D is annotated"]
+      )
+      expect(run.spec_observations.pluck(:repository_id).uniq).to eq([repository.id])
+    end
+
+    # The client's own measurement, turned into a platform guard: a table-driven loop writes the
+    # `it` once, so all N examples report the same `(file_path, line_number)`. A key built on the
+    # coordinate folds three examples onto one row and takes their durations with them.
+    it "keeps three examples of one table-driven loop apart, though they share a coordinate" do
+      body = ingest_payload(
+        specs: (1..3).map do |index|
+          unannotated_spec(
+            file_path: "spec/models/table_spec.rb", line_number: 9,
+            id: "./spec/models/table_spec.rb[1:#{index}]", name: "handles case #{index}"
+          )
+        end
+      )
+
+      ingest(body)
+
+      rows = TestRun.sole.spec_observations
+      expect(rows.count).to eq(3)
+      expect(rows.pluck(:line_number).uniq).to eq([9])
+      expect(rows.pluck(:example_id)).to match_array(
+        (1..3).map { |index| "./spec/models/table_spec.rb[1:#{index}]" }
+      )
+    end
+
+    # The other shape on the same coordinate: a shared example group reports
+    # `spec/support/shared_examples.rb` as its definition site, and the file that actually ran the
+    # example only ever appears as `spec_file_path`. Aggregating on `file_path` would attribute
+    # every including file's time to a `spec/support/` helper that ran nothing.
+    it "keeps a shared example group's two inclusions apart by the file that ran them" do
+      shared = "spec/support/shared_examples.rb"
+      body = ingest_payload(
+        specs: [
+          unannotated_spec(file_path: shared, line_number: 4, spec_file_path: "spec/models/order_spec.rb",
+                           id: "./spec/models/order_spec.rb[1:1:1]", duration: 1.5),
+          unannotated_spec(file_path: shared, line_number: 4, spec_file_path: "spec/models/refund_spec.rb",
+                           id: "./spec/models/refund_spec.rb[1:1:1]", duration: 2.5)
+        ]
+      )
+
+      ingest(body)
+
+      rows = TestRun.sole.spec_observations
+      expect(rows.count).to eq(2)
+      expect(rows.pluck(:file_path).uniq).to eq([shared])
+      expect(rows.group(:spec_file_path).sum(:duration_seconds)).to eq(
+        "spec/models/order_spec.rb" => 1.5, "spec/models/refund_spec.rb" => 2.5
+      )
+    end
+
+    it "round-trips duration and outcome per example, nulls included" do
+      body = ingest_payload(
+        specs: [
+          unannotated_spec(file_path: "spec/a_spec.rb", line_number: 1, duration: 0.25, outcome: "passed"),
+          unannotated_spec(file_path: "spec/b_spec.rb", line_number: 2, duration: 3.75, outcome: "failed"),
+          unannotated_spec(file_path: "spec/c_spec.rb", line_number: 3, duration: 0.0, outcome: "pending"),
+          unannotated_spec(file_path: "spec/d_spec.rb", line_number: 4, duration: nil, outcome: nil)
+        ]
+      )
+
+      ingest(body)
+
+      expect(TestRun.sole.spec_observations.pluck(:file_path, :duration_seconds, :outcome)).to match_array(
+        [
+          ["spec/a_spec.rb", 0.25, "passed"],
+          ["spec/b_spec.rb", 3.75, "failed"],
+          ["spec/c_spec.rb", 0.0, "pending"],
+          ["spec/d_spec.rb", nil, nil]
+        ]
+      )
+    end
+
+    # `Ingest::Payload` validates `file_path`, `line_number`, `status` and `intent` — and nothing
+    # else. `id` therefore arrives unchecked, and a repeat of one would violate the unique index
+    # and take the whole ingest down with a 500. Storing one row is a better answer than losing the
+    # run, and rejecting the payload belongs to envelope validation rather than to the writer.
+    it "stores one row rather than 500ing when the client repeats an example id" do
+      body = ingest_payload(
+        specs: [
+          unannotated_spec(file_path: "spec/a_spec.rb", line_number: 1, id: "dup", name: "first"),
+          unannotated_spec(file_path: "spec/b_spec.rb", line_number: 2, id: "dup", name: "second")
+        ]
+      )
+
+      ingest(body)
+
+      expect(response).to have_http_status(:accepted)
+      expect(TestRun.sole.spec_observations.pluck(:example_id, :name)).to eq([%w[dup first]])
+      # The run's own denominator still counts what the client reported, which is two specs.
+      expect(TestRun.sole.total_specs_count).to eq(2)
+    end
+
+    # A producer that sends no `id` at all — an older client, a third-party reporter — must not be
+    # collapsed to a single row by the same dedup.
+    it "keeps every example of a payload that carries no ids at all" do
+      specs = (1..3).map { |index| unannotated_spec(file_path: "spec/#{index}_spec.rb", line_number: index, id: "") }
+
+      ingest(ingest_payload(specs: specs))
+
+      expect(TestRun.sole.spec_observations.count).to eq(3)
+      expect(TestRun.sole.spec_observations.pluck(:example_id).uniq).to eq([nil])
+    end
+
+    it "stores an unsharded run's rows with no shard, because it has none to point at" do
+      ingest(ingest_payload(specs: [unannotated_spec]))
+
+      expect(TestRun.sole.test_run_shards).to be_empty
+      expect(TestRun.sole.spec_observations.pluck(:test_run_shard_id)).to eq([nil])
+    end
+
+    # An anonymous slice — sharded, but with no `shard_id` to tell the slices apart — gets a fresh
+    # `TestRunShard` row per POST, so the shard *counters* double on a redelivery and cannot not.
+    # The rows do not, because their key is the run and the example rather than the delivery. That
+    # asymmetry is documented in `Ingest::ObservationRecorder`; this is the assertion behind it.
+    it "does not double an anonymous slice's rows, though it doubles its counters" do
+      body = ingest_payload(ci_run_id: "gha-9", specs: [unannotated_spec(file_path: "spec/a_spec.rb", line_number: 1)])
+
+      ingest(body)
+      ingest(body)
+
+      run = TestRun.sole
+      expect(run.test_run_shards.count).to eq(2)
+      expect(run.total_specs_count).to eq(2)
+      expect(run.spec_observations.count).to eq(1)
+    end
+
+    describe "a four-shard run, one shard of which is re-run" do
+      # Each shard owns its own files, exactly as a real splitter divides a suite, so the four
+      # slices carry disjoint example ids the way a real run does.
+      def shard_payload(index, examples: 3, ci_run_id: "gha-42")
+        specs = (1..examples).map do |n|
+          unannotated_spec(
+            file_path: "spec/shard#{index}/e#{n}_spec.rb", line_number: n,
+            id: "./spec/shard#{index}/e#{n}_spec.rb[1:1]", duration: index.to_f
+          )
+        end
+
+        ingest_payload(commit_sha: "deadbee", ci_run_id: ci_run_id, shard_id: index.to_s, specs: specs)
+      end
+
+      def run_all_shards = (1..4).each { |index| ingest(shard_payload(index)) }
+
+      it "stores every shard's rows against the TestRunShard row that delivered them" do
+        run_all_shards
+
+        run = TestRun.sole
+        expect(run.spec_observations.count).to eq(12)
+        expect(run.spec_observations.distinct.count(:test_run_shard_id)).to eq(4)
+        expect(run.spec_observations.where(test_run_shard_id: nil)).to be_empty
+        expect(run.test_run_shards.pluck(:id)).to match_array(run.spec_observations.distinct.pluck(:test_run_shard_id))
+      end
+
+      # The 25,100-denominator lesson carried one layer down: rows written per POST inherit none of
+      # the counters' idempotency unless they are keyed the same way.
+      it "leaves that shard's row count unchanged, so the suite still totals once" do
+        run_all_shards
+
+        expect { ingest(shard_payload(2)) }.not_to change(SpecObservation, :count)
+
+        expect(TestRun.sole.spec_observations.count).to eq(12)
+      end
+
+      it "replaces the re-run shard's rows rather than keeping the stale ones beside them" do
+        run_all_shards
+        ingest(shard_payload(2, examples: 2))
+
+        run = TestRun.sole
+        expect(run.spec_observations.count).to eq(11)
+        expect(run.spec_observations.where("file_path LIKE 'spec/shard2/%'").pluck(:file_path))
+          .to match_array(%w[spec/shard2/e1_spec.rb spec/shard2/e2_spec.rb])
+      end
+
+      it "re-running every shard leaves the suite counted once" do
+        run_all_shards
+
+        expect { run_all_shards }.not_to change(SpecObservation, :count)
+      end
+
+      # Criterion 9 in one example: the new table is a second, finer record of the same delivery,
+      # and the headline counters are deliberately *not* re-derived from it.
+      it "leaves the run's own counters deriving from its shards, untouched" do
+        run_all_shards
+
+        expect(TestRun.sole).to have_attributes(total_specs_count: 12, annotated_specs_count: 0)
+      end
+    end
+  end
+
+
   describe "authentication" do
     it "rejects a request with no Authorization header with 401" do
       expect { ingest(ingest_payload, key: nil) }.not_to change(TestRun, :count)

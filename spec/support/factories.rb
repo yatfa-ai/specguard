@@ -51,10 +51,25 @@ module Builders
 
   # `behavior` is deliberately over the schema's 15-character floor; shorten it in a caller to
   # exercise the 400 path.
-  def annotated_spec(file_path: "spec/models/invoice_spec.rb", line_number: 12, **intent)
+  #
+  # The five fields beyond the envelope's own four — `id`, `spec_file_path`, `name`, `duration`,
+  # `outcome` — are here because the shipped formatter sends nine fields per example and this
+  # builder used to send four, which meant the whole ingest suite was green against a payload
+  # shape no real client produces. Each is overridable per caller: `id` so a caller can put
+  # several examples on one `(file_path, line_number)` the way a table-driven loop does,
+  # `spec_file_path` so a caller can model a shared example group, `duration`/`outcome` so a
+  # caller can send nulls the way the client does for an example that never ran.
+  def annotated_spec(file_path: "spec/models/invoice_spec.rb", line_number: 12,
+                     id: nil, spec_file_path: nil, name: nil, duration: 0.42, outcome: "passed",
+                     **intent)
     {
+      id: id || "./#{file_path}[1:#{line_number}]",
+      spec_file_path: spec_file_path || file_path,
       file_path: file_path,
       line_number: line_number,
+      name: name || "Invoice finalize locks the line items",
+      duration: duration,
+      outcome: outcome,
       status: "annotated",
       intent: {
         entity: "Invoice",
@@ -65,8 +80,19 @@ module Builders
     }
   end
 
-  def unannotated_spec(file_path: "spec/models/user_spec.rb", line_number: 12)
-    { file_path: file_path, line_number: line_number, status: "unannotated", intent: nil }
+  def unannotated_spec(file_path: "spec/models/user_spec.rb", line_number: 12,
+                       id: nil, spec_file_path: nil, name: nil, duration: 0.11, outcome: "passed")
+    {
+      id: id || "./#{file_path}[1:#{line_number}]",
+      spec_file_path: spec_file_path || file_path,
+      file_path: file_path,
+      line_number: line_number,
+      name: name || "User is valid with a handle",
+      duration: duration,
+      outcome: outcome,
+      status: "unannotated",
+      intent: nil
+    }
   end
 end
 
