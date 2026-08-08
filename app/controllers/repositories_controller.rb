@@ -11,6 +11,12 @@ class RepositoriesController < ApplicationController
   # the `history` block on `GET /api/v1/repository`.
   include RequestedBranchParam
 
+  # `?spec_file=` read as a spec file path, for the drill-down under the "Heaviest spec files"
+  # panel. Read through a concern rather than inline for the reason `RequestedBranchParam` carries
+  # in full: the shapes a query string can legally parse into are not all Strings, and an unguarded
+  # `.presence` on one of them is a 500 on a URL anyone can type.
+  include RequestedSpecFileParam
+
   before_action :require_authentication
 
   # The first four are per-card questions asked by repositories/index, once per repository in the
@@ -164,6 +170,30 @@ class RepositoriesController < ApplicationController
     #
     # ONE query, not growing with the size of the suite: see `SpecFileDurations`.
     @spec_file_durations = SpecFileDurations.for(@latest_test_run) if @latest_test_run
+    # One file out of that rollup, opened: not which files the wall clock went into but WHICH
+    # EXAMPLES are in the one the reader picked. The rollup is a capped ten and every panel on this
+    # page is, so a reader who has found the heavy file has so far found the end of the road — this
+    # is the first read in the application that narrows to a single file rather than grouping by
+    # one, and the panel above is where its links come from.
+    #
+    # Guarded on a file having been ASKED for as well as on there being a run, so a page nobody
+    # asked a file of issues no query at all — the whole drill-down is off the default page's
+    # budget. The ask is the raw parameter and is kept whatever it names: a run that recorded
+    # nothing for that path is an ordinary answer (a stale bookmark, a deleted file, a typo) and
+    # `SpecFileExamples` names it in an empty state rather than the page erroring or silently
+    # rendering nothing.
+    #
+    # Anchored on `@latest_test_run` — the run every panel above names, and specifically not
+    # `@trajectory_run`, which follows `?branch=` and belongs to the "Suite growth" panel alone.
+    # The file was picked out of a rollup of the latest run, so its examples must come from that
+    # same run or the panel would be answering about rows the reader did not click.
+    #
+    # ONE query, bounded by the size of the FILE and not of the suite, and none at all without an
+    # ask: see `SpecFileExamples`.
+    @spec_file_request = requested_spec_file
+    if @latest_test_run && @spec_file_request
+      @spec_file_examples = SpecFileExamples.for(@latest_test_run, @spec_file_request)
+    end
     # The rung above that one, off the same rows of the same run: not which FILES the wall clock
     # went into but which AREAS. Not derivable from the panel above either — a by-file top ten
     # shows ten files, and a directory holding forty files at two seconds each is eighty seconds of
