@@ -527,6 +527,98 @@ RSpec.describe "Repository unstable tests", type: :request do
       expect(row_names).to eq(["candidate 0000"])
     end
 
+    # The state neither example above reaches: the cap bit AND nothing among what it kept varied.
+    # In `truncated_window` the varying candidate is always kept, so `#any?` is true there and the
+    # honest zero is never rendered beside the truncation clause. Here every description fails in
+    # both runs, so the two sentences print inches apart — and a zero that quantified over all
+    # seven would assert a property of the two the clause directly above it says were never read.
+    def uniformly_red_window(limit)
+      repository = create_repository(user: @user)
+      2.times do |run_index|
+        specs = (0..(limit + 1)).map do |i|
+          example_spec(name: "candidate #{format("%04d", i)}", outcome: "failed", line_number: i + 1)
+        end
+        ingest(repository, specs, commit_sha: "run#{format("%010d", run_index)}",
+                                  at: (30 - run_index).days.ago)
+      end
+      repository
+    end
+
+    it "words the zero against the descriptions it compared, not against everything that failed" do
+      stub_const("SpecObservation::UNSTABLE_CANDIDATE_LIMIT", 5)
+
+      get repository_path(uniformly_red_window(5))
+
+      expect(rows).to be_empty
+      expect(none_state).to have_text("5 of the 7 descriptions that failed somewhere in the 2 runs " \
+                                      "on main that reported outcomes were the ones compared " \
+                                      "across runs, and not one of those reported any other " \
+                                      "outcome anywhere in them", normalize_ws: true)
+    end
+
+    # The mutation: deleting the `#truncated?` branch restores a sentence asserting a property of
+    # all seven, printed under a clause saying two of them were never examined.
+    it "says of the descriptions it never examined that nothing here is a finding about them" do
+      stub_const("SpecObservation::UNSTABLE_CANDIDATE_LIMIT", 5)
+
+      get repository_path(uniformly_red_window(5))
+
+      expect(none_state).to have_text("The other 2 descriptions that failed in this window were " \
+                                      "never compared across runs, so nothing here is a finding " \
+                                      "about them", normalize_ws: true)
+      expect(none_state).to have_no_text("7 descriptions failed somewhere in the")
+      expect(none_state).to have_no_text("not one of them reported any other outcome")
+    end
+
+    # The other zero branch is a universal too — "NO description ... changed its outcome" — and is
+    # reachable under the cap by the same route. Seven descriptions that fail in both runs, plus a
+    # description carried by two examples per run which varies: it failed once, so the
+    # fewest-failures-first ordering keeps it, and every examined candidate beside it is uniformly
+    # red. The shared-description section renders, the flip list is empty, and the zero above them
+    # both is a claim about five of eight candidates.
+    def truncated_shared_description_window(limit)
+      repository = create_repository(user: @user)
+      2.times do |run_index|
+        specs = (0..(limit + 1)).map do |i|
+          example_spec(name: "candidate #{format("%04d", i)}", outcome: "failed", line_number: i + 1)
+        end
+        specs << example_spec(name: "Invoice finalize locks the line items", line_number: 90,
+                              outcome: run_index.zero? ? "failed" : "passed")
+        specs << example_spec(name: "Invoice finalize locks the line items", line_number: 91,
+                              outcome: "passed")
+        ingest(repository, specs, commit_sha: "run#{format("%010d", run_index)}",
+                                  at: (30 - run_index).days.ago)
+      end
+      repository
+    end
+
+    it "qualifies the shared-description zero by the candidates it compared as well" do
+      stub_const("SpecObservation::UNSTABLE_CANDIDATE_LIMIT", 5)
+
+      get repository_path(truncated_shared_description_window(5))
+
+      expect(rows).to be_empty
+      expect(section?("unstable-tests-shared")).to be(true)
+      expect(none_state).to have_text("No description belonging to a single example changed its " \
+                                      "outcome among the 5 of 8 failing descriptions this panel " \
+                                      "compared across the 2 runs on main that reported outcomes",
+                                      normalize_ws: true)
+      expect(none_state).to have_text("The other 3 descriptions that failed in this window were " \
+                                      "never compared across runs", normalize_ws: true)
+    end
+
+    # And says none of that where the cap did not bite — the qualification is a disclosure, not a
+    # hedge the panel wears permanently. `have_no_text("among the")` is what reddens on a branch
+    # that stopped consulting `#truncated?` and qualified every zero unconditionally.
+    it "leaves both zeroes unqualified where every failing description was examined" do
+      get repository_path(repository_with(%w[failed failed]))
+
+      expect(none_state).to have_text("1 description failed somewhere in the 2 runs on main that " \
+                                      "reported outcomes, and not one of them reported any other " \
+                                      "outcome", normalize_ws: true)
+      expect(none_state).to have_no_text("nothing here is a finding about them")
+    end
+
     # The disclosure appears only when the cap actually bit.
     it "discloses nothing where every failing description was examined" do
       get repository_path(repository_with(%w[passed failed]))

@@ -390,24 +390,65 @@ module RepositoriesHelper
   # would be worse than imprecise — "not one of them reported any other outcome" is FALSE over a
   # window whose shared-description group reported two, and it would sit directly above the section
   # saying so.
+  #
+  # Every one of them is also worded against the descriptions it was drawn from, and not only
+  # against the runs. A zero is a UNIVERSAL — "no description varied", "not one of them reported
+  # any other outcome" — and when the candidate cap bit, the population it quantifies over is the
+  # part of the window this panel examined rather than the window. Left unqualified it asserts a
+  # property of descriptions that were never read, inches under the clause disclosing that they
+  # were not read (`#unstable_tests_truncation_clause`). That is the same defect the shared-
+  # description branch exists to refuse, one silence over: a caption is a claim about the list it
+  # was counted off, so when the list is part of the candidates the caption says which part.
   def unstable_tests_none_description(unstable)
     reporting = "#{number_with_delimiter(unstable.runs_reporting_outcomes)} " \
                 "#{"run".pluralize(unstable.runs_reporting_outcomes)}" \
                 "#{unstable_tests_branch_clause(unstable)} that reported outcomes"
 
     if unstable.shared_description_rows.any?
-      "No description belonging to a single example changed its outcome across the #{reporting}. " \
-        "What did vary, varied under a description more than one example answers to, which is " \
-        "reported below rather than counted here."
+      "No description belonging to a single example changed its outcome " \
+        "#{unstable_tests_examined_scope(unstable, reporting)}. What did vary, varied under a " \
+        "description more than one example answers to, which is reported below rather than " \
+        "counted here.#{unstable_tests_unexamined_caveat(unstable)}"
     elsif unstable.candidate_count.zero?
+      # Unreachable under truncation by construction: the cap can only have bitten a window in
+      # which something failed, so there is no unexamined population to qualify this one against.
       "No example failed in any of the #{reporting}, so there is nothing here whose outcome could " \
         "have changed. That is a comparison this window supported and it came back empty."
+    elsif unstable.truncated?
+      "#{number_with_delimiter(unstable.examined_count)} of the " \
+        "#{number_with_delimiter(unstable.candidate_count)} descriptions that failed somewhere in " \
+        "the #{reporting} were the ones compared across runs, and not one of those reported any " \
+        "other outcome anywhere in them. Tests that fail consistently are not what this panel is " \
+        "looking for.#{unstable_tests_unexamined_caveat(unstable)}"
     else
       "#{number_with_delimiter(unstable.candidate_count)} " \
         "#{"description".pluralize(unstable.candidate_count)} failed somewhere in the " \
         "#{reporting}, and not one of them reported any other outcome anywhere in them. Tests that " \
         "fail consistently are not what this panel is looking for."
     end
+  end
+
+  # The population a zero on this panel quantifies over. "Across the window" is only true when
+  # every description that failed in it was compared; when the cap bit it is true of the examined
+  # part alone, and the phrase says which part rather than letting the reader supply the wrong one.
+  def unstable_tests_examined_scope(unstable, reporting)
+    return "across the #{reporting}" unless unstable.truncated?
+
+    "among the #{number_with_delimiter(unstable.examined_count)} of " \
+      "#{number_with_delimiter(unstable.candidate_count)} failing descriptions this panel compared " \
+      "across the #{reporting}"
+  end
+
+  # What a zero above a capped candidate list does NOT establish, said in the same breath as the
+  # zero. `#unstable_tests_truncation_clause` discloses the cap against the LIST — "not represented
+  # above" — which is a statement about rows that were printed; this one is about a claim, and the
+  # claim is the thing a reader would otherwise carry away as clean.
+  def unstable_tests_unexamined_caveat(unstable)
+    return "" unless unstable.truncated?
+
+    " The other #{number_with_delimiter(unstable.unexamined_count)} " \
+      "#{"description".pluralize(unstable.unexamined_count)} that failed in this window were never " \
+      "compared across runs, so nothing here is a finding about them."
   end
 
   # The groups the matching rule could not rule on, said as what they are. Not flakiness and not
