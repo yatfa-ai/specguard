@@ -1,0 +1,49 @@
+name: Release (Bump Version & Deploy)
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  actions: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          # Use GITHUB_TOKEN to allow pushing back to the repo
+          token: ${{ secrets.GITHUB_TOKEN }}
+          fetch-depth: 0
+
+      - name: Configure Git
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Run bump version script
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # Ensure we are on the main branch as required by the script
+          git checkout main
+
+          # Make sure script is executable
+          chmod +x script/bump-version.sh
+
+          # Run the script
+          ./script/bump-version.sh
+
+      # Deploy is triggered by the in-cluster release watcher
+      # (yatfa-ai/infra: specguard-deployment/release/specguard-release-watcher.yaml),
+      # which polls this `prod` branch every ~1m and enqueues the specguard release
+      # Job. This workflow uses ONLY GITHUB_TOKEN — no cluster secrets — so it is
+      # safe in this PUBLIC repository; the deploy side (registry push, image pin,
+      # rollout) lives entirely in the private yatfa-ai/infra + the cluster.
+      # bump-version.sh's fast-forward push of `prod` is the signal the watcher
+      # keys on. (GITHUB_TOKEN pushes don't spawn push-triggered workflows anyway,
+      # but the watcher polls, so it needs no event.) One trigger per commit: the
+      # watcher dedups on the specguard-release-<sha> Job name.
