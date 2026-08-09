@@ -102,6 +102,10 @@ class Api::V1::RepositoriesController < Api::BaseController
       # BESIDE `spec_files`, never in place of it: the two rank different populations and the
       # second is not derivable from the first. See `serialized_spec_directories` below.
       spec_directories: serialized_spec_directories(test_run),
+      # BESIDE both rollups above, and it is the grain NEITHER of them can reach: those two name
+      # areas and files, and an agent holding both still cannot ask which TEST inside a 90-second
+      # directory to open. See `serialized_slowest_examples` below.
+      slowest_examples: serialized_slowest_examples(test_run),
       # `TestRun#suite_size_measured?`, the same predicate `serialized_history_row` serves below and
       # for the same reason: a run that reported zero tests has a `total_specs` but not a
       # measurement, and a difference taken against it describes the report rather than the suite.
@@ -426,6 +430,89 @@ class Api::V1::RepositoriesController < Api::BaseController
       end,
       directory_count: durations.directory_count,
       limit: SpecObservation::HEAVIEST_DIRECTORIES_LIMIT
+    }
+  end
+
+  # WHICH TESTS ARE SLOW — the per-EXAMPLE grain, and the one question the two blocks above are
+  # structurally unable to answer. They rank populations; this ranks individuals, and an agent that
+  # has learned `spec/models/` cost ninety seconds has no way to get from there to a test to open.
+  # `repositories#show` has rendered this list since SPGD-266; it has never reached a client that
+  # cannot read a panel.
+  #
+  # THE SAME OBJECT THE PANEL READS, never a hand-written query — this file's governing rule,
+  # stated in full on `serialized_spec_files` above. `SlowestExamples` is view-free, so the API and
+  # the panel rank the same examples of the same run in the same order, off the same two reads.
+  #
+  # OPERANDS, NEVER THE PANEL'S LABELS, and this grain is where that rule costs the most. Every row
+  # this serializes has four label methods one call away — `SpecObservation#label`,
+  # `#location_label`, `#duration_label`, `#outcome_label` — and each of them FOLDS A FALLBACK
+  # STRING INTO THE VALUE ("not reported", `"path:line"`, `"1.5s"`). That is precisely the prose
+  # this endpoint refuses: a client cannot subtract `"1.5s"` and cannot tell `#label`'s location
+  # fallback from a test genuinely named after its own file. So:
+  #
+  #   - `name` is NULLABLE and serialized as `null` when absent, rather than substituted with
+  #     `#label`'s location fallback. `Ingest::ObservationRecorder#attributes` writes it through
+  #     `presence_of`, so a null is the honest record that the producer sent no description — and a
+  #     client that wants the fallback can build it from the two path operands below.
+  #   - `file_path` + `line_number` are the DEFINITION SITE and are served as two operands rather
+  #     than as the joined string `#location_label` builds from them.
+  #   - `spec_file_path` is the INCLUDING file, nullable, and it is what makes this block JOINABLE:
+  #     it is the column the two rollups above aggregate on, so a client can carry a ranked test
+  #     back to the rollup row it belongs to. `SpecObservation`'s "Two paths, two meanings" note is
+  #     explicit that it and `line_number` are NOT one coordinate — keep all three distinct and let
+  #     the client choose, rather than pairing two of them here.
+  #   - `outcome` is a NULLABLE RAW STRING, echoed verbatim. `null` keeps its documented meaning
+  #     "the client did not say" and must never be folded into `"passed"`; nothing platform-side
+  #     validates the column (`Ingest::Payload` does not), so an unrecognised string is echoed too.
+  #
+  # `recorded_count` / `timed_count` / `limit` follow `serialized_spec_files` exactly — what the
+  # ranking was taken over, and the bound that cut the list, read off `SpecObservation::SLOWEST_LIMIT`
+  # rather than restated here.
+  #
+  # `reported_outcome_count` IS NOT SCOPE CREEP, and it is the one figure the by-file blocks have no
+  # counterpart for. Outcome coverage OVER THE RUN is not derivable from the ten rows served: a
+  # client seeing ten `null` outcomes cannot tell "this run reported no outcomes at all" from "these
+  # ten happened to be silent", and only the first of those makes a zero `failed` count mean
+  # silence rather than health. That is the Vacuous Green separation `SlowestExamples#outcomes_reported?`
+  # exists for, and the count is already in hand at zero extra query cost — `SlowestExamples.for`
+  # splats the whole of `SpecObservation::COVERAGE_COUNTS`. Its `failed_count` / `pending_count` /
+  # `other_outcome_count` siblings are deliberately NOT served: they describe the run's outcome
+  # composition, not this ranking's coverage, and belong with a run-level health block.
+  #
+  # `null` — with the key still present — for a run that recorded no observation rows, on `shards`'
+  # rule verbatim, and never a zeroed block: a `recorded_count: 0` beside an empty array would
+  # assert a run that ran no examples. GATED ON `#recorded?` ITSELF, called rather than re-spelled
+  # as `rows.any?`: the predicate is `recorded_count.positive?` and separates "no rows" from "no
+  # timings", and a run that recorded fifty examples and timed none of them has a real per-example
+  # grain to disclose — with an empty ranking over it — which `rows.any?` would blank.
+  #
+  # EXACTLY TWO EXTRA QUERIES, on every run, recorded or not — and constant in the size of the
+  # suite. `SlowestExamples.for` issues both unconditionally, so `#recorded?` is an answer DERIVED
+  # from the reads rather than a gate in front of them: an indexed backward scan capped at
+  # `SLOWEST_LIMIT`, and one aggregate over the same index's leading column, both behind
+  # `index_spec_observations_on_test_run_id_and_duration_seconds` and both EXPLAIN-certified in
+  # `spec/models/spec_observation_spec.rb`. This block issues the read the panel issues, unchanged,
+  # so that certification transfers rather than needing to be repeated in a request spec.
+  def serialized_slowest_examples(test_run)
+    slowest = SlowestExamples.for(test_run)
+
+    return nil unless slowest.recorded?
+
+    {
+      rows: slowest.rows.map do |observation|
+        {
+          name: observation.name,
+          file_path: observation.file_path,
+          line_number: observation.line_number,
+          spec_file_path: observation.spec_file_path,
+          duration_seconds: observation.duration_seconds,
+          outcome: observation.outcome
+        }
+      end,
+      recorded_count: slowest.recorded_count,
+      timed_count: slowest.timed_count,
+      reported_outcome_count: slowest.reported_outcome_count,
+      limit: SpecObservation::SLOWEST_LIMIT
     }
   end
 

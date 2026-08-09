@@ -25,36 +25,44 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
   # to its own example group, so a helper defined in either block is invisible to the other; that
   # is how it came to be written twice here before it was hoisted out of the file entirely.
 
-  # The endpoint reads `spec_observations` once PER GRAIN it serves — once for the by-file rollup
-  # and once for the by-area one. Each cost block below bounds its OWN grain rather than the table,
-  # because the alternative is worse in both directions: a bare `eq(2)` on the table cannot tell
-  # "one aggregate per grain" from "one grain reading twice", and it has to be rebaselined by hand
-  # every time a grain is added, which is exactly the silent rebaseline `queries_against` was
-  # chosen over `baseline + 1` to avoid. The TOTAL is pinned alongside it in the by-area block, on
-  # each axis the per-grain narrowing left uncovered — the unrecorded run, the history window, and
-  # the recorded run — so "exactly these two reads and no third" is a stated guard on every one of
-  # them rather than an inference from the grain that happens to be counted.
+  # The endpoint reads `spec_observations` once PER GRAIN it serves — once for the by-file rollup,
+  # once for the by-area one, and TWICE for the per-example ranking, whose presenter issues a
+  # capped scan and a coverage aggregate. Each cost block below bounds its OWN grain rather than
+  # the table, because the alternative is worse in both directions: a bare total cannot tell "one
+  # aggregate per grain" from "one grain reading twice", and it has to be rebaselined by hand every
+  # time a grain is added, which is exactly the silent rebaseline `queries_against` was chosen over
+  # `baseline + 1` to avoid. The TOTAL is pinned alongside it in the by-area block, on each axis the
+  # per-grain narrowing left uncovered — the unrecorded run, the history window, and the recorded
+  # run — so "exactly these reads and no other" is a stated guard on every one of them rather than
+  # an inference from the grain that happens to be counted.
   #
   # THE PARTITION IS DEFINED ONCE, HERE, for the reason the note above gives: two sibling blocks
   # each classifying the same statements would be free to drift on which read belongs to which
   # grain, and a guard that counts one query more or less than its sibling still reports a number.
   #
-  # BOTH GRAINS ARE MATCHED POSITIVELY, on their own `GROUP BY`, and neither is defined as "the
-  # reads that are not the other one". A residual definition silently ADOPTS any third read of this
-  # table — an `exists?` gate, a preload, an N+1 — into whichever grain owns the leftovers, and the
-  # block that owns them then reports a number for work it did not do. Matched positively, an
-  # unclassified read belongs to neither list and is caught by the total below instead, which is
-  # the guard that can actually name it.
+  # EVERY GRAIN IS MATCHED POSITIVELY, on SQL only its own read can produce, and none is defined as
+  # "the reads that are not the others". A residual definition silently ADOPTS any further read of
+  # this table — an `exists?` gate, a preload, an N+1 — into whichever grain owns the leftovers, and
+  # the block that owns them then reports a number for work it did not do. Matched positively, an
+  # unclassified read belongs to no list and is caught by the total below instead, which is the
+  # guard that can actually name it.
+  #
+  # The per-example grain is TWO patterns rather than one because it is two different statements —
+  # `SpecObservation.slowest_in`'s capped backward scan and `.coverage_in`'s FILTER aggregate — and
+  # collapsing them into one loose pattern would let either stop being issued without a red example.
   def observation_reads(&) = queries_against("spec_observations", &)
 
   def observation_reads_by_grain(&)
     reads = observation_reads(&)
     [reads.grep(/GROUP BY COALESCE\(substring\(spec_file_path/),
-     reads.grep(/GROUP BY "spec_observations"\."spec_file_path"/)]
+     reads.grep(/GROUP BY "spec_observations"\."spec_file_path"/),
+     reads.grep(/ORDER BY "spec_observations"\."duration_seconds" DESC/) +
+       reads.grep(/COUNT\(\*\) FILTER \(WHERE outcome = 'failed'\)/)]
   end
 
-  def area_grain_reads(&) = observation_reads_by_grain(&).first
-  def file_grain_reads(&) = observation_reads_by_grain(&).last
+  def area_grain_reads(&) = observation_reads_by_grain(&)[0]
+  def file_grain_reads(&) = observation_reads_by_grain(&)[1]
+  def example_grain_reads(&) = observation_reads_by_grain(&)[2]
 
   # ONE builder for every block that writes observation rows — the four grain blocks below (by-file
   # and by-area, rollup and cost) all want the same row and had written it out four times. Hoisted
@@ -67,11 +75,22 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
   # the rollup blocks turn on, and a builder that defaulted it would let an example write one
   # without meaning to. `line_number` keeps `example_id` unique within a file, so a caller can put
   # several examples in one file the way a real suite does.
-  def observe(run, path:, duration:, line_number:)
+  #
+  # `name:` and `outcome:` default to `nil` — the column's own default and what every call site
+  # here wrote before they existed, so adding them changes no existing fixture. Both are nullable
+  # by schema and `Ingest::ObservationRecorder#attributes` writes `name` through `presence_of`, so
+  # a nil is an ORDINARY state a producer reaches rather than an omission the builder invented.
+  #
+  # `defined_in:` overrides `file_path` alone, leaving `path` as the INCLUDING file. It is the one
+  # input at the per-example grain with no counterpart in the rollups, which aggregate on
+  # `spec_file_path` and never see the two diverge: a shared example group is DEFINED in
+  # `spec/support/` and INCLUDED by the spec file that ran it, and `SpecObservation`'s "Two paths,
+  # two meanings" note is what says they must not be collapsed into one coordinate.
+  def observe(run, path:, duration:, line_number:, name: nil, outcome: nil, defined_in: nil)
     run.spec_observations.create!(
       repository: run.repository, example_id: "./#{path}[1:#{line_number}]",
-      file_path: path, spec_file_path: path, line_number: line_number,
-      status: "unannotated", duration_seconds: duration
+      file_path: defined_in || path, spec_file_path: path, line_number: line_number,
+      status: "unannotated", duration_seconds: duration, name: name, outcome: outcome
     )
   end
 
@@ -109,6 +128,10 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
         # observation row means no by-area rollup either. A `directory_count: 0` beside an empty
         # array would assert a run that touched no directories.
         "spec_directories" => nil,
+        # And at the per-EXAMPLE grain, off the same absent rows: no observation row means no
+        # ranking either, and no coverage to state it over. Not a zeroed block — a
+        # `recorded_count: 0` beside an empty array would assert a run that ran no examples.
+        "slowest_examples" => nil,
         "suite_size_measured" => true,
         "ingested_at" => test_run.created_at.iso8601
       )
@@ -419,7 +442,8 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
       expect(get_repository["latest_run"].keys)
         .to contain_exactly("commit_sha", "branch", "total_specs", "annotated_specs",
                             "annotated_ratio", "duration_seconds", "shards", "spec_files",
-                            "spec_directories", "suite_size_measured", "ingested_at")
+                            "spec_directories", "slowest_examples", "suite_size_measured",
+                            "ingested_at")
     end
 
     it "serves exactly the shards keys this contract pins once the decomposition is open" do
@@ -1152,6 +1176,254 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
     end
   end
 
+  # The per-EXAMPLE grain — "which tests are slow", the question the two rollup blocks above are
+  # structurally unable to answer and the one the HTML panel has answered since SPGD-266.
+  describe "the latest run's slowest examples" do
+    # Insertion order and duration order DIFFER on purpose. The ranking is half of what this key
+    # promises, and a fixture written slowest-first would let a serializer that dropped the ORDER BY
+    # — or that inherited the table's `id` order — satisfy a sequence assertion by accident.
+    #
+    # The four rows also span every nullable axis this block has to serve: an outcome of each of
+    # the two names SpecGuard reads, one it does not read, and one row that reported no outcome at
+    # all. That last one is what keeps `reported_outcome_count` from equalling `recorded_count` on
+    # the happy-path fixture, so the two counts cannot be transposed unseen.
+    let!(:test_run) do
+      run = create_test_run(repository: repository, commit_sha: "slowest00001",
+                            branch: "main", total_specs_count: 4, duration_seconds: 30.0)
+      observe(run, path: "spec/models/user_spec.rb", duration: 2.0, line_number: 11,
+              name: "User validates its email", outcome: "passed")
+      observe(run, path: "spec/requests/checkout_spec.rb", duration: 9.5, line_number: 3,
+              name: "Checkout completes an order", outcome: "failed")
+      observe(run, path: "spec/models/invoice_spec.rb", duration: 0.5, line_number: 7,
+              name: "Invoice totals its line items", outcome: "pending")
+      observe(run, path: "spec/requests/search_spec.rb", duration: 6.25, line_number: 2,
+              name: "Search ranks by relevance", outcome: nil)
+      run
+    end
+
+    def slowest_examples = get_repository.dig("latest_run", "slowest_examples")
+
+    # AC1 + AC2. Every row carries all six operands, and the array is asserted as a SEQUENCE — `eq`,
+    # not `match_array` — against a fixture whose insertion order it does not match.
+    it "serves each slow example's raw operands, slowest first" do
+      expect(slowest_examples["rows"]).to eq(
+        [
+          { "name" => "Checkout completes an order",
+            "file_path" => "spec/requests/checkout_spec.rb", "line_number" => 3,
+            "spec_file_path" => "spec/requests/checkout_spec.rb",
+            "duration_seconds" => 9.5, "outcome" => "failed" },
+          { "name" => "Search ranks by relevance",
+            "file_path" => "spec/requests/search_spec.rb", "line_number" => 2,
+            "spec_file_path" => "spec/requests/search_spec.rb",
+            "duration_seconds" => 6.25, "outcome" => nil },
+          { "name" => "User validates its email",
+            "file_path" => "spec/models/user_spec.rb", "line_number" => 11,
+            "spec_file_path" => "spec/models/user_spec.rb",
+            "duration_seconds" => 2.0, "outcome" => "passed" },
+          { "name" => "Invoice totals its line items",
+            "file_path" => "spec/models/invoice_spec.rb", "line_number" => 7,
+            "spec_file_path" => "spec/models/invoice_spec.rb",
+            "duration_seconds" => 0.5, "outcome" => "pending" }
+        ]
+      )
+    end
+
+    # AC3. The coverage the ranking was taken over, and the bound that cut it. `limit` is read off
+    # the constant rather than written as `10`, so a change to `SLOWEST_LIMIT` cannot leave the
+    # endpoint disclosing a bound it no longer applies.
+    it "states what the ranking was taken over, and the bound that produced it" do
+      expect(slowest_examples["recorded_count"]).to eq(4)
+      expect(slowest_examples["timed_count"]).to eq(4)
+      # Three of the four rows named an outcome; the fourth said nothing. Not equal to
+      # `recorded_count`, so a serializer that served one figure under both names is red here.
+      expect(slowest_examples["reported_outcome_count"]).to eq(3)
+      expect(slowest_examples["limit"]).to eq(SpecObservation::SLOWEST_LIMIT)
+    end
+
+    # AC4. The sub-block's own key set, stated as its subject rather than pinned as a side effect
+    # of the `eq` above — the pattern `contract_shard_keys` and both rollup blocks set, and for the
+    # same reason. A guard whose stated subject IS the key set survives a fixture whose numbers
+    # change, and says out loud what a new key owes this block before it ships.
+    #
+    # The row keys are pinned too, and that half is load bearing here in a way it is not one rung
+    # up: the run-level outcome counters `SlowestExamples` also holds — `failed_count`,
+    # `pending_count`, `other_outcome_count` — describe the run's composition rather than this
+    # ranking's coverage, and this is the guard that keeps them out.
+    it "serves exactly the slowest_examples keys this contract pins" do
+      expect(slowest_examples.keys)
+        .to contain_exactly("rows", "recorded_count", "timed_count", "reported_outcome_count",
+                            "limit")
+      expect(slowest_examples["rows"].first.keys)
+        .to contain_exactly("name", "file_path", "line_number", "spec_file_path",
+                            "duration_seconds", "outcome")
+    end
+
+    # AC6. Read off the same presenter `repositories#show` assigns to `@slowest_examples` rather
+    # than re-stating the fixture's numbers: two independent hand-written expectations would both
+    # still pass if the endpoint started reading a different run, a different limit, or re-sorted
+    # the list. Every served axis is compared element-wise, because a serializer that zipped two
+    # columns out of step would satisfy any one of them alone.
+    it "serves the same rows, in the same order, that repositories#show renders" do
+      shown = SlowestExamples.for(repository.latest_test_run)
+
+      expect(slowest_examples["rows"].map { it["name"] }).to eq(shown.rows.map(&:name))
+      expect(slowest_examples["rows"].map { it["file_path"] }).to eq(shown.rows.map(&:file_path))
+      expect(slowest_examples["rows"].map { it["line_number"] }).to eq(shown.rows.map(&:line_number))
+      expect(slowest_examples["rows"].map { it["spec_file_path"] }).to eq(shown.rows.map(&:spec_file_path))
+      expect(slowest_examples["rows"].map { it["duration_seconds"] }).to eq(shown.rows.map(&:duration_seconds))
+      expect(slowest_examples["rows"].map { it["outcome"] }).to eq(shown.rows.map(&:outcome))
+      expect(slowest_examples["recorded_count"]).to eq(shown.recorded_count)
+      expect(slowest_examples["timed_count"]).to eq(shown.timed_count)
+      expect(slowest_examples["reported_outcome_count"]).to eq(shown.reported_outcome_count)
+    end
+
+    # AC2's standing rule, asserted over the whole serialized block rather than per key — and this
+    # is the grain where it costs the most. FOUR label methods sit one call away on the very rows
+    # this block maps (`SpecObservation#label`, `#location_label`, `#duration_label`,
+    # `#outcome_label`), and each folds a fallback string into the value a client would have to
+    # parse back out.
+    it "serves numbers and raw strings, never the panel's labels" do
+      expect(slowest_examples.to_json).not_to match(/of \d|\d+\.\d+s|not reported/)
+      expect(slowest_examples["rows"].map { it["duration_seconds"] }).to all(be_a(Float))
+      expect(slowest_examples["rows"].map { it["line_number"] }).to all(be_a(Integer))
+      expect(slowest_examples.values_at("recorded_count", "timed_count", "reported_outcome_count",
+                                        "limit")).to all(be_a(Integer))
+      # `#location_label`'s join, specifically: the two operands are served as two keys, so no
+      # value in this block is the string it would build from them.
+      expect(slowest_examples.to_json).not_to include("spec/requests/checkout_spec.rb:3")
+    end
+
+    # THE VACUOUS GREEN CASE `SlowestExamples#outcomes_reported?` was written for, at the API grain.
+    # A run whose client sends no outcomes stores a nil on every row, and `failed_count` over it is
+    # zero — a zero that counts SILENCE, not health. A client holding ten null outcomes and no
+    # coverage figure cannot tell that run from one where these ten happened to be the quiet ones,
+    # which is exactly why `reported_outcome_count` is served beside the rows rather than left to
+    # be inferred from them.
+    it "distinguishes a run that reported no outcomes from one whose slowest ten were quiet" do
+      silent = create_test_run(repository: repository, commit_sha: "noOutcome001", duration_seconds: 12.0)
+      observe(silent, path: "spec/models/a_spec.rb", duration: 3.0, line_number: 1, name: "a", outcome: nil)
+      observe(silent, path: "spec/models/b_spec.rb", duration: 1.0, line_number: 1, name: "b", outcome: nil)
+      expect(repository.latest_test_run).to eq(silent)
+
+      expect(slowest_examples["rows"].map { it["outcome"] }).to eq([nil, nil])
+      expect(slowest_examples["recorded_count"]).to eq(2)
+      # The figure that does the distinguishing. Zero REPORTED, over two recorded rows — and the
+      # fixture at the top of this block, whose rows are equally not-all-failing, reads 3.
+      expect(slowest_examples["reported_outcome_count"]).to eq(0)
+    end
+
+    # An outcome string SpecGuard does not read, echoed verbatim. Nothing platform-side validates
+    # this column — `Ingest::Payload` does not — so a serializer that mapped unknown strings onto a
+    # known vocabulary would be inventing a verdict the producer never sent.
+    it "echoes an outcome it does not recognise rather than folding it into a known one" do
+      exotic = create_test_run(repository: repository, commit_sha: "exotic000001", duration_seconds: 5.0)
+      observe(exotic, path: "spec/models/a_spec.rb", duration: 3.0, line_number: 1,
+              name: "a", outcome: "aborted_by_runner")
+      expect(repository.latest_test_run).to eq(exotic)
+
+      expect(slowest_examples["rows"].first["outcome"]).to eq("aborted_by_runner")
+      expect(slowest_examples["reported_outcome_count"]).to eq(1)
+    end
+
+    # A row whose producer sent no description. `null` is the honest record of that, and the row is
+    # still LOCATABLE — which is the whole reason the location is served as operands rather than
+    # substituted through `#label`, whose fallback would put `"spec/models/a_spec.rb:1"` in the
+    # `name` field and make a nameless test indistinguishable from one named after its own file.
+    it "serves a nameless row as null and still locates it" do
+      nameless = create_test_run(repository: repository, commit_sha: "nameless0001", duration_seconds: 5.0)
+      observe(nameless, path: "spec/models/a_spec.rb", duration: 3.0, line_number: 42, name: nil)
+      expect(repository.latest_test_run).to eq(nameless)
+
+      row = slowest_examples["rows"].first
+
+      expect(row["name"]).to be_nil
+      expect(row["file_path"]).to eq("spec/models/a_spec.rb")
+      expect(row["line_number"]).to eq(42)
+    end
+
+    # THREE DISTINCT COLUMNS, and the one input that proves they are three. A shared example group
+    # is DEFINED in `spec/support/` and INCLUDED by the file that ran it, so `file_path` and
+    # `spec_file_path` genuinely differ — and `line_number` belongs to the first of them, never to
+    # the second. Serving `spec_file_path` is also what makes this block JOINABLE: it is the column
+    # the two rollups aggregate on, so a client can carry a ranked test back to its rollup row.
+    it "keeps the definition site and the including file as separate operands" do
+      shared = create_test_run(repository: repository, commit_sha: "sharedex0001", duration_seconds: 5.0)
+      observe(shared, path: "spec/models/user_spec.rb", defined_in: "spec/support/shared_examples.rb",
+              duration: 3.0, line_number: 8, name: "behaves like an auditable record")
+      expect(repository.latest_test_run).to eq(shared)
+
+      row = slowest_examples["rows"].first
+
+      expect(row["file_path"]).to eq("spec/support/shared_examples.rb")
+      expect(row["line_number"]).to eq(8)
+      expect(row["spec_file_path"]).to eq("spec/models/user_spec.rb")
+      # And the rollup one rung up aggregated on the INCLUDING file, which is what the join is for.
+      expect(get_repository.dig("latest_run", "spec_files", "rows").first["path"])
+        .to eq(row["spec_file_path"])
+    end
+
+    # Untimed rows are OUT of the ranking and IN the coverage — the separation `slowest_in`'s
+    # `.timed` scope and `coverage_in`'s two different COUNTs exist to make. A client dividing
+    # `timed_count` by `recorded_count` learns the ranking covered four of six examples; one
+    # holding only the rows would report six.
+    it "ranks only the timed rows while counting all of them" do
+      observe(test_run, path: "spec/models/silent_spec.rb", duration: nil, line_number: 1, name: "silent one")
+      observe(test_run, path: "spec/models/silent_spec.rb", duration: nil, line_number: 2, name: "silent two")
+
+      expect(slowest_examples["rows"].map { it["name"] }).not_to include("silent one", "silent two")
+      expect(slowest_examples["rows"].length).to eq(4)
+      expect(slowest_examples["recorded_count"]).to eq(6)
+      expect(slowest_examples["timed_count"]).to eq(4)
+    end
+
+    # AC3's figure that `rows.size` cannot supply. The list stops at the limit, so its own length
+    # reads the same on "the 10 slowest of 300" and "all 10 this run timed" — and a client with only
+    # the array would report the second while looking at the first.
+    it "reports how many examples the run recorded in all, past the limit that cut the list" do
+      limit = SpecObservation::SLOWEST_LIMIT
+      (limit + 5).times do |index|
+        observe(test_run, path: "spec/extra_spec.rb", duration: 20.0 + index, line_number: index,
+                name: "extra #{index}", outcome: "passed")
+      end
+
+      expect(slowest_examples["rows"].length).to eq(limit)
+      # Counted against the table rather than against a number written twice, so this cannot agree
+      # with a miscounted aggregate.
+      expect(slowest_examples["recorded_count"]).to eq(test_run.spec_observations.count)
+      expect(slowest_examples["recorded_count"]).to be > slowest_examples["rows"].length
+      expect(slowest_examples["limit"]).to eq(limit)
+      # And the list really is the SLOWEST ten, not the first ten the limit happened to reach.
+      expect(slowest_examples["rows"].first["duration_seconds"]).to eq(34.0)
+    end
+
+    # THE REASON THIS KEY IS SERVED AT ALL, stated as a guard rather than as a comment. Every
+    # figure is read off the endpoint's own response, so it is the three blocks disagreeing with
+    # each other: the heaviest AREA holds none of the two slowest TESTS, and no rollup row names a
+    # test. A client that "derived" slow tests from the rollups — the substitute this key exists to
+    # refuse — has no row to name and no name to report.
+    it "names a test, which neither rollup beside it can" do
+      # Two hundred cheap examples in one file: heaviest area AND heaviest file by SUM, with not
+      # one of its rows anywhere near the head of the ranking. Concentration and outliers are
+      # different questions, and this fixture is the run where the two answers disagree.
+      200.times do |index|
+        observe(test_run, path: "spec/bulk/a_spec.rb", duration: 0.1, line_number: index,
+                name: "bulk #{index}")
+      end
+      body = get_repository["latest_run"]
+
+      expect(body.dig("spec_directories", "rows").first["path"]).to eq("spec/bulk")
+      expect(body.dig("spec_files", "rows").first["path"]).to eq("spec/bulk/a_spec.rb")
+      # The slowest TEST is in neither of them — so the ranking is not recoverable by reading a
+      # rollup and opening its top row, which is the substitute this key exists to refuse.
+      expect(body.dig("slowest_examples", "rows").first["name"]).to eq("Checkout completes an order")
+      expect(body.dig("slowest_examples", "rows").first["spec_file_path"]).to eq("spec/requests/checkout_spec.rb")
+      # And no rollup row carries a name at all, at either grain: they rank populations, and a
+      # population has no description to report.
+      expect(body.dig("spec_files", "rows").first.keys).not_to include("name")
+      expect(body.dig("spec_directories", "rows").first.keys).not_to include("name")
+    end
+  end
+
   # AC2. The whole pre-SPGD-255 corpus, plus every client that sends no per-example detail.
   describe "a run that recorded no per-example rows" do
     it "serves spec_files as null, with the key still present" do
@@ -1178,6 +1450,42 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
       expect(repository.latest_test_run.spec_observations).to be_empty
       expect(block).to have_key("spec_directories")
       expect(block["spec_directories"]).to be_nil
+    end
+
+    # AC1 at the per-example grain, and its own example on the rule the two above set: three keys
+    # gated by three different presenters' `#recorded?`, so a change that unblanked one leaves the
+    # others' guards green and must be named by a red example of its own.
+    #
+    # The gate is `SlowestExamples#recorded?`, NOT `#any?`, and that distinction has no counterpart
+    # in the two blocks above. A run that recorded fifty examples and timed none of them has an
+    # EMPTY ranking over a real per-example grain, and `#recorded?` serves the block for it while
+    # `rows.any?` would blank it — asserting the run whose observations are genuinely absent is
+    # what keeps this example about the gate rather than about the emptiness of the array.
+    it "serves slowest_examples as null, with the key still present" do
+      create_test_run(repository: repository, commit_sha: "norows000003", duration_seconds: 42.5)
+
+      block = get_repository["latest_run"]
+
+      expect(repository.latest_test_run.spec_observations).to be_empty
+      expect(block).to have_key("slowest_examples")
+      expect(block["slowest_examples"]).to be_nil
+    end
+
+    # The other side of that gate, and the reason it is `#recorded?`. This run RECORDED rows and
+    # timed none of them, so there is a per-example grain to disclose and an empty ranking over it
+    # — the state a `rows.any?` gate would serve as `null`, telling a client the run reported no
+    # per-example detail when it reported fifty examples' worth.
+    it "serves the block, with an empty ranking, for a run that recorded rows and timed none" do
+      untimed = create_test_run(repository: repository, commit_sha: "untimed00001", duration_seconds: 42.5)
+      3.times { |index| observe(untimed, path: "spec/a_spec.rb", duration: nil, line_number: index, name: "a#{index}") }
+      expect(repository.latest_test_run).to eq(untimed)
+
+      block = get_repository.dig("latest_run", "slowest_examples")
+
+      expect(block).not_to be_nil
+      expect(block["rows"]).to eq([])
+      expect(block["recorded_count"]).to eq(3)
+      expect(block["timed_count"]).to eq(0)
     end
   end
 
@@ -1484,6 +1792,7 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
         "commit_sha" => third.commit_sha, "branch" => "main", "total_specs" => 40,
         "annotated_specs" => 10, "annotated_ratio" => 0.25, "duration_seconds" => 42.5,
         "shards" => nil, "spec_files" => nil, "spec_directories" => nil,
+        "slowest_examples" => nil,
         "suite_size_measured" => true,
         "ingested_at" => third.created_at.iso8601
       )
@@ -2508,11 +2817,15 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
       # one. A gate in front of the read would buy this run its query back at the price of a second
       # one on every run that does record.
       expect(area_grain_reads { get_repository }.length).to eq(1)
-      # And the UNRECORDED path reads the table twice IN TOTAL — no third. Asserted here and not
-      # only on the recorded fixture below, because a read matching neither `GROUP BY` is invisible
-      # to both per-grain guards by construction, and the unrecorded branch is exactly where an
-      # `exists?` gate or a preload would be tempting to add.
-      expect(observation_reads { get_repository }.length).to eq(2)
+      # And the UNRECORDED path reads the table FOUR times IN TOTAL — no fifth. Asserted here and
+      # not only on the recorded fixture below, because a read matching no grain's pattern is
+      # invisible to every per-grain guard by construction, and the unrecorded branch is exactly
+      # where an `exists?` gate or a preload would be tempting to add.
+      #
+      # Written as `1 + 1 + 2` rather than as a bare `4`, so the total is the SUM OF THE GRAINS it
+      # is meant to bound. A literal that had to be edited by hand each time a grain shipped is the
+      # silent rebaseline this file refuses everywhere else.
+      expect(observation_reads { get_repository }.length).to eq(4)
       expect(get_repository.dig("latest_run", "spec_directories")).to be_nil
 
       small = create_test_run(repository: repository, commit_sha: "acost0000002", duration_seconds: 42.5)
@@ -2546,28 +2859,121 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
 
       expect(repository.test_runs.count).to eq(16)
       expect(area_grain_reads { get_repository }.length).to eq(1)
-      # The N+1 this example exists to catch need not land on either grain's `GROUP BY` — a
-      # per-run preload of `spec_observations` matches neither, so the per-grain count alone would
+      # The N+1 this example exists to catch need not land on any grain's pattern — a per-run
+      # preload of `spec_observations` matches none of them, so the per-grain count alone would
       # stay at 1 through sixteen extra reads. The total is what names it.
-      expect(observation_reads { get_repository }.length).to eq(2)
+      expect(observation_reads { get_repository }.length).to eq(4)
     end
 
     # "GAINS EXACTLY ONE" — the half neither per-grain block can state, and the reason it is stated
-    # once rather than in both. Two guards each saying "my grain reads once" leave a third read
+    # once rather than in both. Two guards each saying "my grain reads once" leave a further read
     # added by anything else on this endpoint unnamed; the table-level total is what closes that,
     # and it is the criterion this ticket was written against.
-    it "reads spec_observations exactly twice in total — one aggregate per grain, and no third" do
+    #
+    # FOUR, as `1 + 1 + 2`: one aggregate per rollup grain and two for the per-example ranking,
+    # whose presenter issues a capped scan and a coverage aggregate. Restated as the sum of the
+    # three classified lists rather than as a literal, so a grain that stopped reading and another
+    # that started reading twice cannot cancel out into a passing total.
+    it "reads spec_observations exactly four times in total — one per rollup grain, two for the ranking, and no other" do
       run = create_test_run(repository: repository, commit_sha: "acosttotal01", duration_seconds: 42.5)
       observe(run, path: "spec/models/a_spec.rb", duration: 0.5, line_number: 1)
       observe(run, path: "spec/requests/b_spec.rb", duration: 0.5, line_number: 1)
 
-      area, file = observation_reads_by_grain { get_repository }
+      area, file, example = observation_reads_by_grain { get_repository }
 
       expect(area.length).to eq(1)
       expect(file.length).to eq(1)
-      # And the two classified reads are ALL of them — the assertion the per-grain blocks cannot
-      # make, because a read matching neither `GROUP BY` is invisible to both of them.
-      expect(observation_reads { get_repository }.length).to eq(2)
+      expect(example.length).to eq(2)
+      # And the classified reads are ALL of them — the assertion the per-grain blocks cannot make,
+      # because a read matching no grain's pattern is invisible to every one of them.
+      expect(observation_reads { get_repository }.length).to eq(area.length + file.length + example.length)
+      expect(observation_reads { get_repository }.length).to eq(4)
+    end
+  end
+
+  # AC5. The per-example ranking's own axis, stated on the two blocks above's terms — with one
+  # difference that has to be said out loud rather than inherited: this grain costs TWO, not one.
+  # `SlowestExamples.for` issues both reads unconditionally, so `#recorded?` is an answer DERIVED
+  # from them rather than a gate in front of them, and the pair is the honest figure: an indexed
+  # backward scan capped at `SLOWEST_LIMIT`, and one aggregate over the same index's leading column.
+  # Both sit behind `index_spec_observations_on_test_run_id_and_duration_seconds` and are
+  # EXPLAIN-certified in `spec/models/spec_observation_spec.rb`, which is where a plan belongs.
+  #
+  # The `+ 2` IS WRITTEN AS `+ 2` AND NEVER REBASELINED, on the precedent the sharded cost block
+  # sets above — but it is pinned as TWO CLASSIFIED READS rather than as a delta off a `count_queries`
+  # baseline, because there is no "off" state on this endpoint to take that baseline against: the
+  # two reads fire on every run, recorded or not, so a before-and-after delta cannot be measured at
+  # runtime the way the shard block's gated one can. Two positively-matched statements is the
+  # stronger form of the same claim — it says WHICH two, so a read that stopped being issued and a
+  # different one that started cannot cancel out — and the table-level total in the block above is
+  # what pins the `2` as an ADDITION to the rollups' `2` rather than a replacement of it.
+  describe "what the per-example ranking costs the endpoint" do
+    # The axis this example is NAMED for: the size of the suite. 20 examples over 2 files and 2000
+    # over 200 cost the same two reads, which is what makes the block affordable at the roadmap's
+    # 20,000-example design point. A serializer that fetched rows and sorted them in Ruby — or that
+    # took a third pass for the coverage figures — reads as three here and as more as the suite
+    # grows.
+    it "reads spec_observations exactly twice for this grain, on a run with rows and without" do
+      bare = create_test_run(repository: repository, commit_sha: "ecost0000001", duration_seconds: 42.5)
+      get_repository
+      expect(bare.spec_observations).to be_empty
+      # PAID ON THE RUN THAT HAS NOTHING TO DISCLOSE. `#recorded?` is computed FROM the coverage
+      # aggregate, so declining to serve the block costs exactly what serving it does.
+      expect(example_grain_reads { get_repository }.length).to eq(2)
+      expect(get_repository.dig("latest_run", "slowest_examples")).to be_nil
+
+      small = create_test_run(repository: repository, commit_sha: "ecost0000002", duration_seconds: 42.5)
+      2.times do |index|
+        10.times { |line| observe(small, path: "spec/small_#{index}_spec.rb", duration: 0.5, line_number: line) }
+      end
+      expect(repository.latest_test_run).to eq(small)
+      expect(example_grain_reads { get_repository }.length).to eq(2)
+      expect(get_repository.dig("latest_run", "slowest_examples", "recorded_count")).to eq(20)
+
+      big = create_test_run(repository: repository, commit_sha: "ecost0000003", duration_seconds: 42.5)
+      200.times do |index|
+        10.times { |line| observe(big, path: "spec/big_#{index}_spec.rb", duration: 0.5, line_number: line) }
+      end
+      expect(repository.latest_test_run).to eq(big)
+      expect(example_grain_reads { get_repository }.length).to eq(2)
+      # And the ranking really was served at 2000 examples — a serializer that quietly stopped
+      # emitting the block above some width would satisfy every count above.
+      expect(get_repository.dig("latest_run", "slowest_examples", "recorded_count")).to eq(2000)
+      expect(get_repository.dig("latest_run", "slowest_examples", "rows").length)
+        .to eq(SpecObservation::SLOWEST_LIMIT)
+    end
+
+    # THE WHOLE ENDPOINT'S count, not this table's — the figure a client actually pays, and the one
+    # `queries_against`'s per-table narrowing cannot see. Stated as UNCHANGED across two orders of
+    # magnitude of suite size rather than as a number, because the number belongs to the endpoint's
+    # other blocks and would rebaseline every time one of them changed.
+    it "leaves the endpoint's total query count unmoved as the suite grows" do
+      run = create_test_run(repository: repository, commit_sha: "ecosttotal01", duration_seconds: 42.5)
+      10.times { |line| observe(run, path: "spec/a_spec.rb", duration: 0.5, line_number: line) }
+      get_repository
+      baseline = count_queries { get_repository }
+
+      big = create_test_run(repository: repository, commit_sha: "ecosttotal02", duration_seconds: 42.5)
+      200.times do |index|
+        10.times { |line| observe(big, path: "spec/big_#{index}_spec.rb", duration: 0.5, line_number: line) }
+      end
+      expect(repository.latest_test_run).to eq(big)
+      expect(count_queries { get_repository }).to eq(baseline)
+      expect(get_repository.dig("latest_run", "slowest_examples", "rows").length)
+        .to eq(SpecObservation::SLOWEST_LIMIT)
+    end
+
+    # The history axis, restated for this key alone. `slowest_examples` is served on `latest_run`
+    # and on nothing else, so a window of sixteen runs must not read the table thirty-two times —
+    # the N+1 that is invisible in the examples above, where every fixture has one run to serve.
+    it "reads it twice whatever the history holds" do
+      run = create_test_run(repository: repository, commit_sha: "ecostwindow1", duration_seconds: 42.5)
+      observe(run, path: "spec/models/a_spec.rb", duration: 0.5, line_number: 1)
+      15.times { |index| create_test_run(repository: repository, commit_sha: "ecostwin%04d" % index) }
+
+      expect(repository.test_runs.count).to eq(16)
+      expect(example_grain_reads { get_repository }.length).to eq(2)
+      expect(observation_reads { get_repository }.length).to eq(4)
     end
   end
 end
