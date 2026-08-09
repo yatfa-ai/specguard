@@ -2822,9 +2822,12 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
       # invisible to every per-grain guard by construction, and the unrecorded branch is exactly
       # where an `exists?` gate or a preload would be tempting to add.
       #
-      # Written as `1 + 1 + 2` rather than as a bare `4`, so the total is the SUM OF THE GRAINS it
-      # is meant to bound. A literal that had to be edited by hand each time a grain shipped is the
-      # silent rebaseline this file refuses everywhere else.
+      # Pinned as a bare `4` here, and that is deliberate rather than an oversight: this example
+      # classifies nothing — it holds `area_grain_reads` alone, so there are no grain lists in
+      # scope to sum, and putting them in scope would re-narrow the one assertion that has to stay
+      # UNclassified to catch the read matching no grain's pattern. The sum-of-grains form belongs
+      # at the site that already does the classifying, where it is written ALONGSIDE the literal
+      # and not in place of it — see "reads spec_observations exactly four times in total" below.
       expect(observation_reads { get_repository }.length).to eq(4)
       expect(get_repository.dig("latest_run", "spec_directories")).to be_nil
 
