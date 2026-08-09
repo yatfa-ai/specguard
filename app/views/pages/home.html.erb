@@ -21,7 +21,13 @@
         </p>
 
         <% if github_oauth_configured? %>
+          <%# turbo: false is load-bearing. OmniAuth's request phase answers this POST with a 302 to
+              github.com; Turbo drives button_to through fetch, and a fetch cannot follow a
+              cross-origin redirect — the response is opaque, so the click silently does nothing.
+              Opting the form out of Turbo makes it a native browser POST, which follows the
+              redirect to GitHub normally. %>
           <%= button_to "Sign in with GitHub", github_auth_path,
+                        form: { data: { turbo: false } },
                         class: UI::ButtonComponent.classes(variant: :primary) %>
         <% else %>
           <%= render UI::AlertComponent.new(tone: :warning, title: "GitHub OAuth is not configured") do %>
