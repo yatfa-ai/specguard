@@ -1515,12 +1515,21 @@
                       file. `nil` is omitted from the query string, so a page nobody asked a branch
                       of links exactly as it did before.
 
+                      The AREA ask rides through for the same reason, and the reciprocity is the
+                      point: the "Spec files in this directory" panel below offers this identical
+                      gesture on files this capped ten cannot show, and it carries the area through.
+                      If this one did not, the same gesture on the same target panel would close
+                      the area from one list and keep it from the other, with nothing on the page
+                      telling a reader which they were about to get. Picking a file is not a
+                      request to close the area, from either list.
+
                       `aria-current` on the open file, because this is a list of choices with one
                       of them taken and the panel below is a long way down the page — a reader
                       arriving back at this table by keyboard needs to be told which row they are
                       already looking at. %>
                   <%= link_to file.path,
                               repository_path(@repository, branch: @trajectory_branch_request,
+                                              spec_directory: @spec_directory_request,
                                               spec_file: file.path, anchor: "spec-file-examples"),
                               class: "underline underline-offset-2 decoration-app-border-light " \
                                      "text-app-content hover:decoration-app-content",
@@ -1599,11 +1608,20 @@
               reader who most needs the drill-down is the one least likely to want to do that. It
               carries the branch ask through and anchors back at the panel the file was picked
               from, so closing a file returns the reader where they opened it rather than at the
-              top of a long page. %>
+              top of a long page.
+
+              It carries any OPEN AREA through, and the panel it anchors at follows the area rather
+              than being fixed. A file reached through the area drill-down was NOT picked from
+              "Heaviest spec files" — that panel's capped ten is precisely where such a file is
+              not — so dropping the area here would close the middle rung on the way back and land
+              the reader at a list their file is absent from. This is the same invariant "Close
+              directory" keeps in the other direction: closing a file is not a request to close the
+              area, exactly as closing an area is not a request to close the file. %>
           <%= render UI::ButtonComponent.new(
                 variant: :ghost,
                 href: repository_path(@repository, branch: @trajectory_branch_request,
-                                      anchor: "spec-file-durations")
+                                      spec_directory: @spec_directory_request,
+                                      anchor: @spec_directory_request ? "spec-directory-files" : "spec-file-durations")
               ) { "Close file" } %>
         <% end %>
         <% if @spec_file_examples.recorded? %>
@@ -1834,7 +1852,35 @@
                                             describedby: "spec-directory-durations-basis") do %>
             <% @spec_directory_durations.rows.each do |directory| %>
               <tr>
-                <td class="px-3 py-2 font-mono text-xs text-app-content"><%= directory.path %></td>
+                <td class="px-3 py-2 font-mono text-xs text-app-content">
+                  <%# The way INTO the area, and the rung that was missing. Every ranking on this
+                      page is a capped ten, and this one is the LEAST escapable of them: the by-file
+                      panel above is also ten rows long, so an area that is heavy because it holds
+                      forty ordinary files has not one of its files in that list — its rows were
+                      reachable from nowhere at all. The path was already being rendered, so the
+                      drill-down costs no query to offer, only the one it takes when a reader asks.
+
+                      `?spec_directory=`, following the `?spec_file=` precedent directly above and
+                      the `?branch=` one before it rather than a nested route: a directory path
+                      contains `/` and makes a poor route segment, and the panel and its drill-down
+                      read one run on one page.
+
+                      The branch ask is CARRIED THROUGH for the reason the file link gives: `?branch=`
+                      anchors the "Suite growth" panel and nothing else, and dropping it here would
+                      re-anchor a chart the reader did not touch as the side effect of opening an
+                      area. `nil` is omitted from the query string, so a page nobody asked a branch
+                      of links exactly as it did before.
+
+                      `aria-current` on the open area, because this is a list of choices with one of
+                      them taken and the panel below is a long way down the page. %>
+                  <%= link_to directory.path,
+                              repository_path(@repository, branch: @trajectory_branch_request,
+                                              spec_directory: directory.path,
+                                              anchor: "spec-directory-files"),
+                              class: "underline underline-offset-2 decoration-app-border-light " \
+                                     "text-app-content hover:decoration-app-content",
+                              aria: { current: directory.path == @spec_directory_request ? "true" : nil } %>
+                </td>
                 <td class="px-3 py-2 text-app-content-secondary tabular-nums">
                   <%# Always a fraction, never a bare count: the denominator is the point of the
                       column, and a complete area has to be visibly complete rather than merely
@@ -1869,6 +1915,183 @@
                              "#{'directory'.pluralize(@spec_directory_durations.directory_count)} " \
                              "and a duration for none of them, so there is no wall clock to " \
                              "attribute to any area. An example that never ran reports no duration."
+              ) %>
+        <% end %>
+      <% end %>
+    <% end %>
+
+    <%# == One spec directory, opened
+        The rung BELOW the panel above and ABOVE the file drill-down further up — the middle of the
+        three, and the one that was missing. A reader could learn that `spec/models` carries six
+        minutes of the run and, separately, that `spec/models/order_spec.rb` holds three hundred
+        examples; nothing joined them. The by-file rollup could not: it is a capped ten too, and an
+        area is heavy exactly when it holds many ordinary files, so the heaviest area on this page
+        is the one with none of its files in that list. Its rows were reachable from nowhere.
+
+        Each file listed here links into the "Examples in this spec file" panel above, which closes
+        area → file → example. Both parameters live on one URL, so opening a file does not close the
+        area it was opened from.
+
+        Rendered only when an area was ASKED for, and the read is taken only then: a page nobody
+        asked an area of costs exactly what it cost before this existed.
+
+        An EQUALITY predicate on the area expression, at ONE depth — `spec/models/orders` is its own
+        row in the panel above and is not gathered into `spec/models` here. A SUBTREE would be a
+        prefix predicate, wants a `text_pattern_ops` index and therefore a migration, and would
+        re-open the drill-down TREE `SpecObservation.directory_durations_in` says is a different
+        question. It is deliberately not this panel, exactly as it is deliberately not the one above.
+
+        Same visibility rule and same gate as the panels around it: read-only suite telemetry on
+        `current_repository(:view)`, outside `manage_keys`, and nothing here widens that. %>
+    <% if @spec_directory_files %>
+      <%= render UI::PanelComponent.new(title: "Spec files in this directory", id: "spec-directory-files",
+                                        class: "lg:col-span-3") do |panel| %>
+        <% panel.with_actions do %>
+          <%# The way back OUT, for the reason the file drill-down gives: this panel is reached by a
+              link and nothing else removes the parameter, so without this the only exit is editing
+              the URL. It carries the branch ask through and anchors back at the panel the area was
+              picked from. It also carries any OPEN FILE through — the file panel is a separate
+              panel a reader opened separately, and closing the area is not a request to close it. %>
+          <%= render UI::ButtonComponent.new(
+                variant: :ghost,
+                href: repository_path(@repository, branch: @trajectory_branch_request,
+                                      spec_file: @spec_file_request,
+                                      anchor: "spec-directory-durations")
+              ) { "Close directory" } %>
+        <% end %>
+        <% if @spec_directory_files.recorded? %>
+          <%# What the list IS, before the list — the discipline every panel on this page keeps, with
+              the axis this grain adds: the list is capped over FILES and its coverage is counted
+              over EXAMPLES, and on a truncated area those are two different populations. Both come
+              back as windows on the one read that returned the rows
+              (`SpecObservation.files_in_directory`), so neither can end up describing a different
+              row set from the table below.
+
+              Never off `TestRun#total_specs_count` on the Overview panel, which is re-derived by
+              SUM over shard reports and can legitimately differ. %>
+          <p class="text-xs text-app-muted mb-3" id="spec-directory-files-basis">
+            <span class="font-mono text-app-content-secondary"><%= @spec_directory_files.path %></span>
+            —
+            <% if @spec_directory_files.any_timed? %>
+              <%# "Heaviest first" is only sayable where something was measured. The cap is
+                  disclosed against the AREA's file count rather than against the list's own
+                  length, which equals a limit the reader cannot see. %>
+              <% if @spec_directory_files.truncated? %>
+                the <%= number_with_delimiter(@spec_directory_files.rows.size) %> heaviest of the
+                <%= number_with_delimiter(@spec_directory_files.file_count) %> spec files this run
+                recorded in this area, heaviest first.
+              <% else %>
+                all <%= number_with_delimiter(@spec_directory_files.file_count) %>
+                <%= "spec file".pluralize(@spec_directory_files.file_count) %> this run recorded in
+                this area, heaviest first.
+              <% end %>
+            <% else %>
+              <%# Files exist here and not one of their examples was timed. Every file's SUM is
+                  NULL, so there is a list and no ranking at all — and "heaviest first" over it
+                  would be a promise about an order nothing measured. Ordered by path instead, which
+                  is what the read falls back to once every total ties. %>
+              <% if @spec_directory_files.truncated? %>
+                <%= number_with_delimiter(@spec_directory_files.rows.size) %> of the
+                <%= number_with_delimiter(@spec_directory_files.file_count) %> spec files this run
+                recorded in this area, in path order — nothing here was timed, so there is no order
+                to rank them in.
+              <% else %>
+                all <%= number_with_delimiter(@spec_directory_files.file_count) %>
+                <%= "spec file".pluralize(@spec_directory_files.file_count) %> this run recorded in
+                this area, in path order — nothing here was timed, so there is no order to rank
+                them in.
+              <% end %>
+            <% end %>
+            <%# The coverage, counted in EXAMPLES over the whole area — the figure a list of files
+                cannot show and the one the totals were actually summed over. Through
+                `SpecDirectoryFiles#coverage_label`, which is the spelling the area's own row in the
+                panel above uses, so the same claim about the same area cannot be stated two ways. %>
+            <% if @spec_directory_files.complete? %>
+              Every one of the
+              <%= number_with_delimiter(@spec_directory_files.recorded_count) %>
+              <%= "example".pluralize(@spec_directory_files.recorded_count) %> this run recorded in
+              this area reported a duration, so each total covers the whole of its file.
+            <% elsif @spec_directory_files.any_timed? %>
+              <%# The cross-reference is CONDITIONAL, because the panel above is a capped ten and
+                  this panel answers about any area that was asked for. An area outside that ten
+                  renders here in full and has no row up there to agree with, and a sentence
+                  pointing at a row that is not on the page is a false claim about the page. Where
+                  the row IS there the agreement is worth stating — it is the reader's own check
+                  that the drill-down and the rollup were summed over the same rows. %>
+              Across this area's examples, durations cover
+              <%= @spec_directory_files.coverage_label
+                  %><% if spec_directory_listed_in_rollup?(@spec_directory_durations,
+                                                           @spec_directory_files.path) %> — the same
+                fraction the row for this area states in the panel above<% end %>. A file
+              whose examples did not all report a duration has a total covering only the ones that
+              did, and a file that reported none has no total to state rather than a zero.
+            <% else %>
+              Not one of the
+              <%= number_with_delimiter(@spec_directory_files.recorded_count) %>
+              <%= "example".pluralize(@spec_directory_files.recorded_count) %> this run recorded in
+              this area reported a duration, so there is no wall clock to attribute to any file in
+              it.
+            <% end %>
+            An example that never ran has no duration to report, so a missing timing is a faithful
+            record rather than a gap — and it is not a zero.
+            This area is the immediate parent of the files listed, so a nested area such as a
+            subdirectory of it is its own row in the panel above rather than part of this list.
+            Counted off the rows this run wrote here, which is a different figure from the suite
+            size on the Overview panel above and may legitimately differ from it.
+          </p>
+          <%= render UI::TableComponent.new(columns: ["Spec file", "Examples timed", "Total duration"],
+                                            describedby: "spec-directory-files-basis") do %>
+            <% @spec_directory_files.rows.each do |file| %>
+              <tr>
+                <td class="px-3 py-2 font-mono text-xs text-app-content">
+                  <%# The LAST rung, and it already exists: this is the same `?spec_file=` link the
+                      "Heaviest spec files" panel carries, offered here on files that panel's own
+                      cap cannot show. Area → file → example, closed.
+
+                      Both parameters ride on the one URL — the area ask is carried through beside
+                      the file ask — so opening a file out of this list does not close the area it
+                      was opened from, and the reader can pick a second file without navigating
+                      back. The branch ask rides along too, for the reason every link on this page
+                      carries it: it anchors the "Suite growth" chart and nothing here should
+                      re-anchor a chart the reader did not touch. %>
+                  <%= link_to file.path,
+                              repository_path(@repository, branch: @trajectory_branch_request,
+                                              spec_directory: @spec_directory_files.path,
+                                              spec_file: file.path, anchor: "spec-file-examples"),
+                              class: "underline underline-offset-2 decoration-app-border-light " \
+                                     "text-app-content hover:decoration-app-content",
+                              aria: { current: file.path == @spec_file_request ? "true" : nil } %>
+                </td>
+                <td class="px-3 py-2 text-app-content-secondary tabular-nums">
+                  <%# Always a fraction, never a bare count: the denominator is the point of the
+                      column, and a complete file has to be visibly complete rather than merely
+                      unremarked. %>
+                  <%= file.coverage_label %>
+                </td>
+                <td class="px-3 py-2 text-app-content tabular-nums">
+                  <%# Through `SpecObservation.humanized_duration`, the same seam every other grain
+                      on this page renders through — so a file that measured nothing says "not
+                      reported" rather than wearing the spelling of a zero. %>
+                  <%= file.duration_label %>
+                </td>
+              </tr>
+            <% end %>
+          <% end %>
+        <% else %>
+          <%# The run recorded nothing for the area that was asked for. An ordinary answer and not
+              an error: `?spec_directory=` is a URL a reader types, edits and bookmarks, so a
+              deleted directory, a renamed one and a typo all arrive here. It names the path back —
+              an empty state without a subject is a sentence about nothing — and points at the panel
+              above, described by what it ACTUALLY holds: that panel is a capped ten, not a
+              catalogue of the run's areas, so on a suite of forty areas the correct spelling may
+              not be in it either. Pointing a reader at a list under a promise it does not keep is
+              the same over-claim the coverage sentence above refuses. %>
+          <%= render UI::EmptyStateComponent.new(
+                title: "No spec files in this directory",
+                description: "This run recorded no examples in #{@spec_directory_files.path}. It " \
+                             "may have been renamed or deleted since, or never have run in this " \
+                             "run at all — the “Heaviest spec directories” panel above lists the " \
+                             "areas this run spent the most time in."
               ) %>
         <% end %>
       <% end %>

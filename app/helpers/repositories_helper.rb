@@ -350,6 +350,29 @@ module RepositoriesHelper
     end
   end
 
+  # == The "Spec files in this directory" panel's sentences
+
+  # Whether the area the drill-down panel is open on has its own row in the "Heaviest spec
+  # directories" rollup above it — the question that decides whether the panel may cross-reference
+  # that rollup at all.
+  #
+  # It is a real question and not a formality. The rollup is capped at
+  # `SpecObservation::HEAVIEST_DIRECTORIES_LIMIT`, and `?spec_directory=` is a URL a reader types,
+  # edits and bookmarks: the run's eleventh-heaviest area renders this panel with rows and real
+  # counts while having no row above it at all. A caption is a claim, and "the same fraction the row
+  # for this area states in the panel above" is a claim about a DIFFERENT panel's contents that the
+  # object making it cannot see. So the view asks here rather than assuming, and says it only where
+  # the reader can turn around and check it.
+  #
+  # Off the rollup's own rows rather than off a second query: the rows are already loaded and the
+  # question is precisely "is it on the page", which is what `rows` means and what a re-read would
+  # not answer.
+  def spec_directory_listed_in_rollup?(rollup, path)
+    return false if rollup.nil?
+
+    rollup.rows.any? { |row| row.path == path }
+  end
+
   # == The "Tests whose outcome changed" panel's sentences
 
   # What window every figure on the panel was drawn from — how many runs, on which branch, and how

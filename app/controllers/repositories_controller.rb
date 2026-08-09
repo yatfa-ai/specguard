@@ -17,6 +17,13 @@ class RepositoriesController < ApplicationController
   # `.presence` on one of them is a 500 on a URL anyone can type.
   include RequestedSpecFileParam
 
+  # `?spec_directory=` read as a spec directory path, for the drill-down under the "Heaviest spec
+  # directories" panel. Its own concern rather than a widening of the one above, for the reason both
+  # of theirs carry in full: one guard answering two parameters makes "which shapes does each
+  # tolerate" a single question nobody asked, and this value reaches a SQL equality comparison
+  # directly, where a non-String does not raise but answers a different question.
+  include RequestedSpecDirectoryParam
+
   before_action :require_authentication
 
   # The first four are per-card questions asked by repositories/index, once per repository in the
@@ -209,6 +216,33 @@ class RepositoriesController < ApplicationController
     # Guarded identically, and on nothing else. ONE query, not growing with the size of the suite:
     # see `SpecDirectoryDurations`.
     @spec_directory_durations = SpecDirectoryDurations.for(@latest_test_run) if @latest_test_run
+    # One area out of THAT rollup, opened: not which areas the wall clock went into but WHICH SPEC
+    # FILES are in the one the reader picked. The middle rung of the drill-in, and the rung that was
+    # missing — the by-file rollup above is a capped ten, so the heaviest area on this page is
+    # precisely the one whose files are structurally absent from it (see `SpecDirectoryDurations`),
+    # and its files could be reached from nowhere. Each file listed here is itself a link into the
+    # `?spec_file=` panel above, which closes area → file → example.
+    #
+    # An EQUALITY narrow at one depth and not a subtree: `spec/models/orders` is its own area here
+    # exactly as it is its own row in the rollup. `SpecObservation.files_in_directory` holds the
+    # argument, including why a prefix `LIKE` would be a different feature and would want a
+    # migration this one does not.
+    #
+    # Guarded on an area having been ASKED for as well as on there being a run, so a page nobody
+    # asked an area of issues no query at all. The ask is the raw parameter and is kept whatever it
+    # names: a run that recorded nothing for that path is an ordinary answer (a stale bookmark, a
+    # deleted directory, a typo) and `SpecDirectoryFiles` names it in an empty state.
+    #
+    # Anchored on `@latest_test_run` for the reason the file drill-down above is: the area was
+    # picked out of a rollup of that run, so its files must come from that same run or the panel
+    # would be answering about rows the reader did not click.
+    #
+    # ONE query, bounded by the size of the AREA and not of the suite, and none at all without an
+    # ask: see `SpecDirectoryFiles`.
+    @spec_directory_request = requested_spec_directory
+    if @latest_test_run && @spec_directory_request
+      @spec_directory_files = SpecDirectoryFiles.for(@latest_test_run, @spec_directory_request)
+    end
     # The same areas, asked of TWO runs instead of one: not which area carries the time but which
     # area got bigger or smaller since the previous run ON THIS BRANCH. `@previous_test_run` above
     # is that run and is already in memory, so riding it costs nothing and keeps this panel on the
