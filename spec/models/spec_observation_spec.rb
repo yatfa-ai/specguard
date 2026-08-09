@@ -273,6 +273,25 @@ RSpec.describe SpecObservation do
         expect(plan).not_to match(/Seq Scan on spec_observations/)
       end
 
+      # The same certification for the rung BETWEEN those two, and the reason it also ships without
+      # a migration — which is the claim most worth measuring here, because this read is the one
+      # that looks like it wants a `text_pattern_ops` index and does not.
+      #
+      # It adds an EXPRESSION predicate over the by-directory rollup above: `DIRECTORY_EXPRESSION =
+      # ?`. No index on this table can serve that, and it therefore decides nothing about the access
+      # path — `where(test_run_id:)` still does, exactly as it does for the rollup, and the grouping
+      # hash-aggregates on top. A `text_pattern_ops` index would serve `spec_file_path LIKE
+      # 'spec/d3/%'`, a PREFIX predicate; this read issues none, and the example directly above in
+      # "what they return" pins that the narrowing is an equality at one depth rather than a subtree.
+      # If a future edit turns it into a prefix `LIKE`, that example fails first and this one records
+      # what the plan cost.
+      it "reads the panel's one-directory drill-down off an index rather than scanning the table" do
+        plan = plan_for_actual_sql { described_class.files_in_directory(run, "spec/d3") }
+
+        expect(plan).to match(INDEXED_BY_RUN)
+        expect(plan).not_to match(/Seq Scan on spec_observations/)
+      end
+
       # The same certification for the read that spans TWO runs, and the reason it ships without a
       # migration. Twice the rows is not a different shape: it narrows on `test_run_id` with an `IN`
       # list of two, which `index_spec_observations_on_test_run_id` serves exactly as it serves one,
@@ -983,6 +1002,167 @@ RSpec.describe SpecObservation do
 
       it "reads no directories for a run that recorded nothing" do
         expect(described_class.directory_durations_in(run)).to eq([])
+      end
+    end
+
+    # The rung BETWEEN the two above: one area's files, rather than every area's total or one
+    # file's examples. The read that closes area → file → example, and the one whose absence made
+    # the heaviest area on the page the hardest place in the suite to look inside.
+    describe ".files_in_directory" do
+      # THE question this read exists for, and the reason the by-file rollup could not answer it:
+      # `spec/models` here holds three files none of which is the run's heaviest, and a by-file top
+      # ten would surface `spec/requests/checkout_spec.rb` instead of any of them.
+      it "totals each file of the area it was asked about, heaviest file first" do
+        observe(run, duration: 3.5, line_number: 1, spec_file_path: "spec/models/order_spec.rb")
+        observe(run, duration: 1.0, line_number: 2, spec_file_path: "spec/models/refund_spec.rb")
+        observe(run, duration: 2.0, line_number: 3, spec_file_path: "spec/models/user_spec.rb")
+        observe(run, duration: 9.0, line_number: 4, spec_file_path: "spec/requests/checkout_spec.rb")
+
+        expect(described_class.files_in_directory(run, "spec/models")).to eq(
+          [["spec/models/order_spec.rb", 3.5, 1, 1, 3, 3, 3],
+           ["spec/models/user_spec.rb", 2.0, 1, 1, 3, 3, 3],
+           ["spec/models/refund_spec.rb", 1.0, 1, 1, 3, 3, 3]]
+        )
+      end
+
+      # THE fence this slice draws, and the assertion that fails the moment it is crossed. The
+      # predicate is an EQUALITY on the area, so `spec/models/orders` is its own area exactly as it
+      # is its own row in `.directory_durations_in` — a prefix `LIKE 'spec/models/%'` would gather
+      # it in, double-count its rows against the rollup one rung up, and re-open the drill-down
+      # tree that read's comment says is a different question.
+      it "reads the area at its own depth, gathering no nested area into it" do
+        observe(run, duration: 1.0, line_number: 1, spec_file_path: "spec/models/order_spec.rb")
+        observe(run, duration: 2.0, line_number: 2, spec_file_path: "spec/models/orders/refund_spec.rb")
+
+        expect(described_class.files_in_directory(run, "spec/models"))
+          .to eq([["spec/models/order_spec.rb", 1.0, 1, 1, 1, 1, 1]])
+        expect(described_class.files_in_directory(run, "spec/models/orders"))
+          .to eq([["spec/models/orders/refund_spec.rb", 2.0, 1, 1, 1, 1, 1]])
+      end
+
+      # The area name is computed by the SAME expression the rollup above groups by, so the path a
+      # link carries is a path this read can answer. A repository-root file's area is `.` there and
+      # has to be `.` here, or the one row the rollup names that way opens an empty panel.
+      it "answers for the repository root under the name the rollup gives it" do
+        observe(run, duration: 3.0, line_number: 1, spec_file_path: "smoke_spec.rb")
+        observe(run, duration: 1.0, line_number: 2, spec_file_path: "spec/models/order_spec.rb")
+
+        expect(described_class.files_in_directory(run, ".")).to eq([["smoke_spec.rb", 3.0, 1, 1, 1, 1, 1]])
+      end
+
+      # Keyed on the INCLUDING file, so a shared example group's time lands on the area that RAN it
+      # — the rule `Ingest::ObservationRecorder` writes `spec_file_path` for, and the rule the
+      # rollup one rung up is asserted against. A read keyed on `file_path` would list
+      # `spec/support/shared_examples.rb` under an area that never included it.
+      it "lists a shared example group's row under the file that ran it" do
+        observe(run, duration: 1.5, line_number: 4, file_path: "spec/support/shared_examples.rb",
+                     spec_file_path: "spec/models/order_spec.rb",
+                     example_id: "./spec/models/order_spec.rb[1:1:1]")
+
+        expect(described_class.files_in_directory(run, "spec/models").map(&:first))
+          .to eq(["spec/models/order_spec.rb"])
+        expect(described_class.files_in_directory(run, "spec/support")).to eq([])
+      end
+
+      # THE example this read exists to get right, and the one the obvious implementation fails
+      # twice over: `group(...).sum(:duration_seconds)` casts a NULL sum to `0.0` on the way back
+      # into Ruby, and `SUM(...) DESC` is NULLS FIRST in Postgres — so a file NONE of whose
+      # examples were timed comes back as a measured zero AND is named the heaviest file in the
+      # area. Both halves are asserted because they fail differently.
+      it "hands back a nil for a file that reported no timing at all, sorted below every total" do
+        observe(run, duration: nil, line_number: 1, spec_file_path: "spec/models/never_ran_spec.rb")
+        observe(run, duration: 0.25, line_number: 2, spec_file_path: "spec/models/quick_spec.rb")
+
+        files = described_class.files_in_directory(run, "spec/models")
+
+        expect(files).to eq([["spec/models/quick_spec.rb", 0.25, 1, 1, 2, 2, 1],
+                             ["spec/models/never_ran_spec.rb", nil, 1, 0, 2, 2, 1]])
+        expect(files.last[1]).to be_nil
+      end
+
+      it "counts each file's rows against the ones that carried a duration" do
+        observe(run, duration: 4.0, line_number: 1, spec_file_path: "spec/models/order_spec.rb")
+        observe(run, duration: nil, line_number: 2, spec_file_path: "spec/models/order_spec.rb")
+
+        expect(described_class.files_in_directory(run, "spec/models"))
+          .to eq([["spec/models/order_spec.rb", 4.0, 2, 1, 1, 2, 1]])
+      end
+
+      it "reads the run it was asked about and no other" do
+        other = create_test_run(repository: repository, commit_sha: "0ther")
+        observe(run, duration: 1.0, line_number: 1, spec_file_path: "spec/models/ours_spec.rb")
+        observe(other, duration: 99.0, line_number: 1, spec_file_path: "spec/models/theirs_spec.rb")
+
+        expect(described_class.files_in_directory(run, "spec/models"))
+          .to eq([["spec/models/ours_spec.rb", 1.0, 1, 1, 1, 1, 1]])
+      end
+
+      # Its OWN limit, not the by-file rollup's and not the by-file drill-down's. The default is
+      # asserted through `SPEC_DIRECTORY_FILES_LIMIT` by name, so a reuse of either sibling constant
+      # cannot pass this example by happening to be equal today.
+      it "caps at the limit it was given, and defaults to the panel's own" do
+        (described_class::SPEC_DIRECTORY_FILES_LIMIT + 2).times do |i|
+          observe(run, duration: i.to_f + 1, line_number: i + 1,
+                       spec_file_path: "spec/models/f#{format('%03d', i)}_spec.rb")
+        end
+
+        expect(described_class.files_in_directory(run, "spec/models").size)
+          .to eq(described_class::SPEC_DIRECTORY_FILES_LIMIT)
+        expect(described_class.files_in_directory(run, "spec/models", limit: 2).map(&:first))
+          .to eq(["spec/models/f026_spec.rb", "spec/models/f025_spec.rb"])
+      end
+
+      # What the capped list is the head OF, in the same round trip. `COUNT(*) OVER ()` runs after
+      # `GROUP BY` and before `LIMIT`, so it counts the area's FILES rather than the rows on the
+      # page — twelve files holding twenty-four examples is twelve, not twenty-four and not the cap.
+      it "reports how many files the area holds, whatever the limit returns" do
+        12.times do |i|
+          2.times do |j|
+            observe(run, duration: 1.0, line_number: (i * 2) + j,
+                         spec_file_path: "spec/models/f#{i}_spec.rb")
+          end
+        end
+
+        expect(described_class.files_in_directory(run, "spec/models", limit: 3).map { |row| row[4] })
+          .to eq([12, 12, 12])
+        expect(described_class.files_in_directory(run, "spec/models", limit: 100).map { |row| row[4] }.uniq)
+          .to eq([12])
+      end
+
+      # The two figures a list of FILES cannot show and the caption is spent on: how many EXAMPLES
+      # the area holds and how many of them were timed, counted over the whole area rather than
+      # over the files that fit. `SUM(COUNT(...)) OVER ()` is what reaches them from a read grouped
+      # by file — and the cap is what makes the distinction real, so the limit here is below the
+      # file count on purpose.
+      it "reports the area's own example counts, counted before the cap" do
+        4.times do |i|
+          observe(run, duration: 1.0, line_number: (i * 2) + 1, spec_file_path: "spec/models/f#{i}_spec.rb")
+          observe(run, duration: nil, line_number: (i * 2) + 2, spec_file_path: "spec/models/f#{i}_spec.rb")
+        end
+
+        rows = described_class.files_in_directory(run, "spec/models", limit: 1)
+
+        expect(rows.size).to eq(1)
+        expect(rows.map { |row| row[5] }).to eq([8])
+        expect(rows.map { |row| row[6] }).to eq([4])
+      end
+
+      # Two files totalling the same is ordinary inside one area, so the order has to be total or
+      # two requests against unchanged rows list them differently.
+      it "breaks ties by path, so equal totals have one order" do
+        observe(run, duration: 1.5, line_number: 1, spec_file_path: "spec/models/b_spec.rb")
+        observe(run, duration: 1.5, line_number: 2, spec_file_path: "spec/models/a_spec.rb")
+
+        expect(described_class.files_in_directory(run, "spec/models").map(&:first))
+          .to eq(["spec/models/a_spec.rb", "spec/models/b_spec.rb"])
+      end
+
+      # An area this run recorded nothing for is an ordinary answer — a stale bookmark, a deleted
+      # directory, a typo — and not an error. No rows, and specifically not the whole run's files.
+      it "reads no files for an area the run recorded nothing in" do
+        observe(run, duration: 1.0, line_number: 1, spec_file_path: "spec/models/order_spec.rb")
+
+        expect(described_class.files_in_directory(run, "spec/ghosts")).to eq([])
       end
     end
 

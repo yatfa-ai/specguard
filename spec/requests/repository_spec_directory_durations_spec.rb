@@ -377,4 +377,413 @@ RSpec.describe "Repository heaviest spec directories", type: :request do
       expect(large_queries.size).to eq(small_queries.size)
     end
   end
+
+  # == The drill-in: one area of that rollup, opened
+  #
+  # The MIDDLE rung of area → file → example, and the one that was missing. Rung three shipped with
+  # the "Examples in this spec file" panel; rung one is the rollup above. Rung two never existed, so
+  # rung one could not reach rung three — and it is not a gap the by-file panel could cover, because
+  # that panel is a capped ten as well and an area is heavy precisely when it holds many ordinary
+  # files. The heaviest area on this page was the one place in the suite a reader could not look
+  # inside.
+  #
+  # Hosted here rather than in its own file because every example needs the fixture this file
+  # already builds, and the panel it opens out of is the one this file is about.
+  describe "opening one directory out of the rollup" do
+    def files_panel = Capybara.string(response.body).find("#spec-directory-files")
+
+    def files_panel? = Capybara.string(response.body).has_css?("#spec-directory-files")
+
+    # ELEMENT-scoped, never panel-scoped: the basis paragraph has branches sharing most of their
+    # words, so a panel-level `have_text` passes for the wrong branch with the deciding one deleted.
+    def files_basis = files_panel.find("#spec-directory-files-basis")
+
+    def file_rows
+      files_panel.all("tbody tr").map do |row|
+        path, coverage, duration = row.all("td").map { |cell| cell.text.gsub(/\s+/, " ").strip }
+
+        { path: path, coverage: coverage, duration: duration }
+      end
+    end
+
+    def file_row_paths = file_rows.map { |row| row[:path] }
+
+    # Built so the heavy AREA holds none of the run's heavy FILES — the shape that makes this rung
+    # necessary rather than convenient. `spec/models` is the heaviest area at 10.5s across three
+    # middling files; the single heaviest file in the run is in `spec/requests`.
+    def area_run
+      repository = create_repository(user: @user)
+      ingest(repository, [example_spec(file_path: "spec/models/order_spec.rb", duration: 3.5, line_number: 1),
+                          example_spec(file_path: "spec/models/refund_spec.rb", duration: 5.0, line_number: 2),
+                          example_spec(file_path: "spec/models/user_spec.rb", duration: 2.0, line_number: 3),
+                          example_spec(file_path: "spec/requests/checkout_spec.rb", duration: 9.0, line_number: 4)])
+      repository
+    end
+
+    describe "the way in, from the panel above" do
+      # The panel above already rendered the path as plain text, so the way in costs no query to
+      # offer — and without it the ten areas the page names are ten dead ends.
+      it "links each listed directory to its own spec files" do
+        get repository_path(area_run)
+
+        href = panel.find("a", text: "spec/models")[:href]
+
+        expect(href).to include("spec_directory=#{CGI.escape('spec/models')}")
+        expect(href).to include("#spec-directory-files")
+      end
+
+      # A list of choices with one of them taken, and the drill-in sits below a long page.
+      it "marks the open directory in the panel it was opened from" do
+        get repository_path(area_run, spec_directory: "spec/models")
+
+        expect(panel.find("a", text: "spec/models")["aria-current"]).to eq("true")
+        expect(panel.find("a", text: "spec/requests")["aria-current"]).to be_nil
+      end
+
+      # `?branch=` anchors the "Suite growth" panel and nothing else. Opening an area must not
+      # re-anchor a chart the reader did not touch.
+      it "carries a branch ask through the link rather than dropping it" do
+        get repository_path(area_run, branch: "main")
+
+        expect(panel.find("a", text: "spec/models")[:href]).to include("branch=main")
+      end
+
+      it "renders no panel at all when no directory was asked for" do
+        get repository_path(area_run)
+
+        expect(response).to have_http_status(:ok)
+        expect(files_panel?).to be(false)
+      end
+    end
+
+    describe "an area whose files were timed" do
+      # THE question this rung exists for. Scoped to the area — the run's heaviest file is in
+      # another one and belongs to nothing here — and heaviest file first inside it.
+      it "lists that area's spec files, heaviest first, and no other area's" do
+        get repository_path(area_run, spec_directory: "spec/models")
+
+        expect(file_rows).to eq([{ path: "spec/models/refund_spec.rb", coverage: "1 of 1", duration: "5.00s" },
+                                 { path: "spec/models/order_spec.rb", coverage: "1 of 1", duration: "3.50s" },
+                                 { path: "spec/models/user_spec.rb", coverage: "1 of 1", duration: "2.00s" }])
+        expect(files_panel).to have_no_text("checkout_spec.rb")
+      end
+
+      # THE assertion that fails if this panel is ever fed by the by-file rollup instead of its own
+      # read: not one of `spec/models`' three files is the heaviest file in the run, which is what
+      # makes the area heavy and its files unreachable from a by-file top ten.
+      it "shows files the by-file panel's own ranking heads with something else" do
+        get repository_path(area_run, spec_directory: "spec/models")
+
+        expect(file_row_paths).not_to include("spec/requests/checkout_spec.rb")
+        expect(file_row_paths.first).to eq("spec/models/refund_spec.rb")
+      end
+
+      it "names the area it is listing" do
+        get repository_path(area_run, spec_directory: "spec/models")
+
+        expect(files_basis).to have_text("spec/models", normalize_ws: true)
+      end
+
+      it "says the list is all of the area's files, where nothing was cut" do
+        get repository_path(area_run, spec_directory: "spec/models")
+
+        expect(files_basis).to have_text("all 3 spec files this run recorded in this area, heaviest first",
+                                         normalize_ws: true)
+        expect(files_basis).to have_text(
+          "Every one of the 3 examples this run recorded in this area reported a duration",
+          normalize_ws: true
+        )
+      end
+
+      # An EQUALITY narrow at one depth, exactly as the rollup above groups at one depth. A prefix
+      # `LIKE` would gather the nested area in — and would have left this slice, per
+      # `SpecObservation.files_in_directory`.
+      it "does not gather a nested area's files into its ancestor" do
+        repository = create_repository(user: @user)
+        ingest(repository, [example_spec(file_path: "spec/models/order_spec.rb", duration: 1.0, line_number: 1),
+                            example_spec(file_path: "spec/models/orders/refund_spec.rb", duration: 2.0,
+                                         line_number: 2)])
+
+        get repository_path(repository, spec_directory: "spec/models")
+
+        expect(file_row_paths).to eq(["spec/models/order_spec.rb"])
+      end
+
+      # The area name a link carries is computed by the same expression the rollup groups by, so the
+      # one row the rollup names `.` has to open too — a repository-root file is otherwise a row that
+      # links to an empty panel.
+      it "opens the repository root under the name the panel above gives it" do
+        repository = create_repository(user: @user)
+        ingest(repository, [example_spec(file_path: "smoke_spec.rb", duration: 3.0, line_number: 1,
+                                         id: "./smoke_spec.rb[1:1]"),
+                            example_spec(file_path: "spec/models/order_spec.rb", duration: 1.0, line_number: 2)])
+
+        get repository_path(repository, spec_directory: ".")
+
+        expect(file_row_paths).to eq(["smoke_spec.rb"])
+      end
+
+      # Bounded by `SpecObservation::SPEC_DIRECTORY_FILES_LIMIT` — its own constant, not the by-file
+      # rollup's ten and not the by-file drill-down's fifty.
+      it "lists no more than its own limit, however many files the area holds" do
+        get repository_path(capped_area_run, spec_directory: "spec/models")
+
+        expect(file_rows.size).to eq(SpecObservation::SPEC_DIRECTORY_FILES_LIMIT)
+      end
+
+      # A capped list that does not disclose its cap is the lie `SpecDirectoryDurations#truncated?`
+      # already refuses one rung up. The count has to come from the AREA and not from the rows on
+      # hand, which are the truncated figure.
+      it "says how many files the area holds, not just how many it lists" do
+        get repository_path(capped_area_run, spec_directory: "spec/models")
+
+        expect(files_basis).to have_text(
+          "the #{SpecObservation::SPEC_DIRECTORY_FILES_LIMIT} heaviest of the 27 spec files this " \
+          "run recorded in this area, heaviest first", normalize_ws: true
+        )
+      end
+
+      # The OTHER axis, and the one a list of files cannot show: the cap is counted in FILES and
+      # the coverage in EXAMPLES, and on a truncated area those describe different populations. Two
+      # examples per file, so a coverage figure taken off the listed rows would read 50 rather than
+      # 54 and no arithmetic on the page would betray it.
+      it "counts its timing coverage over the whole area rather than over the files that fit" do
+        get repository_path(capped_area_run, spec_directory: "spec/models")
+
+        expect(file_rows.size).to eq(SpecObservation::SPEC_DIRECTORY_FILES_LIMIT)
+        expect(files_basis).to have_text(
+          "Every one of the 54 examples this run recorded in this area reported a duration",
+          normalize_ws: true
+        )
+      end
+    end
+
+    # Rung three, reached from rung two. It already shipped — what is new is that it can now be
+    # reached from an area, which is the whole point of the middle rung existing.
+    describe "the way on, into one of those files" do
+      it "links each listed file into the examples panel above" do
+        get repository_path(area_run, spec_directory: "spec/models")
+
+        href = files_panel.find("a", text: "spec/models/refund_spec.rb")[:href]
+
+        expect(href).to include("spec_file=#{CGI.escape('spec/models/refund_spec.rb')}")
+        expect(href).to include("#spec-file-examples")
+      end
+
+      # Both parameters on ONE URL. Opening a file out of this list must not close the area it was
+      # opened from, or the reader cannot pick a second file without navigating back.
+      it "carries the area ask through, so both panels stay open together" do
+        get repository_path(area_run, spec_directory: "spec/models")
+
+        expect(files_panel.find("a", text: "spec/models/refund_spec.rb")[:href])
+          .to include("spec_directory=#{CGI.escape('spec/models')}")
+      end
+
+      it "opens both panels when both parameters are asked" do
+        get repository_path(area_run, spec_directory: "spec/models",
+                                      spec_file: "spec/models/refund_spec.rb")
+
+        expect(files_panel?).to be(true)
+        expect(Capybara.string(response.body).has_css?("#spec-file-examples")).to be(true)
+        expect(files_panel.find("a", text: "spec/models/refund_spec.rb")["aria-current"]).to eq("true")
+      end
+
+      it "carries a branch ask through that link too" do
+        get repository_path(area_run, branch: "main", spec_directory: "spec/models")
+
+        expect(files_panel.find("a", text: "spec/models/refund_spec.rb")[:href]).to include("branch=main")
+      end
+    end
+
+    # The hazard every read on this table shares, at this grain: `SUM` skips a missing timing
+    # silently and `DESC` alone is NULLS FIRST in Postgres, so the file nothing measured is named
+    # the heaviest in the area and its nil is rendered as a zero it never measured.
+    describe "an area mixing timed and untimed files" do
+      def mixed_area_run
+        repository = create_repository(user: @user)
+        ingest(repository, [example_spec(file_path: "spec/models/order_spec.rb", duration: 4.0, line_number: 1),
+                            example_spec(file_path: "spec/models/order_spec.rb", duration: nil, line_number: 2),
+                            example_spec(file_path: "spec/models/never_ran_spec.rb", duration: nil,
+                                         line_number: 3)])
+        repository
+      end
+
+      it "keeps the untimed file in the list and below every measured one, with no zero" do
+        get repository_path(mixed_area_run, spec_directory: "spec/models")
+
+        expect(file_rows).to eq([{ path: "spec/models/order_spec.rb", coverage: "1 of 2", duration: "4.00s" },
+                                 { path: "spec/models/never_ran_spec.rb", coverage: "0 of 1",
+                                   duration: "not reported" }])
+        expect(files_panel).to have_no_text("0.00s")
+      end
+
+      # In the spelling `SpecDirectoryDurations::Row#coverage_label` fixed for the row above, so the
+      # area's line in the rollup and the area opened out of it cannot state one coverage two ways.
+      it "states how much of the area the durations cover" do
+        get repository_path(mixed_area_run, spec_directory: "spec/models")
+
+        expect(files_basis).to have_text("Across this area's examples, durations cover 1 of 3",
+                                         normalize_ws: true)
+        expect(files_basis).to have_no_text("Every one of the 3 examples")
+      end
+
+      # The denominator is this area's rows, never the Overview's suite size — that figure is
+      # re-derived by SUM over shard reports and the two can legitimately differ.
+      it "counts the area's own rows rather than the run's suite size" do
+        repository = create_repository(user: @user)
+        ingest(repository, [example_spec(file_path: "spec/models/order_spec.rb", duration: 1.0, line_number: 1),
+                            example_spec(file_path: "spec/models/refund_spec.rb", duration: nil, line_number: 2)],
+               total_specs_count: 4_000)
+
+        get repository_path(repository, spec_directory: "spec/models")
+
+        expect(files_basis).to have_text("Across this area's examples, durations cover 1 of 2",
+                                         normalize_ws: true)
+        expect(files_panel).to have_no_text("4,000")
+        expect(files_panel).to have_no_text("4000")
+      end
+    end
+
+    # An area with rows and no timings is a LIST with no ranking — every file ties. It still
+    # renders, because the files exist and their example counts are worth reading; what it must not
+    # do is promise an order nothing measured.
+    describe "an area none of whose examples were timed" do
+      def untimed_area_run
+        repository = create_repository(user: @user)
+        ingest(repository, [example_spec(file_path: "spec/models/order_spec.rb", duration: nil, line_number: 1),
+                            example_spec(file_path: "spec/models/refund_spec.rb", duration: nil, line_number: 2)])
+        repository
+      end
+
+      it "still lists the files, with no duration and no zero" do
+        get repository_path(untimed_area_run, spec_directory: "spec/models")
+
+        expect(file_row_paths).to eq(["spec/models/order_spec.rb", "spec/models/refund_spec.rb"])
+        expect(file_rows.map { |row| row[:duration] }).to eq(["not reported", "not reported"])
+        expect(files_panel).to have_no_text("0.00s")
+      end
+
+      it "does not claim the list is ranked" do
+        get repository_path(untimed_area_run, spec_directory: "spec/models")
+
+        expect(files_basis).to have_text("in path order", normalize_ws: true)
+        expect(files_basis).to have_no_text("heaviest first")
+        expect(files_basis).to have_text(
+          "Not one of the 2 examples this run recorded in this area reported a duration",
+          normalize_ws: true
+        )
+      end
+    end
+
+    # `?spec_directory=` is a URL a reader types, edits and bookmarks. An area this run recorded
+    # nothing for is an ordinary answer — a renamed directory, a deleted one, a typo — and not a
+    # request to error on. The rule `RequestedSpecFileParam` states, unchanged at this grain.
+    describe "an area this run recorded nothing for" do
+      it "renders an empty state naming the path, not an error" do
+        get repository_path(area_run, spec_directory: "spec/ghosts")
+
+        expect(response).to have_http_status(:ok)
+        expect(files_panel).to have_text("No spec files in this directory", normalize_ws: true)
+        expect(files_panel).to have_text("spec/ghosts", normalize_ws: true)
+        expect(files_panel).to have_no_css("tbody tr")
+      end
+
+      # A prefix reading of the ask would answer this one with `spec/models`' files rather than
+      # with nothing, which is the same fence the nested-area example draws from the other side.
+      it "does not answer a partial path with the area it is a prefix of" do
+        get repository_path(area_run, spec_directory: "spec/mod")
+
+        expect(files_panel).to have_no_css("tbody tr")
+      end
+
+      it "renders no panel for a repository CI has never reported for" do
+        get repository_path(create_repository(user: @user), spec_directory: "spec/models")
+
+        expect(response).to have_http_status(:ok)
+        expect(files_panel?).to be(false)
+      end
+    end
+
+    # The three shapes a query string can legally parse into that are not a String. This parameter
+    # reaches an EQUALITY comparison against `SpecObservation::DIRECTORY_EXPRESSION`, where an Array
+    # does not raise at all — it becomes an `IN` list and answers a question nobody asked under a
+    # caption naming one directory.
+    describe "a spec-directory parameter that is not a path" do
+      def expect_spec_directory_param_treated_as_no_ask(query)
+        get repository_path(area_run, **query)
+
+        expect(response).to have_http_status(:ok)
+        expect(files_panel?).to be(false)
+      end
+
+      it_behaves_like "a surface that treats a malformed spec-directory parameter as no ask"
+
+      # The positive path, beside the group it makes falsifiable: a guard that swallowed every value
+      # would answer 200 on all three shapes above and render no panel here either.
+      it "honours a spec-directory parameter that IS a path" do
+        get repository_path(area_run, spec_directory: "spec/models")
+
+        expect(files_panel?).to be(true)
+        expect(file_rows.size).to eq(3)
+      end
+
+      # A blank ask is no ask: `DIRECTORY_EXPRESSION` coalesces a separator-less path to `.` and
+      # `spec_file_path` is NOT NULL, so no row's area can be blank — an empty ask would open a
+      # panel guaranteed to be empty, which is a worse answer than not opening one.
+      it "treats a blank spec-directory parameter as no ask" do
+        get repository_path(area_run, spec_directory: "")
+
+        expect(response).to have_http_status(:ok)
+        expect(files_panel?).to be(false)
+      end
+    end
+
+    # One narrowed read, bounded by the size of the AREA and not of the suite — and none at all on a
+    # page nobody asked an area of. A `select` over the run's rows filtered in Ruby is exactly the
+    # shape that ships green on a three-row fixture and takes the page down on a real suite.
+    describe "what the drill-in costs" do
+      # `queries_against` comes from spec/support/query_capture.rb.
+
+      it "costs one query, and only when an area was asked for" do
+        repository = capped_area_run
+
+        opened = queries_against("spec_observations") do
+          get repository_path(repository, spec_directory: "spec/models")
+        end
+        unopened = queries_against("spec_observations") { get repository_path(repository) }
+
+        expect(unopened.size).to eq(opened.size - 1)
+      end
+
+      it "costs the same number of queries on a 27-file area as on a 3-file one" do
+        small = area_run
+        large = capped_area_run
+
+        small_queries = queries_against("spec_observations") do
+          get repository_path(small, spec_directory: "spec/models")
+        end
+        large_queries = queries_against("spec_observations") do
+          get repository_path(large, spec_directory: "spec/models")
+        end
+
+        expect(file_rows.size).to eq(SpecObservation::SPEC_DIRECTORY_FILES_LIMIT)
+        expect(large_queries.size).to eq(small_queries.size)
+      end
+    end
+
+    # More files in one area than the panel lists, and TWO examples in each — so the file cap and
+    # the example coverage are different numbers and one caption cannot satisfy both by accident.
+    def capped_area_run
+      repository = create_repository(user: @user, github_full_name: "acme/capped-area")
+      files = SpecObservation::SPEC_DIRECTORY_FILES_LIMIT + 2
+      specs = (1..files).flat_map do |i|
+        (1..2).map do |j|
+          example_spec(file_path: "spec/models/f#{format('%03d', i)}_spec.rb", duration: i.to_f,
+                       line_number: (i * 10) + j)
+        end
+      end
+      ingest(repository, specs, commit_sha: "feedfacecafe0003")
+      repository
+    end
+  end
 end

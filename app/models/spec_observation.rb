@@ -86,6 +86,23 @@ class SpecObservation < ApplicationRecord
   # and a sentence explaining a list's length must not be able to disagree with it.
   FILE_EXAMPLES_LIMIT = 50
 
+  # How many spec FILES a single directory's drill-down returns. Its own constant, and it caps the
+  # same KIND of thing `FILE_EXAMPLES_LIMIT` caps — a LISTING of one already-picked row's contents,
+  # not a ranking of a whole run — which is exactly why sharing that constant would look harmless
+  # and would not be.
+  #
+  # The populations differ by an order of magnitude in the same direction every time. One spec file
+  # holding three hundred examples is an ordinary file; one directory holding three hundred spec
+  # files is not a directory anybody keeps. So the number that stops a file's example list from
+  # running off the page is not the number that stops an area's file list from doing it, and one
+  # constant standing for both would make that a single edit nobody meant to make — the rule the six
+  # `_LIMIT`s above obey, at the one grain where the similarity of the two lists makes it tempting
+  # to break.
+  #
+  # Named, like its siblings, because the panel's caption reports the figure back to the reader and
+  # a sentence explaining a list's length must not be able to disagree with it.
+  SPEC_DIRECTORY_FILES_LIMIT = 25
+
   # What the drill-down's caption has to say ABOUT the rows under it, counted in the SAME read that
   # returns them — `COUNT(*) OVER ()` and `COUNT(duration_seconds) OVER ()`, which count non-nulls.
   #
@@ -578,6 +595,81 @@ class SpecObservation < ApplicationRecord
       .pluck(Arel.sql(DIRECTORY_EXPRESSION), Arel.sql("SUM(duration_seconds)"),
              Arel.sql("COUNT(*)"), Arel.sql("COUNT(duration_seconds)"),
              Arel.sql("COUNT(*) OVER ()"))
+  end
+
+  # The spec FILES of ONE code area in ONE run, heaviest first — the rung between the by-directory
+  # rollup above and `.in_file` below it, and the one that was missing.
+  #
+  # `.directory_durations_in` names the ten areas the run spent most of its wall clock in and
+  # `.in_file` lists one file's examples, but nothing joined the two: the by-file rollup is also a
+  # capped ten, and the class comment on `SpecDirectoryDurations` states why that is not a way in —
+  # "a directory holding forty files at two seconds each is eighty seconds of the run with not one
+  # of its rows in that list". The heaviest AREA is precisely the one whose files are structurally
+  # absent from a by-file top ten, so its files could be reached from nowhere. This is that read.
+  #
+  # == An EQUALITY narrow at one depth, and deliberately not a subtree
+  #
+  # The predicate is `DIRECTORY_EXPRESSION = ?` — the area a row is IN, compared for equality with
+  # the area that was asked for. It is not `spec_file_path LIKE 'spec/models/%'`, and the
+  # difference is the whole reason this ships without a migration. A prefix predicate is what a
+  # `text_pattern_ops` index serves, and it would also gather `spec/models/orders/` into
+  # `spec/models/` — re-opening the drill-down TREE that `.directory_durations_in` above says is
+  # "a different question and deliberately not this one". Every row here sits at the same depth as
+  # its own file, exactly as every row of the rollup does, so this listing partitions its area the
+  # way that rollup partitions the run. An edit that grows a prefix `LIKE` has left what this
+  # method is allowed to say.
+  #
+  # Through `DIRECTORY_EXPRESSION` rather than a hand-copy of it, for the reason that constant's own
+  # comment gives: three hand-copies of one expression are three definitions of what an area IS, and
+  # this one has to agree with the GROUP BY that produced the path being asked about — a link whose
+  # target is computed one way and answered another opens an empty panel on a row that has rows.
+  #
+  # == Grouped by FILE, and the counts are the file's
+  #
+  # `SUM(duration_seconds)` per file with `NULLS LAST`, for the reason every read on this table
+  # gives: `SUM` skips a missing timing silently, `DESC` alone is NULLS FIRST in Postgres, and a
+  # file none of whose examples were timed would otherwise be named the heaviest in the area with a
+  # total it did not measure. `COUNT(*)` and `COUNT(duration_seconds)` ride along per group, so each
+  # row can state what its own total was summed over.
+  #
+  # == Three windows, so the caption is counted before the cap
+  #
+  # `COUNT(*) OVER ()` counts the area's FILES — windows run after `GROUP BY` and before `LIMIT`, so
+  # it counts groups rather than rows on the page and counts all of them however few come back. The
+  # same trick `FILE_POPULATION_COUNTS` uses one grain down and `.directory_durations_in` uses one
+  # grain up, and for the same reason: a capped list whose own length is the only figure available
+  # cannot tell three files from three hundred.
+  #
+  # The other two are `SUM(COUNT(...)) OVER ()` — an aggregate under a window, which is the only
+  # spelling that reaches the AREA's example counts from a read grouped by file. They are what lets
+  # the panel state its timing coverage over the whole area rather than over the files that fit,
+  # which on a truncated area are different populations. `.directory_growth_between` uses the same
+  # construct for the same reason: a total that describes the page is a claim about the page.
+  #
+  # == Why this needs no index of its own
+  #
+  # It narrows on `test_run_id` — served by `index_spec_observations_on_test_run_id` — and adds an
+  # EXPRESSION predicate that no index can serve and that therefore decides nothing about the access
+  # path; the grouping hash-aggregates on top. That is the plan `.directory_durations_in` gets, for
+  # the reason its comment states: the aggregate has to touch the heap for `duration_seconds`
+  # either way, so no wider index buys a whole-run grouping anything. EXPLAIN-certified at the
+  # 20-run seed in spec/models/spec_observation_spec.rb rather than argued for here.
+  #
+  # @return [Array<Array>] `[spec_file_path, total_seconds, recorded_count, timed_count, file_count,
+  #   directory_recorded_count, directory_timed_count]` per file, heaviest first. The last three are
+  #   the same figures on every row: how many files the area holds, and how many examples it holds
+  #   and timed — all counted before the `LIMIT`.
+  def self.files_in_directory(test_run, directory, limit: SPEC_DIRECTORY_FILES_LIMIT)
+    where(test_run_id: test_run.id)
+      .where(sanitize_sql_array(["#{DIRECTORY_EXPRESSION} = ?", directory]))
+      .group(:spec_file_path)
+      .order(Arel.sql("SUM(duration_seconds) DESC NULLS LAST"), spec_file_path: :asc)
+      .limit(limit)
+      .pluck(Arel.sql("spec_file_path"), Arel.sql("SUM(duration_seconds)"),
+             Arel.sql("COUNT(*)"), Arel.sql("COUNT(duration_seconds)"),
+             Arel.sql("COUNT(*) OVER ()"),
+             Arel.sql("SUM(COUNT(*)) OVER ()"),
+             Arel.sql("SUM(COUNT(duration_seconds)) OVER ()"))
   end
 
   # How each code AREA's example count MOVED between two runs — the first read on this table that
