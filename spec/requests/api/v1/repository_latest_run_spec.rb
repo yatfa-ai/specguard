@@ -25,6 +25,56 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
   # to its own example group, so a helper defined in either block is invisible to the other; that
   # is how it came to be written twice here before it was hoisted out of the file entirely.
 
+  # The endpoint reads `spec_observations` once PER GRAIN it serves — once for the by-file rollup
+  # and once for the by-area one. Each cost block below bounds its OWN grain rather than the table,
+  # because the alternative is worse in both directions: a bare `eq(2)` on the table cannot tell
+  # "one aggregate per grain" from "one grain reading twice", and it has to be rebaselined by hand
+  # every time a grain is added, which is exactly the silent rebaseline `queries_against` was
+  # chosen over `baseline + 1` to avoid. The TOTAL is pinned alongside it in the by-area block, on
+  # each axis the per-grain narrowing left uncovered — the unrecorded run, the history window, and
+  # the recorded run — so "exactly these two reads and no third" is a stated guard on every one of
+  # them rather than an inference from the grain that happens to be counted.
+  #
+  # THE PARTITION IS DEFINED ONCE, HERE, for the reason the note above gives: two sibling blocks
+  # each classifying the same statements would be free to drift on which read belongs to which
+  # grain, and a guard that counts one query more or less than its sibling still reports a number.
+  #
+  # BOTH GRAINS ARE MATCHED POSITIVELY, on their own `GROUP BY`, and neither is defined as "the
+  # reads that are not the other one". A residual definition silently ADOPTS any third read of this
+  # table — an `exists?` gate, a preload, an N+1 — into whichever grain owns the leftovers, and the
+  # block that owns them then reports a number for work it did not do. Matched positively, an
+  # unclassified read belongs to neither list and is caught by the total below instead, which is
+  # the guard that can actually name it.
+  def observation_reads(&) = queries_against("spec_observations", &)
+
+  def observation_reads_by_grain(&)
+    reads = observation_reads(&)
+    [reads.grep(/GROUP BY COALESCE\(substring\(spec_file_path/),
+     reads.grep(/GROUP BY "spec_observations"\."spec_file_path"/)]
+  end
+
+  def area_grain_reads(&) = observation_reads_by_grain(&).first
+  def file_grain_reads(&) = observation_reads_by_grain(&).last
+
+  # ONE builder for every block that writes observation rows — the four grain blocks below (by-file
+  # and by-area, rollup and cost) all want the same row and had written it out four times. Hoisted
+  # for the reason the note above gives about `observation_reads`: RSpec scoping a `def` to its own
+  # example group explains why a sibling's helper is INVISIBLE, it does not argue for copying it,
+  # and four copies of a `create!` is four places for the row shape to drift apart.
+  #
+  # `duration:` is REQUIRED rather than defaulted, at every call site including the nils, on the
+  # rule `spec_observation_spec.rb`'s builder states for itself: an untimed row is the state half
+  # the rollup blocks turn on, and a builder that defaulted it would let an example write one
+  # without meaning to. `line_number` keeps `example_id` unique within a file, so a caller can put
+  # several examples in one file the way a real suite does.
+  def observe(run, path:, duration:, line_number:)
+    run.spec_observations.create!(
+      repository: run.repository, example_id: "./#{path}[1:#{line_number}]",
+      file_path: path, spec_file_path: path, line_number: line_number,
+      status: "unannotated", duration_seconds: duration
+    )
+  end
+
   describe "a repository with an ingested run" do
     let!(:test_run) do
       create_test_run(repository: repository,
@@ -55,6 +105,10 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
         # zeroed block — a `file_count: 0` beside an empty array would assert a run that touched no
         # spec files, which is a measurement nobody took.
         "spec_files" => nil,
+        # And null at the grain above it, for the same reason and off the same absent rows: no
+        # observation row means no by-area rollup either. A `directory_count: 0` beside an empty
+        # array would assert a run that touched no directories.
+        "spec_directories" => nil,
         "suite_size_measured" => true,
         "ingested_at" => test_run.created_at.iso8601
       )
@@ -365,7 +419,7 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
       expect(get_repository["latest_run"].keys)
         .to contain_exactly("commit_sha", "branch", "total_specs", "annotated_specs",
                             "annotated_ratio", "duration_seconds", "shards", "spec_files",
-                            "suite_size_measured", "ingested_at")
+                            "spec_directories", "suite_size_measured", "ingested_at")
     end
 
     it "serves exactly the shards keys this contract pins once the decomposition is open" do
@@ -801,19 +855,6 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
   # rationale is the precedent, one axis over ("an agent reading only those cannot learn which part
   # it waited on").
   describe "the by-file rollup on latest_run" do
-    # One example of one run. `duration_seconds:` is passed at every call site including the nils,
-    # on the rule `spec_observation_spec.rb`'s builder states for itself: an untimed row is the
-    # state half of this block turns on, and a builder that defaulted it would let an example write
-    # one without meaning to. `line_number` keeps `example_id` unique within a file so a caller can
-    # put several examples in one file the way a real suite does.
-    def observe(run, path:, duration:, line_number:)
-      run.spec_observations.create!(
-        repository: run.repository, example_id: "./#{path}[1:#{line_number}]",
-        file_path: path, spec_file_path: path, line_number: line_number,
-        status: "unannotated", duration_seconds: duration
-      )
-    end
-
     # A run whose heaviest file sorts LAST alphabetically, so cost order and path order disagree.
     # That disagreement is the fixture's whole job: with the two orders coincident, a serializer
     # that re-sorted on `path` would serve the same array as one that inherited the aggregate's
@@ -937,6 +978,180 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
     end
   end
 
+  # WHERE the wall clock went, by code AREA — the block above one rung up, and the agent-readable
+  # twin of the by-directory panel `repositories#show` renders. Served BESIDE the by-file rollup
+  # rather than instead of it, because the area grain is NOT derivable from the file grain by a
+  # client: the list above stops at ten files, so an agent holding it out of a twenty-thousand
+  # example run structurally cannot sum the run's directories. `SpecDirectoryDurations`' own
+  # comment states the arithmetic — *"a directory holding forty files at two seconds each is eighty
+  # seconds of the run with not one of its rows in that list"* — and the fixture below is built so
+  # that this file's examples FAIL under a client that tries.
+  describe "the by-area rollup on latest_run" do
+    # A run whose heaviest AREA is heavy through MANY SMALL FILES, and whose heaviest FILE lives in
+    # a different, lighter area. Both disagreements are the fixture's job:
+    #
+    #   - `spec/requests` totals 12.0s over four 3.0s files. Not one of them is the heaviest file
+    #     in the run; the heaviest FILE is `spec/models/user_spec.rb` at 9.0s, in the area that
+    #     comes SECOND. A serializer that rolled the by-file list up by parent directory, or a
+    #     client that did, ranks these two backwards — which is the non-derivability this key
+    #     exists for, asserted rather than asserted about.
+    #   - `spec/models` sorts BEFORE `spec/requests` alphabetically while costing less, so cost
+    #     order and path order disagree and a serializer that re-sorted on `path` serves a
+    #     different array from one that inherited `SUM(...) DESC NULLS LAST`.
+    let!(:test_run) do
+      run = create_test_run(repository: repository, commit_sha: "bydir0000001",
+                            branch: "main", total_specs_count: 7, duration_seconds: 24.0)
+      observe(run, path: "spec/models/user_spec.rb", duration: 4.0, line_number: 1)
+      observe(run, path: "spec/models/user_spec.rb", duration: 5.0, line_number: 2)
+      observe(run, path: "spec/models/invoice_spec.rb", duration: 1.5, line_number: 1)
+      4.times do |index|
+        observe(run, path: "spec/requests/thing_#{index}_spec.rb", duration: 3.0, line_number: 1)
+      end
+      run
+    end
+
+    def spec_directories = get_repository.dig("latest_run", "spec_directories")
+
+    # AC1. The block exists, and its rows carry all four columns rather than a path and a number.
+    # The array is asserted as a SEQUENCE — `eq`, not `match_array` — because the ranking is half
+    # of what this key promises, and the fixture above is built so the two orders differ.
+    it "serves each area's total beside what that total was summed over, heaviest first" do
+      expect(spec_directories["rows"]).to eq(
+        [
+          { "path" => "spec/requests", "total_seconds" => 12.0,
+            "recorded_count" => 4, "timed_count" => 4 },
+          { "path" => "spec/models", "total_seconds" => 10.5,
+            "recorded_count" => 3, "timed_count" => 3 }
+        ]
+      )
+      expect(spec_directories["directory_count"]).to eq(2)
+      expect(spec_directories["limit"]).to eq(SpecObservation::HEAVIEST_DIRECTORIES_LIMIT)
+    end
+
+    # The reason this key is served AT ALL, stated as a guard rather than as a comment. Every
+    # figure here is read off the response, so it is the endpoint's own two blocks disagreeing:
+    # the heaviest area is not the area of the heaviest file, and its total is larger than any file
+    # total in the body. A client that "derived" areas by grouping `spec_files` — the substitute
+    # this key exists to refuse — reads the ranking backwards on exactly this run.
+    it "ranks areas by what the AREA cost, not by what its heaviest file cost" do
+      body = get_repository["latest_run"]
+
+      heaviest_area = body.dig("spec_directories", "rows").first
+      heaviest_file = body.dig("spec_files", "rows").first
+
+      expect(heaviest_file["path"]).to eq("spec/models/user_spec.rb")
+      expect(heaviest_area["path"]).to eq("spec/requests")
+      # The heaviest area is heavier than the heaviest FILE while holding no file as heavy as it —
+      # so neither the ranking nor the total is recoverable from the block above.
+      expect(heaviest_area["total_seconds"]).to be > heaviest_file["total_seconds"]
+      expect(body.dig("spec_files", "rows").map { it["total_seconds"] }).to all(be < 10.0)
+      # And the area total is the SUM ACROSS ITS FILES, not any one file's figure.
+      expect(heaviest_area["total_seconds"]).to eq(12.0)
+      expect(heaviest_area["recorded_count"]).to eq(4)
+    end
+
+    # AC8's companion: the sub-block's own key set, stated as its subject rather than pinned as a
+    # side effect of the `eq` above — the pattern `contract_shard_keys` and the by-file block set,
+    # and for the same reason. A guard whose stated subject IS the key set survives a fixture whose
+    # numbers change, and says out loud what a new key owes this block before it ships.
+    it "serves exactly the spec_directories keys this contract pins" do
+      expect(spec_directories.keys).to contain_exactly("rows", "directory_count", "limit")
+      expect(spec_directories["rows"].first.keys)
+        .to contain_exactly("path", "total_seconds", "recorded_count", "timed_count")
+    end
+
+    # AC5. Read off the same presenter `repositories#show` assigns rather than re-stating the
+    # fixture's numbers: two independent hand-written expectations would both still pass if the
+    # endpoint started reading a different run, a different limit, or re-sorted the list. The
+    # ORDER is asserted as a sequence, because that is the half a `match_array` would drop and the
+    # half the `NULLS LAST` in the aggregate exists to get right.
+    it "serves the same rows, in the same order, that repositories#show renders" do
+      shown = SpecDirectoryDurations.for(repository.latest_test_run)
+
+      expect(spec_directories["rows"].map { it["path"] }).to eq(shown.rows.map(&:path))
+      expect(spec_directories["rows"].map { it["total_seconds"] }).to eq(shown.rows.map(&:total_seconds))
+      expect(spec_directories["rows"].map { it["recorded_count"] }).to eq(shown.rows.map(&:recorded_count))
+      expect(spec_directories["rows"].map { it["timed_count"] }).to eq(shown.rows.map(&:timed_count))
+      expect(spec_directories["directory_count"]).to eq(shown.directory_count)
+    end
+
+    # AC6. The block's standing rule, asserted over the whole serialized body rather than per key:
+    # `Row#duration_label` and `#coverage_label` are one call away in the presenter this reads
+    # from, and a serializer that reached for either would still satisfy every assertion above if
+    # the fixture's numbers happened to render similarly.
+    it "serves numbers, never the panel's labels" do
+      expect(spec_directories.to_json).not_to match(/of \d|\d+\.\d+s|not reported/)
+      expect(spec_directories["rows"].map { it["total_seconds"] }).to all(be_a(Float).or(be_nil))
+      expect(spec_directories["rows"].map { it["recorded_count"] }).to all(be_a(Integer))
+    end
+
+    # AC3. THE row this grain has to get right, and it costs MORE here than one rung down: an area
+    # is a bigger population than a file, so `0.0` for an all-untimed area is a bigger invented
+    # measurement, and `SUM(...) DESC`'s NULLS FIRST would name it the heaviest AREA in the suite.
+    # Both halves are asserted because they fail differently: a serializer coalescing to zero
+    # passes "the area appears" and fails "the total is null".
+    it "serves null, not 0.0, for an area whose examples all went untimed" do
+      observe(test_run, path: "spec/silent/one_spec.rb", duration: nil, line_number: 1)
+      observe(test_run, path: "spec/silent/two_spec.rb", duration: nil, line_number: 2)
+
+      silent = spec_directories["rows"].find { it["path"] == "spec/silent" }
+
+      expect(silent).not_to be_nil
+      expect(silent["total_seconds"]).to be_nil
+      # Counted across BOTH its files — the area is the population, not the file.
+      expect(silent["recorded_count"]).to eq(2)
+      expect(silent["timed_count"]).to eq(0)
+      expect(spec_directories["rows"].last["path"]).to eq("spec/silent")
+    end
+
+    # An area whose examples were HALF timed — the state that makes a per-row denominator load
+    # bearing rather than decorative, and load bearing over a wider population than a file's. The
+    # total covers half the area, and the row is what says so.
+    it "states per-row coverage on a partly timed area" do
+      observe(test_run, path: "spec/partial/seen_spec.rb", duration: 3.0, line_number: 1)
+      observe(test_run, path: "spec/partial/unseen_spec.rb", duration: nil, line_number: 1)
+
+      partial = spec_directories["rows"].find { it["path"] == "spec/partial" }
+
+      expect(partial["total_seconds"]).to eq(3.0)
+      expect(partial["recorded_count"]).to eq(2)
+      expect(partial["timed_count"]).to eq(1)
+    end
+
+    # A spec file at the REPOSITORY ROOT has no parent directory, and `DIRECTORY_EXPRESSION`
+    # coalesces it to `"."` rather than dropping the row. Asserted here because it is the one input
+    # at this grain that has no counterpart one rung down, and a serializer or an expression change
+    # that let it fall out would silently stop the areas summing to the run.
+    it "serves a root-level spec file under its coalesced area rather than dropping it" do
+      observe(test_run, path: "smoke_spec.rb", duration: 2.5, line_number: 1)
+
+      root = spec_directories["rows"].find { it["path"] == "." }
+
+      expect(root).not_to be_nil
+      expect(root["total_seconds"]).to eq(2.5)
+      expect(root["recorded_count"]).to eq(1)
+    end
+
+    # AC4. The figure `rows.size` cannot supply. The list stops at the limit, so its own length
+    # reads the same on "the 10 heaviest of 300" and "all 10 this run touched" — and a client with
+    # only the array would report the second while looking at the first.
+    it "reports how many areas the run touched in all, past the limit that cut the list" do
+      limit = SpecObservation::HEAVIEST_DIRECTORIES_LIMIT
+      (limit + 5).times do |index|
+        observe(test_run, path: format("spec/extra_%02d/thing_spec.rb", index),
+                duration: 20.0 + index, line_number: 1)
+      end
+
+      expect(spec_directories["rows"].length).to eq(limit)
+      # The fixture's own two areas plus the fifteen above — asserted against the table rather than
+      # against a number written twice, so this cannot agree with a miscounted `COUNT(*) OVER ()`.
+      expect(spec_directories["directory_count"])
+        .to eq(test_run.spec_observations.distinct.count(Arel.sql(SpecObservation::DIRECTORY_EXPRESSION)))
+      expect(spec_directories["directory_count"]).to be > spec_directories["rows"].length
+      expect(spec_directories["limit"]).to eq(limit)
+    end
+  end
+
   # AC2. The whole pre-SPGD-255 corpus, plus every client that sends no per-example detail.
   describe "a run that recorded no per-example rows" do
     it "serves spec_files as null, with the key still present" do
@@ -950,6 +1165,19 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
       expect(repository.latest_test_run.spec_observations).to be_empty
       expect(block).to have_key("spec_files")
       expect(block["spec_files"]).to be_nil
+    end
+
+    # AC2 at the grain above, and its own example rather than a third `expect` in the one above:
+    # the two keys are gated by two different presenters' `#recorded?`, so a change that unblanked
+    # one leaves the other's guard green and must be named by a red example of its own.
+    it "serves spec_directories as null, with the key still present" do
+      create_test_run(repository: repository, commit_sha: "norows000002", duration_seconds: 42.5)
+
+      block = get_repository["latest_run"]
+
+      expect(repository.latest_test_run.spec_observations).to be_empty
+      expect(block).to have_key("spec_directories")
+      expect(block["spec_directories"]).to be_nil
     end
   end
 
@@ -1255,7 +1483,8 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
       expect(body["latest_run"]).to eq(
         "commit_sha" => third.commit_sha, "branch" => "main", "total_specs" => 40,
         "annotated_specs" => 10, "annotated_ratio" => 0.25, "duration_seconds" => 42.5,
-        "shards" => nil, "spec_files" => nil, "suite_size_measured" => true,
+        "shards" => nil, "spec_files" => nil, "spec_directories" => nil,
+        "suite_size_measured" => true,
         "ingested_at" => third.created_at.iso8601
       )
       expect(body["api_key"]).to have_key("last_used_at")
@@ -2197,16 +2426,16 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
   # that happens to be the only one added this release", and it silently rebaselines the day
   # anything else on the endpoint changes its own cost. `queries_against` names the table, so what
   # is pinned is the thing the budget is actually about: the endpoint reads `spec_observations`
-  # exactly once, whatever the run looks like.
+  # exactly once FOR THIS GRAIN, whatever the run looks like.
+  #
+  # NARROWED TO THE GRAIN, not rebaselined to two, when the by-area rollup was added beside this
+  # one. Rewriting these three `eq(1)`s as `eq(2)` would have made this block pass on a by-file
+  # serializer that read the table twice and a by-area one that read it not at all — the arrival of
+  # a sibling silently dissolving a guard that had held. `file_grain_reads` classifies by which
+  # aggregate issued the statement (see the partition at the top of this file), so what this block
+  # asserts today is what it asserted before the sibling existed. The total across both grains is
+  # pinned once, in the by-area block below.
   describe "what the by-file rollup costs the endpoint" do
-    def observe(run, path:, line_number:)
-      run.spec_observations.create!(
-        repository: run.repository, example_id: "./#{path}[1:#{line_number}]",
-        file_path: path, spec_file_path: path, line_number: line_number,
-        status: "unannotated", duration_seconds: 0.5
-      )
-    end
-
     # The axis this example is NAMED for: the size of the suite. 20 examples over 2 files and 2000
     # over 200 cost the same one read, which is what makes the block affordable at the roadmap's
     # 20,000-example design point. A serializer that fetched rows and rolled them up in Ruby — or
@@ -2218,18 +2447,22 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
       expect(bare.spec_observations).to be_empty
       # Paid on the run that has nothing to disclose too — the honest cost, and the one a gate in
       # front of the read would remove at the price of a second query on every run that does.
-      expect(queries_against("spec_observations") { get_repository }.length).to eq(1)
+      expect(file_grain_reads { get_repository }.length).to eq(1)
 
       small = create_test_run(repository: repository, commit_sha: "cost00000002", duration_seconds: 42.5)
-      2.times { |index| 10.times { |line| observe(small, path: "spec/small_#{index}_spec.rb", line_number: line) } }
+      2.times do |index|
+        10.times { |line| observe(small, path: "spec/small_#{index}_spec.rb", duration: 0.5, line_number: line) }
+      end
       expect(repository.latest_test_run).to eq(small)
-      expect(queries_against("spec_observations") { get_repository }.length).to eq(1)
+      expect(file_grain_reads { get_repository }.length).to eq(1)
       expect(get_repository.dig("latest_run", "spec_files", "file_count")).to eq(2)
 
       big = create_test_run(repository: repository, commit_sha: "cost00000003", duration_seconds: 42.5)
-      200.times { |index| 10.times { |line| observe(big, path: "spec/big_#{index}_spec.rb", line_number: line) } }
+      200.times do |index|
+        10.times { |line| observe(big, path: "spec/big_#{index}_spec.rb", duration: 0.5, line_number: line) }
+      end
       expect(repository.latest_test_run).to eq(big)
-      expect(queries_against("spec_observations") { get_repository }.length).to eq(1)
+      expect(file_grain_reads { get_repository }.length).to eq(1)
       # And the rollup really was served at 200 files — a serializer that quietly stopped emitting
       # the block above some width would satisfy every count above.
       expect(get_repository.dig("latest_run", "spec_files", "file_count")).to eq(200)
@@ -2242,11 +2475,99 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
     # be invisible in the example above, where every fixture has exactly one run to serve.
     it "reads it once whatever the history holds" do
       run = create_test_run(repository: repository, commit_sha: "costwindow01", duration_seconds: 42.5)
-      observe(run, path: "spec/a_spec.rb", line_number: 1)
+      observe(run, path: "spec/a_spec.rb", duration: 0.5, line_number: 1)
       15.times { |index| create_test_run(repository: repository, commit_sha: "costwin%05d" % index) }
 
       expect(repository.test_runs.count).to eq(16)
-      expect(queries_against("spec_observations") { get_repository }.length).to eq(1)
+      expect(file_grain_reads { get_repository }.length).to eq(1)
+    end
+  end
+
+  # AC7. The by-area rollup's own axis, stated on the block above's terms because it is the same
+  # cost one rung up: EXACTLY ONE additional query, on every run recorded or not, and CONSTANT in
+  # the size of the suite. `SpecDirectoryDurations.for` issues `directory_durations_in`
+  # unconditionally, so `#recorded?` is an answer DERIVED from the read rather than a gate in front
+  # of it — and it is worth saying plainly that this is NOT "no query when unrecorded", which is the
+  # restatement the by-file criterion had to be corrected on. There is no cheaper way to ask:
+  # `test_runs` carries no observation counter.
+  #
+  # It needs no index of its own. The read groups on an EXPRESSION and narrows on a COLUMN, and
+  # only the second decides the access path, so `index_spec_observations_on_test_run_id` serves it
+  # — EXPLAIN-certified at the 20-run seed in `spec/models/spec_observation_spec.rb`, which is
+  # where a plan belongs rather than in a request spec.
+  describe "what the by-area rollup costs the endpoint" do
+    # The suite-size axis, and the one that decides whether this key is affordable at the roadmap's
+    # 20,000-example design point: 20 examples over 2 areas and 2000 over 200 cost the same single
+    # read. A serializer that fetched rows and grouped them in Ruby — or that took a second pass
+    # for `directory_count` — reads as two here and as more as the suite grows.
+    it "reads spec_observations exactly once for the area grain, on a run with rows and without" do
+      bare = create_test_run(repository: repository, commit_sha: "acost0000001", duration_seconds: 42.5)
+      get_repository
+      expect(bare.spec_observations).to be_empty
+      # PAID ON THE RUN THAT HAS NOTHING TO DISCLOSE, which is the honest cost and not the flattering
+      # one. A gate in front of the read would buy this run its query back at the price of a second
+      # one on every run that does record.
+      expect(area_grain_reads { get_repository }.length).to eq(1)
+      # And the UNRECORDED path reads the table twice IN TOTAL — no third. Asserted here and not
+      # only on the recorded fixture below, because a read matching neither `GROUP BY` is invisible
+      # to both per-grain guards by construction, and the unrecorded branch is exactly where an
+      # `exists?` gate or a preload would be tempting to add.
+      expect(observation_reads { get_repository }.length).to eq(2)
+      expect(get_repository.dig("latest_run", "spec_directories")).to be_nil
+
+      small = create_test_run(repository: repository, commit_sha: "acost0000002", duration_seconds: 42.5)
+      2.times do |index|
+        10.times { |line| observe(small, path: "spec/small_#{index}/a_spec.rb", duration: 0.5, line_number: line) }
+      end
+      expect(repository.latest_test_run).to eq(small)
+      expect(area_grain_reads { get_repository }.length).to eq(1)
+      expect(get_repository.dig("latest_run", "spec_directories", "directory_count")).to eq(2)
+
+      big = create_test_run(repository: repository, commit_sha: "acost0000003", duration_seconds: 42.5)
+      200.times do |index|
+        10.times { |line| observe(big, path: "spec/big_#{index}/a_spec.rb", duration: 0.5, line_number: line) }
+      end
+      expect(repository.latest_test_run).to eq(big)
+      expect(area_grain_reads { get_repository }.length).to eq(1)
+      # And the rollup really was served at 200 areas — a serializer that quietly stopped emitting
+      # the block above some width would satisfy every count above.
+      expect(get_repository.dig("latest_run", "spec_directories", "directory_count")).to eq(200)
+      expect(get_repository.dig("latest_run", "spec_directories", "rows").length)
+        .to eq(SpecObservation::HEAVIEST_DIRECTORIES_LIMIT)
+    end
+
+    # The history axis, restated for this key alone. `spec_directories` is served on `latest_run`
+    # and on nothing else, so a window of sixteen runs must not read the table sixteen times — the
+    # N+1 that is invisible in the example above, where every fixture has one run to serve.
+    it "reads it once whatever the history holds" do
+      run = create_test_run(repository: repository, commit_sha: "acostwindow1", duration_seconds: 42.5)
+      observe(run, path: "spec/models/a_spec.rb", duration: 0.5, line_number: 1)
+      15.times { |index| create_test_run(repository: repository, commit_sha: "acostwin%04d" % index) }
+
+      expect(repository.test_runs.count).to eq(16)
+      expect(area_grain_reads { get_repository }.length).to eq(1)
+      # The N+1 this example exists to catch need not land on either grain's `GROUP BY` — a
+      # per-run preload of `spec_observations` matches neither, so the per-grain count alone would
+      # stay at 1 through sixteen extra reads. The total is what names it.
+      expect(observation_reads { get_repository }.length).to eq(2)
+    end
+
+    # "GAINS EXACTLY ONE" — the half neither per-grain block can state, and the reason it is stated
+    # once rather than in both. Two guards each saying "my grain reads once" leave a third read
+    # added by anything else on this endpoint unnamed; the table-level total is what closes that,
+    # and it is the criterion this ticket was written against.
+    it "reads spec_observations exactly twice in total — one aggregate per grain, and no third" do
+      run = create_test_run(repository: repository, commit_sha: "acosttotal01", duration_seconds: 42.5)
+      observe(run, path: "spec/models/a_spec.rb", duration: 0.5, line_number: 1)
+      observe(run, path: "spec/requests/b_spec.rb", duration: 0.5, line_number: 1)
+
+      area, file = observation_reads_by_grain { get_repository }
+
+      expect(area.length).to eq(1)
+      expect(file.length).to eq(1)
+      # And the two classified reads are ALL of them — the assertion the per-grain blocks cannot
+      # make, because a read matching neither `GROUP BY` is invisible to both of them.
+      expect(observation_reads { get_repository }.length).to eq(2)
     end
   end
 end
