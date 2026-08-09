@@ -78,10 +78,16 @@ fi
 PROD_PUSH_SUCCESS=false
 PROD_RETRIES=0
 while [ $PROD_RETRIES -lt $MAX_RETRIES ]; do
-    if git fetch origin prod; then
+    if git fetch origin prod 2>/dev/null; then
         EXPECTED_PROD=$(git rev-parse origin/prod)
         if git push origin main:prod || \
            git push --force-with-lease=prod:"$EXPECTED_PROD" origin main:prod; then
+            PROD_PUSH_SUCCESS=true
+            break
+        fi
+    else
+        # prod does not exist yet (first release) — create it from main.
+        if git push origin main:prod; then
             PROD_PUSH_SUCCESS=true
             break
         fi

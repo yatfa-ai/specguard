@@ -4,12 +4,12 @@
 # Multi-stage Dockerfile for the SpecGuard Rails application.
 # Builds a single image shared by the web server (puma) and the Solid Queue worker.
 #
-# SpecGuard differs from yatfa's build in two ways that make this LEANER:
-#   - importmap (no JS bundling) + a COMMITTED app/assets/builds/tailwind.css
-#     mean NO Node/Bun is needed — the .dockerignore keeps that CSS so
-#     assets:precompile ships it as-is.
-#   - SpecGuard does not use ActiveRecord::Encryption, so assets:precompile
-#     needs only SECRET_KEY_BASE_DUMMY=1 (no dummy encryption keys).
+# SpecGuard uses importmap (no JS bundling), so this is leaner than yatfa's
+# build in one way: no Bun / no JS bundler. Node + `npm install` ARE needed,
+# though — assets:precompile runs tailwindcss:build, which resolves the `daisyui`
+# @plugin from node_modules (see lib/spec_guard/stylesheet_lint.rb: "npm for
+# DaisyUI, then the Tailwind CLI"). SpecGuard does not use ActiveRecord
+# Encryption, so assets:precompile needs only SECRET_KEY_BASE_DUMMY=1.
 # Ruby matches .ruby-version (4.0.5).
 
 ARG RUBY_VERSION=4.0.5
@@ -36,11 +36,17 @@ ENV RAILS_ENV="production" \
 # Throw-away build stage to reduce size of final image
 FROM base AS build
 
-# Packages needed to build gems (pg, neighbor, nokogiri, …). No Node/Bun —
-# see the header: assets are importmap + a committed CSS.
+# Packages needed to build gems (pg, neighbor, nokogiri, …).
 RUN apt-get update -qq && \
     apt-get install --no-install-recommends -y \
         build-essential git libpq-dev libyaml-dev pkg-config && \
+    rm -rf /var/lib/apt/lists /var/cache/apt/archives
+
+# Node 20 for the CSS build: assets:precompile runs tailwindcss:build, which
+# resolves the `daisyui` @plugin (app/assets/tailwind/application.css) from
+# node_modules. importmap means no JS bundling — npm is here only for daisyui.
+RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - && \
+    apt-get install -y nodejs && \
     rm -rf /var/lib/apt/lists /var/cache/apt/archives
 
 # Install application gems
@@ -50,8 +56,14 @@ RUN bundle install && \
     # -j 1 disable parallel compilation to avoid a QEMU bug: https://github.com/rails/bootsnap/issues/495
     bundle exec bootsnap precompile -j 1 --gemfile
 
-# Copy application code (incl. the committed app/assets/builds/tailwind.css —
-# the .dockerignore keeps it; there is no asset build step here).
+# Install npm deps (daisyui) for the CSS build. No lockfile in this repo, so a
+# plain install (resolves daisyui ^5.7.16). Layered before COPY . .; the
+# .dockerignore keeps the host node_modules out of the context either way.
+COPY package.json ./
+RUN npm install
+
+# Copy application code (incl. the committed app/assets/builds/tailwind.css,
+# which assets:precompile regenerates from the tailwind sources + daisyui).
 COPY . .
 
 # Precompile bootsnap code for faster boot times.
