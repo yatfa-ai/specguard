@@ -1,0 +1,11 @@
+#!/bin/sh -e
+# Entrypoint for the SpecGuard image.
+#
+# Migrations are NOT run here. They run in the specguard-web `migrate`
+# initContainer (bin/rails db:prepare) BEFORE puma starts, so the new code never
+# serves against a not-yet-migrated schema and doesn't race across replicas. This
+# entrypoint just execs the command.
+#
+# puma binds 0.0.0.0:${PORT} — config/puma.rb reads ENV["PORT"], and PORT comes
+# from ConfigMap/specguard-config (80). The Service targets containerPort 80.
+exec "$@"
