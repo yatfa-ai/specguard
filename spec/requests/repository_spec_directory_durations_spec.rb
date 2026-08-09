@@ -595,6 +595,136 @@ RSpec.describe "Repository heaviest spec directories", type: :request do
       end
     end
 
+    # The way BACK. A rung is only closed if a reader can come back out of it without losing it,
+    # and the control that brings them out of rung three predates rung two entirely — before this
+    # panel existed there was no area ask for it to preserve, and it preserved none.
+    #
+    # Which is load-bearing rather than tidy, for the reason this whole ticket exists: a file
+    # reached through an area is, by construction, one the by-file rollup's capped ten does not
+    # show. Dropping the area on the way out therefore does not return the reader where they came
+    # from — it deposits them at a list their file is provably absent from, and makes them re-open
+    # the area to carry on. "Close directory" already keeps the mirror invariant on the file ask;
+    # these pin the other half of it.
+    describe "the way back, out of a file and into the area it was opened from" do
+      def close_file_href
+        Capybara.string(response.body).find("#spec-file-examples").find("a", text: "Close file")[:href]
+      end
+
+      it "keeps the area open when a file opened out of it is closed" do
+        get repository_path(area_run, spec_directory: "spec/models",
+                                      spec_file: "spec/models/refund_spec.rb")
+
+        expect(close_file_href).to include("spec_directory=#{CGI.escape('spec/models')}")
+      end
+
+      # The control's own claim is that it anchors at the panel the file was picked from. With an
+      # area open, that panel is the area's — the by-file rollup is not where this file came from
+      # and may well not list it at all.
+      it "anchors back at the panel the file was actually picked from" do
+        get repository_path(area_run, spec_directory: "spec/models",
+                                      spec_file: "spec/models/refund_spec.rb")
+
+        expect(close_file_href).to include("#spec-directory-files")
+      end
+
+      # The unchanged branch, pinned from the other side. `nil` is omitted from a query string, so
+      # a page nobody asked an area of has to close exactly as it did before this panel existed —
+      # and a guard that only exercised the area-open branch would pass just as happily on a
+      # control that had been hard-wired to the drill-in.
+      it "closes to the by-file rollup when no area was open" do
+        get repository_path(area_run, spec_file: "spec/models/refund_spec.rb")
+
+        expect(close_file_href).to include("#spec-file-durations")
+        expect(close_file_href).not_to include("spec_directory")
+      end
+    end
+
+    # One gesture, one meaning, wherever it appears. There are two `?spec_file=` links on this page
+    # and they target the same panel; if only one of them carries the area, then picking a file
+    # from the rollup closes the area while picking one from the drill-in keeps it — the same
+    # gesture with two outcomes, and nothing on the page telling a reader which they are about to
+    # get.
+    describe "picking a file from the by-file rollup while an area is open" do
+      def file_rollup = Capybara.string(response.body).find("#spec-file-durations")
+
+      it "keeps the area open, exactly as the drill-in's own file links do" do
+        get repository_path(area_run, spec_directory: "spec/models")
+
+        rollup_href = file_rollup.find("a", text: "spec/requests/checkout_spec.rb")[:href]
+        drill_in_href = files_panel.find("a", text: "spec/models/refund_spec.rb")[:href]
+
+        expect(rollup_href).to include("spec_directory=#{CGI.escape('spec/models')}")
+        expect(drill_in_href).to include("spec_directory=#{CGI.escape('spec/models')}")
+      end
+
+      # The other half: a page with no area ask links exactly as it did before, so the
+      # carry-through cannot quietly become an always-on parameter.
+      it "adds no area ask to a page that has none" do
+        get repository_path(area_run)
+
+        expect(file_rollup.find("a", text: "spec/requests/checkout_spec.rb")[:href])
+          .not_to include("spec_directory")
+      end
+    end
+
+    # A caption is a claim, and the coverage sentence used to make one about a DIFFERENT panel's
+    # contents — "the same fraction the row for this area states in the panel above". The rollup is
+    # capped at `HEAVIEST_DIRECTORIES_LIMIT` while `?spec_directory=` answers for any area the run
+    # recorded, so the two populations part company exactly at the eleventh-heaviest area: it
+    # renders here in full, with real rows and real counts, and has no row up there to agree with.
+    describe "an area the rollup above does not list" do
+      # Ten areas heavy enough to fill the rollup, and one faint enough to be excluded from it.
+      def unlisted_area_run
+        repository = create_repository(user: @user)
+        heavy = (1..SpecObservation::HEAVIEST_DIRECTORIES_LIMIT).map do |i|
+          example_spec(file_path: "spec/heavy#{format('%02d', i)}/a_spec.rb", duration: 100.0 + i,
+                       line_number: i)
+        end
+        ingest(repository, heavy + [
+                 example_spec(file_path: "spec/faint/order_spec.rb", duration: 1.0, line_number: 90),
+                 example_spec(file_path: "spec/faint/order_spec.rb", duration: nil, line_number: 91)
+               ])
+        repository
+      end
+
+      # The premise, asserted rather than assumed: if the fixture ever stopped excluding the area
+      # the example below would pass for the wrong reason.
+      it "is absent from the rollup yet opens with its own rows and counts" do
+        get repository_path(unlisted_area_run, spec_directory: "spec/faint")
+
+        expect(rows.size).to eq(SpecObservation::HEAVIEST_DIRECTORIES_LIMIT)
+        expect(panel).to have_no_text("spec/faint")
+        expect(file_row_paths).to eq(["spec/faint/order_spec.rb"])
+        expect(files_basis).to have_text("Across this area's examples, durations cover 1 of 2",
+                                         normalize_ws: true)
+      end
+
+      it "does not cross-reference a rollup row that is not on the page" do
+        get repository_path(unlisted_area_run, spec_directory: "spec/faint")
+
+        expect(files_basis).to have_no_text(
+          "the same fraction the row for this area states in the panel above", normalize_ws: true
+        )
+      end
+
+      # The positive, beside it: where the row IS above, the agreement is still stated. Without
+      # this, deleting the clause outright would pass — and the clause earns its place by giving a
+      # reader a row to check the figure against.
+      it "still cross-references the row where the area does appear above" do
+        repository = create_repository(user: @user)
+        ingest(repository, [example_spec(file_path: "spec/models/order_spec.rb", duration: 4.0, line_number: 1),
+                            example_spec(file_path: "spec/models/order_spec.rb", duration: nil, line_number: 2)])
+
+        get repository_path(repository, spec_directory: "spec/models")
+
+        expect(panel).to have_text("spec/models")
+        expect(files_basis).to have_text(
+          "durations cover 1 of 2 — the same fraction the row for this area states in the panel above",
+          normalize_ws: true
+        )
+      end
+    end
+
     # The hazard every read on this table shares, at this grain: `SUM` skips a missing timing
     # silently and `DESC` alone is NULLS FIRST in Postgres, so the file nothing measured is named
     # the heaviest in the area and its nil is rendered as a zero it never measured.
@@ -694,6 +824,18 @@ RSpec.describe "Repository heaviest spec directories", type: :request do
         get repository_path(area_run, spec_directory: "spec/mod")
 
         expect(files_panel).to have_no_css("tbody tr")
+      end
+
+      # The empty state points at the rollup, and has to describe it by what it ACTUALLY holds. The
+      # rollup is a capped ten, not a catalogue of the run's areas, so on a suite of forty areas a
+      # reader sent there to find the correct spelling may not find it — "the areas this run did
+      # record" promises a completeness the panel does not have.
+      it "describes the panel it points at by what that panel holds" do
+        get repository_path(area_run, spec_directory: "spec/ghosts")
+
+        expect(files_panel).to have_text("lists the areas this run spent the most time in",
+                                         normalize_ws: true)
+        expect(files_panel).to have_no_text("lists the areas this run did record", normalize_ws: true)
       end
 
       it "renders no panel for a repository CI has never reported for" do

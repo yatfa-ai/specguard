@@ -1515,12 +1515,21 @@
                       file. `nil` is omitted from the query string, so a page nobody asked a branch
                       of links exactly as it did before.
 
+                      The AREA ask rides through for the same reason, and the reciprocity is the
+                      point: the "Spec files in this directory" panel below offers this identical
+                      gesture on files this capped ten cannot show, and it carries the area through.
+                      If this one did not, the same gesture on the same target panel would close
+                      the area from one list and keep it from the other, with nothing on the page
+                      telling a reader which they were about to get. Picking a file is not a
+                      request to close the area, from either list.
+
                       `aria-current` on the open file, because this is a list of choices with one
                       of them taken and the panel below is a long way down the page — a reader
                       arriving back at this table by keyboard needs to be told which row they are
                       already looking at. %>
                   <%= link_to file.path,
                               repository_path(@repository, branch: @trajectory_branch_request,
+                                              spec_directory: @spec_directory_request,
                                               spec_file: file.path, anchor: "spec-file-examples"),
                               class: "underline underline-offset-2 decoration-app-border-light " \
                                      "text-app-content hover:decoration-app-content",
@@ -1599,11 +1608,20 @@
               reader who most needs the drill-down is the one least likely to want to do that. It
               carries the branch ask through and anchors back at the panel the file was picked
               from, so closing a file returns the reader where they opened it rather than at the
-              top of a long page. %>
+              top of a long page.
+
+              It carries any OPEN AREA through, and the panel it anchors at follows the area rather
+              than being fixed. A file reached through the area drill-down was NOT picked from
+              "Heaviest spec files" — that panel's capped ten is precisely where such a file is
+              not — so dropping the area here would close the middle rung on the way back and land
+              the reader at a list their file is absent from. This is the same invariant "Close
+              directory" keeps in the other direction: closing a file is not a request to close the
+              area, exactly as closing an area is not a request to close the file. %>
           <%= render UI::ButtonComponent.new(
                 variant: :ghost,
                 href: repository_path(@repository, branch: @trajectory_branch_request,
-                                      anchor: "spec-file-durations")
+                                      spec_directory: @spec_directory_request,
+                                      anchor: @spec_directory_request ? "spec-directory-files" : "spec-file-durations")
               ) { "Close file" } %>
         <% end %>
         <% if @spec_file_examples.recorded? %>
@@ -1994,9 +2012,17 @@
               <%= "example".pluralize(@spec_directory_files.recorded_count) %> this run recorded in
               this area reported a duration, so each total covers the whole of its file.
             <% elsif @spec_directory_files.any_timed? %>
+              <%# The cross-reference is CONDITIONAL, because the panel above is a capped ten and
+                  this panel answers about any area that was asked for. An area outside that ten
+                  renders here in full and has no row up there to agree with, and a sentence
+                  pointing at a row that is not on the page is a false claim about the page. Where
+                  the row IS there the agreement is worth stating — it is the reader's own check
+                  that the drill-down and the rollup were summed over the same rows. %>
               Across this area's examples, durations cover
-              <%= @spec_directory_files.coverage_label %> — the same fraction the row for this area
-              states in the panel above. A file
+              <%= @spec_directory_files.coverage_label
+                  %><% if spec_directory_listed_in_rollup?(@spec_directory_durations,
+                                                           @spec_directory_files.path) %> — the same
+                fraction the row for this area states in the panel above<% end %>. A file
               whose examples did not all report a duration has a total covering only the ones that
               did, and a file that reported none has no total to state rather than a zero.
             <% else %>
@@ -2056,14 +2082,16 @@
               an error: `?spec_directory=` is a URL a reader types, edits and bookmarks, so a
               deleted directory, a renamed one and a typo all arrive here. It names the path back —
               an empty state without a subject is a sentence about nothing — and points at the panel
-              that lists what this run DID record, which is the one place the correct spelling
-              exists. %>
+              above, described by what it ACTUALLY holds: that panel is a capped ten, not a
+              catalogue of the run's areas, so on a suite of forty areas the correct spelling may
+              not be in it either. Pointing a reader at a list under a promise it does not keep is
+              the same over-claim the coverage sentence above refuses. %>
           <%= render UI::EmptyStateComponent.new(
                 title: "No spec files in this directory",
                 description: "This run recorded no examples in #{@spec_directory_files.path}. It " \
                              "may have been renamed or deleted since, or never have run in this " \
                              "run at all — the “Heaviest spec directories” panel above lists the " \
-                             "areas this run did record."
+                             "areas this run spent the most time in."
               ) %>
         <% end %>
       <% end %>

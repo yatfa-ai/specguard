@@ -123,16 +123,22 @@ class SpecDirectoryFiles
   # One spec file's share of one area's wall clock, and what that share was measured over. The same
   # four fields `SpecFileDurations::Row` carries, because it is the same claim about the same grain
   # — narrowed to one area rather than ranked across the run.
+  #
+  # It carries FEWER methods than that sibling, and the absence is deliberate. `SpecFileDurations`
+  # and `SpecDirectoryDurations` both answer `#any_timed?` and `#complete?` by folding over their
+  # rows (`rows.any?(&:timed?)`, `rows.all?(&:complete?)`), so a per-row `#timed?`/`#complete?` is
+  # load-bearing there. Here the parent answers both off the area's own windows instead — see
+  # `#any_timed?` above for why that is the truthful answer at this grain, where the list is capped
+  # over a population the page cannot show all of. That leaves a per-row pair with no caller and no
+  # question to answer, so they are not written: an unreachable method whose sibling is load-bearing
+  # is an invitation to fold over the page's rows and quietly reintroduce the figure this presenter
+  # exists to avoid.
   Row = Struct.new(:path, :total_seconds, :recorded_count, :timed_count, keyword_init: true) do
-    # This file has a measured total. False when every one of its examples went untimed, which is
-    # SQL NULL out of the aggregate and stays nil all the way to the cell.
-    def timed? = !total_seconds.nil?
-
-    def complete? = timed_count == recorded_count
-
     # The total, rendered — through the same seam one example's duration, one file's total and one
     # area's total are rendered through, so no two grains on this page can disagree about how a
-    # duration is spelled, and an unmeasured file says "not reported" rather than "0.00s".
+    # duration is spelled, and an unmeasured file says "not reported" rather than "0.00s". A file
+    # whose examples all went untimed is SQL NULL out of the aggregate, stays nil all the way to
+    # the cell, and is spelled by this seam rather than tested for here.
     def duration_label = SpecObservation.humanized_duration(total_seconds)
 
     # How much of the file this total covers, always as a fraction and never as a bare count. "40"
