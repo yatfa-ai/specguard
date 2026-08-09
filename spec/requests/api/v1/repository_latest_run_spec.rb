@@ -30,8 +30,10 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
   # because the alternative is worse in both directions: a bare `eq(2)` on the table cannot tell
   # "one aggregate per grain" from "one grain reading twice", and it has to be rebaselined by hand
   # every time a grain is added, which is exactly the silent rebaseline `queries_against` was
-  # chosen over `baseline + 1` to avoid. The TOTAL is still pinned, once, in the by-area block —
-  # so "exactly these two reads and no third" remains a stated guard rather than an inference.
+  # chosen over `baseline + 1` to avoid. The TOTAL is pinned alongside it in the by-area block, on
+  # each axis the per-grain narrowing left uncovered — the unrecorded run, the history window, and
+  # the recorded run — so "exactly these two reads and no third" is a stated guard on every one of
+  # them rather than an inference from the grain that happens to be counted.
   #
   # THE PARTITION IS DEFINED ONCE, HERE, for the reason the note above gives: two sibling blocks
   # each classifying the same statements would be free to drift on which read belongs to which
@@ -53,6 +55,25 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
 
   def area_grain_reads(&) = observation_reads_by_grain(&).first
   def file_grain_reads(&) = observation_reads_by_grain(&).last
+
+  # ONE builder for every block that writes observation rows — the four grain blocks below (by-file
+  # and by-area, rollup and cost) all want the same row and had written it out four times. Hoisted
+  # for the reason the note above gives about `observation_reads`: RSpec scoping a `def` to its own
+  # example group explains why a sibling's helper is INVISIBLE, it does not argue for copying it,
+  # and four copies of a `create!` is four places for the row shape to drift apart.
+  #
+  # `duration:` is REQUIRED rather than defaulted, at every call site including the nils, on the
+  # rule `spec_observation_spec.rb`'s builder states for itself: an untimed row is the state half
+  # the rollup blocks turn on, and a builder that defaulted it would let an example write one
+  # without meaning to. `line_number` keeps `example_id` unique within a file, so a caller can put
+  # several examples in one file the way a real suite does.
+  def observe(run, path:, duration:, line_number:)
+    run.spec_observations.create!(
+      repository: run.repository, example_id: "./#{path}[1:#{line_number}]",
+      file_path: path, spec_file_path: path, line_number: line_number,
+      status: "unannotated", duration_seconds: duration
+    )
+  end
 
   describe "a repository with an ingested run" do
     let!(:test_run) do
@@ -834,19 +855,6 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
   # rationale is the precedent, one axis over ("an agent reading only those cannot learn which part
   # it waited on").
   describe "the by-file rollup on latest_run" do
-    # One example of one run. `duration_seconds:` is passed at every call site including the nils,
-    # on the rule `spec_observation_spec.rb`'s builder states for itself: an untimed row is the
-    # state half of this block turns on, and a builder that defaulted it would let an example write
-    # one without meaning to. `line_number` keeps `example_id` unique within a file so a caller can
-    # put several examples in one file the way a real suite does.
-    def observe(run, path:, duration:, line_number:)
-      run.spec_observations.create!(
-        repository: run.repository, example_id: "./#{path}[1:#{line_number}]",
-        file_path: path, spec_file_path: path, line_number: line_number,
-        status: "unannotated", duration_seconds: duration
-      )
-    end
-
     # A run whose heaviest file sorts LAST alphabetically, so cost order and path order disagree.
     # That disagreement is the fixture's whole job: with the two orders coincident, a serializer
     # that re-sorted on `path` would serve the same array as one that inherited the aggregate's
@@ -979,18 +987,6 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
   # seconds of the run with not one of its rows in that list"* — and the fixture below is built so
   # that this file's examples FAIL under a client that tries.
   describe "the by-area rollup on latest_run" do
-    # The by-file block's builder verbatim, and deliberately a second copy rather than a hoist:
-    # RSpec scopes a `def` to its own example group, and the two blocks pin different grains off
-    # the same rows. `duration_seconds:` is passed at every call site including the nils, so an
-    # untimed row — the state half of this block turns on — is never written by accident.
-    def observe(run, path:, duration:, line_number:)
-      run.spec_observations.create!(
-        repository: run.repository, example_id: "./#{path}[1:#{line_number}]",
-        file_path: path, spec_file_path: path, line_number: line_number,
-        status: "unannotated", duration_seconds: duration
-      )
-    end
-
     # A run whose heaviest AREA is heavy through MANY SMALL FILES, and whose heaviest FILE lives in
     # a different, lighter area. Both disagreements are the fixture's job:
     #
@@ -2440,14 +2436,6 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
   # asserts today is what it asserted before the sibling existed. The total across both grains is
   # pinned once, in the by-area block below.
   describe "what the by-file rollup costs the endpoint" do
-    def observe(run, path:, line_number:)
-      run.spec_observations.create!(
-        repository: run.repository, example_id: "./#{path}[1:#{line_number}]",
-        file_path: path, spec_file_path: path, line_number: line_number,
-        status: "unannotated", duration_seconds: 0.5
-      )
-    end
-
     # The axis this example is NAMED for: the size of the suite. 20 examples over 2 files and 2000
     # over 200 cost the same one read, which is what makes the block affordable at the roadmap's
     # 20,000-example design point. A serializer that fetched rows and rolled them up in Ruby — or
@@ -2462,13 +2450,17 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
       expect(file_grain_reads { get_repository }.length).to eq(1)
 
       small = create_test_run(repository: repository, commit_sha: "cost00000002", duration_seconds: 42.5)
-      2.times { |index| 10.times { |line| observe(small, path: "spec/small_#{index}_spec.rb", line_number: line) } }
+      2.times do |index|
+        10.times { |line| observe(small, path: "spec/small_#{index}_spec.rb", duration: 0.5, line_number: line) }
+      end
       expect(repository.latest_test_run).to eq(small)
       expect(file_grain_reads { get_repository }.length).to eq(1)
       expect(get_repository.dig("latest_run", "spec_files", "file_count")).to eq(2)
 
       big = create_test_run(repository: repository, commit_sha: "cost00000003", duration_seconds: 42.5)
-      200.times { |index| 10.times { |line| observe(big, path: "spec/big_#{index}_spec.rb", line_number: line) } }
+      200.times do |index|
+        10.times { |line| observe(big, path: "spec/big_#{index}_spec.rb", duration: 0.5, line_number: line) }
+      end
       expect(repository.latest_test_run).to eq(big)
       expect(file_grain_reads { get_repository }.length).to eq(1)
       # And the rollup really was served at 200 files — a serializer that quietly stopped emitting
@@ -2483,7 +2475,7 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
     # be invisible in the example above, where every fixture has exactly one run to serve.
     it "reads it once whatever the history holds" do
       run = create_test_run(repository: repository, commit_sha: "costwindow01", duration_seconds: 42.5)
-      observe(run, path: "spec/a_spec.rb", line_number: 1)
+      observe(run, path: "spec/a_spec.rb", duration: 0.5, line_number: 1)
       15.times { |index| create_test_run(repository: repository, commit_sha: "costwin%05d" % index) }
 
       expect(repository.test_runs.count).to eq(16)
@@ -2504,14 +2496,6 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
   # — EXPLAIN-certified at the 20-run seed in `spec/models/spec_observation_spec.rb`, which is
   # where a plan belongs rather than in a request spec.
   describe "what the by-area rollup costs the endpoint" do
-    def observe(run, path:, line_number:)
-      run.spec_observations.create!(
-        repository: run.repository, example_id: "./#{path}[1:#{line_number}]",
-        file_path: path, spec_file_path: path, line_number: line_number,
-        status: "unannotated", duration_seconds: 0.5
-      )
-    end
-
     # The suite-size axis, and the one that decides whether this key is affordable at the roadmap's
     # 20,000-example design point: 20 examples over 2 areas and 2000 over 200 cost the same single
     # read. A serializer that fetched rows and grouped them in Ruby — or that took a second pass
@@ -2524,16 +2508,25 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
       # one. A gate in front of the read would buy this run its query back at the price of a second
       # one on every run that does record.
       expect(area_grain_reads { get_repository }.length).to eq(1)
+      # And the UNRECORDED path reads the table twice IN TOTAL — no third. Asserted here and not
+      # only on the recorded fixture below, because a read matching neither `GROUP BY` is invisible
+      # to both per-grain guards by construction, and the unrecorded branch is exactly where an
+      # `exists?` gate or a preload would be tempting to add.
+      expect(observation_reads { get_repository }.length).to eq(2)
       expect(get_repository.dig("latest_run", "spec_directories")).to be_nil
 
       small = create_test_run(repository: repository, commit_sha: "acost0000002", duration_seconds: 42.5)
-      2.times { |index| 10.times { |line| observe(small, path: "spec/small_#{index}/a_spec.rb", line_number: line) } }
+      2.times do |index|
+        10.times { |line| observe(small, path: "spec/small_#{index}/a_spec.rb", duration: 0.5, line_number: line) }
+      end
       expect(repository.latest_test_run).to eq(small)
       expect(area_grain_reads { get_repository }.length).to eq(1)
       expect(get_repository.dig("latest_run", "spec_directories", "directory_count")).to eq(2)
 
       big = create_test_run(repository: repository, commit_sha: "acost0000003", duration_seconds: 42.5)
-      200.times { |index| 10.times { |line| observe(big, path: "spec/big_#{index}/a_spec.rb", line_number: line) } }
+      200.times do |index|
+        10.times { |line| observe(big, path: "spec/big_#{index}/a_spec.rb", duration: 0.5, line_number: line) }
+      end
       expect(repository.latest_test_run).to eq(big)
       expect(area_grain_reads { get_repository }.length).to eq(1)
       # And the rollup really was served at 200 areas — a serializer that quietly stopped emitting
@@ -2548,11 +2541,15 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
     # N+1 that is invisible in the example above, where every fixture has one run to serve.
     it "reads it once whatever the history holds" do
       run = create_test_run(repository: repository, commit_sha: "acostwindow1", duration_seconds: 42.5)
-      observe(run, path: "spec/models/a_spec.rb", line_number: 1)
+      observe(run, path: "spec/models/a_spec.rb", duration: 0.5, line_number: 1)
       15.times { |index| create_test_run(repository: repository, commit_sha: "acostwin%04d" % index) }
 
       expect(repository.test_runs.count).to eq(16)
       expect(area_grain_reads { get_repository }.length).to eq(1)
+      # The N+1 this example exists to catch need not land on either grain's `GROUP BY` — a
+      # per-run preload of `spec_observations` matches neither, so the per-grain count alone would
+      # stay at 1 through sixteen extra reads. The total is what names it.
+      expect(observation_reads { get_repository }.length).to eq(2)
     end
 
     # "GAINS EXACTLY ONE" — the half neither per-grain block can state, and the reason it is stated
@@ -2561,8 +2558,8 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
     # and it is the criterion this ticket was written against.
     it "reads spec_observations exactly twice in total — one aggregate per grain, and no third" do
       run = create_test_run(repository: repository, commit_sha: "acosttotal01", duration_seconds: 42.5)
-      observe(run, path: "spec/models/a_spec.rb", line_number: 1)
-      observe(run, path: "spec/requests/b_spec.rb", line_number: 1)
+      observe(run, path: "spec/models/a_spec.rb", duration: 0.5, line_number: 1)
+      observe(run, path: "spec/requests/b_spec.rb", duration: 0.5, line_number: 1)
 
       area, file = observation_reads_by_grain { get_repository }
 

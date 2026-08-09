@@ -392,16 +392,11 @@ class Api::V1::RepositoriesController < Api::BaseController
   # stated in full on `serialized_spec_files` above. `SpecDirectoryDurations` is view-free, so the
   # API and the panel rank the same areas in the same order off the same rows of the same run.
   #
-  # Every rule the by-file block states applies here unchanged, so it is not re-argued: `rows`
-  # MIRRORS the presenter and re-sorts nothing (the aggregate orders `SUM(duration_seconds) DESC
-  # NULLS LAST, <directory> ASC`, and a plain `desc` re-sort here would head a list captioned
-  # "heaviest first" with the area that reported NOTHING); STRUCTURED COUNTS, never `Row#duration_label`
-  # (`"1.23s"` / `"not reported"`) or `#coverage_label` (`"4 of 12"`); `total_seconds` is `null` and
-  # never `0.0` for an area none of whose examples reported a timing; `directory_count` is NOT
-  # `rows.size` but the `COUNT(*) OVER ()` counted in the same pass, with `limit` beside it read off
-  # `SpecObservation`'s own constant so the response cannot claim a bound the query did not apply;
-  # `null` — THE KEY STILL PRESENT — for a run that recorded no observation rows; and the gate is
-  # `#recorded?` ITSELF rather than a re-spelled `rows.any?`.
+  # Every rule `serialized_spec_files` states applies here unchanged and is NOT restated: the
+  # `null`-with-the-key-present shape, the `#recorded?` gate, structured counts over labels,
+  # `total_seconds` never coalesced to `0.0`, `directory_count` off the window function rather than
+  # `rows.size`, and the inherited order. Read them there. They are one behaviour described once,
+  # and a second copy here is a second thing to keep true.
   #
   # What the grain changes is only what each of those costs when it is got wrong, and every one
   # costs MORE here: an area is a bigger population than a file, so an all-untimed area rendered as
