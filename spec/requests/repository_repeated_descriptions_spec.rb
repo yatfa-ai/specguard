@@ -276,6 +276,35 @@ RSpec.describe "Repository repeated descriptions", type: :request do
       expect(panel).to have_no_css("tbody tr")
     end
 
+    # The other half of that state, and the half a `have_no_css("tbody tr")` cannot see: the basis
+    # paragraph is a claim ABOUT the ranking — it says "costliest first" and names an "Examples
+    # timed" column as the denominator of every total — so on the run that produces neither it must
+    # be ABSENT rather than reworded. A paragraph describing a table that is not on the page is the
+    # one failure this panel's empty state exists to prevent, and it is invisible to any assertion
+    # made on the table alone.
+    it "makes no claim about a ranking where there is nothing ranked" do
+      get repository_path(repository_with([["untimed twice", nil], ["untimed twice", nil]]))
+
+      expect(panel).to have_no_css("#repeated-descriptions-basis")
+      expect(panel).to have_no_text("costliest first", normalize_ws: true)
+      expect(panel).to have_no_text("Examples timed", normalize_ws: true)
+    end
+
+    # The discrimination that keeps the fix above from being a blanket "no timings, no paragraph".
+    # A run whose every description is unique timed nothing repeated either, and its paragraph
+    # promises no ranking — it states the honest zero's own denominator and is the only place the
+    # rows that carry no description are answered for. Deleting the `any?` half of the view's
+    # condition passes every assertion above and fails this one.
+    it "keeps the honest zero's paragraph on a unique-description run that timed nothing" do
+      get repository_path(repository_with([["one", nil], ["two", nil]]))
+
+      expect(panel).to have_css("#repeated-descriptions-none")
+      expect(panel).to have_no_css("#repeated-descriptions-untimed")
+      expect(basis_line).to have_text("Every one of the 2 examples this run described carries a " \
+                                      "description no other example of the run carries",
+                                      normalize_ws: true)
+    end
+
     # No per-example rows at all — a run ingested before those rows existed, or a client that sends
     # no per-example detail. There is no description grain to discuss and the panel does not appear
     # to discuss it, which is the line every single-run panel on this page draws with `recorded?`.
