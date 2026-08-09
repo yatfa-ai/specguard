@@ -118,6 +118,142 @@ RSpec.describe SpecObservation do
       end
     end
 
+    # The read whose grain is the DESCRIPTION rather than the file, the area or the example — the
+    # one grain `seed` above deliberately does not produce, because every row it writes carries a
+    # unique `name`. That is the ordinary suite, and it is exactly why these examples build the
+    # repeated population explicitly: a run with no repetition is the state this read has to return
+    # nothing for, and asserting against a fixture that accidentally contained repetition would
+    # certify neither half.
+    describe "the descriptions one run recorded more than once" do
+      before { seed(run) }
+
+      # Rows sharing one description, appended to a run whose 500 seeded rows are all unique. Timed
+      # by default and untimed on request, because "this group cost 90 seconds" and "this group was
+      # never measured" are the two states the ranking has to keep apart.
+      def repeat(name, durations, path: "spec/d0/f0_spec.rb", test_run: run)
+        now = Time.current
+        rows = durations.each_with_index.map do |seconds, index|
+          key = "#{path}-#{name}-#{index}"
+          { test_run_id: test_run.id, repository_id: test_run.repository_id,
+            example_id: "./#{path}[9:#{key}]", spec_file_path: path, file_path: path,
+            line_number: 900 + index, name: name, duration_seconds: seconds,
+            status: "unannotated", created_at: now, updated_at: now }
+        end
+
+        described_class.insert_all(rows)
+      end
+
+      def names_returned = described_class.repeated_descriptions_in(run, limit: 100).map(&:first)
+
+      # The whole predicate: a description ONE example carries is not a repetition, and the 500
+      # uniquely-named rows the seed wrote are the proof that `HAVING COUNT(*) > 1` is doing the
+      # work rather than the fixture being small.
+      it "returns the descriptions carried by more than one example, and no others" do
+        repeat("shared across a loop", [1.0, 2.0])
+
+        expect(names_returned).to eq(["shared across a loop"])
+      end
+
+      # Ranked by what the repetition COSTS and specifically not by how many examples are in it —
+      # the ordering the panel's whole claim rests on. The three-example group here outranks the
+      # eight-example one, which is the assertion that would fail if this were ordered by
+      # `COUNT(*)`.
+      it "ranks the groups by summed wall clock rather than by how many examples share the name" do
+        repeat("three slow examples", [30.0, 30.0, 30.0])
+        repeat("eight fast examples", Array.new(8, 0.25))
+
+        expect(names_returned).to eq(["three slow examples", "eight fast examples"])
+      end
+
+      # `SUM(...) DESC` is NULLS FIRST in Postgres, so the naive ordering does not merely include
+      # the group nobody timed — it names it the most expensive repetition in the run. The same
+      # hazard `.directory_durations_in` carries `NULLS LAST` for, at this grain.
+      it "sorts a group nothing timed to the end rather than to the head of the ranking" do
+        repeat("timed group", [0.5, 0.5])
+        repeat("untimed group", [nil, nil])
+
+        expect(names_returned).to eq(["timed group", "untimed group"])
+        expect(described_class.repeated_descriptions_in(run, limit: 100).last[1]).to be_nil
+      end
+
+      # Each group states what its own total was summed over, because `SUM` skips NULLs silently
+      # and a half-measured group is otherwise indistinguishable, as a number, from a complete one.
+      it "counts each group's examples and how many of them reported a timing" do
+        repeat("half measured", [4.0, nil, 2.0])
+
+        _name, total, recorded, timed = described_class.repeated_descriptions_in(run, limit: 100).first
+
+        expect(total).to be_within(0.001).of(6.0)
+        expect(recorded).to eq(3)
+        expect(timed).to eq(2)
+      end
+
+      # The files are what let a reader go and look, and a group spanning two of them is a
+      # disclosure the panel makes rather than an error. `ARRAY_AGG(DISTINCT …) FILTER (…)`, so the
+      # list is de-duplicated and a null never arrives as a nil element inside it.
+      it "names the distinct spec files the group's examples ran in" do
+        repeat("spans two files", [1.0], path: "spec/d0/a_spec.rb")
+        repeat("spans two files", [1.0], path: "spec/d1/b_spec.rb")
+
+        expect(described_class.repeated_descriptions_in(run, limit: 100).first[4])
+          .to contain_exactly("spec/d0/a_spec.rb", "spec/d1/b_spec.rb")
+      end
+
+      # A null name is not a description and two nulls are not one test. Pooling them would invent
+      # the largest repetition in the run out of rows that share nothing at all — here, the three
+      # most expensive rows the run wrote.
+      it "excludes the rows carrying no description rather than pooling them into one group" do
+        repeat(nil, [50.0, 50.0, 50.0], path: "spec/d0/unnamed_spec.rb")
+
+        expect(names_returned).to be_empty
+      end
+
+      # `COUNT(*) OVER ()` runs after `GROUP BY` and its `HAVING` and before the `LIMIT`, so it
+      # counts repeated DESCRIPTIONS and counts all of them however few come back. Without it a
+      # capped list's own length is the only figure available, and three repetitions and three
+      # hundred would render identically.
+      it "reports how many repeated descriptions the run holds, before the cap" do
+        6.times { |index| repeat("group #{index}", [index + 1.0, index + 1.0]) }
+
+        capped = described_class.repeated_descriptions_in(run, limit: 2)
+
+        expect(capped.size).to eq(2)
+        expect(capped.map { |row| row[5] }.uniq).to eq([6])
+      end
+
+      # The two window totals describe the whole repeated population rather than the head of it
+      # that fit on the page — on a truncated run those are different numbers, and a coverage
+      # sentence built on the listed rows would be a claim about the page.
+      it "reports the examples every repeated description covers and times, before the cap" do
+        repeat("first group", [1.0, nil])
+        repeat("second group", [2.0, 2.0, nil])
+
+        _name, _total, _recorded, _timed, _paths, groups, repeated_recorded, repeated_timed =
+          described_class.repeated_descriptions_in(run, limit: 1).first
+
+        expect(groups).to eq(2)
+        expect(repeated_recorded).to eq(5)
+        expect(repeated_timed).to eq(3)
+      end
+
+      # The gate an empty ranking cannot provide for itself: a run that wrote no rows and a run
+      # whose every description is unique both return nothing, and only the first of them is
+      # silence.
+      it "counts the run's rows and the ones carrying no description, in one read" do
+        repeat(nil, Array.new(7, 0.1), path: "spec/d0/unnamed_spec.rb")
+
+        expect(described_class.description_presence_in(run))
+          .to eq(recorded_count: rows_per_run + 7, unnamed_count: 7)
+      end
+
+      it "reports a run that wrote no rows as zero of both rather than as an absence" do
+        empty_run = create_test_run(repository: repository)
+
+        expect(described_class.description_presence_in(empty_run))
+          .to eq(recorded_count: 0, unnamed_count: 0)
+      end
+    end
+
     # The only examples that need a populated table: a planner given three rows sequentially scans
     # everything, and an EXPLAIN assertion over that would say nothing about the indexes at all. At
     # twenty runs a single run is ~5% of the table, so "use the index" is a decision rather than a
@@ -372,6 +508,44 @@ RSpec.describe SpecObservation do
       # figure this one scan already has the rows for.
       it "counts a whole run's outcomes off an index rather than scanning the table" do
         plan = plan_for(coverage)
+
+        expect(plan).to match(INDEXED_BY_RUN)
+        expect(plan).not_to match(/Seq Scan on spec_observations/)
+      end
+
+      # The certification for the read whose grain is the DESCRIPTION, and the reason it ships
+      # without a migration — MEASURED here rather than argued from the by-directory sibling, for
+      # the reason that example states about itself: this is the assertion that would have sent the
+      # slice to a migration had the premise been wrong, so it is the one that has to run against a
+      # real planner with real statistics at the 20-run seed.
+      #
+      # The premise is that a whole-run `GROUP BY name` is the same shape as a whole-run `GROUP BY`
+      # an expression: `where(test_run_id:)` decides the access path and the grouping
+      # hash-aggregates on top. What makes it worth measuring rather than assuming is that unlike
+      # `DIRECTORY_EXPRESSION` there IS an index over `name` on this table —
+      # `index_spec_observations_on_repository_id_and_name` — and it is NOT the path here, because
+      # it leads on `repository_id`. That index is what `.outcome_composition_in` rides for a
+      # WINDOW of runs; a single-run narrow does not begin with its leading column, and reaching
+      # for it would mean walking a whole repository's rows to answer a question about one run.
+      #
+      # `SUM(duration_seconds)` projects a column outside every index leading with `test_run_id`,
+      # so the aggregate has to touch the heap and an `Index Only Scan` is not available to this
+      # query — the same tradeoff `.directory_durations_in` carries, which is why this asserts the
+      # shared matcher rather than the widened `INDEXED_OR_COVERED_BY_RUN` beside it.
+      it "reads the panel's repeated-description ranking off an index rather than scanning" do
+        plan = plan_for_actual_sql { described_class.repeated_descriptions_in(run) }
+
+        expect(plan).to match(INDEXED_BY_RUN)
+        expect(plan).not_to match(/Seq Scan on spec_observations/)
+      end
+
+      # The second read that panel makes, and the one that answers for the rows the ranking above
+      # had to exclude. Certified separately because it is a separate round trip — the ranking
+      # drops null names in its WHERE clause, so no window over it could ever have counted them —
+      # and a plan assertion on the ranking alone would say nothing about the query that produces
+      # the caption beside it.
+      it "counts the run's described and undescribed rows off an index rather than scanning" do
+        plan = plan_for_actual_sql { described_class.description_presence_in(run) }
 
         expect(plan).to match(INDEXED_BY_RUN)
         expect(plan).not_to match(/Seq Scan on spec_observations/)
