@@ -37,13 +37,11 @@ jobs:
           # Run the script
           ./script/bump-version.sh
 
-      # Deploy is triggered by the in-cluster release watcher
-      # (yatfa-ai/infra: specguard-deployment/release/specguard-release-watcher.yaml),
-      # which polls this `prod` branch every ~1m and enqueues the specguard release
-      # Job. This workflow uses ONLY GITHUB_TOKEN — no cluster secrets — so it is
-      # safe in this PUBLIC repository; the deploy side (registry push, image pin,
-      # rollout) lives entirely in the private yatfa-ai/infra + the cluster.
-      # bump-version.sh's fast-forward push of `prod` is the signal the watcher
-      # keys on. (GITHUB_TOKEN pushes don't spawn push-triggered workflows anyway,
-      # but the watcher polls, so it needs no event.) One trigger per commit: the
-      # watcher dedups on the specguard-release-<sha> Job name.
+      # This workflow only advances `prod`; it does not deploy. Deployment is
+      # driven by whatever the operator points at that branch, and needs no
+      # credentials here — this workflow uses ONLY GITHUB_TOKEN.
+      #
+      # Self-hosting: `prod` is the release pointer. Build the image from that
+      # branch and roll it out however you like; a push made with GITHUB_TOKEN
+      # does not spawn push-triggered workflows, so trigger your build from the
+      # branch state rather than from a push event.

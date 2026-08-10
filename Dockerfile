@@ -4,12 +4,12 @@
 # Multi-stage Dockerfile for the SpecGuard Rails application.
 # Builds a single image shared by the web server (puma) and the Solid Queue worker.
 #
-# SpecGuard uses importmap (no JS bundling), so this is leaner than yatfa's
-# build in one way: no Bun / no JS bundler. Node + `npm install` ARE needed,
-# though — assets:precompile runs tailwindcss:build, which resolves the `daisyui`
-# @plugin from node_modules (see lib/spec_guard/stylesheet_lint.rb: "npm for
-# DaisyUI, then the Tailwind CLI"). SpecGuard does not use ActiveRecord
-# Encryption, so assets:precompile needs only SECRET_KEY_BASE_DUMMY=1.
+# SpecGuard uses importmap (no JS bundling), so no JS bundler is needed in this
+# build. Node + `npm install` ARE needed, though — assets:precompile runs
+# tailwindcss:build, which resolves the `daisyui` @plugin from node_modules (see
+# lib/spec_guard/stylesheet_lint.rb: "npm for DaisyUI, then the Tailwind CLI").
+# SpecGuard does not use ActiveRecord Encryption, so assets:precompile needs only
+# SECRET_KEY_BASE_DUMMY=1.
 # Ruby matches .ruby-version (4.0.5).
 
 ARG RUBY_VERSION=4.0.5
@@ -18,8 +18,8 @@ FROM docker.io/library/ruby:$RUBY_VERSION-slim AS base
 # Rails app lives here
 WORKDIR /rails
 
-# Install base packages (libvips for image deps, postgresql-client for the
-# migrate initContainer's psql-free db:prepare path, jemalloc for memory).
+# Install base packages (libvips for image deps, postgresql-client for
+# db:prepare, jemalloc for memory).
 RUN apt-get update -qq && \
     apt-get install --no-install-recommends -y \
         curl libjemalloc2 libvips postgresql-client && \
@@ -71,11 +71,11 @@ RUN bundle exec bootsnap precompile -j 1 app/ lib/
 
 # Precompile assets for production without requiring a real SECRET_KEY_BASE.
 # SpecGuard does not use ActiveRecord::Encryption, so no dummy encryption keys
-# are needed here (unlike yatfa). assets:precompile only boots the app.
+# are needed here. assets:precompile only boots the app.
 RUN SECRET_KEY_BASE_DUMMY=1 ./bin/rails assets:precompile
 
-# Web target — the only image. The worker (Solid Queue) uses this same image
-# and overrides its command via the specguard-worker Deployment.
+# Web target — the only image. The Solid Queue worker uses this same image and
+# overrides the command (see bin/jobs).
 FROM base AS web
 RUN groupadd --system --gid 1000 rails && \
     useradd rails --uid 1000 --gid 1000 --create-home --shell /bin/bash
