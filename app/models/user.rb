@@ -15,7 +15,7 @@ class User < ApplicationRecord
   # a dead end. Neither is requested at sign-in — see `SpecGuard::GithubOauth`.
   GITHUB_REPOSITORY_SCOPES = Set["repo", "public_repo"].freeze
 
-  # The four-way answer from `User.resolve_by_handle`. A handle is deliberately not unique across
+  # The five-way answer from `User.resolve_by_handle`. A handle is deliberately not unique across
   # rows, so a caller that gets a bare `User` back cannot tell "this is the person you named" from
   # "this is one of several people who might be". This makes the difference impossible to ignore.
   #
@@ -23,11 +23,17 @@ class User < ApplicationRecord
   # and "nobody has signed in with that handle" are different facts about the world and want
   # different answers from a caller. Collapsing them would tell an owner who pasted a profile URL
   # to go ask a colleague to re-authenticate — advice that sends them to fix the wrong thing.
+  #
+  # `:archived` is separate from `:not_found` by that same argument, and it is the sharper case:
+  # folding it in would tell an owner "nobody has signed in as X yet — ask them to sign in once",
+  # which is both false and impossible to act on, since an archived person is refused at sign-in
+  # by design. It sends the owner to badger a colleague who cannot comply.
   Resolution = Data.define(:status, :user, :match_count) do
     def found? = status == :found
     def not_found? = status == :not_found
     def ambiguous? = status == :ambiguous
     def malformed? = status == :malformed
+    def archived? = status == :archived
   end
 
   has_many :repositories, dependent: :destroy
@@ -63,6 +69,25 @@ class User < ApplicationRecord
   validates :github_uid, presence: true, uniqueness: true
   validates :github_handle, presence: true
 
+  # Archiving is an offboarding control, not a deletion: it refuses sign-in (SessionsController),
+  # stops an already-live session from authenticating (ApplicationController#current_user) and takes
+  # the person out of the invitable set (`resolve_by_handle`). It destroys and nullifies NOTHING —
+  # their repositories, test runs, spec intents, minted API keys and the memberships they granted
+  # all stay, attribution intact, which is the entire reason to archive rather than destroy.
+  #
+  # DELIBERATELY NOT A `default_scope`. A blanket scope would silently rewrite every read in the
+  # app: the members list joins `users` and orders over it (MembershipsController#index), and every
+  # association traversal — `membership.user`, `api_key.created_by_user`, `membership.granted_by_user`
+  # — would start returning nil for an archived person. That would quietly *un-attribute* the very
+  # history this state exists to preserve, and it would do it in the rendering layer where nobody
+  # would read it as a policy decision. Read sites opt in one at a time, on purpose, and each one
+  # is a line somebody had to write.
+  scope :active, -> { where(archived_at: nil) }
+  scope :archived, -> { where.not(archived_at: nil) }
+
+  def archived? = archived_at.present?
+  def active? = !archived?
+
   # Resolve a user-typed GitHub handle. The only sanctioned way to look a user up by handle.
   #
   # `github_handle` is NOT unique, and must not be: a row holds whatever handle its owner had at
@@ -83,12 +108,32 @@ class User < ApplicationRecord
     # such as "The Octocat") from being resolvable as an identity.
     return Resolution.new(status: :malformed, user: nil, match_count: 0) unless normalized&.match?(HANDLE_FORMAT)
 
-    matches = where(github_handle: normalized).order(:id).to_a
+    # One query for both halves, partitioned here rather than two round trips — and archived rows
+    # are read rather than filtered in SQL because their absence is itself an answer (`:archived`)
+    # and a `WHERE archived_at IS NULL` would throw away the fact that the handle matched anybody.
+    active_matches, archived_matches = where(github_handle: normalized).order(:id).partition(&:active?)
 
-    case matches.length
-    when 0 then Resolution.new(status: :not_found, user: nil, match_count: 0)
-    when 1 then Resolution.new(status: :found, user: matches.first, match_count: 1)
-    else Resolution.new(status: :ambiguous, user: nil, match_count: matches.length)
+    # ARCHIVED ROWS ARE NOT PART OF THE INVITABLE SET, and that ordering is the whole rule:
+    #
+    #   - Ambiguity is only ever reported among rows that could actually be granted access. One
+    #     active + one archived row sharing a recycled handle now resolves `:found` on the active
+    #     one, where it used to be `:ambiguous` — an owner is no longer blocked from inviting a
+    #     real colleague by a departed one holding the same string. Two active + one archived is
+    #     still `:ambiguous`, and reports 2, the number of people it will not choose between.
+    #   - `:archived` is reported only when there is nothing invitable at all, and it is reported
+    #     however many archived rows there are: to the caller, "everyone with that handle is
+    #     archived" is one fact and one sentence, and there is no choice left to be ambiguous about.
+    #   - `user` stays nil, as it does for every non-`found` status. An archived row is precisely
+    #     the row a caller must not act on, so handing it back would invite exactly that.
+    case active_matches.length
+    when 0
+      if archived_matches.any?
+        Resolution.new(status: :archived, user: nil, match_count: archived_matches.length)
+      else
+        Resolution.new(status: :not_found, user: nil, match_count: 0)
+      end
+    when 1 then Resolution.new(status: :found, user: active_matches.first, match_count: 1)
+    else Resolution.new(status: :ambiguous, user: nil, match_count: active_matches.length)
     end
   end
 
@@ -109,6 +154,15 @@ class User < ApplicationRecord
   # Also banks the access token and the scopes GitHub actually granted with it, which is what makes
   # the app able to ask GitHub anything on this user's behalf. Both halves are recorded in one save
   # so a callback can never leave a row holding a token whose scopes are a previous grant's.
+  #
+  # A PURE IDENTITY UPSERT, AND IT STAYS ONE: it resolves who the callback is, it does not decide
+  # whether they may be let in. `archived_at` is neither read nor written here — refusing an
+  # archived person is `SessionsController`'s job, because that is where a session would be
+  # established and where the refusal has somewhere to redirect to. The known consequence is that
+  # an archived person's row is still refreshed (handle, avatar, email, token) on every refused
+  # attempt. That is intentional, not a leak of the archive: the row was already theirs, the
+  # refresh grants nothing, and `archived_at` itself is never cleared — so an archived person
+  # cannot undo their own archiving by visiting the callback URL.
   def self.from_github_omniauth(auth)
     info = auth["info"] || {}
 

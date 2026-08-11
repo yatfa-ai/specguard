@@ -83,6 +83,80 @@ RSpec.describe User do
     end
   end
 
+  describe "archiving" do
+    it "is inactive once archived, and active until then" do
+      user = create_user
+
+      expect(user).to be_active
+      expect(user).not_to be_archived
+
+      user.update!(archived_at: Time.current)
+
+      expect(user).to be_archived
+      expect(user).not_to be_active
+    end
+
+    it "partitions the table between the two scopes" do
+      active = create_user(github_uid: "1001", github_handle: "octocat")
+      archived = create_user(github_uid: "9999", github_handle: "departed")
+      archived.update!(archived_at: Time.current)
+
+      expect(described_class.active).to contain_exactly(active)
+      expect(described_class.archived).to contain_exactly(archived)
+    end
+
+    # There is deliberately NO `default_scope`, and this is the assertion that keeps it that way. A
+    # blanket scope would take archived people out of every unscoped read in the app — including
+    # association traversals, which is where the attribution this whole state exists to preserve is
+    # actually rendered (the members list, "who minted this key", "who granted this membership").
+    it "leaves unscoped reads and association traversals seeing the archived row" do
+      owner = create_user(github_uid: "1001", github_handle: "octocat")
+      departing = create_user(github_uid: "9999", github_handle: "departing-dev")
+      repository = create_repository(user: owner)
+      key = repository.api_keys.create!(name: "CI — main", created_by_user: departing)
+      membership = create_membership(repository: repository, user: departing)
+
+      departing.update!(archived_at: Time.current)
+
+      expect(described_class.all).to include(departing)
+      expect(described_class.find_by(github_handle: "departing-dev")).to eq(departing)
+      expect(key.reload.created_by_user).to eq(departing)
+      expect(membership.reload.user).to eq(departing)
+      expect(repository.members.reload).to include(departing)
+    end
+
+    # THE DEFINITION OF DONE FOR THIS WHOLE DIRECTION, stated as a test: archiving is the
+    # alternative to deleting, and it is only worth having because it destroys nothing. `User#destroy`
+    # still cascades into repositories and, through them, every test run, spec intent and API key on
+    # them — so if archiving ever grew a destroy or a nullify, this is the example that says so.
+    it "destroys and nullifies nothing" do
+      owner = create_user(github_uid: "1001", github_handle: "octocat")
+      colleague = create_user(github_uid: "2002", github_handle: "hubot")
+      repository = create_repository(user: owner)
+      test_run = create_test_run(repository: repository)
+      spec_intent = create_spec_intent(repository: repository)
+      own_key = repository.api_keys.create!(name: "CI — main", created_by_user: owner)
+      colleague_membership = create_membership(repository: repository, user: colleague)
+      colleague_membership.update!(granted_by_user: owner)
+
+      counts = lambda do
+        [Repository.count, TestRun.count, SpecIntent.count, ApiKey.count, RepositoryMembership.count]
+      end
+
+      expect { owner.update!(archived_at: Time.current) }.not_to change(&counts)
+
+      # Every row still there, and every attribution column still naming the archived person —
+      # "still exists" is not enough if the columns pointing at them were nulled.
+      expect(repository.reload.user).to eq(owner)
+      expect(test_run.reload.repository).to eq(repository)
+      expect(spec_intent.reload.repository).to eq(repository)
+      expect(own_key.reload.created_by_user).to eq(owner)
+      expect(colleague_membership.reload.granted_by_user).to eq(owner)
+      expect(colleague_membership.user).to eq(colleague)
+      expect(owner.reload.repositories).to contain_exactly(repository)
+    end
+  end
+
   describe ".resolve_by_handle" do
     it "resolves a handle regardless of the case and padding the caller typed" do
       user = create_user(github_handle: "Octocat")
@@ -160,6 +234,65 @@ RSpec.describe User do
         expect(resolution.user).to be_nil
         expect(resolution.user).not_to eq(renamer)
         expect(resolution.user).not_to eq(claimant)
+      end
+    end
+
+    # Archived rows are not part of the invitable set. The three shapes below are the whole rule,
+    # and the middle one is a correctness win rather than only a new state: an owner used to be
+    # blocked from inviting a real colleague by a departed one holding the same recycled string.
+    context "when a matching row is archived" do
+      it "reports :archived rather than :not_found when every match is archived" do
+        create_user(github_uid: "9999", github_handle: "departed").update!(archived_at: Time.current)
+
+        resolution = described_class.resolve_by_handle("Departed")
+
+        expect(resolution).to be_archived
+        # The distinction this status exists for: :not_found would tell the owner to go ask them to
+        # sign in once, which is advice an archived person cannot act on.
+        expect(resolution).not_to be_not_found
+        expect(resolution).not_to be_found
+        expect(resolution).not_to be_ambiguous
+        expect(resolution.user).to be_nil
+        expect(resolution.match_count).to eq(1)
+      end
+
+      it "resolves :found on the active row when an archived row shares the handle" do
+        active = create_user(github_uid: "1001", github_handle: "octocat")
+        create_user(github_uid: "2002", github_handle: "Octocat").update!(archived_at: Time.current)
+
+        resolution = described_class.resolve_by_handle("octocat")
+
+        expect(resolution).to be_found
+        expect(resolution).not_to be_ambiguous
+        expect(resolution.user).to eq(active)
+        expect(resolution.match_count).to eq(1)
+      end
+
+      it "still reports ambiguity among the active rows, counting only those" do
+        create_user(github_uid: "1001", github_handle: "twin")
+        create_user(github_uid: "2002", github_handle: "twin")
+        create_user(github_uid: "3003", github_handle: "twin").update!(archived_at: Time.current)
+
+        resolution = described_class.resolve_by_handle("twin")
+
+        expect(resolution).to be_ambiguous
+        expect(resolution.user).to be_nil
+        # 2, not 3 — the count names how many people it will not choose between, and it will never
+        # choose the archived one.
+        expect(resolution.match_count).to eq(2)
+      end
+
+      it "reports :archived once, however many archived rows share the handle" do
+        create_user(github_uid: "1001", github_handle: "departed").update!(archived_at: Time.current)
+        create_user(github_uid: "2002", github_handle: "departed").update!(archived_at: Time.current)
+
+        resolution = described_class.resolve_by_handle("departed")
+
+        # Not :ambiguous. There is no choice left to be ambiguous about — none of them can be added.
+        expect(resolution).to be_archived
+        expect(resolution).not_to be_ambiguous
+        expect(resolution.user).to be_nil
+        expect(resolution.match_count).to eq(2)
       end
     end
   end

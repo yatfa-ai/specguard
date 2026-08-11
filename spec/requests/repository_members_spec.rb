@@ -178,7 +178,7 @@ RSpec.describe "Repository members", type: :request do
 
     # Two rows legitimately share a recycled handle (see sessions_spec). Picking one would silently
     # grant a private repository to a stranger, which is the whole reason `resolve_by_handle` returns
-    # a four-way answer instead of a User.
+    # a five-way answer instead of a User.
     it "refuses an ambiguous handle without creating a row, and names how many accounts share it" do
       create_user(github_uid: "9999", github_handle: "hubot")
       create_user(github_uid: "8888", github_handle: "hubot")
@@ -189,18 +189,50 @@ RSpec.describe "Repository members", type: :request do
       expect(response.body).to include("2 accounts share the handle hubot")
     end
 
+    # An archived person is refused at sign-in, so inviting them would hand out access nobody can
+    # ever use — and describing them as "never signed in" would send the owner to ask them to do
+    # the one thing the archive forbids.
+    it "refuses an archived handle, saying so rather than that they have never signed in" do
+      colleague.update!(archived_at: Time.current)
+
+      expect { add_member("hubot", %w[view]) }.not_to change(RepositoryMembership, :count)
+
+      expect(response).to have_http_status(:unprocessable_content)
+      expect(response.body).to include("The SpecGuard account for hubot has been archived")
+      expect(response.body).not_to include("Nobody has signed into SpecGuard as hubot yet")
+    end
+
+    # The free correctness win in the same change: an archived row no longer holds a recycled handle
+    # hostage. Before, one departed colleague and one current one sharing a string made the current
+    # one uninvitable — the owner was blocked by somebody who had already left.
+    it "adds the active colleague when a departed one holds the same recycled handle" do
+      colleague
+      create_user(github_uid: "8888", github_handle: "hubot").update!(archived_at: Time.current)
+
+      expect { add_member("hubot", %w[view]) }.to change(RepositoryMembership, :count).by(1)
+
+      expect(RepositoryMembership.last.user).to eq(colleague)
+      expect(response).to redirect_to(repository_members_path(repository))
+    end
+
     # The anti-collapse control, and the reason it is a matrix rather than five separate examples:
     # each of those would still pass if the *other* four sentences were rendered alongside its own.
     # Distinctness is the property `User::Resolution` exists to protect — "nobody holds that handle"
     # and "that is not a handle" send the owner to fix entirely different things — so it is asserted
     # directly. The last two are RepositoryMembership's own messages, surfaced rather than restated.
+    #
+    # `departed` is the sharpest pair in the matrix: an archived person must NOT be described with
+    # the not-found sentence, which would tell the owner to ask them to sign in once — advice an
+    # archived person is refused for taking.
     it "answers each refusal with its own sentence and never another's" do
       create_user(github_uid: "7777", github_handle: "twin")
       create_user(github_uid: "6666", github_handle: "twin")
+      create_user(github_uid: "5555", github_handle: "departed").update!(archived_at: Time.current)
       create_membership(repository: repository, user: colleague)
 
       refusals = {
         "ghost" => "Nobody has signed into SpecGuard as ghost yet",
+        "departed" => "The SpecGuard account for departed has been archived",
         "The Octocat" => "That is not a GitHub handle",
         "twin" => "2 accounts share the handle twin",
         "octocat" => "User already owns this repository",

@@ -92,7 +92,7 @@ class MembershipsController < ApplicationController
   end
 
   # The first production call site `User.resolve_by_handle` has ever had, and the reason it returns a
-  # four-way `Resolution` rather than a `User`: each of its three non-`found` answers is a different
+  # five-way `Resolution` rather than a `User`: each of its four non-`found` answers is a different
   # fact about the world and earns a different sentence here. `:ambiguous` in particular is refused
   # outright — picking one of several rows sharing a recycled handle would silently grant a private
   # repository to a stranger, which is exactly what `User.resolve_by_handle` exists to make
@@ -305,7 +305,13 @@ class MembershipsController < ApplicationController
   # the owner to fix entirely different things, and telling someone who pasted a profile URL to go
   # ask a colleague to re-authenticate is advice about the wrong problem.
   #
-  # `else raise` on purpose, matching `RepositoryPolicy#can?`: a fifth status added to `Resolution`
+  # `:archived` is the sharpest instance of that rule, which is why it is not folded into
+  # `:not_found`: the not-found sentence below would tell the owner to ask the person to sign in
+  # once — false, and impossible for them to act on, since an archived person is refused at sign-in
+  # by design. So this sentence says the account is archived and points at the only thing that can
+  # actually change it.
+  #
+  # `else raise` on purpose, matching `RepositoryPolicy#can?`: a sixth status added to `Resolution`
   # must fail on the first request rather than fall through to a default that quietly accepts it.
   def unresolved_message(resolution)
     handle = @grant.handle.to_s.strip
@@ -313,6 +319,9 @@ class MembershipsController < ApplicationController
     case resolution.status
     when :not_found
       "Nobody has signed into SpecGuard as #{handle} yet — ask them to sign in once, then add them."
+    when :archived
+      "The SpecGuard account for #{handle} has been archived, so they cannot be given access. " \
+        "Archiving is deliberate — their account has to be restored before they can be added."
     when :ambiguous
       "#{resolution.match_count} accounts share the handle #{handle}, so SpecGuard will not guess " \
         "which one you mean. Ask them to sign in again so their handle is current, then try again."

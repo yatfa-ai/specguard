@@ -53,4 +53,61 @@ RSpec.describe "GitHub sign-in", type: :request do
     follow_redirect!
     expect(response.body).to include("invalid_credentials")
   end
+
+  # Archiving is an offboarding control, and a control that only bites the next time somebody
+  # chooses to sign in is one they simply outlast. Both halves are asserted: the door, and the
+  # session already on the other side of it.
+  describe "an archived user" do
+    it "is refused at the callback, and is not reactivated by it" do
+      user = sign_in_via_github
+      delete sign_out_path
+      user.update!(archived_at: Time.current)
+      archived_at = user.reload.archived_at
+
+      expect { sign_in_via_github }.not_to change(User, :count)
+
+      # No session was established.
+      expect(session[:user_id]).to be_nil
+      expect(response).to redirect_to(root_path)
+      follow_redirect!
+      expect(response.body).to include("has been archived")
+
+      # And the callback did not undo the archiving — otherwise an archived person offboards
+      # themselves back in by visiting this URL, and the control means nothing.
+      expect(user.reload.archived_at).to eq(archived_at)
+      expect(user).to be_archived
+
+      # Still refused on the way to any signed-in page.
+      get repositories_path
+      expect(response).to redirect_to(root_path)
+    end
+
+    # The identity upsert stays a pure upsert: it still refreshes the row it resolved. That is
+    # deliberate (the row was already theirs and the refresh grants nothing), and pinned here so it
+    # reads as a decision rather than as a leak someone should "fix".
+    it "still has its identity row refreshed by the refused attempt" do
+      user = sign_in_via_github
+      user.update!(archived_at: Time.current)
+
+      sign_in_via_github(info: { nickname: "octocat-renamed" })
+
+      expect(user.reload.github_handle).to eq("octocat-renamed")
+      expect(user).to be_archived
+    end
+
+    it "stops authenticating with the session it was already holding" do
+      user = sign_in_via_github
+
+      get repositories_path
+      expect(response).to have_http_status(:ok)
+
+      user.update!(archived_at: Time.current)
+
+      # Same session, no new request to the callback — the live session simply stops working.
+      get repositories_path
+      expect(response).to redirect_to(root_path)
+      follow_redirect!
+      expect(response.body).to include("Sign in with GitHub to continue")
+    end
+  end
 end
