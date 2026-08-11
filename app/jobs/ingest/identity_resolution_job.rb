@@ -21,8 +21,18 @@ module Ingest
   # `Ingest::IdentityResolver::RETRY_SWEEP_LIMIT`.
   #
   # What is left for a job-level policy to cover is everything that is NOT an embedding failure — a
-  # database blip, a deploy mid-job — and a re-run of this job is already harmless for those: the
-  # resolver's work list is unresolved observations, so re-running it re-does only what did not land.
+  # database blip, a deploy mid-job — which raises out of `perform` and lands in Solid Queue's failed
+  # executions. **Nothing re-runs this job for those.** There is no `retry_on` (`ApplicationJob`'s
+  # are commented out), no sweeper in `config/recurring.yml`, and the only `perform_later` in the
+  # application is per-run from the ingest request — so a run that simply finished delivering is
+  # never redelivered and its job is never re-enqueued.
+  #
+  # What re-does the work is the NEXT INGEST of the same repository, which is the same mechanism the
+  # failure backlog already uses: the resolver's cross-run sweep reads the rows this job never
+  # reached — unresolved, unstamped, and past `SpecObservation::EMBED_ATTEMPT_GRACE` — and attempts
+  # them under the same budget. Re-doing only what did not land is a property of the WORK LIST, and
+  # it holds for whatever walks it; what it never was, and what this paragraph used to imply, is a
+  # reason to expect this job to be walked again.
   #
   # A run that no longer exists is not an error. Between the enqueue and the dequeue its repository
   # may have been deleted, which takes the run with it; there is nothing to resolve and nothing to
