@@ -1561,14 +1561,25 @@ RSpec.describe Ingest::IdentityResolver do
       strand(record([unannotated_spec(file_path: "spec/c_spec.rb", line_number: 3,
                                       name: "Order#checkout rejects an expired card")], ci_run_id: "run-3"),
              ago: SpecObservation::EMBED_RETRY_WINDOW + 1.second)
+      # A SECOND row past the window, and the reason it is here is the assertion below rather than
+      # the scenario: with one row on each side the two figures are both 1, and `1 == 1` cannot tell
+      # the labels apart from the sets beneath them. Wiring `never_attempted_retrying` to
+      # `.embed_unattempted_abandoned` and its sibling to `.embed_unattempted_retryable` — the exact
+      # inversion criterion 3 forbids — leaves a symmetric fixture green while the report tells an
+      # operator "nothing will ever attempt this again" about a row we are still trying. The figures
+      # have to DIFFER for the assertion to reach the wiring, which is the discipline the failed
+      # backlog's example above already applies with its 2 and its 1.
+      strand(record([unannotated_spec(file_path: "spec/d_spec.rb", line_number: 4,
+                                      name: "Report#export streams the CSV in batches")], ci_run_id: "run-4"),
+             ago: SpecObservation::EMBED_RETRY_WINDOW + 2.seconds)
 
       summary = summary_of do
-        described_class.resolve(record([unannotated_spec(file_path: "spec/d_spec.rb", line_number: 4,
+        described_class.resolve(record([unannotated_spec(file_path: "spec/e_spec.rb", line_number: 5,
                                                          name: "Session#destroy clears the remember token")],
-                                       ci_run_id: "run-4"))
+                                       ci_run_id: "run-5"))
       end
 
-      expect(summary).to include("never_attempted_retrying=1", "never_attempted_gave_up=1")
+      expect(summary).to include("never_attempted_retrying=1", "never_attempted_gave_up=2")
       # `.embed_unattempted_abandoned` is two populations at once — rows a dead job stranded and
       # then outlived, AND the frozen signalless tail doing exactly what it should — so its figure
       # is "rows nothing will ever attempt again" and NOT "rows we failed". The model says so
