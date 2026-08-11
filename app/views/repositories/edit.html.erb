@@ -13,7 +13,8 @@
 
   <%= render UI::PageHeaderComponent.new(
         title: "Rename repository",
-        subtitle: "Corrects the name only — API keys, test runs and spec intents are kept."
+        subtitle: "Points this record at another of your GitHub repositories — API keys, test " \
+                  "runs and spec intents are kept. Verified with GitHub like a registration is."
       ) %>
 
   <%= render "form", repository: @repository, submit_label: "Save changes",

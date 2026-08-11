@@ -44,8 +44,26 @@ class Forms::FieldComponent < ApplicationComponent
     # is unaffected.
     wrapper_class
 
+    return select_input if @as == :select
+
     form.public_send(@as, attribute,
                      **@input_options,
                      class: merge_classes(INPUT_CLASS, @input_options[:class]))
+  end
+
+  private
+
+  # `select` is the one control in the builder whose signature is not `(attribute, **options)` —
+  # it takes choices and its select-specific options as *positional* arguments, and its HTML
+  # attributes only third. Splatting the caller's options at it the way every other control is
+  # handled puts `include_blank` on the `<select>` tag as a stray attribute and drops the choices
+  # entirely. So it is spelled out here once, rather than at each call site or by asking callers to
+  # bypass `field` and lose the label, hint and error rendering that is the point of this component.
+  def select_input
+    choices = @input_options.delete(:choices) || []
+    select_options = @input_options.extract!(:include_blank, :prompt, :selected)
+
+    form.select(attribute, choices, select_options,
+                @input_options.merge(class: merge_classes(INPUT_CLASS, @input_options[:class])))
   end
 end

@@ -85,6 +85,35 @@ a placeholder, and the sign-in panel says so rather than dead-ending you. See
 `config/initializers/omniauth.rb`. Specs never talk to GitHub: `spec/support/omniauth.rb` puts
 OmniAuth in test mode and drives the real callback action with a mock identity.
 
+### GitHub repository access (incremental authorization)
+
+Sign-in asks for `read:user,user:email` and nothing more, so a visitor who only wants to look at a
+dashboard never hands over access to their repositories. The broader `repo` scope is requested
+lazily, at the moment someone first registers a repository, from the registration page itself —
+the same OAuth provider, with the scope overridden on the request phase, and OmniAuth's `origin`
+carrying the user back to where they were. `SpecGuard::GithubOauth::SIGN_IN_SCOPE` and
+`REPOSITORY_SCOPE` are the two asks.
+
+That token is what closes the squatting gap: registering a repository picks from the list GitHub
+says you have, and `GithubOwnership` re-asks GitHub server-side whether you are an **admin** of
+the one you picked before the record is created. Every write of `github_full_name` clears that
+same gate — registration and rename both — and it fails closed, including when GitHub is
+unreachable.
+
+The token is **encrypted at rest** (Active Record Encryption, `users.github_access_token`). Keys
+come from ENV, then credentials, then a fallback derived from `secret_key_base`, so a fresh
+checkout boots with nothing configured — see `config/initializers/active_record_encryption.rb`,
+which documents what rotating `secret_key_base` costs you (nothing but a re-authorization).
+
+```sh
+export ACTIVE_RECORD_ENCRYPTION_PRIMARY_KEY=...        # optional; `bin/rails db:encryption:init`
+export ACTIVE_RECORD_ENCRYPTION_DETERMINISTIC_KEY=...
+export ACTIVE_RECORD_ENCRYPTION_KEY_DERIVATION_SALT=...
+```
+
+Specs never reach api.github.com either: `spec/support/github_api.rb` installs a deterministic
+fake through `GithubApi.factory`, the same public seam production code would swap.
+
 ### API keys (CI/agent auth)
 
 Minted per repository in the dashboard and revealed once. Only the SHA-256 digest is ever

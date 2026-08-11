@@ -29,6 +29,10 @@
  *
  * If you add a helper or decorator that emits classes from somewhere else, add ITS directory
  * here — do not restore automatic detection.
+ *
+ * Note that this narrows the blast radius but does NOT remove it: two of the four directories are
+ * Ruby and one is JavaScript, so ordinary identifiers in them are still scanned as candidate class
+ * names. See the `exclude` list below, which is the other half of the fix.
  */
 @import "tailwindcss" source(none);
 @source "../../views";
@@ -36,8 +40,32 @@
 @source "../../helpers";
 @source "../../javascript";
 
+/*
+ * `exclude` is an allow-list written by subtraction: every DaisyUI component this app does not use.
+ *
+ * It exists because `source(none)` alone could not do the job. Tailwind matches literal text, and
+ * the directories it must scan contain Ruby and JavaScript, so a component whose name is an
+ * ordinary English word gets emitted by an identifier that has nothing to do with CSS. This is not
+ * hypothetical: the repository picker added `def select_input`, `form.select`, `@as == :select`,
+ * `repository_picker_target: "select"` and a Stimulus `filter()` action — none of them an HTML
+ * class, none of them reachable by any page — and Tailwind emitted DaisyUI's `select` and `filter`
+ * components anyway, 10.4 KB of CSS that nothing could ever apply, reddening `lint:stylesheet` on a
+ * change that touched no styling at all.
+ *
+ * Naming the unused components is what makes that structurally impossible rather than fixed once.
+ * The list is verified, not guessed: building with it produces a byte-identical
+ * `app/assets/builds/tailwind.css`, so nothing here is load-bearing today.
+ *
+ * If you start using one of these, DELETE IT FROM THIS LIST — its classes will not exist
+ * otherwise. Adding a DaisyUI component is meant to be a deliberate act, not something an English
+ * word in a method name does on your behalf.
+ */
 @plugin "daisyui" {
   themes: dark --default, winter;
+  exclude: avatar, breadcrumbs, calendar, carousel, chat, collapse, countdown, diff, divider, dock,
+           drawer, fab, fieldset, filter, footer, hero, hover3d, hovergallery, indicator, kbd, mask,
+           mockup, modal, navbar, otp, select, stack, steps, tab, textarea, timeline, toggle,
+           validator;
 }
 
 /* ---------------------------------------------------------------------------

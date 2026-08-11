@@ -29,6 +29,10 @@ class RepositoriesController < ApplicationController
   # The first four are per-card questions asked by repositories/index, once per repository in the
   # list. The fifth is a per-row question asked by repositories/show, once per API key.
   helper_method :owns_repository?, :key_count_visible?, :api_key_count, :latest_run, :former_member?
+  # Read by the registration and rename forms, which are the two views that have to render a picker
+  # of the viewer's real GitHub repositories and say something useful when there is none to render.
+  helper_method :github_listing, :github_listing_error, :github_listing_error_message,
+                :github_authorization_needed?
 
   # Everything the viewer can open: what they own, plus what has been shared with them. Kept as one
   # relation rather than `owned + shared`, because concatenating two Arrays orders them
@@ -361,7 +365,7 @@ class RepositoriesController < ApplicationController
   def create
     @repository = current_user.repositories.new(repository_params)
 
-    if @repository.save
+    if save_with_verified_ownership(@repository)
       redirect_to repository_path(@repository), notice: "Registered #{@repository.github_full_name}."
     else
       render :new, status: :unprocessable_content
@@ -377,10 +381,15 @@ class RepositoriesController < ApplicationController
   # Renaming is a pure metadata change: api_keys, test_runs and spec_intents are keyed by
   # repository_id, so none of them are touched. That is the whole point — the alternative
   # (Remove + re-register) destroys every key and all telemetry.
+  #
+  # Verified through the same gate as `#create`, and that is the point of the gate existing at all
+  # — see `save_with_verified_ownership`. Owner-only was never an ownership check: it says the
+  # presser owns the *SpecGuard record*, which is exactly what a squatter has.
   def update
     @repository = current_repository(:owner)
+    @repository.assign_attributes(repository_params)
 
-    if @repository.update(repository_params)
+    if save_with_verified_ownership(@repository)
       redirect_to repository_path(@repository), notice: rename_notice
     else
       render :edit, status: :unprocessable_content
@@ -579,6 +588,103 @@ class RepositoriesController < ApplicationController
 
   def repository_params
     params.expect(repository: [:github_full_name])
+  end
+
+  # The single gate every write of `github_full_name` passes through — and it is written as a save
+  # rather than as a `before_action` guard for a structural reason: `repository_params` has two
+  # callers (`#create` and `#update`), so a check bolted onto one action leaves the other one
+  # writing the identity column unverified. Squatting would simply have moved from POST
+  # /repositories to PATCH /repositories/:id and the gap would have read as closed.
+  #
+  # Order is load-bearing:
+  #
+  #   1. `valid?` first, so a slug that is not `org/repo` — or one already registered — is refused
+  #      from the record's own rules and never becomes a GitHub round trip. It also runs
+  #      `normalize_full_name`, so step 2 asks GitHub about the value that would actually be
+  #      stored rather than about whatever was pasted.
+  #   2. Ownership, and only when the identity is actually changing. A rename form submitted
+  #      unchanged, like the one `rename_notice` exists to describe, must not re-ask GitHub — and
+  #      must not fail closed on a GitHub outage for a write that changes nothing.
+  #   3. `save`.
+  #
+  # Fails closed at every step: a verdict that is not `verified?` — including "GitHub could not be
+  # reached" — does not save.
+  def save_with_verified_ownership(repository)
+    return false unless repository.valid?
+    return false unless verify_github_ownership(repository)
+
+    repository.save
+  end
+
+  # Records the refusal on the attribute it is about, so the form shows it under the field the user
+  # has to change, exactly as a format or uniqueness failure does. The verdict is also kept for the
+  # view, which offers an authorize button instead of an error when the fix is a grant rather than
+  # an edit.
+  def verify_github_ownership(repository)
+    return true unless repository.will_save_change_to_github_full_name?
+
+    @github_verdict = GithubOwnership.verify(user: current_user, full_name: repository.github_full_name)
+    return true if @github_verdict.verified?
+
+    repository.errors.add(:github_full_name, @github_verdict.message)
+    false
+  end
+
+  # The repositories this user may pick from, straight off GitHub. Memoized and lazy — read by the
+  # registration and rename forms, and by nothing on the success path, so a registration that
+  # verifies costs exactly one GitHub call rather than two.
+  #
+  # A listing failure is not an error page. The form still renders; it says what went wrong and
+  # offers the fix. Nothing on this path is authorization — `save_with_verified_ownership` is the
+  # gate, and it asks GitHub again — so a stale or empty list cannot admit anything.
+  def github_listing
+    return @github_listing if defined?(@github_listing)
+
+    @github_listing =
+      begin
+        GithubApi.for(current_user)&.repositories if current_user.github_repository_access?
+      rescue GithubApi::Error => e
+        Rails.logger.warn("[RepositoriesController] listing repositories: #{e.class}: #{e.message}")
+        @github_listing_error = listing_error_for(e)
+        nil
+      end
+  end
+
+  # The same three-way split the verification path makes, for the same reason: the listing call
+  # hits GitHub with the same token and gets the same 403s, so an SSO-blocked user must not be
+  # shown "GitHub is not answering right now" — nothing is wrong with GitHub, and waiting will not
+  # help. `:token_rejected` and `:scope_too_narrow` are the two the authorize button can fix.
+  def listing_error_for(error)
+    case error
+    when GithubApi::Unauthorized then :token_rejected
+    when GithubApi::Forbidden
+      GithubOwnership::FORBIDDEN_VERDICTS.fetch(error.reason, :scope_too_narrow)
+    else :unavailable
+    end
+  end
+
+  def github_listing_error
+    github_listing
+    @github_listing_error
+  end
+
+  # The sentence to show when the repository list could not be loaded — reusing the verification
+  # path's wording so the two ways of hitting the same GitHub refusal do not explain it differently.
+  # Phrased for a whole-page panel, so it is the verdict message with a subject in front of it.
+  def github_listing_error_message
+    status = github_listing_error
+    return nil if status.nil? || status == :unavailable
+
+    "Your repository list #{GithubOwnership::MESSAGES.fetch(status)}"
+  end
+
+  # Whether the *fix* on offer is "authorize GitHub" rather than "pick something else". True before
+  # the user has ever granted repository access, and again after a token stops working or comes
+  # back too narrow to answer with.
+  def github_authorization_needed?
+    !current_user.github_repository_access? ||
+      %i[token_rejected scope_too_narrow].include?(github_listing_error) ||
+      @github_verdict&.reauthorize? || false
   end
 
   # Submitting the form unchanged is a valid save, so don't claim a rename that didn't happen.

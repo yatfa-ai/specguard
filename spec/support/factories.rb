@@ -3,8 +3,17 @@
 # Deliberately plain builders rather than a factory gem — the domain models are few and simple
 # enough that a fixture DSL would be more machinery than they justify.
 module Builders
-  def create_user(github_uid: "1001", github_handle: "octocat")
-    User.create!(github_uid: github_uid, github_handle: github_handle)
+  # Connected to GitHub by default, at the elevated scope — the same default, for the same reason,
+  # as `OmniAuthHelpers::DEFAULT_AUTH` and the permissive `FakeGithubApi`: a spec about sharing or
+  # API keys needs a user who can register a repository, and should not have to describe an OAuth
+  # grant to get one. Pass `github_access_token: nil` for a user who has signed in and gone no
+  # further, which is what every user is until they first register something.
+  def create_user(github_uid: "1001", github_handle: "octocat",
+                  github_access_token: "gho_test_token",
+                  github_token_scopes: "read:user,repo,user:email")
+    User.create!(github_uid: github_uid, github_handle: github_handle,
+                 github_access_token: github_access_token,
+                 github_token_scopes: github_token_scopes)
   end
 
   def create_repository(user: create_user, github_full_name: "acme/billing-service")

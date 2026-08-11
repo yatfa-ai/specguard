@@ -8,8 +8,17 @@ class Repository < ApplicationRecord
   # The owner: the account that registered this repository, and the only one that holds every
   # permission implicitly (see RepositoryPolicy#owner?). Anything naming the owner reads through
   # here — never off `github_full_name`. The slug's org segment is a *GitHub* org, not a SpecGuard
-  # account, and nothing constrains the two to match: `github_full_name` is permitted free-form and
-  # validated only for presence, uniqueness and shape, so any user may register any slug.
+  # account, and nothing constrains the two to match: an org repository is registered by whoever
+  # administers it on GitHub, whose handle is not the org's name.
+  #
+  # What this model validates about `github_full_name` is presence, shape and global uniqueness,
+  # and that is deliberately all — ownership is not a property of the string and cannot be checked
+  # from it. It is established at the point of writing, by asking GitHub whether the writer
+  # administers the repository: `RepositoriesController#save_with_verified_ownership` is the one
+  # gate every write of this column passes through, and `GithubOwnership` is the question it asks.
+  # A record created around this model rather than through that controller — a builder in the
+  # suite, a console session — is unverified by construction, which is why the gate lives with the
+  # request that carries a user's GitHub token rather than in a callback here.
   belongs_to :user
   has_many :api_keys, dependent: :destroy
   # Deleted before the runs that own them: `spec_observations.repository_id` is denormalised, so

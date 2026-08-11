@@ -21,6 +21,27 @@ module SpecGuard
   module GithubOauth
     PLACEHOLDER = "specguard-oauth-not-configured"
 
+    # What a *visitor* is asked for. Deliberately the minimum that identifies a person: enough to
+    # create their row and show their handle and avatar, and not one scope more.
+    SIGN_IN_SCOPE = "read:user,user:email"
+
+    # What someone is asked for when they first register a repository, and never before —
+    # incremental authorization. `repo` is GitHub's narrowest scope that can both list private
+    # repositories and report the caller's permission level on one, which is what ownership
+    # verification rests on (see GithubOwnership).
+    #
+    # It is a broad scope, and the consequence is stated to the user at the point they are asked
+    # rather than buried here: SpecGuard then holds a token that can read their repositories.
+    # SpecGuard reads two things with it — the list you pick from, and your permission level on
+    # what you picked — and stores neither beyond the `org/repo` you register. The alternative,
+    # asking every visitor for `repo` at sign-in, would take the same access from everyone who
+    # only ever wanted to look at a dashboard.
+    #
+    # The sign-in scopes are carried along so a re-authorization never *narrows* what is already
+    # granted: GitHub issues a token for exactly the scopes in the request, so omitting them here
+    # would trade the identity scopes away for the repository one.
+    REPOSITORY_SCOPE = "repo,#{SIGN_IN_SCOPE}"
+
     class << self
       def client_id
         ENV["GITHUB_CLIENT_ID"].presence || credential(:client_id) || PLACEHOLDER
@@ -49,7 +70,7 @@ Rails.application.config.middleware.use OmniAuth::Builder do
   provider :github,
            SpecGuard::GithubOauth.client_id,
            SpecGuard::GithubOauth.client_secret,
-           scope: "read:user,user:email"
+           scope: SpecGuard::GithubOauth::SIGN_IN_SCOPE
 end
 
 # omniauth-rails_csrf_protection: the request phase must be a POST carrying an authenticity token.

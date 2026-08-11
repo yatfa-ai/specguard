@@ -1,16 +1,97 @@
-<%# Shared by `new` and `edit` — registering and renaming are the same one-field form.
+<%# Shared by `new` and `edit` — registering and renaming are the same one-field form, and that is
+    now load-bearing rather than convenient: `github_full_name` is verified on every write
+    (RepositoriesController#save_with_verified_ownership), so both forms must offer the same picker
+    of repositories the viewer actually administers. A free-text field on either one is the
+    squatting gap.
+
     locals: repository, submit_label, cancel_href %>
 <%= render UI::PanelComponent.new do %>
-  <%= form_with model: repository do |form| %>
-    <div class="form-grid">
-      <%= form.field :github_full_name, label: "GitHub repository", full: true,
-                     placeholder: "org/repo",
-                     hint: "The full name as it appears on GitHub." %>
-    </div>
+  <% choices = github_listing && repository_choices(github_listing, repository) %>
+  <% picker = !github_authorization_needed? && choices.present? %>
 
-    <div class="mt-4 flex items-center gap-2">
-      <%= form.submit_button submit_label %>
-      <%= render UI::ButtonComponent.new(variant: :ghost, href: cancel_href) { "Cancel" } %>
+  <%# A refused write must always be able to say why. When the picker renders, the field renders
+      its own errors beneath it (Forms::FieldComponent) — but the three branches below render no
+      field at all, and without this a 422 would show a "connect GitHub" or "GitHub is not
+      answering" panel with the verdict that caused it nowhere on the page. %>
+  <% unless picker %>
+    <% repository.errors.full_messages_for(:github_full_name).each do |message| %>
+      <%= render UI::AlertComponent.new(tone: :error, class: "mb-4") { message } %>
+    <% end %>
+  <% end %>
+
+  <% if github_authorization_needed? %>
+    <%# The fix here is a grant, not an edit, so no field is rendered.
+
+        `origin` is passed explicitly rather than left to default to `request.fullpath`, because
+        this panel's most likely reader arrived by POST: they submitted the form, verification came
+        back needing a grant, and this is the 422 re-render. `request.fullpath` is then
+        `/repositories` (the POST path) or `/repositories/:id` (the PATCH path) — neither of which
+        renders this form, so authorizing would land them on the dashboard or the show page and
+        make them find the button again. The form's own GET path is the only correct answer, and
+        it is a property of what is being rendered, not of how this request arrived. %>
+    <% form_origin = repository.persisted? ? edit_repository_path(repository) : new_repository_path %>
+    <%= render UI::EmptyStateComponent.new(
+          title: "Connect your GitHub repositories",
+          description: github_authorization_disclosure
+        ) do %>
+      <%= github_authorize_button origin: form_origin %>
+    <% end %>
+  <% elsif github_listing.nil? %>
+    <%# Nothing to pick from and nothing the user can fix by typing, so the form is withheld rather
+        than shown empty. Two different reasons land here and they must not read the same: GitHub
+        being down is waitable, GitHub *refusing* is not. `github_listing_error_message` is nil
+        only for the genuine outage, which is the one case "try again shortly" is true of. %>
+    <% if github_listing_error_message %>
+      <%= render UI::AlertComponent.new(tone: :warning, title: "GitHub refused the request") do %>
+        <%= github_listing_error_message %>
+      <% end %>
+    <% else %>
+      <%= render UI::AlertComponent.new(tone: :warning, title: "GitHub is not answering right now") do %>
+        Your repository list could not be loaded, so there is nothing to pick from yet. Try again
+        shortly.
+      <% end %>
+    <% end %>
+
+    <div class="mt-4">
+      <%= render UI::ButtonComponent.new(variant: :ghost, href: cancel_href) { "Back" } %>
     </div>
+  <% elsif choices.blank? %>
+    <%# Reached both when GitHub returned nothing and when it returned only repositories the user
+        does not administer. Those are the same dead end from here — an empty picker with a
+        footnote is worse than saying so. %>
+    <%= render UI::EmptyStateComponent.new(
+          title: "No repositories to register",
+          description: "GitHub reports no repositories you administer. Only a repository you " \
+                       "administer on GitHub can be registered here."
+        ) do %>
+      <%= render UI::ButtonComponent.new(variant: :ghost, href: cancel_href) { "Back" } %>
+    <% end %>
+  <% else %>
+    <%= form_with model: repository do |form| %>
+      <div class="form-grid" data-controller="repository-picker">
+        <div class="form-field-full space-y-1">
+          <%= label_tag :repository_query, "Search your repositories",
+                        class: "block text-sm font-medium text-app-content" %>
+          <%= text_field_tag :repository_query, nil,
+                             placeholder: "Start typing to narrow the list…",
+                             autocomplete: "off",
+                             data: { repository_picker_target: "query",
+                                     action: "input->repository-picker#refine" },
+                             class: Forms::FieldComponent::INPUT_CLASS %>
+          <p class="text-xs text-app-muted" data-repository-picker-target="count"></p>
+        </div>
+
+        <%= form.field :github_full_name, as: :select, label: "GitHub repository", full: true,
+                       choices: choices,
+                       include_blank: "Select a repository…",
+                       hint: repository_picker_hint(github_listing),
+                       data: { repository_picker_target: "select" } %>
+      </div>
+
+      <div class="mt-4 flex items-center gap-2">
+        <%= form.submit_button submit_label %>
+        <%= render UI::ButtonComponent.new(variant: :ghost, href: cancel_href) { "Cancel" } %>
+      </div>
+    <% end %>
   <% end %>
 <% end %>
