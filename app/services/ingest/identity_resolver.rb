@@ -13,7 +13,7 @@ module Ingest
   # holds is re-sighted without embedding anything at all ({#identical_text}). It answers the
   # ordinary case — an unchanged suite re-ingested — and it is a shortcut past the above rather than
   # a replacement for it, because a miss there proves nothing. It is asked once per PAGE rather than
-  # once per row ({#digest_index}), so the ordinary case is ~40 round trips at the design point
+  # once per row ({#digest_index}), so the ordinary case is ~40 digest lookups at the design point
   # rather than 20,000; the decision it feeds is still made one row at a time.
   #
   # == Why this runs in a job and not in the ingest transaction
@@ -73,7 +73,7 @@ module Ingest
   # Batching the embed calls, and caching them — the rest of the *Cost* axis, still SPGD-72's. Two
   # of that paragraph's items ARE now here. Skipping the re-embed when a run's text is byte-identical
   # to a row this repository already holds: {#identical_text}. Batching the lookup that answers it,
-  # so the unchanged case costs one query per page rather than one per row: {#digest_index}. They
+  # so asking it costs one lookup per page rather than one per row: {#digest_index}. They
   # shipped in that order because the first removes work rather than reorganising it, and because the
   # key both need already existed; the second was worth doing once round trips rather than work were
   # what was left. What remains is the EMBED — batching it and caching it — which is a different
@@ -94,10 +94,18 @@ module Ingest
     #
     # It is now also the width of the digest short-circuit's `IN` list ({#digest_index}), which is
     # the one place the number reaches a query rather than a buffer — so on the ordinary case, an
-    # unchanged suite re-ingested, the whole page IS one round trip. That makes this a size worth
-    # tuning where it used not to be, but not a different KIND of constant: both readings bound one
-    # page, and neither is a bound on how much work a delivery inherits — that is
-    # {RETRY_SWEEP_LIMIT}, and it stays separate for the reason stated there.
+    # unchanged suite re-ingested, the whole page's DIGEST QUESTION is one round trip.
+    #
+    # The PAGE is not, and the distinction is the whole point of the number: a re-sighting still
+    # issues its own `UPDATE`s per row, so a 12-row unchanged page measures 28 round trips of which
+    # exactly 1 is the lookup, and at this design point it is ~1,002. Those UPDATEs are O(N) by
+    # definition and untouched by this slice — the resolver spec's round-trip group narrows its
+    # count to the digest `SELECT` for that exact reason. What batching removed is the 500 lookups,
+    # not the page.
+    #
+    # That makes this a size worth tuning where it used not to be, but not a different KIND of
+    # constant: both readings bound one page, and neither is a bound on how much work a delivery
+    # inherits — that is {RETRY_SWEEP_LIMIT}, and it stays separate for the reason stated there.
     BATCH_SIZE = 500
 
     # **How much of an earlier run's unfinished business ONE JOB is made to pay for.** The cost
@@ -260,12 +268,20 @@ module Ingest
     # **One `WHERE text_digest IN (…)` against the unique `(repository_id, text_digest)` index**, in
     # place of the one equality per row this used to be. On run 2 of an unchanged 20,000-example
     # suite — the ordinary case, since every run writes its own observations with a NULL identity and
-    # so re-presents the WHOLE suite — that is ~40 round trips where it was 20,000. Nothing about the
-    # work changed; SPGD-373 already removed the embed from this path. What is left is the trips, and
-    # this is them.
+    # so re-presents the WHOLE suite — that is ~40 digest lookups where it was 20,000. Nothing about
+    # the work changed; SPGD-373 already removed the embed from this path. What is left is the
+    # lookups, and this is them. The per-row re-sighting `UPDATE`s are a separate O(N) that this
+    # does not touch and does not claim to — see {BATCH_SIZE} for what a page actually costs.
     #
     # Digested in Ruby before anything is asked, which costs no queries: {Ingest::SpecSignal} is pure
     # over the already-loaded row, and {SpecIdentity.digest_for} is a SHA-256 of a string.
+    #
+    # This builds each row's signal a second time — {#identity_for} builds its own — and that is
+    # deliberate rather than an oversight. {SpecObservation#signal} does not memoise, so the price
+    # is one extra object per row and no extra query. Caching it would mean carrying a
+    # per-observation map alongside the digest map for the width of a page, to save an allocation
+    # nothing has measured; and {#identity_for} taking a pre-built signal would move the seam that
+    # `resolve_as_the_loser`'s stub hangs on. Not worth either.
     #
     # `pluck` and not a relation of records: the value is an id, and {SpecIdentity::RESIGHTABLE} is
     # what a re-sighting moves — `text`, `text_digest`, `signal_source` and `embedding` are
@@ -459,7 +475,7 @@ module Ingest
     #
     # That removed the WORK. Removing the round trips is {#digest_index}, and it is the same
     # optimisation finished rather than a second one: the equality that answered a row for free still
-    # cost a query to ask, so the best case — nothing changed — was 20,000 sequential trips to
+    # cost a query to ask, so the best case — nothing changed — spent 20,000 sequential lookups to
     # rediscover 20,000 rows the database could name in ~40.
     #
     # == This is a SHORTCUT and never THE lookup

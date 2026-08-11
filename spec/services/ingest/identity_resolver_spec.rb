@@ -51,9 +51,9 @@ RSpec.describe Ingest::IdentityResolver do
   # so the counter can be installed without changing what the example under it measures.
   #
   # Top-level because TWO groups now bound the same figure from opposite ends: "re-ingesting text
-  # that has not changed" asserts the embed does not happen on run 2, and "what a page of unchanged
-  # text costs in round trips" asserts that batching those lookups did not quietly add one back on
-  # run 1. One instrument, so the two cannot disagree about what an embed is.
+  # that has not changed" asserts the embed does not happen on run 2, and "the page map is a
+  # snapshot, and what that costs a FIRST run" asserts that batching those lookups did not quietly
+  # add one back on run 1. One instrument, so the two cannot disagree about what an embed is.
   let(:counting_provider) do
     Class.new do
       class << self
@@ -361,23 +361,31 @@ RSpec.describe Ingest::IdentityResolver do
     # and near-identical filler would collapse under `MATCH_SIMILARITY` into fewer identities than
     # examples — which would leave the query count technically green while the fixture no longer
     # meant what it says. Each example below pins that premise before asserting anything.
-    SUBJECTS = [
-      "Invoice#finalize locks the line items",
-      "User#save rejects a duplicate email",
-      "Cart adds an item to the cart",
-      "Order#checkout rejects an expired card",
-      "Payment#refund returns money to the original card",
-      "Shipment#dispatch assigns a tracking number",
-      "Coupon#apply reduces the total by a percentage",
-      "Session#expire logs the visitor out",
-      "Ledger#post balances debits against credits",
-      "Report#render writes a PDF to disk",
-      "Webhook#deliver retries after a server error",
-      "Search#query ranks by relevance and then recency"
-    ].freeze
+    #
+    # A method and not a constant: a constant assigned in a `describe` block takes the file's
+    # lexical cref, not the example group's, so `SUBJECTS = [...]` here would define a GLOBAL
+    # `::SUBJECTS` — a name generic enough to collide with the next spec that wants it, and to
+    # collide load-order-dependently. Every other fixture in this file (`suite`, `wide_suite`,
+    # `record`, `ingest`, `digest_lookups`) is a method for the same reason.
+    def subjects
+      [
+        "Invoice#finalize locks the line items",
+        "User#save rejects a duplicate email",
+        "Cart adds an item to the cart",
+        "Order#checkout rejects an expired card",
+        "Payment#refund returns money to the original card",
+        "Shipment#dispatch assigns a tracking number",
+        "Coupon#apply reduces the total by a percentage",
+        "Session#expire logs the visitor out",
+        "Ledger#post balances debits against credits",
+        "Report#render writes a PDF to disk",
+        "Webhook#deliver retries after a server error",
+        "Search#query ranks by relevance and then recency"
+      ].freeze
+    end
 
     def wide_suite(offset: 0)
-      SUBJECTS.each_with_index.map do |name, index|
+      subjects.each_with_index.map do |name, index|
         unannotated_spec(file_path: "spec/models/subject_#{index}_spec.rb",
                          line_number: index + 1 + offset, name: name)
       end
@@ -385,7 +393,7 @@ RSpec.describe Ingest::IdentityResolver do
 
     it "asks one query for a whole page's digests rather than one per example" do
       ingest(wide_suite, ci_run_id: "run-1")
-      expect(repository.spec_identities.count).to eq(SUBJECTS.size)
+      expect(repository.spec_identities.count).to eq(subjects.size)
 
       second = record(wide_suite(offset: 100), ci_run_id: "run-2")
 
@@ -400,9 +408,9 @@ RSpec.describe Ingest::IdentityResolver do
       # also pass. `BATCH_SIZE` is what the lookup is grouped by, so shrinking it to a third of the
       # suite must cost exactly three lookups — and an implementation that kept asking per row would
       # answer twelve here whatever this constant said.
-      stub_const("#{described_class}::BATCH_SIZE", SUBJECTS.size / 3)
+      stub_const("#{described_class}::BATCH_SIZE", subjects.size / 3)
       ingest(wide_suite, ci_run_id: "run-1")
-      expect(repository.spec_identities.count).to eq(SUBJECTS.size)
+      expect(repository.spec_identities.count).to eq(subjects.size)
 
       second = record(wide_suite(offset: 100), ci_run_id: "run-2")
 
@@ -425,6 +433,13 @@ RSpec.describe Ingest::IdentityResolver do
       expect(digest_lookups { described_class.resolve(run) }).to be_empty
       expect(run.spec_observations.sole.reload.spec_identity_id).to be_nil
     end
+  end
+
+  describe "the page map is a snapshot, and what that costs a FIRST run" do
+    # Its own group rather than a fourth example in the round-trip group above: this one is a FIRST
+    # run over text that is not unchanged, and it asserts an EMBED COUNT rather than a round trip.
+    # It answers a different question from the group it used to sit in, so it is filed under the
+    # question it actually answers.
 
     it "does not make a first run embed twice for two examples carrying the same text" do
       # **The cost of a page map being a SNAPSHOT, resolved deliberately rather than discovered.**
