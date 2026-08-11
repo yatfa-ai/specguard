@@ -9,6 +9,11 @@ module Ingest
   # nearest neighbour within {SpecIdentity::MATCH_DISTANCE}, and either re-sight the row that came
   # back or insert a new one. The observation is then pointed at whichever it was.
   #
+  # Ahead of all of that sits one equality: text byte-identical to a row this repository already
+  # holds is re-sighted without embedding anything at all ({#identical_text}). It answers the
+  # ordinary case — an unchanged suite re-ingested — and it is a shortcut past the above rather than
+  # a replacement for it, because a miss there proves nothing.
+  #
   # == Why this runs in a job and not in the ingest transaction
   #
   # {Ingest::ObservationRecorder} writes inside the transaction holding the run's `FOR UPDATE` lock,
@@ -51,9 +56,11 @@ module Ingest
   #
   # == What is deliberately not here
   #
-  # Batching the embed calls, caching them, and skipping a re-embed when the text is byte-identical
-  # to last run's — the *Cost* axis, still SPGD-72's, deliberately not bundled into a correctness
-  # fix. Also the ANN recall measurement {#nearest} hands over by name.
+  # Batching the embed calls, and caching them — the rest of the *Cost* axis, still SPGD-72's. The
+  # third item of that paragraph, skipping the re-embed when a run's text is byte-identical to a row
+  # this repository already holds, IS now here: see {#identical_text}. It came first because it
+  # removes work rather than reorganising it, and because the key it needs already existed. Also the
+  # ANN recall measurement {#nearest} hands over by name.
   #
   # **Not** a `retry_on` / `discard_on` policy on {Ingest::IdentityResolutionJob}, and that omission
   # is now a finding rather than a deferral: `retry_on EmbeddingGenerator::Error` cannot fire.
@@ -221,6 +228,11 @@ module Ingest
       # unresolved and must.
       return nil unless signal.present?
 
+      # The cheap answer first, and only when it is certain — see {#identical_text} for why a miss
+      # here proves nothing and must fall through to the embed rather than stand in for it.
+      identical = identical_text(signal)
+      return resight(identical, observation) if identical
+
       embedding = embed(signal.text)
       return record_embed_failure(observation) if embedding.nil?
 
@@ -228,6 +240,58 @@ module Ingest
       return resight(match, observation) if match
 
       claim_identity(signal, embedding, observation)
+    end
+
+    # The identity this repository already holds for text that is **byte-identical** to this
+    # signal's, found without embedding anything. One indexed equality on
+    # `(repository_id, text_digest)` — the UNIQUE key {#claim_identity} already upserts onto, so no
+    # new index and at most one row.
+    #
+    # == What it removes
+    #
+    # Every run writes its own observations with `spec_identity_id` NULL, so {#resolve}'s work list
+    # is the WHOLE SUITE on every run rather than the part of it that changed. Run 2 of an unchanged
+    # 20,000-example suite was therefore 20,000 embeddings and 20,000 approximate-index lookups to
+    # rediscover 20,000 rows that this equality names outright.
+    #
+    # The embed costs no money on the shipped provider and it is not free:
+    # `EmbeddingGenerator::LocalProvider` SHA-256s every word and every 3-character n-gram — roughly
+    # 68 digests for a 60-character description, ~1.4M per ingest at the design point, on every
+    # ingest forever. And the provider is swappable by design (`EmbeddingGenerator.provider=`), so a
+    # deployment that installed `OpenAIProvider` pays 20,000 billed API calls per unchanged
+    # re-ingest. It also narrows {#nearest}'s recall exposure by not reaching the index at all on
+    # the identical-text case — which does not settle the measurement that method hands to SPGD-72,
+    # only shrinks what rides on it.
+    #
+    # `select(:id)` because `id` is all that is needed: {SpecIdentity::RESIGHTABLE} is
+    # `file_path, line_number, last_seen_test_run_id, updated_at`, and `text`, `text_digest`,
+    # `signal_source` and `embedding` are deliberately absent from it — a re-sighting provably never
+    # reads the vector. That is what makes skipping the embed possible rather than merely cheaper.
+    #
+    # == This is a SHORTCUT and never THE lookup
+    #
+    # **The digest is over the raw text; the embedding is over a normalized form of it.**
+    # `LocalProvider` downcases, splits on `[[:alnum:]]+` and rejoins with single spaces, so
+    # `"Order#checkout"` and `"Order  checkout"` embed *identically* while their SHA-256 digests
+    # differ. A miss here is therefore not evidence that the test is new — it is evidence that the
+    # cheap question cannot answer this one — and {#identity_for} falls through to today's path
+    # completely unchanged.
+    #
+    # Reading this as the lookup and the embed as an insert-only fallback is the tempting shape and
+    # it is wrong: it would start a second history for every test whose description gained a comma,
+    # while every existing example about *moved* tests stayed green. The falsifier is the resolver
+    # spec's "still matches text that differs only in punctuation and whitespace", which is exactly
+    # that pair and which only similarity can resolve.
+    #
+    # Per row, and that is the floor rather than the ceiling. One equality against a unique index
+    # already beats an embed plus an index probe by the margin this exists for; grouping a
+    # {BATCH_SIZE} page's digests into one `WHERE text_digest IN (…)` would trade ~40 queries for
+    # 20,000 and belongs with the batching SPGD-72 owns, once round trips rather than work are what
+    # is left.
+    def identical_text(signal)
+      @repository.spec_identities
+                 .select(:id)
+                 .find_by(text_digest: SpecIdentity.digest_for(signal.text))
     end
 
     # Writes the one fact that makes this row's absence of an identity mean something: the provider
@@ -276,10 +340,11 @@ module Ingest
     # `spec_intents` carries the same shape and is only ever ranking.
     #
     # What it cannot cost is the identical-text case — a moved test, or the same test ingested by
-    # two shards — because `(repository_id, text_digest)` catches that in {#claim_identity} whatever
-    # this returns. The exposure is exactly the near-identical band, the case the spec's "differs
-    # only in punctuation and whitespace" example isolates: the bytes differ, so only similarity can
-    # find the row.
+    # two shards. {#identical_text} answers that one before this method is called at all, and
+    # `(repository_id, text_digest)` catches it again in {#claim_identity} whatever this returns.
+    # The exposure is exactly the near-identical band, the case the spec's "differs only in
+    # punctuation and whitespace" example isolates: the bytes differ, so neither equality can see
+    # it and only similarity can find the row.
     #
     # **Deliberately not mitigated here.** pgvector 0.8.0 is installed and `hnsw.iterative_scan`
     # addresses this directly, so the remedy is a one-line `SET` rather than an upgrade. It is left
