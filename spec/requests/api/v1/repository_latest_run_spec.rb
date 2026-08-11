@@ -25,44 +25,25 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
   # to its own example group, so a helper defined in either block is invisible to the other; that
   # is how it came to be written twice here before it was hoisted out of the file entirely.
 
-  # The endpoint reads `spec_observations` once PER GRAIN it serves — once for the by-file rollup,
-  # once for the by-area one, and TWICE for the per-example ranking, whose presenter issues a
-  # capped scan and a coverage aggregate. Each cost block below bounds its OWN grain rather than
-  # the table, because the alternative is worse in both directions: a bare total cannot tell "one
-  # aggregate per grain" from "one grain reading twice", and it has to be rebaselined by hand every
-  # time a grain is added, which is exactly the silent rebaseline `queries_against` was chosen over
-  # `baseline + 1` to avoid. The TOTAL is pinned alongside it in the by-area block, on each axis the
-  # per-grain narrowing left uncovered — the unrecorded run, the history window, and the recorded
-  # run — so "exactly these reads and no other" is a stated guard on every one of them rather than
-  # an inference from the grain that happens to be counted.
+  # `observation_reads` and the per-grain partition it is split into come from
+  # spec/support/observation_grain_reads.rb. They lived HERE until a second request spec — the
+  # flakiness file beside this one — needed the same classification, at which point keeping them
+  # here would have meant a second copy in that file: two lists free to drift on which read belongs
+  # to which grain, which is the drift the note above describes for the subscriber itself. The
+  # reasoning that used to sit here in full moved with them, including why every grain is matched
+  # POSITIVELY and never as "the reads that are not the others".
   #
-  # THE PARTITION IS DEFINED ONCE, HERE, for the reason the note above gives: two sibling blocks
-  # each classifying the same statements would be free to drift on which read belongs to which
-  # grain, and a guard that counts one query more or less than its sibling still reports a number.
+  # Each cost block below still bounds its OWN grain rather than the table, because a bare total
+  # cannot tell "one aggregate per grain" from "one grain reading twice". The TOTAL is pinned
+  # alongside it in the by-area block, on each axis the per-grain narrowing left uncovered — the
+  # unrecorded run, the history window, and the recorded run — so "exactly these reads and no other"
+  # is a stated guard on every one of them rather than an inference from the grain that happens to
+  # be counted.
   #
-  # EVERY GRAIN IS MATCHED POSITIVELY, on SQL only its own read can produce, and none is defined as
-  # "the reads that are not the others". A residual definition silently ADOPTS any further read of
-  # this table — an `exists?` gate, a preload, an N+1 — into whichever grain owns the leftovers, and
-  # the block that owns them then reports a number for work it did not do. Matched positively, an
-  # unclassified read belongs to no list and is caught by the total below instead, which is the
-  # guard that can actually name it.
-  #
-  # The per-example grain is TWO patterns rather than one because it is two different statements —
-  # `SpecObservation.slowest_in`'s capped backward scan and `.coverage_in`'s FILTER aggregate — and
-  # collapsing them into one loose pattern would let either stop being issued without a red example.
-  def observation_reads(&) = queries_against("spec_observations", &)
-
-  def observation_reads_by_grain(&)
-    reads = observation_reads(&)
-    [reads.grep(/GROUP BY COALESCE\(substring\(spec_file_path/),
-     reads.grep(/GROUP BY "spec_observations"\."spec_file_path"/),
-     reads.grep(/ORDER BY "spec_observations"\."duration_seconds" DESC/) +
-       reads.grep(/COUNT\(\*\) FILTER \(WHERE outcome = 'failed'\)/)]
-  end
-
-  def area_grain_reads(&) = observation_reads_by_grain(&)[0]
-  def file_grain_reads(&) = observation_reads_by_grain(&)[1]
-  def example_grain_reads(&) = observation_reads_by_grain(&)[2]
+  # Every fixture in this file is UNFILTERED or has no observation rows on a branch-scoped window,
+  # so the flakiness grain contributes nothing to the totals below — which is itself the contract
+  # (`unstable_tests` is not constructed without `?branch=`) and is asserted as such next door
+  # rather than left as an unremarked property of these fixtures.
 
   # ONE builder for every block that writes observation rows — the four grain blocks below (by-file
   # and by-area, rollup and cost) all want the same row and had written it out four times. Hoisted
@@ -175,7 +156,7 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
     it "serves exactly the top-level keys this contract pins" do
       expect(get_repository.keys)
         .to contain_exactly("repository", "api_key", "latest_run", "history_window", "history",
-                            "branches_window", "branches")
+                            "unstable_tests_window", "unstable_tests", "branches_window", "branches")
     end
 
     it "scopes latest_run to the key's own repository" do
@@ -2062,7 +2043,7 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
 
       expect(body.keys)
         .to contain_exactly("repository", "api_key", "latest_run", "history_window", "history",
-                            "branches_window", "branches")
+                            "unstable_tests_window", "unstable_tests", "branches_window", "branches")
       expect(body["history"].first.keys).to contain_exactly(
         "commit_sha", "branch", "total_specs", "annotated_specs", "annotated_ratio",
         "duration_seconds", "shard_count", "timed_shard_count", "suite_size_measured", "ingested_at"
@@ -2873,23 +2854,32 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
     # added by anything else on this endpoint unnamed; the table-level total is what closes that,
     # and it is the criterion this ticket was written against.
     #
-    # FOUR, as `1 + 1 + 2`: one aggregate per rollup grain and two for the per-example ranking,
-    # whose presenter issues a capped scan and a coverage aggregate. Restated as the sum of the
-    # three classified lists rather than as a literal, so a grain that stopped reading and another
+    # FOUR, as `1 + 1 + 2 + 0`: one aggregate per rollup grain, two for the per-example ranking —
+    # whose presenter issues a capped scan and a coverage aggregate — and NONE for the cross-run
+    # flakiness grain, which is not constructed on an unfiltered window. Restated as the sum of the
+    # four classified lists rather than as a literal, so a grain that stopped reading and another
     # that started reading twice cannot cancel out into a passing total.
+    #
+    # The flakiness list is destructured and asserted EMPTY rather than dropped on the floor. Two
+    # separate things break if it is not: a grain silently added to this request would be adopted by
+    # the total without anything naming it, and — the sharper one — the sum below would keep passing
+    # if the flakiness composition read were mis-classified into the per-example grain, since the
+    # two patterns overlapped before `spec/support/observation_grain_reads.rb` tightened the second.
     it "reads spec_observations exactly four times in total — one per rollup grain, two for the ranking, and no other" do
       run = create_test_run(repository: repository, commit_sha: "acosttotal01", duration_seconds: 42.5)
       observe(run, path: "spec/models/a_spec.rb", duration: 0.5, line_number: 1)
       observe(run, path: "spec/requests/b_spec.rb", duration: 0.5, line_number: 1)
 
-      area, file, example = observation_reads_by_grain { get_repository }
+      area, file, example, flakiness = observation_reads_by_grain { get_repository }
 
       expect(area.length).to eq(1)
       expect(file.length).to eq(1)
       expect(example.length).to eq(2)
+      expect(flakiness).to be_empty
       # And the classified reads are ALL of them — the assertion the per-grain blocks cannot make,
       # because a read matching no grain's pattern is invisible to every one of them.
-      expect(observation_reads { get_repository }.length).to eq(area.length + file.length + example.length)
+      expect(observation_reads { get_repository }.length)
+        .to eq(area.length + file.length + example.length + flakiness.length)
       expect(observation_reads { get_repository }.length).to eq(4)
     end
   end

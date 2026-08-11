@@ -57,6 +57,13 @@ class Api::V1::RepositoriesController < Api::BaseController
       latest_run: serialized_latest_run,
       history_window: serialized_history_window,
       history: serialized_history,
+      # BESIDE `history`/`history_window` and deliberately NOT inside `latest_run`, which is
+      # single-run facts by construction. Every key that block serves — `shards`, `spec_files`,
+      # `spec_directories`, `slowest_examples` — is a statement about ONE run's rows; "this test is
+      # unstable" is a statement about one test across several, and it is read off the same window
+      # `history` is served over. See `serialized_unstable_tests_window`.
+      unstable_tests_window: serialized_unstable_tests_window,
+      unstable_tests: serialized_unstable_tests,
       branches_window: serialized_branches_window,
       branches: serialized_branches
     }
@@ -698,6 +705,232 @@ class Api::V1::RepositoriesController < Api::BaseController
     @history_runs ||= preload_shard_counts(
       current_repository.recent_test_runs(limit: history_limit, branch: requested_branch).to_a
     )
+  end
+
+  # The contract the flakiness rows below are served under — and, when they are `null`, the reason
+  # they are. Served UNCONDITIONALLY, on the key-always-present rule `latest_run.shards` argues for
+  # itself above: a client tests one thing rather than distinguishing an absent key from a null one,
+  # and the block that explains a `null` is worthless if it is itself absent whenever the `null`
+  # happens.
+  #
+  # `grouped` IS THE LOAD-BEARING KEY, and it exists because of the branch decision below. Outcomes
+  # compared across branches are outcomes of different code — `UnstableTests` states that rule for
+  # itself — and unfiltered, `history_runs` is the INTERLEAVED all-branch window
+  # `serialized_history_window` spends a paragraph warning about, on which consecutive rows are
+  # routinely two different branches. Grouping outcomes over it would manufacture a flip out of two
+  # branches: the same description failing on `feature/x` and passing on `main` is two pieces of
+  # code, and calling it flaky is a false positive the object exists to avoid. So unfiltered,
+  # `UnstableTests.for` IS NOT CALLED AT ALL — no rows, and no reads to produce them — and this
+  # boolean is what says so.
+  #
+  # It is read off whether the object was CONSTRUCTED, never re-spelled as `requested_branch ?
+  # true : false`. A second copy of the gate is a second thing to keep true, and the one that
+  # decides what was read is the one worth serving. So `grouped` is exactly `unstable_tests !=
+  # null`, in every response, and a client can test either.
+  #
+  # `grouped: true` IS NOT "SOMETHING WAS COMPARED". It says the window was eligible to be grouped
+  # and was handed to the presenter — which is the branch decision and nothing more. What came of
+  # it is the block's own business and is stated there: an unknown `?branch=` selects zero runs and
+  # groups over an empty set, and a branch whose client never reported outcomes groups over a
+  # populated one and still cannot compare. `run_count`, `recorded` and `comparable` are what
+  # separate those, and they are in the block precisely because they are answers rather than
+  # eligibility.
+  #
+  # `branch_scope` and `branch` are TWO keys rather than one interpolated token, and `branch` is
+  # always served (`null` when the window was not narrowed) — `serialized_history_window` makes
+  # both arguments in full and they are not repeated here. They carry the same values that block
+  # carries in the same response, because both describe the SAME window: the rows below are grouped
+  # over `history_runs`, which is what `history` is serialized from.
+  #
+  # `null` ROWS AND NEVER AN EMPTY LIST. `unstable_tests: []` would read as "nothing is flaky" when
+  # it means "we refused to compare" — Vacuous Green exactly, in the shape this project keeps
+  # finding it: a surface reporting a clean result for work it did not do. The `null` cannot be
+  # misread, and this block says which of the two states produced it.
+  #
+  # `order` NAMES ALL THREE KEYS, and `tie_break_served` is `true` here — the one place on this
+  # endpoint where it is. `UnstableTests#initialize` sorts by `(-failed_run_count, -run_count,
+  # name)` and every one of those three is served on the row below, so unlike `history` and
+  # `branches` — whose tie-breaks are an ingest sequence and a last-run timestamp that no row
+  # carries — a client CAN reproduce this order from what it holds. Stated rather than assumed,
+  # because the honest answer differs per block and a client that had to guess would re-sort one of
+  # the two lists that must not be re-sorted.
+  def serialized_unstable_tests_window
+    {
+      order: "failed_run_count_desc,run_count_desc,name_asc",
+      tie_break_served: true,
+      branch_scope: requested_branch ? "single_branch" : "all_branches",
+      branch: requested_branch,
+      grouped: !unstable_tests.nil?
+    }
+  end
+
+  # WHICH TESTS ARE UNSTABLE ACROSS RUNS — the agent-readable half of the "Tests whose outcome
+  # changed" panel `repositories#show` has rendered since SPGD-282, and the roadmap's fourth axis
+  # ("where it is flaky"), which is the only one of the four this endpoint has never been given.
+  #
+  # A DIFFERENT GRAIN FROM EVERYTHING IN `latest_run`, which is why it is served beside `history`
+  # rather than inside that block. `slowest_examples` reaches the per-example grain of ONE run;
+  # this is the first key on this endpoint that matches a test to ITSELF across runs, and no
+  # arrangement of single-run facts answers it. An agent holding thirty responses could subtract
+  # them — which is the polling-and-differencing this file's opening comment exists to refuse.
+  #
+  # THE SAME OBJECT THE PANEL READS, never a hand-written query — this file's governing rule,
+  # stated in full on `serialized_spec_files`. `UnstableTests` is view-free, so the API and the
+  # panel name the same tests, in the same order, off the same rows of the same window.
+  #
+  # OFF THE ALREADY-MEMOIZED WINDOW, so this adds NO run-window query. `history_runs` is
+  # materialized once and `show` already reads it twice, and `UnstableTests.for`'s own signature
+  # documents the window as *"ALREADY LOADED … handed in rather than re-queried"*, precisely so two
+  # surfaces cannot come to be drawn on two windows that agree today. The object is order- and
+  # anchor-indifferent: it reads `runs.map(&:id)` and `runs.size` and nothing else.
+  #
+  # `null` — THE KEY STILL PRESENT — under an unfiltered window, and the argument for that is on
+  # `serialized_unstable_tests_window` above where the boolean that explains it lives.
+  #
+  # AN EMPTY `rows` IS A REAL ANSWER HERE and is not the same state. Under a branch-scoped window
+  # the object IS constructed, and `rows: []` beside `comparable: true` means "we compared and
+  # nothing flipped". Beside `comparable: false` it means "nobody told us how anything ended". The
+  # two must never serialize identically, which is what the coverage keys below are for.
+  #
+  # STRUCTURED COUNTS AND BOOLEANS, NOT PROSE — this endpoint's standing rule, and this is the
+  # block where it costs the most. `RepositoriesHelper` words this same coverage in TWELVE
+  # `unstable_tests_*` helpers ("3 of the last 30 runs on main reported outcomes", "2 of 5"), and a
+  # machine-readable client cannot act on a sentence without parsing it. So every figure those
+  # sentences are built from goes out as an integer or a boolean and the client words it — or does
+  # not word it at all and just divides.
+  #
+  # `comparable` IS THE VACUOUS GREEN GATE AND IS SERVED AS A FLAG, never as an empty list.
+  # `UnstableTests#comparable?` is explicit about why: `outcome` is nullable and nothing validates
+  # it, so a window whose client sends no outcomes stores a nil on every row of every run, which
+  # yields no failures, therefore no candidates, therefore an empty list — *"the zero is real; what
+  # it counts is silence"*. An empty list without this flag is "nobody told us" wearing the
+  # spelling of "everything is stable".
+  #
+  # `recorded` is the coarser question one rung under it — whether the window has ANY per-example
+  # grain at all — and separates a repository whose CI has never sent per-example detail from one
+  # that sends it without outcomes. Both are read off the object's OWN predicates, called rather
+  # than re-spelled here, on the rule `serialized_spec_files`' `#recorded?` gate states: a
+  # controller-side copy of a predicate is free to drift the day the presenter's changes.
+  #
+  # `truncated` / `unexamined_count` DISCLOSE THE CANDIDATE CAP. The candidate step stops at
+  # `SpecObservation::UNSTABLE_CANDIDATE_LIMIT` — a catastrophe valve for a window in which the
+  # whole suite went red — and a capped list that does not say it stopped is read as the whole
+  # story. The two OPERANDS (`candidate_count`, `examined_count`) go out beside the boolean, so a
+  # client can check the comparison rather than take it; `limit` is read off `SpecObservation`'s own
+  # constant rather than restated here, on the precedent `serialized_spec_files` sets, so the
+  # response cannot claim a bound the query did not apply.
+  #
+  # `unnamed_count` IS AN EXCLUSION, not a population. A null `name` cannot be matched to itself
+  # across runs — two nulls are not known to be one test — so those rows are dropped from the
+  # matching before anything is grouped. Counted in ROWS and never in tests, because an unnamed row
+  # is precisely a row this block cannot say is a test.
+  #
+  # `shared_description_rows` IS ITS OWN LIST and never folded into `rows` — exactly as the panel
+  # lists them separately. These are descriptions that varied across the window AND were carried by
+  # more than one example in at least one run of it, so the description is not a key for that run:
+  # its `failed` and its `passed` are two tests rather than one test that flipped. Reported rather
+  # than dropped, because a dropped group is a silence a reader has no way to notice, and named as
+  # what they are rather than as flakiness, because nothing here establishes which of it.
+  #
+  # AT MOST FOUR READS OF `spec_observations`, and CONSTANT in the length of the window and the size
+  # of the suite — none of them new. They are the panel's own reads, already EXPLAIN-certified in
+  # `spec/models/spec_observation_spec.rb`, so that certification transfers rather than needing to
+  # be repeated in a request spec. The count is not constant in STATE, deliberately:
+  # `UnstableTests.for` asks the gating question FIRST and on its own, so an incomparable window
+  # costs ONE read and stops, and an unfiltered request costs NONE because the object is never
+  # constructed.
+  def serialized_unstable_tests
+    unstable = unstable_tests
+
+    return nil if unstable.nil?
+
+    {
+      rows: unstable.rows.map { |row| serialized_unstable_test_row(row) },
+      shared_description_rows: unstable.shared_description_rows.map { |row| serialized_unstable_test_row(row) },
+      run_count: unstable.run_count,
+      runs_with_rows: unstable.runs_with_rows,
+      runs_reporting_outcomes: unstable.runs_reporting_outcomes,
+      recorded: unstable.recorded?,
+      comparable: unstable.comparable?,
+      candidate_count: unstable.candidate_count,
+      examined_count: unstable.examined_count,
+      truncated: unstable.truncated?,
+      unexamined_count: unstable.unexamined_count,
+      unnamed_count: unstable.unnamed_count,
+      limit: SpecObservation::UNSTABLE_CANDIDATE_LIMIT
+    }
+  end
+
+  # One description across the window. Every counter the presenter carries, flat, on
+  # `serialized_slowest_examples`' shape — and every one of them an OPERAND rather than one of the
+  # labels `UnstableTests::Row` builds for the panel. `#appearance_label` and `#failure_label` word
+  # these same figures as `"2 of 5"`, which a client would have to split on a space before it could
+  # compare two rows.
+  #
+  # BOTH DENOMINATORS ARE SERVED, and they are different denominators. `run_count` is the runs this
+  # description APPEARED in — not the window's length, which is on the block above — because a test
+  # added halfway through the window failed in two of the fifteen runs that ran it, and dividing by
+  # thirty would report a stability it was never measured for. `recorded_count` is its ROWS, which
+  # exceeds `run_count` exactly when the description was carried by more than one example in a run.
+  #
+  # `outcome_words` IS ECHOED VERBATIM and never reworded into a verdict — the model's own
+  # echo-don't-judge rule, which `SpecObservation#outcome_label` carries the reason for: nothing
+  # platform-side validates that string, so quoting what arrived is the only reading that cannot be
+  # wrong. An unrecognised word goes out unrecognised.
+  #
+  # `outcome_words` and `files_seen` are read through the ROW'S ACCESSORS, never off the struct
+  # members: both aggregates are `ARRAY_AGG(…) FILTER (…)`, which is SQL NULL rather than an empty
+  # array for a group with nothing to collect, and both accessors `Array()`-normalise that and sort
+  # — so two rows carrying the same set serialize the same way instead of in whatever order the
+  # planner returned.
+  #
+  # `unreported_outcome_count` is runs that recorded this description and said NOTHING about how it
+  # ended. Not a pass, and counted as one nowhere: `#changed?` compares against
+  # `reported_outcome_count` and not against `recorded_count`, precisely so a client that stopped
+  # sending outcomes cannot manufacture a flip. Served so a client can see the same separation
+  # rather than infer it.
+  #
+  # `shared_description` rides on EVERY row, in both lists, on the rule `serialized_history_row`'s
+  # per-row `branch` follows: a client should be able to read a row's classification off the row
+  # rather than off the list it arrived in. `multi_file` is beside it and is a DISCLOSURE rather
+  # than a defect — the project's identity rule is semantic, so a test that moved is the same test
+  # and keeps its history, but a reader looking for a flaky test in one file needs to know the
+  # history spans two.
+  def serialized_unstable_test_row(row)
+    {
+      name: row.name,
+      recorded_count: row.recorded_count,
+      run_count: row.run_count,
+      reported_outcome_count: row.reported_outcome_count,
+      unreported_outcome_count: row.unreported_outcome_count,
+      failed_count: row.failed_count,
+      failed_run_count: row.failed_run_count,
+      outcome_words: row.outcome_words,
+      files_seen: row.files_seen,
+      multi_file: row.multi_file?,
+      shared_description: row.shared_description?
+    }
+  end
+
+  # The presenter, or `nil` when no comparison was allowed — memoized, because `show` reads it
+  # twice: once for the window block's `grouped` and once for the rows. Without the memo the whole
+  # thing is built twice and the block's four reads become eight, which is what the cost examples
+  # next door count.
+  #
+  # MEMOIZED ACROSS THE NIL — `defined?` rather than `||=` — so the memo means "already decided"
+  # rather than "already truthy". That distinction is free TODAY: `requested_branch &&`
+  # short-circuits before any read, so re-evaluating the nil case costs nothing and a `||=` would
+  # behave identically. It stops being free the moment this gate consults anything that costs, and
+  # the shape that cannot regress is the one that does not depend on the answer being truthy.
+  #
+  # The branch gate lives HERE, in one place, so the boolean the window serves and the decision that
+  # produced it cannot come apart. See `serialized_unstable_tests_window` for why an unfiltered
+  # window is refused rather than answered.
+  def unstable_tests
+    return @unstable_tests if defined?(@unstable_tests)
+
+    @unstable_tests =
+      requested_branch && UnstableTests.for(current_repository, history_runs, branch: requested_branch)
   end
 
   # The contract the `branches` catalogue is served under, on the same rule `history_window`
