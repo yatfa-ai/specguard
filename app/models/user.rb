@@ -36,10 +36,34 @@ class User < ApplicationRecord
     def archived? = status == :archived
   end
 
-  has_many :repositories, dependent: :destroy
-  # Both sides of the membership declare `dependent: :destroy`; dropping either one leaves the
-  # foreign key to fail on destroy.
-  has_many :repository_memberships, dependent: :destroy
+  # `:restrict_with_error`, NOT `:destroy`. These two are the associations a person *owns*, and
+  # cascading from them deletes other people's data: a user's repositories carry every
+  # collaborator's membership on them and every byte of telemetry beneath them (see `Repository`'s
+  # own cascade), so a single `user.destroy` would take a colleague's access and a repository's
+  # whole history with it.
+  #
+  # The asymmetry with `Repository` is deliberate, and is the point rather than an oversight.
+  # Destroying a *repository* still cascades into its api_keys, spec_observations, test_runs,
+  # spec_intents and memberships, because those genuinely belong to it and go when it goes.
+  # Destroying the *person* does not, because what hangs off them belongs to their colleagues.
+  # `:nullify` is not an option here either — `repositories.user_id` and
+  # `repository_memberships.user_id` are both `NOT NULL` (db/schema.rb), so there is no "unknown
+  # owner" state for these rows the way there is for the attribution columns below.
+  #
+  # `_with_error` rather than `_with_exception`: `destroy` returns `false` with the reason on
+  # `errors[:base]`, which is the ordinary Rails shape a future "remove user" screen can render;
+  # `destroy!` still raises `ActiveRecord::RecordNotDestroyed`. Be honest about what that buys — it
+  # makes a user undestroyable the moment they register a repository or are invited to one, so in
+  # practice the only row this still permits deleting is someone who signed in and went no further.
+  # That is deliberate: the answer for a departing user is archive/disable, not delete, and this
+  # holds the line until that path exists. Nothing in `app` or `lib` calls `User#destroy` today.
+  #
+  # The note that used to sit here — that both sides must declare `:destroy` or the foreign key
+  # fails on destroy — no longer applies: `:restrict_with_error` aborts before any DELETE is issued,
+  # so the FK is never reached. It remains the second line of defence for a callback-bypassing
+  # `user.delete`, which raises `ActiveRecord::InvalidForeignKey` rather than silently orphaning.
+  has_many :repositories, dependent: :restrict_with_error
+  has_many :repository_memberships, dependent: :restrict_with_error
   # Repositories shared *with* this user — deliberately separate from `repositories`, which stays
   # "repositories this user owns" and is what RepositoriesController#index still lists.
   has_many :member_repositories, through: :repository_memberships, source: :repository
@@ -53,7 +77,8 @@ class User < ApplicationRecord
   # `:nullify` for the same reason as `created_api_keys`, one step further: a membership is somebody
   # *else's* access. Deleting the person who granted it must forget who granted it, never revoke the
   # colleague who was granted it — and it must not be confused with `repository_memberships` above,
-  # which is this user's own access and does go away with them.
+  # which is this user's *own* access and, far from going away with them, is now one of the two
+  # things that stops them being deleted at all.
   has_many :granted_repository_memberships, class_name: "RepositoryMembership",
                                             foreign_key: :granted_by_user_id,
                                             dependent: :nullify, inverse_of: :granted_by_user

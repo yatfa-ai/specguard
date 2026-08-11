@@ -60,6 +60,77 @@ RSpec.describe User do
     end
   end
 
+  # The other half of the rule the block above states. `created_api_keys` and
+  # `granted_repository_memberships` are *attributions* and nullify; `repositories` and
+  # `repository_memberships` are what the person actually holds, and they REFUSE the deletion
+  # outright rather than cascading.
+  #
+  # The distinction is the whole point: cascading from the owning side deletes other people's data
+  # — every collaborator's membership on the user's repositories, and every byte of telemetry
+  # beneath them — from one `user.destroy` call. Nothing in `app` or `lib` calls it today, so this
+  # is prevention, landing before a "remove user" surface exists. Be honest about its reach: a user
+  # is undestroyable the moment they register a repository or are invited to one, and archive rather
+  # than delete is the intended answer for a departing user.
+  describe "deleting a user who still holds repositories or memberships" do
+    let(:owner) { create_user }
+    let(:teammate) { create_user(github_uid: "9999", github_handle: "someone-else") }
+    let(:repository) { create_repository(user: owner) }
+
+    it "refuses to delete an owner, and takes none of their repository's telemetry with it" do
+      run = create_test_run(repository: repository)
+      create_spec_intent(repository: repository, test_run: run)
+      SpecObservation.create!(repository: repository, test_run: run, status: "annotated",
+                              file_path: "spec/models/invoice_spec.rb", line_number: 12,
+                              example_id: "./spec/models/invoice_spec.rb[1:1]")
+      repository.api_keys.create!(name: "CI — main")
+      counted = [Repository, TestRun, SpecIntent, SpecObservation, ApiKey, described_class]
+      before = counted.to_h { |model| [model, model.count] }
+
+      expect(owner.destroy).to be(false)
+
+      expect(owner.errors[:base]).to be_present
+      expect(owner.reload).to be_persisted
+      expect(counted.to_h { |model| [model, model.count] }).to eq(before)
+    end
+
+    # A membership is this user's access to somebody ELSE's repository. Cascading it away on delete
+    # is how a user deletion quietly edits another owner's member list.
+    it "refuses to delete someone who holds a membership on a repository they do not own" do
+      membership = create_membership(repository: repository, user: teammate)
+
+      expect(teammate.destroy).to be(false)
+      expect(teammate.errors[:base]).to be_present
+      expect(membership.reload).to be_persisted
+      expect(repository.reload.members).to eq([teammate])
+    end
+
+    # `:restrict_with_error`, not `:restrict_with_exception` — a refusal a form can render. The bang
+    # still raises, because a caller who chose it asked for the exception.
+    it "raises from destroy! while destroy merely returns false" do
+      create_repository(user: owner)
+
+      expect { owner.destroy! }.to raise_error(ActiveRecord::RecordNotDestroyed)
+    end
+
+    # The second line of defence, and the reason the model guard is not the only thing standing
+    # here: `delete` skips every callback, so the foreign key is what stops the row going and
+    # leaving `repositories.user_id` — which is `NOT NULL` — pointing at nobody.
+    it "raises a foreign key violation when the callbacks are bypassed with delete" do
+      repository
+
+      expect { owner.delete }.to raise_error(ActiveRecord::InvalidForeignKey)
+    end
+
+    # The permitted case, stated positively so the guard's actual reach is on the record: someone
+    # who signed in and went no further is still deletable.
+    it "still deletes a user who owns nothing and holds nothing" do
+      loiterer = create_user(github_uid: "4242", github_handle: "just-looking")
+
+      expect(loiterer.destroy).to be_truthy
+      expect(described_class.exists?(loiterer.id)).to be(false)
+    end
+  end
+
   describe "handle normalization" do
     it "stores a mixed-case, padded handle in canonical form" do
       user = create_user(github_handle: "  Octocat  ")

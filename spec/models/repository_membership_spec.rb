@@ -133,17 +133,25 @@ RSpec.describe RepositoryMembership do
     expect { repository.destroy! }.to change(described_class, :count).by(-1)
   end
 
-  it "is removed when the member is destroyed" do
+  # The two examples that follow used to assert the opposite — that destroying a user took their
+  # memberships (and, for an owner, the whole repository) with them. That cascade is exactly what
+  # `User`'s `dependent: :restrict_with_error` removed: a membership is a person's access to
+  # somebody else's repository, and deleting the person must never be the way it disappears.
+  it "is not removed when the member is destroyed — the member is refused instead" do
     create_membership(repository: repository, user: teammate)
 
-    expect { teammate.destroy! }.to change(described_class, :count).by(-1)
+    expect { expect(teammate.destroy).to be(false) }.not_to change(described_class, :count)
+    expect(teammate.errors[:base]).to be_present
+    expect(teammate.reload).to be_persisted
   end
 
-  it "is removed when the owner is destroyed, along with the repository" do
+  it "is not removed when the owner is destroyed — the owner is refused, and the repository stays" do
     create_membership(repository: repository, user: teammate)
 
-    expect { owner.destroy! }.to change(described_class, :count).by(-1)
-    expect(Repository.count).to eq(0)
+    expect { expect(owner.destroy).to be(false) }.not_to change(described_class, :count)
+    expect(owner.errors[:base]).to be_present
+    expect(Repository.count).to eq(1)
+    expect(repository.reload).to be_persisted
   end
 
   # Nobody may grant access they do not hold themselves. Without this, `members.manage` is a lever
@@ -234,11 +242,21 @@ RSpec.describe RepositoryMembership do
     end
 
     # Deleting the grantor forgets who granted it; it must never revoke the colleague's access.
+    #
+    # The grantor has to be stripped back to owning nothing and holding nothing before they are
+    # deletable at all — `User` declares `dependent: :restrict_with_error` on `repositories` and
+    # `repository_memberships`. That is not a workaround to keep this example green, it is the only
+    # shape the scenario can have: `grantor_holds_every_granted_permission` forbids granting a
+    # permission you do not hold, so every valid grantor either owns the repository or holds a
+    # membership on it. "The grantor left" therefore *means* their own access went first, and this
+    # models exactly that sequence. The assertion below is unchanged, and is about
+    # `granted_by_user`'s `:nullify`, which this ticket deliberately preserves.
     it "keeps the grant when the grantor is deleted, and forgets the grantor" do
       grantor = onboarder
       membership = described_class.create!(repository: repository, user: newcomer,
                                           permissions: %w[view], granted_by_user: grantor)
 
+      described_class.find_by!(user: grantor, repository: repository).destroy!
       grantor.destroy!
 
       expect(membership.reload.granted_by_user_id).to be_nil
