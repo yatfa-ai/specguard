@@ -8,7 +8,8 @@
 
   <%= render UI::PageHeaderComponent.new(
         title: "Register a repository",
-        subtitle: "Use the GitHub org/repo form, e.g. acme/billing-service."
+        subtitle: "Pick one of your GitHub repositories. SpecGuard checks with GitHub that you " \
+                  "administer it before registering."
       ) %>
 
   <%= render "form", repository: @repository, submit_label: "Register",

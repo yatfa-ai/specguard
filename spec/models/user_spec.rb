@@ -163,4 +163,87 @@ RSpec.describe User do
       end
     end
   end
+
+  # The GitHub authorization the app holds on this user's behalf. Everything ownership verification
+  # can do rests on it, and it is the only secret this table stores.
+  describe "the stored GitHub authorization" do
+    describe "#github_scopes" do
+      # Read off what GitHub reported granting, never off what was requested. A user can uncheck an
+      # organization on the consent screen and come back with less than was asked for; treating the
+      # request as the grant is how a feature ends up calling an API it has no scope for.
+      it "reads the granted scopes, however GitHub spaced them" do
+        user = create_user(github_token_scopes: nil)
+        user.assign_github_authorization("credentials" => { "token" => "gho_x" },
+                                         "extra" => { "scope" => " Repo , read:user " })
+
+        expect(user.github_scopes).to eq(Set["repo", "read:user"])
+      end
+
+      it "is empty rather than nil when nothing was granted" do
+        expect(create_user(github_token_scopes: nil).github_scopes).to be_empty
+      end
+    end
+
+    describe "#github_repository_access?" do
+      it "is true for a token carrying repo" do
+        expect(create_user(github_token_scopes: "repo,read:user")).to be_github_repository_access
+      end
+
+      # A narrower grant is a usable answer, not a dead end: a user who granted only `public_repo`
+      # simply will not see their private repositories in the picker.
+      it "is true for a token carrying public_repo alone" do
+        expect(create_user(github_token_scopes: "public_repo")).to be_github_repository_access
+      end
+
+      # A live token at the sign-in scopes cannot read repositories. This is what every user looks
+      # like between signing in and first registering something.
+      it "is false for a token carrying only the sign-in scopes" do
+        expect(create_user(github_token_scopes: "read:user,user:email"))
+          .not_to be_github_repository_access
+      end
+
+      it "is false when there is no token, whatever the scopes column says" do
+        expect(create_user(github_access_token: nil, github_token_scopes: "repo"))
+          .not_to be_github_repository_access
+      end
+    end
+
+    describe "#assign_github_authorization" do
+      it "records the token, the scopes and when the grant was made" do
+        user = create_user(github_access_token: nil, github_token_scopes: nil)
+
+        user.assign_github_authorization("credentials" => { "token" => "gho_new" },
+                                         "extra" => { "scope" => "repo" })
+
+        expect(user.github_access_token).to eq("gho_new")
+        expect(user.github_token_scopes).to eq("repo")
+        expect(user.github_token_updated_at).to be_present
+      end
+
+      # A callback without a token is not evidence of a revocation. Clearing on one would demote a
+      # user who had already connected, silently, on their next ordinary sign-in.
+      it "leaves an existing grant alone when the callback carries no token" do
+        user = create_user(github_access_token: "gho_kept", github_token_scopes: "repo")
+
+        user.assign_github_authorization("info" => {})
+
+        expect(user.github_access_token).to eq("gho_kept")
+        expect(user.github_token_scopes).to eq("repo")
+      end
+    end
+
+    # Rotating the encryption keys is survivable rather than a 500 on every page that asks whether
+    # GitHub is connected: an unopenable envelope is operationally identical to no token, and the
+    # user is walked through authorizing again.
+    it "reports a token it cannot decrypt as absent rather than raising" do
+      user = create_user
+      User.connection.execute(
+        "UPDATE users SET github_access_token = 'not-an-envelope' WHERE id = #{user.id}"
+      )
+
+      expect { user.reload.github_access_token }.not_to raise_error
+      expect(user.reload.github_access_token).to be_nil
+      expect(user.reload).not_to be_github_repository_access
+    end
+  end
 end
