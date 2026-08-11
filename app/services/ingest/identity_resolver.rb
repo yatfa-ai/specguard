@@ -12,7 +12,9 @@ module Ingest
   # Ahead of all of that sits one equality: text byte-identical to a row this repository already
   # holds is re-sighted without embedding anything at all ({#identical_text}). It answers the
   # ordinary case — an unchanged suite re-ingested — and it is a shortcut past the above rather than
-  # a replacement for it, because a miss there proves nothing.
+  # a replacement for it, because a miss there proves nothing. It is asked once per PAGE rather than
+  # once per row ({#digest_index}), so the ordinary case is ~40 round trips at the design point
+  # rather than 20,000; the decision it feeds is still made one row at a time.
   #
   # == Why this runs in a job and not in the ingest transaction
   #
@@ -68,10 +70,14 @@ module Ingest
   #
   # == What is deliberately not here
   #
-  # Batching the embed calls, and caching them — the rest of the *Cost* axis, still SPGD-72's. The
-  # third item of that paragraph, skipping the re-embed when a run's text is byte-identical to a row
-  # this repository already holds, IS now here: see {#identical_text}. It came first because it
-  # removes work rather than reorganising it, and because the key it needs already existed. Also the
+  # Batching the embed calls, and caching them — the rest of the *Cost* axis, still SPGD-72's. Two
+  # of that paragraph's items ARE now here. Skipping the re-embed when a run's text is byte-identical
+  # to a row this repository already holds: {#identical_text}. Batching the lookup that answers it,
+  # so the unchanged case costs one query per page rather than one per row: {#digest_index}. They
+  # shipped in that order because the first removes work rather than reorganising it, and because the
+  # key both need already existed; the second was worth doing once round trips rather than work were
+  # what was left. What remains is the EMBED — batching it and caching it — which is a different
+  # thing entirely: it is the path a CHANGED suite takes, and no equality can shortcut it. Also the
   # ANN recall measurement {#nearest} hands over by name.
   #
   # **Not** a `retry_on` / `discard_on` policy on {Ingest::IdentityResolutionJob}, and that omission
@@ -82,8 +88,16 @@ module Ingest
   # live in the work list, which is where it now lives.
   class IdentityResolver
     # Rows per database round trip on the work list. A repository-scoped ANN lookup and an upsert
-    # per row means the loop is round-trip bound whatever this is; the batch only bounds how many
-    # observations are held in memory at once, and 20,000 of them is the design point.
+    # per row means a page of genuinely NEW text is round-trip bound whatever this is; what the batch
+    # bounds is how many observations are held in memory at once, and 20,000 of them is the design
+    # point.
+    #
+    # It is now also the width of the digest short-circuit's `IN` list ({#digest_index}), which is
+    # the one place the number reaches a query rather than a buffer — so on the ordinary case, an
+    # unchanged suite re-ingested, the whole page IS one round trip. That makes this a size worth
+    # tuning where it used not to be, but not a different KIND of constant: both readings bound one
+    # page, and neither is a bound on how much work a delivery inherits — that is
+    # {RETRY_SWEEP_LIMIT}, and it stays separate for the reason stated there.
     BATCH_SIZE = 500
 
     # **How much of an earlier run's unfinished business ONE JOB is made to pay for.** The cost
@@ -133,6 +147,10 @@ module Ingest
     def initialize(run)
       @run = run
       @repository = run.repository
+      # Replaced wholesale by each {#resolve_page}; `{}` here so the two methods that touch it —
+      # {#identical_text} and {#claim_identity} — are total rather than conditional on a page being
+      # open, and so that a page is a page's worth of entries rather than the suite's.
+      @digest_index = {}
     end
 
     # @return [Integer] how many observations now carry an identity that did not before — **across
@@ -165,10 +183,16 @@ module Ingest
       #
       # The backlog stays first because it is the older debt and a rescue is what somebody is
       # waiting for, not because anything depends on it being first.
-      retry_backlog.each { |observation| resolved += claim(observation) }
+      #
+      # **Both lists are walked a PAGE at a time**, because the digest short-circuit is answered per
+      # page — see {#resolve_page}. The backlog is already capped at one page by
+      # {RETRY_SWEEP_LIMIT} and is loaded by a single read whose `order` and `limit` are load-bearing
+      # (see {#retry_backlog}), so it is handed over as the one page it already is rather than made
+      # symmetric with `find_in_batches` — which would ignore both.
+      resolved += resolve_page(retry_backlog.to_a)
 
-      @run.spec_observations.unresolved.find_each(batch_size: BATCH_SIZE) do |observation|
-        resolved += claim(observation)
+      @run.spec_observations.unresolved.find_in_batches(batch_size: BATCH_SIZE) do |page|
+        resolved += resolve_page(page)
       end
 
       resolved
@@ -212,6 +236,63 @@ module Ingest
       return failed if remaining <= 0
 
       failed + unattempted_embed_backlog(remaining).to_a
+    end
+
+    # One page of the work list: ask the database once which of these texts this repository already
+    # holds, then decide each row against that answer.
+    #
+    # This is where the page seam has to be. Both of {#resolve}'s lists run through {#claim}, and
+    # {#identity_for} sees one observation at a time and cannot know what the other 499 are — so a
+    # lookup driven from in there is a lookup per row however cheap the row makes it.
+    #
+    # {#digest_index} is the whole of what the page buys; everything after it is the per-row
+    # decision exactly as it was, and a row the index cannot answer falls through to
+    # embed/{#nearest}/{#claim_identity} unchanged. See {#identical_text} for why a miss must fall
+    # through rather than stand in for the lookup.
+    def resolve_page(observations)
+      @digest_index = digest_index(observations)
+
+      observations.sum { |observation| claim(observation) }
+    end
+
+    # `digest => identity id`, for every text on this page that this repository already holds.
+    #
+    # **One `WHERE text_digest IN (…)` against the unique `(repository_id, text_digest)` index**, in
+    # place of the one equality per row this used to be. On run 2 of an unchanged 20,000-example
+    # suite — the ordinary case, since every run writes its own observations with a NULL identity and
+    # so re-presents the WHOLE suite — that is ~40 round trips where it was 20,000. Nothing about the
+    # work changed; SPGD-373 already removed the embed from this path. What is left is the trips, and
+    # this is them.
+    #
+    # Digested in Ruby before anything is asked, which costs no queries: {Ingest::SpecSignal} is pure
+    # over the already-loaded row, and {SpecIdentity.digest_for} is a SHA-256 of a string.
+    #
+    # `pluck` and not a relation of records: the value is an id, and {SpecIdentity::RESIGHTABLE} is
+    # what a re-sighting moves — `text`, `text_digest`, `signal_source` and `embedding` are
+    # deliberately absent from it, so nothing downstream of a hit ever reads the row. Loading 500
+    # identities to use 500 ids would put the vectors this method exists to avoid touching straight
+    # into memory.
+    #
+    # `uniq` because a page may carry the same text twice — two examples with identical
+    # `full_description` is the case `identity_resolver_spec.rb`'s "cannot separate two tests whose
+    # descriptions are identical" pins — and an `IN` list is not the place to repeat it. Empty page,
+    # or a page of nothing but `:none` rows, asks nothing at all rather than issuing `IN ()`.
+    # `filter_map` and not `map`: a `:none` row has no text, and `digest_for(nil)` is a perfectly
+    # good SHA-256 of the empty string — so a nil left in this list becomes a real digest that no row
+    # can ever hold, and a real round trip spent asking about it. That is the whole cost this method
+    # exists to remove, reintroduced by one method name.
+    #
+    # No early return for the empty case, deliberately: `where(text_digest: [])` compiles to `1=0`
+    # and Rails answers it without a round trip, so a page of nothing but `:none` rows already costs
+    # nothing and a guard here would be a branch no test could reach. The property is pinned by the
+    # resolver spec's "still costs nothing when a page carries no text to look up at all", which
+    # asserts the ABSENCE of the query rather than the presence of the guard — so it stays honest if
+    # that optimisation ever goes away.
+    def digest_index(observations)
+      digests = observations.filter_map { |observation| observation.signal.text }
+                            .uniq.map { |text| SpecIdentity.digest_for(text) }
+
+      @repository.spec_identities.where(text_digest: digests).pluck(:text_digest, :id).to_h
     end
 
     # The rows EARLIER runs of this repository failed to embed, and which this ingest is entitled to
@@ -344,15 +425,21 @@ module Ingest
       return record_embed_failure(observation) if embedding.nil?
 
       match = nearest(embedding)
-      return resight(match, observation) if match
+      return resight(match.id, observation) if match
 
       claim_identity(signal, embedding, observation)
     end
 
-    # The identity this repository already holds for text that is **byte-identical** to this
-    # signal's, found without embedding anything. One indexed equality on
-    # `(repository_id, text_digest)` — the UNIQUE key {#claim_identity} already upserts onto, so no
-    # new index and at most one row.
+    # @return [Integer, nil] the id of the identity this repository already holds for text that is
+    #   **byte-identical** to this signal's, found without embedding anything and — now — without
+    #   asking the database anything either.
+    #
+    # **Still the per-row seam, and deliberately so.** What moved is where the answer comes from: the
+    # page asked once ({#digest_index}, one `WHERE text_digest IN (…)` against the UNIQUE
+    # `(repository_id, text_digest)` key {#claim_identity} already upserts onto), and this reads that
+    # answer for one row. Keeping the seam here is what keeps the decision per row while the cost is
+    # per page — and it is what `identity_resolver_spec.rb`'s `resolve_as_the_loser` stubs to
+    # reproduce a race, which is a second reason not to dissolve it into {#identity_for}.
     #
     # == What it removes
     #
@@ -370,10 +457,10 @@ module Ingest
     # the identical-text case — which does not settle the measurement that method hands to SPGD-72,
     # only shrinks what rides on it.
     #
-    # `select(:id)` because `id` is all that is needed: {SpecIdentity::RESIGHTABLE} is
-    # `file_path, line_number, last_seen_test_run_id, updated_at`, and `text`, `text_digest`,
-    # `signal_source` and `embedding` are deliberately absent from it — a re-sighting provably never
-    # reads the vector. That is what makes skipping the embed possible rather than merely cheaper.
+    # That removed the WORK. Removing the round trips is {#digest_index}, and it is the same
+    # optimisation finished rather than a second one: the equality that answered a row for free still
+    # cost a query to ask, so the best case — nothing changed — was 20,000 sequential trips to
+    # rediscover 20,000 rows the database could name in ~40.
     #
     # == This is a SHORTCUT and never THE lookup
     #
@@ -388,17 +475,11 @@ module Ingest
     # it is wrong: it would start a second history for every test whose description gained a comma,
     # while every existing example about *moved* tests stayed green. The falsifier is the resolver
     # spec's "still matches text that differs only in punctuation and whitespace", which is exactly
-    # that pair and which only similarity can resolve.
-    #
-    # Per row, and that is the floor rather than the ceiling. One equality against a unique index
-    # already beats an embed plus an index probe by the margin this exists for; grouping a
-    # {BATCH_SIZE} page's digests into one `WHERE text_digest IN (…)` would trade ~40 queries for
-    # 20,000 and belongs with the batching SPGD-72 owns, once round trips rather than work are what
-    # is left.
+    # that pair and which only similarity can resolve. **Batching does not touch that**: a digest
+    # absent from the page's map is absent for the same reason it missed the per-row `find_by`, and
+    # falls through to the same place.
     def identical_text(signal)
-      @repository.spec_identities
-                 .select(:id)
-                 .find_by(text_digest: SpecIdentity.digest_for(signal.text))
+      @digest_index[SpecIdentity.digest_for(signal.text)]
     end
 
     # Writes the one fact that makes this row's absence of an identity mean something: the provider
@@ -483,12 +564,16 @@ module Ingest
     # observation OF this test whether or not it is the most recent one, and the link is what
     # {#claim} counts. One UPDATE either way, with no callbacks and no validation pass over a 1536
     # element vector that has not changed.
-    def resight(identity, observation)
-      SpecIdentity.where(id: identity.id)
+    #
+    # Takes an ID rather than a record, which is all either caller has now that {#identical_text}
+    # answers out of a `pluck`ed map — and all this ever needed: {SpecIdentity::RESIGHTABLE} is the
+    # whole of what a re-sighting writes and none of it is read off the row first.
+    def resight(identity_id, observation)
+      SpecIdentity.where(id: identity_id)
                   .where(SpecIdentity.sighting_not_older_than(observation.test_run_id))
                   .update_all(sighting(observation, Time.current))
 
-      identity.id
+      identity_id
     end
 
     # What "seen again" moves, and the only definition of it. Sliced through
@@ -538,14 +623,32 @@ module Ingest
     # still generated from `RESIGHTABLE`, so this is one list and one guard reaching both paths
     # rather than a second copy of either. See that constant for why the losing side of this race is
     # not the only way an OLDER sighting arrives here.
+    #
+    # == The row it just created is put back into the page's map
+    #
+    # {#digest_index} is asked once per page, so it is a SNAPSHOT — and the `find_by` it replaced was
+    # not. That one saw identities committed by EARLIER ROWS OF THE SAME PAGE; a map computed up
+    # front does not. The case is two observations with byte-identical text on a FIRST run — the pair
+    # `identity_resolver_spec.rb`'s "cannot separate two tests whose descriptions are identical"
+    # builds — where the second row would now miss the map and fall through to an embed.
+    #
+    # The OUTCOME would be unchanged either way (identical text embeds to an identical vector,
+    # {#nearest} matches at cosine 1.0, and failing even that, this method's conflict key lands them
+    # on one row), so this line is not what makes the change correct. What it preserves is the EMBED
+    # COUNT, and that is worth a line: the embed is the expensive thing this whole path exists to
+    # avoid, the provider is swappable for a billed one, and "batching the lookups made a first run
+    # embed more" is a regression no example here would have caught — `:208` asserts identity count,
+    # not embed count. So the page's map learns what the page wrote, and the snapshot is a snapshot
+    # only of what was there BEFORE the page started.
     def claim_identity(signal, embedding, observation)
       now = Time.current
+      digest = SpecIdentity.digest_for(signal.text)
 
-      SpecIdentity.upsert_all(
+      id = SpecIdentity.upsert_all(
         [{
           repository_id: @repository.id,
           text: signal.text,
-          text_digest: SpecIdentity.digest_for(signal.text),
+          text_digest: digest,
           signal_source: signal.source.to_s,
           embedding: embedding
         }.merge(sighting(observation, now), created_at: now)],
@@ -553,6 +656,9 @@ module Ingest
         on_duplicate: Arel.sql(SpecIdentity::RESIGHT_ON_CONFLICT),
         record_timestamps: false, returning: %w[id]
       ).rows.dig(0, 0)
+
+      @digest_index[digest] = id
+      id
     end
 
     # @return [Array<Float>, nil] nil when the provider failed, which leaves the observation
