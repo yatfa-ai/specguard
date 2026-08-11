@@ -155,9 +155,24 @@ RSpec.describe "Regenerating an API key", type: :request do
     it "keeps the copy source holding the bare token and nothing else" do
       # The Stimulus controller copies `textContent` verbatim for both the clipboard and the file,
       # so any decoration inside this element lands in the user's password manager.
-      source = reveal_panel.find("[data-copy-text-target='source']")
+      #
+      # WHICH element that is is not simply "the first source in the panel". `sourceTarget` is
+      # singular and scope-resolved: `Scope#containsElement` is
+      # `element.closest(controllerSelector) === this.element`, so a source inside a NESTED
+      # copy-text scope — the ready-to-run curl added by SPGD-353 — belongs to that controller and
+      # is invisible here. This re-derives the panel controller's own source the way Stimulus does
+      # rather than trusting document order, so reordering the panel cannot quietly hand auto-copy
+      # the curl, and nesting this snippet cannot quietly leave the panel with no source at all.
+      panel = reveal_panel.native
+      own_sources = panel.css("[data-copy-text-target='source']").reject do |node|
+        node.ancestors.take_while { |ancestor| ancestor != panel }
+            .any? { |ancestor| ancestor["data-controller"].to_s.split.include?("copy-text") }
+      end
 
-      expect(source.text).to match(/\Asgk_[A-Za-z0-9_-]{20,}\z/)
+      # Exactly one: at zero, `sourceTarget` is missing and auto-copy and Download both throw on
+      # the one panel whose job is getting this value off the page; above one, document order picks.
+      expect(own_sources.size).to eq(1)
+      expect(own_sources.first.text.strip).to match(/\Asgk_[A-Za-z0-9_-]{20,}\z/)
     end
 
     # The panel claims in bold that this is the only time the token is shown. Turbo Drive would

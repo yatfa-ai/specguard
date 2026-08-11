@@ -85,11 +85,15 @@
           </p>
         <% end %>
 
-        <%# Two `copy-text` scopes, not one wrapping both snippets: `copy_text_controller.js` reads
-            the SINGULAR `this.sourceTarget`, so a scope holding two payloads copies the first one
-            from both buttons. The component deliberately does not declare the controller itself —
-            see UI::CopyableCodeComponent. %>
-        <div class="space-y-1" data-controller="copy-text">
+        <%# NO `data-controller="copy-text"` here, deliberately: this snippet is the AUTO-COPY
+            scope's payload. Stimulus resolves a target to its nearest same-identifier ancestor
+            (`Scope#containsElement` is `element.closest(controllerSelector) === this.element`), so
+            wrapping this in its own scope would hide the token from the panel controller above —
+            leaving its `sourceTarget` missing, and auto-copy and Download throwing on a panel whose
+            entire job is to get this value off the page. The "Try it now" curl below takes the
+            nested scope instead, for the same reason in reverse: `sourceTarget` is SINGULAR, so a
+            second payload in THIS scope would be what auto-copy grabbed. %>
+        <div class="space-y-1">
           <p class="section-label text-app-content-secondary">The key</p>
           <%= render UI::CopyableCodeComponent.new do %><%= @revealed_token %><% end %>
         </div>
@@ -112,7 +116,11 @@
             This REPLACES the "Use it as `Authorization: Bearer <token>` against <url>" line that
             stood here: a placeholder instruction at the one moment the real value is on screen is
             the exact incoherence this panel existed to fix. Nothing it said is lost — the header,
-            the URL and the token are all in the command below, and now in runnable form. %>
+            the URL and the token are all in the command below, and now in runnable form.
+
+            Its OWN `copy-text` scope, so this longer payload cannot become the auto-copy scope's
+            `sourceTarget` — see the note on "The key" above. Nested means its Copy button copies
+            the curl and the panel still auto-copies the bare token. %>
         <div class="space-y-1" data-controller="copy-text">
           <p class="section-label text-app-content-secondary">Try it now</p>
           <%= render UI::CopyableCodeComponent.new do %>curl -H "Authorization: Bearer <%= @revealed_token %>" <%= api_v1_repository_url %><% end %>
