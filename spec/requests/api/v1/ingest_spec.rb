@@ -61,7 +61,7 @@ RSpec.describe "POST /api/v1/ingest", type: :request do
         "total_specs" => 3,
         "annotated_specs" => 2,
         "annotated_ratio" => 0.667,
-        "embedding_status" => "pending"
+        "embedding_status" => "queued"
       )
     end
 
@@ -75,18 +75,53 @@ RSpec.describe "POST /api/v1/ingest", type: :request do
       expect(TestRun.last.annotated_ratio).to eq(66.7)
     end
 
-    # Slice 2 records the run only. The upsert of individual intents is slice 3's job, and writing
-    # them here would hand that slice a `create!` path it would have to unpick.
-    it "persists no spec_intents yet" do
+    # Identity resolution is `Ingest::IdentityResolutionJob`'s and writes `spec_identities`.
+    # `spec_intents` is a different table with a different (positional) key and no writer at all —
+    # see `db/migrate/20260811120000_create_spec_identities.rb` for why identity did not go there.
+    it "persists no spec_intents" do
       expect { ingest(body) }.not_to change(SpecIntent, :count)
     end
 
-    # There is no queue and no job class in the tree yet, so nothing was scheduled. Saying
-    # "queued" here would report work that does not exist.
-    it "does not claim to have queued embeddings it has not queued" do
+    # The seam is filled, so it may finally say so — and only because it genuinely enqueued.
+    it "reports queued, and has a job to show for it" do
+      expect { ingest(body) }.to have_enqueued_job(Ingest::IdentityResolutionJob)
+
+      expect(response.parsed_body["embedding_status"]).to eq("queued")
+      # The run's id and nothing else: a 20,000-example payload as a job argument would be
+      # megabytes of JSON in `solid_queue_jobs`, and the specs are already in the database.
+      expect(enqueued_jobs.sole["arguments"]).to eq([TestRun.last.id])
+    end
+
+    # The synchronous half answers 202 before any per-spec work, so nothing is resolved yet at the
+    # moment the client reads the body. Asserted rather than assumed: a resolution that had crept
+    # into the request would be 20,000 embeddings inside the run's `FOR UPDATE` lock.
+    it "resolves nothing inline — the identity work is genuinely asynchronous" do
+      expect { ingest(body) }.not_to change(SpecIdentity, :count)
+
+      expect(TestRun.last.spec_observations.pluck(:spec_identity_id)).to all(be_nil)
+    end
+
+    # The columns the resolver reads. Until now `Ingest::Payload` validated the intent triple,
+    # counted it into `annotated_specs_count` and then dropped it, which forced every cross-run
+    # read onto `name` alone and made annotating a test change nothing about its identity.
+    it "keeps the intent triple the client sent, at the observation" do
       ingest(body)
 
-      expect(response.parsed_body["embedding_status"]).to eq("pending")
+      annotated = TestRun.last.spec_observations.where.not(intent_entity: nil)
+
+      expect(annotated.count).to eq(2)
+      expect(annotated.first.slice(:intent_entity, :intent_action, :intent_behavior).values)
+        .to eq(["Invoice", "finalize", "locks the line items once the invoice is finalized"])
+    end
+
+    it "leaves an unannotated example's intent columns null rather than inventing a triple" do
+      ingest(body)
+
+      unannotated = TestRun.last.spec_observations.find_by(status: "unannotated")
+
+      expect(unannotated.intent_entity).to be_nil
+      expect(unannotated.intent_action).to be_nil
+      expect(unannotated.intent_behavior).to be_nil
     end
 
     it "scopes the run to the repository behind the key" do
@@ -493,9 +528,10 @@ RSpec.describe "POST /api/v1/ingest", type: :request do
     end
   end
 
-  # The seam slice 3 fills in is handed the *whole* population, not the annotated slice: an
-  # unannotated example is represented by its name (Ingest::SpecSignal), so narrowing here would
-  # decide — before the seam exists — that a suite mid-adoption has nothing to embed.
+  # The seam is handed the *whole* population, not the annotated slice: an unannotated example is
+  # represented by its name (Ingest::SpecSignal), so narrowing here would decide that a suite
+  # mid-adoption — or one at zero annotations, which is every suite on day one — has nothing to
+  # embed.
   describe "what the embedding seam is handed" do
     let(:specs) do
       [annotated_spec(file_path: "spec/models/invoice_spec.rb", line_number: 1),
@@ -518,10 +554,19 @@ RSpec.describe "POST /api/v1/ingest", type: :request do
         .to eq(%w[spec/models/invoice_spec.rb spec/models/order_spec.rb spec/models/user_spec.rb])
     end
 
-    # Nothing is scheduled, so nothing may claim to be. Widening what the seam sees must not move
-    # this: reporting "queued" for work that was never enqueued is the cheapest possible lie.
-    it "still reports pending, because nothing is enqueued yet" do
+    # Widening what the seam sees must not weaken what it claims. The rule is the same one it was
+    # written under: `"queued"` only when a job was genuinely enqueued.
+    it "reports queued for a mixed population, annotated and not" do
       ingest(ingest_payload(specs: specs))
+
+      expect(response.parsed_body["embedding_status"]).to eq("queued")
+    end
+
+    # The other half of that rule, and the one that keeps it from being vacuous: a payload with
+    # nothing to represent schedules nothing and says so.
+    it "reports pending, and enqueues nothing, when there is no spec to embed" do
+      expect { ingest(ingest_payload(specs: [])) }
+        .not_to have_enqueued_job(Ingest::IdentityResolutionJob)
 
       expect(response.parsed_body["embedding_status"]).to eq("pending")
     end

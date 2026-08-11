@@ -49,6 +49,28 @@ module Builders
     )
   end
 
+  # One durable test identity, embedded the way production embeds one.
+  #
+  # The embedding is computed from `text` rather than defaulted away, and that is the point: the
+  # column is `NOT NULL` precisely so no row can exist that `nearest_neighbors` would filter out of
+  # every search, and a builder allowed to skip it would be building a state the producer cannot
+  # (SPGD-91). Callers wanting a specific similarity install a provider that models one — see
+  # `spec/support/lexical_embeddings.rb` — rather than passing a hand-made vector here.
+  def create_spec_identity(repository:, text: "Invoice finalize locks the line items",
+                           signal_source: "name", file_path: "spec/models/invoice_spec.rb",
+                           line_number: 12, **attrs)
+    repository.spec_identities.create!(
+      {
+        text: text,
+        text_digest: SpecIdentity.digest_for(text),
+        signal_source: signal_source,
+        embedding: EmbeddingGenerator.call(text),
+        file_path: file_path,
+        line_number: line_number
+      }.merge(attrs)
+    )
+  end
+
   # --- /api/v1/ingest request bodies -------------------------------------------------------
   # Built as plain hashes rather than through the model, on purpose: these describe the *wire*
   # contract, and a builder that went through SpecIntent would encode the model's rules instead

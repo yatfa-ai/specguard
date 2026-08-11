@@ -96,9 +96,16 @@ module Ingest
     # Everything a redelivery is allowed to move. `created_at` is absent so a remeasured row keeps
     # when it first appeared, and the conflict key itself is absent because Postgres will not let
     # `DO UPDATE` touch the columns it matched on.
+    #
+    # `spec_identity_id` is absent too, and for a third reason: a redelivery re-measures a test, it
+    # does not re-identify one, so a row already resolved keeps its link while its measurement
+    # moves. A row its own shard re-delivers is deleted and recreated rather than updated, so that
+    # one comes back unresolved and the next {Ingest::IdentityResolutionJob} claims it again — both
+    # paths converge on the same identity, because the identity is a function of the text and the
+    # text is what was re-sent.
     REMEASURABLE = %i[
-      test_run_shard_id spec_file_path file_path line_number name duration_seconds outcome status
-      updated_at
+      test_run_shard_id spec_file_path file_path line_number name intent_entity intent_action
+      intent_behavior duration_seconds outcome status updated_at
     ].freeze
 
     def self.record(run, specs, shard: nil) = new(run, specs, shard: shard).record
@@ -159,6 +166,17 @@ module Ingest
         file_path: spec["file_path"],
         line_number: spec["line_number"],
         name: presence_of(spec["name"]),
+        # The declared intent, kept at last. `Ingest::Payload` validates this triple against the
+        # OpenTestIntent schema and counts it into `annotated_specs_count`, and until now nothing
+        # wrote it anywhere — so every cross-run read was forced onto `name` alone and annotating a
+        # test changed nothing about its identity, the exact outcome `Ingest::SpecSignal` exists to
+        # prevent. Read here rather than passed to the resolver through a job argument, because a
+        # 20,000-example run would otherwise put 20,000 spec hashes into `solid_queue_jobs`.
+        #
+        # Read straight off the wire, not through `SpecSignal`: this records the three fields the
+        # client sent, and deciding which of them *represents* the test is a question with one
+        # owner, asked later against these columns by `SpecObservation#signal`.
+        **intent_attributes(spec["intent"]),
         # `duration` and `outcome` are `result&.run_time` / `result&.status&.to_s` on the client.
         # The safe navigation is real — an example that never ran has neither — so a nil here is a
         # faithful record rather than a gap to paper over.
@@ -167,6 +185,22 @@ module Ingest
         status: spec["status"],
         created_at: now,
         updated_at: now
+      }
+    end
+
+    # The three intent fields, or three nils. Always all three keys, never a subset: `upsert_all`
+    # builds one statement from the first row's keys, so a row omitting them would take the whole
+    # delivery's columns with it and silently drop the intent of every annotated example behind an
+    # unannotated first one.
+    #
+    # `layer` and `preconditions` are deliberately not read — see the migration.
+    def intent_attributes(intent)
+      intent = {} unless intent.is_a?(Hash)
+
+      {
+        intent_entity: presence_of(intent["entity"]),
+        intent_action: presence_of(intent["action"]),
+        intent_behavior: presence_of(intent["behavior"])
       }
     end
 
