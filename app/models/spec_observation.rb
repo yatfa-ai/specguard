@@ -42,8 +42,8 @@ class SpecObservation < ApplicationRecord
   #
   # Its nil is **not** a record of WHY the example is unresolved, and used to be the only one there
   # was. Three different things wear it — the job has not reached the row yet, the row has no text to
-  # embed, or the embedding failed — and `embed_failed_at` below is what tells the third from the
-  # other two. `AddEmbedFailureToSpecObservations` sets out all three.
+  # embed, or an attempt to resolve it failed — and `embed_failed_at` below is what tells the third
+  # from the other two. `AddEmbedFailureToSpecObservations` sets out all three.
   belongs_to :spec_identity, optional: true
 
   # Rows this run brought in that no {SpecIdentity} has claimed yet. The resolver's work list, and
@@ -56,9 +56,9 @@ class SpecObservation < ApplicationRecord
   # below, and they narrow this rather than replacing it.
   scope :unresolved, -> { where(spec_identity_id: nil) }
 
-  # **The rows whose embedding FAILED**, and the answer to "how many examples did this run fail to
-  # embed?" — a question nothing could ask while the only evidence was a NULL that three states
-  # share.
+  # **The rows an attempt to resolve FAILED on**, and the answer to "how many examples did this run
+  # fail to embed?" — a question nothing could ask while the only evidence was a NULL that three
+  # states share.
   #
   # A positive stamp rather than the absence of one, so this separates a failure from *both* of the
   # other two meanings with one predicate. Note what it is deliberately not paired with: there is no
@@ -67,8 +67,27 @@ class SpecObservation < ApplicationRecord
   # drift, and this scope needs none — a row that never had text to embed never reached the embed
   # call, so it never got a stamp.
   #
+  # == The column is named for the failure it was introduced for, and now carries one more
+  #
+  # `AddEmbedFailureToSpecObservations` added it for the embedding failure, which was then the only
+  # one that could be recorded. `Ingest::IdentityResolver#claim_inherited` is the second writer: a
+  # row of an EARLIER run that raises anywhere on the resolve path — the ANN lookup on a dropped
+  # connection, a write that failed — is stamped here too, so that one such row cannot abort the
+  # sweep and leave itself findable only in Solid Queue's failed executions.
+  #
+  # So the honest reading of a stamped row is **"this was reached, something was tried, and it did
+  # not land"**, and the column name is narrower than the fact. That is deliberate rather than
+  # drift, and `#record_resolve_failure` on the resolver argues it at length: the distinction the
+  # pipeline actually leans on is permanently-unresolved (no stamp, nothing to embed) against
+  # temporarily-unresolved (stamped, bounded, retried), and both writers are on the same side of it.
+  # A rename would move `.embed_retryable`, `.embed_abandoned`, `.embed_unattempted` and the partial
+  # index under them for a word.
+  #
+  # It is therefore not a claim about the PROVIDER. Anything needing that distinction reads the
+  # resolver's log lines; this column is the queryable, retryable fact and never the diagnosis.
+  #
   # Not cleared when a later attempt succeeds. The row leaves the backlog by leaving `.unresolved`,
-  # and what remains is a true statement about it: this measurement's embedding failed at least once
+  # and what remains is a true statement about it: resolving this measurement failed at least once
   # before it landed.
   scope :embed_failed, -> { where.not(embed_failed_at: nil) }
 
@@ -132,8 +151,8 @@ class SpecObservation < ApplicationRecord
     unresolved.embed_failed.where(embed_failed_at: ...EMBED_RETRY_WINDOW.ago)
   }
 
-  # **The rows NOTHING ever asked the provider about** — the exact complement of `.embed_failed`,
-  # and the other side of the discriminator `AddEmbedFailureToSpecObservations` introduced.
+  # **The rows NOTHING ever tried** — the exact complement of `.embed_failed`, and the other side of
+  # the discriminator `AddEmbedFailureToSpecObservations` introduced.
   #
   # It is the two meanings that migration could not separate, pooled on purpose: *not attempted yet*
   # and *nothing to embed*. Nothing here re-derives which — that would mean a second implementation

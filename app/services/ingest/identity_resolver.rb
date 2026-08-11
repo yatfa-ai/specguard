@@ -54,11 +54,14 @@ module Ingest
   # That second list is itself two, because there are two ways a row is left behind and only one of
   # them leaves evidence (see {#retry_backlog}):
   #
-  # * **The provider was asked and could not answer.** Stamped with `embed_failed_at`, bounded by
-  #   {SpecObservation::EMBED_RETRY_WINDOW}, ordered so a large backlog drains fairly.
-  # * **The provider was never asked**, because the job that would have asked never got there — an
+  # * **Something was tried and it failed.** Stamped with `embed_failed_at`, bounded by
+  #   {SpecObservation::EMBED_RETRY_WINDOW}, ordered so a large backlog drains fairly. Ordinarily
+  #   that is the provider being asked and unable to answer; since {#claim_inherited} it is also a
+  #   row of THIS list that failed some other way while the sweep held it. One stamp covers both,
+  #   and {#record_resolve_failure} is where that is argued rather than assumed.
+  # * **Nothing was ever tried**, because the job that would have tried never got there — an
   #   exception out of `perform`, a dropped connection, a deploy mid-job. There is no stamp, since
-  #   {#record_embed_failure} only runs where the provider was actually called, so this population
+  #   {#record_resolve_failure} only runs where the row was actually reached, so this population
   #   was invisible to the first list and to both audit scopes: the ONE unresolved state with no
   #   query that could find it. {SpecObservation::EMBED_ATTEMPT_GRACE} is what makes it sweepable
   #   without racing the job that may still be on its way.
@@ -86,6 +89,15 @@ module Ingest
   # ActiveJob and the job always completes *successfully* having resolved nothing. The rescue is
   # deliberate — one unembeddable example must not abandon the other 19,999 — so the retry has to
   # live in the work list, which is where it now lives.
+  #
+  # {#claim_inherited} is the same argument applied one level out, and it is why a `retry_on` for
+  # the OTHER errors is not the answer either. One inherited row that raises — an ANN lookup on a
+  # dropped connection, a dimension-mismatched stored vector — used to abort the whole delivery
+  # before this run's own list was reached, on every ingest of that repository forever, because the
+  # backlog is walked first and a deterministic failure fails identically every time. A job retry
+  # would only multiply that into N identical failed executions. Recovery lives in the work list, so
+  # the containment does too: the row takes a stamp, sinks under the fairness ordering, and the
+  # delivery goes on.
   class IdentityResolver
     # Rows per database round trip on the work list. A repository-scoped ANN lookup and an upsert
     # per row means a page of genuinely NEW text is round-trip bound whatever this is; what the batch
@@ -177,6 +189,10 @@ module Ingest
     #   alternative — counting only `@run`'s rows — would report a sweep that did real work as a
     #   no-op. `spec/services/ingest/identity_resolver_spec.rb`'s "running twice over the same run"
     #   example is unaffected either way: a repository with no failed embeds has an empty backlog.
+    #
+    #   An inherited row {#claim_inherited} contained contributes 0, for the same reason a row that
+    #   never had an identity to find does: it does not now carry one. The count says what was
+    #   resolved and never what was attempted, so containment cannot inflate it.
     def resolve
       resolved = 0
 
@@ -206,7 +222,13 @@ module Ingest
       # not each — and those reads' `order` and `limit` are load-bearing, so it is handed over as the
       # one page it already is rather than made symmetric with `find_in_batches`, which would ignore
       # both. It arrives as an Array for that budget's arithmetic and is a page all the same.
-      resolved += resolve_page(retry_backlog)
+      #
+      # `inherited: true` sends this page's rows through {#claim_inherited} and not {#claim}, and
+      # the asymmetry is the point: a row of an earlier run is best-effort by construction, so one
+      # of them failing is contained to itself rather than allowed to end the delivery. The
+      # run-scoped loop below takes the default and keeps claiming bare — see {#claim_inherited} for
+      # why the two halves are treated differently.
+      resolved += resolve_page(retry_backlog, inherited: true)
 
       @run.spec_observations.unresolved.find_in_batches(batch_size: BATCH_SIZE) do |page|
         resolved += resolve_page(page)
@@ -269,10 +291,23 @@ module Ingest
     # decision exactly as it was, and a row the index cannot answer falls through to
     # embed/{#nearest}/{#claim_identity} unchanged. See {#identical_text} for why a miss must fall
     # through rather than stand in for the lookup.
-    def resolve_page(observations)
+    #
+    # `inherited:` chooses which of the two claim seams the page's rows take, and it is a parameter
+    # rather than a second method because the page itself is identical either way: the same one
+    # lookup, the same per-row decision after it. {#claim_inherited} for the repository's earlier
+    # runs, {#claim} for `@run`'s own, and {#claim_inherited} is where the asymmetry is argued.
+    #
+    # **{#digest_index} is outside that containment, deliberately.** It is one query for the whole
+    # page, so a failure in it is not row-shaped: there is no one observation it can be attributed
+    # to, stamped and demoted, and rescuing it would leave an empty map that silently re-embeds the
+    # entire page while reporting a clean sweep. It propagates, which is the same line
+    # {#claim_inherited}'s stated non-promise draws.
+    def resolve_page(observations, inherited: false)
       @digest_index = digest_index(observations)
 
-      observations.sum { |observation| claim(observation) }
+      observations.sum do |observation|
+        inherited ? claim_inherited(observation) : claim(observation)
+      end
     end
 
     # `digest => identity id`, for every text on this page that this repository already holds.
@@ -323,10 +358,10 @@ module Ingest
       @repository.spec_identities.where(text_digest: digests).pluck(:text_digest, :id).to_h
     end
 
-    # The rows EARLIER runs of this repository failed to embed, and which this ingest is entitled to
-    # re-attempt. Empty on a repository whose provider has never failed, which is the normal case
-    # and costs one probe of an index that is empty there — see the migration for why the index is
-    # partial.
+    # The rows an EARLIER run of this repository was reached on and failed to resolve — the provider
+    # unable to answer, or a failure {#claim_inherited} contained — and which this ingest is entitled
+    # to re-attempt. Empty on a repository that has never had one, which is the normal case and costs
+    # one probe of an index that is empty there — see the migration for why the index is partial.
     #
     # Scoped to the repository because identity is per repository and so is the provider outage that
     # produced these rows; `@repository` is already in hand from {#initialize}. `@run` is EXCLUDED
@@ -429,6 +464,54 @@ module Ingest
       observation.update_column(:spec_identity_id, identity) ? 1 : 0
     end
 
+    # {#claim}, with the blast radius of ONE inherited row held to that row.
+    #
+    # == Why the two halves of the work list are not treated the same
+    #
+    # {#resolve} walks the repository's earlier runs before it walks `@run`'s own observations, and
+    # the two lists have different standing. This run's rows are the delivery's own business and the
+    # caller is entitled to see them fail: an exception there is a report about the thing that was
+    # just asked for. An inherited row is work this delivery volunteered for on an earlier one's
+    # behalf — best-effort by construction, under a budget it is only *entitled* to spend — and
+    # letting one of them abort the whole pass inverts that entirely.
+    #
+    # It inverted it badly, which is the defect this method exists for. The backlog is walked FIRST,
+    # so a row that raises killed the delivery before `@run`'s own list was reached at all. And a
+    # deterministic failure — a stored vector of the wrong dimension, a row whose signal trips a
+    # provider bug — fails identically on every attempt, so *every subsequent ingest of that
+    # repository* re-read it, re-raised, and left its own observations unresolved and unstamped:
+    # exactly the invisible population the never-attempted sweep was built to rescue, defeated by
+    # the one row that kills the sweep. One row, one repository, forever.
+    #
+    # == `StandardError` and not a list
+    #
+    # Deliberately broad, because the enumerable failures are already handled elsewhere and what is
+    # left is by definition the one nobody enumerated. `EmbeddingGenerator::Error` never arrives
+    # here — {#embed} consumes it at the single call site and returns nil, so the stamping path
+    # below is reached through {#identity_for} rather than through this rescue, and SPGD-367's
+    # behaviour is untouched. Everything else the class comment lists as "what a job-level policy
+    # would have to cover" is what this catches: {#nearest}'s lookup, both write paths, and
+    # {#claim}'s own `update_column`.
+    #
+    # **It is not a promise that the delivery survives anything.** {#record_resolve_failure} is
+    # itself an UPDATE, so a failure broad enough to take the connection with it raises from inside
+    # this rescue and propagates exactly as before. That is the right answer rather than a gap: a
+    # database that cannot be written to must not produce a delivery that reports a clean sweep. The
+    # case this contains is the row-shaped one, and the row-shaped one is the one that recurs.
+    #
+    # @return [Integer] 0 on the contained path — see {#resolve}'s `@return` for why a contained row
+    #   counts as nothing rather than as an attempt.
+    def claim_inherited(observation)
+      claim(observation)
+    rescue StandardError => e
+      Rails.logger.error(
+        "[IdentityResolver] run=#{@run.id} contained a failure on inherited observation " \
+        "#{observation.id}: #{e.class}: #{e.message}"
+      )
+      record_resolve_failure(observation)
+      0
+    end
+
     # @return [Integer, nil] the id of the identity this observation belongs to, or nil when it has
     #   none to belong to.
     def identity_for(observation)
@@ -440,8 +523,13 @@ module Ingest
       #
       # Returns BEFORE the embed, so it leaves no failure stamp — which is exactly what keeps this
       # population separable from the one below it. A row with nothing to embed is permanently
-      # unresolved and must never enter the retry backlog; a row whose embed failed is temporarily
+      # unresolved and must never enter the retry backlog; a row whose attempt failed is temporarily
       # unresolved and must.
+      #
+      # Before {#identical_text} and {#nearest} too, which is what keeps that true now that
+      # {#claim_inherited} can stamp a row for a failure anywhere on this path: there is no database
+      # work on the `:none` path for it to catch. The signalless population takes no stamp, no count
+      # and no place in any ordering, exactly as {#unattempted_embed_backlog} needs.
       return nil unless signal.present?
 
       # The cheap answer first, and only when it is certain — see {#identical_text} for why a miss
@@ -450,7 +538,7 @@ module Ingest
       return resight(identical, observation) if identical
 
       embedding = embed(signal.text)
-      return record_embed_failure(observation) if embedding.nil?
+      return record_resolve_failure(observation) if embedding.nil?
 
       match = nearest(embedding)
       return resight(match.id, observation) if match
@@ -510,8 +598,35 @@ module Ingest
       @digest_index[SpecIdentity.digest_for(signal.text)]
     end
 
-    # Writes the one fact that makes this row's absence of an identity mean something: the provider
-    # was asked and could not answer.
+    # Writes the one fact that makes this row's absence of an identity mean something: **it was
+    # reached, something was tried, and it did not land.**
+    #
+    # == What the stamp means, since it now has two writers
+    #
+    # It meant "the provider was asked and could not answer", which was the only failure that could
+    # be recorded when SPGD-367 introduced the column. {#claim_inherited} is the second caller and
+    # its failures are not the provider's, so the column is read here as the wider fact — and the
+    # widening is stated rather than left for the next reader to infer from a name, because
+    # `embed_failed_at` still says the narrower thing and cannot be renamed without a migration that
+    # would move two audit scopes and the index under them.
+    #
+    # The widening is safe because of WHICH distinction the rest of this class actually leans on.
+    # {#identity_for}'s `:none` early return is the one that matters, and its claim is *"a row with
+    # nothing to embed is permanently unresolved and must never enter the retry backlog; a row whose
+    # embed failed is temporarily unresolved and must"* — a split between **permanently** and
+    # **temporarily** unresolved, not between the provider and everything else. A contained row is
+    # squarely on the temporary side: a dropped connection is exactly the transient thing a bounded
+    # retry is for, and a row that is genuinely hopeless leaves by the window rather than by being
+    # recognised. That early return also still leaves no stamp of any kind — it returns before
+    # {#identical_text}, before {#embed} and before {#nearest}, so there is nothing left on that path
+    # for {#claim_inherited} to catch, and the signalless population stays exactly as separable as
+    # it was.
+    #
+    # What it is NOT is a claim that a stamped row failed at the provider. Anything that needs that
+    # distinction has the log line {#embed} and {#claim_inherited} each write; the column is the
+    # queryable, retryable fact and never the diagnosis.
+    #
+    # == The mechanics, unchanged since SPGD-367
     #
     # `embed_failed_at` is `COALESCE`d so it holds the FIRST failure and no later one moves it. That
     # is what makes `SpecObservation::EMBED_RETRY_WINDOW` a window that closes rather than one every
@@ -527,8 +642,34 @@ module Ingest
     # measurement history, and `Ingest::ObservationRecorder::REMEASURABLE` keeps the two halves apart
     # from the other direction.
     #
-    # @return [nil] always — the caller is `identity_for`, and there is still no identity.
-    def record_embed_failure(observation)
+    # == What bounds a poison row, and what deliberately does not
+    #
+    # Both columns do a job for {#claim_inherited} and neither is new machinery. The count demotes:
+    # {#failed_embed_backlog} orders `(:embed_failure_count, :embed_failed_at, :id)`, so a contained
+    # row sinks below every row that has been tried less and the sweep goes on round-robining the
+    # rest of the backlog instead of spending itself on the one that cannot be rescued. The
+    # timestamp ends it: seven days after its first containment the row leaves `.embed_retryable`
+    # for `.embed_abandoned` and stops being swept at all, queryable as a thing that was given up on.
+    #
+    # **No failure-count exclusion is added**, and that is a decision rather than an omission.
+    # `SpecObservation::EMBED_RETRY_WINDOW`'s own comment refuses an attempt CAP for this pipeline
+    # and the argument transfers here without modification: `embed_failure_count` counts attempts by
+    # ANYTHING, and an N-shard delivery schedules N jobs over these same rows, so a cap is spent by
+    # the concurrency rather than by the retrying and the number that would survive it is a client's
+    # shard count — which this application never sees. The same inflation is harmless to the
+    # ordering, because concurrent sweeps bump roughly the same rows together and leave the order
+    # BETWEEN them where it was. So the count ranks and the clock bounds, exactly as before.
+    #
+    # What that costs, stated: a contained row is re-attempted once per ingest for up to a week, at
+    # one lookup and one embedding each — the same price a provider-failed row has always carried,
+    # under a budget `RETRY_SWEEP_LIMIT` already caps, and demoted below everything with a better
+    # claim on that budget. A row stranded UNSTAMPED and then contained also restarts its clock: its
+    # seven days ran from `created_at` and now run from `embed_failed_at`. Bounded either way, and
+    # anchoring the window to the first failure is what `embed_failed_at` has always meant.
+    #
+    # @return [nil] always — the callers are {#identity_for}, which still has no identity, and
+    #   {#claim_inherited}, which returns 0 of its own.
+    def record_resolve_failure(observation)
       SpecObservation.where(id: observation.id).update_all(
         ["embed_failed_at = COALESCE(embed_failed_at, ?), embed_failure_count = embed_failure_count + 1",
          Time.current]
@@ -690,7 +831,7 @@ module Ingest
     end
 
     # @return [Array<Float>, nil] nil when the provider failed, which leaves the observation
-    #   unresolved and stamped — see {#record_embed_failure}, which is what the nil now costs.
+    #   unresolved and stamped — see {#record_resolve_failure}, which is what the nil now costs.
     #
     # Rescued rather than allowed to propagate so that one unembeddable example does not abandon the
     # other 19,999 — and rescued *here*, at the single call, so the rescue cannot accidentally swallow
