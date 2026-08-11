@@ -9,12 +9,20 @@ module Ingest
   # runs, why it is out of the ingest transaction, and how two of these overlapping stay idempotent
   # is answered on that class.
   #
-  # == No retry policy, deliberately
+  # == No retry policy, and it is a finding rather than a deferral
   #
-  # No `retry_on`, no `discard_on`. SPGD-362 hands both to SPGD-72 by name, along with partial-failure
-  # observability, and a policy guessed here would be the thing that work has to undo first. What is
-  # safe to say now is that a re-run is harmless: the resolver's work list is the run's *unresolved*
-  # observations, so re-running this job re-does only what did not land.
+  # No `retry_on`, no `discard_on`. `retry_on EmbeddingGenerator::Error` is the obvious policy here
+  # and it would **never fire**: {Ingest::IdentityResolver#embed} rescues that class at the single
+  # call site and returns nil, so the error is consumed before ActiveJob can see it and this job
+  # always completes *successfully* having resolved zero rows. That rescue is deliberate — one
+  # unembeddable example must not abandon the other 19,999 — so the retry belongs in the work list,
+  # and that is where it now is: the resolver sweeps the repository's earlier failed rows alongside
+  # this run's, bounded by `SpecObservation::EMBED_RETRY_WINDOW` and
+  # `Ingest::IdentityResolver::RETRY_SWEEP_LIMIT`.
+  #
+  # What is left for a job-level policy to cover is everything that is NOT an embedding failure — a
+  # database blip, a deploy mid-job — and a re-run of this job is already harmless for those: the
+  # resolver's work list is unresolved observations, so re-running it re-does only what did not land.
   #
   # A run that no longer exists is not an error. Between the enqueue and the dequeue its repository
   # may have been deleted, which takes the run with it; there is nothing to resolve and nothing to

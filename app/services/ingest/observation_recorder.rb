@@ -103,6 +103,21 @@ module Ingest
     # one comes back unresolved and the next {Ingest::IdentityResolutionJob} claims it again — both
     # paths converge on the same identity, because the identity is a function of the text and the
     # text is what was re-sent.
+    #
+    # **`embed_failed_at` and `embed_failure_count` are absent by the same reasoning, stated rather
+    # than omitted.** They are identity-resolution facts, not measurements: a redelivery says what
+    # the test COST this time, and it says nothing whatever about whether the embedding provider was
+    # reachable when the resolver last asked. So a redelivered row keeps its place in
+    # {Ingest::IdentityResolver}'s retry backlog while its duration and outcome move — which is what
+    # the retry needs, since the rescue is about the row's *resolution* and the redelivery did not
+    # perform one. `#attributes` correspondingly does not write them, so they are not in the
+    # statement at all: an insert takes the column defaults and a `DO UPDATE` cannot reach them.
+    #
+    # The delete-then-recreate path clears both, and that is correct rather than a leak. That path
+    # already "starts a new history" for the row, per the class comment above; the recreated row is
+    # genuinely unresolved-and-unattempted, the resolver will attempt it in the ordinary way, and if
+    # the provider is still down it earns a fresh stamp on its own merits. What must not happen is a
+    # row silently keeping a stamp for an embedding attempt that no longer refers to it.
     REMEASURABLE = %i[
       test_run_shard_id spec_file_path file_path line_number name intent_entity intent_action
       intent_behavior duration_seconds outcome status updated_at

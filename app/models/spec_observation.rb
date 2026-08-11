@@ -36,18 +36,94 @@ class SpecObservation < ApplicationRecord
   # to its run first.
   belongs_to :test_run_shard, optional: true
   # Which durable test this measurement belongs to — the link that turns a pile of per-run rows into
-  # one test's history. Optional, and its nil is the *only* record of an unresolved example: the row
-  # is written inside the ingest transaction and resolved afterwards by
-  # {Ingest::IdentityResolutionJob}, and it stays nil when the embedding failed. Nothing scopes it
-  # away, which is the point — see the migration for why the invisible state was pushed here rather
-  # than left to live as a NULL embedding on `spec_identities`.
+  # one test's history. Optional, and nothing scopes that nil away, which is the point: see
+  # `CreateSpecIdentities` for why the unresolved state was pushed here rather than left to live as
+  # a NULL embedding on `spec_identities`, where `neighbor` would have hidden it from resolution.
+  #
+  # Its nil is **not** a record of WHY the example is unresolved, and used to be the only one there
+  # was. Three different things wear it — the job has not reached the row yet, the row has no text to
+  # embed, or the embedding failed — and `embed_failed_at` below is what tells the third from the
+  # other two. `AddEmbedFailureToSpecObservations` sets out all three.
   belongs_to :spec_identity, optional: true
 
   # Rows this run brought in that no {SpecIdentity} has claimed yet. The resolver's work list, and
   # by construction its own idempotency: a row drops out of this scope the moment it is resolved, so
   # a job that runs twice — two shards of one run each enqueueing one — does the work once between
   # them rather than twice each.
+  #
+  # Deliberately still the widest predicate, and still one column: this is "has no identity", which
+  # is the only question the work list asks. Which KIND of unresolved a row is, is the three scopes
+  # below, and they narrow this rather than replacing it.
   scope :unresolved, -> { where(spec_identity_id: nil) }
+
+  # **The rows whose embedding FAILED**, and the answer to "how many examples did this run fail to
+  # embed?" — a question nothing could ask while the only evidence was a NULL that three states
+  # share.
+  #
+  # A positive stamp rather than the absence of one, so this separates a failure from *both* of the
+  # other two meanings with one predicate. Note what it is deliberately not paired with: there is no
+  # `signalless` scope re-deriving "no intent and no name" in SQL. `#signal` states that the
+  # intent-or-name precedence has exactly one owner and that a second implementation of it would
+  # drift, and this scope needs none — a row that never had text to embed never reached the embed
+  # call, so it never got a stamp.
+  #
+  # Not cleared when a later attempt succeeds. The row leaves the backlog by leaving `.unresolved`,
+  # and what remains is a true statement about it: this measurement's embedding failed at least once
+  # before it landed.
+  scope :embed_failed, -> { where.not(embed_failed_at: nil) }
+
+  # **How long a failed embed stays retryable**, measured from the FIRST failure — the bound on
+  # {Ingest::IdentityResolver}'s cross-run sweep, and the reason a permanently-unembeddable row does
+  # not re-embed on every future ingest until its retention window deletes it.
+  #
+  # == Why a window and not an attempt cap
+  #
+  # An attempt cap is the obvious spelling and it does not survive this pipeline's own shape.
+  # `IdentityResolver`'s class comment states it: *"Every shard of a run enqueues a job for the
+  # run, so an N-shard delivery schedules N jobs over the same rows"*. Those N jobs read the same
+  # work list, so one provider outage on an eight-shard run burns eight attempts on every row before
+  # a single later ingest has had a chance to rescue any of them. The cap would be spent by the
+  # failure itself rather than by the retrying, and a cap generous enough to survive it would be a
+  # number chosen from a client's shard count — which this application never sees.
+  #
+  # Wall-clock is immune to that: eight concurrent jobs and one job leave the window in the same
+  # place, because it is anchored to `embed_failed_at`, which is written once and never refreshed.
+  # It is also the bound that matches the failure being recovered from. A provider outage is an
+  # interval, not a number of tries.
+  #
+  # Seven days rather than a day, because the unit of retry is an INGEST and repositories differ by
+  # orders of magnitude in how often they produce one: a day is several hundred chances on a busy
+  # trunk and possibly zero on a repository whose CI runs weekly. Seven days is at least a few on
+  # any repository active enough to be worth the retry.
+  #
+  # It is NOT claimed to expire before `BRANCH_RETENTION_RUNS` does — the two are in different
+  # units and neither dominates. A repository at a hundred runs a day prunes sixty runs of a branch
+  # back inside a day, so the row is deleted with its run long before this window closes; a
+  # repository at one run a week has the window close first. Whichever comes first ends the
+  # retrying, and both are rules that say so: this one gives up and leaves the row queryable as
+  # `.embed_abandoned`, and the retention rule deletes the measurement it was trying to rescue,
+  # after which there is nothing left to attach an identity to. Neither is a row quietly falling
+  # out of a set nobody was watching.
+  #
+  # What bounds the COST is not this: it is `IdentityResolver::RETRY_SWEEP_LIMIT`, which caps the
+  # work any one ingest inherits. This bounds the LIFETIME of a hopeless row, and the two are
+  # separate because they answer separate questions.
+  EMBED_RETRY_WINDOW = 7.days
+
+  # The backlog: failed rows still inside the window and still unresolved — exactly what one ingest
+  # is entitled to re-attempt on behalf of the runs before it. Repository scoping is the caller's,
+  # because the tenant boundary belongs to the caller that has the tenant.
+  scope :embed_retryable, lambda {
+    unresolved.embed_failed.where(embed_failed_at: EMBED_RETRY_WINDOW.ago..)
+  }
+
+  # The rows this rule has GIVEN UP on — failed, never resolved, and now older than the window. Its
+  # own scope because a bound that cannot be queried is a bound nobody can audit: "we stopped trying"
+  # and "we are still trying" must not be one figure, for the same reason the three meanings of a
+  # NULL above must not be.
+  scope :embed_abandoned, lambda {
+    unresolved.embed_failed.where(embed_failed_at: ...EMBED_RETRY_WINDOW.ago)
+  }
 
   # What text represents this example, answered by the one class that decides it.
   #
