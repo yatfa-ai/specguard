@@ -42,7 +42,7 @@ module SpecGuard
   # a diff, and it silences every check below it rather than the one offender it was reached for.
   # {GRANDFATHERED} instead names each merged file and states what it did, so that (a) the
   # inventory is legible to the next reader and (b) adding to it is a visible, reviewable claim
-  # with a reason attached. The three entries are merged history the guard deliberately does not
+  # with a reason attached. Its entries are merged history the guard deliberately does not
   # re-litigate: their locks are already paid, and dropping and rebuilding a live index to correct
   # its build *history* would take another lock to buy nothing.
   #
@@ -50,9 +50,17 @@ module SpecGuard
   #
   # {#offenses} skips any index whose table is `create_table`-d in the same file. A table that did
   # not exist when the migration started has no writers to block, so the lock is uncontended by
-  # construction and a concurrent build would be pure cost. This is not a loophole for the hazard:
-  # `spec_observations` and `test_runs` both already exist, so nothing can reach it by declaring
-  # them again.
+  # construction and a concurrent build would be pure cost. `CreateSpecObservations` builds five
+  # indexes on `spec_observations` under this exemption.
+  #
+  # The exemption is granted file-wide only by an *unconditional* `create_table`. With
+  # `if_not_exists: true` the table may already exist — and an existing hot table has writers — so
+  # such a `create_table` exempts only the indexes lexically inside its own block, which run just
+  # on the branch where the table was in fact created. A later `add_index` in the same file is
+  # still judged. This matters because the file-wide form is otherwise a real loophole rather than
+  # a theoretical one: `create_table :spec_observations, if_not_exists: true` in a migration would
+  # otherwise excuse every index it went on to build on the hot table.
+
   #
   # == What this lint does NOT reach
   #
@@ -66,10 +74,16 @@ module SpecGuard
   #   also written on the ingest path — and is out of scope here only because it is written once
   #   per *distinct* test text rather than once per example. Add it, with its reason, when that
   #   stops being true.
-  # * **Non-literal table names.** A table computed at runtime cannot be matched against
-  #   {GUARDED_TABLES} by reading the source. Rather than pass such a call silently, the lint
+  # * **Non-literal table names, and unreadable SQL.** A table computed at runtime cannot be
+  #   matched against {GUARDED_TABLES} by reading the source, and neither can the body of an
+  #   `execute` whose argument is not a literal. Rather than pass such a call silently, the lint
   #   reports it as `:unresolved` — "could not check" is a distinct answer from "checked and
-  #   clean", and only one of them is allowed to be green.
+  #   clean", and only one of them is allowed to be green. The `execute` arm is the one where that
+  #   distinction is easiest to lose, because an unread argument reads as empty SQL, and empty SQL
+  #   contains no `CREATE INDEX`.
+  # * **`t.index` on something other than the block parameter.** A `.index` call is only read as a
+  #   table definition when its receiver is the local the enclosing `create_table`/`change_table`
+  #   yielded. `Array#index` and friends are ordinary Ruby and are not index builds.
   class MigrationIndexLint
     MIGRATION_GLOB = "db/migrate/*.rb"
 
@@ -109,8 +123,11 @@ module SpecGuard
     end
 
     # One index-creating construct found in one migration, before it is judged.
-    Build = Struct.new(:table, :line_number, :concurrent, :source, keyword_init: true) do
+    Build = Struct.new(:table, :line_number, :concurrent, :source, :created_here, keyword_init: true) do
       def concurrent? = concurrent
+
+      # Built lexically inside the `create_table` block for this same table.
+      def created_here? = created_here == true
     end
 
     def initialize(root: Dir.pwd)
@@ -179,6 +196,26 @@ module SpecGuard
       CONCURRENT_SQL = /CREATE\s+INDEX\s+CONCURRENTLY/i
       SQL_TABLE = /\bON\s+(?:ONLY\s+)?"?([a-z_][a-z0-9_$]*)"?/i
 
+      TEACH_IT = "or teach lib/spec_guard/migration_index_lint.rb to read this form"
+
+      UNRESOLVED_DETAIL = {
+        table: "creates an index on a table this lint cannot read from the source, so it could " \
+               "not be checked against the guarded tables",
+        sql: "executes SQL this lint cannot read from the source, so it could not be checked for " \
+             "a CREATE INDEX at all"
+      }.freeze
+
+      UNRESOLVED_FIX = {
+        table: "name the table with a literal symbol or string, #{TEACH_IT}",
+        sql: "pass the SQL as a literal string or heredoc, #{TEACH_IT}"
+      }.freeze
+
+
+      # What a `create_table`/`change_table` block puts in scope for the calls inside it: the table
+      # those calls are about, the block parameter they must be called on to *be* those calls, and
+      # whether the block is creating the table (which is what earns the exemption).
+      Frame = Struct.new(:table, :block_param, :created, keyword_init: true)
+
       def initialize(program)
         @created_tables = []
         @builds = []
@@ -191,6 +228,7 @@ module SpecGuard
         found = []
 
         @builds.each do |build|
+          next if build.created_here?
           next if @created_tables.include?(build.table)
           next unless GUARDED_TABLES.key?(build.table)
           next if build.concurrent?
@@ -216,13 +254,11 @@ module SpecGuard
           )
         end
 
-        @unresolved.each do |(line_number, source)|
+        @unresolved.each do |(line_number, source, reason)|
           found << Offense.new(
             kind: :unresolved, path: path, line_number: line_number,
-            detail: "`#{source}` creates an index on a table this lint cannot read from the " \
-                    "source, so it could not be checked against the guarded tables",
-            fix: "name the table with a literal symbol or string, or teach " \
-                 "lib/spec_guard/migration_index_lint.rb to read this form"
+            detail: "`#{source}` #{UNRESOLVED_DETAIL.fetch(reason)}",
+            fix: UNRESOLVED_FIX.fetch(reason)
           )
         end
 
@@ -231,15 +267,19 @@ module SpecGuard
 
       private
 
-      def walk(node, table_context)
+      def walk(node, frame)
         if node.is_a?(Prism::CallNode)
           case node.name
           when :disable_ddl_transaction!
             @disable_ddl_transaction = true
           when :create_table
             table = literal(positional(node).first)
-            @created_tables << table if table
-            return walk_children(node, table)
+            # `if_not_exists: true` means the block may be skipped entirely against a table that
+            # already exists — and an already-existing table has writers. It still exempts the
+            # indexes *inside* its own block (those run only on the branch where the table was just
+            # created), but it does not get the file-wide exemption a plain `create_table` gets.
+            @created_tables << table if table && !conditional_create?(node)
+            return walk_children(node, frame_for(node, table, created: true))
           when :create_join_table
             # The created table is NEITHER argument — Rails joins them, so reading the first one
             # would file `spec_observations` as "created here" for a
@@ -247,69 +287,115 @@ module SpecGuard
             # table in that migration.
             table = join_table_name(node)
             @created_tables << table if table
-            return walk_children(node, table)
+            return walk_children(node, frame_for(node, table, created: true))
           when :change_table
-            return walk_children(node, literal(positional(node).first))
+            return walk_children(node, frame_for(node, literal(positional(node).first), created: false))
           when :add_index
-            record_index(node, literal(positional(node).first))
+            record_index(node, literal(positional(node).first), frame)
           when :index
-            record_index(node, table_context) if node.receiver
+            record_index(node, frame&.table, frame) if block_receiver?(node, frame)
           when :add_reference, :add_belongs_to
-            record_reference(node, literal(positional(node).first))
+            record_reference(node, literal(positional(node).first), frame)
           when :references, :belongs_to
-            record_reference(node, table_context) if node.receiver
+            record_reference(node, frame&.table, frame) if block_receiver?(node, frame)
           when :execute
-            record_execute(node)
+            record_execute(node, frame)
           end
         end
 
-        walk_children(node, table_context)
+        walk_children(node, frame)
       end
 
-      def walk_children(node, table_context)
-        node.compact_child_nodes.each { |child| walk(child, table_context) }
+      def walk_children(node, frame)
+        node.compact_child_nodes.each { |child| walk(child, frame) }
         nil
       end
 
-      def record_index(node, table)
-        return unresolved(node) if table.nil?
+      def frame_for(node, table, created:)
+        Frame.new(table: table, block_param: block_param(node), created: created)
+      end
 
-        add(table, node, concurrent: concurrent_option?(options(node)["algorithm"]))
+      # `t.index` is only a table definition call when `t` is the block parameter the surrounding
+      # `create_table`/`change_table` yielded. `index` is otherwise ordinary Ruby — `Array#index`,
+      # `String#index`, `Enumerable#index` — and this repository writes data-touching migrations
+      # (20260806090000_normalize_and_index_user_github_handles.rb is one). Reddening the suite on a
+      # migration that builds no index at all, with an offense telling the author to name a table
+      # that does not exist, is how a guard earns being routed around.
+      def block_receiver?(node, frame)
+        return false unless frame&.block_param
+        return false unless node.receiver.is_a?(Prism::LocalVariableReadNode)
+
+        node.receiver.name == frame.block_param
+      end
+
+      def block_param(node)
+        block = node.block
+        return unless block.is_a?(Prism::BlockNode)
+
+        parameters = block.parameters
+        return unless parameters.is_a?(Prism::BlockParametersNode)
+
+        first = parameters.parameters&.requireds&.first
+        first.name if first.is_a?(Prism::RequiredParameterNode)
+      end
+
+      # Anything but a literal `false` is treated as conditional, because the point of the check is
+      # that the table may already exist and this lint cannot evaluate the condition.
+      def conditional_create?(node)
+        flag = options(node)["if_not_exists"]
+
+        !flag.nil? && !flag.is_a?(Prism::FalseNode)
+      end
+
+      def record_index(node, table, frame)
+        return unresolved(node, :table) if table.nil?
+
+        add(table, node, concurrent: concurrent_option?(options(node)["algorithm"]), frame: frame)
       end
 
       # `add_reference` / `t.references` build an index unless told not to — the default is
       # `index: true`, which is why an index can land on a hot table without the word "index"
       # appearing anywhere in the migration.
-      def record_reference(node, table)
+      def record_reference(node, table, frame)
         index = options(node)["index"]
         return if index.is_a?(Prism::FalseNode)
-        return unresolved(node) if table.nil?
+        return unresolved(node, :table) if table.nil?
 
         concurrent =
           index.is_a?(Prism::HashNode) &&
           concurrent_option?(hash_options(index)["algorithm"])
 
-        add(table, node, concurrent: concurrent)
+        add(table, node, concurrent: concurrent, frame: frame)
       end
 
-      def record_execute(node)
-        sql = positional(node).filter_map { |argument| string_content(argument) }.join(" ")
+      def record_execute(node, frame)
+        arguments = positional(node)
+        return if arguments.empty?
+
+        contents = arguments.map { |argument| string_content(argument) }
+        # SQL this lint cannot read is not SQL it checked. Falling through to the `INDEX_SQL` test
+        # below on an empty string would answer "no index here" — the same green as a genuinely
+        # index-free `execute` — for a call it never actually read.
+        return unresolved(node, :sql) if contents.all?(&:nil?)
+
+        sql = contents.compact.join(" ")
         return unless sql.match?(INDEX_SQL)
 
         table = sql[SQL_TABLE, 1]
-        return unresolved(node) if table.nil?
+        return unresolved(node, :table) if table.nil?
 
-        add(table, node, concurrent: sql.match?(CONCURRENT_SQL))
+        add(table, node, concurrent: sql.match?(CONCURRENT_SQL), frame: frame)
       end
 
-      def add(table, node, concurrent:)
+      def add(table, node, concurrent:, frame: nil)
         @builds << Build.new(
           table: table, line_number: node.location.start_line,
-          concurrent: concurrent, source: signature(node)
+          concurrent: concurrent, source: signature(node),
+          created_here: frame&.created == true && frame.table == table
         )
       end
 
-      def unresolved(node) = @unresolved << [node.location.start_line, signature(node)]
+      def unresolved(node, reason) = @unresolved << [node.location.start_line, signature(node), reason]
 
       # `create_join_table :a, :b` creates `a_b` — the two names sorted and joined, unless
       # `table_name:` overrides it.
@@ -362,6 +448,16 @@ module SpecGuard
           # Prism models both `"a#{b}c"` and adjacent-literal concatenation as this node; the
           # interpolated parts are simply not string content and drop out.
           node.parts.filter_map { |part| string_content(part) }.join(" ")
+        when Prism::CallNode
+          # `execute <<~SQL.squish` — the dominant `execute` spelling in this repository (4 of 5,
+          # including the only vector index it builds) and the one `#{}`-free heredocs get written
+          # in. Prism sees the *method call*, whose receiver is the heredoc; reading only the
+          # outermost node left this arm answering "" for the form the codebase actually writes.
+          # Reaching through the receiver is safe in the one direction that matters: it can only
+          # ever surface more SQL, which can only push a call toward `:non_concurrent` or
+          # `:unresolved`, never toward a green it had not earned. Also covers `"...".strip`,
+          # `"...".freeze`, and `.squish` on a plain string.
+          string_content(node.receiver)
         end
       end
     end

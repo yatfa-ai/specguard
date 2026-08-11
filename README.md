@@ -82,6 +82,13 @@ to block. `spec/migrations/concurrent_index_build_spec.rb` fails the suite when 
 `lib/spec_guard/migration_index_lint.rb` carries the reasoning and the list of merged migrations
 that predate the guard.
 
+It applies however the index is spelled, not just to `add_index`: `t.index` and `t.references`
+under `change_table`, `add_reference` (which builds an index by **default** — that is how one
+reached `spec_observations` without the word "index" appearing), and raw `CREATE INDEX` in an
+`execute`, which is how the vector indexes are built because `add_index` cannot express
+`USING hnsw (embedding vector_cosine_ops)`. In raw SQL the spelling is `CREATE INDEX CONCURRENTLY`,
+and `disable_ddl_transaction!` is required there too.
+
 ## Auth
 
 ### GitHub OAuth (human sign-in)

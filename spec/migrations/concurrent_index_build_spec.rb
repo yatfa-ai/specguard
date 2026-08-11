@@ -206,11 +206,46 @@ RSpec.describe SpecGuard::MigrationIndexLint do
 
         expect(offenses_for(source).map(&:kind)).to eq([:non_concurrent])
       end
+
+      # `index` is an ordinary Ruby method — Array, String and Enumerable all answer to it — and
+      # this repository writes data-touching migrations that call it
+      # (20260806090000_normalize_and_index_user_github_handles.rb). Reading every `.index` with a
+      # receiver as a table definition reddened the suite on migrations that build no index at all,
+      # and told the author to "name the table with a literal symbol or string" when there was no
+      # table to name. An unactionable failure on unrelated code is how a guard gets routed around.
+      it "does not read `Array#index` as an index build" do
+        source = migration(<<~RUBY)
+          names = %w[a b]
+          pos = names.index("a")
+        RUBY
+
+        expect(offenses_for(source)).to be_empty
+      end
+
+      it "does not read `.index` on a local that is not the block parameter as an index build" do
+        source = migration(<<~RUBY)
+          change_table :spec_observations do |t|
+            haystack = %w[a b]
+            haystack.index("a")
+          end
+        RUBY
+
+        expect(offenses_for(source)).to be_empty
+      end
     end
 
     # `CreateSpecIntents` and `CreateSpecIdentities` both build their vector indexes this way,
     # because `add_index` cannot express an `ivfflat`/`hnsw` operator class. It is the form a
     # future vector index on `spec_observations` would arrive in.
+    #
+    # Which is why the spelling matters as much as the construct. `execute <<~SQL.squish` is 4 of
+    # the 5 `execute` calls in db/migrate and is how the repository's only vector index is built;
+    # an earlier version of this arm read only the outermost node, saw a method call rather than a
+    # heredoc, and answered "" — so the SQL never reached the CREATE INDEX test and the call was
+    # dropped before it was judged. The falsifier witnessed the branch going red on bare `<<~SQL`,
+    # a spelling this codebase mostly does not use, and never on the one it does. Each spelling
+    # below is therefore exercised in BOTH directions: red on the plain build, green on the
+    # concurrent one, so neither a silent drop nor a blanket flag can pass.
     describe "raw SQL" do
       it "flags a CREATE INDEX in an executed heredoc" do
         source = migration(<<~'RUBY')
@@ -234,8 +269,65 @@ RSpec.describe SpecGuard::MigrationIndexLint do
         expect(offenses_for(source)).to be_empty
       end
 
+      # The exact shape of db/migrate/20260811120000_create_spec_identities.rb:124.
+      it "flags a heredoc behind `.squish`, the spelling this repository actually writes" do
+        source = migration(<<~'RUBY')
+          execute <<~SQL.squish
+            CREATE INDEX index_spec_observations_on_embedding
+            ON spec_observations USING hnsw (embedding vector_cosine_ops)
+          SQL
+        RUBY
+
+        expect(offenses_for(source).map(&:kind)).to eq([:non_concurrent])
+      end
+
+      it "accepts the concurrent form of that same spelling" do
+        source = migration(<<~'RUBY', disable_ddl: true)
+          execute <<~SQL.squish
+            CREATE INDEX CONCURRENTLY index_spec_observations_on_embedding
+            ON spec_observations USING hnsw (embedding vector_cosine_ops)
+          SQL
+        RUBY
+
+        expect(offenses_for(source)).to be_empty
+      end
+
+      # `.squish` behind a `reversible` block — how CreateSpecIdentities wraps it, so that the
+      # index has a `direction.down`. Two block frames deep from the migration body.
+      it "flags one nested inside reversible/direction.up" do
+        source = migration(<<~'RUBY')
+          reversible do |direction|
+            direction.up do
+              execute <<~SQL.squish
+                CREATE INDEX index_spec_observations_on_embedding
+                ON spec_observations USING hnsw (embedding vector_cosine_ops)
+              SQL
+            end
+          end
+        RUBY
+
+        expect(offenses_for(source).map(&:kind)).to eq([:non_concurrent])
+      end
+
+      it "flags a plain string behind a method call too" do
+        source = migration(%(execute "CREATE INDEX idx ON spec_observations (name)".squish))
+
+        expect(offenses_for(source).map(&:kind)).to eq([:non_concurrent])
+      end
+
       it "ignores an execute that is not building an index" do
         expect(offenses_for(migration(%(execute "ANALYZE spec_observations")))).to be_empty
+      end
+
+      # The failure mode this arm is most prone to: an argument it cannot read looks like empty
+      # SQL, and empty SQL contains no CREATE INDEX. "I read it and there is no index here" and "I
+      # could not read it" must not both be green.
+      it "reports an execute whose SQL it cannot read rather than passing it" do
+        offenses = offenses_for(migration("execute build_index_sql"))
+
+        expect(offenses.map(&:kind)).to eq([:unresolved])
+        expect(offenses.first.detail).to include("could not be checked for a CREATE INDEX")
+        expect(offenses.first.fix).to include("literal string or heredoc")
       end
     end
 
@@ -285,6 +377,48 @@ RSpec.describe SpecGuard::MigrationIndexLint do
           create_join_table :spec_observations, :tags
 
           add_index :spec_observations_tags, :tag_id
+        RUBY
+
+        expect(offenses_for(source)).to be_empty
+      end
+
+      # The exemption rests on "this table did not exist, so it has no writers". `if_not_exists:`
+      # is precisely the case where it may well have existed — and an existing hot table has
+      # writers — so it does not get the file-wide form. Nobody writes this by accident, but the
+      # lint is the durable record of the reasoning, so the exemption has to actually mean what it
+      # says rather than be a sentence that is nearly true.
+      it "does not let `create_table if_not_exists:` exempt the rest of the migration" do
+        source = migration(<<~RUBY)
+          create_table :spec_observations, if_not_exists: true do |t|
+            t.string :name
+          end
+
+          add_index :spec_observations, :name
+        RUBY
+
+        expect(offenses_for(source).map(&:kind)).to eq([:non_concurrent])
+      end
+
+      # The other half: indexes inside that block run only on the branch where the table was in
+      # fact just created, so they keep the exemption. Flagging them would be a false positive.
+      it "still exempts the indexes inside that block" do
+        source = migration(<<~RUBY)
+          create_table :spec_observations, if_not_exists: true do |t|
+            t.string :name
+            t.index :name
+          end
+        RUBY
+
+        expect(offenses_for(source)).to be_empty
+      end
+
+      it "keeps the file-wide exemption for an explicit `if_not_exists: false`" do
+        source = migration(<<~RUBY)
+          create_table :spec_observations, if_not_exists: false do |t|
+            t.string :name
+          end
+
+          add_index :spec_observations, :name
         RUBY
 
         expect(offenses_for(source)).to be_empty
@@ -358,14 +492,21 @@ RSpec.describe SpecGuard::MigrationIndexLint do
       expect(report).to include("1 migration(s) checked", "0 grandfathered", "clean")
     end
 
+    # Asserts the exemption ARITHMETIC directly rather than by reading a clean tree's report. The
+    # earlier spelling of this example matched the grandfathered count inside the live tree's
+    # report string, which meant one real offense anywhere in db/migrate reddened this example too
+    # — a second, noisier failure, about counts, for a defect that has nothing to do with counts.
+    # That is exactly what the neighbouring example's comment rejects. `checked_files` answers the
+    # question ("is the exempt set excluded from the checked set?") without depending on whether
+    # what remains happens to be clean.
     it "counts the grandfathered migrations as exempt rather than as checked" do
-      report = described_class.new(root: Rails.root).report
+      lint = described_class.new(root: Rails.root)
+      checked = lint.checked_files.map { |path| path.basename.to_s }
 
-      expect(report).to include(
-        "#{described_class::GRANDFATHERED.size} grandfathered",
-        "#{Rails.root.glob('db/migrate/*.rb').size - described_class::GRANDFATHERED.size} " \
-        "migration(s) checked"
-      )
+      expect(described_class::GRANDFATHERED).not_to be_empty
+      expect(checked).not_to include(*described_class::GRANDFATHERED.keys)
+      expect(checked.size)
+        .to eq(Rails.root.glob("db/migrate/*.rb").size - described_class::GRANDFATHERED.size)
     end
 
     it "points at the offending line, the reason and the fix when it is not" do
