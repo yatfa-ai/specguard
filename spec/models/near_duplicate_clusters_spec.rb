@@ -368,12 +368,24 @@ RSpec.describe NearDuplicateClusters do
 
     # An identity outlives the runs that observed it, so a deleted test keeps its row. It weighs
     # nothing, and a member list that did not say so would look like a member that ran.
+    #
+    # The distribution is deliberately UNEVEN — one member carrying two examples, one carrying none
+    # — because that is the shape a summed count cannot see. `example_count` here EQUALS
+    # `member_count` while a member nothing resolved to sits in the list, so the assertion below
+    # fails against any arithmetic answer and passes only against a per-member one. An EVEN fixture
+    # is the one that flatters the wrong implementation, and this object's flagship scenario, a
+    # table-driven loop, is uneven by construction.
     it "keeps an identity nothing resolved to visible, at zero examples" do
-      cluster = described_class.for(repository).clusters.first
-      identity(CREDIT, line: 15)
+      expect(described_class.for(repository).clusters.first).not_to be_unobserved_members
 
-      expect(cluster).not_to be_unobserved_members
-      expect(described_class.for(repository).clusters.first).to be_unobserved_members
+      identity(CREDIT, line: 15)
+      observe(SpecIdentity.find_by!(text: EXPIRED), duration: 1.0)
+
+      cluster = described_class.for(repository).clusters.first
+
+      expect(cluster.example_count).to eq(cluster.member_count)
+      expect(cluster.members.reject(&:observed?).map(&:text)).to eq([ CREDIT ])
+      expect(cluster).to be_unobserved_members
     end
   end
 
@@ -535,16 +547,15 @@ RSpec.describe NearDuplicateClusters do
     end
 
     # EXPLAINed under an operator price this helper sets ITSELF rather than under whatever the read
-    # left behind. `SET LOCAL` is scoped to the transaction and not to the nested block that issued
-    # it, so inside the suite's per-example transaction the read's own setting does happen to still
-    # be in force here — and a plan assertion resting on that would be resting on the test harness's
-    # transaction strategy rather than on the code. Stated explicitly, the priced and unpriced plans
-    # below are the same query asked two ways.
-    def plan_for_actual_sql(&) = explain(captured_sql(&), cost: SpecIdentity::VECTOR_OPERATOR_COST)
-
-    def explain(sql, cost: nil)
+    # left behind — which is now nothing, because `near_duplicate_pairs_in` restores the previous
+    # price before it returns. Setting it here rather than borrowing the read's is what makes these
+    # plans statements about the query: the price binds to the transaction rather than to the block
+    # that issued it, so a plan taken on the read's leftovers would be resting on the suite's
+    # transaction strategy instead of on the code.
+    def plan_for_actual_sql(&)
+      sql = captured_sql(&)
       connection = ActiveRecord::Base.connection
-      connection.execute(cost ? "SET LOCAL cpu_operator_cost = #{cost}" : "RESET cpu_operator_cost")
+      connection.execute("SET LOCAL cpu_operator_cost = #{SpecIdentity::VECTOR_OPERATOR_COST}")
       connection.select_values("EXPLAIN #{sql}").join("\n")
     end
 
@@ -559,9 +570,10 @@ RSpec.describe NearDuplicateClusters do
     # quadratic: reached any other way, every identity compares itself against every sibling, which
     # is the 199,990,000-pair census SPGD-252 needed sixteen forked workers to finish.
     #
-    # Both spellings are refused, and the second is the one that actually happens. Postgres does not
-    # pick a `Seq Scan` here — it picks `index_spec_identities_on_repository_id` and sorts what it
-    # finds, which looks like an index scan in the plan and IS an all-pairs join in the profile.
+    # Both spellings of the quadratic plan are refused, and the second is the one worth naming: a
+    # scan of `index_spec_identities_on_repository_id` that sorts what it finds LOOKS like an index
+    # scan in the plan and IS an all-pairs join in the profile. Refusing only `Seq Scan` would pass
+    # over the shape this read most plausibly regresses into.
     it "never walks one identity's siblings to find its neighbours" do
       plan = plan_for_actual_sql { described_class.for(repository) }
 
@@ -569,16 +581,35 @@ RSpec.describe NearDuplicateClusters do
       expect(plan).not_to match(/index_spec_identities_on_repository_id on spec_identities n\b/)
     end
 
-    # SpecIdentity::VECTOR_OPERATOR_COST's reason for existing, pinned against the plan it prevents
-    # rather than asserted about the constant. Remove the `SET LOCAL` and this repository's read
-    # goes back to 3,000 sorted-by-distance scans of 3,000 rows each — measured at 69.06s against
-    # 1.07s for the identical statement.
-    it "is the corrected operator price that makes the planner choose it" do
-      unpriced = explain(captured_sql { described_class.for(repository) })
-
-      expect(unpriced).to match(/index_spec_identities_on_repository_id on spec_identities n\b/)
-      expect(unpriced).not_to include("index_spec_identities_on_embedding")
-    end
+    # == Why there is no negative control here, and where the necessity evidence lives instead
+    #
+    # The obvious companion to the examples above is "and WITHOUT the corrected price the planner
+    # does not choose the index". It was written, and it is deliberately gone: **it asserts that
+    # Postgres makes a mistake, which is not a property of this code.**
+    #
+    # A first pass pinned WHICH wrong plan the mis-priced planner reaches for; that failed one
+    # full-suite run in three under `config.order = :random`. Relaxing it to the weaker claim — that
+    # the unpriced plan simply does not use `index_spec_identities_on_embedding` — did not fix it.
+    # Measured on this branch, same fixture, same 3,000-identity scale:
+    #
+    #   full suite, seeds 1 and 4242            unpriced plan declines the index   (example passed)
+    #   full suite, seeds 31337 and 777         unpriced plan USES the index       (example failed)
+    #   this file in isolation                  declines                           (example passed)
+    #   standalone runner, faithful fixture     USES, before AND after VACUUM FULL (would fail)
+    #
+    # Both directions observed, from a query that never changed. Given a false price the planner is
+    # entitled to any plan its current statistics make look cheapest, and the vector index is
+    # sometimes still it — cheap for the wrong reason, and slow for the reason
+    # {SpecIdentity::VECTOR_OPERATOR_COST} documents. An example that flips on resident statistics
+    # can only fail for reasons that are not about `near_duplicate_pairs_in`, which is the whole
+    # objection to the version before it.
+    #
+    # The necessity claim is not lost, it is carried by the thing that can actually carry it: the
+    # recorded benchmark on that constant — **69.06s against 1.07s** for the identical statement and
+    # identical rows at 3,000 identities. A wall-clock measurement is a statement about what the
+    # plans COST, and it stays true whichever plan the mis-priced planner happens to pick. What the
+    # suite pins is what this code does: under the corrected price the neighbour question is
+    # answered off the HNSW index, and neither spelling of the quadratic scan appears.
 
     # The seed side is a different question from the neighbour side, and only the neighbour side is
     # the quadratic one. This repository's own rows are the population being reported on, so they
@@ -610,17 +641,34 @@ RSpec.describe NearDuplicateClusters do
         .to eq(count_queries { described_class.for(small) })
     end
 
-    # Four, and each of them named: the planner directive, the pair read, the identity population,
-    # and the observation presence. A bare total cannot tell "one read per question" from "one
-    # question read twice", so the number is asserted next to the list it stands for.
+    # Six, and each of them named: the price to be restored, the correction, the pair read, the
+    # restore, the identity population, and the observation presence. A bare total cannot tell "one
+    # read per question" from "one question read twice", so the number is asserted next to the list
+    # it stands for. Three of the six are the planner directive and its bookends, and none of them
+    # depends on how much the repository holds.
     it "reads spec_identities twice and spec_observations once, whatever it finds" do
       statements = executed_sql { described_class.for(repository) }
 
-      expect(statements.size).to eq(4)
-      expect(statements.grep(/SET LOCAL cpu_operator_cost/).size).to eq(1)
+      expect(statements.size).to eq(6)
+      expect(statements.grep(/SHOW cpu_operator_cost/).size).to eq(1)
+      expect(statements.grep(/set_config\('cpu_operator_cost'/).size).to eq(2)
       expect(statements.grep(/CROSS JOIN LATERAL/).size).to eq(1)
       expect(statements.grep(/FROM "spec_identities"/).size).to eq(1)
       expect(statements.grep(/FROM "spec_observations"/).size).to eq(1)
+    end
+
+    # The corrected price is a fact about ONE statement, and it binds to the transaction rather than
+    # to the block that asked for it. This example runs inside the suite's per-example transaction,
+    # so it IS the nested case: a caller who wrapped this read in a transaction of their own and
+    # went on running unrelated queries under a 1536× operator price they never asked for.
+    it "puts the operator price back for whoever called it" do
+      cost = -> { ActiveRecord::Base.connection.select_value("SHOW cpu_operator_cost") }
+      before = cost.call
+
+      described_class.for(repository)
+
+      expect(cost.call).to eq(before)
+      expect(before).not_to eq(SpecIdentity::VECTOR_OPERATOR_COST.to_s)
     end
   end
 end

@@ -342,10 +342,18 @@ class NearDuplicateClusters
     def from_intent? = signal_source == "intent"
     def from_name? = signal_source == "name"
 
-    # This cluster holds more distinct texts than examples that ran under them — which means at
-    # least one member is an identity nothing has resolved to in any ingested run. Worth asking
-    # because it is the one shape where `member_count` overstates what the cluster costs.
-    def unobserved_members? = example_count < member_count
+    # At least one member is an identity nothing has resolved to in any ingested run, so the member
+    # list holds a row that contributes nothing to what this cluster costs.
+    #
+    # Asked of the MEMBERS, one at a time, and never of the cluster's arithmetic. `example_count <
+    # member_count` is a tempting one-liner and it is wrong in this object's headline scenario: the
+    # count is a SUM, so a single member carrying a 3-example table-driven loop pays for two members
+    # nothing resolved to and the predicate reports that nobody is missing. That implication only
+    # ever ran one way — few examples implies an unobserved member, but a member nothing resolved to
+    # implies nothing about the sum — and this method is asked in the other direction. A disclosure
+    # that declines to disclose is the exact failure this class exists to prevent, so it does not
+    # get to be reproduced inside it.
+    def unobserved_members? = members.any? { |member| !member.observed? }
 
     # At least one member's neighbour list hit `NEIGHBOURS`, so this component may be part of a
     # larger group whose remaining edges were cut by the cap.

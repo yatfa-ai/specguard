@@ -397,15 +397,40 @@ class SpecIdentity < ApplicationRecord
       ORDER BY a.id, b.distance, b.neighbour_id
     SQL
 
-    # `SET LOCAL` and therefore a transaction of its own: outside one Postgres discards the setting
-    # with a warning and the read silently reverts to the plan that takes 69 seconds. Read-only, so
-    # it costs a BEGIN/COMMIT pair and nothing else, and scoped rather than global because this is
-    # the only statement in the application whose cost is dominated by a 1536-dimension operator.
+    # A transaction of its own, because the corrected price is transaction-scoped and outside one
+    # Postgres would discard it — the read would silently revert to the plan that takes 69 seconds.
+    # Read-only, so it costs a BEGIN/COMMIT pair and nothing else.
+    #
+    # == And the price is restored, because the scope is narrower than it looks
+    #
+    # `SET LOCAL` binds to the TRANSACTION, not to the block that issued it, and
+    # `ActiveRecord::Base.transaction` JOINS an ambient transaction rather than opening its own. So
+    # a caller that wraps this read in a transaction of theirs would carry `cpu_operator_cost = 3.84`
+    # into every statement they ran afterwards — re-pricing queries that have no 1536-dimension
+    # operator anywhere in them, from a method they called for its return value. `requires_new:` is
+    # not the fix either: a savepoint is not a new transaction as far as a GUC is concerned.
+    #
+    # So the previous value is read first and put back after, through `set_config(…, true)` — the
+    # function spelling of `SET LOCAL`, which takes the value as a bind instead of as string
+    # interpolation and does not warn when there is no transaction to be local to. The restore is on
+    # the success path only, and that is sufficient rather than an oversight: a statement that
+    # raised has aborted the transaction, and an aborted transaction can only be rolled back, which
+    # discards the setting outright.
+    previous_cost = connection.select_value("SHOW cpu_operator_cost")
+
     transaction do
-      connection.execute("SET LOCAL cpu_operator_cost = #{VECTOR_OPERATOR_COST}")
-      connection.select_all(sql).cast_values
+      set_operator_cost(VECTOR_OPERATOR_COST)
+      rows = connection.select_all(sql).cast_values
+      set_operator_cost(previous_cost)
+      rows
     end
   end
+
+  # `SET LOCAL` as a function call, so the value binds instead of interpolating.
+  def self.set_operator_cost(value)
+    connection.execute(sanitize_sql_array([ "SELECT set_config('cpu_operator_cost', ?, true)", value.to_s ]))
+  end
+  private_class_method :set_operator_cost
 
   # How many identities this repository holds, and how they split across the two signal sources —
   # the denominator every coverage figure {NearDuplicateClusters} states is a fraction OF.
