@@ -43,6 +43,30 @@ RSpec.describe Ingest::IdentityResolver do
 
   def identity_texts = repository.spec_identities.pluck(:text).sort
 
+  # How many embeddings a block caused, counted through `EmbeddingGenerator.provider=` — the public
+  # swap seam `with lexical embeddings` itself uses — rather than by stubbing
+  # `EmbeddingGenerator.call`: what is counted is then the real call the resolver makes through the
+  # real interface, width validation and all. Delegating to `LocalProvider` rather than returning a
+  # fixture vector keeps every fallthrough behaving exactly as it does everywhere else in this file,
+  # so the counter can be installed without changing what the example under it measures.
+  #
+  # Top-level because TWO groups now bound the same figure from opposite ends: "re-ingesting text
+  # that has not changed" asserts the embed does not happen on run 2, and "the page map is a
+  # snapshot, and what that costs a FIRST run" asserts that batching those lookups did not quietly
+  # add one back on run 1. One instrument, so the two cannot disagree about what an embed is.
+  let(:counting_provider) do
+    Class.new do
+      class << self
+        def calls = @calls ||= 0
+
+        def call(text)
+          @calls = calls + 1
+          EmbeddingGenerator::LocalProvider.call(text)
+        end
+      end
+    end
+  end
+
   describe "the behaviour this slice exists for: a test that moved is the same test" do
     # A shifted test's text is byte-identical, so two independent mechanisms both land it on the row
     # it already had: similarity (its vector is unchanged, cosine 1.0) and the `(repository_id,
@@ -245,24 +269,8 @@ RSpec.describe Ingest::IdentityResolver do
     # it — and each of those rows is named outright by the `(repository_id, text_digest)` equality
     # `#claim_identity` already upserts onto, so nothing has to be embedded to find it again.
     #
-    # Counted through `EmbeddingGenerator.provider=`, the public swap seam `with lexical embeddings`
-    # itself uses, rather than by stubbing `EmbeddingGenerator.call`: what is counted is then the
-    # real call the resolver makes through the real interface, width validation and all. Delegating
-    # to `LocalProvider` rather than returning a fixture vector keeps every fallthrough behaving
-    # exactly as it does everywhere else in this file, so the counter can be installed without
-    # changing what the example under it measures.
-    let(:counting_provider) do
-      Class.new do
-        class << self
-          def calls = @calls ||= 0
-
-          def call(text)
-            @calls = calls + 1
-            EmbeddingGenerator::LocalProvider.call(text)
-          end
-        end
-      end
-    end
+    # The instrument is `counting_provider`, one level up. What that equality COSTS TO ASK is the
+    # group below this one.
 
     it "embeds nothing at all when every text is byte-identical to a row already held" do
       ingest(suite, ci_run_id: "run-1")
@@ -330,6 +338,177 @@ RSpec.describe Ingest::IdentityResolver do
     end
   end
 
+  describe "what a page of unchanged text costs in round trips" do
+    # The other half of the same optimisation, and the reason it is a separate group: the group above
+    # asserts the equality removes the WORK, this one asserts asking it does not cost a round trip
+    # per row. Run 2 of an unchanged suite answers every row by an equality now, but a per-row
+    # `find_by` still issued 20,000 sequential trips at the design point to rediscover 20,000 rows
+    # the database can name a page at a time.
+    #
+    # **A query count and never a duration.** A duration would go green on a fast machine whatever
+    # the resolver did, and red on a slow one whatever it did — the claim is about the NUMBER of
+    # statements, so that is what is counted. `count_queries`/`executed_sql` (spec/support/
+    # query_capture.rb) drop `payload[:cached]` as well as `SCHEMA`/`TRANSACTION`, so what is counted
+    # is round trips actually paid for.
+    #
+    # Narrowed to the digest lookup rather than counted as a page total: the per-row UPDATEs a
+    # re-sighting issues are O(N) by definition and are not what this slice changed, so a total would
+    # move for reasons that have nothing to do with the claim. `\ASELECT` excludes the `INSERT … ON
+    # CONFLICT` in `#claim_identity`, which names the same column and is not a lookup.
+    def digest_lookups(&) = executed_sql(&).grep(/\ASELECT\b.*\btext_digest\b/m)
+
+    # Twelve deliberately UNLIKE descriptions. The count has to be a page-multiple to say anything,
+    # and near-identical filler would collapse under `MATCH_SIMILARITY` into fewer identities than
+    # examples — which would leave the query count technically green while the fixture no longer
+    # meant what it says. Each example below pins that premise before asserting anything.
+    #
+    # A method and not a constant: a constant assigned in a `describe` block takes the file's
+    # lexical cref, not the example group's, so `SUBJECTS = [...]` here would define a GLOBAL
+    # `::SUBJECTS` — a name generic enough to collide with the next spec that wants it, and to
+    # collide load-order-dependently. Every other fixture in this file (`suite`, `wide_suite`,
+    # `record`, `ingest`, `digest_lookups`) is a method for the same reason.
+    def subjects
+      [
+        "Invoice#finalize locks the line items",
+        "User#save rejects a duplicate email",
+        "Cart adds an item to the cart",
+        "Order#checkout rejects an expired card",
+        "Payment#refund returns money to the original card",
+        "Shipment#dispatch assigns a tracking number",
+        "Coupon#apply reduces the total by a percentage",
+        "Session#expire logs the visitor out",
+        "Ledger#post balances debits against credits",
+        "Report#render writes a PDF to disk",
+        "Webhook#deliver retries after a server error",
+        "Search#query ranks by relevance and then recency"
+      ].freeze
+    end
+
+    def wide_suite(offset: 0)
+      subjects.each_with_index.map do |name, index|
+        unannotated_spec(file_path: "spec/models/subject_#{index}_spec.rb",
+                         line_number: index + 1 + offset, name: name)
+      end
+    end
+
+    it "asks one query for a whole page's digests rather than one per example" do
+      ingest(wide_suite, ci_run_id: "run-1")
+      expect(repository.spec_identities.count).to eq(subjects.size)
+
+      second = record(wide_suite(offset: 100), ci_run_id: "run-2")
+
+      # Twelve rows, one page, one lookup. Per row this was twelve; at the 20,000-example design
+      # point it was 20,000.
+      expect(digest_lookups { described_class.resolve(second) }.size).to eq(1)
+      expect(second.spec_observations.unresolved.count).to eq(0)
+    end
+
+    it "grows with the number of PAGES and not with the number of examples" do
+      # The falsifier for the one above, which a resolver that asked once for the whole suite would
+      # also pass. `BATCH_SIZE` is what the lookup is grouped by, so shrinking it to a third of the
+      # suite must cost exactly three lookups — and an implementation that kept asking per row would
+      # answer twelve here whatever this constant said.
+      stub_const("#{described_class}::BATCH_SIZE", subjects.size / 3)
+      ingest(wide_suite, ci_run_id: "run-1")
+      expect(repository.spec_identities.count).to eq(subjects.size)
+
+      second = record(wide_suite(offset: 100), ci_run_id: "run-2")
+
+      expect(digest_lookups { described_class.resolve(second) }.size).to eq(3)
+      expect(second.spec_observations.unresolved.count).to eq(0)
+    end
+
+    it "asks once for the CROSS-RUN BACKLOG's page too, and not once per rescued row" do
+      # **The other list.** Both examples above walk a run's OWN rows, and `#resolve` walks two
+      # lists: before them comes `#retry_backlog`, the rows of EARLIER runs nothing else will
+      # revisit. That list reaches `#claim` by a different route, so a resolver that batched a run's
+      # own pages and went back to asking per row for the backlog would answer both examples above
+      # correctly — verified, not assumed: replacing `resolve_page(retry_backlog)` with the per-row
+      # `retry_backlog.each { claim(...) }` this slice removed leaves the WHOLE suite green without
+      # this example. That is the shape SPGD-78 is about, so the backlog page is pinned separately
+      # from the run's own.
+      #
+      # It is also the newer half of the seam. `#retry_backlog` became TWO populations under one
+      # budget in SPGD-379, and this is what says the page seam still sits above both of them.
+      ingest(wide_suite, ci_run_id: "run-1")
+      expect(repository.spec_identities.count).to eq(subjects.size)
+
+      # A whole run stranded before its job reached any of it — unresolved, UNSTAMPED, and waiting
+      # longer than the grace, which is exactly `#unattempted_embed_backlog`'s population. Aged by
+      # `update_all` rather than by moving the clock, the choice `#strand` states further down.
+      stranded = record(wide_suite(offset: 100), ci_run_id: "run-2")
+      stranded.spec_observations.unresolved
+              .update_all(created_at: (SpecObservation::EMBED_ATTEMPT_GRACE + 1.minute).ago)
+
+      # Run 3 carries text this repository already holds, which keeps the instrument honest in a way
+      # the fixture has to arrange: `digest_lookups` matches any SELECT naming `text_digest`, and
+      # `#nearest` selects EVERY column. A row that fell through to similarity would therefore be
+      # counted here as though it were a lookup. With nothing to embed anywhere, the only statements
+      # that can match are the two this example is about.
+      third = record([unannotated_spec(file_path: "spec/models/subject_0_spec.rb", line_number: 900,
+                                       name: subjects.first)], ci_run_id: "run-3")
+
+      EmbeddingGenerator.provider = counting_provider
+
+      # TWO pages, two lookups: the backlog's twelve rows, then run 3's one. Per row it is thirteen.
+      expect(digest_lookups { described_class.resolve(third) }.size).to eq(2)
+
+      # The premise, pinned rather than trusted: nothing was embedded, so nothing reached `#nearest`
+      # and neither number above is an artifact of a fallthrough.
+      expect(counting_provider.calls).to eq(0)
+      expect(stranded.spec_observations.unresolved).to be_empty
+    end
+
+    it "still costs nothing when a page carries no text to look up at all" do
+      # A page of rows with nothing to embed — `Ingest::SpecSignal`'s `:none` case, the rows
+      # `#identity_for` returns nil for — must ask the database nothing.
+      #
+      # This is a falsifiable guard on `#digest_index`'s `filter_map` and not on an empty-list check:
+      # `SpecIdentity.digest_for(nil)` is a perfectly good SHA-256 of the empty string, so a `map`
+      # here would send a real digest no row can hold on a real round trip, and this goes red.
+      # Asserted as the ABSENCE of the query rather than as the presence of a guard, so it keeps
+      # meaning the same thing however `where(text_digest: [])` is answered.
+      run = record([unannotated_spec(name: "Cart adds an item to the cart")], ci_run_id: "run-1")
+      run.spec_observations.sole.update_columns(name: nil)
+
+      expect(digest_lookups { described_class.resolve(run) }).to be_empty
+      expect(run.spec_observations.sole.reload.spec_identity_id).to be_nil
+    end
+  end
+
+  describe "the page map is a snapshot, and what that costs a FIRST run" do
+    # Its own group rather than a fourth example in the round-trip group above: this one is a FIRST
+    # run over text that is not unchanged, and it asserts an EMBED COUNT rather than a round trip.
+    # It answers a different question from the group it used to sit in, so it is filed under the
+    # question it actually answers.
+
+    it "does not make a first run embed twice for two examples carrying the same text" do
+      # **The cost of a page map being a SNAPSHOT, resolved deliberately rather than discovered.**
+      # The per-row `find_by` this replaced saw identities committed by EARLIER ROWS OF THE SAME
+      # PAGE; a map read once up front does not, so the second of two byte-identical descriptions
+      # would miss it and fall through to an embed that today it never pays.
+      #
+      # The OUTCOME is the same either way — identical text embeds to an identical vector, `#nearest`
+      # matches at cosine 1.0, and the conflict key would land them together regardless — which is
+      # exactly why this needs its own example: "cannot separate two tests whose descriptions are
+      # identical" asserts the identity COUNT and stays green under both. The embed is the expensive
+      # thing the whole path exists to avoid and the provider is swappable for a billed one, so
+      # `#claim_identity` puts the row it just created back into the page's map, and this is the
+      # assertion that says so.
+      EmbeddingGenerator.provider = counting_provider
+
+      run = ingest([unannotated_spec(file_path: "spec/models/invoice_spec.rb", line_number: 3,
+                                     name: "is valid"),
+                    unannotated_spec(file_path: "spec/models/user_spec.rb", line_number: 7,
+                                     name: "is valid")],
+                   ci_run_id: "run-1")
+
+      expect(counting_provider.calls).to eq(1)
+      expect(repository.spec_identities.count).to eq(1)
+      expect(run.spec_observations.pluck(:spec_identity_id).uniq.size).to eq(1)
+    end
+  end
+
   describe "the tenant boundary" do
     it "never resolves a test onto another repository's identity" do
       other = create_repository(user: create_user(github_uid: "2002", github_handle: "other"),
@@ -363,6 +542,13 @@ RSpec.describe Ingest::IdentityResolver do
     # re-sighting path instead of the conflict path it names. That is also what genuinely happens to
     # a loser — an uncommitted winner is invisible to an equality exactly as it is to an index scan
     # — so stubbing both is the faithful reproduction, not a workaround for one.
+    #
+    # `#identical_text` is STILL the right seam for the first stub now that the digest question is
+    # answered a page at a time: the query moved to `#digest_index`, the DECISION did not, and this
+    # is the method that makes it for one row. Stubbing the page builder instead would be stubbing
+    # further from what the loser actually experiences, and dropping the stub because the examples
+    # stay green without it would silently retire the race coverage — the winner IS committed before
+    # `#resolve` runs here, so the page's map finds it just as the per-row `find_by` did.
     def resolve_as_the_loser(run)
       resolver = described_class.new(run)
       allow(resolver).to receive(:identical_text).and_return(nil)
