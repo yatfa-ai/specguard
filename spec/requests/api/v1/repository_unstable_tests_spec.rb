@@ -626,7 +626,7 @@ RSpec.describe "GET /api/v1/repository — unstable_tests", type: :request do
       expect(flakiness_grain_reads { get_repository(key: api_key) }).to be_empty
       # And the endpoint's other grains are untouched at their own established count, so the zero
       # above is this grain declining to read rather than the table going quiet.
-      expect(observation_reads { get_repository(key: api_key) }.length).to eq(4)
+      expect(observation_reads { get_repository(key: api_key) }.length).to eq(6)
       expect(get_repository(key: api_key)["unstable_tests"]).to be_nil
     end
 
@@ -664,20 +664,21 @@ RSpec.describe "GET /api/v1/repository — unstable_tests", type: :request do
     end
 
     # And the four are ALL of the reads this window adds — the assertion the per-grain count cannot
-    # make, because a read matching no grain's pattern is invisible to every one of them. Eight is
-    # the endpoint's four single-run reads plus these four.
+    # make, because a read matching no grain's pattern is invisible to every one of them. Ten is
+    # the endpoint's six single-run reads plus these four.
     it "adds exactly those four to the table's total, and no fifth" do
       repository_with(%w[passed failed passed])
       get_repository(key: api_key)
 
-      area, file, example, flakiness =
+      area, file, example, description, flakiness =
         observation_reads_by_grain { get_repository(key: api_key, query: { branch: "main" }) }
 
-      expect([area.length, file.length, example.length, flakiness.length]).to eq([1, 1, 2, 4])
+      expect([area.length, file.length, example.length, description.length, flakiness.length])
+        .to eq([1, 1, 2, 2, 4])
       expect(observation_reads { get_repository(key: api_key, query: { branch: "main" }) }.length)
-        .to eq(area.length + file.length + example.length + flakiness.length)
+        .to eq(area.length + file.length + example.length + description.length + flakiness.length)
       expect(observation_reads { get_repository(key: api_key, query: { branch: "main" }) }.length)
-        .to eq(8)
+        .to eq(10)
     end
 
     # NO RUN-WINDOW QUERY. The block is drawn on `history_runs`, which is materialized once and

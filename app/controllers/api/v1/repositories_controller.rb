@@ -113,6 +113,11 @@ class Api::V1::RepositoriesController < Api::BaseController
       # areas and files, and an agent holding both still cannot ask which TEST inside a 90-second
       # directory to open. See `serialized_slowest_examples` below.
       slowest_examples: serialized_slowest_examples(test_run),
+      # BESIDE `slowest_examples`, and the grain none of the three blocks above can reach. Those
+      # roll this run's rows up by where the code LIVES — the example, its file, its area — and no
+      # rollup of "where" can see that two of those rows say the same thing. See
+      # `serialized_repeated_descriptions` below.
+      repeated_descriptions: serialized_repeated_descriptions(test_run),
       # `TestRun#suite_size_measured?`, the same predicate `serialized_history_row` serves below and
       # for the same reason: a run that reported zero tests has a `total_specs` but not a
       # measurement, and a difference taken against it describes the report rather than the suite.
@@ -520,6 +525,103 @@ class Api::V1::RepositoriesController < Api::BaseController
       timed_count: slowest.timed_count,
       reported_outcome_count: slowest.reported_outcome_count,
       limit: SpecObservation::SLOWEST_LIMIT
+    }
+  end
+
+  # WHICH DESCRIPTIONS ONE RUN RECORDED MORE THAN ONCE, ranked by the wall clock those examples cost
+  # between them — the ⭐overcoverage reading `repositories#show` has rendered since SPGD-344, and
+  # the last of the five run-grain panels to reach a client that cannot read a panel.
+  #
+  # INSIDE `latest_run` rather than beside it, on the membership test the comment on
+  # `unstable_tests` states in full: every key that block serves is a statement about ONE run's
+  # rows, and "this test is unstable" is a statement about one test across several.
+  # `RepeatedDescriptions.for` narrows both of its reads to a single `test_run_id`, so this is a
+  # statement about one run's rows and belongs where the other four are.
+  #
+  # THE GRAIN IS THE DESCRIPTION, which is a grain none of the four blocks above can reach. They
+  # roll a run's rows up by where the code LIVES — the example, its file, its area — and no
+  # rollup of "where" can see that two of those rows claim to test the same thing. The measurement
+  # existed nowhere before that panel: `GROUP BY name` appears twice in this application and both
+  # are narrowed to failures, so on a green suite — the normal case — nothing grouped examples by
+  # description at all.
+  #
+  # THE SAME OBJECT THE PANEL READS, never a hand-written query — this file's governing rule,
+  # stated in full on `serialized_spec_files` above. `RepeatedDescriptions` is view-free, so the
+  # API and the panel rank the same descriptions of the same run in the same order, off the same
+  # two reads.
+  #
+  # OPERANDS, NEVER THE PANEL'S PROSE, and every row here has two label methods one call away.
+  # `Row#duration_label` renders `"1.23s"` or `"not reported"` and `Row#coverage_label` renders
+  # `"6 of 8"`; a client can subtract neither. So `total_seconds` is the raw float — `null`, never
+  # `0.0`, for a group nothing timed, which `Row#timed?` exists to keep distinguishable — and
+  # `recorded_count` / `timed_count` are the two integers that fraction is built from. `files_seen`
+  # is served through the row's own accessor, which is `Array()`-normalized and sorted, so the
+  # `ARRAY_AGG … FILTER` SQL NULL cannot leak into the JSON as a bare `null` element.
+  #
+  # `group_count` beside `limit`, on the rule `spec_files` states: `rows.size` cannot tell "the 10
+  # costliest of 80" from "all 3", and `group_count` is the `COUNT(*) OVER ()` counted after the
+  # `HAVING` and before the `LIMIT`, so it counts every repeated description however few come back.
+  # `limit` is READ OFF `SpecObservation::REPEATED_DESCRIPTIONS_LIMIT` rather than restated here, on
+  # the precedent `history_window.run_count_limit` and `slowest_examples.limit` set. The operands,
+  # never `#truncated?` — this endpoint ships figures a client compares, not comparisons.
+  #
+  # THE THREE HONESTY FIGURES ARE THE POINT OF THE BLOCK, and they are why an empty `rows` here
+  # carries more keys than an empty ranking one grain up. `#recorded?`, `#named?` and `#any?` are
+  # three different facts — the object's class comment says so in those words — and an empty
+  # ranking over a run that wrote NO rows, an empty ranking over a run whose producer sent no
+  # descriptions, and an empty ranking over a suite whose every description is unique are the same
+  # empty list. Only the first two are silence, and reporting any of them as "no redundancy here"
+  # is *Vacuous Green*. So `recorded_count` says how many rows the run wrote, `unnamed_row_count`
+  # says how many of them the grouping could not see (they are excluded in SQL, so no window over
+  # that read could ever have counted them — hence the second query), and the client holds
+  # `named_row_count`'s two operands without this endpoint shipping the subtraction.
+  #
+  # `repeated_recorded_count` / `repeated_timed_count` are the window pair, over the WHOLE repeated
+  # population rather than over the head that fit, which is what keeps a truncated run from reading
+  # as fully timed on the strength of ten rows.
+  #
+  # NO VERDICT KEY. A description carried by several examples is evidence of repetition AND the
+  # ordinary shape of a table-driven loop or a shared example group; the object deliberately has no
+  # `#redundant?` and this response has no counterpart. It presents, and does not judge.
+  #
+  # `null` — with the key still present — for a run that recorded no observation rows, on
+  # `slowest_examples`' rule verbatim, and never a zeroed block: a `recorded_count: 0` beside an
+  # empty array would assert a run that ran no examples. GATED ON `#recorded?` ITSELF, called
+  # rather than re-spelled as `rows.any?`: a run that recorded five hundred examples whose every
+  # description is unique has a real description grain to disclose, with an honest empty ranking and
+  # a zero `group_count` over it, and `rows.any?` would blank exactly that run.
+  #
+  # RE-SORTED NOWHERE. The order is the aggregate's `SUM(duration_seconds) DESC NULLS LAST, name
+  # ASC` — a group nobody timed sorts LAST rather than heading a list about what repetition cost.
+  #
+  # EXACTLY TWO EXTRA QUERIES, on every run, recorded or not — and constant in the size of the
+  # suite. `RepeatedDescriptions.for` issues both unconditionally, so `#recorded?` is an answer
+  # DERIVED from the reads rather than a gate in front of them: one grouped aggregate behind
+  # `index_spec_observations_on_test_run_id`, and one two-column count over the same narrow. Both
+  # are EXPLAIN-certified in `spec/models/spec_observation_spec.rb`, and this block issues the
+  # panel's reads unchanged, so that certification transfers rather than needing to be repeated in
+  # a request spec.
+  def serialized_repeated_descriptions(test_run)
+    repeated = RepeatedDescriptions.for(test_run)
+
+    return nil unless repeated.recorded?
+
+    {
+      rows: repeated.rows.map do |row|
+        {
+          name: row.name,
+          total_seconds: row.total_seconds,
+          recorded_count: row.recorded_count,
+          timed_count: row.timed_count,
+          files_seen: row.files_seen
+        }
+      end,
+      group_count: repeated.group_count,
+      recorded_count: repeated.recorded_count,
+      unnamed_row_count: repeated.unnamed_row_count,
+      repeated_recorded_count: repeated.repeated_recorded_count,
+      repeated_timed_count: repeated.repeated_timed_count,
+      limit: SpecObservation::REPEATED_DESCRIPTIONS_LIMIT
     }
   end
 
