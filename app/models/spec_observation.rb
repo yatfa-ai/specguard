@@ -791,28 +791,89 @@ class SpecObservation < ApplicationRecord
   # respect to directory structure. That grain answers "which partition ran long"; this one answers
   # "which area of the codebase costs", and neither is derivable from the other.
   #
-  # @return [Array<Array>] `[directory, total_seconds, recorded_count, timed_count, directory_count]`
-  #   per directory, where `directory_count` is the same figure on every row: how many directories
-  #   the run touched in total, before the `LIMIT`.
+  # @return [Array<Array>] `[directory, total_seconds, recorded_count, timed_count,
+  #   distinct_name_count, named_count, directory_count]` per directory, where `directory_count` is
+  #   the same figure on every row: how many directories the run touched in total, before the
+  #   `LIMIT`. The window function stays LAST in the tuple, and the two description figures were
+  #   inserted BEFORE it rather than appended after — see the note below.
   #
   # == Every hazard the by-file read documents, at this grain
   #
-  # The four columns, `pluck` over `.sum`, and `NULLS LAST` are all here for the reasons spelled
-  # out on `.file_durations_in` above — read that comment, it is not repeated. What changes with
-  # the grain is only how much each one costs when it is got wrong: an area is a bigger population
-  # than a file, so an all-untimed area rendered as `0.00s` is a bigger invented measurement, and
-  # `SUM(...) DESC`'s NULLS FIRST would name that area the heaviest in the suite.
+  # The duration columns, `pluck` over `.sum`, and `NULLS LAST` are all here for the reasons
+  # spelled out on `.file_durations_in` above — read that comment, it is not repeated. What changes
+  # with the grain is only how much each one costs when it is got wrong: an area is a bigger
+  # population than a file, so an all-untimed area rendered as `0.00s` is a bigger invented
+  # measurement, and `SUM(...) DESC`'s NULLS FIRST would name that area the heaviest in the suite.
   #
-  # == Why this needs no index of its own
+  # == How many DISTINCT DESCRIPTIONS an area's examples carry, and the count that rides beside it
+  #
+  # The third figure of the area-grain reading — "this area carries 340 examples and 6 minutes of
+  # wall clock for what looks like ~40 distinct behaviors". It is measured HERE, in the aggregate
+  # that already produces the other two, because a caption is a claim about a list: a density
+  # counted by a second read is a claim about a population this one did not group. No migration and
+  # no new index. It is NOT free, and what it costs is written down below rather than waved at.
+  #
+  # `COUNT(DISTINCT name)` SKIPS NULLS SILENTLY and `name` is nullable, so on its own it reports an
+  # area whose producer sent no descriptions as ZERO distinct behaviors against 340 examples — the
+  # most extreme over-coverage reading obtainable, invented out of silence. So `COUNT(name)` rides
+  # back beside it and the density is only ever stated over the NAMED rows, with the excluded ones
+  # visible: the same `recorded_count` / `timed_count` fraction this method already carries for
+  # timings, applied to the second nullable column. `RepeatedDescriptions` draws the same
+  # distinction one grain down and `.unnamed_row_count_in` above refuses the same silence for a
+  # window. What the ratio MEANS is not decided here or anywhere downstream — repetition is equally
+  # the ordinary shape of a table-driven loop or a shared example group.
+  #
+  # POSITION IS A DECISION, not an accident: `SpecDirectoryDurations.for` reads the window count off
+  # the end of the tuple, so appending after `COUNT(*) OVER ()` would have kept every caller running
+  # while silently handing it a description count as a directory count. The window stays last, and
+  # the caller now reads it by an explicit index rather than by `.last`.
+  #
+  # == What the DISTINCT aggregate COSTS: the hash strategy, and this read alone pays it
+  #
+  # A `DISTINCT` aggregate disqualifies hashed aggregation in Postgres, so adding `COUNT(DISTINCT
+  # name)` moved this read off `HashAggregate` and onto `Sort` + `GroupAggregate`, sorting the run's
+  # rows on the directory expression AND on `name` before grouping them. That is a REAL price and
+  # this comment used to deny it: the access path did not change, which is a narrower claim than the
+  # plan not changing, and the two were being read as the same sentence.
+  #
+  # Measured, not asserted — EXPLAIN (ANALYZE, BUFFERS) over one 20,000-example run, the stated
+  # design point, at the default `work_mem` of 4MB:
+  #
+  #     before   HashAggregate           Memory:  145kB   Buffers: shared hit=753
+  #     after    Sort + GroupAggregate   Memory: 2911kB   Buffers: shared hit=753
+  #
+  # What that buys and what it costs. The buffer counts are IDENTICAL — the sort reads no page the
+  # hash did not already read, because both sit on the same index scan of the same one run, which is
+  # the part "the access path is unchanged" was always about. The sort is bounded by ONE RUN's rows,
+  # never by the table, and it is the run's rows this read already had to fetch. What it adds is
+  # ~2.8MB of `work_mem` and a sort of 20,000 rows on two text columns, per render of this panel.
+  #
+  # The wall-clock difference is deliberately NOT quoted as a figure. Repeated on one box it ran
+  # 53-58ms before and 57-69ms after — a real cost whose ranges OVERLAP, so any single pair of
+  # numbers picked out of that would be a precision this measurement does not have, which is the
+  # error this whole section exists to correct. What is stable across every repetition is the
+  # strategy, the sort memory and the buffer count above; those are what the claim rests on.
+  #
+  # Priced as acceptable: the panel is one read on one page load, not a hot path, and tens of
+  # milliseconds is well inside the budget for rendering a dashboard. The figure is worth a sort.
+  #
+  # Where it stops being acceptable: 2911kB sits under the default 4MB with less room than it looks
+  # — at `work_mem = 1MB` the same read spills to `external merge Disk: 2040kB`. So a deployment
+  # that tightens `work_mem`, or a suite materially past the design point, buys disk I/O rather than
+  # CPU here. The strategy is pinned by an EXPLAIN example in spec/models/spec_observation_spec.rb
+  # so that an edit which loses the in-memory sort is visible rather than silent.
+  #
+  # == Why this still needs no index of its own
   #
   # It groups on an EXPRESSION and narrows on a COLUMN, and only the second decides the access
-  # path. `where(test_run_id:)` is served by `index_spec_observations_on_test_run_id` and the
-  # grouping hash-aggregates on top of it — the same plan `.file_durations_in` gets and for the
-  # same reason spec/models/spec_observation_spec.rb states there: the aggregate has to touch the
-  # heap for `duration_seconds` either way, so no wider index buys a whole-run grouping anything.
+  # path. `where(test_run_id:)` is served by `index_spec_observations_on_test_run_id`, and the
+  # aggregation — hash before this change, sort-and-group after it — sits on top of that scan
+  # either way. No index available here changes that: the aggregate has to touch the heap for
+  # `duration_seconds` whatever it does, so no wider index buys a whole-run grouping anything, and
+  # an index leading with `name` would not be read by a grouping keyed on the directory expression.
   # A `text_pattern_ops` index governs a prefix PREDICATE — "every row under `spec/models/`" — and
-  # this read has no prefix predicate to serve. Both claims are EXPLAIN-certified at the 20-run
-  # seed in that spec rather than argued for here.
+  # this read has no prefix predicate to serve. All of it is EXPLAIN-certified at the 20-run seed in
+  # that spec rather than argued for here.
   def self.directory_durations_in(test_run, limit: HEAVIEST_DIRECTORIES_LIMIT)
     where(test_run_id: test_run.id)
       .group(Arel.sql(DIRECTORY_EXPRESSION))
@@ -820,6 +881,7 @@ class SpecObservation < ApplicationRecord
       .limit(limit)
       .pluck(Arel.sql(DIRECTORY_EXPRESSION), Arel.sql("SUM(duration_seconds)"),
              Arel.sql("COUNT(*)"), Arel.sql("COUNT(duration_seconds)"),
+             Arel.sql("COUNT(DISTINCT name)"), Arel.sql("COUNT(name)"),
              Arel.sql("COUNT(*) OVER ()"))
   end
 
@@ -876,10 +938,23 @@ class SpecObservation < ApplicationRecord
   #
   # It narrows on `test_run_id` — served by `index_spec_observations_on_test_run_id` — and adds an
   # EXPRESSION predicate that no index can serve and that therefore decides nothing about the access
-  # path; the grouping hash-aggregates on top. That is the plan `.directory_durations_in` gets, for
-  # the reason its comment states: the aggregate has to touch the heap for `duration_seconds`
-  # either way, so no wider index buys a whole-run grouping anything. EXPLAIN-certified at the
-  # 20-run seed in spec/models/spec_observation_spec.rb rather than argued for here.
+  # path. That is the ACCESS PATH `.file_durations_in` gets, for the reason its comment states: the
+  # aggregate has to touch the heap for `duration_seconds` either way, so no wider index buys a
+  # whole-run grouping anything. EXPLAIN-certified at the 20-run seed in
+  # spec/models/spec_observation_spec.rb rather than argued for here.
+  #
+  # This comment used to go on to claim "the grouping hash-aggregates on top", and to cite
+  # `.directory_durations_in` as the exemplar for that. BOTH halves were wrong and are worth
+  # recording as wrong, because the second is a trap. Measured at the 20-run seed: this read gets
+  # `Sort` + `GroupAggregate` (the planner estimates three groups, at which size sorting is simply
+  # cheaper), while `.file_durations_in` — same table, same absence of a `DISTINCT` aggregate, 25
+  # groups — gets `HashAggregate`. So for THIS read the strategy is a cost tiebreak that moves with
+  # the data, and no comment here should promise either one.
+  #
+  # `.directory_durations_in` is not that, and that is why it is no longer cited here: its
+  # `COUNT(DISTINCT name)` disqualifies hashed aggregation outright, so its sort is structural
+  # rather than a tiebreak, and its own comment prices it in measured milliseconds. A read whose
+  # strategy is chosen and a read whose strategy is forced are not exemplars of each other.
   #
   # @return [Array<Array>] `[spec_file_path, total_seconds, recorded_count, timed_count, file_count,
   #   directory_recorded_count, directory_timed_count]` per file, heaviest first. The last three are
@@ -942,13 +1017,18 @@ class SpecObservation < ApplicationRecord
   #
   # == Why it needs no index of its own
   #
-  # Verbatim the argument at `.directory_durations_in`: it narrows on `test_run_id` — served by
-  # `index_spec_observations_on_test_run_id` — and GROUPS on a column no index leads on for this
-  # predicate, which decides nothing about the access path; the grouping hash-aggregates on top.
+  # Verbatim the ACCESS PATH argument at `.directory_durations_in`: it narrows on `test_run_id` —
+  # served by `index_spec_observations_on_test_run_id` — and GROUPS on a column no index leads on
+  # for this predicate, which decides nothing about the access path.
   # `index_spec_observations_on_repository_id_and_name` exists and is NOT the path here: it leads on
   # `repository_id`, which is what `.outcome_composition_in` rides for a WINDOW of runs, and a
   # single-run narrow does not begin with it. EXPLAIN-certified at the 20-run seed in
   # spec/models/spec_observation_spec.rb rather than argued for here.
+  #
+  # Not "and the grouping hash-aggregates on top", which this comment used to say and which is
+  # measurably false: the `ARRAY_AGG(DISTINCT spec_file_path)` in the `pluck` below disqualifies
+  # hashed aggregation, so this read sorts on `name, spec_file_path` and group-aggregates — the
+  # same price, from the same cause, that `.directory_durations_in` now writes down in full.
   #
   # @return [Array<Array>] `[name, total_seconds, recorded_count, timed_count, file_paths,
   #   group_count, repeated_recorded_count, repeated_timed_count]` per description, costliest first.
@@ -1070,9 +1150,14 @@ class SpecObservation < ApplicationRecord
   #
   # It narrows on `test_run_id` — an `IN` list of two — and groups on an EXPRESSION, and only the
   # first decides the access path. `index_spec_observations_on_test_run_id` serves it and the
-  # grouping hash-aggregates on top, which is the plan `.directory_durations_in` gets one method
-  # up; two runs is twice the rows, not a different shape. EXPLAIN-certified at the 20-run seed in
-  # spec/models/spec_observation_spec.rb rather than argued for here.
+  # grouping hash-aggregates on top; two runs is twice the rows, not a different shape.
+  # EXPLAIN-certified at the 20-run seed in spec/models/spec_observation_spec.rb rather than argued
+  # for here.
+  #
+  # This used to add "which is the plan `.directory_durations_in` gets one method up". It is not,
+  # any more: that read acquired a `COUNT(DISTINCT name)`, which disqualifies hashed aggregation
+  # outright and buys it a sort. This read has no `DISTINCT` aggregate and does still hash — the
+  # two facts simply stopped being the same fact, so it is stated here on its own evidence.
   #
   # @return [Array<Array>] `[directory, previous_count, latest_count, directory_count,
   #   previous_recorded, latest_recorded]` per directory, ranked by absolute movement. The last

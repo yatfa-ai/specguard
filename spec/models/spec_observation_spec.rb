@@ -394,10 +394,9 @@ RSpec.describe SpecObservation do
       # `text_pattern_ops` index; that index type serves a prefix PREDICATE — "every row under
       # `spec/models/`" — and this read issues none. It narrows on `test_run_id`, a plain column
       # with a plain index, and GROUPS on an expression, which decides nothing about the access
-      # path. So the plan is the by-file one above: one run reached through an index, hash-aggregated
-      # on top, for the reason the bare grouping two examples up states — the aggregate has to touch
-      # the heap for `duration_seconds` either way, so no wider index buys a whole-run grouping
-      # anything.
+      # path. So the ACCESS PATH is the by-file one above: one run reached through an index, for
+      # the reason the bare grouping two examples up states — the aggregate has to touch the heap
+      # for `duration_seconds` either way, so no wider index buys a whole-run grouping anything.
       #
       # MEASURED here rather than argued from the sibling: this is the assertion that would have
       # sent the slice to a migration had the premise been wrong, so it is the one that must run
@@ -409,18 +408,69 @@ RSpec.describe SpecObservation do
         expect(plan).not_to match(/Seq Scan on spec_observations/)
       end
 
+      # The AGGREGATION STRATEGY, which is a different fact from the access path and was being
+      # smuggled in under it. The example above cannot see this: `INDEXED_BY_RUN` matches the scan
+      # at the bottom of the plan and stayed green when `COUNT(DISTINCT name)` was added, while the
+      # aggregation above that scan changed from `HashAggregate` to `Sort` + `GroupAggregate`. A
+      # certification that cannot distinguish the two plans it is offered certifies nothing about
+      # the difference — the project's own Vacuous Green shape, pointed at the measurement rather
+      # than at a gate.
+      #
+      # So the strategy is pinned explicitly, and pinned as the WORSE one it actually is. A
+      # `DISTINCT` aggregate disqualifies hashed aggregation in Postgres, so this read sorts every
+      # one of the run's rows on the directory expression and on `name` before grouping them. That
+      # is the price of the distinct-description column and `.directory_durations_in`'s comment
+      # prices it in measured sort memory and buffer counts; what this example is for is making an
+      # edit that changes the price VISIBLE. Drop the `DISTINCT` and this reddens on the
+      # `GroupAggregate`; add a second sort or lose the index scan underneath it and the sort key
+      # or the sibling example above reddens instead.
+      #
+      # The sort key is asserted, not just the `Sort` node: a plan can sort for the ORDER BY alone
+      # — the by-file rollup above does, on `SUM(duration_seconds)` — and matching a bare `Sort`
+      # would pass on that one too, which is exactly the indiscriminate assertion this example
+      # exists to stop being.
+      it "pays for the distinct-description count with a sort, and says so in the plan" do
+        plan = plan_for_actual_sql { described_class.directory_durations_in(run) }
+
+        expect(plan).to include("GroupAggregate")
+        expect(plan).to match(/Sort Key: .*substring.*, name/)
+        expect(plan).not_to include("HashAggregate")
+      end
+
+      # The falsifier for the example above, and the reason it is not asserting an accident: the
+      # SAME read WITHOUT the `DISTINCT` aggregate — everything else identical, same seed, same
+      # statistics — hash-aggregates. So `GroupAggregate` above is caused by the column this slice
+      # added rather than by the size of the table or the shape of the grouping, and a future edit
+      # that removes the `DISTINCT` will be told what it just changed.
+      it "hash-aggregates the same grouping when the DISTINCT aggregate is taken away" do
+        without_distinct = described_class.where(test_run_id: run.id)
+          .group(Arel.sql(SpecObservation::DIRECTORY_EXPRESSION))
+          .select(Arel.sql("#{SpecObservation::DIRECTORY_EXPRESSION}, SUM(duration_seconds), COUNT(*), COUNT(name)"))
+
+        plan = plan_for(without_distinct)
+
+        expect(plan).to include("HashAggregate")
+        expect(plan).to match(INDEXED_BY_RUN)
+      end
+
       # The same certification for the rung BETWEEN those two, and the reason it also ships without
       # a migration — which is the claim most worth measuring here, because this read is the one
       # that looks like it wants a `text_pattern_ops` index and does not.
       #
       # It adds an EXPRESSION predicate over the by-directory rollup above: `DIRECTORY_EXPRESSION =
       # ?`. No index on this table can serve that, and it therefore decides nothing about the access
-      # path — `where(test_run_id:)` still does, exactly as it does for the rollup, and the grouping
-      # hash-aggregates on top. A `text_pattern_ops` index would serve `spec_file_path LIKE
-      # 'spec/d3/%'`, a PREFIX predicate; this read issues none, and the example directly above in
-      # "what they return" pins that the narrowing is an equality at one depth rather than a subtree.
-      # If a future edit turns it into a prefix `LIKE`, that example fails first and this one records
-      # what the plan cost.
+      # path — `where(test_run_id:)` still does, exactly as it does for the rollup. A
+      # `text_pattern_ops` index would serve `spec_file_path LIKE 'spec/d3/%'`, a PREFIX predicate;
+      # this read issues none, and the example directly above in "what they return" pins that the
+      # narrowing is an equality at one depth rather than a subtree. If a future edit turns it into
+      # a prefix `LIKE`, that example fails first and this one records what the plan cost.
+      #
+      # This comment used to add "and the grouping hash-aggregates on top". Measured, it does not:
+      # at this seed the planner estimates three groups and sorts, while `.file_durations_in` — same
+      # table, same absence of a `DISTINCT` aggregate, 25 groups — hashes. For this read the
+      # strategy is a cost tiebreak that moves with the data, so nothing here asserts one. Where a
+      # strategy IS forced rather than chosen, it is pinned: see the by-directory rollup above,
+      # whose `DISTINCT` aggregate rules hashing out and whose sort is asserted for that reason.
       it "reads the panel's one-directory drill-down off an index rather than scanning the table" do
         plan = plan_for_actual_sql { described_class.files_in_directory(run, "spec/d3") }
 
@@ -520,8 +570,12 @@ RSpec.describe SpecObservation do
       # real planner with real statistics at the 20-run seed.
       #
       # The premise is that a whole-run `GROUP BY name` is the same shape as a whole-run `GROUP BY`
-      # an expression: `where(test_run_id:)` decides the access path and the grouping
-      # hash-aggregates on top. What makes it worth measuring rather than assuming is that unlike
+      # an expression: `where(test_run_id:)` decides the ACCESS PATH, which is what this example
+      # asserts. It does NOT claim the strategy above that scan — this comment used to say "and the
+      # grouping hash-aggregates on top" and that is measurably false, because the read's
+      # `ARRAY_AGG(DISTINCT spec_file_path)` disqualifies hashed aggregation exactly as the
+      # by-directory rollup's `COUNT(DISTINCT name)` does. What makes the access path worth
+      # measuring rather than assuming is that unlike
       # `DIRECTORY_EXPRESSION` there IS an index over `name` on this table —
       # `index_spec_observations_on_repository_id_and_name` — and it is NOT the path here, because
       # it leads on `repository_id`. That index is what `.outcome_composition_in` rides for a
@@ -1041,9 +1095,9 @@ RSpec.describe SpecObservation do
         observe(run, duration: 0.5, line_number: 5, spec_file_path: "spec/system/smoke_spec.rb")
 
         expect(described_class.directory_durations_in(run)).to eq(
-          [["spec/requests", 13.0, 2, 2, 3],
-           ["spec/models", 4.0, 2, 2, 3],
-           ["spec/system", 0.5, 1, 1, 3]]
+          [["spec/requests", 13.0, 2, 2, 2, 2, 3],
+           ["spec/models", 4.0, 2, 2, 2, 2, 3],
+           ["spec/system", 0.5, 1, 1, 1, 1, 3]]
         )
       end
 
@@ -1056,8 +1110,8 @@ RSpec.describe SpecObservation do
         observe(run, duration: 2.0, line_number: 2, spec_file_path: "spec/models/orders/refund_spec.rb")
 
         expect(described_class.directory_durations_in(run)).to eq(
-          [["spec/models/orders", 2.0, 1, 1, 2],
-           ["spec/models", 1.0, 1, 1, 2]]
+          [["spec/models/orders", 2.0, 1, 1, 1, 1, 2],
+           ["spec/models", 1.0, 1, 1, 1, 1, 2]]
         )
       end
 
@@ -1071,8 +1125,8 @@ RSpec.describe SpecObservation do
         observe(run, duration: 1.0, line_number: 2, spec_file_path: "spec/models/order_spec.rb")
 
         expect(described_class.directory_durations_in(run)).to eq(
-          [[".", 3.0, 1, 1, 2],
-           ["spec/models", 1.0, 1, 1, 2]]
+          [[".", 3.0, 1, 1, 1, 1, 2],
+           ["spec/models", 1.0, 1, 1, 1, 1, 2]]
         )
       end
 
@@ -1106,8 +1160,8 @@ RSpec.describe SpecObservation do
 
         directories = described_class.directory_durations_in(run)
 
-        expect(directories).to eq([["spec/models", 0.25, 1, 1, 2],
-                                   ["spec/system", nil, 2, 0, 2]])
+        expect(directories).to eq([["spec/models", 0.25, 1, 1, 1, 1, 2],
+                                   ["spec/system", nil, 2, 0, 2, 2, 2]])
         expect(directories.last[1]).to be_nil
       end
 
@@ -1120,7 +1174,71 @@ RSpec.describe SpecObservation do
         observe(run, duration: nil, line_number: 2, spec_file_path: "spec/models/order_spec.rb")
         observe(run, duration: nil, line_number: 3, spec_file_path: "spec/models/refund_spec.rb")
 
-        expect(described_class.directory_durations_in(run)).to eq([["spec/models", 4.0, 3, 1, 1]])
+        expect(described_class.directory_durations_in(run)).to eq([["spec/models", 4.0, 3, 1, 3, 3, 1]])
+      end
+
+      # THE third figure, and the one the panel's headline sentence needs: how many distinct
+      # descriptions an area's examples carry. Four examples over two descriptions is the shape the
+      # reading is about — a `COUNT(*)` retyped as a distinct count, or a distinct count taken over
+      # `example_id` rather than `name`, both come back as 4 here and neither is a behavior count.
+      it "counts each area's distinct descriptions, not its examples" do
+        observe(run, duration: 1.0, line_number: 1, name: "settles an invoice",
+                     spec_file_path: "spec/models/order_spec.rb")
+        observe(run, duration: 1.0, line_number: 2, name: "settles an invoice",
+                     spec_file_path: "spec/models/order_spec.rb")
+        observe(run, duration: 1.0, line_number: 3, name: "settles an invoice",
+                     spec_file_path: "spec/models/refund_spec.rb")
+        observe(run, duration: 1.0, line_number: 4, name: "refuses a negative total",
+                     spec_file_path: "spec/models/refund_spec.rb")
+
+        expect(described_class.directory_durations_in(run)).to eq([["spec/models", 4.0, 4, 4, 2, 4, 1]])
+      end
+
+      # THE inverted Vacuous Green this pair of aggregates exists to refuse. `COUNT(DISTINCT name)`
+      # skips NULLs silently, so an area whose producer sent no descriptions at all comes back as
+      # ZERO distinct behaviors against its whole example count — read as a density, the most
+      # redundant area obtainable, invented out of silence rather than measured. The count of NAMED
+      # rows rides back in the same tuple so that zero is separable from a measurement: 0 distinct
+      # over 0 named is "nothing to count", which is not "nothing distinct to count".
+      it "reports no named rows for an area whose examples carry no description at all" do
+        observe(run, duration: 1.0, line_number: 1, name: nil, spec_file_path: "spec/models/order_spec.rb")
+        observe(run, duration: 1.0, line_number: 2, name: nil, spec_file_path: "spec/models/order_spec.rb")
+        observe(run, duration: 1.0, line_number: 3, name: nil, spec_file_path: "spec/models/refund_spec.rb")
+
+        expect(described_class.directory_durations_in(run)).to eq([["spec/models", 3.0, 3, 3, 0, 0, 1]])
+      end
+
+      # The partial case, and the one a whole-area check passes straight over: the distinct count is
+      # taken across SOME of the area's rows, so the population it was counted over is not
+      # `recorded_count`. Both figures come back, so the excluded rows are subtractable rather than
+      # silent — 2 distinct over 3 named of 5 recorded, where reading 2 against 5 overstates the
+      # repetition by counting rows the aggregate never saw.
+      it "counts an area's distinct descriptions over its named rows, not over all of them" do
+        observe(run, duration: 1.0, line_number: 1, name: "settles an invoice",
+                     spec_file_path: "spec/models/order_spec.rb")
+        observe(run, duration: 1.0, line_number: 2, name: "settles an invoice",
+                     spec_file_path: "spec/models/order_spec.rb")
+        observe(run, duration: 1.0, line_number: 3, name: "refuses a negative total",
+                     spec_file_path: "spec/models/order_spec.rb")
+        observe(run, duration: 1.0, line_number: 4, name: nil, spec_file_path: "spec/models/refund_spec.rb")
+        observe(run, duration: 1.0, line_number: 5, name: nil, spec_file_path: "spec/models/refund_spec.rb")
+
+        expect(described_class.directory_durations_in(run)).to eq([["spec/models", 5.0, 5, 5, 2, 3, 1]])
+      end
+
+      # One description in two AREAS is one distinct behavior in each of them, not one across the
+      # run: the counts are per group, and a distinct count taken over the whole run before the
+      # grouping would report one of these two areas as carrying no description of its own.
+      it "counts each area's descriptions against that area rather than against the run" do
+        observe(run, duration: 2.0, line_number: 1, name: "settles an invoice",
+                     spec_file_path: "spec/models/order_spec.rb")
+        observe(run, duration: 1.0, line_number: 2, name: "settles an invoice",
+                     spec_file_path: "spec/requests/order_spec.rb")
+
+        expect(described_class.directory_durations_in(run)).to eq(
+          [["spec/models", 2.0, 1, 1, 1, 1, 2],
+           ["spec/requests", 1.0, 1, 1, 1, 1, 2]]
+        )
       end
 
       it "reads the run it was asked about and no other" do
@@ -1128,7 +1246,7 @@ RSpec.describe SpecObservation do
         observe(run, duration: 1.0, line_number: 1, spec_file_path: "spec/ours/a_spec.rb")
         observe(other, duration: 99.0, line_number: 1, spec_file_path: "spec/theirs/a_spec.rb")
 
-        expect(described_class.directory_durations_in(run)).to eq([["spec/ours", 1.0, 1, 1, 1]])
+        expect(described_class.directory_durations_in(run)).to eq([["spec/ours", 1.0, 1, 1, 1, 1, 1]])
       end
 
       # Its OWN limit, not the by-file one. The two constants happen to be equal today, which is

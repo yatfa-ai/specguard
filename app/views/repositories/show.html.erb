@@ -1999,8 +1999,48 @@
             Counted off the rows this run wrote here, which is a different figure from the suite
             size on the Overview panel above and may legitimately differ from it. It is also not the
             shard split on that panel: a CI partition is not a code area.
+            <%# What the THIRD column was counted over, on the same terms as the second — and the
+                sentence that stops the new figure being read as a verdict.
+
+                `COUNT(DISTINCT name)` skips a missing description exactly as `SUM` skips a missing
+                timing, and inverted it costs more than anything else on this page: an area whose
+                producer sent no descriptions would print zero distinct behaviors against its whole
+                example count, which is the strongest over-coverage reading available here and is
+                made of silence. So the column is a fraction over the NAMED rows, the excluded rows
+                are printed beside it, and an area with none says so.
+
+                Every sentence here is a claim about the areas LISTED, never about the run — the
+                list is capped at ten and the sentence one paragraph up says so out loud ("the 10
+                heaviest of the 13 directories"). `#any_named?` and `#fully_named?` fold over those
+                ten rows, so a run whose only described area sits below the cap would make a
+                run-scoped sentence here false while both predicates are correct. The predicates are
+                list-scoped by construction and the prose has to be too, which is the rule
+                `SpecDirectoryDurations` states about itself: a caption is a claim ABOUT the list. %>
+            <% if @spec_directory_durations.any_named? %>
+              The "Distinct descriptions" column is how many distinct descriptions each area's
+              examples carry, counted over the examples that reported one.
+              <% if @spec_directory_durations.fully_named? %>
+                Every example in every directory listed reported a description, so each count covers
+                the whole of its area.
+              <% else %>
+                Examples that reported no description are counted separately beside it rather than
+                folded in, and an area that reported none has no descriptions to count rather than
+                zero distinct behaviors.
+              <% end %>
+              Several examples sharing a description is equally a suite testing one behavior many
+              ways and an ordinary table-driven loop or shared example group, so this is a ratio to
+              review rather than a judgement about the area.
+            <% else %>
+              The "Distinct descriptions" column has nothing to state about the directories listed
+              here: not one of their examples reported a description, so there is nothing to count
+              distinct rather than nothing distinct to count.
+            <% end %>
           </p>
-          <%= render UI::TableComponent.new(columns: ["Directory", "Examples timed", "Total duration"],
+          <%# "Distinct descriptions" LAST, in the order the area-grain reading is said in: this
+              area carries N examples ("Examples timed"), costs this much wall clock ("Total
+              duration"), for this many distinct behaviors. %>
+          <%= render UI::TableComponent.new(columns: ["Directory", "Examples timed", "Total duration",
+                                                      "Distinct descriptions"],
                                             describedby: "spec-directory-durations-basis") do %>
             <% @spec_directory_durations.rows.each do |directory| %>
               <tr>
@@ -2045,6 +2085,38 @@
                       disagree about how a duration is spelled, and an area that measured nothing
                       says "not reported" rather than wearing the spelling of a zero. %>
                   <%= directory.duration_label %>
+                </td>
+                <td class="px-3 py-2 text-app-content-secondary tabular-nums">
+                  <%# The third figure of the area-grain reading, and the one that must never be a
+                      bare number. A fraction over the rows the count could SEE, because
+                      `COUNT(DISTINCT name)` skips the rows it could not, and "no descriptions"
+                      rather than "0" for an area none of whose examples reported one — a zero
+                      there is this surface inventing the most redundant area on the page out of a
+                      producer's silence.
+
+                      The excluded rows are printed beside the fraction wherever the fraction is
+                      printed, the way every coverage figure on this page carries its own
+                      denominator rather than deferring to a caption a reader may not be looking
+                      at.
+
+                      SPELLED LIKE THE FRACTION IT ANNOTATES — no `number_with_delimiter`, and that
+                      is a decision rather than an omission. The two halves of this cell are one
+                      sentence, and delimiting only the second reads "40 of 20000 (1,234 unnamed)"
+                      at the design point: one cell disagreeing with itself about what a number
+                      looks like. The fraction's spelling is `Row#distinct_description_label`'s,
+                      which is `#coverage_label`'s, which is the spelling of the "Examples timed"
+                      cell one column over and of the same fraction at every other grain on this
+                      page — so the alternative is not "delimit this span" but "re-spell every
+                      coverage fraction the panels share", which is a change to all of them and is
+                      deliberately not smuggled in behind a new column. Delimiters on this page mark
+                      CAPTION PROSE, where a figure stands alone in a sentence; every other
+                      `number_with_delimiter` in this file is in a basis line or a summary string. %>
+                  <%= directory.distinct_description_label %>
+                  <% if directory.named? && directory.excluded_unnamed_rows? %>
+                    <span class="text-app-muted">
+                      (<%= directory.unnamed_count %> unnamed)
+                    </span>
+                  <% end %>
                 </td>
               </tr>
             <% end %>

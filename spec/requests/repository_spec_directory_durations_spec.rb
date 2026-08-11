@@ -35,12 +35,13 @@ RSpec.describe "Repository heaviest spec directories", type: :request do
   # words, so a panel-level `have_text` passes for the wrong state with the deciding branch deleted.
   def basis_line = panel.find("#spec-directory-durations-basis")
 
-  # One row as a reader meets it: the area, what its total was summed over, and the total.
+  # One row as a reader meets it: the area, what its total was summed over, the total, and how many
+  # distinct descriptions the examples behind it carry.
   def rows
     panel.all("tbody tr").map do |row|
-      path, coverage, duration = row.all("td").map { |cell| cell.text.gsub(/\s+/, " ").strip }
+      path, coverage, duration, descriptions = row.all("td").map { |cell| cell.text.gsub(/\s+/, " ").strip }
 
-      { path: path, coverage: coverage, duration: duration }
+      { path: path, coverage: coverage, duration: duration, descriptions: descriptions }
     end
   end
 
@@ -164,8 +165,10 @@ RSpec.describe "Repository heaviest spec directories", type: :request do
 
       get repository_path(repository)
 
-      expect(rows).to eq([{ path: "spec/models/orders", coverage: "1 of 1", duration: "2.00s" },
-                          { path: "spec/models", coverage: "1 of 1", duration: "1.00s" }])
+      expect(rows).to eq([{ path: "spec/models/orders", coverage: "1 of 1", duration: "2.00s",
+                            descriptions: "1 of 1" },
+                          { path: "spec/models", coverage: "1 of 1", duration: "1.00s",
+                            descriptions: "1 of 1" }])
     end
 
     # A spec file at the repository root has no parent segment at all. Dropping those rows would
@@ -223,7 +226,8 @@ RSpec.describe "Repository heaviest spec directories", type: :request do
     it "states how much of a partly timed area its total was summed over" do
       get repository_path(mixed_run)
 
-      expect(rows.first).to eq(path: "spec/models", coverage: "1 of 3", duration: "4.00s")
+      expect(rows.first).to eq(path: "spec/models", coverage: "1 of 3", duration: "4.00s",
+                               descriptions: "1 of 3")
     end
 
     # Both halves fail differently. A cell rendering the aggregate's nil through
@@ -232,7 +236,8 @@ RSpec.describe "Repository heaviest spec directories", type: :request do
     it "shows no total for a wholly untimed area, and does not rank it above a measured one" do
       get repository_path(mixed_run)
 
-      expect(rows.last).to eq(path: "spec/system", coverage: "0 of 2", duration: "not reported")
+      expect(rows.last).to eq(path: "spec/system", coverage: "0 of 2", duration: "not reported",
+                              descriptions: "1 of 2")
       expect(row_paths.first).to eq("spec/models")
       expect(panel).to have_no_text("0.00s")
     end
@@ -314,6 +319,210 @@ RSpec.describe "Repository heaviest spec directories", type: :request do
     end
   end
 
+  # THE THIRD FIGURE of the area-grain reading — "this area carries 340 examples and 6 minutes of
+  # wall clock for what looks like ~40 distinct behaviors". The other two have been on this panel
+  # since it shipped; this describes the column that completes the sentence, and the silence it must
+  # refuse to turn into the loudest reading on the page.
+  describe "the distinct descriptions each area carries" do
+    # An example the producer sent no description for. `Ingest::Payload#validate_name` accepts a nil
+    # `name` only when the spec carries an intent, so this goes through the ANNOTATED builder and
+    # drops the name afterwards — which is the real production shape: an annotated suite whose
+    # formatter never sent `full_description`. A hand-inserted row would assert against a shape
+    # nothing writes.
+    def unnamed_spec(file_path:, duration:, line_number:, **attrs)
+      annotated_spec(file_path: file_path, line_number: line_number, duration: duration)
+        .merge(name: nil).merge(attrs)
+    end
+
+    # The reading itself: three examples over two descriptions in one area, one example over one in
+    # the other. A column rendering the example count reads "3 of 3" for the first and is
+    # indistinguishable from the second on the axis that matters.
+    it "states how many distinct descriptions an area's examples carry, not how many examples ran" do
+      repository = create_repository(user: @user)
+      ingest(repository, [example_spec(file_path: "spec/models/order_spec.rb", duration: 3.0,
+                                       line_number: 1, name: "settles an invoice"),
+                          example_spec(file_path: "spec/models/order_spec.rb", duration: 3.0,
+                                       line_number: 2, name: "settles an invoice"),
+                          example_spec(file_path: "spec/models/refund_spec.rb", duration: 3.0,
+                                       line_number: 3, name: "refuses a negative total"),
+                          example_spec(file_path: "spec/system/smoke_spec.rb", duration: 1.0,
+                                       line_number: 4, name: "boots")])
+
+      get repository_path(repository)
+
+      expect(rows).to eq([{ path: "spec/models", coverage: "3 of 3", duration: "9.00s",
+                            descriptions: "2 of 3" },
+                          { path: "spec/system", coverage: "1 of 1", duration: "1.00s",
+                            descriptions: "1 of 1" }])
+    end
+
+    # THE Vacuous Green this column is inverted by, and the one assertion worth the whole guard.
+    # `COUNT(DISTINCT name)` skips NULLs, so an area whose producer sent no descriptions counts zero
+    # of them — and a cell rendering that bare would print the single most redundant area this page
+    # can describe, out of a producer's silence rather than a measurement. It says so instead.
+    it "says an area carries no descriptions rather than reporting it as maximal redundancy" do
+      repository = create_repository(user: @user)
+      ingest(repository, [unnamed_spec(file_path: "spec/models/order_spec.rb", duration: 3.0, line_number: 1),
+                          unnamed_spec(file_path: "spec/models/order_spec.rb", duration: 3.0, line_number: 2),
+                          unnamed_spec(file_path: "spec/models/refund_spec.rb", duration: 3.0, line_number: 3)],
+             annotated_specs_count: 3)
+
+      get repository_path(repository)
+
+      expect(rows).to eq([{ path: "spec/models", coverage: "3 of 3", duration: "9.00s",
+                            descriptions: "no descriptions" }])
+      # Neither the invented count nor the fraction wearing the shape of a measurement.
+      expect(rows.first[:descriptions]).not_to eq("0 of 3")
+      expect(rows.first[:descriptions]).not_to eq("0 of 0")
+    end
+
+    # The caption is a claim ABOUT the column, so on a run where nothing was named it must not go on
+    # describing a density nothing was counted for.
+    it "says the column has nothing to count where none of the listed areas carry descriptions" do
+      repository = create_repository(user: @user)
+      ingest(repository, [unnamed_spec(file_path: "spec/models/order_spec.rb", duration: 3.0, line_number: 1)],
+             annotated_specs_count: 1)
+
+      get repository_path(repository)
+
+      expect(basis_line).to have_text("nothing to count distinct rather than nothing distinct to count",
+                                      normalize_ws: true)
+    end
+
+    # THE example the one above cannot be: it runs on a SINGLE directory, where "the areas listed"
+    # and "the run" are the same rows, so it passes whichever of the two the caption claims. This is
+    # the run where they diverge — twelve unnamed areas heavy enough to fill the cap, and one named
+    # area light enough to fall below it.
+    #
+    # `#any_named?` folds over the LISTED rows and is false here, correctly: no listed area carries
+    # a description. What the caption may not do is promote that into a claim about the run, which
+    # holds a described area it cannot see — one sentence earlier the same paragraph discloses "the
+    # 10 heaviest of the 13", so a run-scoped sentence here contradicts the disclosure beside it.
+    # This panel carries `#truncated?` precisely because the list is capped; a caption that forgets
+    # the cap is the reading that whole predicate exists to refuse.
+    it "scopes the nothing-to-count sentence to the listed areas, not to a run it cannot see" do
+      repository = create_repository(user: @user)
+      heavy = (1..12).map do |i|
+        unnamed_spec(file_path: format("spec/heavy%02d/a_spec.rb", i), duration: 10.0 + i, line_number: i)
+      end
+      named = example_spec(file_path: "spec/light/b_spec.rb", duration: 0.1, line_number: 13,
+                           name: "settles an invoice")
+
+      ingest(repository, heavy + [named], annotated_specs_count: 12)
+
+      get repository_path(repository)
+
+      # The precondition: the list is capped, and the named area is one of the areas cut from it.
+      expect(rows.size).to eq(SpecObservation::HEAVIEST_DIRECTORIES_LIMIT)
+      expect(row_paths).not_to include("spec/light")
+      expect(basis_line).to have_text("The 10 heaviest of the 13 directories", normalize_ws: true)
+
+      expect(basis_line).to have_text("nothing to state about the directories listed here",
+                                      normalize_ws: true)
+      # The claim the panel is not entitled to make: this run DOES hold an example that reported a
+      # description, in the area the cap removed.
+      expect(basis_line).to have_no_text("nothing to state on this run", normalize_ws: true)
+      expect(basis_line).to have_no_text("no example it recorded reported a description",
+                                         normalize_ws: true)
+    end
+
+    # The partial area, which is where reading the distinct count against the EXAMPLE count goes
+    # wrong quietly: two named rows carrying one description between them, beside two the count
+    # could not see. "1 of 4" would be a density over a population the aggregate never read, and the
+    # excluded rows have to be visible in the same cell rather than inferable from a caption.
+    it "counts the density over an area's named rows and shows what it excluded" do
+      repository = create_repository(user: @user)
+      ingest(repository, [example_spec(file_path: "spec/models/order_spec.rb", duration: 1.0,
+                                       line_number: 1, name: "settles an invoice"),
+                          example_spec(file_path: "spec/models/order_spec.rb", duration: 1.0,
+                                       line_number: 2, name: "settles an invoice"),
+                          unnamed_spec(file_path: "spec/models/refund_spec.rb", duration: 1.0, line_number: 3),
+                          unnamed_spec(file_path: "spec/models/refund_spec.rb", duration: 1.0, line_number: 4)],
+             annotated_specs_count: 2)
+
+      get repository_path(repository)
+
+      expect(rows.first[:coverage]).to eq("4 of 4")
+      expect(rows.first[:descriptions]).to eq("1 of 2 (2 unnamed)")
+      expect(basis_line).to have_text("counted separately beside it rather than folded in",
+                                      normalize_ws: true)
+    end
+
+    # The ordinary run says the ordinary thing: no exclusion clause where nothing was excluded, for
+    # the reason every other caption on this page omits its own — "(0 unnamed)" is a sentence about
+    # arithmetic rather than about this area.
+    it "adds no exclusion note to an area that named every one of its examples" do
+      repository = create_repository(user: @user)
+      ingest(repository, [example_spec(file_path: "spec/models/order_spec.rb", duration: 1.0,
+                                       line_number: 1, name: "settles an invoice")])
+
+      get repository_path(repository)
+
+      expect(rows.first[:descriptions]).to eq("1 of 1")
+      expect(panel).to have_no_text("unnamed")
+      expect(basis_line).to have_text("Every example in every directory listed reported a description",
+                                      normalize_ws: true)
+    end
+
+    # ONE CELL, ONE SPELLING. The cell is a fraction plus the rows that fraction could not see, and
+    # they are one sentence: delimiting only the second half prints "2 of 1010 (1,010 unnamed)" —
+    # a cell disagreeing with itself about what a number looks like. The fraction is spelled by
+    # `Row#distinct_description_label`, which is `#coverage_label`'s spelling and the spelling of
+    # every coverage fraction on this page, so the exclusion follows it rather than the caption
+    # prose beside it. Pinned rather than left to a comment, because the accident this replaced was
+    # invisible until a four-digit run.
+    it "spells both halves of the cell the same way at four digits" do
+      repository = create_repository(user: @user)
+      named = (1..1010).map do |i|
+        example_spec(file_path: "spec/models/order_spec.rb", duration: 0.01, line_number: i,
+                     name: "behaviour #{i % 2}", id: "./spec/models/order_spec.rb[1:#{i}]")
+      end
+      unnamed = (1..1010).map do |i|
+        unnamed_spec(file_path: "spec/models/refund_spec.rb", duration: 0.01, line_number: i,
+                     id: "./spec/models/refund_spec.rb[1:#{i}]")
+      end
+
+      ingest(repository, named + unnamed, annotated_specs_count: 1010)
+
+      get repository_path(repository)
+
+      expect(rows.first[:descriptions]).to eq("2 of 1010 (1010 unnamed)")
+      expect(rows.first[:coverage]).to eq("2020 of 2020")
+    end
+
+    # The panel offers a ratio and takes no position on it, exactly as `RepeatedDescriptions` does
+    # one grain down: several examples under one description is equally a suite testing one behavior
+    # many ways and an ordinary table-driven loop or shared example group.
+    it "offers the ratio for review rather than calling the area redundant" do
+      repository = create_repository(user: @user)
+      ingest(repository, [example_spec(file_path: "spec/models/order_spec.rb", duration: 1.0,
+                                       line_number: 1, name: "settles an invoice"),
+                          example_spec(file_path: "spec/models/order_spec.rb", duration: 1.0,
+                                       line_number: 2, name: "settles an invoice")])
+
+      get repository_path(repository)
+
+      expect(basis_line).to have_text("a ratio to review rather than a judgement about the area",
+                                      normalize_ws: true)
+      expect(panel).to have_no_text(/redundant|over-?covered|duplicate/i)
+    end
+
+    # Same figure, same object, one grouped aggregate: the column costs the panel no extra query.
+    # `queries_against` comes from spec/support/query_capture.rb.
+    it "costs no query beyond the one the panel already made" do
+      repository = create_repository(user: @user)
+      ingest(repository, (1..30).map do |i|
+        example_spec(file_path: "spec/d#{i % 5}/f#{i}_spec.rb", duration: i.to_f, line_number: i,
+                     name: "behaviour #{i % 3}")
+      end)
+
+      queries = queries_against(SpecObservation.table_name) { get repository_path(repository) }
+
+      expect(queries.grep(/COUNT\(DISTINCT/).size).to eq(1)
+      expect(queries.grep(/COUNT\(DISTINCT/).first).to match(/COUNT\(\*\) OVER \(\)/)
+    end
+  end
+
   # Every figure on the panel against direct SQL of the same grouping, taken independently of the
   # read the page makes. The panel's own query is the thing under test, so a check written through
   # it would agree with itself by construction; this one groups the rows in Ruby, off the records,
@@ -323,7 +532,7 @@ RSpec.describe "Repository heaviest spec directories", type: :request do
       repository = create_repository(user: @user)
       ingest(repository, (1..24).map do |i|
         example_spec(file_path: "spec/d#{i % 4}/f#{i}_spec.rb", duration: (i % 7).zero? ? nil : i.to_f,
-                     line_number: i)
+                     line_number: i, name: "behaviour #{i % 5}")
       end)
 
       get repository_path(repository)
@@ -335,18 +544,28 @@ RSpec.describe "Repository heaviest spec directories", type: :request do
         # nil, not 0.0, for an area nothing was measured in — the distinction the whole panel turns
         # on, kept in the CONTROL too so a control that flattened it could not certify a page that
         # flattened it.
-        [directory, timed.empty? ? nil : timed.sum, timed.size, observations.size]
-      end.sort_by { |_directory, total, _timed, _recorded| -(total || -Float::INFINITY) }
+        #
+        # `compact` before `uniq` on the descriptions, for the same reason: a nil is not a
+        # description, and a control that let one through would count "nobody said" as a behavior
+        # and certify a page that did the same.
+        named = observations.filter_map(&:name)
+        [directory, timed.empty? ? nil : timed.sum, timed.size, observations.size,
+         named.uniq.size, named.size]
+      end.sort_by { |_directory, total, _timed, _recorded, _distinct, _named| -(total || -Float::INFINITY) }
 
       # Rendered through `SpecObservation.humanized_duration` rather than through a format string
       # retyped here: the claim under test is that the FIGURES match an independent grouping, and a
       # hand-rolled "%.2fs" is a second definition of the spelling that disagrees with the seam the
       # moment a total passes a minute — which is exactly what these totals do.
-      expect(rows).to eq(expected.map do |directory, total, timed, recorded|
+      expect(rows).to eq(expected.map do |directory, total, timed, recorded, distinct, named|
         { path: directory, coverage: "#{timed} of #{recorded}",
-          duration: SpecObservation.humanized_duration(total) }
+          duration: SpecObservation.humanized_duration(total),
+          descriptions: "#{distinct} of #{named}" }
       end)
       expect(rows.size).to eq(4)
+      # The descriptions column is genuinely counting something: six examples over five descriptions
+      # in each area, so a column that had rendered the example count would read "6 of 6" here.
+      expect(rows.map { |row| row[:descriptions] }).to all(eq("5 of 6"))
     end
   end
 
