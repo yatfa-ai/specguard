@@ -59,6 +59,29 @@ bin/ci
 Gem audit, importmap audit, the design-system drift lint, the stylesheet freshness check, and the
 suite. `config/ci.rb` is the list.
 
+## Migrations
+
+An index on a table ingestion writes to must be built with `algorithm: :concurrently`, which
+requires `disable_ddl_transaction!`:
+
+```ruby
+class AddSomethingToSpecObservations < ActiveRecord::Migration[8.1]
+  disable_ddl_transaction!
+
+  def change
+    add_index :spec_observations, %i[repository_id created_at], algorithm: :concurrently
+  end
+end
+```
+
+A plain `CREATE INDEX` holds a lock that blocks every writer for the whole build, and reads are
+unaffected — which is what makes it quiet enough to have slipped through twice. The rule covers
+`spec_observations` (20,000 rows per run, one bulk `upsert_all` per ingest) and `test_runs` (one
+row per run); an index on a table the same migration creates is exempt, because it has no writers
+to block. `spec/migrations/concurrent_index_build_spec.rb` fails the suite when it is missed, and
+`lib/spec_guard/migration_index_lint.rb` carries the reasoning and the list of merged migrations
+that predate the guard.
+
 ## Auth
 
 ### GitHub OAuth (human sign-in)
