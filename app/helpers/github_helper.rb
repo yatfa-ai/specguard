@@ -68,19 +68,32 @@ module GithubHelper
   # picker that silently omits things is a picker people stop trusting.
   def repository_picker_hint(listing)
     sentences = ["Only repositories you administer on GitHub can be registered."]
-
-    withheld = listing.repos.length - administered_repos(listing).length
-    if withheld.positive?
-      sentences << "#{pluralize(withheld, 'repository', plural: 'repositories')} you do not " \
-                   "administer #{withheld == 1 ? 'is' : 'are'} not listed."
-    end
+    sentences << withheld_repositories_sentence(listing.repos.length - administered_repos(listing).length)
 
     if listing.truncated?
       sentences << "Showing the first #{GithubApi::MAX_PAGES * GithubApi::PER_PAGE} repositories " \
                    "GitHub returned."
     end
 
-    sentences.join(" ")
+    sentences.compact.join(" ")
+  end
+
+  # "3 repositories you do not administer are not listed." — the sentence that keeps a withheld list
+  # from being a mysterious one, and `nil` when nothing was withheld.
+  #
+  # One definition for the three places that say it (the single-repository picker's hint, the
+  # organization card, the organization's repository list). It is the same fact each time, and three
+  # copies is three chances for one of them to disagree about the verb — which is exactly the kind of
+  # drift that makes a reader wonder whether they mean different things.
+  #
+  # Composed as one String rather than assembled across ERB lines, deliberately: interpolating a
+  # `pluralize` mid-sentence in a template puts a newline inside the sentence, which reads fine in a
+  # browser and is invisible to anything matching on the text.
+  def withheld_repositories_sentence(count)
+    return nil unless count.positive?
+
+    "#{pluralize(count, 'repository', plural: 'repositories')} you do not administer " \
+      "#{count == 1 ? 'is' : 'are'} not listed."
   end
 
   private

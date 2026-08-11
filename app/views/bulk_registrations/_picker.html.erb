@@ -1,0 +1,144 @@
+<%# Step two: which of the organization's repositories.
+
+    locals: organization (a GithubOrganizations::Org)
+
+    Every row here is a repository GitHub says this viewer administers. Nothing on this page is a
+    gate: the tick boxes are client-controlled, so `BulkRegistration` re-asks GitHub about every
+    submitted name before it saves anything. What the page is responsible for is not offering a
+    click that can only fail — which is why already-registered rows are shown but not selectable. %>
+<% administered = organization.administered %>
+<% registerable = administered.reject { |repo| already_registered?(repo.full_name) } %>
+<% already = administered.length - registerable.length %>
+
+<div class="space-y-4">
+  <div class="flex flex-wrap items-center justify-between gap-2">
+    <div class="min-w-0">
+      <%= render UI::HeadingComponent.new(level: 3, class: "text-app-content break-words") { organization.login } %>
+      <p class="mt-1 text-sm text-app-content-secondary">
+        <%# Each of these is composed as one string rather than assembled across ERB lines: a
+            newline inside a sentence renders fine and is invisible to anything reading the text. %>
+        <%= pluralize(administered.length, "repository", plural: "repositories") %> you administer.
+        <% if already.positive? %>
+          <%= "#{already == 1 ? 'One is' : "#{already} are"} already registered and cannot be registered again." %>
+        <% end %>
+        <%= withheld_repositories_sentence(organization.withheld_count) %>
+      </p>
+    </div>
+    <%= render UI::ButtonComponent.new(variant: :ghost, size: :sm, href: bulk_repositories_path) do %>
+      Change organization
+    <% end %>
+  </div>
+
+  <% if registerable.empty? %>
+    <%# Everything this viewer administers here is already registered. That is a success, not an
+        empty state to apologise for, so it says so and points at the list rather than at a form
+        that could do nothing. %>
+    <%= render UI::EmptyStateComponent.new(
+          title: "Nothing left to register",
+          description: "Every repository you administer in #{organization.login} is already " \
+                       "registered in SpecGuard."
+        ) do %>
+      <%= render UI::ButtonComponent.new(variant: :primary, href: repositories_path) { "Back to repositories" } %>
+    <% end %>
+  <% else %>
+    <%# `turbo: false` is what makes the summary reachable, and it is load-bearing rather than
+        incidental. Turbo Drive REQUIRES a redirect in response to a form submission: a 200 with a
+        rendered body is refused with "Form responses must redirect to another location", logged to
+        the console and otherwise swallowed. `#create` answers with a rendered summary by design
+        (see the controller's class comment for why a 20-row result is not flash material), so under
+        Turbo the repositories would be registered and the user would see the picker sit there
+        unchanged — silent success, the worst available failure for this action. Opting this one
+        form out of Turbo keeps the render-don't-flash design and costs a full page load on a
+        request that is already doing N GitHub verifications inline.
+
+        Note the refusal paths are NOT why this is here: `render_refusal` returns 422 and Turbo
+        renders 4xx happily. It is only the success path Turbo drops. %>
+    <%= form_with url: bulk_repositories_path, method: :post,
+                  data: { controller: "bulk-picker", turbo: false } do %>
+      <%# Carried so a 422 re-render (nothing selected, too many selected) comes back to the same
+          organization rather than dropping the reader at the chooser with their selection gone. %>
+      <%= hidden_field_tag :organization, organization.login %>
+
+      <div class="space-y-1">
+        <%= label_tag :repository_query, "Search #{organization.login}",
+                      class: "block text-sm font-medium text-app-content" %>
+        <%= text_field_tag :repository_query, nil,
+                           placeholder: "Start typing to narrow the list…",
+                           autocomplete: "off",
+                           data: { bulk_picker_target: "query",
+                                   action: "input->bulk-picker#refine" },
+                           class: Forms::FieldComponent::INPUT_CLASS %>
+      </div>
+
+      <div class="mt-3 flex flex-wrap items-center justify-between gap-2 border-b border-app-border-light pb-2">
+        <%# Selects what is CURRENTLY SHOWN, not the whole organization — narrowing to "service"
+            and pressing this is how a reader picks a subset of forty repositories, and a control
+            that quietly reached past the narrowing would register things they had filtered out of
+            view. With JavaScript off it is inert and the rows are ticked individually; nothing
+            here is required to submit the form. %>
+        <label class="flex items-center gap-2 text-sm text-app-content">
+          <%= check_box_tag :bulk_picker_all, "1", false,
+                            id: "bulk-picker-all",
+                            data: { bulk_picker_target: "all",
+                                    action: "change->bulk-picker#chooseShown" },
+                            class: "size-4 accent-app-cta" %>
+          Select all shown
+        </label>
+        <p class="text-xs text-app-muted" data-bulk-picker-target="count"></p>
+      </div>
+
+      <ul class="mt-2 max-h-96 divide-y divide-app-border-light overflow-y-auto">
+        <% administered.each_with_index do |repo, index| %>
+          <% taken = already_registered?(repo.full_name) %>
+          <li class="py-2"
+              data-bulk-picker-target="row"
+              data-bulk-picker-name="<%= repo.full_name.downcase %>">
+            <label class="flex items-start gap-3 <%= taken ? "cursor-not-allowed opacity-60" : "cursor-pointer" %>"
+                   for="bulk-pick-<%= index %>">
+              <%= check_box_tag "github_full_names[]", repo.full_name,
+                                !taken && @full_names.include?(repo.full_name),
+                                id: "bulk-pick-#{index}",
+                                disabled: taken,
+                                data: { bulk_picker_target: "pick",
+                                        action: "change->bulk-picker#tally" },
+                                class: "mt-0.5 size-4 shrink-0 accent-app-cta" %>
+              <span class="min-w-0 flex-1">
+                <span class="block break-words text-sm text-app-content"><%= repo.full_name %></span>
+                <span class="mt-1 flex flex-wrap items-center gap-1">
+                  <%# `private` and `archived` change what registering the repository will MEAN — a
+                      private one is why the broad scope was needed, an archived one will never push
+                      another CI run — so they are on the row rather than discoverable afterwards.
+                      Same two facts the single-repository picker puts on its option label. %>
+                  <% if taken %>
+                    <%= render UI::BadgeComponent.new(tone: :info) { "Already registered" } %>
+                  <% end %>
+                  <% if repo.private? %>
+                    <%= render UI::BadgeComponent.new(tone: :neutral) { "private" } %>
+                  <% end %>
+                  <% if repo.archived? %>
+                    <%= render UI::BadgeComponent.new(tone: :warning) { "archived" } %>
+                  <% end %>
+                </span>
+              </span>
+            </label>
+          </li>
+        <% end %>
+      </ul>
+
+      <%# The batch bound, stated only when this organization can actually reach it. A limit a
+          reader cannot hit is noise; one they can is something to know before they tick forty
+          boxes and have the submission refused. %>
+      <% if registerable.length > BulkRegistration::MAX_BATCH %>
+        <%= render UI::AlertComponent.new(tone: :warning, class: "mt-3") do %>
+          At most <%= BulkRegistration::MAX_BATCH %> repositories can be registered in one batch.
+          Register the rest in a second pass.
+        <% end %>
+      <% end %>
+
+      <div class="mt-4 flex items-center gap-2">
+        <%= render UI::ButtonComponent.new(variant: :primary, type: "submit") { "Register selected repositories" } %>
+        <%= render UI::ButtonComponent.new(variant: :ghost, href: repositories_path) { "Cancel" } %>
+      </div>
+    <% end %>
+  <% end %>
+</div>

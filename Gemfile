@@ -63,6 +63,11 @@ gem "ruby-openai", "~> 8.3"
 group :development, :test do
   # Test framework
   gem "rspec-rails", "~> 8.0"
-  # Node matchers for ViewComponent unit specs (render_inline + have_css)
+  # Node matchers for ViewComponent unit specs (render_inline + have_css), and the browser-driven
+  # system specs in spec/system.
   gem "capybara"
+  # Drives a real headless Chromium for spec/system. Only the system specs need it, and they are
+  # the only place a claim about Turbo, Stimulus or anything else that requires JS can be settled:
+  # a request spec renders the response body itself and so cannot see a browser refuse it.
+  gem "selenium-webdriver"
 end

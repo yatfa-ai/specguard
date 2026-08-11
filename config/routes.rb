@@ -10,6 +10,20 @@ Rails.application.routes.draw do
 
   # --- Dashboard ----------------------------------------------------------------
   resources :repositories, only: %i[index new create show edit update destroy] do
+    # Registering a whole GitHub organization at once (SPGD-355). A COLLECTION route deliberately:
+    # `/repositories/bulk` sits in the same path space as `/repositories/:id`, and Rails emits
+    # collection routes ahead of member ones, so the literal segment cannot be swallowed as an id.
+    # Declaring it as a sibling `resource` outside this block would depend on file ordering to stay
+    # correct, which is not a property to rest a route on.
+    #
+    # Both verbs answer at one path: the GET chooses (an organization, then its repositories, via
+    # `?organization=`), the POST performs. One name — `bulk_repositories_path` — for both, because
+    # the form posts back to the page it was rendered from.
+    collection do
+      get "bulk", to: "bulk_registrations#new", as: :bulk
+      post "bulk", to: "bulk_registrations#create"
+    end
+
     resources :api_keys, only: %i[create destroy] do
       # A member POST, not a second collection `create`: rotation changes an existing key in place
       # and the route has to name which one. See ApiKeysController#regenerate.

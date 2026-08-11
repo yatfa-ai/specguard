@@ -108,10 +108,26 @@ class GithubApi
   # `permissions` is present on every authenticated read of a repository (both endpoints below).
   # When it is absent the answer is `false`, never `nil` — an unknown permission level is not a
   # grant, and a nil flowing into a policy check is a bug waiting for a truthiness test.
-  Repo = Data.define(:full_name, :private, :admin, :archived) do
+  #
+  # `owner_type` is GitHub's own `owner.type` — `"Organization"` or `"User"` — and it is the one
+  # field that distinguishes an organization's repository from a personal one. Bulk registration
+  # groups the listing by owner and offers the organizations (see `GithubOrganizations`), and the
+  # owner *segment* of `full_name` cannot answer that question: `acme/x` is the same string whether
+  # `acme` is an org or a person who happens to be called that. Defaulted to `nil` — "GitHub did
+  # not say" — because both `Repo.new` call sites outside this file are tests and a required field
+  # would make every one of them describe an owner it does not care about; `organization?` reads a
+  # nil as "not an organization", which withholds rather than invents.
+  Repo = Data.define(:full_name, :private, :admin, :archived, :owner_type) do
+    def initialize(owner_type: nil, **) = super
+
     def admin? = admin
     def private? = private
     def archived? = archived
+    def organization? = owner_type == "Organization"
+
+    # The owner segment of `full_name` — the GitHub account the repository lives under. A
+    # *namespace*, not a SpecGuard user and not necessarily an organization; see `organization?`.
+    def owner = full_name.to_s.split("/").first.to_s
 
     def self.from(payload)
       permissions = payload["permissions"] || {}
@@ -120,7 +136,8 @@ class GithubApi
         full_name: payload["full_name"].to_s,
         private: payload["private"] == true,
         admin: permissions["admin"] == true,
-        archived: payload["archived"] == true
+        archived: payload["archived"] == true,
+        owner_type: payload.dig("owner", "type")
       )
     end
   end
@@ -162,6 +179,28 @@ class GithubApi
   # between renders rather than reordered by GitHub's push activity.
   #
   # Returns a `Listing`, not an Array, so a caller cannot read a truncated list as a complete one.
+  #
+  # == This is also how an organization's repositories are enumerated
+  #
+  # `organization_member` is the affiliation that carries them, and every row arrives with the
+  # caller's own `permissions.admin` and its `owner.type` already on it. So bulk registration
+  # groups THIS listing by owner rather than calling `GET /user/orgs` + `GET /orgs/:org/repos`
+  # (`GithubOrganizations`), and three things follow that are worth stating, because the obvious
+  # reading is that a dedicated org endpoint would be more direct:
+  #
+  #   - No `read:org`. The org endpoints need a scope the `repo` grant does not include, so adding
+  #     them would mean every user who already authorized in SPGD-354 has a stored token that
+  #     cannot enumerate an org until they re-authorize. Bulk registration would be broken for
+  #     exactly the users most likely to want it.
+  #   - One round trip for every org, not one per org plus a page walk inside each. A batch is
+  #     already N saves; making its enumeration O(orgs × pages) buys nothing.
+  #   - The set is the RIGHT one rather than a superset. `/orgs/:org/repos` lists repositories the
+  #     caller may not touch; only a repository the caller can see and administer is registerable,
+  #     and that is precisely what this returns.
+  #
+  # What it costs is stated where it bites: `MAX_PAGES` bounds the whole listing, so an
+  # organization's repositories can be cut off by a *global* cap rather than a per-org one, and
+  # `truncated` is how a caller learns to say so instead of presenting a partial org as complete.
   def repositories
     repos = []
     truncated = false

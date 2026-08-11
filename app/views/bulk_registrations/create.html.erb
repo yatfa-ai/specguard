@@ -1,0 +1,83 @@
+<% content_for :title, "Registration summary · SpecGuard" %>
+
+<%= render UI::PageComponent.new do %>
+  <%= render UI::BreadcrumbComponent.new(items: [
+        { label: "Repositories", href: repositories_path },
+        { label: "Register an organization", href: bulk_repositories_path },
+        { label: "Summary" }
+      ]) %>
+
+  <%= render UI::PageHeaderComponent.new(
+        title: "Registration summary",
+        subtitle: "What happened to each of the #{pluralize(@result.total_count, 'repository', plural: 'repositories')} you submitted."
+      ) %>
+
+  <%# The headline, and it is deliberately two numbers that add up to the submission rather than one
+      celebratory one. "Registered 20" over a batch where four were skipped is the dishonest summary
+      this ticket exists to prevent; the breakdown below is what makes the second number checkable. %>
+  <%= render UI::AlertComponent.new(tone: @result.any_registered? ? :success : :warning) do %>
+    Registered <%= pluralize(@result.registered_count, "repository", plural: "repositories") %>.
+    <% if @result.skipped_count.positive? %>
+      Skipped <%= @result.skipped_count %>.
+    <% end %>
+  <% end %>
+
+  <%# A batch skipped for a missing or dead grant is not something a re-run fixes, so the fix is
+      offered here rather than left for the reader to find their way back to. Reads the result's own
+      `reauthorize?` through GithubRepositoryListing — the same question the single-repository form
+      asks of a single verdict. %>
+  <% if github_authorization_needed? %>
+    <%= render UI::PanelComponent.new(class: "mt-4") do %>
+      <%= render UI::EmptyStateComponent.new(
+            title: "Connect your GitHub repositories",
+            description: github_authorization_disclosure
+          ) do %>
+        <%= github_authorize_button origin: bulk_repositories_path %>
+      <% end %>
+    <% end %>
+  <% end %>
+
+  <% if @result.any_registered? %>
+    <%= render UI::PanelComponent.new(title: "Registered (#{@result.registered_count})", class: "mt-4") do %>
+      <ul class="divide-y divide-app-border-light">
+        <% @result.registered.each do |outcome| %>
+          <li class="py-2">
+            <%= link_to outcome.full_name, repository_path(outcome.repository),
+                        class: "text-sm text-app-cta hover:underline break-words" %>
+          </li>
+        <% end %>
+      </ul>
+    <% end %>
+  <% end %>
+
+  <%# One panel per reason, in `BulkRegistration::SKIP_ORDER`, and never a heading over an empty
+      group. Grouping rather than one flat list because the reasons are not equivalent: "already
+      registered" needs no action at all, "not administered by you" is a fact about GitHub, and a
+      dead token is something to go and fix — and a reader scanning twenty rows for the ones that
+      matter should not have to read every sentence to sort them. %>
+  <% @result.skipped_groups.each do |status, label, outcomes| %>
+    <%= render UI::PanelComponent.new(title: "#{label} (#{outcomes.length})", class: "mt-4") do %>
+      <ul class="divide-y divide-app-border-light">
+        <% outcomes.each do |outcome| %>
+          <li class="py-2 text-sm text-app-content-secondary">
+            <%# The already-registered rows link when — and only when — this user may open the
+                repository. One somebody else registered says "already registered" and links
+                nowhere, which is all this page may honestly say about it. %>
+            <% if outcome.repository %>
+              <%= link_to outcome.full_name, repository_path(outcome.repository),
+                          class: "text-app-cta hover:underline break-words" %>
+              <%= outcome.message %>
+            <% else %>
+              <span class="break-words"><%= outcome.sentence %></span>
+            <% end %>
+          </li>
+        <% end %>
+      </ul>
+    <% end %>
+  <% end %>
+
+  <div class="mt-4 flex items-center gap-2">
+    <%= render UI::ButtonComponent.new(variant: :primary, href: repositories_path) { "Back to repositories" } %>
+    <%= render UI::ButtonComponent.new(variant: :ghost, href: bulk_repositories_path) { "Register another organization" } %>
+  </div>
+<% end %>

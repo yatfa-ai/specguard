@@ -401,11 +401,21 @@ class Repository < ApplicationRecord
     scope.order(created_at: :desc, id: :desc).limit(limit)
   end
 
+  # The canonical form of an `owner/repo` slug, as a value rather than as a callback's side effect.
+  #
+  # Exposed as a class method because it is a RULE a caller must be able to apply *before* a record
+  # exists. `BulkRegistration` de-duplicates a submitted batch, and de-duplicating raw strings would
+  # let `acme/api` and `https://github.com/acme/api` through as two candidates for one repository.
+  # Returns `nil` for anything that normalises to blank, so a caller can `filter_map` over it.
+  def self.normalize_full_name(value)
+    value.to_s.strip.delete_prefix("https://github.com/")
+         .delete_suffix(".git").delete_suffix("/").presence
+  end
+
   private
 
   def normalize_full_name
-    self.github_full_name = github_full_name.to_s.strip.delete_prefix("https://github.com/")
-                                            .delete_suffix(".git").delete_suffix("/").presence
+    self.github_full_name = self.class.normalize_full_name(github_full_name)
   end
 
   def derive_name
