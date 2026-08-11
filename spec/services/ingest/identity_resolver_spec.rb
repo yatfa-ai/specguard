@@ -871,7 +871,7 @@ RSpec.describe Ingest::IdentityResolver do
 
       stranded = run.spec_observations.unresolved
       expect(stranded.count).to eq(2)
-      # Not a failure, and nothing may read it as one: the provider was never asked about these.
+      # Not a failure, and nothing may read it as one: nothing was tried on these at all.
       expect(stranded.pluck(:embed_failed_at).uniq).to eq([nil])
       expect(stranded.pluck(:embed_failure_count).uniq).to eq([0])
       expect(repository.spec_observations.embed_failed).to be_empty
@@ -1124,10 +1124,14 @@ RSpec.describe Ingest::IdentityResolver do
       # Keyed to ONE OBSERVATION rather than to a call count, because what is under test here is the
       # blast radius of a single row and not the death of a pass — and keyed through `#identity_for`,
       # which is the seam that still knows which row the lookup below is being made for.
-      def sweeping_run(ci_run_id:, poison:, specs: nil)
+      #
+      # `poison_own:` additionally poisons THIS run's own rows, which is how one pass can carry a
+      # failure on each side of the asymmetry at once.
+      def sweeping_run(ci_run_id:, poison:, specs: nil, poison_own: false)
         run = record(specs || [unannotated_spec(file_path: "spec/models/user_spec.rb", line_number: 3,
                                                 name: "User#save rejects a duplicate email")],
                      ci_run_id: ci_run_id)
+        poisoned_ids = [poison.id] + (poison_own ? run.spec_observations.pluck(:id) : [])
         resolver = described_class.new(run)
         resolving = nil
         allow(resolver).to receive(:identity_for).and_wrap_original do |original, observation|
@@ -1135,7 +1139,7 @@ RSpec.describe Ingest::IdentityResolver do
           original.call(observation)
         end
         allow(resolver).to receive(:nearest).and_wrap_original do |original, *args|
-          raise ActiveRecord::StatementInvalid, "server closed the connection" if resolving.id == poison.id
+          raise ActiveRecord::StatementInvalid, "server closed the connection" if poisoned_ids.include?(resolving.id)
 
           original.call(*args)
         end
@@ -1277,6 +1281,27 @@ RSpec.describe Ingest::IdentityResolver do
         # before this change.
         expect(stranded.spec_observations.sole.reload.spec_identity_id).to be_present
         expect(run.spec_observations.unresolved).not_to be_empty
+      end
+
+      it "contains the inherited row and lets this run's own out, in ONE pass" do
+        # The asymmetry as a single event rather than as two examples of one side each. The example
+        # above pins it with an inherited row that SUCCEEDS on the way past, which is a fair
+        # regression pin but survives the mutation this group is written against. This one does not:
+        # it is the shape that breaks if someone later routes the run-scoped loop through
+        # `#claim_inherited` too, because then the raise below is swallowed and the pass reports a
+        # clean delivery over a row the caller actually asked about.
+        poisoned = poisoned_backlog_row
+        run, resolver = sweeping_run(ci_run_id: "run-2", poison: poisoned, poison_own: true)
+
+        expect { resolver.resolve }.to raise_error(ActiveRecord::StatementInvalid)
+
+        # Inherited: contained and stamped, so the pass got past it to reach this run's list at all.
+        expect(poisoned.reload.embed_failed_at).to be_present
+        expect(poisoned.embed_failure_count).to eq(1)
+        # This run's own: left exactly as a died pass leaves it — unresolved and UNSTAMPED, the
+        # state the group at the top of this file documents and which must keep holding.
+        expect(run.spec_observations.unresolved).not_to be_empty
+        expect(run.spec_observations.pluck(:embed_failed_at).uniq).to eq([nil])
       end
 
       it "does not manufacture a clean sweep out of a database it cannot even stamp" do

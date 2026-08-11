@@ -243,11 +243,14 @@ module Ingest
     # runs that this ingest is entitled to attempt on their behalf. Two populations, and they are
     # two because the reason nobody attended to them is different:
     #
-    # * {#failed_embed_backlog} — the provider was asked and could not answer. Stamped, ordered by
-    #   how often it has been tried, bounded by {SpecObservation::EMBED_RETRY_WINDOW}.
-    # * {#unattempted_embed_backlog} — the provider was never asked, because the job that would have
-    #   asked never got there. Unstamped, and therefore invisible to every mechanism the first list
-    #   is built on.
+    # * {#failed_embed_backlog} — something was tried and it failed. Stamped with `embed_failed_at`,
+    #   ordered by how often it has been tried, bounded by {SpecObservation::EMBED_RETRY_WINDOW}.
+    #   Ordinarily that is the provider being asked and unable to answer; since {#claim_inherited} it
+    #   is also a row of THIS list that failed some other way while the sweep held it. One stamp
+    #   covers both, and {#record_resolve_failure} is where that is argued rather than assumed.
+    # * {#unattempted_embed_backlog} — nothing was ever tried, because the job that would have tried
+    #   never got there. Unstamped, and therefore invisible to every mechanism the first list is
+    #   built on.
     #
     # The failures come first and take their share of the budget first. Not because the order is
     # load-bearing — {#resolve} explains at length why no iteration order is any more — but because

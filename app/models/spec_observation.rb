@@ -57,8 +57,9 @@ class SpecObservation < ApplicationRecord
   scope :unresolved, -> { where(spec_identity_id: nil) }
 
   # **The rows an attempt to resolve FAILED on**, and the answer to "how many examples did this run
-  # fail to embed?" — a question nothing could ask while the only evidence was a NULL that three
-  # states share.
+  # reach and fail to resolve?" — a question nothing could ask while the only evidence was a NULL
+  # that three states share. The migration asked it in the narrower words the column was introduced
+  # for ("fail to embed"); the section below is why the scope now answers the wider one.
   #
   # A positive stamp rather than the absence of one, so this separates a failure from *both* of the
   # other two meanings with one predicate. Note what it is deliberately not paired with: there is no
