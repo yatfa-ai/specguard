@@ -664,21 +664,27 @@ RSpec.describe "GET /api/v1/repository — unstable_tests", type: :request do
     end
 
     # And the four are ALL of the reads this window adds — the assertion the per-grain count cannot
-    # make, because a read matching no grain's pattern is invisible to every one of them. Ten is
-    # the endpoint's six single-run reads plus these four.
+    # make, because a read matching no grain's pattern is invisible to every one of them. Eleven is
+    # the endpoint's six single-run reads, plus these four, plus the ONE the growth-by-area block
+    # beside this one adds on the same branch-scoped window. That eleventh read is counted here
+    # rather than folded into the four, because the whole point of this example is that a read
+    # belonging to no grain is caught by the total: `spec/requests/api/v1/repository_directory_growth_spec.rb`
+    # bounds it, this line only refuses to let it disappear.
     it "adds exactly those four to the table's total, and no fifth" do
       repository_with(%w[passed failed passed])
       get_repository(key: api_key)
 
-      area, file, example, description, flakiness =
+      area, file, example, description, flakiness, growth =
         observation_reads_by_grain { get_repository(key: api_key, query: { branch: "main" }) }
 
       expect([area.length, file.length, example.length, description.length, flakiness.length])
         .to eq([1, 1, 2, 2, 4])
+      expect(growth.length).to eq(1)
       expect(observation_reads { get_repository(key: api_key, query: { branch: "main" }) }.length)
-        .to eq(area.length + file.length + example.length + description.length + flakiness.length)
+        .to eq(area.length + file.length + example.length + description.length + flakiness.length +
+               growth.length)
       expect(observation_reads { get_repository(key: api_key, query: { branch: "main" }) }.length)
-        .to eq(10)
+        .to eq(11)
     end
 
     # NO RUN-WINDOW QUERY. The block is drawn on `history_runs`, which is materialized once and

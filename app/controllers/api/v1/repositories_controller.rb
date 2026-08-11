@@ -64,6 +64,15 @@ class Api::V1::RepositoriesController < Api::BaseController
       # `history` is served over. See `serialized_unstable_tests_window`.
       unstable_tests_window: serialized_unstable_tests_window,
       unstable_tests: serialized_unstable_tests,
+      # BESIDE `unstable_tests` and for the same structural reason it sits out here: a statement
+      # about the WINDOW rather than about one run. `history` serves how the suite grew — one total
+      # per run, no area grain on any row — and `latest_run.spec_directories` serves the area grain
+      # of exactly one run. An agent holding every other key on this endpoint can compute THAT the
+      # suite grew and never WHERE, which is the half of the roadmap's second axis ("how the suite
+      # has grown over time and in which areas") nothing here answered. See
+      # `serialized_directory_growth_window`.
+      directory_growth_window: serialized_directory_growth_window,
+      directory_growth: serialized_directory_growth,
       branches_window: serialized_branches_window,
       branches: serialized_branches
     }
@@ -868,7 +877,7 @@ class Api::V1::RepositoriesController < Api::BaseController
 
   # WHICH TESTS ARE UNSTABLE ACROSS RUNS — the agent-readable half of the "Tests whose outcome
   # changed" panel `repositories#show` has rendered since SPGD-282, and the roadmap's fourth axis
-  # ("where it is flaky"), which is the only one of the four this endpoint has never been given.
+  # ("where it is flaky"), which was the last of the four this endpoint had never been given.
   #
   # A DIFFERENT GRAIN FROM EVERYTHING IN `latest_run`, which is why it is served beside `history`
   # rather than inside that block. `slowest_examples` reaches the per-example grain of ONE run;
@@ -1033,6 +1042,202 @@ class Api::V1::RepositoriesController < Api::BaseController
 
     @unstable_tests =
       requested_branch && UnstableTests.for(current_repository, history_runs, branch: requested_branch)
+  end
+
+  # The contract the growth-by-area rows below are served under — and, when they are `null`, the
+  # reason they are. Served UNCONDITIONALLY, on the key-always-present rule `latest_run.shards` and
+  # `serialized_unstable_tests_window` both argue for: a client tests one thing rather than
+  # distinguishing an absent key from a null one, and a block that explains a `null` is worthless if
+  # it is itself absent whenever the `null` happens.
+  #
+  # `grouped` IS THE LOAD-BEARING KEY, and it exists for the branch reason its flakiness sibling
+  # gives, which binds at least as hard here. `SpecDirectoryWindowGrowth` picks its baseline with
+  # two in-memory predicates — `TestRun#suite_size_measured?` and `TestRun#assembled_like?`, which
+  # is `shard_count` equality — and NEITHER looks at `branch`. Handed the INTERLEAVED all-branch
+  # window `serialized_history_window` warns about, the walk would anchor on a `main` run and
+  # baseline against a `feature/x` run that happened to be sharded the same way, and report "this
+  # area grew by 300 examples" where the truth is two different pieces of code. So unfiltered, the
+  # object IS NOT CONSTRUCTED — no rows, and no read to produce them — and this boolean says so.
+  #
+  # Read off whether the object was CONSTRUCTED, never re-spelled as `requested_branch ? true :
+  # false`. A second copy of the gate is a second thing to keep true, and the one that decides what
+  # was read is the one worth serving. So `grouped` is exactly `directory_growth != null`.
+  #
+  # `grouped: true` IS NOT "SOMETHING WAS COMPARED", the same disclaimer the flakiness window
+  # carries: the object is constructed for every branch-scoped ask, and what came of it is the
+  # block's own business. Its `state` is what separates the eight answers.
+  #
+  # `order` names both keys and `tie_break_served` is TRUE, which is the honest reading here and
+  # only the second place on this endpoint it is. `SpecObservation.directory_growth_between` orders
+  # by `ABS(anchor_count - baseline_count) DESC` then `path ASC`, and both operands and the path go
+  # out on every row — so a client CAN reproduce this order from what it holds, unlike `history`
+  # (whose tie-break is an ingest sequence no row carries) and `branches`.
+  #
+  # `basis` IS THE OBJECT'S OWN LOAD-BEARING LIMITATION, served as a token because a client cannot
+  # act on the paragraph `spec_directory_window_growth.rb` spends on it. The figures compare TWO
+  # ENDPOINTS of a thirty-run window; they are not a series over it. An area that added 300
+  # examples in run 12 and deleted them again in run 25 reads `change: 0` here, indistinguishable
+  # from an area nothing happened in — and a thirty-run heading over a two-run measurement is
+  # exactly the claim a caption would otherwise imply and nothing looked at. `covered_run_count`
+  # says how far apart the two endpoints are; this says that two is all there are.
+  def serialized_directory_growth_window
+    {
+      order: "abs_change_desc,path_asc",
+      tie_break_served: true,
+      basis: "two_endpoints",
+      branch_scope: requested_branch ? "single_branch" : "all_branches",
+      branch: requested_branch,
+      grouped: !spec_directory_window_growth.nil?
+    }
+  end
+
+  # WHICH AREAS OF THE SUITE GREW OR SHRANK ACROSS THE BRANCH WINDOW — the agent-readable half of
+  # the panel `repositories#show` renders from the same object, and the "in which areas" half of the
+  # roadmap's growth axis, which is the one this endpoint has never been given.
+  #
+  # A DIFFERENT GRAIN FROM EVERYTHING IN `latest_run`, which is why it is served beside `history`.
+  # `latest_run.spec_directories` carries a per-directory `recorded_count` for exactly ONE run, and
+  # `serialized_history_row` carries run TOTALS with no area grain on any row. Neither is the other's
+  # missing half: an agent holding both, for every row of the window, knows how much the suite grew
+  # and nothing about where. Two responses could not be subtracted into this either — that is the
+  # polling-and-differencing this file's opening comment exists to refuse.
+  #
+  # THE SAME OBJECT THE PANEL READS, never a hand-written query — this file's governing rule, stated
+  # in full on `serialized_spec_files`. `SpecDirectoryWindowGrowth` is view-free, so the API and the
+  # panel name the same areas, in the same order, off the same rows of the same window.
+  #
+  # OFF THE ALREADY-MEMOIZED WINDOW, so this adds NO run-window query — see
+  # `spec_directory_window_growth` for the ORDER that window has to be handed over in, which is the
+  # one thing about this block that is not shared with its flakiness sibling.
+  #
+  # `state` IS SERVED AS THE SYMBOL AND NEVER COLLAPSED TO A BOOLEAN OR TO `null`. The object
+  # distinguishes eight states, seven of them absences, and its own comment is why they are not one:
+  # "every earlier run on this branch reported no tests", "they were all assembled differently from
+  # this one" and "the run at the far end recorded no per-example rows" are one blank panel and
+  # three different things to go and fix. `comparable` rides beside it as the single boolean a
+  # client that only wants the rows can branch on, read off the object's own predicate rather than
+  # re-derived here from the symbol.
+  #
+  # THE HONESTY FIGURES ARE SERVED, NOT DROPPED, and they are the block's actual payload in seven of
+  # the eight states. The baseline is WALKED from the far end of the window, so the comparison a
+  # client is handed can be SHORTER than the window it asked over — `window_run_count` is what the
+  # window holds and `covered_run_count`/`runs_back` are what the figures span, and a 26-run
+  # comparison under a 30-run heading is a fact about the measurement rather than an implementation
+  # detail. The two skip counts stay SPLIT rather than summed, on the object's own rule: a client
+  # that stopped reporting totals and a branch whose sharding changed are two different repairs, and
+  # a bare "4 runs were skipped" is a fact nobody can act on.
+  #
+  # BOTH COMMIT SHAS, so a client can say WHICH TWO RUNS the figure spans and go read them. They are
+  # nullable for the reason the states are: the walk finds no baseline in four of them, and there is
+  # no run to name. Anchor and baseline rather than "first" and "last" — the anchor is the newest
+  # run of the window and the baseline is the OLDER end, which is the direction every `change` on
+  # every row below is signed in.
+  #
+  # `truncated` DISCLOSES THE CAP with both operands beside it. `directory_count` is counted BEFORE
+  # `SpecObservation::MOVED_DIRECTORIES_LIMIT` applies (a window function, so it runs before the
+  # `LIMIT`), which is what makes the comparison answerable at all; `limit` is read off that
+  # constant rather than restated, so the response cannot claim a bound the query did not apply.
+  #
+  # `baseline_recorded_count`/`anchor_recorded_count` are the DENOMINATORS the recorded-rows states
+  # turn on — how many per-example rows each end wrote in total — and deliberately not
+  # `TestRun#total_specs_count`, which is re-derived by SUM over shard reports and can legitimately
+  # differ from the rows a run actually wrote. Every figure on this block is counted off those rows.
+  #
+  # ONE READ OF `spec_observations` AT MOST, and none at all where there is nothing to compare. The
+  # walk is pure in-memory predicates over rows already loaded, and the comparison itself is two run
+  # ids in an `IN` list whatever the window's length — already plan-certified at the seeded table
+  # size in `spec/models/spec_observation_spec.rb`, so that certification transfers rather than
+  # needing to be repeated here. Same argument `serialized_unstable_tests` makes for itself.
+  def serialized_directory_growth
+    growth = spec_directory_window_growth
+
+    return nil if growth.nil?
+
+    {
+      state: growth.state,
+      comparable: growth.comparable?,
+      rows: growth.rows.map { |row| serialized_directory_growth_row(row) },
+      window_run_count: growth.window_run_count,
+      covered_run_count: growth.covered_run_count,
+      runs_back: growth.runs_back,
+      shortened: growth.shortened?,
+      skipped_unmeasured_count: growth.skipped_unmeasured_count,
+      skipped_assembled_differently_count: growth.skipped_assembled_differently_count,
+      anchor_commit_sha: growth.anchor_run&.commit_sha,
+      baseline_commit_sha: growth.baseline_run&.commit_sha,
+      directory_count: growth.directory_count,
+      truncated: growth.truncated?,
+      baseline_recorded_count: growth.baseline_recorded_count,
+      anchor_recorded_count: growth.anchor_recorded_count,
+      limit: SpecObservation::MOVED_DIRECTORIES_LIMIT
+    }
+  end
+
+  # One area's movement across the window, and BOTH OPERANDS it was taken across — never one of the
+  # labels the row builds for the panel. `SpecDirectoryWindowGrowth::Row` carries `change_label`,
+  # `change_reading`, `baseline_count_label` and `anchor_count_label`, which are typographic and
+  # screen-reader spellings of these same numbers: a U+2212 for a negative, `"±0"` for an area that
+  # did not move, `"New area"` where a delta would be arithmetic on a side that was never measured,
+  # and delimited numerals throughout. A client served those would be splitting strings and
+  # stripping glyphs to compare two rows. `serialized_unstable_test_row` set this rule; this block
+  # is where it costs the most, because the labels here are the panel's whole vocabulary.
+  #
+  # `previous_count`/`latest_count` are the aggregate's own two sides and are the parent Struct's
+  # names; they go out as `baseline_count`/`anchor_count`, the names the window object itself uses
+  # for the two ends of the comparison and the two shas above are served under. The translation
+  # happens once, here, rather than in every client's head.
+  #
+  # `moved`, `new_area` and `removed_area` are the three states the label collapses, served as the
+  # booleans they are. `new_area` and `removed_area` are NOT derivable from `change` alone — an area
+  # at zero on one side is a real absence, and `+40` against an absent side reads identically to an
+  # existing area that gained forty examples, which is the one distinction a client scanning this
+  # list most needs. The block that holds this row has already established that BOTH runs recorded
+  # rows, which is what makes a zero on one side that area's own absence rather than a run that
+  # recorded nothing anywhere.
+  def serialized_directory_growth_row(row)
+    {
+      path: row.path,
+      baseline_count: row.previous_count,
+      anchor_count: row.latest_count,
+      change: row.change,
+      moved: row.moved?,
+      new_area: row.new_area?,
+      removed_area: row.removed_area?
+    }
+  end
+
+  # The presenter, or `nil` when no comparison was allowed — memoized across the nil with `defined?`
+  # rather than `||=`, for the reason `unstable_tests` states above and under the same double read
+  # (`show` asks for the window block's `grouped` and then for the rows).
+  #
+  # ⭐ THE WINDOW IS HANDED IN REVERSED, AND THAT IS THIS METHOD'S WHOLE SUBTLETY.
+  # `SpecDirectoryWindowGrowth.for` documents its parameter as *"the window, ALREADY LOADED and
+  # OLDEST FIRST"*, takes `runs.last` as its ANCHOR and walks from index 0 for the BASELINE.
+  # `history_runs` is `Repository#recent_test_runs`, ordered `(created_at, id) DESC` — NEWEST first.
+  # Handing it in unreversed does not raise: `runs.last` becomes the OLDEST run, the walk finds a
+  # baseline among the NEWER ones, and every `change` comes back SIGN-FLIPPED — a suite that grew
+  # reports its areas shrinking, under a block that looks perfectly well-formed. The human panel
+  # avoids this by construction because `Repository#suite_size_trajectory` ends `.to_a.reverse`; this
+  # call site has to do it deliberately.
+  #
+  # The adjacent precedent is what makes it easy to walk into and is NOT a licence: `UnstableTests.for`
+  # documents the same parameter with no ordering clause and is order-indifferent — it reads
+  # `runs.map(&:id)` and groups — so `unstable_tests` above hands `history_runs` straight in and is
+  # right to. This one is not order-indifferent, and the two lines are otherwise identical.
+  #
+  # `.reverse` AND NEVER `.reverse!`. `serialized_history` maps the same memoized array and
+  # `serialized_history_window` declares `order: "ingested_at_desc,ingest_sequence_desc"` over it;
+  # reversing in place would make the endpoint's own ordering contract a lie, in the same response
+  # body, for every client reading `history`.
+  #
+  # The branch gate lives HERE, in one place, so the boolean the window serves and the decision that
+  # produced it cannot come apart — see `serialized_directory_growth_window` for why an unfiltered
+  # window is refused rather than answered.
+  def spec_directory_window_growth
+    return @spec_directory_window_growth if defined?(@spec_directory_window_growth)
+
+    @spec_directory_window_growth =
+      requested_branch && SpecDirectoryWindowGrowth.for(history_runs.reverse, branch: requested_branch)
   end
 
   # The contract the `branches` catalogue is served under, on the same rule `history_window`

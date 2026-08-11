@@ -174,7 +174,8 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
     it "serves exactly the top-level keys this contract pins" do
       expect(get_repository.keys)
         .to contain_exactly("repository", "api_key", "latest_run", "history_window", "history",
-                            "unstable_tests_window", "unstable_tests", "branches_window", "branches")
+                            "unstable_tests_window", "unstable_tests", "directory_growth_window",
+                            "directory_growth", "branches_window", "branches")
     end
 
     it "scopes latest_run to the key's own repository" do
@@ -2423,7 +2424,8 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
 
       expect(body.keys)
         .to contain_exactly("repository", "api_key", "latest_run", "history_window", "history",
-                            "unstable_tests_window", "unstable_tests", "branches_window", "branches")
+                            "unstable_tests_window", "unstable_tests", "directory_growth_window",
+                            "directory_growth", "branches_window", "branches")
       expect(body["history"].first.keys).to contain_exactly(
         "commit_sha", "branch", "total_specs", "annotated_specs", "annotated_ratio",
         "duration_seconds", "shard_count", "timed_shard_count", "suite_size_measured", "ingested_at"
@@ -2849,15 +2851,25 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
       end
     end
 
-    # The invariance, from a ONE-ROW baseline to the full thirty-row bound and past it. A baseline
-    # taken inside the window would sit inside the leak it is meant to measure; forty rows is what
-    # proves the bound is enforced rather than the fixture merely being small.
-    it "costs the same at 1 branch row, at 30 and at 40" do
-      create_main_runs(1, prefix: "cost")
+    # The invariance, from the smallest baseline that holds the WINDOW'S STATE fixed to the full
+    # thirty-row bound and past it. A baseline taken inside the window would sit inside the leak it
+    # is meant to measure; forty rows is what proves the bound is enforced rather than the fixture
+    # merely being small.
+    #
+    # TWO ROWS AND NOT ONE, and the reason is a property of this endpoint rather than a concession.
+    # Two of the blocks served here read CONDITIONALLY ON STATE rather than on window size —
+    # `SpecDirectoryWindowGrowth` asks `spec_observations` nothing at all where the window holds a
+    # single run, because there is no earlier run to compare against — so a one-row baseline is
+    # taken in a state no larger window can be in, and the "extra" query at thirty rows is a second
+    # END appearing rather than a per-row cost. Two rows is the smallest window in the same state as
+    # thirty and forty, and it is still twenty-eight rows short of the bound: a per-row `pick` for
+    # `shard_count` reads as twenty-eight extra statements here, which is the leak this bounds.
+    it "costs the same at 2 branch rows, at 30 and at 40" do
+      create_main_runs(2, prefix: "cost")
       get_repository(query: { branch: "main" })
       baseline = executed_sql { get_repository(query: { branch: "main" }) }.length
 
-      create_main_runs(29, prefix: "grow")
+      create_main_runs(28, prefix: "grow")
       expect(repository.test_runs.where(branch: "main").count).to eq(30)
       expect(executed_sql { get_repository(query: { branch: "main" }) }.length).to eq(baseline)
 
