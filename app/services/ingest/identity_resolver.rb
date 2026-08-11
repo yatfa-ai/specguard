@@ -39,15 +39,27 @@ module Ingest
   #   row, because the insert is an upsert onto `(repository_id, text_digest)` — see
   #   {#claim_identity} and the migration's "The conflict key" section.
   #
-  # == The work list is TWO lists, and the second is what makes a failure recoverable
+  # == The work list is TWO lists, and the second is what makes an unresolved row recoverable
   #
   # This run's unresolved observations, and — before them — the rows of the repository's EARLIER runs
-  # whose embedding failed and which nothing else will ever revisit. Until that second list existed
-  # there was exactly one `perform_later` in the whole application and its argument was the run just
-  # created, so run-1's failed rows were never read again by anything: run-2's job walks run-2's
-  # rows. The identity was not lost — run-2 re-creates it from the same text — but run-1's duration
-  # and outcome stayed orphaned from that test's history permanently, which is the half of "nothing
-  # is permanently lost" that was not true.
+  # that nothing else will ever revisit. Until that second list existed there was exactly one
+  # `perform_later` in the whole application and its argument was the run just created, so run-1's
+  # leftovers were never read again by anything: run-2's job walks run-2's rows. The identity was not
+  # lost — run-2 re-creates it from the same text — but run-1's duration and outcome stayed orphaned
+  # from that test's history permanently, which is the half of "nothing is permanently lost" that was
+  # not true.
+  #
+  # That second list is itself two, because there are two ways a row is left behind and only one of
+  # them leaves evidence (see {#retry_backlog}):
+  #
+  # * **The provider was asked and could not answer.** Stamped with `embed_failed_at`, bounded by
+  #   {SpecObservation::EMBED_RETRY_WINDOW}, ordered so a large backlog drains fairly.
+  # * **The provider was never asked**, because the job that would have asked never got there — an
+  #   exception out of `perform`, a dropped connection, a deploy mid-job. There is no stamp, since
+  #   {#record_embed_failure} only runs where the provider was actually called, so this population
+  #   was invisible to the first list and to both audit scopes: the ONE unresolved state with no
+  #   query that could find it. {SpecObservation::EMBED_ATTEMPT_GRACE} is what makes it sweepable
+  #   without racing the job that may still be on its way.
   #
   # The trigger is deliberately the next INGEST rather than a scheduled sweep. `config/recurring.yml`
   # has one production entry and it is Solid Queue housekeeping; adding a cron is a deployment
@@ -74,19 +86,25 @@ module Ingest
     # observations are held in memory at once, and 20,000 of them is the design point.
     BATCH_SIZE = 500
 
-    # **How much of an earlier run's failure ONE JOB is made to pay for.** The cost bound on the
-    # cross-run sweep, and its own constant rather than a reuse of `BATCH_SIZE` by the rule this
+    # **How much of an earlier run's unfinished business ONE JOB is made to pay for.** The cost
+    # bound on the cross-run sweep — on BOTH of the lists {#retry_backlog} draws it from, together
+    # and not each — and its own constant rather than a reuse of `BATCH_SIZE` by the rule this
     # codebase's `_LIMIT`s obey: that one bounds how many rows are held in MEMORY at once and would
     # be just as correct at 50 or 5,000, this bounds how much EXTRA WORK a delivery inherits from
     # deliveries before it. They move for different reasons and one number standing for both would
     # make that a single edit nobody meant to make.
     #
     # A bound is needed because the failure mode is the design point: a provider outage across a
-    # 20,000-example run leaves 20,000 failed rows, and an uncapped sweep would make the very next
-    # ingest do 40,000 embeddings — its own suite plus the whole backlog — on the one path that is
-    # already the largest thing this application does. Capped, a job is at worst its own share of
-    # the suite plus 500, and a backlog larger than the cap drains across the ingests that follow
-    # instead of landing on one of them.
+    # 20,000-example run leaves 20,000 failed rows — and a job that dies mid-resolve leaves up to as
+    # many unattempted ones — so an uncapped sweep would make the very next ingest do 40,000
+    # embeddings, its own suite plus the whole backlog, on the one path that is already the largest
+    # thing this application does. Capped, a job is at worst its own share of the suite plus 500, and
+    # a backlog larger than the cap drains across the ingests that follow instead of landing on one
+    # of them.
+    #
+    # **Across both lists and never per list**, which is what {#retry_backlog} is a method for
+    # rather than a relation: two lists each capped at this number is a job inheriting `2 × 500`
+    # while this comment went on claiming 500.
     #
     # == A JOB and not an INGEST, and the difference is the shard count
     #
@@ -134,7 +152,7 @@ module Ingest
       # "last known path", so whichever observation is resolved LAST used to have the final word on
       # where the test was last seen — and this loop holds observations from several runs at once,
       # so "last" had to mean "newest" for that word to be true. Two axes then wanted one ordering
-      # key: chronology wants oldest-first, and {#retry_backlog}'s fairness wants least-tried
+      # key: chronology wants oldest-first, and {#failed_embed_backlog}'s fairness wants least-tried
       # first, which is INVERSELY correlated with age because an older failed row has been swept by
       # more ingests and carries a higher count. No single key serves both, and the one that was
       # chosen served fairness while a comment here claimed it served chronology.
@@ -158,6 +176,44 @@ module Ingest
 
     private
 
+    # **The work that is not this run's**, under one budget — the rows of the repository's EARLIER
+    # runs that this ingest is entitled to attempt on their behalf. Two populations, and they are
+    # two because the reason nobody attended to them is different:
+    #
+    # * {#failed_embed_backlog} — the provider was asked and could not answer. Stamped, ordered by
+    #   how often it has been tried, bounded by {SpecObservation::EMBED_RETRY_WINDOW}.
+    # * {#unattempted_embed_backlog} — the provider was never asked, because the job that would have
+    #   asked never got there. Unstamped, and therefore invisible to every mechanism the first list
+    #   is built on.
+    #
+    # The failures come first and take their share of the budget first. Not because the order is
+    # load-bearing — {#resolve} explains at length why no iteration order is any more — but because
+    # a stamped row is a row something has already tried and failed to rescue at least once, which
+    # is a stronger claim on a scarce slot than a row nobody has tried at all.
+    #
+    # == ONE budget, and this is the whole reason the method exists
+    #
+    # `RETRY_SWEEP_LIMIT` bounds *"how much EXTRA WORK a delivery inherits from deliveries before
+    # it"*, and that sentence is about the inheriting, not about any particular list. Two
+    # independently `.limit(RETRY_SWEEP_LIMIT)`ed relations would quietly double what a job can
+    # inherit — `N × 2 × 500` at the shard multiplicity that constant already accounts for — while
+    # every word of its comment went on reading as though it had not changed. So the second list is
+    # asked for the REMAINDER, and a full first list means it is not queried at all.
+    #
+    # An Array rather than a relation, which is what makes that arithmetic possible at all: two
+    # relations over disjoint predicates with different ordering keys cannot be capped jointly in
+    # one statement without a UNION whose outer ordering key neither list has. {#resolve} walks this
+    # with `.each` and always did — the relation it used to walk was already capped at one
+    # `BATCH_SIZE` page — so nothing downstream notices. `find_each` was never available to either
+    # half in any case: it ignores exactly the `order` and `limit` these two reads are.
+    def retry_backlog
+      failed = failed_embed_backlog.to_a
+      remaining = RETRY_SWEEP_LIMIT - failed.size
+      return failed if remaining <= 0
+
+      failed + unattempted_embed_backlog(remaining).to_a
+    end
+
     # The rows EARLIER runs of this repository failed to embed, and which this ingest is entitled to
     # re-attempt. Empty on a repository whose provider has never failed, which is the normal case
     # and costs one probe of an index that is empty there — see the migration for why the index is
@@ -165,8 +221,8 @@ module Ingest
     #
     # Scoped to the repository because identity is per repository and so is the provider outage that
     # produced these rows; `@repository` is already in hand from {#initialize}. `@run` is EXCLUDED
-    # rather than left in: this run's own unresolved rows are the second list, and a row that
-    # appeared on both would be embedded twice in one pass — once for nothing.
+    # rather than left in: this run's own unresolved rows are {#resolve}'s run-scoped list, and a row
+    # that appeared on both would be embedded twice in one pass — once for nothing.
     #
     # Ordered least-tried first, and — since the monotonicity guard {#resolve} describes — ordered
     # for FAIRNESS alone. Nothing about correctness rides on this key any more, which is what frees
@@ -185,15 +241,66 @@ module Ingest
     # and harmless to a ranking, because concurrent sweeps bump roughly the same top-N together and
     # leave the ORDER BETWEEN rows where it was. This wants a key that is monotone in "has been
     # tried", not a key that is calibrated in tries.
-    #
-    # `.each` and not `find_each`: the relation is already capped at `RETRY_SWEEP_LIMIT`, which is
-    # one `BATCH_SIZE` page, and `find_each` ignores exactly the `order` and `limit` this read is.
-    def retry_backlog
+    def failed_embed_backlog
       @repository.spec_observations
                  .embed_retryable
                  .where.not(test_run_id: @run.id)
                  .order(:embed_failure_count, :embed_failed_at, :id)
                  .limit(RETRY_SWEEP_LIMIT)
+    end
+
+    # The rows of this repository's earlier runs that were never attempted at all — the population
+    # `SpecObservation::EMBED_ATTEMPT_GRACE` and the migration beside it exist for, and the one that
+    # had no query that could find it.
+    #
+    # Its whole predicate is an absence, so unlike the failure backlog it cannot be empty on a
+    # healthy repository — every row is in it between the ingest commit and the job's pass. What
+    # keeps it small is the grace floor, which excludes exactly the rows a live job is plausibly
+    # still walking, and the fact that a row leaves by being resolved. The new partial index is what
+    # keeps the probe cheap all the same; see the migration for why the failure index cannot serve
+    # this predicate, which is its complement.
+    #
+    # `@run` is excluded for the same reason it is above — its own unresolved rows are {#resolve}'s
+    # second list, and a row on both would be embedded twice in one pass. It is not redundant with
+    # the grace floor: an ingest whose job is dequeued more than an hour after the commit would
+    # otherwise find its own rows here.
+    #
+    # == Ordered NEWEST first, which is the opposite of the failure backlog and deliberate
+    #
+    # That list orders by attempts so a retried row sinks and the whole backlog round-robins. This
+    # one has no attempt counter to sink by — nothing here has ever been attempted, and the two rows
+    # this sweep cannot resolve are precisely the ones that will never acquire one: a row with no
+    # intent and no name returns nil from {#identity_for} BEFORE the embed, so it takes no stamp, no
+    # count, and no place in any ordering that could demote it.
+    #
+    # Oldest-first would therefore park that population permanently at the head of the list. A
+    # repository carrying `RETRY_SWEEP_LIMIT` signalless rows inside the window would spend its
+    # entire sweep budget on them on every ingest, forever, and no genuinely stranded row would ever
+    # be reached — starvation by a set that is behaving correctly.
+    #
+    # Newest-first structurally cannot do that, and the structure is `Ingest::Payload#validate_name`:
+    # it rejects "absent name and no intent", so a signalless row is one written before that
+    # validator existed and is therefore older than every row written since. Sorting by age
+    # descending puts the unresolvable population last by construction rather than by hope. It also
+    # happens to be the order a rescue wants — the freshest stranding is the one whose run somebody
+    # may still be looking at — but that is a bonus and not the argument.
+    #
+    # `id` breaks ties, and here the ties are the NORMAL case rather than a corner:
+    # `Ingest::ObservationRecorder#record` writes a run's observations in a single bulk `upsert_all`,
+    # so a whole run can share one `created_at` to the microsecond. Without the tiebreak the cap
+    # would take an arbitrary and differently-chosen slice of that run on every ingest, and rows
+    # could be passed over indefinitely while the count of them never moved. Both keys descend
+    # together so the read is one backward walk of
+    # `index_spec_observations_on_unattempted_embed_backlog`, which carries `id` for exactly this.
+    #
+    # `limit` is a parameter and not `RETRY_SWEEP_LIMIT`, because this list spends what the failure
+    # backlog left — see {#retry_backlog} for why there is one budget and not two.
+    def unattempted_embed_backlog(limit)
+      @repository.spec_observations
+                 .embed_unattempted_retryable
+                 .where.not(test_run_id: @run.id)
+                 .order(created_at: :desc, id: :desc)
+                 .limit(limit)
     end
 
     # @return [Integer] 1 when this observation now carries an identity it did not carry before.

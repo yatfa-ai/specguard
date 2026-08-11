@@ -132,6 +132,101 @@ class SpecObservation < ApplicationRecord
     unresolved.embed_failed.where(embed_failed_at: ...EMBED_RETRY_WINDOW.ago)
   }
 
+  # **The rows NOTHING ever asked the provider about** — the exact complement of `.embed_failed`,
+  # and the other side of the discriminator `AddEmbedFailureToSpecObservations` introduced.
+  #
+  # It is the two meanings that migration could not separate, pooled on purpose: *not attempted yet*
+  # and *nothing to embed*. Nothing here re-derives which — that would mean a second implementation
+  # of the intent-or-name precedence in SQL, and `#signal` states that the precedence has exactly one
+  # owner and that a copy of it would drift. `Ingest::IdentityResolver#identity_for` is that owner
+  # and it is what tells them apart, one row at a time, at a cost of a row read and zero embeddings
+  # for the second kind.
+  #
+  # That is what makes the pooling affordable rather than sloppy: a sweep does not need to know which
+  # of the two a row is in order to do the right thing with it. It embeds the ones that have text and
+  # returns nil for the ones that do not, which is the same answer it has always given them.
+  scope :embed_unattempted, -> { where(embed_failed_at: nil) }
+
+  # **How old an unattempted row has to be before anything else may touch it** — the floor under the
+  # never-attempted sweep, and the reason that sweep is not a race with the job that is already on
+  # its way to the same rows.
+  #
+  # == What it guards, and what it explicitly does not
+  #
+  # A COST guard, not a correctness one, and the distinction decides how the number is chosen. Two
+  # passes over one row converge: `IdentityResolver#claim_identity` upserts onto
+  # `(repository_id, text_digest)` and `SpecIdentity::SIGHTING_NOT_OLDER` refuses the older sighting
+  # whichever pass arrives second — the same mechanism that already makes N concurrent jobs over one
+  # run safe. So a floor set too low costs a duplicated embedding and never a duplicated identity,
+  # and a floor set too high costs only latency on a rescue nobody is waiting on by then.
+  #
+  # Being a cost guard is also why it is a floor on `created_at` rather than a stamp written when the
+  # job starts. A "resolution started" column would have to be written on the hot path for every row
+  # of every run — 20,000 extra writes per ingest — to buy a guarantee this does not need.
+  #
+  # == Why an hour
+  #
+  # It has to clear, with room to spare, the whole interval between the row being COMMITTED and the
+  # job reaching it, which is two terms. The resolve itself is round-trip bound and the design point
+  # is 20,000 examples, which is minutes; the QUEUE DELAY in front of it is the larger and far less
+  # predictable term — a deploy, a saturated worker pool, or the N jobs an N-shard delivery
+  # schedules over the same rows all push the last one's start time out, and none of those is a
+  # number this application can see.
+  #
+  # An hour is well past both and is still nothing against the window it sits inside: it removes
+  # 1/168th of `EMBED_RETRY_WINDOW`, so a genuinely stranded row is rescuable for essentially the
+  # whole seven days regardless. Sized against a job that is LATE rather than against one that is
+  # typical, because the failure of being too low — re-embedding rows a live job is about to claim —
+  # is paid on every healthy ingest, while the failure of being too high is paid once, on the rare
+  # run that actually stranded, in an hour of delay before a rescue that was never going to be
+  # instant.
+  #
+  # Deliberately not derived from `Ingest::IdentityResolver::BATCH_SIZE` or `RETRY_SWEEP_LIMIT`.
+  # Those are row counts and this is wall-clock, and the thing it has to outlast is a queue rather
+  # than a loop.
+  EMBED_ATTEMPT_GRACE = 1.hour
+
+  # The never-attempted backlog: unresolved, unstamped, old enough that no live job is plausibly
+  # still on its way to them, and still inside the retry window. What one ingest is entitled to
+  # attempt on behalf of a job that died before it got there.
+  #
+  # Bounded on `created_at` at BOTH ends, and it is the same column at both because it is the only
+  # timestamp these rows have to offer: `.embed_retryable` anchors on `embed_failed_at` precisely
+  # because a stamp exists there, and the absence of one is what defines this population. The lower
+  # bound is `EMBED_RETRY_WINDOW` — the same lifetime bound, for the same reason, so that "we gave
+  # up" is a single rule across both backlogs rather than two rules that could drift; the upper bound
+  # is `EMBED_ATTEMPT_GRACE`.
+  #
+  # `updated_at` would be the wrong column and quietly so. `Ingest::ObservationRecorder` keeps
+  # `created_at` out of `REMEASURABLE` on purpose, so an example redelivered under a different shard
+  # id lands on the conflict branch and moves only `updated_at` — the grace on a row that has been
+  # waiting since its original ingest would silently restart, on a redelivery that resolved nothing.
+  # `created_at` is the column that says when the row started waiting, and it is the one read here.
+  #
+  # Repository scoping is the caller's, exactly as it is for `.embed_retryable`: the tenant boundary
+  # belongs to the caller that has the tenant.
+  scope :embed_unattempted_retryable, lambda {
+    unresolved.embed_unattempted.where(created_at: EMBED_RETRY_WINDOW.ago..EMBED_ATTEMPT_GRACE.ago)
+  }
+
+  # The unattempted rows this rule has GIVEN UP on — never stamped, never resolved, and now older
+  # than the window. `.embed_abandoned`'s counterpart, and here for the reason that scope gives:
+  # a bound that cannot be queried is a bound nobody can audit.
+  #
+  # It is the one place the pooling on `.embed_unattempted` above is visible as a cost. This set is
+  # two things at once — rows a dead job stranded and then outlived, and the frozen signalless tail
+  # that was never going to resolve and is doing exactly what it should — so a count here is "rows
+  # nothing will ever attempt again" and NOT "rows we failed". Nothing in this class can split them,
+  # for the reason `.embed_unattempted` states; an operator who needs the split reads `name` and the
+  # three `intent_` columns, which is `Ingest::SpecSignal`'s question and not a scope's.
+  #
+  # Stated rather than left to be discovered, because the alternative reading — an alarming number
+  # that is mostly legacy rows behaving correctly — is exactly the kind of figure this table's
+  # comments refuse to ship.
+  scope :embed_unattempted_abandoned, lambda {
+    unresolved.embed_unattempted.where(created_at: ...EMBED_RETRY_WINDOW.ago)
+  }
+
   # What text represents this example, answered by the one class that decides it.
   #
   # `Ingest::SpecSignal` takes a spec hash exactly as it came off the JSON wire — string keys, an
