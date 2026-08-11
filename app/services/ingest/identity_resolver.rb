@@ -194,10 +194,11 @@ module Ingest
       #
       # **Both lists are walked a PAGE at a time**, because the digest short-circuit is answered per
       # page — see {#resolve_page}. The backlog is already capped at one page by
-      # {RETRY_SWEEP_LIMIT} and is loaded by a single read whose `order` and `limit` are load-bearing
-      # (see {#retry_backlog}), so it is handed over as the one page it already is rather than made
-      # symmetric with `find_in_batches` — which would ignore both.
-      resolved += resolve_page(retry_backlog.to_a)
+      # {RETRY_SWEEP_LIMIT} — across BOTH of the reads {#retry_backlog} draws it from, together and
+      # not each — and those reads' `order` and `limit` are load-bearing, so it is handed over as the
+      # one page it already is rather than made symmetric with `find_in_batches`, which would ignore
+      # both. It arrives as an Array for that budget's arithmetic and is a page all the same.
+      resolved += resolve_page(retry_backlog)
 
       @run.spec_observations.unresolved.find_in_batches(batch_size: BATCH_SIZE) do |page|
         resolved += resolve_page(page)
@@ -234,10 +235,13 @@ module Ingest
     #
     # An Array rather than a relation, which is what makes that arithmetic possible at all: two
     # relations over disjoint predicates with different ordering keys cannot be capped jointly in
-    # one statement without a UNION whose outer ordering key neither list has. {#resolve} walks this
-    # with `.each` and always did — the relation it used to walk was already capped at one
-    # `BATCH_SIZE` page — so nothing downstream notices. `find_each` was never available to either
-    # half in any case: it ignores exactly the `order` and `limit` these two reads are.
+    # one statement without a UNION whose outer ordering key neither list has. {#resolve} hands the
+    # result straight to {#resolve_page} as the ONE PAGE it already is — `RETRY_SWEEP_LIMIT` is one
+    # `BATCH_SIZE` — so the digest short-circuit is batched over this list exactly as it is over a
+    # run's own page, and nothing downstream notices that this is an Array. `find_in_batches` was
+    # never available to either half in any case: it ignores exactly the `order` and `limit` these
+    # two reads are, which is why the cap is applied here and the page seam reads it rather than
+    # re-deriving it.
     def retry_backlog
       failed = failed_embed_backlog.to_a
       remaining = RETRY_SWEEP_LIMIT - failed.size

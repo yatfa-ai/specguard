@@ -418,6 +418,47 @@ RSpec.describe Ingest::IdentityResolver do
       expect(second.spec_observations.unresolved.count).to eq(0)
     end
 
+    it "asks once for the CROSS-RUN BACKLOG's page too, and not once per rescued row" do
+      # **The other list.** Both examples above walk a run's OWN rows, and `#resolve` walks two
+      # lists: before them comes `#retry_backlog`, the rows of EARLIER runs nothing else will
+      # revisit. That list reaches `#claim` by a different route, so a resolver that batched a run's
+      # own pages and went back to asking per row for the backlog would answer both examples above
+      # correctly — verified, not assumed: replacing `resolve_page(retry_backlog)` with the per-row
+      # `retry_backlog.each { claim(...) }` this slice removed leaves the WHOLE suite green without
+      # this example. That is the shape SPGD-78 is about, so the backlog page is pinned separately
+      # from the run's own.
+      #
+      # It is also the newer half of the seam. `#retry_backlog` became TWO populations under one
+      # budget in SPGD-379, and this is what says the page seam still sits above both of them.
+      ingest(wide_suite, ci_run_id: "run-1")
+      expect(repository.spec_identities.count).to eq(subjects.size)
+
+      # A whole run stranded before its job reached any of it — unresolved, UNSTAMPED, and waiting
+      # longer than the grace, which is exactly `#unattempted_embed_backlog`'s population. Aged by
+      # `update_all` rather than by moving the clock, the choice `#strand` states further down.
+      stranded = record(wide_suite(offset: 100), ci_run_id: "run-2")
+      stranded.spec_observations.unresolved
+              .update_all(created_at: (SpecObservation::EMBED_ATTEMPT_GRACE + 1.minute).ago)
+
+      # Run 3 carries text this repository already holds, which keeps the instrument honest in a way
+      # the fixture has to arrange: `digest_lookups` matches any SELECT naming `text_digest`, and
+      # `#nearest` selects EVERY column. A row that fell through to similarity would therefore be
+      # counted here as though it were a lookup. With nothing to embed anywhere, the only statements
+      # that can match are the two this example is about.
+      third = record([unannotated_spec(file_path: "spec/models/subject_0_spec.rb", line_number: 900,
+                                       name: subjects.first)], ci_run_id: "run-3")
+
+      EmbeddingGenerator.provider = counting_provider
+
+      # TWO pages, two lookups: the backlog's twelve rows, then run 3's one. Per row it is thirteen.
+      expect(digest_lookups { described_class.resolve(third) }.size).to eq(2)
+
+      # The premise, pinned rather than trusted: nothing was embedded, so nothing reached `#nearest`
+      # and neither number above is an artifact of a fallthrough.
+      expect(counting_provider.calls).to eq(0)
+      expect(stranded.spec_observations.unresolved).to be_empty
+    end
+
     it "still costs nothing when a page carries no text to look up at all" do
       # A page of rows with nothing to embed — `Ingest::SpecSignal`'s `:none` case, the rows
       # `#identity_for` returns nil for — must ask the database nothing.
