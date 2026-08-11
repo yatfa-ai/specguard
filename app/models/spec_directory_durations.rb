@@ -40,17 +40,54 @@
 # states how many of its examples reported a timing, and a row with none of them renders "not
 # reported" rather than a zero it did not measure — `SpecObservation.humanized_duration` is the one
 # seam that decides that, at every grain.
+#
+# == The third figure: how many DISTINCT DESCRIPTIONS an area's examples carry
+#
+# The area-grain reading this panel exists to let a reader state — "this area carries 340 examples
+# and 6 minutes of wall clock for what looks like ~40 distinct behaviors" — needs a third figure,
+# and it is counted in the same grouped aggregate as the other two for the reason above: a caption
+# is a claim ABOUT the list, and a density counted by a second read describes a population this list
+# was not built from.
+#
+# `COUNT(DISTINCT name)` skips NULLs the way `SUM` skips them, and `name` is nullable, so the same
+# argument applies to the same rows a second time — and inverted, it costs the most on this panel of
+# anywhere on the page. An area whose producer sent no descriptions would report ZERO distinct
+# behaviors against 340 examples, which is the most extreme over-coverage reading obtainable, made
+# out of silence rather than measured. So the per-area count of NAMED rows rides back beside the
+# distinct count, the density is stated over those rows only, the excluded rows are visible beside
+# it, and an area with no named rows SAYS SO rather than ranking first. `RepeatedDescriptions` draws
+# the same `recorded?` / `named?` / `any?` distinction one grain down.
+#
+# == It presents, and does not judge
+#
+# `RepeatedDescriptions` states the rule and the area grain inherits it unchanged: a description
+# carried by several examples is evidence of repetition AND the ordinary shape of a table-driven
+# loop or a shared example group. Nothing here decides which. No method on this object or its rows
+# returns a redundancy verdict — the figures are operands for a reader, and there is no
+# `#over_covered?` here to be tempted by.
 class SpecDirectoryDurations
   def self.for(test_run, limit: SpecObservation::HEAVIEST_DIRECTORIES_LIMIT)
     tuples = SpecObservation.directory_durations_in(test_run, limit: limit)
-    rows = tuples.map do |path, total, recorded, timed, _directory_count|
-      Row.new(path: path, total_seconds: total, recorded_count: recorded.to_i, timed_count: timed.to_i)
+    rows = tuples.map do |path, total, recorded, timed, distinct_names, named, _directory_count|
+      Row.new(path: path, total_seconds: total, recorded_count: recorded.to_i, timed_count: timed.to_i,
+              distinct_name_count: distinct_names.to_i, named_count: named.to_i)
     end
 
     # Off any row, because the window carries the same total on all of them; `to_i` on the nil of
     # an empty read, where "no directories" is the honest count.
-    new(rows: rows, directory_count: tuples.first&.last.to_i)
+    #
+    # BY INDEX, not by `.last`. Reading the end of the tuple was correct only for as long as the
+    # window function happened to be the last expression plucked, and it went on being correct
+    # SILENTLY — a description count served as a directory count renders a caption that is merely
+    # wrong rather than a page that breaks. `fetch` raises where `.last` would guess, so the next
+    # column added to that read fails here loudly instead.
+    new(rows: rows, directory_count: tuples.first&.fetch(DIRECTORY_COUNT_INDEX).to_i)
   end
+
+  # Where `COUNT(*) OVER ()` sits in one tuple of `SpecObservation.directory_durations_in`. Named
+  # here, beside the only read of it, so the tuple shape is a stated contract between the two
+  # objects rather than a positional habit.
+  DIRECTORY_COUNT_INDEX = 6
 
   def initialize(rows:, directory_count:)
     @rows = rows
@@ -93,8 +130,23 @@ class SpecDirectoryDurations
   # rather than leaving a reader to compare each row's two figures to reach it.
   def complete? = recorded? && rows.all?(&:complete?)
 
-  # One directory's share of one run's wall clock, and what that share was measured over.
-  Row = Struct.new(:path, :total_seconds, :recorded_count, :timed_count, keyword_init: true) do
+  # At least one listed area has a description to count, so the distinct-description column has
+  # something to state. False for a producer that sends no `name` at all — `Ingest::ObservationRecorder`
+  # writes it through `presence_of`, so such a run stores a nil on every row — and a column of zeroes
+  # over that run is "nobody told us what these tests are called", never "every area here repeats
+  # itself completely". The `recorded?` / `any_named?` / `fully_named?` split is
+  # `RepeatedDescriptions`' `recorded?` / `named?` / `any?` at this grain.
+  def any_named? = rows.any?(&:named?)
+
+  # Every example of every listed area carried a description, so each distinct count was counted over
+  # the whole of its area. Read off the LISTED head, exactly like `#complete?` beside it and for the
+  # same reason: it selects which sentence the caption prints about the rows a reader can see.
+  def fully_named? = recorded? && rows.none?(&:excluded_unnamed_rows?)
+
+  # One directory's share of one run's wall clock, what that share was measured over, and how many
+  # distinct descriptions the examples it was measured over carry.
+  Row = Struct.new(:path, :total_seconds, :recorded_count, :timed_count, :distinct_name_count,
+                   :named_count, keyword_init: true) do
     # This area has a measured total. False when every one of its examples went untimed, which is
     # SQL NULL out of the aggregate and stays nil all the way to the cell.
     def timed? = !total_seconds.nil?
@@ -110,5 +162,43 @@ class SpecDirectoryDurations
     # in a column of "12 of 40" reads as forty of something unstated; the denominator is the point
     # of the column, and a complete area has to be visibly complete rather than merely unannotated.
     def coverage_label = "#{timed_count} of #{recorded_count}"
+
+    # At least one of this area's examples carried a description, so `COUNT(DISTINCT name)` had
+    # something to count. The predicate the distinct column is stated BEHIND, never a fact folded
+    # into the number: `COUNT(DISTINCT name)` skips NULLs, so an area whose every row is unnamed
+    # comes back as a flat zero that is indistinguishable, AS A NUMBER, from an area whose 340
+    # examples genuinely share no description — and the second reading is the strongest
+    # over-coverage claim this page can make. Zero distinct behaviors is never printed for silence.
+    def named? = named_count.positive?
+
+    # How many of this area's rows the distinct count could NOT see. The complement over the area's
+    # own population, so the two figures sum to the row rather than to two different reads.
+    def unnamed_count = recorded_count - named_count
+
+    # Rows were excluded from the distinct count for carrying no description. Asked so the surface
+    # can omit the clause entirely on the ordinary area: "0 examples carried no description" is a
+    # sentence about arithmetic rather than about this area, and `RepeatedDescriptions` renders its
+    # exclusion sentence under the same condition for the same reason.
+    def excluded_unnamed_rows? = unnamed_count.positive?
+
+    # How many distinct descriptions this area's NAMED examples carry, always as a fraction over the
+    # rows the count was taken across and never as a bare count. "40" alone reads as forty of the
+    # area, and the area is `recorded_count`, which is the one denominator this figure was NOT
+    # counted over — the excluded rows are stated separately by `#unnamed_count`.
+    #
+    # An area with nothing named says so instead. Not "0 of 0", which is a fraction wearing the
+    # shape of a measurement, and not "0", which is the invented maximal-redundancy reading this
+    # whole method exists to refuse.
+    def distinct_description_label
+      return "no descriptions" unless named?
+
+      "#{distinct_name_count} of #{named_count}"
+    end
+
+    # No `#over_covered?`, and no threshold anywhere on this Row. The ratio of distinct descriptions
+    # to examples is equally the signature of a suite testing one behavior forty ways and of a
+    # table-driven loop or a shared example group doing exactly what it should — `RepeatedDescriptions`
+    # states the rule one grain down and refuses a `#redundant?` for the same reason. What is shipped
+    # here are the operands; the reading is the reader's.
   end
 end

@@ -696,17 +696,43 @@ class SpecObservation < ApplicationRecord
   # respect to directory structure. That grain answers "which partition ran long"; this one answers
   # "which area of the codebase costs", and neither is derivable from the other.
   #
-  # @return [Array<Array>] `[directory, total_seconds, recorded_count, timed_count, directory_count]`
-  #   per directory, where `directory_count` is the same figure on every row: how many directories
-  #   the run touched in total, before the `LIMIT`.
+  # @return [Array<Array>] `[directory, total_seconds, recorded_count, timed_count,
+  #   distinct_name_count, named_count, directory_count]` per directory, where `directory_count` is
+  #   the same figure on every row: how many directories the run touched in total, before the
+  #   `LIMIT`. The window function stays LAST in the tuple, and the two description figures were
+  #   inserted BEFORE it rather than appended after — see the note below.
   #
   # == Every hazard the by-file read documents, at this grain
   #
-  # The four columns, `pluck` over `.sum`, and `NULLS LAST` are all here for the reasons spelled
-  # out on `.file_durations_in` above — read that comment, it is not repeated. What changes with
-  # the grain is only how much each one costs when it is got wrong: an area is a bigger population
-  # than a file, so an all-untimed area rendered as `0.00s` is a bigger invented measurement, and
-  # `SUM(...) DESC`'s NULLS FIRST would name that area the heaviest in the suite.
+  # The duration columns, `pluck` over `.sum`, and `NULLS LAST` are all here for the reasons
+  # spelled out on `.file_durations_in` above — read that comment, it is not repeated. What changes
+  # with the grain is only how much each one costs when it is got wrong: an area is a bigger
+  # population than a file, so an all-untimed area rendered as `0.00s` is a bigger invented
+  # measurement, and `SUM(...) DESC`'s NULLS FIRST would name that area the heaviest in the suite.
+  #
+  # == How many DISTINCT DESCRIPTIONS an area's examples carry, and the count that rides beside it
+  #
+  # The third figure of the area-grain reading — "this area carries 340 examples and 6 minutes of
+  # wall clock for what looks like ~40 distinct behaviors". It is measured HERE, in the aggregate
+  # that already produces the other two, because a caption is a claim about a list: a density
+  # counted by a second read is a claim about a population this one did not group. No migration and
+  # no new index — the grouping already touches the heap for `duration_seconds`, so two more
+  # aggregates over rows already in the plan change no access path (EXPLAIN-certified, as above).
+  #
+  # `COUNT(DISTINCT name)` SKIPS NULLS SILENTLY and `name` is nullable, so on its own it reports an
+  # area whose producer sent no descriptions as ZERO distinct behaviors against 340 examples — the
+  # most extreme over-coverage reading obtainable, invented out of silence. So `COUNT(name)` rides
+  # back beside it and the density is only ever stated over the NAMED rows, with the excluded ones
+  # visible: the same `recorded_count` / `timed_count` fraction this method already carries for
+  # timings, applied to the second nullable column. `RepeatedDescriptions` draws the same
+  # distinction one grain down and `.unnamed_row_count_in` above refuses the same silence for a
+  # window. What the ratio MEANS is not decided here or anywhere downstream — repetition is equally
+  # the ordinary shape of a table-driven loop or a shared example group.
+  #
+  # POSITION IS A DECISION, not an accident: `SpecDirectoryDurations.for` reads the window count off
+  # the end of the tuple, so appending after `COUNT(*) OVER ()` would have kept every caller running
+  # while silently handing it a description count as a directory count. The window stays last, and
+  # the caller now reads it by an explicit index rather than by `.last`.
   #
   # == Why this needs no index of its own
   #
@@ -725,6 +751,7 @@ class SpecObservation < ApplicationRecord
       .limit(limit)
       .pluck(Arel.sql(DIRECTORY_EXPRESSION), Arel.sql("SUM(duration_seconds)"),
              Arel.sql("COUNT(*)"), Arel.sql("COUNT(duration_seconds)"),
+             Arel.sql("COUNT(DISTINCT name)"), Arel.sql("COUNT(name)"),
              Arel.sql("COUNT(*) OVER ()"))
   end
 

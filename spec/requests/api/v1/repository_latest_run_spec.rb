@@ -1025,11 +1025,18 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
     let!(:test_run) do
       run = create_test_run(repository: repository, commit_sha: "bydir0000001",
                             branch: "main", total_specs_count: 7, duration_seconds: 24.0)
-      observe(run, path: "spec/models/user_spec.rb", duration: 4.0, line_number: 1)
-      observe(run, path: "spec/models/user_spec.rb", duration: 5.0, line_number: 2)
-      observe(run, path: "spec/models/invoice_spec.rb", duration: 1.5, line_number: 1)
+      #   - `spec/models` carries THREE examples over TWO descriptions and `spec/requests` FOUR over
+      #     four, so the distinct-description count is not the example count in either area and a
+      #     serializer that served `recorded_count` twice under two names is red on the first row.
+      observe(run, path: "spec/models/user_spec.rb", duration: 4.0, line_number: 1,
+                   name: "User is valid with a handle")
+      observe(run, path: "spec/models/user_spec.rb", duration: 5.0, line_number: 2,
+                   name: "User is valid with a handle")
+      observe(run, path: "spec/models/invoice_spec.rb", duration: 1.5, line_number: 1,
+                   name: "Invoice finalize locks the line items")
       4.times do |index|
-        observe(run, path: "spec/requests/thing_#{index}_spec.rb", duration: 3.0, line_number: 1)
+        observe(run, path: "spec/requests/thing_#{index}_spec.rb", duration: 3.0, line_number: 1,
+                     name: "Thing #{index} responds")
       end
       run
     end
@@ -1043,9 +1050,11 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
       expect(spec_directories["rows"]).to eq(
         [
           { "path" => "spec/requests", "total_seconds" => 12.0,
-            "recorded_count" => 4, "timed_count" => 4 },
+            "recorded_count" => 4, "timed_count" => 4,
+            "distinct_name_count" => 4, "named_count" => 4 },
           { "path" => "spec/models", "total_seconds" => 10.5,
-            "recorded_count" => 3, "timed_count" => 3 }
+            "recorded_count" => 3, "timed_count" => 3,
+            "distinct_name_count" => 2, "named_count" => 3 }
         ]
       )
       expect(spec_directories["directory_count"]).to eq(2)
@@ -1081,7 +1090,8 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
     it "serves exactly the spec_directories keys this contract pins" do
       expect(spec_directories.keys).to contain_exactly("rows", "directory_count", "limit")
       expect(spec_directories["rows"].first.keys)
-        .to contain_exactly("path", "total_seconds", "recorded_count", "timed_count")
+        .to contain_exactly("path", "total_seconds", "recorded_count", "timed_count",
+                            "distinct_name_count", "named_count")
     end
 
     # AC5. Read off the same presenter `repositories#show` assigns rather than re-stating the
@@ -1096,6 +1106,9 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
       expect(spec_directories["rows"].map { it["total_seconds"] }).to eq(shown.rows.map(&:total_seconds))
       expect(spec_directories["rows"].map { it["recorded_count"] }).to eq(shown.rows.map(&:recorded_count))
       expect(spec_directories["rows"].map { it["timed_count"] }).to eq(shown.rows.map(&:timed_count))
+      expect(spec_directories["rows"].map { it["distinct_name_count"] })
+        .to eq(shown.rows.map(&:distinct_name_count))
+      expect(spec_directories["rows"].map { it["named_count"] }).to eq(shown.rows.map(&:named_count))
       expect(spec_directories["directory_count"]).to eq(shown.directory_count)
     end
 
@@ -1107,6 +1120,43 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
       expect(spec_directories.to_json).not_to match(/of \d|\d+\.\d+s|not reported/)
       expect(spec_directories["rows"].map { it["total_seconds"] }).to all(be_a(Float).or(be_nil))
       expect(spec_directories["rows"].map { it["recorded_count"] }).to all(be_a(Integer))
+      # `Row#distinct_description_label` is the same one call away and folds "no descriptions" into
+      # the value for exactly the area a client most needs to tell apart from a measured zero.
+      expect(spec_directories.to_json).not_to match(/no descriptions|unnamed/)
+      expect(spec_directories["rows"].map { it["distinct_name_count"] }).to all(be_a(Integer))
+      expect(spec_directories["rows"].map { it["named_count"] }).to all(be_a(Integer))
+    end
+
+    # THE row the description operands exist for, and the reason both of them are served rather than
+    # the distinct count alone. `COUNT(DISTINCT name)` skips NULLs, so an area whose producer sent no
+    # descriptions serves `distinct_name_count: 0` — and a client dividing that by `recorded_count`
+    # reads the most redundant area in the suite out of a silence nobody measured. `named_count: 0`
+    # is what makes the zero readable as "nothing to count", and it is the ONLY field that can: the
+    # payload carries no other figure a client could subtract to reach it.
+    it "serves a zero named count beside the zero distinct count for an area carrying no descriptions" do
+      observe(test_run, path: "spec/silent/one_spec.rb", duration: 1.0, line_number: 1, name: nil)
+      observe(test_run, path: "spec/silent/two_spec.rb", duration: 1.0, line_number: 2, name: nil)
+
+      silent = spec_directories["rows"].find { it["path"] == "spec/silent" }
+
+      expect(silent["recorded_count"]).to eq(2)
+      expect(silent["named_count"]).to eq(0)
+      expect(silent["distinct_name_count"]).to eq(0)
+    end
+
+    # The partial area, where the two figures stop being interchangeable: the distinct count was
+    # taken over the NAMED rows, so `named_count` and not `recorded_count` is the denominator a
+    # client divides by, and the difference between them is what the count could not see.
+    it "serves the population the distinct count was taken over, not the area's whole row count" do
+      observe(test_run, path: "spec/partial/a_spec.rb", duration: 1.0, line_number: 1, name: "shared")
+      observe(test_run, path: "spec/partial/b_spec.rb", duration: 1.0, line_number: 2, name: "shared")
+      observe(test_run, path: "spec/partial/c_spec.rb", duration: 1.0, line_number: 3, name: nil)
+
+      partial = spec_directories["rows"].find { it["path"] == "spec/partial" }
+
+      expect(partial["recorded_count"]).to eq(3)
+      expect(partial["named_count"]).to eq(2)
+      expect(partial["distinct_name_count"]).to eq(1)
     end
 
     # AC3. THE row this grain has to get right, and it costs MORE here than one rung down: an area

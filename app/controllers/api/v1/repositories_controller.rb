@@ -446,7 +446,17 @@ class Api::V1::RepositoriesController < Api::BaseController
           path: row.path,
           total_seconds: row.total_seconds,
           recorded_count: row.recorded_count,
-          timed_count: row.timed_count
+          timed_count: row.timed_count,
+          # The third figure of the area-grain reading, served as the OPERANDS the panel states it
+          # from and never as the density itself. `COUNT(DISTINCT name)` skips NULLs, so
+          # `distinct_name_count` alone is a ratio a client would compute against the wrong
+          # denominator — over `recorded_count`, which includes rows the count could not see, an
+          # area whose producer sent no descriptions reads as total redundancy. `named_count` is
+          # what it WAS counted over, so a client divides by the same figure the panel does and can
+          # subtract to see what was excluded. No verdict here for the same reason there is none on
+          # the Row: the reading is the client's.
+          distinct_name_count: row.distinct_name_count,
+          named_count: row.named_count
         }
       end,
       directory_count: durations.directory_count,

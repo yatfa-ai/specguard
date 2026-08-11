@@ -1041,9 +1041,9 @@ RSpec.describe SpecObservation do
         observe(run, duration: 0.5, line_number: 5, spec_file_path: "spec/system/smoke_spec.rb")
 
         expect(described_class.directory_durations_in(run)).to eq(
-          [["spec/requests", 13.0, 2, 2, 3],
-           ["spec/models", 4.0, 2, 2, 3],
-           ["spec/system", 0.5, 1, 1, 3]]
+          [["spec/requests", 13.0, 2, 2, 2, 2, 3],
+           ["spec/models", 4.0, 2, 2, 2, 2, 3],
+           ["spec/system", 0.5, 1, 1, 1, 1, 3]]
         )
       end
 
@@ -1056,8 +1056,8 @@ RSpec.describe SpecObservation do
         observe(run, duration: 2.0, line_number: 2, spec_file_path: "spec/models/orders/refund_spec.rb")
 
         expect(described_class.directory_durations_in(run)).to eq(
-          [["spec/models/orders", 2.0, 1, 1, 2],
-           ["spec/models", 1.0, 1, 1, 2]]
+          [["spec/models/orders", 2.0, 1, 1, 1, 1, 2],
+           ["spec/models", 1.0, 1, 1, 1, 1, 2]]
         )
       end
 
@@ -1071,8 +1071,8 @@ RSpec.describe SpecObservation do
         observe(run, duration: 1.0, line_number: 2, spec_file_path: "spec/models/order_spec.rb")
 
         expect(described_class.directory_durations_in(run)).to eq(
-          [[".", 3.0, 1, 1, 2],
-           ["spec/models", 1.0, 1, 1, 2]]
+          [[".", 3.0, 1, 1, 1, 1, 2],
+           ["spec/models", 1.0, 1, 1, 1, 1, 2]]
         )
       end
 
@@ -1106,8 +1106,8 @@ RSpec.describe SpecObservation do
 
         directories = described_class.directory_durations_in(run)
 
-        expect(directories).to eq([["spec/models", 0.25, 1, 1, 2],
-                                   ["spec/system", nil, 2, 0, 2]])
+        expect(directories).to eq([["spec/models", 0.25, 1, 1, 1, 1, 2],
+                                   ["spec/system", nil, 2, 0, 2, 2, 2]])
         expect(directories.last[1]).to be_nil
       end
 
@@ -1120,7 +1120,71 @@ RSpec.describe SpecObservation do
         observe(run, duration: nil, line_number: 2, spec_file_path: "spec/models/order_spec.rb")
         observe(run, duration: nil, line_number: 3, spec_file_path: "spec/models/refund_spec.rb")
 
-        expect(described_class.directory_durations_in(run)).to eq([["spec/models", 4.0, 3, 1, 1]])
+        expect(described_class.directory_durations_in(run)).to eq([["spec/models", 4.0, 3, 1, 3, 3, 1]])
+      end
+
+      # THE third figure, and the one the panel's headline sentence needs: how many distinct
+      # descriptions an area's examples carry. Four examples over two descriptions is the shape the
+      # reading is about — a `COUNT(*)` retyped as a distinct count, or a distinct count taken over
+      # `example_id` rather than `name`, both come back as 4 here and neither is a behavior count.
+      it "counts each area's distinct descriptions, not its examples" do
+        observe(run, duration: 1.0, line_number: 1, name: "settles an invoice",
+                     spec_file_path: "spec/models/order_spec.rb")
+        observe(run, duration: 1.0, line_number: 2, name: "settles an invoice",
+                     spec_file_path: "spec/models/order_spec.rb")
+        observe(run, duration: 1.0, line_number: 3, name: "settles an invoice",
+                     spec_file_path: "spec/models/refund_spec.rb")
+        observe(run, duration: 1.0, line_number: 4, name: "refuses a negative total",
+                     spec_file_path: "spec/models/refund_spec.rb")
+
+        expect(described_class.directory_durations_in(run)).to eq([["spec/models", 4.0, 4, 4, 2, 4, 1]])
+      end
+
+      # THE inverted Vacuous Green this pair of aggregates exists to refuse. `COUNT(DISTINCT name)`
+      # skips NULLs silently, so an area whose producer sent no descriptions at all comes back as
+      # ZERO distinct behaviors against its whole example count — read as a density, the most
+      # redundant area obtainable, invented out of silence rather than measured. The count of NAMED
+      # rows rides back in the same tuple so that zero is separable from a measurement: 0 distinct
+      # over 0 named is "nothing to count", which is not "nothing distinct to count".
+      it "reports no named rows for an area whose examples carry no description at all" do
+        observe(run, duration: 1.0, line_number: 1, name: nil, spec_file_path: "spec/models/order_spec.rb")
+        observe(run, duration: 1.0, line_number: 2, name: nil, spec_file_path: "spec/models/order_spec.rb")
+        observe(run, duration: 1.0, line_number: 3, name: nil, spec_file_path: "spec/models/refund_spec.rb")
+
+        expect(described_class.directory_durations_in(run)).to eq([["spec/models", 3.0, 3, 3, 0, 0, 1]])
+      end
+
+      # The partial case, and the one a whole-area check passes straight over: the distinct count is
+      # taken across SOME of the area's rows, so the population it was counted over is not
+      # `recorded_count`. Both figures come back, so the excluded rows are subtractable rather than
+      # silent — 2 distinct over 3 named of 5 recorded, where reading 2 against 5 overstates the
+      # repetition by counting rows the aggregate never saw.
+      it "counts an area's distinct descriptions over its named rows, not over all of them" do
+        observe(run, duration: 1.0, line_number: 1, name: "settles an invoice",
+                     spec_file_path: "spec/models/order_spec.rb")
+        observe(run, duration: 1.0, line_number: 2, name: "settles an invoice",
+                     spec_file_path: "spec/models/order_spec.rb")
+        observe(run, duration: 1.0, line_number: 3, name: "refuses a negative total",
+                     spec_file_path: "spec/models/order_spec.rb")
+        observe(run, duration: 1.0, line_number: 4, name: nil, spec_file_path: "spec/models/refund_spec.rb")
+        observe(run, duration: 1.0, line_number: 5, name: nil, spec_file_path: "spec/models/refund_spec.rb")
+
+        expect(described_class.directory_durations_in(run)).to eq([["spec/models", 5.0, 5, 5, 2, 3, 1]])
+      end
+
+      # One description in two AREAS is one distinct behavior in each of them, not one across the
+      # run: the counts are per group, and a distinct count taken over the whole run before the
+      # grouping would report one of these two areas as carrying no description of its own.
+      it "counts each area's descriptions against that area rather than against the run" do
+        observe(run, duration: 2.0, line_number: 1, name: "settles an invoice",
+                     spec_file_path: "spec/models/order_spec.rb")
+        observe(run, duration: 1.0, line_number: 2, name: "settles an invoice",
+                     spec_file_path: "spec/requests/order_spec.rb")
+
+        expect(described_class.directory_durations_in(run)).to eq(
+          [["spec/models", 2.0, 1, 1, 1, 1, 2],
+           ["spec/requests", 1.0, 1, 1, 1, 1, 2]]
+        )
       end
 
       it "reads the run it was asked about and no other" do
@@ -1128,7 +1192,7 @@ RSpec.describe SpecObservation do
         observe(run, duration: 1.0, line_number: 1, spec_file_path: "spec/ours/a_spec.rb")
         observe(other, duration: 99.0, line_number: 1, spec_file_path: "spec/theirs/a_spec.rb")
 
-        expect(described_class.directory_durations_in(run)).to eq([["spec/ours", 1.0, 1, 1, 1]])
+        expect(described_class.directory_durations_in(run)).to eq([["spec/ours", 1.0, 1, 1, 1, 1, 1]])
       end
 
       # Its OWN limit, not the by-file one. The two constants happen to be equal today, which is
