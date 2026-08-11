@@ -294,6 +294,27 @@ RSpec.describe Ingest::IdentityResolver do
       expect(run.spec_observations.sole.spec_identity_id).to eq(winner.id)
     end
 
+    it "refuses a losing sighting from a run older than the one the winner already names" do
+      # The conflict branch is a re-sighting, so it is monotonic for the reason `#resight` is. And it
+      # is reachable outside a race: `#nearest` is an approximate index lookup, so an under-recalled
+      # miss on text that already HAS an identity arrives here rather than there — carrying, if the
+      # row came out of the cross-run backlog, a run older than the one the identity already names.
+      older = record([unannotated_spec(file_path: "spec/models/cart_spec.rb", line_number: 5,
+                                       name: "Cart adds an item to the cart")], ci_run_id: "run-1")
+      newer = record([unannotated_spec(file_path: "spec/models/cart_spec.rb", line_number: 90,
+                                       name: "Cart adds an item to the cart")], ci_run_id: "run-2")
+      winner = create_spec_identity(repository: repository, text: "Cart adds an item to the cart",
+                                    file_path: "spec/models/cart_spec.rb", line_number: 90,
+                                    last_seen_test_run_id: newer.id)
+
+      resolve_as_the_loser(older)
+
+      expect(winner.reload.location).to eq("spec/models/cart_spec.rb:90")
+      expect(winner.last_seen_test_run_id).to eq(newer.id)
+      # Refused the sighting, not the row: the older observation still gets its link.
+      expect(older.spec_observations.sole.spec_identity_id).to eq(winner.id)
+    end
+
     it "leaves the winner's own identity untouched — a conflict re-sights, it does not overwrite" do
       winner = create_spec_identity(repository: repository, text: "Cart adds an item to the cart")
       # Read back from the column rather than held from the insert: pgvector stores float4, so the
@@ -414,11 +435,41 @@ RSpec.describe Ingest::IdentityResolver do
       second = ingest([unannotated_spec(file_path: "spec/models/cart_spec.rb", line_number: 90,
                                         name: "Cart adds an item to the cart")], ci_run_id: "run-2")
 
-      # The falsifier for the sweep's ORDER. Resolve the backlog after this run's own rows and the
-      # identity reports line 5 — a "last known path" that moved backwards in time.
+      # The backlog row and the newer run's own row, in one pass, resolved in that order. The
+      # falsifier for `SpecIdentity::SIGHTING_NOT_OLDER` on the half of the work list where the
+      # newer sighting arrives second.
       identity = repository.spec_identities.sole
       expect(identity.location).to eq("spec/models/cart_spec.rb:90")
       expect(identity.last_seen_test_run_id).to eq(second.id)
+    end
+
+    it "keeps the newest run's path when an outage spanning two runs is rescued in one sweep" do
+      # The shape the whole slice exists to recover from — a provider down across MORE than one
+      # ingest — and the case iteration order alone never covered. Both rows are failed, both are in
+      # the backlog, and they are walked least-tried-first: run-1's row was already swept once by
+      # run-2's ingest, so it carries a HIGHER failure count than run-2's own row and is therefore
+      # walked LAST. Ordering cannot fix that without giving up the fairness key; the guard makes it
+      # not matter.
+      provider_down
+      first = ingest([unannotated_spec(file_path: "spec/models/cart_spec.rb", line_number: 5,
+                                       name: "Cart adds an item to the cart")], ci_run_id: "run-1")
+      second = ingest([unannotated_spec(file_path: "spec/models/cart_spec.rb", line_number: 90,
+                                        name: "Cart adds an item to the cart")], ci_run_id: "run-2")
+      provider_back
+
+      # Pin the premise rather than trusting it: this example is only about the newest-last order if
+      # the older row really does sort after the newer one.
+      expect(repository.spec_observations.embed_retryable.order(:embed_failure_count).pluck(:test_run_id))
+        .to eq([second.id, first.id])
+
+      unrelated_ingest(ci_run_id: "run-3")
+
+      identity = repository.spec_identities.find_by!(text: "Cart adds an item to the cart")
+      expect(identity.location).to eq("spec/models/cart_spec.rb:90")
+      expect(identity.last_seen_test_run_id).to eq(second.id)
+      # Both rows are still rescued — refusing the older sighting is not refusing the older row.
+      expect(first.spec_observations.sole.reload.spec_identity_id).to eq(identity.id)
+      expect(second.spec_observations.sole.reload.spec_identity_id).to eq(identity.id)
     end
 
     it "keeps the first failure's timestamp, so re-attempting cannot push the window forward" do

@@ -67,7 +67,7 @@ module Ingest
     # observations are held in memory at once, and 20,000 of them is the design point.
     BATCH_SIZE = 500
 
-    # **How much of an earlier run's failure ONE ingest is made to pay for.** The cost bound on the
+    # **How much of an earlier run's failure ONE JOB is made to pay for.** The cost bound on the
     # cross-run sweep, and its own constant rather than a reuse of `BATCH_SIZE` by the rule this
     # codebase's `_LIMIT`s obey: that one bounds how many rows are held in MEMORY at once and would
     # be just as correct at 50 or 5,000, this bounds how much EXTRA WORK a delivery inherits from
@@ -77,9 +77,24 @@ module Ingest
     # A bound is needed because the failure mode is the design point: a provider outage across a
     # 20,000-example run leaves 20,000 failed rows, and an uncapped sweep would make the very next
     # ingest do 40,000 embeddings — its own suite plus the whole backlog — on the one path that is
-    # already the largest thing this application does. Capped, an ingest is at worst its own suite
-    # plus 500, and a backlog larger than the cap drains across the ingests that follow instead of
-    # landing on one of them.
+    # already the largest thing this application does. Capped, a job is at worst its own share of
+    # the suite plus 500, and a backlog larger than the cap drains across the ingests that follow
+    # instead of landing on one of them.
+    #
+    # == A JOB and not an INGEST, and the difference is the shard count
+    #
+    # Stated precisely, because the imprecise version is contradicted by this class's own comment
+    # three sections up: *every shard of a run enqueues a job for the run*, so an N-shard delivery
+    # runs {#retry_backlog} N times, largely over the same rows, for up to `N × RETRY_SWEEP_LIMIT`
+    # backlog embeddings in one ingest. That is the same duplicate-work multiplier
+    # {SpecObservation::EMBED_RETRY_WINDOW} names as fatal to an attempt cap, and it does not
+    # disappear here just because this is a cost bound rather than a lifetime bound.
+    #
+    # It remains a bound worth having, and the reason is what it is a function OF. `N × 500` follows
+    # the SHARD COUNT, which is a small constant a client picks; an uncapped sweep follows the
+    # BACKLOG, which is the suite size. A 20,000-row backlog still cannot land on one delivery. What
+    # would be untrue is the sentence "an ingest is at worst its own suite plus 500", so it is not
+    # the sentence.
     #
     # It is a cap on ROWS and never a fraction of the run, so a small delivery cannot be made to
     # carry a large one's backlog in proportion to itself. Sized at the same order as one batch: the
@@ -106,13 +121,25 @@ module Ingest
     def resolve
       resolved = 0
 
-      # **The backlog first, and the order is load-bearing.** A re-sighting moves the identity's
-      # "last known path", so whichever observation is resolved LAST has the final word on where the
-      # test was last seen. The backlog is by definition older than this run, so resolving it second
-      # would let run-1's path overwrite run-2's on the identity run-2 had just correctly placed —
-      # a last-known-path that goes backwards in time. Oldest first, newest last, so the newest run
-      # wins by being last, which is the same last-writer-wins semantic {#resight} already has
-      # within a single run.
+      # **The backlog first, and the order is deliberately NOT load-bearing.**
+      #
+      # It was, and that was the defect this rework exists for. A re-sighting moves the identity's
+      # "last known path", so whichever observation is resolved LAST used to have the final word on
+      # where the test was last seen — and this loop holds observations from several runs at once,
+      # so "last" had to mean "newest" for that word to be true. Two axes then wanted one ordering
+      # key: chronology wants oldest-first, and {#retry_backlog}'s fairness wants least-tried
+      # first, which is INVERSELY correlated with age because an older failed row has been swept by
+      # more ingests and carries a higher count. No single key serves both, and the one that was
+      # chosen served fairness while a comment here claimed it served chronology.
+      #
+      # So the ordering stopped being the mechanism. {SpecIdentity::SIGHTING_NOT_OLDER} refuses, in
+      # SQL and on both of the two paths that re-sight a row, a sighting from a run older than the
+      # one the identity already names. Monotonic by construction: these two lists may be walked in
+      # any order at all — including interleaved by two concurrent jobs, which no iteration order
+      # could have covered anyway — and the identity still ends on the newest run that saw the test.
+      #
+      # The backlog stays first because it is the older debt and a rescue is what somebody is
+      # waiting for, not because anything depends on it being first.
       retry_backlog.each { |observation| resolved += claim(observation) }
 
       @run.spec_observations.unresolved.find_each(batch_size: BATCH_SIZE) do |observation|
@@ -134,13 +161,23 @@ module Ingest
     # rather than left in: this run's own unresolved rows are the second list, and a row that
     # appeared on both would be embedded twice in one pass — once for nothing.
     #
-    # Ordered least-tried first, which is what stops a backlog bigger than `RETRY_SWEEP_LIMIT` from
-    # starving its own tail. A pure `embed_failed_at` ordering re-attempts the same 500 rows on every
-    # ingest until the window closes on all 20,000 at once — they failed in the same outage, so they
-    # expire together and 19,500 of them never get a single retry. Ordering on `embed_failure_count`
-    # makes a retried row sink below the rows that have not been tried yet, so the sweep round-robins
-    # the whole backlog instead of a window into it. `embed_failed_at` then `id` break the ties, so
-    # the order is total and stable rather than whatever the planner returned first.
+    # Ordered least-tried first, and — since the monotonicity guard {#resolve} describes — ordered
+    # for FAIRNESS alone. Nothing about correctness rides on this key any more, which is what frees
+    # it to be the one fairness actually wants: a pure `embed_failed_at` ordering re-attempts the
+    # same 500 rows on every ingest until the window closes on all 20,000 at once — they failed in
+    # the same outage, so they expire together and 19,500 of them never get a single retry. Ordering
+    # on `embed_failure_count` makes a retried row sink below the rows that have not been tried yet,
+    # so the sweep round-robins the whole backlog instead of a window into it. `embed_failed_at`
+    # then `id` break the ties, so the order is total and stable rather than whatever the planner
+    # returned first.
+    #
+    # What that counter counts is attempts BY ANYTHING — the N concurrent jobs an N-shard delivery
+    # schedules over these same rows included — and {SpecObservation::EMBED_RETRY_WINDOW} reads it
+    # exactly that way when it refuses it as a CAP. The two are not in tension: shard multiplicity
+    # is fatal to a cap, because it spends the allowance on the failure rather than on the retrying,
+    # and harmless to a ranking, because concurrent sweeps bump roughly the same top-N together and
+    # leave the ORDER BETWEEN rows where it was. This wants a key that is monotone in "has been
+    # tried", not a key that is calibrated in tries.
     #
     # `.each` and not `find_each`: the relation is already capped at `RETRY_SWEEP_LIMIT`, which is
     # one `BATCH_SIZE` page, and `find_each` ignores exactly the `order` and `limit` this read is.
@@ -261,26 +298,43 @@ module Ingest
     end
 
     # An existing test, seen again. Moves only where it was last seen — see
-    # {SpecIdentity::RESIGHTABLE} for why the text and the vector are not in that set.
+    # {SpecIdentity::RESIGHTABLE} for why the text and the vector are not in that set — and moves it
+    # only FORWARD, which is {SpecIdentity::SIGHTING_NOT_OLDER}'s job and the reason this is a
+    # guarded `update_all` rather than the `update_columns` it used to be.
     #
-    # `update_columns` so this is one UPDATE with no callbacks and no validation pass over a 1536
+    # The guard belongs in the statement and not around it. This loop resolves rows of several runs
+    # and two jobs run it concurrently, so a read-compare-write in Ruby would be checking a value
+    # another job is free to move before the write lands; `WHERE` makes the comparison and the write
+    # one statement over one row.
+    #
+    # A guard that fails updates nothing and this still returns the identity — the observation is an
+    # observation OF this test whether or not it is the most recent one, and the link is what
+    # {#claim} counts. One UPDATE either way, with no callbacks and no validation pass over a 1536
     # element vector that has not changed.
     def resight(identity, observation)
-      identity.update_columns(sighting(observation, Time.current))
+      SpecIdentity.where(id: identity.id)
+                  .where(SpecIdentity.sighting_not_older_than(observation.test_run_id))
+                  .update_all(sighting(observation, Time.current))
+
       identity.id
     end
 
     # What "seen again" moves, and the only definition of it. Sliced through
-    # {SpecIdentity::RESIGHTABLE} so this method and the `update_only:` clause in {#claim_identity}
-    # are the *same* list rather than two copies of it: the match path and the conflict path both
-    # end in a re-sighting, and one of them quietly moving a column the other does not is exactly
-    # the drift a shared constant is for.
+    # {SpecIdentity::RESIGHTABLE} so this method and the conflict clause in {#claim_identity} are the
+    # *same* list rather than two copies of it: the match path and the conflict path both end in a
+    # re-sighting, and one of them quietly moving a column the other does not is exactly the drift a
+    # shared constant is for. {SpecIdentity::SIGHTING_NOT_OLDER} is shared by both for the same
+    # reason, one level down: it decides WHETHER these values land.
     #
     # `last_seen_test_run_id` comes off the OBSERVATION and never off `@run`, and the two are only
     # equal on the run-scoped half of the work list. A row rescued from the backlog was seen by an
     # EARLIER run, and stamping this ingest's id on it would have the identity claim it was last
     # seen in a run that never contained it. They were the same value until the sweep existed; this
     # is the seam where they stop being.
+    #
+    # That makes the value honest, which is not the same as making it win — a rescue of run-1 and a
+    # rescue of run-2 both produce honest values for the same identity in one pass, and which of the
+    # two the row keeps is the guard's decision rather than this method's.
     def sighting(observation, now)
       { file_path: observation.file_path, line_number: observation.line_number,
         last_seen_test_run_id: observation.test_run_id, updated_at: now }.slice(*SpecIdentity::RESIGHTABLE)
@@ -292,9 +346,9 @@ module Ingest
     # shard of a repository's first run resolves for the first time, so two of them reaching the same
     # text and both finding nothing is the ordinary case and not a corner. `ON CONFLICT … DO UPDATE
     # … RETURNING id` makes both of them come away holding the same row: the winner inserts, the
-    # loser's values land on the winner as an ordinary re-sighting, and neither raises. A
-    # `create!`-and-rescue would reach the same place in two statements and a savepoint; this is one
-    # statement and needs neither.
+    # loser's values land on the winner as an ordinary re-sighting — guarded exactly as the match
+    # path's re-sighting is, see below — and neither raises. A `create!`-and-rescue would reach the
+    # same place in two statements and a savepoint; this is one statement and needs neither.
     #
     # It is also what makes the *identical-text* case safe twice over. A test that merely moved
     # embeds to the same vector and is found by {#nearest}; if that lookup ever missed it — an
@@ -305,6 +359,13 @@ module Ingest
     # `record_timestamps: false` because the row carries its own — {SpecIdentity::RESIGHTABLE} keeps
     # `created_at` out of the update list, so a row that already existed keeps when the test first
     # appeared and moves only its `updated_at`.
+    #
+    # `on_duplicate:` rather than `update_only:` so the conflict branch carries
+    # {SpecIdentity::SIGHTING_NOT_OLDER} — the same guard {#resight} takes as a `WHERE`, spelled as
+    # a `CASE` per column because `ON CONFLICT DO UPDATE` has nowhere else to put it. The clause is
+    # still generated from `RESIGHTABLE`, so this is one list and one guard reaching both paths
+    # rather than a second copy of either. See that constant for why the losing side of this race is
+    # not the only way an OLDER sighting arrives here.
     def claim_identity(signal, embedding, observation)
       now = Time.current
 
@@ -316,7 +377,8 @@ module Ingest
           signal_source: signal.source.to_s,
           embedding: embedding
         }.merge(sighting(observation, now), created_at: now)],
-        unique_by: %i[repository_id text_digest], update_only: SpecIdentity::RESIGHTABLE,
+        unique_by: %i[repository_id text_digest],
+        on_duplicate: Arel.sql(SpecIdentity::RESIGHT_ON_CONFLICT),
         record_timestamps: false, returning: %w[id]
       ).rows.dig(0, 0)
     end

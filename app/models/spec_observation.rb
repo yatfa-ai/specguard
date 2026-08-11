@@ -86,6 +86,12 @@ class SpecObservation < ApplicationRecord
   # failure itself rather than by the retrying, and a cap generous enough to survive it would be a
   # number chosen from a client's shard count — which this application never sees.
   #
+  # `embed_failure_count` therefore counts attempts BY ANYTHING, not attempts by the retrier, and
+  # {Ingest::IdentityResolver#retry_backlog} reads it the same way where it uses the column to ORDER
+  # the sweep. That is not the same claim twice with two answers: the inflation is fatal to a
+  # calibrated cap and harmless to a ranking, because concurrent sweeps bump roughly the same rows
+  # together and leave the order between them where it was.
+  #
   # Wall-clock is immune to that: eight concurrent jobs and one job leave the window in the same
   # place, because it is anchored to `embed_failed_at`, which is written once and never refreshed.
   # It is also the bound that matches the failure being recovered from. A provider outage is an
@@ -106,7 +112,8 @@ class SpecObservation < ApplicationRecord
   # out of a set nobody was watching.
   #
   # What bounds the COST is not this: it is `IdentityResolver::RETRY_SWEEP_LIMIT`, which caps the
-  # work any one ingest inherits. This bounds the LIFETIME of a hopeless row, and the two are
+  # work any one JOB inherits — per job and not per ingest, for the shard reason above, which that
+  # constant states in its own terms. This bounds the LIFETIME of a hopeless row, and the two are
   # separate because they answer separate questions.
   EMBED_RETRY_WINDOW = 7.days
 

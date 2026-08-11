@@ -20,12 +20,15 @@ require "digest"
 #
 # `text` and `embedding` are **immutable** once written. A match refreshes only where the test was
 # last seen — `file_path`, `line_number`, `last_seen_test_run_id` — so the thing a history hangs off
-# cannot drift out from under it. One consequence worth stating rather than leaving to be found: a
-# test that *gains* an `@intent` changes which text represents it, from its name to its triple, and
-# those are usually far enough apart to miss (measured below: 0.86 for a representative pair). It
-# therefore starts a new identity. That is the settled model working, not a defect in it — an
-# annotated test is matched by its declaration, and until the declaration existed there was nothing
-# to match by.
+# cannot drift out from under it. Those three move FORWARD only: see `SIGHTING_NOT_OLDER` below,
+# which is what stops an observation from a run older than the one already named here from reporting
+# a last known path that has travelled backwards in time.
+#
+# One consequence worth stating rather than leaving to be found: a test that *gains* an `@intent`
+# changes which text represents it, from its name to its triple, and those are usually far enough
+# apart to miss (measured below: 0.86 for a representative pair). It therefore starts a new identity.
+# That is the settled model working, not a defect in it — an annotated test is matched by its
+# declaration, and until the declaration existed there was nothing to match by.
 class SpecIdentity < ApplicationRecord
   # Which of {Ingest::SpecSignal}'s sources supplied `text`. `SpecSignal::SOURCES` also carries
   # `:none`; it is absent here on purpose — a spec with no text has nothing to embed, so no row is
@@ -109,6 +112,90 @@ class SpecIdentity < ApplicationRecord
   # `text_digest`, `signal_source` and `embedding` are absent because they are the identity itself;
   # `created_at` is absent so a row keeps when the test first appeared.
   RESIGHTABLE = %i[file_path line_number last_seen_test_run_id updated_at].freeze
+
+  # **A sighting may never move a row BACKWARDS in time**, and this is the one place that is
+  # decided — for both of the two paths that re-sight a row rather than inside either of them.
+  #
+  # == Why this is an invariant of the table and not an ordering discipline
+  #
+  # "Last known path" is last-writer-wins: `file_path`, `line_number` and `last_seen_test_run_id`
+  # move together, so whichever observation is written LAST has the final word. That is correct
+  # within one run — two examples sharing a description genuinely have no order between them, which
+  # `MATCH_SIMILARITY` above records — and it is wrong the moment the writers span runs, because
+  # then one of them IS older and the row would end up naming a run that another run has already
+  # superseded.
+  #
+  # {Ingest::IdentityResolver}'s cross-run sweep made that reachable in the ordinary case: it
+  # resolves rows of EARLIER runs alongside this one's, so a single pass holds observations from
+  # several runs of the same test. Ordering the pass chronologically is the obvious answer and it
+  # does not survive contact — the sweep's other axis, fairness, wants a key (`embed_failure_count`)
+  # that is inversely correlated with age, and one iteration order cannot serve both. So the
+  # ordering stopped being the mechanism and this became it: any order at all is now safe, because
+  # a write that would move the row backwards simply does not happen.
+  #
+  # == What "older" means
+  #
+  # `(created_at, id)`, which is the ordering every recency question in this application is asked
+  # in — `Repository#latest_test_run`, `#recent_test_runs` and `#previous_test_run_on_branch` all
+  # sort by exactly this pair, and the last of them explains at length why both halves are needed:
+  # `created_at` alone mis-orders a same-instant pair and `id` alone can disagree with the clock,
+  # since ids are assigned at INSERT and `created_at` in Ruby before it. A row-value comparison, so
+  # the tie-break is the same one the panels use rather than a second definition of "newer".
+  #
+  # Two PK probes of a small table per re-sighting. Against the embedding and the ANN lookup this
+  # loop already does per row, that is not the cost worth economising on, and the alternative —
+  # holding both runs in Ruby — is a query per observation at the 20,000-example design point.
+  #
+  # `NULL` passes: a row that has never been sighted has no sighting to be older than. So does a
+  # `last_seen_test_run_id` whose run has been deleted (the FK nullifies rather than cascades, and
+  # a `NOT EXISTS` over the missing row is true) — with nothing to compare against, the sighting in
+  # hand is the best-known answer and lands.
+  SIGHTING_NOT_OLDER = <<~SQL.squish
+    (spec_identities.last_seen_test_run_id IS NULL OR NOT EXISTS (
+       SELECT 1 FROM test_runs seen, test_runs sighted
+       WHERE seen.id = spec_identities.last_seen_test_run_id
+         AND sighted.id = %<sighted_run>s
+         AND (seen.created_at, seen.id) > (sighted.created_at, sighted.id)))
+  SQL
+
+  private_constant :SIGHTING_NOT_OLDER
+
+  # The guard as a WHERE clause, for the match path — {Ingest::IdentityResolver#resight}, which has
+  # the sighting run's id in hand and binds it.
+  #
+  # A guard that fails means the UPDATE matches no row, which is the whole point: the identity is
+  # left exactly as it was, `updated_at` included, because nothing about it changed. The caller
+  # still links its observation to the row — being older than the last sighting does not make an
+  # observation any less an observation OF this test.
+  def self.sighting_not_older_than(test_run_id)
+    sanitize_sql_array([format(SIGHTING_NOT_OLDER, sighted_run: "?"), test_run_id])
+  end
+
+  # The same guard as an `ON CONFLICT DO UPDATE SET` clause, for the insert path —
+  # {Ingest::IdentityResolver#claim_identity}, where the losing side of an upsert race lands its
+  # sighting on the winner. That path's own comment calls itself "an ordinary re-sighting", and an
+  # invariant that held on one of the two ways to re-sight a row would not be an invariant.
+  #
+  # It is reachable outside a race, too: `#nearest` is an approximate index lookup, so an
+  # under-recalled miss on text that already HAS an identity arrives here rather than at `#resight`
+  # — and the row it lands on may well have been sighted by a newer run than the one that missed.
+  #
+  # Built FROM `RESIGHTABLE` rather than beside it, so this clause and the `#resight` UPDATE move
+  # the same columns for the same reason that constant exists: two hand-written lists are two
+  # definitions of what a re-sighting is. Postgres reads an unqualified `excluded.x` as the row
+  # proposed for insert and `spec_identities.x` as the row already there, so a column whose guard
+  # fails is set to the value it already holds — a no-op write rather than a skipped one, which is
+  # what keeps this a single statement.
+  #
+  # The four `CASE`s share one verdict even though each evaluates the predicate separately: every
+  # `SET` expression in one statement reads the row as it was BEFORE the update, so the guard on
+  # `last_seen_test_run_id` — which the predicate itself reads — cannot see a value another clause
+  # of the same statement has already moved. The four columns land together or not at all, which is
+  # what makes this the same atomic re-sighting `#resight` performs.
+  RESIGHT_ON_CONFLICT = RESIGHTABLE.map do |column|
+    "#{column} = CASE WHEN #{format(SIGHTING_NOT_OLDER, sighted_run: 'excluded.last_seen_test_run_id')} " \
+      "THEN excluded.#{column} ELSE spec_identities.#{column} END"
+  end.join(", ").freeze
 
   belongs_to :repository
   # The run that last observed this test. Optional because the FK nulls rather than cascades.
