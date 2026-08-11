@@ -699,15 +699,16 @@ RSpec.describe "Repository unstable tests", type: :request do
       ActiveSupport::Notifications.unsubscribe(subscriber)
     end
 
-    # An ABSOLUTE count, not a difference against a control. Eleven reads of this table serve this
+    # An ABSOLUTE count, not a difference against a control. Thirteen reads of this table serve this
     # page in the state that costs the most: two for the "Slowest tests" panel, one for "Heaviest
-    # spec files", one for "Heaviest spec directories", one for "Areas that grew or shrank", one for
-    # "Areas that got slower or faster", one for "Areas that grew or shrank over the window", and
-    # four for this one — the gating probe, the candidate narrowing, the composition of those
-    # candidates, and the unnamed-row count. Seven of those eleven belong to panels this slice did
-    # not write; what this example pins for THIS panel is the four, and that they stay four.
-    # Equality against a smaller fixture alone would still hold if both pages regressed to a
-    # fixed-but-wasteful number of passes over the same table.
+    # spec files", one for "Heaviest spec directories", two for "Descriptions this run recorded more
+    # than once", one for "Areas that grew or shrank", one for "Areas that got slower or faster",
+    # one for "Areas that grew or shrank over the window", and four for this one — the gating probe,
+    # the candidate narrowing, the composition of those candidates, and the unnamed-row count. Nine
+    # of those thirteen belong to panels this slice did not write; what this example pins for THIS
+    # panel is the four, and that they stay four. Equality against a smaller fixture alone would
+    # still hold if both pages regressed to a fixed-but-wasteful number of passes over the same
+    # table.
     #
     # The sixth neighbour is a two-run by-AREA comparison ranked by summed duration, the sibling of
     # the count comparison beside it: an area where an existing spec got slower gains no examples,
@@ -750,7 +751,7 @@ RSpec.describe "Repository unstable tests", type: :request do
       # panels would be equal and worthless.
       expect(rows.size).to eq(4)
       expect(large_queries.size).to eq(small_queries.size)
-      expect(large_queries.size).to eq(11)
+      expect(large_queries.size).to eq(13)
     end
 
     # The candidate narrowing is what makes the composition affordable, and its `IN` list is capped
@@ -765,7 +766,7 @@ RSpec.describe "Repository unstable tests", type: :request do
         ingest(repository, specs, commit_sha: "red#{format("%011d", index)}", at: (30 - index).days.ago)
       end
 
-      expect(queries_against("spec_observations") { get repository_path(repository) }.size).to eq(11)
+      expect(queries_against("spec_observations") { get repository_path(repository) }.size).to eq(13)
     end
 
     # The gate is what it says it is: a window that cannot be compared asks nothing past the probe
@@ -775,13 +776,22 @@ RSpec.describe "Repository unstable tests", type: :request do
 
       queries = queries_against("spec_observations") { get repository_path(repository) }
 
-      # Seven of these belong to the panels above, which read the latest run (and, for the three
-      # by-area comparisons, an earlier one) regardless; the eighth is this panel's gating probe,
-      # and there is no ninth. The window comparison is among the seven and not among what the gate
-      # withholds: its own gate is about SIZES and is satisfied here, where this panel's is about
-      # OUTCOMES and is not — two windows of the same runs, two different questions to refuse.
-      expect(queries.size).to eq(8)
-      expect(queries.none? { |sql| sql.include?("GROUP BY") && sql.include?("name") }).to be(true)
+      # Nine of these belong to the panels above, which read the latest run (and, for the three
+      # by-area comparisons, an earlier one) regardless; the tenth is this panel's gating probe,
+      # and there is no eleventh. The window comparison is among the nine and not among what the
+      # gate withholds: its own gate is about SIZES and is satisfied here, where this panel's is
+      # about OUTCOMES and is not — two windows of the same runs, two different questions to refuse.
+      expect(queries.size).to eq(10)
+      # What the gate withholds is a grouping by description over the WINDOW — the candidate
+      # narrowing and the composition that follows it, both of which narrow `test_run_id` to a LIST
+      # of runs. The single-run `GROUP BY name` among the nine belongs to the "Descriptions this run
+      # recorded more than once" panel and is not this one's: it asks about one run's rows, needs no
+      # outcome to have been reported, and is therefore not something an incomparable window has any
+      # reason to withhold. Discriminated on the window narrow rather than on the grouping alone,
+      # because the grouping alone stopped telling the two apart the moment a second panel used it.
+      expect(
+        queries.none? { |sql| sql.include?("GROUP BY") && sql.include?("name") && sql.include?(%(test_run_id" IN)) }
+      ).to be(true)
     end
   end
 

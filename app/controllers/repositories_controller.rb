@@ -216,6 +216,25 @@ class RepositoriesController < ApplicationController
     # Guarded identically, and on nothing else. ONE query, not growing with the size of the suite:
     # see `SpecDirectoryDurations`.
     @spec_directory_durations = SpecDirectoryDurations.for(@latest_test_run) if @latest_test_run
+    # The same run's rows at a grain none of the panels above reach: not which FILES or AREAS the
+    # wall clock went into, but which DESCRIPTIONS more than one example of the run recorded, and
+    # what those examples cost between them. Reachable from nowhere until now — `GROUP BY name`
+    # exists twice in this application and both are narrowed to failures, so on a green suite
+    # nothing grouped examples by description at all (see `SpecObservation.repeated_descriptions_in`).
+    #
+    # Presented for review and never as a verdict: a shared description is equally a table-driven
+    # loop, a shared example group, or the same test written twice, and nothing in these rows
+    # decides which. `RepeatedDescriptions` holds that boundary and the honesty figures — the rows
+    # excluded for carrying no description, and what share of the summed time was measured — beside
+    # the list they describe.
+    #
+    # Anchored on `@latest_test_run` — the run every panel above names, and specifically not
+    # `@trajectory_run`, which follows `?branch=` and belongs to the "Suite growth" panel alone.
+    #
+    # Guarded identically, and on nothing else. TWO queries, neither growing with the size of the
+    # suite: the grouped ranking, and the description-presence counts it must exclude before it can
+    # group (see `SpecObservation.description_presence_in` for why those cannot ride the same read).
+    @repeated_descriptions = RepeatedDescriptions.for(@latest_test_run) if @latest_test_run
     # One area out of THAT rollup, opened: not which areas the wall clock went into but WHICH SPEC
     # FILES are in the one the reader picked. The middle rung of the drill-in, and the rung that was
     # missing — the by-file rollup above is a capped ten, so the heaviest area on this page is

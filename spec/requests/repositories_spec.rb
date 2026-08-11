@@ -1492,6 +1492,20 @@ RSpec.describe "Repository registration and API keys", type: :request do
       # nothing. Its own N+1 guard is the equality across two suite sizes in
       # spec/requests/repository_spec_file_durations_spec.rb, alongside the by-file panel's.
       #
+      # RECOUNTED AT 19 by SPGD-344, which added the "Descriptions this run recorded more than once"
+      # panel: TWO further reads of `spec_observations`. The first groups the same run's rows by
+      # DESCRIPTION — a grain no read on this page could reach, because the only two `GROUP BY name`
+      # reads in the application are narrowed to failures and therefore see nothing on a green run.
+      # The second counts the rows carrying no description at all, and it is a second round trip
+      # rather than a window on the first because the first excludes those rows in its WHERE clause:
+      # a window over it could never have counted what it dropped. It is also the panel's Vacuous
+      # Green gate — a run that wrote no rows and a run whose every description is unique return the
+      # identical empty ranking, and only a row count tells them apart. Both are issued on this
+      # fixture for the same reason the four above are: the run recorded no examples, both come back
+      # empty and the panel renders nothing. Its own N+1 guard — the failure an absolute count here
+      # cannot tell from an ordinary widening — is the equality across two suite sizes in
+      # spec/requests/repository_repeated_descriptions_spec.rb.
+      #
       # QUERY-CACHE HITS ARE COUNTED, unlike the panel's other budget guards. A repeated identical
       # SELECT inside one request costs no round trip and is invisible to a `payload[:cached]`
       # filter — which is exactly how a dropped `@shard_durations ||=` would slip through, and
@@ -1509,7 +1523,7 @@ RSpec.describe "Repository registration and API keys", type: :request do
         # first-request-only work cannot land in it.
         get repository_path(repository)
 
-        expect(count_all_queries { get repository_path(repository) }).to eq(17)
+        expect(count_all_queries { get repository_path(repository) }).to eq(19)
         # And the page really did render the thing being counted — an absolute count is satisfied
         # by a page that renders nothing at all.
         expect(distribution.all("li").size).to eq(4)

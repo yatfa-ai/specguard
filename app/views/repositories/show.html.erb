@@ -2097,6 +2097,229 @@
       <% end %>
     <% end %>
 
+    <%# == Which DESCRIPTIONS this run recorded more than once, and what they cost
+        The last of the single-run panels and the only one whose grain is the DESCRIPTION. Every
+        panel above rolls this run's rows up by where the code LIVES — the example, its file, its
+        area — and none of them can see that two of those rows say the same thing. `GROUP BY name`
+        exists twice in the whole application and both are narrowed to failures, so on a green suite
+        — the normal case — nothing here had ever grouped examples by what they claim to test.
+
+        ONE run, like the panels above and for the same reason: `example_id` is positional and not
+        stable across refactors, so anything spanning runs would be comparing rows not known to be
+        the same tests. Whether these groups PERSIST across runs is a different question and
+        deliberately not this one.
+
+        Ranked by summed wall clock rather than by how many examples share the description: an
+        eight-example group costing two seconds matters less than a three-example group costing
+        ninety, and the question is redundancy weighed against what it costs to run.
+
+        Same visibility rule as the panels above — rendered when the run WROTE example rows — and
+        outside the `manage_keys` gate for the same reason they are: read-only suite telemetry,
+        nothing credential and nothing actionable. %>
+    <% if @repeated_descriptions&.recorded? %>
+      <%= render UI::PanelComponent.new(title: "Descriptions this run recorded more than once",
+                                        id: "repeated-descriptions", class: "lg:col-span-3") do %>
+        <% if @repeated_descriptions.named? %>
+          <%# The untimed run is answered FIRST, before the basis paragraph rather than under it.
+              That paragraph is a claim about a RANKING — "costliest first", and a column named
+              "Examples timed" it tells the reader is the denominator of every total. On a run that
+              repeated a description and timed none of its examples there is neither: nothing is
+              ordered, and there is no table for that column to be in. Rendered above the empty
+              state it would describe a table that is not on the page.
+
+              The nesting `spec-file-durations` and `spec-directory-durations` above already use,
+              for this reason: `any_timed?` wraps the caption and the table TOGETHER, so a panel
+              with nothing to rank renders its empty state alone. The empty state below says
+              everything true about such a run already, in descriptions counted before the cap.
+
+              Only where something WAS repeated. A run whose every description is unique times
+              nothing repeated either, and that run keeps its paragraph: there the caption promises
+              no ranking, and it is where the honest zero is stated.
+
+              What the two branches SHARE is the rows that carry no description. That disclosure is
+              not a clause of the ranking — it is what the grouping could not read at all — so it
+              cannot travel with the paragraph that describes the ranking. Both branches below
+              render it, each in the words true of its own state, because no state of this panel may
+              leave those rows unanswered: a panel built on two of a run's five rows that does not
+              say so is a claim about a population it never looked at. %>
+          <% if @repeated_descriptions.any? && !@repeated_descriptions.any_timed? %>
+            <%# Repetitions exist and not one of their examples was timed. Every group's SUM is
+                NULL, so there is a list of repeated descriptions and no ranking — and a column of
+                "not reported" under a heading promising "costliest first" would be a ranking of
+                nothing. Not zeroes, for the reason the panels above give: a zero is this surface
+                inventing the measurement it is missing.
+
+                Stated in DESCRIPTIONS and EXAMPLES counted before the `LIMIT`, never by summing
+                the rows on hand, which are a capped ten wearing a run-wide-looking figure. %>
+            <div id="repeated-descriptions-untimed">
+              <%= render UI::EmptyStateComponent.new(
+                    title: "No timings on this run",
+                    description: "This run recorded " \
+                                 "#{number_with_delimiter(@repeated_descriptions.group_count)} " \
+                                 "#{'description'.pluralize(@repeated_descriptions.group_count)} " \
+                                 "under more than one example and a duration for none of those " \
+                                 "examples, so there is no wall clock to weigh the repetition " \
+                                 "against. An example that never ran reports no duration."
+                  ) %>
+              <%# The exclusion, carried into the state that has no basis paragraph to carry it. The
+                  sentence is the same fact the paragraph below states and deliberately NOT the same
+                  element: `#repeated-descriptions-basis` is reserved for the states that describe a
+                  table, and reusing that id here would make a `have_css` for it pass in exactly the
+                  state where the paragraph must be absent.
+
+                  Only the clause that is TRUE here. Nothing about "costliest first" and nothing
+                  naming the "Examples timed" column — neither exists on this run, and describing
+                  them is the defect the nesting above was fixed to remove. Rendered only when there
+                  are excluded rows, for the reason the paragraph below gives. %>
+              <% if @repeated_descriptions.excluded_unnamed_rows? %>
+                <p class="text-xs text-app-muted mt-3" id="repeated-descriptions-untimed-basis">
+                  <%= number_with_delimiter(@repeated_descriptions.unnamed_row_count) %>
+                  of the <%= number_with_delimiter(@repeated_descriptions.recorded_count) %>
+                  <%= "example".pluralize(@repeated_descriptions.recorded_count) %> this run recorded
+                  carried no description at all and could not be grouped, so nothing here describes
+                  them.
+                </p>
+              <% end %>
+            </div>
+          <% else %>
+            <%# What was grouped, by what rule, what the rule could not reach, and — before any of the
+                numbers are read as a finding — what a repeated description is NOT evidence of. That
+                last clause is the panel's whole boundary: a shared description is equally a
+                table-driven loop, a shared example group, or the same test written twice, and nothing
+                in these rows decides which. Saying so is the same echo-don't-judge rule the outcome
+                column obeys, and it is why nothing below this paragraph uses the word "duplicate".
+
+                Every figure is counted off THIS RUN'S ROWS — `RepeatedDescriptions` holds the list and
+                these counts together — so this paragraph cannot end up describing a different row set
+                from the table under it. %>
+            <p class="text-xs text-app-muted mb-3" id="repeated-descriptions-basis">
+              <% if @repeated_descriptions.any? %>
+                <%# The list is CAPPED, so its own length says nothing about how many repetitions the
+                    run holds. The total is stated whether or not anything was cut, and costs no extra
+                    query: it rides back on the same grouped aggregate. %>
+                <% if @repeated_descriptions.truncated? %>
+                  The <%= number_with_delimiter(@repeated_descriptions.rows.size) %> costliest of the
+                  <%= number_with_delimiter(@repeated_descriptions.group_count) %> descriptions this
+                  run recorded under more than one example, costliest first
+                <% else %>
+                  All <%= number_with_delimiter(@repeated_descriptions.group_count) %>
+                  <%= "description".pluralize(@repeated_descriptions.group_count) %> this run recorded
+                  under more than one example, costliest first
+                <% end %>
+                — ranked by the wall clock those examples cost between them rather than by how many of
+                them there are, because three examples costing ninety seconds are worth more of a
+                reader's attention than eight costing two.
+                <%# The claim boundary, stated before the table rather than under it. %>
+                Presented for review and not as a finding of duplication: several examples can share a
+                description because a table-driven loop or a shared example group put them there, as
+                much as because the same test was written twice, and these rows do not decide which.
+                <% if @repeated_descriptions.complete? %>
+                  Every example under every description listed reported a duration, so each total
+                  covers the whole of its group.
+                <% else %>
+                  The "Examples timed" column is what each total was summed over: a group whose
+                  examples did not all report a duration has a total covering only the ones that did,
+                  and a group that reported none has no total to state rather than a zero. Across every
+                  repeated description this run holds,
+                  <%= @repeated_descriptions.coverage_label %> examples reported one. An example that
+                  never ran has no duration to report, so a missing timing is a faithful record rather
+                  than a gap.
+                <% end %>
+              <% else %>
+                Every one of the
+                <%= number_with_delimiter(@repeated_descriptions.named_row_count) %>
+                <%= "example".pluralize(@repeated_descriptions.named_row_count) %> this run described
+                carries a description no other example of the run carries.
+              <% end %>
+              <%# The silence the grouping had to create to exist. A null name cannot be grouped —
+                  pooling every unnamed example would invent the largest repetition on the page out of
+                  rows that share nothing — so those rows are excluded in SQL, and a panel that read
+                  nine tenths of a run and said nothing about the other tenth would be a claim about a
+                  population it never looked at. Rendered only when there are any: a clause reading "0
+                  examples carried no description" is a sentence about arithmetic rather than about
+                  this run. %>
+              <% if @repeated_descriptions.excluded_unnamed_rows? %>
+                <%= number_with_delimiter(@repeated_descriptions.unnamed_row_count) %>
+                of the <%= number_with_delimiter(@repeated_descriptions.recorded_count) %>
+                <%= "example".pluralize(@repeated_descriptions.recorded_count) %> this run recorded
+                carried no description at all and could not be grouped, so nothing here describes them.
+              <% end %>
+            </p>
+            <% if @repeated_descriptions.any? %>
+              <%= render UI::TableComponent.new(
+                    columns: ["Description", "Examples", "Examples timed", "Total duration"],
+                    describedby: "repeated-descriptions-basis"
+                  ) do %>
+                <% @repeated_descriptions.rows.each do |group| %>
+                  <tr>
+                    <td class="px-3 py-2 text-app-content">
+                      <%= group.name %>
+                      <%# The spec files the group's examples ran in, NAMED rather than counted:
+                          "spans 2 files" sends a reader looking without saying where. One file is
+                          named too — a group inside a single file is the case a reader can act on
+                          most directly, and leaving it blank would make the common row the one with
+                          the least information on it. %>
+                      <span class="block font-mono text-xs text-app-muted">
+                        in <%= group.files_seen.to_sentence %>
+                      </span>
+                    </td>
+                    <%# The size of the group — how many examples of this run say this same thing.
+                        Kept beside the coverage fraction rather than folded into it: this is the
+                        figure that makes the row a repetition, and the one next to it is a
+                        denominator for the duration. %>
+                    <td class="px-3 py-2 text-app-content tabular-nums"><%= group.recorded_count %></td>
+                    <td class="px-3 py-2 text-app-content-secondary tabular-nums">
+                      <%# Always a fraction, never a bare count: the denominator is the point of the
+                          column, and a fully timed group has to be visibly complete rather than
+                          merely unremarked. %>
+                      <%= group.coverage_label %>
+                    </td>
+                    <td class="px-3 py-2 text-app-content tabular-nums">
+                      <%# Through `SpecObservation.humanized_duration`, the same seam every other
+                          duration on this page renders through — so a group that measured nothing
+                          says "not reported" rather than wearing the spelling of a zero. %>
+                      <%= group.duration_label %>
+                    </td>
+                  </tr>
+                <% end %>
+              <% end %>
+            <% else %>
+              <%# The honest zero, reachable only behind `named?` above — so it is only ever printed
+                  over a run that DID describe its examples, and never over one that was silent. What
+                  it counts is stated in the paragraph above it rather than repeated here. %>
+              <div id="repeated-descriptions-none">
+                <%= render UI::EmptyStateComponent.new(
+                      title: "No description was recorded twice in this run",
+                      description: "Every example this run described carries a description no other " \
+                                   "example of the run carries, so there is no repetition to weigh " \
+                                   "against the wall clock. That is a fact about THIS run's rows and " \
+                                   "not about the suite's history."
+                    ) %>
+              </div>
+            <% end %>
+          <% end %>
+        <% else %>
+          <%# The run wrote rows and named none of them. `name` is nullable and
+              `Ingest::ObservationRecorder#attributes` writes it through `presence_of`, so a producer
+              that sends no description stores a nil on every row — and such a run produces exactly
+              the empty ranking a suite of entirely unique descriptions does. Rendered as "nothing is
+              repeated" that empty list is "nobody told us" wearing the spelling of "there is no
+              redundancy", which is the one reading this panel must not produce. %>
+          <div id="repeated-descriptions-unnamed">
+            <%= render UI::EmptyStateComponent.new(
+                  title: "This run reported no test descriptions",
+                  description: "All " \
+                               "#{number_with_delimiter(@repeated_descriptions.recorded_count)} " \
+                               "#{'example'.pluralize(@repeated_descriptions.recorded_count)} this " \
+                               "run recorded arrived without a description, so there is nothing to " \
+                               "group them by. This is not a run without repetition — it is a run " \
+                               "this panel cannot read."
+                ) %>
+          </div>
+        <% end %>
+      <% end %>
+    <% end %>
+
     <%# == Which AREAS of the suite grew or shrank since the previous run on this branch
         The first panel here to read the per-example table across TWO runs, and the boundary it
         crosses is worth being precise about, because the panel directly above says panels here are

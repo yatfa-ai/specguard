@@ -392,9 +392,18 @@ RSpec.describe "Repository slowest tests", type: :request do
       # gating probe, which on this single-run fixture establishes that outcomes cannot be compared
       # and asks nothing further; its own budget is asserted in
       # spec/requests/repository_unstable_tests_spec.rb.
+      #
+      # RECOUNTED AT 7 by SPGD-344, which added the "Descriptions this run recorded more than once"
+      # panel: TWO further reads of this table, both over this same run's rows. The first groups
+      # them by DESCRIPTION — a grain no panel on this page could reach, since the only two
+      # `GROUP BY name` reads in the application are narrowed to failures — and the second counts
+      # the rows that carry no description, which the first has to exclude in its WHERE clause and
+      # therefore cannot count for itself. Its own budget, including that the two stay two as the
+      # number of repeated descriptions grows, is asserted in
+      # spec/requests/repository_repeated_descriptions_spec.rb.
       # Page-wide rather than panel-scoped on purpose: what must not grow is the number of times
       # ONE page walks this table, and only a count taken across the whole request can say that.
-      expect(large_queries.size).to eq(5)
+      expect(large_queries.size).to eq(7)
     end
   end
 

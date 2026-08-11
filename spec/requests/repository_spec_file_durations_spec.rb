@@ -298,8 +298,15 @@ RSpec.describe "Repository heaviest spec files", type: :request do
       # spec/requests/repository_unstable_tests_spec.rb). That fourth query is the directory
       # panel's entire budget, as the third is this one's: each rung is one grouped aggregate and
       # neither is derivable from the other.
-      expect(large_queries.size).to eq(5)
-      expect(large_queries.count { |sql| sql.include?("GROUP BY") }).to eq(2)
+      #
+      # RECOUNTED AT 7 by SPGD-344, which added the "Descriptions this run recorded more than once"
+      # panel: TWO further reads of these same rows at a grain neither rung above reaches — grouped
+      # by DESCRIPTION rather than by where the code lives — plus the count of the rows carrying no
+      # description, which that grouping excludes in its WHERE clause and therefore cannot count for
+      # itself. Only the first of the two is a `GROUP BY`, which is why the grouping tally below
+      # moves to three rather than four: the presence count is a plain aggregate over one run.
+      expect(large_queries.size).to eq(7)
+      expect(large_queries.count { |sql| sql.include?("GROUP BY") }).to eq(3)
     end
   end
 

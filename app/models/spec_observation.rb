@@ -103,6 +103,22 @@ class SpecObservation < ApplicationRecord
   # a sentence explaining a list's length must not be able to disagree with it.
   SPEC_DIRECTORY_FILES_LIMIT = 25
 
+  # How many repeated-DESCRIPTION groups the redundancy ranking returns. Its own constant, by the
+  # rule the seven above it obey, and the population it ranks is unlike any of theirs: not files,
+  # not areas, not examples, but the DESCRIPTIONS that more than one example of one run recorded.
+  # That population is a small and lumpy fraction of a suite — one built without table-driven loops
+  # or shared example groups has none at all, and one built around them can have hundreds — so it
+  # tracks neither the file count nor the example count the `_LIMIT`s above are sized against, and a
+  # suite that wants twenty-five files listed under an area has no reason to want twenty-five
+  # repeated descriptions ranked.
+  #
+  # Ten rather than the twenty-five of the two LISTINGS above, because this is a RANKING: it shows
+  # the head of a population ordered by what that population COSTS and stops, exactly as the four
+  # rankings at the top of this list do, and it is read at the same glance they are. Named, like all
+  # of them, because the panel's caption reports the figure back to the reader and a sentence
+  # explaining a list's length must not be able to disagree with it.
+  REPEATED_DESCRIPTIONS_LIMIT = 10
+
   # What the drill-down's caption has to say ABOUT the rows under it, counted in the SAME read that
   # returns them — `COUNT(*) OVER ()` and `COUNT(duration_seconds) OVER ()`, which count non-nulls.
   #
@@ -670,6 +686,119 @@ class SpecObservation < ApplicationRecord
              Arel.sql("COUNT(*) OVER ()"),
              Arel.sql("SUM(COUNT(*)) OVER ()"),
              Arel.sql("SUM(COUNT(duration_seconds)) OVER ()"))
+  end
+
+  # The descriptions that MORE THAN ONE example of ONE run recorded, ranked by the wall clock those
+  # examples cost between them — the first read in this application that groups examples by
+  # description on a run that is not red.
+  #
+  # == Why this did not already exist
+  #
+  # `GROUP BY name` appears exactly twice above, and both are narrowed to failures:
+  # `.unstable_candidates_in` selects `outcome: "failed"` before it groups, and
+  # `.outcome_composition_in` is scoped to the names that read returned. On a GREEN suite — the
+  # normal case — nothing here groups examples by description at all. So the fact that several
+  # examples of one run share a description has only ever been reachable as a by-product of the
+  # flakiness path, where `UnstableTests::Row#shared_description?` computes it in order to THROW
+  # THOSE GROUPS AWAY: there, a description carried by two examples in one run is a matching-rule
+  # false positive to be rejected. Here it is the finding.
+  #
+  # The population is documented on `UNSTABLE_COMPOSITION` above and is not hypothetical: *"a
+  # table-driven loop, a shared example group or two genuinely identical `it` strings put several
+  # examples under one description in the same run"*. Schema uniqueness is `(test_run_id,
+  # example_id)` and nothing wider, so nothing prevents it.
+  #
+  # == Ranked by summed wall clock, and deliberately not by group size
+  #
+  # An eight-example group costing two seconds matters less than a three-example group costing
+  # ninety, and the question this read exists to serve is redundancy WEIGHED AGAINST duration. So
+  # the ordering is the one every duration rollup on this table uses, `NULLS LAST` included, for the
+  # reason `.directory_durations_in` gives at length: `SUM(...) DESC` is NULLS FIRST in Postgres, so
+  # a group none of whose examples were timed would otherwise be named the most expensive repetition
+  # in the suite on the strength of a total nobody measured. `name` breaks ties, so a run whose
+  # groups total equally has one stable order rather than one the planner picks afresh per request.
+  #
+  # == What it does NOT say
+  #
+  # Nothing here is a verdict that the group is duplicated work. A shared description is evidence of
+  # repetition and is also the ordinary shape of a `where` loop over a table of cases; which of the
+  # two a group is cannot be decided from these rows, so the surface presents it for review and says
+  # so — the echo-don't-judge rule `#outcome_label` states for the outcome word, at this grain.
+  #
+  # A null `name` is excluded, because a null is not a description and pooling every unnamed example
+  # of the run into one group would invent the largest repetition on the page out of rows that share
+  # nothing. How many rows that excludes is a separate question, asked by `.description_presence_in`
+  # below and stated on the panel; dropping them silently is the reading this must not produce.
+  #
+  # == Why it needs no index of its own
+  #
+  # Verbatim the argument at `.directory_durations_in`: it narrows on `test_run_id` — served by
+  # `index_spec_observations_on_test_run_id` — and GROUPS on a column no index leads on for this
+  # predicate, which decides nothing about the access path; the grouping hash-aggregates on top.
+  # `index_spec_observations_on_repository_id_and_name` exists and is NOT the path here: it leads on
+  # `repository_id`, which is what `.outcome_composition_in` rides for a WINDOW of runs, and a
+  # single-run narrow does not begin with it. EXPLAIN-certified at the 20-run seed in
+  # spec/models/spec_observation_spec.rb rather than argued for here.
+  #
+  # @return [Array<Array>] `[name, total_seconds, recorded_count, timed_count, file_paths,
+  #   group_count, repeated_recorded_count, repeated_timed_count]` per description, costliest first.
+  #   `total_seconds` is nil for a group none of whose examples were timed. The last three are the
+  #   same figures on every row — how many repeated descriptions the run holds, and how many
+  #   examples they cover and timed between them — all counted before the `LIMIT`.
+  #
+  # `COUNT(*) OVER ()` is evaluated after `GROUP BY` and its `HAVING` and before the `LIMIT`, so it
+  # counts repeated DESCRIPTIONS and counts all of them however few come back — the truncation
+  # disclosure `.file_durations_in` documents. The two `SUM(COUNT(...)) OVER ()` totals are the
+  # `.files_in_directory` construct and are here for the same reason: the panel's timing coverage
+  # has to describe the whole repeated population rather than the head of it that fit on the page.
+  def self.repeated_descriptions_in(test_run, limit: REPEATED_DESCRIPTIONS_LIMIT)
+    where(test_run_id: test_run.id)
+      .where.not(name: nil)
+      .group(:name)
+      .having(Arel.sql("COUNT(*) > 1"))
+      .order(Arel.sql("SUM(duration_seconds) DESC NULLS LAST"), Arel.sql("name ASC"))
+      .limit(limit)
+      .pluck(Arel.sql("name"), Arel.sql("SUM(duration_seconds)"),
+             Arel.sql("COUNT(*)"), Arel.sql("COUNT(duration_seconds)"),
+             Arel.sql("ARRAY_AGG(DISTINCT spec_file_path) FILTER (WHERE spec_file_path IS NOT NULL)"),
+             Arel.sql("COUNT(*) OVER ()"),
+             Arel.sql("SUM(COUNT(*)) OVER ()"),
+             Arel.sql("SUM(COUNT(duration_seconds)) OVER ()"))
+  end
+
+  # Whether ONE run's rows carry descriptions at all, and how many of them do not — the two facts a
+  # description-grouped read has to establish BEFORE anything it returns can be read.
+  #
+  # The run-scoped counterpart of `.unnamed_row_count_in` above, which asks the same question of a
+  # WINDOW and is not reusable here: that one narrows on `repository_id` and a list of runs because
+  # the cross-run panel's population is a window, and handing it a one-element list would ride the
+  # wrong index to answer a question about a single run.
+  #
+  # Two figures rather than one, and the second is the load-bearing addition. `recorded_count` of
+  # zero and `unnamed_count` of zero is a run that wrote no rows at all; the repeated-description
+  # read returns exactly the same empty list for it as it does for a suite whose every description
+  # is unique. Rendered as "nothing is repeated here" that empty list is *Vacuous Green* — "nobody
+  # told us" wearing the spelling of "there is no redundancy" — and `recorded_count` is what lets
+  # the surface tell the two apart, exactly as `reported_outcome_count` does for the outcome
+  # counters on `COVERAGE_COUNTS`.
+  #
+  # One aggregate over rows the run wrote, never `TestRun#total_specs_count`: that figure is
+  # re-derived by SUM over `test_run_shards` and the class comment above is explicit that nothing
+  # here re-derives it. `COUNT(*) FILTER (...)` rather than a second query, for the one-read reason
+  # `.coverage_in` gives — a caption fetched separately from the list it describes is a claim with
+  # no structural reason to keep agreeing with it.
+  #
+  # This IS a second round trip beside `.repeated_descriptions_in`, and it has to be: that read
+  # excludes null names in its WHERE clause, so no window over it could ever have counted the rows
+  # it dropped. `SlowestExamples` pays the same price for the same reason and `FILE_POPULATION_COUNTS`
+  # records why the drill-down beside it does not have to.
+  #
+  # @return [Hash{Symbol=>Integer}] `recorded_count` and `unnamed_count`, both counted in rows.
+  def self.description_presence_in(test_run)
+    counts = where(test_run_id: test_run.id)
+             .pick(Arel.sql("COUNT(*)"), Arel.sql("COUNT(*) FILTER (WHERE name IS NULL)"))
+
+    { recorded_count: counts[0].to_i, unnamed_count: counts[1].to_i }
   end
 
   # How each code AREA's example count MOVED between two runs — the first read on this table that

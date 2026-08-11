@@ -569,7 +569,13 @@ RSpec.describe "Repository spec file examples", type: :request do
       # compare outcomes and asks nothing further) and ONE for this panel. The list and both figures
       # in its caption come back on that one read: the counts are windows on it rather than a second
       # aggregate.
-      expect(large_queries.size).to eq(6)
+      #
+      # RECOUNTED AT 8 by SPGD-344, which added the "Descriptions this run recorded more than once"
+      # panel: TWO further reads of the same run's rows, grouped by DESCRIPTION and — separately,
+      # because the grouping excludes them in its WHERE clause — counting the rows that carry none.
+      # Neither is a per-file read and neither moves with a file being open, which is why the
+      # drill-down's own delta below is still exactly one.
+      expect(large_queries.size).to eq(8)
     end
 
     # The whole drill-down is off the default page's budget. A reader who never opens a file pays
@@ -583,7 +589,7 @@ RSpec.describe "Repository spec file examples", type: :request do
       unopened = queries_against("spec_observations") { get repository_path(repository) }
 
       expect(unopened.size).to eq(opened.size - 1)
-      expect(unopened.size).to eq(5)
+      expect(unopened.size).to eq(7)
     end
   end
 end
