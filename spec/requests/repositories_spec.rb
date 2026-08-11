@@ -44,14 +44,65 @@ RSpec.describe "Repository registration and API keys", type: :request do
     expect(response.body).not_to match(/sgk_[A-Za-z0-9_-]{20,}/)
   end
 
+  it "hands back a ready-to-run curl carrying the just-minted token" do
+    repository = register_repository
+
+    post repository_api_keys_path(repository)
+    follow_redirect!
+
+    raw_token = response.body[/sgk_[A-Za-z0-9_-]{20,}/]
+    expect(raw_token).to be_present
+    # The whole point: at the reveal moment the command is complete, so there is nothing for the
+    # user to substitute while the only copy of the secret is on screen.
+    expect(response.body).to include(%(curl -H "Authorization: Bearer #{raw_token}" #{api_v1_repository_url}))
+
+    # ...and it really is the credential — the same value the API will accept, not a look-alike.
+    expect(ApiKey.last.token_digest).to eq(ApiKey.digest(raw_token))
+
+    # Next steps, tied to what is shipped: the endpoint, the Bearer header, and the connection
+    # stat on this page that reports whether it ever authenticated.
+    expect(response.body).to include("Next steps")
+    expect(response.body).to include("Authorization: Bearer $SPECGUARD_API_KEY")
+
+    # The reload case still has to be served, so the placeholder form survives alongside it.
+    expect(response.body).to include("&lt;token&gt;")
+  end
+
   it "shows the endpoint and a copyable curl snippet with no flash present" do
     repository = create_repository(user: @user)
+    repository.api_keys.create!(name: "CI")
 
     get repository_path(repository)
 
     expect(response.body).to include("Connect this repository")
     expect(response.body).to include("GET #{api_v1_repository_url}")
     expect(response.body).to include(%(curl -H "Authorization: Bearer &lt;token&gt;" #{api_v1_repository_url}))
+  end
+
+  it "points at minting a key instead of a placeholder curl when the repository has none" do
+    repository = create_repository(user: @user)
+
+    get repository_path(repository)
+
+    # A command whose only possible outcome is a 401, told to substitute a key that was never
+    # minted, is not something to show. The endpoint itself still is.
+    expect(repository.api_keys).to be_empty
+    expect(response.body).to include("Connect this repository")
+    expect(response.body).to include("GET #{api_v1_repository_url}")
+    expect(response.body).not_to include(%(curl -H "Authorization: Bearer &lt;token&gt;"))
+    expect(response.body).to include("This repository has no API key yet")
+  end
+
+  it "tells a member who cannot mint keys who to ask for one" do
+    owner = create_user(github_uid: "8008", github_handle: "octo-owner")
+    repository = create_repository(user: owner)
+    create_membership(repository: repository, user: @user)
+
+    get repository_path(repository)
+
+    expect(response.body).to include("This repository has no API key yet")
+    expect(response.body).to include("octo-owner")
+    expect(response.body).not_to include("Mint a key in")
   end
 
   it "reports 'not connected' while no API key has ever been used" do

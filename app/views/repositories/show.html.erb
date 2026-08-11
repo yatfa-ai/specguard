@@ -85,7 +85,14 @@
           </p>
         <% end %>
 
-        <%= render UI::CopyableCodeComponent.new do %><%= @revealed_token %><% end %>
+        <%# Two `copy-text` scopes, not one wrapping both snippets: `copy_text_controller.js` reads
+            the SINGULAR `this.sourceTarget`, so a scope holding two payloads copies the first one
+            from both buttons. The component deliberately does not declare the controller itself —
+            see UI::CopyableCodeComponent. %>
+        <div class="space-y-1" data-controller="copy-text">
+          <p class="section-label text-app-content-secondary">The key</p>
+          <%= render UI::CopyableCodeComponent.new do %><%= @revealed_token %><% end %>
+        </div>
 
         <div class="flex flex-wrap items-center gap-x-3 gap-y-1">
           <%= render UI::ButtonComponent.new(variant: :secondary, size: :sm, type: "button",
@@ -97,17 +104,59 @@
           </p>
         </div>
 
-        <p class="text-xs text-app-muted">
-          Use it as <code>Authorization: Bearer &lt;token&gt;</code> against
-          <code><%= api_v1_repository_url %></code>.
-        </p>
+        <%# The whole point of this snippet is that it is ready to paste: the real token is already
+            in it, so there is no `<token>` to swap by hand while the value is still on screen. The
+            persistent panel below keeps the placeholder form, because it has to outlive the flash
+            and by then the secret is unrecoverable.
+
+            This REPLACES the "Use it as `Authorization: Bearer <token>` against <url>" line that
+            stood here: a placeholder instruction at the one moment the real value is on screen is
+            the exact incoherence this panel existed to fix. Nothing it said is lost — the header,
+            the URL and the token are all in the command below, and now in runnable form. %>
+        <div class="space-y-1" data-controller="copy-text">
+          <p class="section-label text-app-content-secondary">Try it now</p>
+          <%= render UI::CopyableCodeComponent.new do %>curl -H "Authorization: Bearer <%= @revealed_token %>" <%= api_v1_repository_url %><% end %>
+          <p class="text-xs text-app-muted">
+            Ready to run as-is — the key above is already in the command, nothing to substitute.
+          </p>
+        </div>
+
+        <%# Only what is shipped today: a Bearer-authenticated `GET /api/v1/repository`, and the
+            connection stat on this page that reports whether it ever authenticated. Nothing here
+            promises a capability the API does not have yet. %>
+        <div class="space-y-2">
+          <p class="section-label text-app-content-secondary">Next steps</p>
+          <ol class="list-decimal space-y-1 pl-5 text-xs text-app-muted">
+            <li>
+              Store the key in CI as a secret — a GitHub Actions repository secret named
+              <code>SPECGUARD_API_KEY</code>, for example. Do not commit it: SpecGuard cannot show
+              this value again; regenerate the key to mint a replacement.
+            </li>
+            <li>
+              Point your client at <code>GET <%= api_v1_repository_url %></code> and send the secret
+              as <code>Authorization: Bearer $SPECGUARD_API_KEY</code>.
+            </li>
+            <li>
+              Come back here to check it worked: once any request authenticates, "Connection" in
+              <a href="#connect" class="underline">Connect this repository</a> below reads
+              "Connected" and names how long ago the last request arrived.
+            </li>
+          </ol>
+        </div>
       </div>
     <% end %>
   <% end %>
 
+  <%# Asked ONCE for the whole page and passed down, not re-asked per panel: two panels branch on
+      it (the connect panel's "Try it" below, and the API keys table), and `@api_keys.any?` on an
+      unloaded relation is a real SELECT each time. The keys panel used to be the only asker, so
+      re-asking here would have added a query to every render of this page — which the Overview
+      panel's query-count guard counts, cache hits included. %>
+  <% has_api_keys = @api_keys.any? %>
+
   <%# Deliberately OUTSIDE the @revealed_token gate above: the instructions have to outlive the
       one-shot flash, or a user who reloads the page has no way to learn what the key is for. %>
-  <%= render UI::PanelComponent.new(title: "Connect this repository") do %>
+  <%= render UI::PanelComponent.new(title: "Connect this repository", id: "connect") do %>
     <div class="grid gap-4 lg:grid-cols-3">
       <div class="space-y-4 lg:col-span-2" data-controller="copy-text">
         <div class="space-y-1">
@@ -117,11 +166,29 @@
 
         <div class="space-y-2">
           <p class="section-label text-app-content-secondary">Try it</p>
-          <%= render UI::CopyableCodeComponent.new do %>curl -H "Authorization: Bearer &lt;token&gt;" <%= api_v1_repository_url %><% end %>
-          <p class="text-xs text-app-muted">
-            <code>&lt;token&gt;</code> is a placeholder — substitute the key you copied when you minted
-            it. SpecGuard cannot show an existing key again; regenerate it to mint a replacement.
-          </p>
+          <%# Gated on the repository actually having a key. `<token>` has no value to stand for
+              until one exists, so before that this rendered a command whose only possible outcome
+              was a 401 — and told the reader to substitute a key they had never minted. %>
+          <% if has_api_keys %>
+            <%= render UI::CopyableCodeComponent.new do %>curl -H "Authorization: Bearer &lt;token&gt;" <%= api_v1_repository_url %><% end %>
+            <p class="text-xs text-app-muted">
+              <code>&lt;token&gt;</code> is a placeholder — substitute the key you copied when you minted
+              it. SpecGuard cannot show an existing key again; regenerate it to mint a replacement.
+            </p>
+          <% elsif repository_policy.can?(:keys_manage) %>
+            <p class="text-xs text-app-muted">
+              This repository has no API key yet, and the endpoint answers
+              <code>401 {"error":"unauthorized"}</code> without one. Mint a key in
+              <a href="#api-keys" class="underline">API keys</a> below — the command to run is shown
+              with the key already in it, once.
+            </p>
+          <% else %>
+            <p class="text-xs text-app-muted">
+              This repository has no API key yet, and the endpoint answers
+              <code>401 {"error":"unauthorized"}</code> without one. Ask
+              <%= @repository.user.display_name %> to mint one.
+            </p>
+          <% end %>
         </div>
       </div>
 
@@ -928,7 +995,7 @@
           <% end %>
         <% end %>
 
-        <% if @api_keys.any? %>
+        <% if has_api_keys %>
           <%= render UI::TableComponent.new(columns: ["Name", "Key", "Created by", "Created", "Last used", ""]) do %>
             <% @api_keys.each do |api_key| %>
               <tr>
