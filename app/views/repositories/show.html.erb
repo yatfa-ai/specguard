@@ -2134,8 +2134,14 @@
 
               Only where something WAS repeated. A run whose every description is unique times
               nothing repeated either, and that run keeps its paragraph: there the caption promises
-              no ranking, and it is where the honest zero and the rows that carry no description —
-              which no state of this panel may leave unanswered — are stated. %>
+              no ranking, and it is where the honest zero is stated.
+
+              What the two branches SHARE is the rows that carry no description. That disclosure is
+              not a clause of the ranking — it is what the grouping could not read at all — so it
+              cannot travel with the paragraph that describes the ranking. Both branches below
+              render it, each in the words true of its own state, because no state of this panel may
+              leave those rows unanswered: a panel built on two of a run's five rows that does not
+              say so is a claim about a population it never looked at. %>
           <% if @repeated_descriptions.any? && !@repeated_descriptions.any_timed? %>
             <%# Repetitions exist and not one of their examples was timed. Every group's SUM is
                 NULL, so there is a list of repeated descriptions and no ranking — and a column of
@@ -2155,6 +2161,25 @@
                                  "examples, so there is no wall clock to weigh the repetition " \
                                  "against. An example that never ran reports no duration."
                   ) %>
+              <%# The exclusion, carried into the state that has no basis paragraph to carry it. The
+                  sentence is the same fact the paragraph below states and deliberately NOT the same
+                  element: `#repeated-descriptions-basis` is reserved for the states that describe a
+                  table, and reusing that id here would make a `have_css` for it pass in exactly the
+                  state where the paragraph must be absent.
+
+                  Only the clause that is TRUE here. Nothing about "costliest first" and nothing
+                  naming the "Examples timed" column — neither exists on this run, and describing
+                  them is the defect the nesting above was fixed to remove. Rendered only when there
+                  are excluded rows, for the reason the paragraph below gives. %>
+              <% if @repeated_descriptions.excluded_unnamed_rows? %>
+                <p class="text-xs text-app-muted mt-3" id="repeated-descriptions-untimed-basis">
+                  <%= number_with_delimiter(@repeated_descriptions.unnamed_row_count) %>
+                  of the <%= number_with_delimiter(@repeated_descriptions.recorded_count) %>
+                  <%= "example".pluralize(@repeated_descriptions.recorded_count) %> this run recorded
+                  carried no description at all and could not be grouped, so nothing here describes
+                  them.
+                </p>
+              <% end %>
             </div>
           <% else %>
             <%# What was grouped, by what rule, what the rule could not reach, and — before any of the

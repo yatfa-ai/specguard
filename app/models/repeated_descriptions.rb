@@ -165,7 +165,12 @@ class RepeatedDescriptions
     # SQL NULL out of the aggregate and stays nil all the way to the cell.
     def timed? = !total_seconds.nil?
 
-    def complete? = timed_count == recorded_count
+    # No per-row `complete?` here, unlike `SpecDirectoryDurations::Row`, and the difference is
+    # deliberate rather than an omission. That sibling's panel-level `#complete?` is
+    # `recorded? && rows.all?(&:complete?)`, which reads the LISTED head; this object computes its
+    # own from the window totals instead, so a truncated run cannot report itself complete on the
+    # strength of the ten rows that fit. Nothing is left for a per-row predicate to answer — the
+    # fraction the column renders is `#coverage_label`.
 
     # The total, rendered — through the same seam one example's duration and one area's total are
     # rendered through, so no two grains on this page can disagree about how a duration is spelled,
@@ -183,10 +188,8 @@ class RepeatedDescriptions
     # groups spanning the same files read the same way.
     def files_seen = Array(file_paths).sort
 
-    # The examples sharing this description ran in more than one spec file. Worth SAYING, and worth
-    # saying without a verdict attached: one description across several files is the shape a shared
-    # example group included by several suites makes, and it is equally the shape of two teams
-    # writing the same test twice. Which of them it is does not follow from these rows.
-    def multi_file? = files_seen.size > 1
+    # No `multi_file?` here either. `UnstableTests::Row` carries one because that panel names its
+    # files only when there is more than one; this panel names them unconditionally — a group living
+    # in a single file is the case a reader can act on most directly — so nothing asks the question.
   end
 end

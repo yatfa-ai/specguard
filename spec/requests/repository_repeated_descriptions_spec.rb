@@ -290,6 +290,41 @@ RSpec.describe "Repository repeated descriptions", type: :request do
       expect(panel).to have_no_text("Examples timed", normalize_ws: true)
     end
 
+    # The state where the two silences MEET, and the one no example reached before: repetition the
+    # run never timed, alongside rows it never described. The example above pins that the ranking
+    # paragraph is ABSENT here — and that paragraph used to be this state's only account of the
+    # excluded rows, so removing it took the account with it and no assertion noticed. Without this
+    # example the disclosure can disappear from this state again under a green suite, which is
+    # exactly what happened once.
+    #
+    # The panel's whole account of this run is built on 2 of its 5 rows. Saying so is the ticket's
+    # honesty constraint and the rule `RepeatedDescriptions`' class comment states, and it is true of
+    # this state no less than of the states that render a table. Asserted element-scoped on the id
+    # this state owns, per the header rule — and paired with the absence of the ranking paragraph, so
+    # a fix that restored the disclosure by restoring the false claims with it fails here.
+    it "still answers for the rows carrying no description where it timed nothing it grouped" do
+      get repository_path(repository_with([["untimed twice", nil], ["untimed twice", nil],
+                                           [nil, nil], [nil, nil], [nil, nil]]))
+
+      expect(panel).to have_css("#repeated-descriptions-untimed")
+      expect(panel).to have_no_css("#repeated-descriptions-basis")
+      expect(panel.find("#repeated-descriptions-untimed-basis"))
+        .to have_text("3 of the 5 examples this run recorded carried no description at all",
+                      normalize_ws: true)
+      expect(panel).to have_no_text("costliest first", normalize_ws: true)
+      expect(panel).to have_no_text("Examples timed", normalize_ws: true)
+    end
+
+    # Under the same condition the basis paragraph's clause is rendered under: "0 examples carried no
+    # description" is a sentence about arithmetic rather than about this run.
+    it "says nothing about unnamed rows in that state when every row carried a description" do
+      get repository_path(repository_with([["untimed twice", nil], ["untimed twice", nil]]))
+
+      expect(panel).to have_css("#repeated-descriptions-untimed")
+      expect(panel).to have_no_css("#repeated-descriptions-untimed-basis")
+      expect(panel).to have_no_text("carried no description", normalize_ws: true)
+    end
+
     # The discrimination that keeps the fix above from being a blanket "no timings, no paragraph".
     # A run whose every description is unique timed nothing repeated either, and its paragraph
     # promises no ranking — it states the honest zero's own denominator and is the only place the
