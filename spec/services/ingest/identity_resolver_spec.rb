@@ -498,7 +498,9 @@ RSpec.describe Ingest::IdentityResolver do
                                         name: "Cart adds an item to the cart")], ci_run_id: "run-2")
       provider_back
 
-      # Recorded and not resolved: the state the endpoint answers `202` from.
+      # Recorded and not resolved: the state the endpoint answers `202` from, and the state every
+      # row passes through. It is transient only if the job arrives — nothing guarantees that, which
+      # is why it is a QUERYABLE state now rather than a NULL nobody was looking at.
       unattempted = record([unannotated_spec(file_path: "spec/b_spec.rb", line_number: 2,
                                              name: "User#save rejects a duplicate email")],
                            ci_run_id: "run-3")
@@ -508,6 +510,16 @@ RSpec.describe Ingest::IdentityResolver do
       # One predicate, and it picks the recoverable one out of the three.
       expect(repository.spec_observations.embed_failed.pluck(:test_run_id)).to eq([failed.id])
       expect(repository.spec_observations.embed_retryable.pluck(:test_run_id)).to eq([failed.id])
+      # And its complement picks the other two — which is all one predicate over `embed_failed_at`
+      # can do. Which of THOSE two a row is stays `Ingest::SpecSignal`'s question, asked one row at
+      # a time by `#identity_for`, because a second implementation of the intent-or-name precedence
+      # in SQL is the drift `SpecObservation#signal` exists to prevent.
+      expect(repository.spec_observations.unresolved.embed_unattempted.pluck(:test_run_id))
+        .to contain_exactly(signalless.id, unattempted.id)
+      # Neither of them is in a BACKLOG yet, and for the same reason: both were created just now, so
+      # `EMBED_ATTEMPT_GRACE` still reads them as rows a live job may be on its way to. "Nothing is
+      # wrong; wait" is the correct answer here — the defect was that it stayed the answer forever.
+      expect(repository.spec_observations.embed_unattempted_retryable).to be_empty
     end
 
     it "resolves it on the next run once the provider is back — nothing is permanently lost" do
@@ -620,6 +632,373 @@ RSpec.describe Ingest::IdentityResolver do
 
       unrelated_ingest(ci_run_id: "run-3")
       expect(first.spec_observations.unresolved.count).to eq(0)
+    end
+  end
+
+  describe "a resolve that died before it reached the rest of the run" do
+    # The failure this whole group is about, reproduced at the place it actually happens.
+    # `IdentityResolver`'s loop has exactly one rescue and it is around the embed call, scoped to
+    # `EmbeddingGenerator::Error`. An `ActiveRecord::StatementInvalid` out of the ANN lookup — a
+    # dropped connection, a database blip, the tail of a deploy — propagates out of `#resolve`
+    # instead, and `ApplicationJob` declares no `retry_on` to catch it. Rows already claimed keep
+    # their identity, because `#claim` commits per row; rows not yet reached are left unresolved and
+    # UNSTAMPED, because `#record_embed_failure` only runs where the provider was actually asked.
+    #
+    # Stubbed at `#nearest` rather than at `EmbeddingGenerator`, so the error class is one the
+    # rescue genuinely does not cover. Raising a non-`EmbeddingGenerator::Error` from the provider
+    # would reach the same state through a path the provider contract says cannot happen.
+    def die_after(run, rows:)
+      resolver = described_class.new(run)
+      reached = 0
+      allow(resolver).to receive(:nearest).and_wrap_original do |original, *args|
+        reached += 1
+        raise ActiveRecord::StatementInvalid, "server closed the connection unexpectedly" if reached > rows
+
+        original.call(*args)
+      end
+
+      expect { resolver.resolve }.to raise_error(ActiveRecord::StatementInvalid)
+    end
+
+    # Put a row's wait far enough behind it that `EMBED_ATTEMPT_GRACE` no longer reads it as one a
+    # live job may be on its way to. `update_all` rather than a time-travel helper, the choice
+    # spec/requests/api/v1/repository_latest_run_spec.rb states and the window example above already
+    # follows: assert the fact the fixture needs — this row has been waiting longer than the grace —
+    # rather than moving the clock underneath everything else in the example.
+    def strand(run, ago: SpecObservation::EMBED_ATTEMPT_GRACE + 1.minute)
+      run.spec_observations.unresolved.update_all(created_at: ago.ago)
+    end
+
+    # A LATER ingest of this repository, under a DIFFERENT run. The production trigger under test:
+    # the original run is never redelivered and its job is never re-enqueued, so if the stranded
+    # rows resolve, the cross-run sweep is the only thing that can have resolved them.
+    def later_ingest(specs = [unannotated_spec(file_path: "spec/models/user_spec.rb", line_number: 3,
+                                               name: "User#save rejects a duplicate email")],
+                     ci_run_id:)
+      ingest(specs, ci_run_id: ci_run_id)
+    end
+
+    it "leaves the unreached rows unresolved with no stamp — the state nothing could describe" do
+      run = record(suite, ci_run_id: "run-1")
+
+      die_after(run, rows: 1)
+
+      stranded = run.spec_observations.unresolved
+      expect(stranded.count).to eq(2)
+      # Not a failure, and nothing may read it as one: the provider was never asked about these.
+      expect(stranded.pluck(:embed_failed_at).uniq).to eq([nil])
+      expect(stranded.pluck(:embed_failure_count).uniq).to eq([0])
+      expect(repository.spec_observations.embed_failed).to be_empty
+      expect(repository.spec_observations.embed_retryable).to be_empty
+    end
+
+    it "makes them findable once no live job could still be on its way to them" do
+      run = record(suite, ci_run_id: "run-1")
+      die_after(run, rows: 1)
+
+      # Inside the grace they are indistinguishable from the rows of an ingest that landed a second
+      # ago, and are deliberately left alone: "nothing is wrong; wait" is still the right answer.
+      expect(repository.spec_observations.embed_unattempted_retryable).to be_empty
+
+      strand(run)
+
+      expect(repository.spec_observations.embed_unattempted_retryable.pluck(:test_run_id))
+        .to eq([run.id, run.id])
+    end
+
+    it "resolves them on the next ingest of a different run, without redelivering the original" do
+      run = record(suite, ci_run_id: "run-1")
+      die_after(run, rows: 1)
+      strand(run)
+
+      # No `described_class.resolve(run)` by hand anywhere: nothing in production would ever call it
+      # again for this run, which is precisely the defect. The ingest below is what does it.
+      later_ingest(ci_run_id: "run-2")
+
+      expect(run.spec_observations.unresolved).to be_empty
+      expect(identity_texts).to contain_exactly(
+        "Cart adds an item to the cart",
+        "Invoice finalize locks the line items once the invoice is finalized",
+        "User#save rejects a duplicate email"
+      )
+    end
+
+    it "lands a stranded row on the identity the test already had, rather than starting a second" do
+      run = record(suite, ci_run_id: "run-1")
+      die_after(run, rows: 1)
+      strand(run)
+
+      # The rescuing ingest carries the SAME test as one of the stranded rows, so the two must come
+      # away holding one identity between them — the semantic-identity rule, reached through the
+      # sweep instead of through a run's own list.
+      second = later_ingest(ci_run_id: "run-2")
+
+      identity = second.spec_observations.sole.reload.spec_identity
+      expect(identity.text).to eq("User#save rejects a duplicate email")
+      expect(run.spec_observations.find_by(file_path: "spec/models/user_spec.rb").reload.spec_identity_id)
+        .to eq(identity.id)
+      expect(repository.spec_identities.where(text: identity.text).count).to eq(1)
+    end
+
+    it "does not let a rescued older run overwrite a newer run's last known path" do
+      # `SIGHTING_NOT_OLDER` over the never-attempted half of the backlog, which is the half where
+      # the stranded row is walked FIRST and the newer sighting therefore arrives second.
+      run = record([unannotated_spec(file_path: "spec/models/cart_spec.rb", line_number: 5,
+                                     name: "Cart adds an item to the cart")], ci_run_id: "run-1")
+      die_after(run, rows: 0)
+      strand(run)
+
+      second = later_ingest([unannotated_spec(file_path: "spec/models/cart_spec.rb", line_number: 90,
+                                              name: "Cart adds an item to the cart")],
+                            ci_run_id: "run-2")
+
+      identity = repository.spec_identities.sole
+      expect(identity.location).to eq("spec/models/cart_spec.rb:90")
+      expect(identity.last_seen_test_run_id).to eq(second.id)
+      # Refused the sighting, not the row: the stranded observation still gets its link.
+      expect(run.spec_observations.sole.reload.spec_identity_id).to eq(identity.id)
+    end
+
+    it "never gives an identity to a row with nothing to embed, however many ingests sweep past it" do
+      # The population the sweep now reads on every ingest and must go on doing nothing with. Its
+      # name is nulled by hand because `Ingest::Payload#validate_name` refuses that shape today —
+      # which is exactly why it is a frozen legacy set rather than a growing cost.
+      run = record([unannotated_spec(file_path: "spec/c_spec.rb", line_number: 3,
+                                     name: "Order#checkout rejects an expired card")],
+                   ci_run_id: "run-1")
+      run.spec_observations.sole.update_columns(name: nil)
+      described_class.resolve(run)
+      strand(run)
+
+      # It IS in the work list now — that is the change — and it costs no embedding, because
+      # `#identity_for` returns before the embed for a signal that is not present.
+      expect(repository.spec_observations.embed_unattempted_retryable.count).to eq(1)
+
+      3.times { |index| later_ingest(ci_run_id: "sweep-#{index}") }
+
+      expect(run.spec_observations.sole.reload.spec_identity_id).to be_nil
+      # And still no stamp after three sweeps: a row with nothing to embed never reaches the
+      # provider, so it can never come to look like a failure that somebody should act on.
+      expect(run.spec_observations.sole.embed_failed_at).to be_nil
+      expect(identity_texts).to eq(["User#save rejects a duplicate email"])
+    end
+
+    it "is not starved by the rows that can never leave the backlog" do
+      # The reason this list is ordered NEWEST first while the failure backlog is ordered
+      # least-tried first. A signalless row is swept forever and resolves never — it returns from
+      # `#identity_for` before the embed, so it takes no stamp and no attempt count, and there is no
+      # counter that could demote it. Oldest-first would park that population permanently at the
+      # head of the list and no genuinely stranded row would ever be reached.
+      stub_const("#{described_class}::RETRY_SWEEP_LIMIT", 1)
+
+      signalless = record([unannotated_spec(file_path: "spec/c_spec.rb", line_number: 3,
+                                            name: "Order#checkout rejects an expired card")],
+                          ci_run_id: "run-1")
+      signalless.spec_observations.sole.update_columns(name: nil)
+      described_class.resolve(signalless)
+
+      stranded = record([unannotated_spec(file_path: "spec/models/cart_spec.rb", line_number: 5,
+                                          name: "Cart adds an item to the cart")], ci_run_id: "run-2")
+      die_after(stranded, rows: 0)
+
+      # The signalless row is the OLDER of the two, which is the only shape it can have in
+      # production: `Ingest::Payload#validate_name` has refused that payload since before any row
+      # written after it, so the population that cannot resolve is by construction the oldest one.
+      # That is what makes newest-first a structural answer to starvation rather than a hopeful one.
+      strand(signalless, ago: 3.hours)
+      strand(stranded, ago: 2.hours)
+
+      later_ingest(ci_run_id: "run-3")
+
+      expect(stranded.spec_observations.sole.reload.spec_identity_id).to be_present
+      expect(signalless.spec_observations.sole.reload.spec_identity_id).to be_nil
+    end
+
+    it "gives up on it once the window has closed, and leaves it queryable as such" do
+      run = record(suite, ci_run_id: "run-1")
+      die_after(run, rows: 1)
+      strand(run, ago: SpecObservation::EMBED_RETRY_WINDOW + 1.second)
+
+      later_ingest(ci_run_id: "run-2")
+
+      expect(run.spec_observations.unresolved.count).to eq(2)
+      expect(repository.spec_observations.embed_unattempted_retryable).to be_empty
+      # "We stopped trying" is not the same figure as "we are still trying", which is the whole
+      # reason the bound is a scope and not a bare comparison — `embed_abandoned`'s rule, applied to
+      # the population that never carried a stamp to anchor it.
+      expect(repository.spec_observations.embed_unattempted_abandoned.count).to eq(2)
+    end
+
+    # `RETRY_SWEEP_LIMIT` bounds what ONE JOB inherits from the deliveries before it, and
+    # `#retry_backlog` spends that one allowance across two lists. It does so in two distinct
+    # behaviours, and they need an example each, because the one below cannot reach the other:
+    #
+    # * The failures SATURATE the budget — nothing is left, so the never-attempted list is not
+    #   queried at all (the early return).
+    # * The failures fill it PARTIALLY — the never-attempted list is asked for the REMAINDER (the
+    #   subtraction).
+    #
+    # The second is the arithmetic that actually enforces one budget, and it is the ordinary
+    # production shape rather than the exotic one: a saturated failure backlog is the provider
+    # outage, while a handful of failed rows beside a stranded backlog is the everyday state of a
+    # repository that has lost a job. An example seeded at a limit of 1 can only ever certify the
+    # first — "partial" does not exist there — so a `RETRY_SWEEP_LIMIT`-for-`remaining` mutant
+    # survives it while turning one budget back into two.
+    it "does not query the never-attempted list at all when the failures have taken the whole budget" do
+      stub_const("#{described_class}::RETRY_SWEEP_LIMIT", 1)
+
+      allow(EmbeddingGenerator).to receive(:call).and_raise(EmbeddingGenerator::Error, "provider down")
+      failed = ingest([unannotated_spec(file_path: "spec/a_spec.rb", line_number: 1,
+                                        name: "Cart adds an item to the cart")], ci_run_id: "run-1")
+      RSpec::Mocks.space.proxy_for(EmbeddingGenerator).reset
+
+      stranded = record([unannotated_spec(file_path: "spec/b_spec.rb", line_number: 2,
+                                          name: "Invoice#finalize locks the line items")],
+                        ci_run_id: "run-2")
+      strand(stranded)
+
+      # One slot, and the failures take it — a row something has already tried and failed to rescue
+      # has the stronger claim on a scarce one.
+      later_ingest(ci_run_id: "run-3")
+      expect(failed.spec_observations.unresolved).to be_empty
+      expect(stranded.spec_observations.unresolved.count).to eq(1)
+
+      # Drained across the ingest that follows, exactly as an over-cap failure backlog is.
+      later_ingest(ci_run_id: "run-4")
+      expect(stranded.spec_observations.unresolved).to be_empty
+    end
+
+    it "gives the never-attempted list only what the failures left, not a second full budget" do
+      # The partial branch, and the one that pins the SUBTRACTION rather than the guard in front of
+      # it. Three slots, one of them spent on a failure, three rows stranded: the sweep is entitled
+      # to exactly two of them. Two independently capped lists would take all three here and the
+      # example above would not notice, because at a limit of 1 the remainder is always zero.
+      stub_const("#{described_class}::RETRY_SWEEP_LIMIT", 3)
+
+      allow(EmbeddingGenerator).to receive(:call).and_raise(EmbeddingGenerator::Error, "provider down")
+      failed = ingest([unannotated_spec(file_path: "spec/a_spec.rb", line_number: 1,
+                                        name: "Cart adds an item to the cart")], ci_run_id: "run-1")
+      RSpec::Mocks.space.proxy_for(EmbeddingGenerator).reset
+
+      # Three rows of one run, none of them reached: `die_after(rows: 0)` raises on the first ANN
+      # lookup, so nothing is claimed and nothing is stamped — the whole run is stranded.
+      stranded = record([
+                          unannotated_spec(file_path: "spec/b_spec.rb", line_number: 2,
+                                           name: "Invoice#finalize locks the line items"),
+                          unannotated_spec(file_path: "spec/c_spec.rb", line_number: 3,
+                                           name: "Order#checkout rejects an expired card"),
+                          unannotated_spec(file_path: "spec/d_spec.rb", line_number: 4,
+                                           name: "Session#destroy clears the remember token")
+                        ], ci_run_id: "run-2")
+      die_after(stranded, rows: 0)
+      strand(stranded)
+
+      later_ingest(ci_run_id: "run-3")
+
+      # One slot to the failure, and the OTHER TWO — not another three — to the stranding.
+      expect(failed.spec_observations.unresolved).to be_empty
+      expect(stranded.spec_observations.unresolved.count).to eq(1)
+
+      # And the row the budget refused is deferred rather than dropped: with the failure backlog now
+      # empty, the next ingest has the whole allowance to spend and drains it.
+      later_ingest(ci_run_id: "run-4")
+      expect(stranded.spec_observations.unresolved).to be_empty
+    end
+
+    # The cost half of the slice, and the reason it came with a migration. The failure backlog's
+    # index is partial on `embed_failed_at IS NOT NULL AND spec_identity_id IS NULL`; this sweep's
+    # predicate is the COMPLEMENT of its leading clause, so that index cannot serve it at all. The
+    # sweep runs on every ingest — the hottest path in the application — and unindexed it is a
+    # repository-wide scan of a table holding `BRANCH_RETENTION_RUNS` runs of a 20,000-example suite
+    # per branch, to find nothing on a healthy repository.
+    describe "the plan Postgres chooses for it" do
+      let(:resolved_runs) { 10 }
+      let(:rows_per_run) { 500 }
+      # A backlog LARGER than one sweep may take — the shape the ordering keys are in the index for,
+      # and the design point `RETRY_SWEEP_LIMIT` is written against: *"a provider outage across a
+      # 20,000-example run leaves 20,000 failed rows"*, and a job that died mid-resolve leaves as
+      # many unattempted ones.
+      let(:stranded_rows) { 4 * described_class::RETRY_SWEEP_LIMIT }
+
+      # What the sweep asks for, and deliberately far below the backlog above. `#retry_backlog`
+      # hands this list the REMAINDER of the shared budget, so a small number here is an ordinary
+      # production call and not a contrivance — it is what every ingest issues while a failure
+      # backlog is draining.
+      #
+      # It is small for a second reason, and that one is about keeping this example honest rather
+      # than about fidelity. The margin between the two candidate plans narrows as the suite's own
+      # rolled-back inserts bloat the table: an index scan's per-row cost rises with the heap it has
+      # to fetch from, so at a cap near the backlog size the planner's choice comes down to a
+      # tiebreak that RSpec's ordering decides — which is exactly the flakiness
+      # spec/models/spec_observation_spec.rb records having been bitten by, and it certified nothing
+      # while it lasted. The property under test is that the cap STOPS the read early, and asking
+      # for a small slice of a large backlog is where that property is worth orders of magnitude
+      # rather than percent.
+      let(:sweep_limit) { 25 }
+
+      # Seeded by `insert_all` rather than through the ingest path. These rows are BALLAST for the
+      # planner and nothing reads their content, so the rule the file header states (SPGD-91 — a
+      # fixture must not build a state the producer cannot) is not what is at stake: the columns
+      # that decide this plan are `repository_id`, `created_at`, `spec_identity_id` and
+      # `embed_failed_at`, all of which production writes exactly as this does.
+      def seed(test_run, identity:, created_at:, rows:)
+        SpecObservation.insert_all((1..rows).map do |index|
+          path = "spec/f#{index % 25}_spec.rb"
+          { test_run_id: test_run.id, repository_id: repository.id,
+            example_id: "./#{path}[1:#{index}]", spec_file_path: path, file_path: path,
+            line_number: index, name: "example #{index}", status: "unannotated",
+            spec_identity_id: identity&.id, created_at: created_at, updated_at: created_at }
+        end)
+      end
+
+      # A repository with history behind it and one run stranded in it. Three properties of this
+      # seed are each load-bearing, and the assertion certifies nothing without all three — every
+      # one of them was found by a spelling of this example that passed or failed for the wrong
+      # reason:
+      #
+      # * **Most rows resolved**, so the partial index is a small fraction of the table. A planner
+      #   handed a table where every row matches the partial predicate has no reason to prefer it.
+      # * **The runs spread over TIME** rather than all written at `Time.current`. `created_at` and
+      #   `spec_identity_id` are perfectly correlated in a single-instant seed — every unresolved
+      #   row is also the only old row — and Postgres multiplies the two selectivities as though
+      #   they were independent, underestimating the backlog by 20×. The plan it then picks is
+      #   chosen against a row count production never has.
+      # * **A backlog larger than `RETRY_SWEEP_LIMIT`**, which is what makes the ORDERING half of
+      #   the index matter. Below the cap the sweep needs every row it can find and sorting a few
+      #   hundred of them is nearly free, so the planner may reasonably narrow on
+      #   `index_spec_observations_on_spec_identity_id` — a plain index on a nullable column, whose
+      #   btree indexes its NULLs — and sort. Above the cap that plan has to read and sort the WHOLE
+      #   backlog to hand back 500 rows, while this index yields them already ordered and stops. The
+      #   cost it avoids grows with the backlog, which is precisely when it is worth avoiding.
+      before do
+        identity = create_spec_identity(repository: repository)
+        resolved_runs.times do |index|
+          seed(create_test_run(repository: repository), identity: identity,
+               created_at: (index * 7).hours.ago, rows: rows_per_run)
+        end
+        seed(create_test_run(repository: repository), identity: nil,
+             created_at: (SpecObservation::EMBED_ATTEMPT_GRACE + 1.hour).ago, rows: stranded_rows)
+
+        # Without stats the planner works off hard-coded defaults and its choice says nothing about
+        # the data. `ANALYZE` is legal inside the transaction the suite wraps each example in.
+        ActiveRecord::Base.connection.execute("ANALYZE spec_observations")
+      end
+
+      it "reads the never-attempted backlog off its own partial index, in order, and stops at the cap" do
+        # EXPLAINed from the relation the resolver ACTUALLY walks rather than from a hand-written
+        # copy of it — a copy is a second definition of the query, and a plan assertion against the
+        # copy would be asserting nothing about the sweep.
+        relation = described_class.new(create_test_run(repository: repository))
+                                  .send(:unattempted_embed_backlog, sweep_limit)
+        plan = ActiveRecord::Base.connection.select_values("EXPLAIN #{relation.to_sql}").join("\n")
+
+        expect(plan).to include("index_spec_observations_on_unattempted_embed_backlog")
+        expect(plan).not_to match(/Seq Scan on spec_observations/)
+        # No `Sort` node, which is the half of the criterion the index name alone does not carry:
+        # the rows come back in the sweep's own order, so the `LIMIT` stops after 500 of them rather
+        # than after the whole backlog has been read and ordered.
+        expect(plan).not_to match(/Sort Key:/)
+      end
     end
   end
 

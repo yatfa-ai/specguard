@@ -10,7 +10,7 @@
 #
 # It's strongly recommended that you check this file into your version control system.
 
-ActiveRecord::Schema[8.1].define(version: 2026_08_11_140000) do
+ActiveRecord::Schema[8.1].define(version: 2026_08_11_150000) do
   # These are extensions that must be enabled in order to support this database
   enable_extension "pg_catalog.plpgsql"
   enable_extension "vector"
@@ -230,6 +230,7 @@ ActiveRecord::Schema[8.1].define(version: 2026_08_11_140000) do
     t.bigint "test_run_id", null: false
     t.bigint "test_run_shard_id"
     t.datetime "updated_at", null: false
+    t.index ["repository_id", "created_at", "id"], name: "index_spec_observations_on_unattempted_embed_backlog", where: "((embed_failed_at IS NULL) AND (spec_identity_id IS NULL))"
     t.index ["repository_id", "embed_failure_count", "embed_failed_at"], name: "index_spec_observations_on_embed_backlog", where: "((embed_failed_at IS NOT NULL) AND (spec_identity_id IS NULL))"
     t.index ["repository_id", "name"], name: "index_spec_observations_on_repository_id_and_name"
     t.index ["repository_id"], name: "index_spec_observations_on_repository_id"
