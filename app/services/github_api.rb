@@ -25,12 +25,18 @@ require "uri"
 # exception. The subclasses exist because each means something different to a *user*:
 #
 #   Unauthorized  401 — the token is dead (revoked on GitHub, or expired). Re-authorize.
-#   Forbidden     403 — the token is alive but may not do this: scope too narrow, SAML/SSO not
-#                       authorized for the org, or rate limited.
+#   Forbidden     403 — the token is alive but may not do this. Carries a `reason` (see below),
+#                       because the three things GitHub answers 403 for have three unrelated fixes.
 #   NotFound      404 — no such repository *that this token can see*. GitHub deliberately answers
 #                       404 rather than 403 for a private repository the caller cannot read, so
 #                       this does NOT mean "does not exist" and must never be reported as such.
 #   Unavailable         transport failure, timeout, 5xx, or a body that is not the JSON promised.
+#
+# `Forbidden#reason` is a symbol rather than prose because a caller has to *branch* on it, not print
+# it. An SSO block and a rate limit are both 403 and they are opposites: one clears itself in an
+# hour, the other never clears until a human clicks approve in the organization. Collapsing them
+# into one "try again shortly" is how a user ends up retrying forever — see GithubOwnership, which
+# maps each reason to the fix that actually resolves it.
 #
 # ## Raw HTTP rather than Octokit
 #
@@ -49,9 +55,29 @@ require "uri"
 class GithubApi
   Error = Class.new(StandardError)
   Unauthorized = Class.new(Error)
-  Forbidden = Class.new(Error)
   NotFound = Class.new(Error)
   Unavailable = Class.new(Error)
+
+  # 403, with which of the three unrelated 403s it was. `reason` is one of:
+  #
+  #   :rate_limited       GitHub's hourly budget for this token is spent. Genuinely transient —
+  #                       this is the only 403 for which "try again shortly" is true.
+  #   :sso_required       the repository belongs to an organization enforcing SAML SSO that this
+  #                       token has not been authorized for. Never clears on its own: somebody has
+  #                       to authorize the token for that organization on GitHub.
+  #   :insufficient_scope the grant is too narrow to answer the question. Fixed by re-authorizing.
+  #
+  # Defaults to `:insufficient_scope` because it is the only one of the three that a caller can
+  # act on blindly without misleading anybody: it offers a re-authorize the user may not need,
+  # rather than a wait that will never end.
+  class Forbidden < Error
+    attr_reader :reason
+
+    def initialize(message = nil, reason: :insufficient_scope)
+      super(message)
+      @reason = reason
+    end
+  end
 
   API_ROOT = "https://api.github.com"
 
@@ -61,9 +87,15 @@ class GithubApi
 
   # A ceiling on `repositories`, not a promise about anyone's account. Someone with more than this
   # many repositories would otherwise turn one page render into 40+ sequential GitHub round trips.
-  # The list is a picker, and a picker that takes a minute to appear is not one; the *verification*
-  # path does not read this list at all, so a repository past the cap is still registerable once
-  # search reaches it. Kept visible rather than silent — `repositories` reports truncation.
+  # The list is a picker, and a picker that takes a minute to appear is not one.
+  #
+  # Note what this cap now costs, because it changed meaning in this slice: the picker is the only
+  # way to submit a repository, and the type-to-narrow box searches the options already fetched
+  # rather than asking GitHub. So a repository past the cap is currently NOT registerable through
+  # any UI path. Back when the field was free text, the cap only affected convenience. Fixing it
+  # properly means a GitHub-side search endpoint behind the query box; until then this is a real,
+  # if rare, wall — and `repositories` reports truncation so the picker can say so out loud rather
+  # than appear complete.
   MAX_PAGES = 10
 
   OPEN_TIMEOUT = 5
@@ -188,7 +220,7 @@ class GithubApi
     case response
     when Net::HTTPSuccess then decode(response.body)
     when Net::HTTPUnauthorized then raise Unauthorized, "GitHub rejected the access token."
-    when Net::HTTPForbidden then raise Forbidden, forbidden_message(response)
+    when Net::HTTPForbidden then raise forbidden_error(response)
     when Net::HTTPNotFound then raise NotFound, "GitHub has no such repository visible to this token."
     else raise Unavailable, "GitHub responded #{response.code}."
     end
@@ -201,15 +233,22 @@ class GithubApi
   end
 
   # 403 is GitHub's answer to several unrelated situations, and telling them apart matters to
-  # whoever reads the flash: a rate limit clears on its own, an SSO block needs a click in the org,
-  # and a narrow scope needs re-authorization.
-  def forbidden_message(response)
+  # whoever has to fix it: a rate limit clears on its own, an SSO block needs a click in the org,
+  # and a narrow scope needs re-authorization. The reason travels on the exception so the decision
+  # is made from a symbol; the message is for the log.
+  #
+  # Read in this order deliberately. GitHub sends `X-GitHub-SSO` on a *rate-limited* response to an
+  # SSO org as readily as on an authorization failure, so checking SSO first would report an
+  # hour-long wait as a permanent org-approval problem. Exhaustion is the narrower, more certain
+  # signal, so it wins.
+  def forbidden_error(response)
     if response["x-ratelimit-remaining"] == "0"
-      "GitHub rate limit reached; try again shortly."
+      Forbidden.new("GitHub rate limit reached; try again shortly.", reason: :rate_limited)
     elsif response["x-github-sso"].present?
-      "GitHub requires SSO authorization for that organization."
+      Forbidden.new("GitHub requires SSO authorization for that organization.", reason: :sso_required)
     else
-      "GitHub refused the request; the granted access may be too narrow."
+      Forbidden.new("GitHub refused the request; the granted access may be too narrow.",
+                    reason: :insufficient_scope)
     end
   end
 

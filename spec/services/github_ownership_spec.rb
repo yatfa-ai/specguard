@@ -99,6 +99,48 @@ RSpec.describe GithubOwnership do
     expect(verdict).not_to be_reauthorize
   end
 
+  # The three 403s, kept apart. Collapsing them into `:unavailable` is what told a user behind an
+  # SSO-enforced organization to "try again shortly" for a condition that never clears on its own —
+  # so each example asserts the status AND that it is not the outage one.
+  {
+    sso_required: :sso_required,
+    rate_limited: :rate_limited,
+    insufficient_scope: :scope_too_narrow
+  }.each do |reason, status|
+    it "refuses a #{reason} 403 as #{status} rather than as an outage" do
+      stub_github(forbidden: reason)
+
+      verdict = verify
+
+      expect(verdict).not_to be_verified
+      expect(verdict.status).to eq(status)
+      expect(verdict.status).not_to eq(:unavailable)
+    end
+  end
+
+  # The SSO sentence has to name the organization remedy, because that is the only thing that
+  # resolves it. Asserted against the message the form will actually show, not against a literal.
+  it "tells an SSO-blocked user their organization may need to approve SpecGuard" do
+    stub_github(forbidden: :sso_required)
+
+    expect(verify.message).to include("organization may need to approve SpecGuard")
+    expect(verify.message).not_to include("Try again shortly")
+  end
+
+  # A too-narrow grant is fixed by granting more, so the form must offer the authorize button
+  # rather than an error the field cannot resolve. The other two 403s are NOT reauthorize cases:
+  # re-authorizing does not clear a rate limit or an org's SSO policy.
+  it "offers re-authorization for a too-narrow grant only" do
+    stub_github(forbidden: :insufficient_scope)
+    expect(verify).to be_reauthorize
+
+    stub_github(forbidden: :sso_required)
+    expect(verify).not_to be_reauthorize
+
+    stub_github(forbidden: :rate_limited)
+    expect(verify).not_to be_reauthorize
+  end
+
   it "asks GitHub about the trimmed name it was given" do
     fake = stub_github(repos: [github_repo("acme/billing-service")], strict: true)
 

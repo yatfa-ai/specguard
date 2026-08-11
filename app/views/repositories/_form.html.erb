@@ -20,19 +20,36 @@
   <% end %>
 
   <% if github_authorization_needed? %>
-    <%# The fix here is a grant, not an edit, so no field is rendered. %>
+    <%# The fix here is a grant, not an edit, so no field is rendered.
+
+        `origin` is passed explicitly rather than left to default to `request.fullpath`, because
+        this panel's most likely reader arrived by POST: they submitted the form, verification came
+        back needing a grant, and this is the 422 re-render. `request.fullpath` is then
+        `/repositories` (the POST path) or `/repositories/:id` (the PATCH path) — neither of which
+        renders this form, so authorizing would land them on the dashboard or the show page and
+        make them find the button again. The form's own GET path is the only correct answer, and
+        it is a property of what is being rendered, not of how this request arrived. %>
+    <% form_origin = repository.persisted? ? edit_repository_path(repository) : new_repository_path %>
     <%= render UI::EmptyStateComponent.new(
           title: "Connect your GitHub repositories",
           description: github_authorization_disclosure
         ) do %>
-      <%= github_authorize_button %>
+      <%= github_authorize_button origin: form_origin %>
     <% end %>
   <% elsif github_listing.nil? %>
-    <%# The token is fine, the API is not. Nothing to pick from and nothing the user can fix by
-        typing, so the form is withheld rather than shown empty. %>
-    <%= render UI::AlertComponent.new(tone: :warning, title: "GitHub is not answering right now") do %>
-      Your repository list could not be loaded, so there is nothing to pick from yet. Try again
-      shortly.
+    <%# Nothing to pick from and nothing the user can fix by typing, so the form is withheld rather
+        than shown empty. Two different reasons land here and they must not read the same: GitHub
+        being down is waitable, GitHub *refusing* is not. `github_listing_error_message` is nil
+        only for the genuine outage, which is the one case "try again shortly" is true of. %>
+    <% if github_listing_error_message %>
+      <%= render UI::AlertComponent.new(tone: :warning, title: "GitHub refused the request") do %>
+        <%= github_listing_error_message %>
+      <% end %>
+    <% else %>
+      <%= render UI::AlertComponent.new(tone: :warning, title: "GitHub is not answering right now") do %>
+        Your repository list could not be loaded, so there is nothing to pick from yet. Try again
+        shortly.
+      <% end %>
     <% end %>
 
     <div class="mt-4">
@@ -53,13 +70,13 @@
     <%= form_with model: repository do |form| %>
       <div class="form-grid" data-controller="repository-picker">
         <div class="form-field-full space-y-1">
-          <%= label_tag :repository_filter, "Search your repositories",
+          <%= label_tag :repository_query, "Search your repositories",
                         class: "block text-sm font-medium text-app-content" %>
-          <%= text_field_tag :repository_filter, nil,
+          <%= text_field_tag :repository_query, nil,
                              placeholder: "Start typing to narrow the list…",
                              autocomplete: "off",
                              data: { repository_picker_target: "query",
-                                     action: "input->repository-picker#filter" },
+                                     action: "input->repository-picker#refine" },
                              class: Forms::FieldComponent::INPUT_CLASS %>
           <p class="text-xs text-app-muted" data-repository-picker-target="count"></p>
         </div>

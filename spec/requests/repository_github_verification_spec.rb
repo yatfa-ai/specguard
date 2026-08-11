@@ -67,6 +67,44 @@ RSpec.describe "Ownership-verified repository registration", type: :request do
       expect(response.body).to include("Connect your GitHub repositories")
     end
 
+    # The authorize button on a 422 has to come back to the form, and the form is a GET the user is
+    # no longer on: `request.fullpath` here is `/repositories`, the POST path, which renders the
+    # index. A user who submits, is told to connect GitHub, and grants it would land on the
+    # dashboard and have to find "Register" again — on the one path they are most likely to press
+    # the button.
+    it "returns the user to the registration form after authorizing from a failed registration" do
+      revoke_github_repository_access(@user)
+
+      register("acme/billing-service")
+
+      expect(response).to have_http_status(:unprocessable_content)
+      expect(response.body).to include(CGI.escapeHTML("origin=#{CGI.escape(new_repository_path)}"))
+      expect(response.body).not_to include(CGI.escapeHTML("origin=#{CGI.escape(repositories_path)}&"))
+    end
+
+    # An SSO-enforced organization answers 403 forever until a human authorizes the token for it.
+    # "GitHub did not answer. Try again shortly." is the one sentence that guarantees the user
+    # retries in a loop, so this asserts both the right words and the absence of the wrong ones.
+    it "tells an SSO-blocked user what actually resolves it, not to wait" do
+      stub_github(forbidden: :sso_required)
+
+      expect { register("acme/billing-service") }.not_to change(Repository, :count)
+
+      expect(response).to have_http_status(:unprocessable_content)
+      expect(response.body).to include("organization may need to approve SpecGuard")
+      expect(response.body).not_to include("GitHub did not answer")
+    end
+
+    it "names the rate limit rather than reporting it as an outage" do
+      stub_github(forbidden: :rate_limited)
+
+      expect { register("acme/billing-service") }.not_to change(Repository, :count)
+
+      expect(response).to have_http_status(:unprocessable_content)
+      expect(response.body).to include("rate limit")
+      expect(response.body).not_to include("GitHub did not answer")
+    end
+
     # Shape and uniqueness are the record's own rules and cost nothing to check. Asking GitHub
     # about a string that could not be a repository name is a round trip whose answer is already
     # known, on a path a signed-in user can hammer. (The 422 re-render then lists the picker, which
@@ -137,6 +175,29 @@ RSpec.describe "Ownership-verified repository registration", type: :request do
       expect(response).to redirect_to(repository_path(repository))
       expect(fake.calls_to(:repository)).to eq(0)
     end
+
+    # The create path's twin: here `request.fullpath` is `/repositories/:id`, the PATCH path, which
+    # renders the show page rather than the rename form.
+    it "returns the user to the rename form after authorizing from a failed rename" do
+      revoke_github_repository_access(@user)
+
+      rename("acme/checkout")
+
+      expect(response).to have_http_status(:unprocessable_content)
+      expect(response.body)
+        .to include(CGI.escapeHTML("origin=#{CGI.escape(edit_repository_path(repository))}"))
+    end
+
+    it "tells an SSO-blocked user what actually resolves it, not to wait" do
+      stub_github(forbidden: :sso_required)
+
+      rename("acme/checkout")
+
+      expect(response).to have_http_status(:unprocessable_content)
+      expect(repository.reload.github_full_name).to eq("acme/billing-service")
+      expect(response.body).to include("organization may need to approve SpecGuard")
+      expect(response.body).not_to include("GitHub did not answer")
+    end
   end
 
   describe "GET /repositories/new" do
@@ -196,6 +257,30 @@ RSpec.describe "Ownership-verified repository registration", type: :request do
       get new_repository_path
 
       expect(response.body).to include("GitHub is not answering right now")
+      expect(response.body).not_to include("<select")
+    end
+
+    # The listing call hits GitHub with the same token and collects the same 403s as verification
+    # does, so it must make the same distinction. "GitHub is not answering right now" is false here
+    # — GitHub answered, and said no.
+    it "distinguishes GitHub refusing from GitHub being down when listing" do
+      stub_github(forbidden: :sso_required)
+
+      get new_repository_path
+
+      expect(response.body).to include("GitHub refused the request")
+      expect(response.body).to include("organization may need to approve SpecGuard")
+      expect(response.body).not_to include("GitHub is not answering right now")
+    end
+
+    # A too-narrow grant is the one 403 a re-authorization fixes, so it gets the button rather than
+    # an explanation the user cannot act on.
+    it "offers the grant when the token is too narrow to list repositories" do
+      stub_github(forbidden: :insufficient_scope)
+
+      get new_repository_path
+
+      expect(response.body).to include("Connect your GitHub repositories")
       expect(response.body).not_to include("<select")
     end
   end

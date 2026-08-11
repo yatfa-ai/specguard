@@ -13,6 +13,11 @@ module GithubHelper
   # back in `SessionsController#create`, so the user lands where they were rather than on the
   # dashboard. It is validated there, not here — a helper that builds the link is not the place
   # that has to be right about an open redirect.
+  #
+  # It falls back to `request.fullpath`, which is only right when the button is rendered by a GET
+  # of the page you want to come back to. A caller rendering this inside a non-GET response — a 422
+  # re-render, say — must pass the origin explicitly, or it will send the user back to a path that
+  # renders nothing. See `repositories/_form`, which does.
   def github_repository_authorization_path(origin: nil)
     github_auth_path(scope: SpecGuard::GithubOauth::REPOSITORY_SCOPE, origin: origin || request.fullpath)
   end

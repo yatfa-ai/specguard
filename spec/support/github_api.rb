@@ -20,23 +20,30 @@
 #   stub_github(repos: [github_repo("acme/billing-service", admin: false)])
 #   stub_github(repos: [], unauthorized: true)
 #   stub_github(repos: [github_repo("acme/billing-service")], strict: true)  # 404 anything else
+#   stub_github(forbidden: :sso_required)   # 403, and which of the three 403s it is
 #
 # `strict: true` is the switch that makes the fake behave like GitHub does for a stranger's
 # repository: anything not in `repos` is `NotFound`. Use it for anything asserting the squatting
 # gap is closed — under the permissive default every slug verifies, which is exactly the world
 # this ticket removed.
+#
+# `forbidden:` takes a `GithubApi::Forbidden` reason (`:rate_limited`, `:sso_required`,
+# `:insufficient_scope`) rather than a boolean, because the whole point of that error is that its
+# three cases have three different remedies and must not collapse into one another.
 class FakeGithubApi
   # `calls` is a log, not a mock expectation. Some specs need "GitHub was asked exactly once" or
   # "GitHub was not asked at all" — an unchanged rename must not cost a round trip — and a counter
   # answers that without a message expectation that also stubs the behaviour it is measuring.
   attr_reader :calls
 
-  def initialize(repos: [], strict: false, unauthorized: false, unavailable: false, truncated: false)
+  def initialize(repos: [], strict: false, unauthorized: false, unavailable: false, truncated: false,
+                 forbidden: nil)
     @repos = repos
     @strict = strict
     @unauthorized = unauthorized
     @unavailable = unavailable
     @truncated = truncated
+    @forbidden = forbidden
     @calls = []
   end
 
@@ -66,6 +73,7 @@ class FakeGithubApi
   def raise_configured_failure
     raise GithubApi::Unauthorized, "token rejected" if @unauthorized
     raise GithubApi::Unavailable, "github is down" if @unavailable
+    raise GithubApi::Forbidden.new("github refused", reason: @forbidden) if @forbidden
   end
 end
 

@@ -108,12 +108,42 @@ RSpec.describe GithubApi do
       end
     end
 
+    # The three 403s carry three different remedies, so the reason has to survive as something a
+    # caller can branch on. A message match would pass just as well against a client that told
+    # every 403 the same story, which is the bug these pin.
     it "names the rate limit when GitHub's 403 is one" do
       with_responses(http_response(Net::HTTPForbidden, code: "403",
                                    headers: { "x-ratelimit-remaining" => "0" }))
 
       expect { client.repository("acme/billing") }
-        .to raise_error(GithubApi::Forbidden, /rate limit/)
+        .to raise_error(GithubApi::Forbidden, /rate limit/) { |e| expect(e.reason).to eq(:rate_limited) }
+    end
+
+    it "reports an SSO-enforced organization as its own reason" do
+      with_responses(http_response(Net::HTTPForbidden, code: "403",
+                                   headers: { "x-github-sso" => "required; organizations=abc" }))
+
+      expect { client.repository("acme/billing") }
+        .to raise_error(GithubApi::Forbidden) { |e| expect(e.reason).to eq(:sso_required) }
+    end
+
+    # A rate-limited response from an SSO organization carries BOTH headers. Reporting that as an
+    # org-approval problem would send the user to an admin to fix something that fixes itself in an
+    # hour, so exhaustion — the narrower signal — has to win.
+    it "prefers the rate limit when a 403 carries both signals" do
+      with_responses(http_response(Net::HTTPForbidden, code: "403",
+                                   headers: { "x-ratelimit-remaining" => "0",
+                                              "x-github-sso" => "required; organizations=abc" }))
+
+      expect { client.repository("acme/billing") }
+        .to raise_error(GithubApi::Forbidden) { |e| expect(e.reason).to eq(:rate_limited) }
+    end
+
+    it "falls back to a too-narrow grant for a 403 that names no cause" do
+      with_responses(http_response(Net::HTTPForbidden, code: "403"))
+
+      expect { client.repository("acme/billing") }
+        .to raise_error(GithubApi::Forbidden) { |e| expect(e.reason).to eq(:insufficient_scope) }
     end
 
     # Every transport failure is the same fact to a caller — GitHub could not be reached — and none
