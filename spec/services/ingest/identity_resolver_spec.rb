@@ -828,7 +828,7 @@ RSpec.describe Ingest::IdentityResolver do
     # dropped connection, a database blip, the tail of a deploy — propagates out of `#resolve`
     # instead, and `ApplicationJob` declares no `retry_on` to catch it. Rows already claimed keep
     # their identity, because `#claim` commits per row; rows not yet reached are left unresolved and
-    # UNSTAMPED, because `#record_embed_failure` only runs where the provider was actually asked.
+    # UNSTAMPED, because `#record_resolve_failure` only runs where the row was actually reached.
     #
     # Stubbed at `#nearest` rather than at `EmbeddingGenerator`, so the error class is one the
     # rescue genuinely does not cover. Raising a non-`EmbeddingGenerator::Error` from the provider
@@ -871,7 +871,7 @@ RSpec.describe Ingest::IdentityResolver do
 
       stranded = run.spec_observations.unresolved
       expect(stranded.count).to eq(2)
-      # Not a failure, and nothing may read it as one: the provider was never asked about these.
+      # Not a failure, and nothing may read it as one: nothing was tried on these at all.
       expect(stranded.pluck(:embed_failed_at).uniq).to eq([nil])
       expect(stranded.pluck(:embed_failure_count).uniq).to eq([0])
       expect(repository.spec_observations.embed_failed).to be_empty
@@ -1089,6 +1089,233 @@ RSpec.describe Ingest::IdentityResolver do
       # empty, the next ingest has the whole allowance to spend and drains it.
       later_ingest(ci_run_id: "run-4")
       expect(stranded.spec_observations.unresolved).to be_empty
+    end
+
+    # The poison row. The group above is about a pass that DIED; this one is about the row that
+    # killed it still being there on the next pass, and the one after that.
+    #
+    # `#resolve` walks the inherited backlog BEFORE this run's own list, and until `#claim_inherited`
+    # existed a row that raised there ended the delivery before `@run`'s observations were reached at
+    # all. A deterministic failure — a stored vector of the wrong dimension, a row whose text trips a
+    # provider bug — fails identically on every attempt, and the backlog is re-read by every later
+    # ingest of that repository, so one row left every subsequent run's observations unresolved and
+    # UNSTAMPED: the exact population the sweep above exists to rescue, defeated by the one row that
+    # kills the sweep.
+    describe "when one inherited row raises every time anything reaches it" do
+      # A row of an EARLIER run, in the backlog, that nothing can resolve. Built by the group's own
+      # `die_after` + `strand` rather than by hand: it is a genuinely stranded row and it reaches the
+      # sweep through `embed_unattempted_retryable`, which is how one actually gets there.
+      def poisoned_backlog_row
+        run = record([unannotated_spec(file_path: "spec/models/order_spec.rb", line_number: 7,
+                                       name: "Order#checkout rejects an expired card")],
+                     ci_run_id: "run-1")
+        die_after(run, rows: 0)
+        strand(run)
+        run.spec_observations.sole
+      end
+
+      # A later ingest whose resolver this example holds. `record` then `resolve` is exactly what
+      # `ingest` does; the two halves are split only because the stub has to be attached between
+      # them, and `#resolve` is called by the example so the raise — or its absence — is the
+      # assertion rather than a side effect.
+      #
+      # Poisoned at `#nearest`, the same production site and the same error class `die_after` uses,
+      # for the reason stated there: it is an error the one live rescue genuinely does not cover.
+      # Keyed to ONE OBSERVATION rather than to a call count, because what is under test here is the
+      # blast radius of a single row and not the death of a pass — and keyed through `#identity_for`,
+      # which is the seam that still knows which row the lookup below is being made for.
+      #
+      # `poison_own:` additionally poisons THIS run's own rows, which is how one pass can carry a
+      # failure on each side of the asymmetry at once.
+      def sweeping_run(ci_run_id:, poison:, specs: nil, poison_own: false)
+        run = record(specs || [unannotated_spec(file_path: "spec/models/user_spec.rb", line_number: 3,
+                                                name: "User#save rejects a duplicate email")],
+                     ci_run_id: ci_run_id)
+        poisoned_ids = [poison.id] + (poison_own ? run.spec_observations.pluck(:id) : [])
+        resolver = described_class.new(run)
+        resolving = nil
+        allow(resolver).to receive(:identity_for).and_wrap_original do |original, observation|
+          resolving = observation
+          original.call(observation)
+        end
+        allow(resolver).to receive(:nearest).and_wrap_original do |original, *args|
+          raise ActiveRecord::StatementInvalid, "server closed the connection" if poisoned_ids.include?(resolving.id)
+
+          original.call(*args)
+        end
+
+        [run, resolver]
+      end
+
+      it "does not abort the delivery: this run's own rows are still reached and resolved" do
+        poisoned = poisoned_backlog_row
+        run, resolver = sweeping_run(ci_run_id: "run-2", poison: poisoned)
+
+        expect { resolver.resolve }.not_to raise_error
+
+        # The backlog is walked FIRST, so this assertion is the whole ticket: the delivery got past
+        # the row that used to end it.
+        expect(run.spec_observations.unresolved).to be_empty
+        expect(poisoned.reload.spec_identity_id).to be_nil
+        # And the row that could not be resolved produced no identity standing for nothing.
+        expect(identity_texts).to eq(["User#save rejects a duplicate email"])
+      end
+
+      it "leaves it findable by a scope rather than only in Solid Queue's failed executions" do
+        poisoned = poisoned_backlog_row
+        # The premise, pinned: before the sweep this row is the unstamped kind, so a stamp after it
+        # is this containment's doing and not something the fixture arrived with.
+        expect(repository.spec_observations.embed_failed).to be_empty
+
+        _run, resolver = sweeping_run(ci_run_id: "run-2", poison: poisoned)
+        resolver.resolve
+
+        expect(poisoned.reload.embed_failed_at).to be_present
+        expect(poisoned.embed_failure_count).to eq(1)
+        expect(repository.spec_observations.embed_retryable.pluck(:id)).to eq([poisoned.id])
+      end
+
+      it "counts as nothing, because the count is what NOW carries an identity and it does not" do
+        poisoned = poisoned_backlog_row
+        _run, resolver = sweeping_run(ci_run_id: "run-2", poison: poisoned)
+
+        # One row of its own, and zero for the contained one. Containment must not inflate the
+        # figure `#resolve` reports — see its `@return`.
+        expect(resolver.resolve).to eq(1)
+      end
+
+      it "sinks below a backlog row that has been tried less, so a scarce slot goes to that one" do
+        poisoned = poisoned_backlog_row
+        _second, resolver = sweeping_run(ci_run_id: "run-2", poison: poisoned)
+        resolver.resolve
+
+        # A provider failure on a later run: a backlog row of the SAME standing — stamped, retryable
+        # — carrying one fewer attempt than the contained row now does.
+        allow(EmbeddingGenerator).to receive(:call).and_raise(EmbeddingGenerator::Error, "provider down")
+        failed = ingest([unannotated_spec(file_path: "spec/models/invoice_spec.rb", line_number: 9,
+                                          name: "Invoice#finalize locks the line items")],
+                        ci_run_id: "run-3")
+        RSpec::Mocks.space.proxy_for(EmbeddingGenerator).reset
+
+        # Asserted off the relation the resolver ACTUALLY walks rather than a hand-written copy of
+        # its ORDER BY, which would be a second definition of the query certifying nothing about the
+        # sweep — the same choice the plan example below makes.
+        backlog = described_class.new(create_test_run(repository: repository)).send(:failed_embed_backlog)
+
+        expect(backlog.pluck(:id)).to eq([failed.spec_observations.sole.id, poisoned.id])
+      end
+
+      it "still lets the repository make progress on every ingest, for as long as it is retryable" do
+        poisoned = poisoned_backlog_row
+
+        # Three deliveries, each with the poison row sitting at the head of its backlog. Each one
+        # resolves its own suite, and the row is re-attempted and re-contained rather than skipped —
+        # a dropped connection is transient, and the bound on being wrong about that is the window
+        # below, not a guess made here.
+        3.times do |index|
+          run, resolver = sweeping_run(
+            ci_run_id: "sweep-#{index}", poison: poisoned,
+            specs: [unannotated_spec(file_path: "spec/models/user_spec.rb", line_number: 3 + index,
+                                     name: "User#save rejects a duplicate email")]
+          )
+          resolver.resolve
+          expect(run.spec_observations.unresolved).to be_empty
+        end
+
+        expect(poisoned.reload.embed_failure_count).to eq(3)
+        # One identity across all three, not three: the deliveries did their real work, and the
+        # contained row never grew the table.
+        expect(identity_texts).to eq(["User#save rejects a duplicate email"])
+      end
+
+      it "keeps the first containment's timestamp, so re-attempting cannot push the window forward" do
+        poisoned = poisoned_backlog_row
+        _first, first_resolver = sweeping_run(ci_run_id: "run-2", poison: poisoned)
+        first_resolver.resolve
+        stamped = poisoned.reload.embed_failed_at
+
+        _second, second_resolver = sweeping_run(ci_run_id: "run-3", poison: poisoned)
+        second_resolver.resolve
+
+        # `COALESCE`, and it is what makes the bound below a window that CLOSES rather than one every
+        # containment pushes forward — a hopeless row would otherwise stay retryable for exactly as
+        # long as anything kept retrying it.
+        expect(poisoned.reload.embed_failed_at).to eq(stamped)
+        expect(poisoned.embed_failure_count).to eq(2)
+      end
+
+      it "gives up on it once the window has closed, and leaves it queryable as such" do
+        poisoned = poisoned_backlog_row
+        _second, resolver = sweeping_run(ci_run_id: "run-3", poison: poisoned)
+        resolver.resolve
+
+        # `update_all` rather than a time-travel helper, the choice this file makes throughout:
+        # assert the fact the fixture needs — this row was first contained longer ago than the
+        # window — rather than moving the clock underneath everything else in the example.
+        SpecObservation.where(id: poisoned.id)
+                       .update_all(embed_failed_at: SpecObservation::EMBED_RETRY_WINDOW.ago - 1.second)
+
+        later_ingest(ci_run_id: "run-4")
+
+        # No longer swept at all: the count did not move, so nothing reached it. The bound is the
+        # ordinary one `EMBED_RETRY_WINDOW` already applies to a provider failure, reached by a row
+        # that got its stamp from containment instead.
+        expect(poisoned.reload.embed_failure_count).to eq(1)
+        expect(repository.spec_observations.embed_retryable).to be_empty
+        # "We stopped trying" and "we are still trying" stay two figures.
+        expect(repository.spec_observations.embed_abandoned.pluck(:id)).to eq([poisoned.id])
+      end
+
+      it "contains the INHERITED half only: a failure in this run's own list still ends the pass" do
+        # The asymmetry, and the reason it is one. An inherited row is work this delivery volunteered
+        # for on an earlier one's behalf, so its failure is contained; this run's rows are what the
+        # caller actually asked for, so their failure is still a report. `die_after(rows: 1)` lets
+        # the ONE backlog row through and raises on the first row of `@run`'s own list.
+        stranded = poisoned_backlog_row.test_run
+
+        run = record(suite, ci_run_id: "run-2")
+        die_after(run, rows: 1)
+
+        # The inherited row was rescued on the way past — containment did not turn the backlog into
+        # something the pass skips — and then this run's own failure escaped, exactly as it did
+        # before this change.
+        expect(stranded.spec_observations.sole.reload.spec_identity_id).to be_present
+        expect(run.spec_observations.unresolved).not_to be_empty
+      end
+
+      it "contains the inherited row and lets this run's own out, in ONE pass" do
+        # The asymmetry as a single event rather than as two examples of one side each. The example
+        # above pins it with an inherited row that SUCCEEDS on the way past, which is a fair
+        # regression pin but survives the mutation this group is written against. This one does not:
+        # it is the shape that breaks if someone later routes the run-scoped loop through
+        # `#claim_inherited` too, because then the raise below is swallowed and the pass reports a
+        # clean delivery over a row the caller actually asked about.
+        poisoned = poisoned_backlog_row
+        run, resolver = sweeping_run(ci_run_id: "run-2", poison: poisoned, poison_own: true)
+
+        expect { resolver.resolve }.to raise_error(ActiveRecord::StatementInvalid)
+
+        # Inherited: contained and stamped, so the pass got past it to reach this run's list at all.
+        expect(poisoned.reload.embed_failed_at).to be_present
+        expect(poisoned.embed_failure_count).to eq(1)
+        # This run's own: left exactly as a died pass leaves it — unresolved and UNSTAMPED, the
+        # state the group at the top of this file documents and which must keep holding.
+        expect(run.spec_observations.unresolved).not_to be_empty
+        expect(run.spec_observations.pluck(:embed_failed_at).uniq).to eq([nil])
+      end
+
+      it "does not manufacture a clean sweep out of a database it cannot even stamp" do
+        # The documented non-promise on `#claim_inherited`. The containment is itself an UPDATE, so a
+        # failure broad enough to take the connection with it raises from inside the rescue and
+        # propagates as before. A database that cannot be written to must not produce a delivery that
+        # reports a clean pass.
+        poisoned = poisoned_backlog_row
+        _run, resolver = sweeping_run(ci_run_id: "run-2", poison: poisoned)
+        allow(resolver).to receive(:record_resolve_failure)
+          .and_raise(ActiveRecord::StatementInvalid, "server closed the connection unexpectedly")
+
+        expect { resolver.resolve }.to raise_error(ActiveRecord::StatementInvalid)
+      end
     end
 
     # The cost half of the slice, and the reason it came with a migration. The failure backlog's

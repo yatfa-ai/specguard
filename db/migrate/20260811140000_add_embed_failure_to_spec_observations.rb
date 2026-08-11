@@ -37,8 +37,8 @@
 # nothing happened, to say the same thing worse.
 #
 # It records the **first** failure and is never overwritten (`COALESCE`d in
-# {Ingest::IdentityResolver#record_embed_failure}), because it anchors the retry window: a timestamp
-# refreshed on every attempt is a window that never closes.
+# {Ingest::IdentityResolver#record_resolve_failure}), because it anchors the retry window: a
+# timestamp refreshed on every attempt is a window that never closes.
 #
 # `embed_failure_count` is how many attempts have failed on the row. Deliberately **not** the cap —
 # see `SpecObservation::EMBED_RETRY_WINDOW` for why an attempt cap is the wrong bound here — it
