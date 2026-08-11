@@ -68,20 +68,20 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
   # `spec/support/` and INCLUDED by the spec file that ran it, and `SpecObservation`'s "Two paths,
   # two meanings" note is what says they must not be collapsed into one coordinate.
   #
-  # `included_by:` is its mirror and overrides `spec_file_path` alone — with `nil` accepted as a
-  # VALUE rather than read as an omission, which is what the `:same_file` sentinel is for. The
-  # column is nullable by schema and `Ingest::ObservationRecorder` writes it through `presence_of`,
-  # so a producer that names a definition site and no including file stores a nil there. It is the
-  # only input that makes `RepeatedDescriptions::Row#files_seen` differ from the raw `ARRAY_AGG …
-  # FILTER` it wraps: with every row of a group carrying nil, that aggregate is SQL NULL rather
-  # than an empty array, and the serialized key would be `null` instead of `[]`. A Symbol can never
-  # be a legitimate value for a string column, which is why one can stand in for "not given".
+  # `included_by:` is its mirror and overrides `spec_file_path` alone, defaulting to `path` — the
+  # signature itself says "not given means the including file IS the path", so `nil` passes through
+  # as an ordinary VALUE with no sentinel to read it as an omission. The column is nullable by
+  # schema and `Ingest::ObservationRecorder` writes it through `presence_of`, so a producer that
+  # names a definition site and no including file stores a nil there. It is the only input that
+  # makes `RepeatedDescriptions::Row#files_seen` differ from the raw `ARRAY_AGG … FILTER` it wraps:
+  # with every row of a group carrying nil, that aggregate is SQL NULL rather than an empty array,
+  # and the serialized key would be `null` instead of `[]`.
   def observe(run, path:, duration:, line_number:, name: nil, outcome: nil, defined_in: nil,
-              included_by: :same_file)
+              included_by: path)
     run.spec_observations.create!(
       repository: run.repository, example_id: "./#{path}[1:#{line_number}]",
       file_path: defined_in || path,
-      spec_file_path: included_by == :same_file ? path : included_by,
+      spec_file_path: included_by,
       line_number: line_number,
       status: "unannotated", duration_seconds: duration, name: name, outcome: outcome
     )
