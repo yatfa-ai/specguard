@@ -19,11 +19,12 @@
 # The endpoint reads `spec_observations` once per single-run grain it serves — once for the by-file
 # rollup, once for the by-area one, TWICE for the per-example ranking (a capped scan and a coverage
 # aggregate), TWICE for the by-description one (a grouped aggregate and the presence count it cannot
-# window over) — and UP TO FOUR MORE for the cross-run flakiness block, which is the only grain here
-# whose count depends on state rather than only on shape. Each block that uses these bounds its OWN
-# grain rather than the table, because a bare total cannot tell "one aggregate per grain" from "one
-# grain reading twice", and it has to be rebaselined by hand every time a grain is added — the
-# silent rebaseline `queries_against` was chosen over `baseline + 1` to avoid.
+# window over) — and, for its two CROSS-RUN blocks, UP TO FOUR MORE for flakiness and UP TO ONE MORE
+# for growth-by-area, which are the only grains here whose count depends on state rather than only
+# on shape. Each block that uses these bounds its OWN grain rather than the table, because a bare
+# total cannot tell "one aggregate per grain" from "one grain reading twice", and it has to be
+# rebaselined by hand every time a grain is added — the silent rebaseline `queries_against` was
+# chosen over `baseline + 1` to avoid.
 #
 # == Why some grains are several patterns rather than one
 #
@@ -37,7 +38,7 @@
 # also what lets a block assert "one read, then it stopped" on an incomparable window: the four are
 # ordered here as that method issues them.
 #
-# == The one pattern that had to be TIGHTENED, and why
+# == The patterns that had to be TIGHTENED, and why
 #
 # The per-example coverage read was originally matched on `COUNT(*) FILTER (WHERE outcome =
 # 'failed')`. That string is NOT unique to it: `SpecObservation::UNSTABLE_COMPOSITION` selects the
@@ -48,6 +49,18 @@
 # so when a second reader of this table learned to count failures; the guard against it recurring is
 # the sum-of-grains-equals-the-total assertion, which is what makes a double-classified read show up
 # as a total that is smaller than its parts.
+#
+# THE AREA PATTERN WAS TIGHTENED THE SECOND TIME THE SAME LESSON ARRIVED, when the growth-by-area
+# block was added. `GROUP BY COALESCE(substring(spec_file_path …` is what an AREA is in this schema
+# — `SpecObservation::DIRECTORY_EXPRESSION`, deliberately one definition — so it is selected by
+# `.directory_durations_in` (one run's areas by wall clock) AND by `.directory_growth_between` (two
+# runs' areas by example count), and the loose pattern would have adopted the second into the first.
+# That is the failure mode this file exists to prevent, arriving through the ONE expression that
+# cannot be un-shared: the two reads must group identically, or the API and the panel would disagree
+# about what a directory is. So the grains are separated on their ORDER BY, which is where the two
+# genuinely differ — `SUM(duration_seconds)` ranks a run's areas by time and `ABS(COUNT(*) FILTER
+# (WHERE test_run_id = …))` ranks two runs' areas by movement — and each pattern is still matched on
+# SQL only its own read produces.
 #
 # The by-description patterns were chosen under that lesson rather than after it. `GROUP BY
 # "spec_observations"."name"` is the obvious match and is the WRONG one: three reads on this table
@@ -63,18 +76,21 @@ module ObservationGrainReads
   # `QueryCapture`, where the two rules and the difference between them are stated in full.
   def observation_reads(&) = queries_against("spec_observations", &)
 
-  # `[area, file, example, description, flakiness]` — the five grains, each an array of the
-  # statements matched. The single-run grains come first and the cross-run one last, in the order
-  # `serialized_latest_run` serves them, so a destructuring caller reads the endpoint's own shape.
+  # `[area, file, example, description, flakiness, growth]` — the six grains, each an array of the
+  # statements matched. The single-run grains come first, in the order `serialized_latest_run`
+  # serves them, and the two CROSS-RUN grains last in the order `show` serves them — so a
+  # destructuring caller reads the endpoint's own shape, and a caller written before a grain was
+  # appended keeps naming the same lists it always did.
   def observation_reads_by_grain(&)
     reads = observation_reads(&)
-    [reads.grep(/GROUP BY COALESCE\(substring\(spec_file_path/),
+    [reads.grep(/GROUP BY COALESCE\(substring\(spec_file_path.*ORDER BY SUM\(duration_seconds\)/m),
      reads.grep(/GROUP BY "spec_observations"\."spec_file_path"/),
      reads.grep(/ORDER BY "spec_observations"\."duration_seconds" DESC/) +
        reads.grep(/COUNT\(\*\) FILTER \(WHERE outcome = 'pending'\)/),
      reads.grep(/HAVING \(COUNT\(\*\) > 1\)/) +
        reads.grep(/COUNT\(\*\) FILTER \(WHERE name IS NULL\)/),
-     flakiness_grain_patterns.flat_map { |pattern| reads.grep(pattern) }]
+     flakiness_grain_patterns.flat_map { |pattern| reads.grep(pattern) },
+     reads.grep(/ORDER BY ABS\(COUNT\(\*\) FILTER \(WHERE test_run_id = /)]
   end
 
   # `UnstableTests.for`'s four reads, in the order it issues them: the gating outcome-reporting
@@ -96,6 +112,7 @@ module ObservationGrainReads
   def example_grain_reads(&) = observation_reads_by_grain(&)[2]
   def description_grain_reads(&) = observation_reads_by_grain(&)[3]
   def flakiness_grain_reads(&) = observation_reads_by_grain(&)[4]
+  def growth_grain_reads(&) = observation_reads_by_grain(&)[5]
 end
 
 RSpec.configure do |config|
