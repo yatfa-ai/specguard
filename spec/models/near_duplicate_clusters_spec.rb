@@ -1,0 +1,626 @@
+# frozen_string_literal: true
+
+require "rails_helper"
+
+# The similarity numbers in this file are the SHIPPED provider's, measured rather than assumed —
+# `include_context "with lexical embeddings"` installs `EmbeddingGenerator::LocalProvider`, the same
+# code production runs, so every threshold assertion here is against the vectors the constant was
+# chosen from. Under the suite's default stub two different strings are near-orthogonal however
+# alike they read, and every one of these examples would pass or fail for reasons that have nothing
+# to do with clustering.
+#
+#   Checkout rejects an expired card / … expired card outright               0.89
+#   Checkout rejects an expired card / … expired credit card                 0.90
+#   Checkout rejects an expired card / … expired card when the card is expired  0.80
+#   Checkout rejects an expired card / Checkout returns 402 payment required 0.31
+#   Checkout rejects an expired card / Shipping calculates a delivery estimate  0.07
+#
+# Re-derive any of them with:
+#   ruby -r./app/services/embedding_generator -e 'a,b = ARGV; ...'
+RSpec.describe NearDuplicateClusters do
+  include_context "with lexical embeddings"
+
+  # 0.89 apart — inside the 0.88–0.95 band that must resolve to TWO identities and still be
+  # reportable here as two redundant tests.
+  EXPIRED = "Checkout rejects an expired card"
+  OUTRIGHT = "Checkout rejects an expired card outright"
+  CREDIT = "Checkout rejects an expired credit card"
+  # 0.80 — the measured "lexically similar but DIFFERENT test" mark the threshold sits above.
+  RESTATED = "Checkout rejects an expired card when the card is expired"
+  # 0.31 — the pair `EmbeddingGenerator::LocalProvider` names as the limit of a lexical engine.
+  REWORDED = "Checkout returns 402 payment required"
+  UNRELATED = "Shipping calculates a delivery estimate"
+
+  let(:repository) { create_repository }
+  let(:run) { create_test_run(repository: repository) }
+
+  def identity(text, source: "name", line: 1, path: "spec/models/checkout_spec.rb")
+    create_spec_identity(repository: repository, text: text, signal_source: source,
+                         file_path: path, line_number: line)
+  end
+
+  # One example that resolved to `identity`. `name` is settable apart from the identity's text so a
+  # caller can model the case the whole object exists for: several examples whose `full_description`
+  # is VERBATIM identical, which the unique key collapses onto one identity row.
+  def observe(identity, duration: 0.5, test_run: run, name: identity.text)
+    @sequence = @sequence.to_i + 1
+    SpecObservation.create!(
+      repository: repository, test_run: test_run, spec_identity: identity,
+      example_id: "./#{identity.file_path}[1:#{@sequence}]",
+      file_path: identity.file_path, spec_file_path: identity.file_path,
+      line_number: @sequence, name: name, status: "unannotated",
+      outcome: "passed", duration_seconds: duration
+    )
+  end
+
+  describe "the threshold, which is its own constant" do
+    # SPGD-369's criterion 9, and the reason it is an inequality rather than a literal: what has to
+    # hold is the ORDERING. Matching strictly above clustering is what lets a pair that merely reads
+    # alike resolve to two identities AND be reported here; fold the two together and the finding
+    # and both histories go at once.
+    it "sits strictly below the identity-matching threshold" do
+      expect(described_class::SIMILARITY).to be < SpecIdentity::MATCH_SIMILARITY
+    end
+
+    # Bounded from below by the measured "lexically similar but DIFFERENT test" mark, and from above
+    # by the measured singular→plural mark — the band the class comment derives the value inside.
+    it "sits inside the band the provider's own calibration leaves open" do
+      expect(described_class::SIMILARITY).to be > 0.80
+      expect(described_class::SIMILARITY).to be <= 0.89
+    end
+
+    it "is not a second name for either of SpecIdentity's constants" do
+      expect(described_class::SIMILARITY).not_to eq(SpecIdentity::MATCH_SIMILARITY)
+      expect(described_class::DISTANCE).not_to eq(SpecIdentity::MATCH_DISTANCE)
+    end
+
+    it "expresses the distance the pgvector operator wants, derived rather than restated" do
+      expect(described_class::DISTANCE).to eq(1 - described_class::SIMILARITY)
+    end
+
+    # The constant this slice is forbidden to move. Pinned HERE as well as in spec_identity_spec.rb
+    # because this is the file whose author is holding both numbers at once.
+    it "leaves the matching threshold where it was" do
+      expect(SpecIdentity::MATCH_SIMILARITY).to eq(0.95)
+    end
+  end
+
+  describe "a near-duplicate pair" do
+    # SPGD-369 criterion 1.
+    it "comes back as one cluster of two members" do
+      identity(EXPIRED, line: 3)
+      identity(OUTRIGHT, line: 9)
+
+      clusters = described_class.for(repository).clusters
+
+      expect(clusters.size).to eq(1)
+      expect(clusters.first.member_count).to eq(2)
+      expect(clusters.first.members.map(&:text)).to contain_exactly(EXPIRED, OUTRIGHT)
+    end
+
+    # The grain is the REPOSITORY. `SpecObservation.repeated_descriptions_in` is scoped to one run
+    # and could never see this: the two tests never ran together.
+    it "clusters across runs, because identity outlives the run that observed it" do
+      first = create_test_run(repository: repository, commit_sha: "aaaa1111")
+      second = create_test_run(repository: repository, commit_sha: "bbbb2222")
+      observe(identity(EXPIRED, line: 3), test_run: first)
+      observe(identity(OUTRIGHT, line: 9), test_run: second)
+
+      clusters = described_class.for(repository).clusters
+
+      expect(clusters.size).to eq(1)
+      expect(clusters.first.example_count).to eq(2)
+    end
+
+    # The lower edge of the band. 0.80 is where "a different test" starts, per the provider's own
+    # calibration, and the threshold clears it by more than the hashing error the audit measured.
+    it "leaves a merely lexically-similar pair alone" do
+      identity(EXPIRED, line: 3)
+      identity(RESTATED, line: 9)
+
+      expect(described_class.for(repository).clusters).to be_empty
+    end
+  end
+
+  # SPGD-369 criterion 2 — the ⭐ one. The unique `(repository_id, text_digest)` key collapses the
+  # loop's three verbatim-identical descriptions onto ONE identity row, so an implementation that
+  # counted identity rows would report this as a single test with nothing to cluster it with.
+  describe "a table-driven loop, whose examples share one description verbatim" do
+    before do
+      loop_identity = identity(EXPIRED, line: 3)
+      3.times { observe(loop_identity, duration: 1.0) }
+      observe(identity(OUTRIGHT, line: 9), duration: 5.0)
+    end
+
+    it "is one identity row, which is the premise this whole object is shaped around" do
+      expect(repository.spec_identities.count).to eq(2)
+      expect(repository.spec_observations.count).to eq(4)
+    end
+
+    it "weighs the loop at three examples, not at one" do
+      cluster = described_class.for(repository).clusters.first
+      loop_member = cluster.members.find { |member| member.text == EXPIRED }
+
+      expect(loop_member.example_count).to eq(3)
+    end
+
+    it "reports the cluster's weight in examples and its size in texts, as two numbers" do
+      cluster = described_class.for(repository).clusters.first
+
+      expect(cluster.member_count).to eq(2)
+      expect(cluster.example_count).to eq(4)
+    end
+
+    it "sums the wall clock over the examples rather than over the identities" do
+      cluster = described_class.for(repository).clusters.first
+
+      expect(cluster.total_seconds).to eq(8.0)
+      expect(cluster.coverage_label).to eq("4 of 4")
+    end
+  end
+
+  # SPGD-369 criterion 3.
+  describe "identical and near-identical duplicates together" do
+    before do
+      verbatim = identity(EXPIRED, line: 3)
+      2.times { observe(verbatim, duration: 1.0) }
+      observe(identity(OUTRIGHT, line: 9), duration: 1.0)
+      observe(identity(CREDIT, line: 15), duration: 1.0)
+    end
+
+    it "represents both, and keeps the two counts apart" do
+      result = described_class.for(repository)
+      cluster = result.clusters.first
+
+      expect(result.cluster_count).to eq(1)
+      expect(cluster.member_count).to eq(3)
+      expect(cluster.example_count).to eq(4)
+    end
+
+    it "says the same two numbers over the whole clustered population" do
+      result = described_class.for(repository)
+
+      expect(result.clustered_identity_count).to eq(3)
+      expect(result.clustered_example_count).to eq(4)
+    end
+  end
+
+  # SPGD-369 criterion 4. There is no `@intent` anywhere in this fixture — every identity is
+  # name-derived, which is what a suite with zero annotation produces on the ingest path.
+  describe "a repository with no annotation at all" do
+    it "clusters anyway, because a name is a signal" do
+      identity(EXPIRED, line: 3)
+      identity(OUTRIGHT, line: 9)
+
+      result = described_class.for(repository)
+
+      expect(result.name_identity_count).to eq(2)
+      expect(result.intent_identity_count).to be_zero
+      expect(result.clusters.size).to eq(1)
+      expect(result.clusters.first).to be_from_name
+    end
+  end
+
+  # SPGD-369 criterion 5. An intent-derived text is a joined triple and a name-derived one is human
+  # prose; `Ingest::SpecSignal` is explicit that they are not the same evidence.
+  describe "the signal_source partition" do
+    it "refuses to merge an intent-derived and a name-derived test, however close they score" do
+      identity(EXPIRED, source: "name", line: 3)
+      identity(OUTRIGHT, source: "intent", line: 9)
+
+      expect(described_class.for(repository).clusters).to be_empty
+    end
+
+    it "clusters the identical pair once they share a source — so it is the partition doing it" do
+      identity(EXPIRED, source: "name", line: 3)
+      identity(OUTRIGHT, source: "name", line: 9)
+
+      expect(described_class.for(repository).clusters.size).to eq(1)
+    end
+
+    it "states which source each cluster was found in" do
+      identity(EXPIRED, source: "intent", line: 3)
+      identity(OUTRIGHT, source: "intent", line: 9)
+
+      cluster = described_class.for(repository).clusters.first
+
+      expect(cluster.signal_source).to eq("intent")
+      expect(cluster).to be_from_intent
+      expect(cluster).not_to be_from_name
+    end
+  end
+
+  # SPGD-369 criterion 6. The engine reads vocabulary, not meaning, and the object says so rather
+  # than letting a confident cluster count stand for the whole of a suite's duplication.
+  describe "two tests that duplicate each other in different words" do
+    it "does not cluster them, at 0.31" do
+      identity(EXPIRED, line: 3)
+      identity(REWORDED, line: 9)
+
+      expect(described_class.for(repository).clusters).to be_empty
+    end
+
+    it "carries the limitation on the object rather than in a comment" do
+      expect(described_class.for(repository).similarity_basis).to eq("lexical overlap, not meaning")
+    end
+
+    it "states the floor it searched at, so a reader is not left to assume one" do
+      expect(described_class.for(repository).similarity_floor).to eq(described_class::SIMILARITY)
+    end
+  end
+
+  # SPGD-369 criterion 7.
+  describe "the ranking" do
+    it "is by summed wall clock, never by member count" do
+      cheap = identity(EXPIRED, line: 3)
+      cheap_partner = identity(OUTRIGHT, line: 9)
+      cheap_third = identity(CREDIT, line: 15)
+      [ cheap, cheap_partner, cheap_third ].each { |member| observe(member, duration: 0.1) }
+
+      dear = identity("Refund reverses a captured charge", line: 30)
+      dear_partner = identity("Refund reverses a captured charges", line: 36)
+      [ dear, dear_partner ].each { |member| observe(member, duration: 20.0) }
+
+      clusters = described_class.for(repository).clusters
+
+      expect(clusters.map(&:member_count)).to eq([ 2, 3 ])
+      expect(clusters.map(&:total_seconds)).to eq([ 40.0, 0.30000000000000004 ])
+    end
+
+    it "puts a cluster nobody timed last, never first" do
+      untimed = identity(EXPIRED, line: 3)
+      untimed_partner = identity(OUTRIGHT, line: 9)
+      [ untimed, untimed_partner ].each { |member| observe(member, duration: nil) }
+
+      timed = identity("Refund reverses a captured charge", line: 30)
+      timed_partner = identity("Refund reverses a captured charges", line: 36)
+      [ timed, timed_partner ].each { |member| observe(member, duration: 0.01) }
+
+      clusters = described_class.for(repository).clusters
+
+      expect(clusters.first.total_seconds).to be_present
+      expect(clusters.last.total_seconds).to be_nil
+      expect(clusters.last).not_to be_timed
+      expect(clusters.last.duration_label).to eq("not reported")
+    end
+
+    it "orders members inside a cluster by the same rule" do
+      observe(identity(EXPIRED, line: 3), duration: 0.5)
+      observe(identity(OUTRIGHT, line: 9), duration: 9.0)
+
+      cluster = described_class.for(repository).clusters.first
+
+      expect(cluster.members.map(&:text)).to eq([ OUTRIGHT, EXPIRED ])
+    end
+  end
+
+  describe "what it says about itself when the list is empty" do
+    # The Vacuous Green split: three different facts, three different answers, and only the first
+    # two are silence.
+    it "distinguishes a repository that ingested nothing from one whose tests are all distinct" do
+      empty = described_class.for(repository)
+
+      expect(empty).not_to be_recorded
+      expect(empty).not_to be_clusterable
+      expect(empty).not_to be_any
+
+      observe(identity(EXPIRED, line: 3))
+      observe(identity(UNRELATED, line: 9, path: "spec/models/shipping_spec.rb"))
+      distinct = described_class.for(repository)
+
+      expect(distinct).to be_recorded
+      expect(distinct).to be_clusterable
+      expect(distinct).not_to be_any
+    end
+
+    # An observation that reached no identity is excluded structurally — there is nothing to cluster
+    # it by — so no window over the pair read could ever have counted it.
+    it "answers separately for the examples that reached no identity" do
+      observe(identity(EXPIRED, line: 3))
+      SpecObservation.create!(
+        repository: repository, test_run: run, example_id: "./spec/mystery_spec.rb[1:1]",
+        file_path: "spec/mystery_spec.rb", spec_file_path: "spec/mystery_spec.rb",
+        line_number: 1, name: nil, status: "unannotated"
+      )
+
+      result = described_class.for(repository)
+
+      expect(result.recorded_count).to eq(2)
+      expect(result.unresolved_count).to eq(1)
+      expect(result).to be_excluded_unresolved_rows
+    end
+
+    it "does not mention the exclusion on an ordinary repository" do
+      observe(identity(EXPIRED, line: 3))
+
+      expect(described_class.for(repository)).not_to be_excluded_unresolved_rows
+    end
+  end
+
+  describe "coverage, counted off the population it was summed over" do
+    before do
+      observe(identity(EXPIRED, line: 3), duration: 1.0)
+      observe(identity(OUTRIGHT, line: 9), duration: nil)
+      identity(UNRELATED, line: 20, path: "spec/models/shipping_spec.rb")
+    end
+
+    it "states how much of the embedded population clustered at all" do
+      result = described_class.for(repository)
+
+      expect(result.identity_count).to eq(3)
+      expect(result.clustered_identity_count).to eq(2)
+      expect(result.identity_coverage_label).to eq("2 of 3")
+    end
+
+    it "states how many of the clustered examples were timed" do
+      result = described_class.for(repository)
+
+      expect(result.coverage_label).to eq("1 of 2")
+      expect(result).to be_any_timed
+      expect(result).not_to be_complete
+    end
+
+    it "is complete only when every clustered example reported a timing" do
+      SpecObservation.where(duration_seconds: nil).update_all(duration_seconds: 2.0)
+
+      expect(described_class.for(repository)).to be_complete
+    end
+
+    # An identity outlives the runs that observed it, so a deleted test keeps its row. It weighs
+    # nothing, and a member list that did not say so would look like a member that ran.
+    it "keeps an identity nothing resolved to visible, at zero examples" do
+      cluster = described_class.for(repository).clusters.first
+      identity(CREDIT, line: 15)
+
+      expect(cluster).not_to be_unobserved_members
+      expect(described_class.for(repository).clusters.first).to be_unobserved_members
+    end
+  end
+
+  describe "truncation, which the caption has to say rather than imply" do
+    it "counts every cluster it found, not the ones that fit" do
+      # Three pairs drawn from three disjoint vocabularies. Measured: 0.91–0.99 within a pair,
+      # 0.04–0.07 across any two of them — so this is three clusters and not one, which is what a
+      # truncation assertion needs it to be. Numbering one base text three times would not do it:
+      # "Report 1 …" and "Report 2 …" score 0.99 against each other and merge.
+      [ [ "Invoice finalize locks the line items", "Invoice finalize locks the line item" ],
+        [ "Shipping calculates a delivery estimate", "Shipping calculates delivery estimates" ],
+        [ "Session expires after thirty idle minutes", "Session expires after thirty idle minute" ] ]
+        .each_with_index do |(left, right), index|
+          identity(left, line: (index * 10) + 1, path: "spec/models/g#{index}_spec.rb")
+          identity(right, line: (index * 10) + 2, path: "spec/models/g#{index}_spec.rb")
+        end
+
+      result = described_class.for(repository, limit: 1)
+
+      expect(result.clusters.size).to eq(1)
+      expect(result.cluster_count).to eq(3)
+      expect(result).to be_truncated
+    end
+
+    it "is not truncated when the whole finding fits" do
+      identity(EXPIRED, line: 3)
+      identity(OUTRIGHT, line: 9)
+
+      expect(described_class.for(repository)).not_to be_truncated
+    end
+  end
+
+  describe "the per-row neighbour cap, which is disclosed rather than silent" do
+    # Six mutually near-identical texts with `neighbours: 2` — every member's list is full, so
+    # edges were certainly cut. Single linkage still recovers the group; the disclosure is what
+    # says the group might have been larger still.
+    it "counts the identities whose neighbour list was full" do
+      6.times { |index| identity("Ledger posts entry number #{index}", line: index + 1) }
+
+      result = described_class.for(repository, neighbours: 2)
+
+      expect(result).to be_saturated
+      expect(result.saturated_identity_count).to be_positive
+      expect(result.clusters.first).to be_saturated
+    end
+
+    it "says nothing about saturation when no list was full" do
+      identity(EXPIRED, line: 3)
+      identity(OUTRIGHT, line: 9)
+
+      expect(described_class.for(repository)).not_to be_saturated
+    end
+
+    # Single linkage: membership is transitive while similarity is not, so the two ends of a chain
+    # can sit further apart than the threshold. The range is what makes that visible on the row.
+    it "reports the tightest and loosest edge inside a cluster" do
+      identity(EXPIRED, line: 3)
+      identity(OUTRIGHT, line: 9)
+      identity(CREDIT, line: 15)
+
+      strongest, weakest = described_class.for(repository).clusters.first.similarity_range
+
+      expect(strongest).to be >= weakest
+      expect(weakest).to be >= described_class::SIMILARITY
+      expect(strongest).to be < SpecIdentity::MATCH_SIMILARITY
+    end
+  end
+
+  describe "the tenant boundary" do
+    it "does not let a cluster cross repositories" do
+      other = create_repository(user: create_user(github_uid: "2002", github_handle: "other"),
+                                github_full_name: "acme/other")
+      identity(EXPIRED, line: 3)
+      create_spec_identity(repository: other, text: OUTRIGHT, signal_source: "name",
+                           file_path: "spec/models/checkout_spec.rb", line_number: 9)
+
+      expect(described_class.for(repository).clusters).to be_empty
+      expect(described_class.for(other).clusters).to be_empty
+    end
+  end
+
+  it "returns no verdict about any of it" do
+    expect(described_class.instance_methods).not_to include(:redundant?)
+    expect(described_class::Cluster.instance_methods).not_to include(:redundant?, :duplicate?)
+  end
+
+  # SPGD-369 criterion 8. The only examples that need a populated table: a planner given four rows
+  # scans them outright, and an EXPLAIN over that says nothing about any index.
+  describe "what it costs on a suite at a meaningful fraction of the design point" do
+    let(:identities) { 3_000 }
+
+    before do
+      seed(repository, identities)
+      # A second tenant, so `repository_id` is a real narrowing rather than the whole table — the
+      # shape production has, and the one that decides the OUTER access path.
+      seed(create_repository(user: create_user(github_uid: "3003", github_handle: "neighbour"),
+                             github_full_name: "acme/neighbour"), identities)
+      seed_observations(repository)
+      # Without stats the planner works off hard-coded defaults and its choice says nothing about
+      # the data. `ANALYZE` is legal inside the transaction the suite wraps each example in.
+      ActiveRecord::Base.connection.execute("ANALYZE spec_identities")
+      ActiveRecord::Base.connection.execute("ANALYZE spec_observations")
+    end
+
+    # Vectors built in SQL rather than through `EmbeddingGenerator`: 6,000 embeddings round-tripped
+    # through ActiveRecord is minutes, and what this example needs from them is a populated HNSW
+    # index, not meaning.
+    #
+    # `sin(g * … + i * …)` rather than `random()`, and the `g` is load-bearing. A subquery that
+    # mentions no outer column is uncorrelated, so Postgres hoists it into an InitPlan and evaluates
+    # it ONCE — every row then gets the same vector, every pair sits at cosine 1.0, and the read
+    # comes back with `identities × k` rows in a table where nothing was supposed to match. That
+    # silently turns a scale example into a worst-case example; referencing `g` is what makes each
+    # row's vector its own.
+    def seed(target, count)
+      ActiveRecord::Base.connection.execute(<<~SQL.squish)
+        INSERT INTO spec_identities (repository_id, text, text_digest, signal_source, embedding,
+                                     file_path, line_number, created_at, updated_at)
+        SELECT #{target.id}, 'example ' || g,
+               md5(#{target.id}::text || g::text) || md5(g::text), 'name',
+               (SELECT ARRAY(SELECT sin((g * 12.9898) + (i * 78.233))
+                             FROM generate_series(1, 1536) i))::vector,
+               'spec/models/a_spec.rb', g, now(), now()
+        FROM generate_series(1, #{count}) g
+      SQL
+    end
+
+    # One example per seeded identity, so the member-weight lateral has a populated table to reach
+    # through its index. Against an EMPTY `spec_observations` the planner sequentially scans it
+    # whatever the query says, and the assertion about that join would be green for the one reason
+    # that has nothing to do with the join.
+    def seed_observations(target)
+      ActiveRecord::Base.connection.execute(<<~SQL.squish)
+        INSERT INTO spec_observations (repository_id, test_run_id, spec_identity_id, example_id,
+                                       file_path, spec_file_path, line_number, name, status,
+                                       outcome, duration_seconds, created_at, updated_at)
+        SELECT #{target.id}, #{run.id}, i.id, './spec/models/a_spec.rb[1:' || i.line_number || ']',
+               i.file_path, i.file_path, i.line_number, i.text, 'unannotated', 'passed', 0.1,
+               now(), now()
+        FROM spec_identities i
+        WHERE i.repository_id = #{target.id}
+      SQL
+    end
+
+    # The SQL the read ACTUALLY runs, captured off the wire rather than hand-written here — a copy
+    # is a second definition of the query, free to go on passing after the first one changes. No
+    # `unprepared_statement` needed: the statement is built through `sanitize_sql_array`, so it
+    # already carries its own literals.
+    def captured_sql
+      captured = nil
+      subscriber = ActiveSupport::Notifications.subscribe("sql.active_record") do |_, _, _, _, payload|
+        captured ||= payload[:sql] if payload[:sql].to_s.include?("CROSS JOIN LATERAL")
+      end
+      yield
+
+      captured
+    ensure
+      ActiveSupport::Notifications.unsubscribe(subscriber)
+    end
+
+    # EXPLAINed under an operator price this helper sets ITSELF rather than under whatever the read
+    # left behind. `SET LOCAL` is scoped to the transaction and not to the nested block that issued
+    # it, so inside the suite's per-example transaction the read's own setting does happen to still
+    # be in force here — and a plan assertion resting on that would be resting on the test harness's
+    # transaction strategy rather than on the code. Stated explicitly, the priced and unpriced plans
+    # below are the same query asked two ways.
+    def plan_for_actual_sql(&) = explain(captured_sql(&), cost: SpecIdentity::VECTOR_OPERATOR_COST)
+
+    def explain(sql, cost: nil)
+      connection = ActiveRecord::Base.connection
+      connection.execute(cost ? "SET LOCAL cpu_operator_cost = #{cost}" : "RESET cpu_operator_cost")
+      connection.select_values("EXPLAIN #{sql}").join("\n")
+    end
+
+    it "answers each identity's neighbour question off the HNSW index" do
+      plan = plan_for_actual_sql { described_class.for(repository) }
+
+      expect(plan).to include("index_spec_identities_on_embedding")
+      expect(plan).to match(/Order By: \(embedding <=> /)
+    end
+
+    # The assertion that carries the criterion's reach. The inner relation is the one that would go
+    # quadratic: reached any other way, every identity compares itself against every sibling, which
+    # is the 199,990,000-pair census SPGD-252 needed sixteen forked workers to finish.
+    #
+    # Both spellings are refused, and the second is the one that actually happens. Postgres does not
+    # pick a `Seq Scan` here — it picks `index_spec_identities_on_repository_id` and sorts what it
+    # finds, which looks like an index scan in the plan and IS an all-pairs join in the profile.
+    it "never walks one identity's siblings to find its neighbours" do
+      plan = plan_for_actual_sql { described_class.for(repository) }
+
+      expect(plan).not_to match(/Seq Scan on spec_identities n\b/)
+      expect(plan).not_to match(/index_spec_identities_on_repository_id on spec_identities n\b/)
+    end
+
+    # SpecIdentity::VECTOR_OPERATOR_COST's reason for existing, pinned against the plan it prevents
+    # rather than asserted about the constant. Remove the `SET LOCAL` and this repository's read
+    # goes back to 3,000 sorted-by-distance scans of 3,000 rows each — measured at 69.06s against
+    # 1.07s for the identical statement.
+    it "is the corrected operator price that makes the planner choose it" do
+      unpriced = explain(captured_sql { described_class.for(repository) })
+
+      expect(unpriced).to match(/index_spec_identities_on_repository_id on spec_identities n\b/)
+      expect(unpriced).not_to include("index_spec_identities_on_embedding")
+    end
+
+    # The seed side is a different question from the neighbour side, and only the neighbour side is
+    # the quadratic one. This repository's own rows are the population being reported on, so they
+    # are all visited by construction — what matters is that the OTHER tenant's are not.
+    it "visits only this repository's identities to seed the search" do
+      plan = plan_for_actual_sql { described_class.for(repository) }
+
+      expect(plan).to match(/spec_identities a/)
+      expect(plan).not_to match(/Seq Scan on spec_identities a\b/)
+    end
+
+    # ⭐ The member-weight join, at scale. It is the one join a later reader is most likely to think
+    # is decorative, and re-expanding a cluster's weight through a sequential scan of every
+    # observation in the database is how it would come to look expensive enough to remove.
+    it "re-expands member weight through the by-identity index" do
+      plan = plan_for_actual_sql { described_class.for(repository) }
+
+      expect(plan).to include("index_spec_observations_on_spec_identity_id")
+      expect(plan).not_to match(/Seq Scan on spec_observations o\b/)
+    end
+
+    it "asks a fixed number of questions however large the suite is" do
+      small = create_repository(user: create_user(github_uid: "4004", github_handle: "small"),
+                                github_full_name: "acme/small")
+      create_spec_identity(repository: small, text: EXPIRED, file_path: "spec/a_spec.rb",
+                           line_number: 1)
+
+      expect(count_queries { described_class.for(repository) })
+        .to eq(count_queries { described_class.for(small) })
+    end
+
+    # Four, and each of them named: the planner directive, the pair read, the identity population,
+    # and the observation presence. A bare total cannot tell "one read per question" from "one
+    # question read twice", so the number is asserted next to the list it stands for.
+    it "reads spec_identities twice and spec_observations once, whatever it finds" do
+      statements = executed_sql { described_class.for(repository) }
+
+      expect(statements.size).to eq(4)
+      expect(statements.grep(/SET LOCAL cpu_operator_cost/).size).to eq(1)
+      expect(statements.grep(/CROSS JOIN LATERAL/).size).to eq(1)
+      expect(statements.grep(/FROM "spec_identities"/).size).to eq(1)
+      expect(statements.grep(/FROM "spec_observations"/).size).to eq(1)
+    end
+  end
+end

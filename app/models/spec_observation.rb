@@ -1298,6 +1298,42 @@ class SpecObservation < ApplicationRecord
       .limit(limit)
   end
 
+  # Whether a repository's examples carry a durable identity at all, and how many of them do not —
+  # the two facts a read grouped over `spec_identities` has to establish before anything it returns
+  # can be read.
+  #
+  # The `spec_identities` grain's counterpart of `.description_presence_in`, and here for the same
+  # reason that one exists: {NearDuplicateClusters} can only see examples that reached an identity,
+  # and it excludes the rest *structurally* rather than in a WHERE clause — an observation with no
+  # `spec_identity_id` is in no cluster because there is nothing to cluster it BY. No window over
+  # that read could ever have counted them.
+  #
+  # `unresolved_count` is this grain's "rows with no resolvable text". {Ingest::IdentityResolver}
+  # leaves exactly two kinds of row behind: one whose {Ingest::SpecSignal} is `:none`, which has no
+  # text to embed and therefore no identity to have, and one whose embedding failed, which is left
+  # unresolved on purpose so a later run can try again. Both are invisible to a cluster read, and a
+  # panel that examined the resolved nine tenths of a suite and said nothing about the other tenth
+  # is a claim about a population it did not read.
+  #
+  # `recorded_count` is what tells an empty cluster list apart from an empty suite. A repository
+  # that ingested nothing and a repository whose every test reads differently from every other
+  # produce the identical empty ranking, and rendering "nothing here is repeated" over the first is
+  # *Vacuous Green* — "nobody told us" wearing the spelling of "there is no redundancy".
+  #
+  # One aggregate rather than two round trips, for the reason `.coverage_in` gives: a caption
+  # fetched separately from the list it describes is a claim with no structural reason to keep
+  # agreeing with it. `repository_id` leads, which is what `index_spec_observations_on_repository_id`
+  # serves — this grain is the repository, never a run.
+  #
+  # @return [Hash{Symbol=>Integer}] `recorded_count` and `unresolved_count`, both counted in rows.
+  def self.identity_presence_in(repository)
+    counts = where(repository_id: repository.id).pick(
+      Arel.sql("COUNT(*)"),
+      Arel.sql("COUNT(*) FILTER (WHERE spec_identity_id IS NULL)")
+    )
+
+    { recorded_count: counts[0].to_i, unresolved_count: counts[1].to_i }  end
+
   # Where ONE run's wall clock went, rolled up by DIRECTORY — the rung directly above the rollup
   # above, and the grain the question is usually asked in. "Which area of this suite carries the
   # time" is not answerable from a ranked list of files any more than it was from a ranked list of
