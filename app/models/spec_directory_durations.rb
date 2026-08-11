@@ -130,8 +130,14 @@ class SpecDirectoryDurations
   # rather than leaving a reader to compare each row's two figures to reach it.
   def complete? = recorded? && rows.all?(&:complete?)
 
-  # At least one listed area has a description to count, so the distinct-description column has
-  # something to state. False for a producer that sends no `name` at all — `Ingest::ObservationRecorder`
+  # At least one LISTED area has a description to count, so the distinct-description column has
+  # something to state. Read off the listed head, exactly like `#complete?` and `#fully_named?`
+  # beside it and for the same reason: it selects which sentence the caption prints about the rows a
+  # reader can see, and the list is capped. A run whose only described area ranks below the cap is
+  # false here and correctly so — what the caption may NOT then do is turn that into a sentence
+  # about the run, which is a claim about rows this object cannot see.
+  #
+  # False for a producer that sends no `name` at all — `Ingest::ObservationRecorder`
   # writes it through `presence_of`, so such a run stores a nil on every row — and a column of zeroes
   # over that run is "nobody told us what these tests are called", never "every area here repeats
   # itself completely". The `recorded?` / `any_named?` / `fully_named?` split is

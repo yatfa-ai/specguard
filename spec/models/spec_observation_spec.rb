@@ -394,10 +394,9 @@ RSpec.describe SpecObservation do
       # `text_pattern_ops` index; that index type serves a prefix PREDICATE — "every row under
       # `spec/models/`" — and this read issues none. It narrows on `test_run_id`, a plain column
       # with a plain index, and GROUPS on an expression, which decides nothing about the access
-      # path. So the plan is the by-file one above: one run reached through an index, hash-aggregated
-      # on top, for the reason the bare grouping two examples up states — the aggregate has to touch
-      # the heap for `duration_seconds` either way, so no wider index buys a whole-run grouping
-      # anything.
+      # path. So the ACCESS PATH is the by-file one above: one run reached through an index, for
+      # the reason the bare grouping two examples up states — the aggregate has to touch the heap
+      # for `duration_seconds` either way, so no wider index buys a whole-run grouping anything.
       #
       # MEASURED here rather than argued from the sibling: this is the assertion that would have
       # sent the slice to a migration had the premise been wrong, so it is the one that must run
@@ -409,18 +408,69 @@ RSpec.describe SpecObservation do
         expect(plan).not_to match(/Seq Scan on spec_observations/)
       end
 
+      # The AGGREGATION STRATEGY, which is a different fact from the access path and was being
+      # smuggled in under it. The example above cannot see this: `INDEXED_BY_RUN` matches the scan
+      # at the bottom of the plan and stayed green when `COUNT(DISTINCT name)` was added, while the
+      # aggregation above that scan changed from `HashAggregate` to `Sort` + `GroupAggregate`. A
+      # certification that cannot distinguish the two plans it is offered certifies nothing about
+      # the difference — the project's own Vacuous Green shape, pointed at the measurement rather
+      # than at a gate.
+      #
+      # So the strategy is pinned explicitly, and pinned as the WORSE one it actually is. A
+      # `DISTINCT` aggregate disqualifies hashed aggregation in Postgres, so this read sorts every
+      # one of the run's rows on the directory expression and on `name` before grouping them. That
+      # is the price of the distinct-description column and `.directory_durations_in`'s comment
+      # prices it in measured sort memory and buffer counts; what this example is for is making an
+      # edit that changes the price VISIBLE. Drop the `DISTINCT` and this reddens on the
+      # `GroupAggregate`; add a second sort or lose the index scan underneath it and the sort key
+      # or the sibling example above reddens instead.
+      #
+      # The sort key is asserted, not just the `Sort` node: a plan can sort for the ORDER BY alone
+      # — the by-file rollup above does, on `SUM(duration_seconds)` — and matching a bare `Sort`
+      # would pass on that one too, which is exactly the indiscriminate assertion this example
+      # exists to stop being.
+      it "pays for the distinct-description count with a sort, and says so in the plan" do
+        plan = plan_for_actual_sql { described_class.directory_durations_in(run) }
+
+        expect(plan).to include("GroupAggregate")
+        expect(plan).to match(/Sort Key: .*substring.*, name/)
+        expect(plan).not_to include("HashAggregate")
+      end
+
+      # The falsifier for the example above, and the reason it is not asserting an accident: the
+      # SAME read WITHOUT the `DISTINCT` aggregate — everything else identical, same seed, same
+      # statistics — hash-aggregates. So `GroupAggregate` above is caused by the column this slice
+      # added rather than by the size of the table or the shape of the grouping, and a future edit
+      # that removes the `DISTINCT` will be told what it just changed.
+      it "hash-aggregates the same grouping when the DISTINCT aggregate is taken away" do
+        without_distinct = described_class.where(test_run_id: run.id)
+          .group(Arel.sql(SpecObservation::DIRECTORY_EXPRESSION))
+          .select(Arel.sql("#{SpecObservation::DIRECTORY_EXPRESSION}, SUM(duration_seconds), COUNT(*), COUNT(name)"))
+
+        plan = plan_for(without_distinct)
+
+        expect(plan).to include("HashAggregate")
+        expect(plan).to match(INDEXED_BY_RUN)
+      end
+
       # The same certification for the rung BETWEEN those two, and the reason it also ships without
       # a migration — which is the claim most worth measuring here, because this read is the one
       # that looks like it wants a `text_pattern_ops` index and does not.
       #
       # It adds an EXPRESSION predicate over the by-directory rollup above: `DIRECTORY_EXPRESSION =
       # ?`. No index on this table can serve that, and it therefore decides nothing about the access
-      # path — `where(test_run_id:)` still does, exactly as it does for the rollup, and the grouping
-      # hash-aggregates on top. A `text_pattern_ops` index would serve `spec_file_path LIKE
-      # 'spec/d3/%'`, a PREFIX predicate; this read issues none, and the example directly above in
-      # "what they return" pins that the narrowing is an equality at one depth rather than a subtree.
-      # If a future edit turns it into a prefix `LIKE`, that example fails first and this one records
-      # what the plan cost.
+      # path — `where(test_run_id:)` still does, exactly as it does for the rollup. A
+      # `text_pattern_ops` index would serve `spec_file_path LIKE 'spec/d3/%'`, a PREFIX predicate;
+      # this read issues none, and the example directly above in "what they return" pins that the
+      # narrowing is an equality at one depth rather than a subtree. If a future edit turns it into
+      # a prefix `LIKE`, that example fails first and this one records what the plan cost.
+      #
+      # This comment used to add "and the grouping hash-aggregates on top". Measured, it does not:
+      # at this seed the planner estimates three groups and sorts, while `.file_durations_in` — same
+      # table, same absence of a `DISTINCT` aggregate, 25 groups — hashes. For this read the
+      # strategy is a cost tiebreak that moves with the data, so nothing here asserts one. Where a
+      # strategy IS forced rather than chosen, it is pinned: see the by-directory rollup above,
+      # whose `DISTINCT` aggregate rules hashing out and whose sort is asserted for that reason.
       it "reads the panel's one-directory drill-down off an index rather than scanning the table" do
         plan = plan_for_actual_sql { described_class.files_in_directory(run, "spec/d3") }
 
@@ -520,8 +570,12 @@ RSpec.describe SpecObservation do
       # real planner with real statistics at the 20-run seed.
       #
       # The premise is that a whole-run `GROUP BY name` is the same shape as a whole-run `GROUP BY`
-      # an expression: `where(test_run_id:)` decides the access path and the grouping
-      # hash-aggregates on top. What makes it worth measuring rather than assuming is that unlike
+      # an expression: `where(test_run_id:)` decides the ACCESS PATH, which is what this example
+      # asserts. It does NOT claim the strategy above that scan — this comment used to say "and the
+      # grouping hash-aggregates on top" and that is measurably false, because the read's
+      # `ARRAY_AGG(DISTINCT spec_file_path)` disqualifies hashed aggregation exactly as the
+      # by-directory rollup's `COUNT(DISTINCT name)` does. What makes the access path worth
+      # measuring rather than assuming is that unlike
       # `DIRECTORY_EXPRESSION` there IS an index over `name` on this table —
       # `index_spec_observations_on_repository_id_and_name` — and it is NOT the path here, because
       # it leads on `repository_id`. That index is what `.outcome_composition_in` rides for a

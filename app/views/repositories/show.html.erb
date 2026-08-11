@@ -2007,7 +2007,15 @@
                 producer sent no descriptions would print zero distinct behaviors against its whole
                 example count, which is the strongest over-coverage reading available here and is
                 made of silence. So the column is a fraction over the NAMED rows, the excluded rows
-                are printed beside it, and an area with none says so. %>
+                are printed beside it, and an area with none says so.
+
+                Every sentence here is a claim about the areas LISTED, never about the run — the
+                list is capped at ten and the sentence one paragraph up says so out loud ("the 10
+                heaviest of the 13 directories"). `#any_named?` and `#fully_named?` fold over those
+                ten rows, so a run whose only described area sits below the cap would make a
+                run-scoped sentence here false while both predicates are correct. The predicates are
+                list-scoped by construction and the prose has to be too, which is the rule
+                `SpecDirectoryDurations` states about itself: a caption is a claim ABOUT the list. %>
             <% if @spec_directory_durations.any_named? %>
               The "Distinct descriptions" column is how many distinct descriptions each area's
               examples carry, counted over the examples that reported one.
@@ -2023,9 +2031,9 @@
               ways and an ordinary table-driven loop or shared example group, so this is a ratio to
               review rather than a judgement about the area.
             <% else %>
-              The "Distinct descriptions" column has nothing to state on this run: no example it
-              recorded reported a description, so there is nothing to count distinct rather than
-              nothing distinct to count.
+              The "Distinct descriptions" column has nothing to state about the directories listed
+              here: not one of their examples reported a description, so there is nothing to count
+              distinct rather than nothing distinct to count.
             <% end %>
           </p>
           <%# "Distinct descriptions" LAST, in the order the area-grain reading is said in: this
@@ -2089,11 +2097,24 @@
                       The excluded rows are printed beside the fraction wherever the fraction is
                       printed, the way every coverage figure on this page carries its own
                       denominator rather than deferring to a caption a reader may not be looking
-                      at. %>
+                      at.
+
+                      SPELLED LIKE THE FRACTION IT ANNOTATES — no `number_with_delimiter`, and that
+                      is a decision rather than an omission. The two halves of this cell are one
+                      sentence, and delimiting only the second reads "40 of 20000 (1,234 unnamed)"
+                      at the design point: one cell disagreeing with itself about what a number
+                      looks like. The fraction's spelling is `Row#distinct_description_label`'s,
+                      which is `#coverage_label`'s, which is the spelling of the "Examples timed"
+                      cell one column over and of the same fraction at every other grain on this
+                      page — so the alternative is not "delimit this span" but "re-spell every
+                      coverage fraction the panels share", which is a change to all of them and is
+                      deliberately not smuggled in behind a new column. Delimiters on this page mark
+                      CAPTION PROSE, where a figure stands alone in a sentence; every other
+                      `number_with_delimiter` in this file is in a basis line or a summary string. %>
                   <%= directory.distinct_description_label %>
                   <% if directory.named? && directory.excluded_unnamed_rows? %>
                     <span class="text-app-muted">
-                      (<%= number_with_delimiter(directory.unnamed_count) %> unnamed)
+                      (<%= directory.unnamed_count %> unnamed)
                     </span>
                   <% end %>
                 </td>

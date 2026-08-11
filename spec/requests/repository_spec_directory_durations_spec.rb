@@ -378,7 +378,7 @@ RSpec.describe "Repository heaviest spec directories", type: :request do
 
     # The caption is a claim ABOUT the column, so on a run where nothing was named it must not go on
     # describing a density nothing was counted for.
-    it "says the column has nothing to count on a run whose examples carry no descriptions" do
+    it "says the column has nothing to count where none of the listed areas carry descriptions" do
       repository = create_repository(user: @user)
       ingest(repository, [unnamed_spec(file_path: "spec/models/order_spec.rb", duration: 3.0, line_number: 1)],
              annotated_specs_count: 1)
@@ -387,6 +387,43 @@ RSpec.describe "Repository heaviest spec directories", type: :request do
 
       expect(basis_line).to have_text("nothing to count distinct rather than nothing distinct to count",
                                       normalize_ws: true)
+    end
+
+    # THE example the one above cannot be: it runs on a SINGLE directory, where "the areas listed"
+    # and "the run" are the same rows, so it passes whichever of the two the caption claims. This is
+    # the run where they diverge — twelve unnamed areas heavy enough to fill the cap, and one named
+    # area light enough to fall below it.
+    #
+    # `#any_named?` folds over the LISTED rows and is false here, correctly: no listed area carries
+    # a description. What the caption may not do is promote that into a claim about the run, which
+    # holds a described area it cannot see — one sentence earlier the same paragraph discloses "the
+    # 10 heaviest of the 13", so a run-scoped sentence here contradicts the disclosure beside it.
+    # This panel carries `#truncated?` precisely because the list is capped; a caption that forgets
+    # the cap is the reading that whole predicate exists to refuse.
+    it "scopes the nothing-to-count sentence to the listed areas, not to a run it cannot see" do
+      repository = create_repository(user: @user)
+      heavy = (1..12).map do |i|
+        unnamed_spec(file_path: format("spec/heavy%02d/a_spec.rb", i), duration: 10.0 + i, line_number: i)
+      end
+      named = example_spec(file_path: "spec/light/b_spec.rb", duration: 0.1, line_number: 13,
+                           name: "settles an invoice")
+
+      ingest(repository, heavy + [named], annotated_specs_count: 12)
+
+      get repository_path(repository)
+
+      # The precondition: the list is capped, and the named area is one of the areas cut from it.
+      expect(rows.size).to eq(SpecObservation::HEAVIEST_DIRECTORIES_LIMIT)
+      expect(row_paths).not_to include("spec/light")
+      expect(basis_line).to have_text("The 10 heaviest of the 13 directories", normalize_ws: true)
+
+      expect(basis_line).to have_text("nothing to state about the directories listed here",
+                                      normalize_ws: true)
+      # The claim the panel is not entitled to make: this run DOES hold an example that reported a
+      # description, in the area the cap removed.
+      expect(basis_line).to have_no_text("nothing to state on this run", normalize_ws: true)
+      expect(basis_line).to have_no_text("no example it recorded reported a description",
+                                         normalize_ws: true)
     end
 
     # The partial area, which is where reading the distinct count against the EXAMPLE count goes
@@ -425,6 +462,32 @@ RSpec.describe "Repository heaviest spec directories", type: :request do
       expect(panel).to have_no_text("unnamed")
       expect(basis_line).to have_text("Every example in every directory listed reported a description",
                                       normalize_ws: true)
+    end
+
+    # ONE CELL, ONE SPELLING. The cell is a fraction plus the rows that fraction could not see, and
+    # they are one sentence: delimiting only the second half prints "2 of 1010 (1,010 unnamed)" —
+    # a cell disagreeing with itself about what a number looks like. The fraction is spelled by
+    # `Row#distinct_description_label`, which is `#coverage_label`'s spelling and the spelling of
+    # every coverage fraction on this page, so the exclusion follows it rather than the caption
+    # prose beside it. Pinned rather than left to a comment, because the accident this replaced was
+    # invisible until a four-digit run.
+    it "spells both halves of the cell the same way at four digits" do
+      repository = create_repository(user: @user)
+      named = (1..1010).map do |i|
+        example_spec(file_path: "spec/models/order_spec.rb", duration: 0.01, line_number: i,
+                     name: "behaviour #{i % 2}", id: "./spec/models/order_spec.rb[1:#{i}]")
+      end
+      unnamed = (1..1010).map do |i|
+        unnamed_spec(file_path: "spec/models/refund_spec.rb", duration: 0.01, line_number: i,
+                     id: "./spec/models/refund_spec.rb[1:#{i}]")
+      end
+
+      ingest(repository, named + unnamed, annotated_specs_count: 1010)
+
+      get repository_path(repository)
+
+      expect(rows.first[:descriptions]).to eq("2 of 1010 (1010 unnamed)")
+      expect(rows.first[:coverage]).to eq("2020 of 2020")
     end
 
     # The panel offers a ratio and takes no position on it, exactly as `RepeatedDescriptions` does
