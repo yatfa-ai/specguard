@@ -270,7 +270,10 @@ ActiveRecord::Schema[8.1].define(version: 2026_08_11_120000) do
     t.string "avatar_url"
     t.datetime "created_at", null: false
     t.string "email"
+    t.text "github_access_token"
     t.string "github_handle", null: false
+    t.string "github_token_scopes"
+    t.datetime "github_token_updated_at"
     t.string "github_uid", null: false
     t.datetime "updated_at", null: false
     t.index ["github_handle"], name: "index_users_on_github_handle"
