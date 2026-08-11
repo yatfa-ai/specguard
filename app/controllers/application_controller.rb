@@ -10,8 +10,18 @@ class ApplicationController < ActionController::Base
 
   private
 
+  # Scoped to `User.active`, so archiving somebody takes effect on the session they are ALREADY
+  # holding rather than only the next time they try to sign in. Without this, an offboarding
+  # control is one a signed-in person simply outlasts — they keep full access until their session
+  # expires, which is the one window where it matters most. Everything downstream (`signed_in?`,
+  # `require_authentication`, `repository_policy`) reads through here, so this single call site
+  # carries the whole app.
+  #
+  # `User.active` is an explicit scope, not a `default_scope` — see the note on the model. This is
+  # the read site that opts in; association traversals deliberately still see archived rows, so a
+  # membership or an API key an archived person left behind keeps naming them.
   def current_user
-    @current_user ||= User.find_by(id: session[:user_id]) if session[:user_id]
+    @current_user ||= User.active.find_by(id: session[:user_id]) if session[:user_id]
   end
 
   def signed_in?
