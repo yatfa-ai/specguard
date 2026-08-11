@@ -34,6 +34,25 @@
   <% end %>
 
   <% if @revealed_token.present? %>
+    <%# Keeps this one render out of Turbo Drive's snapshot cache, which is what makes the panel's
+        "only time this token is shown" claim below actually true. Without it Turbo snapshots the
+        live DOM — plaintext token and all — when the reader navigates away, and repaints it on Back
+        or on any return to this page; `connect()` fires on a restored snapshot exactly as on a
+        fresh render, so auto-copy would also re-run and overwrite a clipboard the reader has since
+        put something else on.
+
+        It has to be this meta and not `data-turbo-cache="false"` on the panel: the element-level
+        attribute is NOT implemented in turbo-rails 2.0.23 — `PageSnapshot#clone` only resets
+        selects, blanks password inputs and drops `<noscript>`, and the sole cache opt-out Turbo
+        reads is `getSetting("cache-control")`, i.e. this tag. Turbo evaluates it against the live
+        head in `Visit#loadResponse`, which caches the outgoing snapshot before `mergeHead` runs.
+
+        Scoped to the render that carries a token: it is emitted only inside this branch, and an
+        untracked meta is provisional, so Turbo removes it on the way out and the rest of the app
+        keeps its snapshot cache. %>
+    <% content_for :head do %>
+      <meta name="turbo-cache-control" content="no-cache">
+    <% end %>
     <% revealed_heading = @revealed_token_regenerated ? "Your regenerated API key" : "Your new API key" %>
     <%= render UI::PanelComponent.new(title: @revealed_token_name.present? ? "#{revealed_heading}: #{@revealed_token_name}" : revealed_heading) do %>
       <%# Auto-copy is declared here rather than defaulted on in the controller because it is right
@@ -56,8 +75,12 @@
           <% end %>
           <%# Starts as the truth with JavaScript off, and is REPLACED by copy_text_controller with
               what actually happened. An auto-copy the browser blocked must not read as one that
-              worked, so this never claims a copy the page has not yet made. %>
-          <p class="mt-1 font-semibold" data-copy-text-target="status">
+              worked, so this never claims a copy the page has not yet made.
+
+              `role="status"` because this line is the only report that the automatic copy was
+              REFUSED, and it is swapped in after load — without it a screen reader is left holding
+              the pre-JS sentence and never hears that the token is still uncopied. %>
+          <p class="mt-1 font-semibold" role="status" data-copy-text-target="status">
             Copy it before you leave this page.
           </p>
         <% end %>
@@ -893,7 +916,8 @@
 
     <% if manage_keys %>
       <%# `id` is the deep-link target for the "N API keys minted" badge on the members page: that
-          badge exists to send the owner straight to the lever, which is the Revoke button below. %>
+          badge exists to send the owner straight to the levers on each key below — Regenerate, to
+          rotate a token that leaked or went missing, and Revoke, to retire the key outright. %>
       <%= render UI::PanelComponent.new(title: "API keys", id: "api-keys", class: "lg:col-span-2") do |panel| %>
         <% panel.with_actions do %>
           <%# Inline (not .form-grid) on purpose: this lives in a panel header, so it stays one row. %>

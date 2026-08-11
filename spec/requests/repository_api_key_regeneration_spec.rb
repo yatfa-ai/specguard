@@ -136,6 +136,11 @@ RSpec.describe "Regenerating an API key", type: :request do
       # The rendered text is what a reader with JS disabled — or with the controller failing to
       # connect — is left holding, so it must not assert a copy.
       expect(status.text.strip).to eq("Copy it before you leave this page.")
+
+      # Announced, because this line is the only report that the automatic copy was REFUSED and it
+      # is swapped in after load. Without a live region a screen reader keeps the sentence above and
+      # never hears that the token is still uncopied.
+      expect(status["role"]).to eq("status")
     end
 
     it "offers a one-time download named after the key" do
@@ -154,6 +159,33 @@ RSpec.describe "Regenerating an API key", type: :request do
 
       expect(source.text).to match(/\Asgk_[A-Za-z0-9_-]{20,}\z/)
     end
+
+    # The panel claims in bold that this is the only time the token is shown. Turbo Drive would
+    # falsify that on its own: it snapshots the live DOM when the reader navigates away and repaints
+    # it on Back, plaintext included, and `connect()` fires on a restored snapshot exactly as on a
+    # fresh render — so auto-copy would re-run too, over a clipboard the reader has since used.
+    #
+    # Asserted as the meta and not `data-turbo-cache="false"` on the panel because the element-level
+    # attribute does not exist in turbo-rails 2.0.23 — `PageSnapshot#clone` only resets selects,
+    # blanks password inputs and drops `<noscript>`, and `getSetting("cache-control")` reads exactly
+    # this tag. An example asserting the attribute would pass while the token stayed in the cache.
+    it "keeps the render carrying the token out of Turbo's snapshot cache" do
+      cache_control = Capybara.string(response.body).find("meta[name='turbo-cache-control']", visible: :all)
+
+      expect(cache_control["content"]).to eq("no-cache")
+    end
+  end
+
+  # Paired with the example above: that one alone would also pass if the meta were parked in the
+  # layout for every page, which would quietly cost the whole app its snapshot cache. This is what
+  # makes the assertion about THIS render rather than about the application template.
+  it "leaves the snapshot cache alone on a page with no token on it" do
+    repository.api_keys.create!(name: "CI")
+
+    get repository_path(repository)
+
+    expect(revealed_token).to be_nil
+    expect(response.body).not_to include("turbo-cache-control")
   end
 
   describe "a freshly minted key" do

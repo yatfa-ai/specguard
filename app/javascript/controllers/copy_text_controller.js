@@ -21,8 +21,21 @@ export default class extends Controller {
   // browsers, and the click that triggered this does not survive the redirect that renders the
   // panel — so the attempt genuinely can fail, and `status` is told which way it went. Claiming a
   // copy that did not happen is worse here than not copying at all.
+  //
+  // `connect()` is not once-per-element: Stimulus re-runs it on the SAME instance whenever the
+  // element is re-inserted or moved, and a morph refresh preserves the element across a render. A
+  // second unrequested copy would overwrite a clipboard the reader has since put something else
+  // on, so the flag below bounds it to one run per instance.
+  //
+  // What it deliberately does NOT cover is a restored Turbo snapshot — that replaces the body, so
+  // Stimulus builds a fresh instance no instance flag could bound. The reveal panel closes that
+  // path at the source instead, with a `turbo-cache-control` meta that keeps the render carrying
+  // the token out of the snapshot cache: no snapshot, so nothing to restore and nothing to re-copy.
   connect() {
-    if (this.autoCopyValue) this.copy()
+    if (!this.autoCopyValue || this.autoCopied) return
+
+    this.autoCopied = true
+    this.copy()
   }
 
   async copy() {
