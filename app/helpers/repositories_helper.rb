@@ -81,6 +81,13 @@ module RepositoriesHelper
   # never will, a run that reported nothing — and the reader can only act on the second if they are
   # told which it is.
   #
+  # Filename for the reveal-once token download. Named after the key, so an owner who rotates two
+  # of them in a sitting can tell the files apart; `parameterize` is also what stops a
+  # user-controlled key name from reaching the browser's `download` attribute as a path.
+  def revealed_token_filename(name)
+    ["specguard", name.to_s.parameterize.presence, "api-key"].compact.join("-") + ".txt"
+  end
+
   # Every number here is counted off the same `SuiteTrajectory` the chart would have been drawn
   # from, so the empty state cannot claim a different history from the one that was loaded.
   def trajectory_thin_description(trajectory)

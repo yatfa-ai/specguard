@@ -34,13 +34,45 @@
   <% end %>
 
   <% if @revealed_token.present? %>
-    <%= render UI::PanelComponent.new(title: @revealed_token_name.present? ? "Your new API key: #{@revealed_token_name}" : "Your new API key") do %>
-      <div class="space-y-3" data-controller="copy-text">
-        <%= render UI::AlertComponent.new(tone: :warning, title: "Shown once") do %>
-          Only the SHA-256 digest is stored. Copy this now — reloading this page will not show it again.
+    <% revealed_heading = @revealed_token_regenerated ? "Your regenerated API key" : "Your new API key" %>
+    <%= render UI::PanelComponent.new(title: @revealed_token_name.present? ? "#{revealed_heading}: #{@revealed_token_name}" : revealed_heading) do %>
+      <%# Auto-copy is declared here rather than defaulted on in the controller because it is right
+          for exactly this call site: overwriting a clipboard is cheap and reversible, and leaving
+          this page without the token is neither. The two outcome messages are passed in rather
+          than hardcoded in JS, so the words a reader sees live with the rest of the words on this
+          page. %>
+      <div class="space-y-3"
+           data-controller="copy-text"
+           data-copy-text-auto-copy-value="true"
+           data-copy-text-copied-message-value="Copied to your clipboard — paste it somewhere safe before you leave this page."
+           data-copy-text-copy-failed-message-value="Your browser did not allow an automatic copy. Use Copy or Download below, before you leave this page."
+           data-copy-text-download-filename-value="<%= revealed_token_filename(@revealed_token_name) %>">
+        <%= render UI::AlertComponent.new(tone: :warning, title: "This is the only time this token is shown") do %>
+          <p>Only the SHA-256 digest is stored, so reloading this page will not show it again.</p>
+          <% if @revealed_token_regenerated %>
+            <p class="mt-1">
+              The previous token for this key has stopped working — replace it anywhere it was in use.
+            </p>
+          <% end %>
+          <%# Starts as the truth with JavaScript off, and is REPLACED by copy_text_controller with
+              what actually happened. An auto-copy the browser blocked must not read as one that
+              worked, so this never claims a copy the page has not yet made. %>
+          <p class="mt-1 font-semibold" data-copy-text-target="status">
+            Copy it before you leave this page.
+          </p>
         <% end %>
 
         <%= render UI::CopyableCodeComponent.new do %><%= @revealed_token %><% end %>
+
+        <div class="flex flex-wrap items-center gap-x-3 gap-y-1">
+          <%= render UI::ButtonComponent.new(variant: :secondary, size: :sm, type: "button",
+                                             data: { action: "copy-text#download" }) do %>
+            Download as a file
+          <% end %>
+          <p class="text-xs text-app-muted">
+            Written from this page, not fetched from the server — SpecGuard does not hold the token.
+          </p>
+        </div>
 
         <p class="text-xs text-app-muted">
           Use it as <code>Authorization: Bearer &lt;token&gt;</code> against
@@ -65,7 +97,7 @@
           <%= render UI::CopyableCodeComponent.new do %>curl -H "Authorization: Bearer &lt;token&gt;" <%= api_v1_repository_url %><% end %>
           <p class="text-xs text-app-muted">
             <code>&lt;token&gt;</code> is a placeholder — substitute the key you copied when you minted
-            it. SpecGuard cannot show an existing key again, only mint a new one.
+            it. SpecGuard cannot show an existing key again; regenerate it to mint a replacement.
           </p>
         </div>
       </div>
@@ -906,9 +938,21 @@
                   <%= api_key.last_used_at ? "#{time_ago_in_words(api_key.last_used_at)} ago" : "never" %>
                 </td>
                 <td class="px-3 py-2 text-right">
-                  <%= button_to "Revoke", repository_api_key_path(@repository, api_key), method: :delete,
-                                class: UI::ButtonComponent.classes(variant: :danger, size: :xs),
-                                form: { data: { turbo_confirm: "Revoke #{api_key.name}?" } } %>
+                  <div class="flex items-center justify-end gap-2">
+                    <%# The recovery path for a lost key. Warning tone, not danger: unlike Revoke
+                        this leaves the row, its name and its attribution standing — what it
+                        destroys is the token, which the confirm dialog says outright because
+                        nothing on this page can undo it. %>
+                    <%= button_to "Regenerate", regenerate_repository_api_key_path(@repository, api_key),
+                                  method: :post,
+                                  class: UI::ButtonComponent.classes(variant: :warning, size: :xs),
+                                  form: { data: { turbo_confirm: "Regenerate #{api_key.name}? Its current " \
+                                                                 "token stops working immediately, and the " \
+                                                                 "replacement is shown only once." } } %>
+                    <%= button_to "Revoke", repository_api_key_path(@repository, api_key), method: :delete,
+                                  class: UI::ButtonComponent.classes(variant: :danger, size: :xs),
+                                  form: { data: { turbo_confirm: "Revoke #{api_key.name}?" } } %>
+                  </div>
                 </td>
               </tr>
             <% end %>
