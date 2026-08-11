@@ -294,6 +294,27 @@ RSpec.describe Ingest::IdentityResolver do
       expect(run.spec_observations.sole.spec_identity_id).to eq(winner.id)
     end
 
+    it "refuses a losing sighting from a run older than the one the winner already names" do
+      # The conflict branch is a re-sighting, so it is monotonic for the reason `#resight` is. And it
+      # is reachable outside a race: `#nearest` is an approximate index lookup, so an under-recalled
+      # miss on text that already HAS an identity arrives here rather than there — carrying, if the
+      # row came out of the cross-run backlog, a run older than the one the identity already names.
+      older = record([unannotated_spec(file_path: "spec/models/cart_spec.rb", line_number: 5,
+                                       name: "Cart adds an item to the cart")], ci_run_id: "run-1")
+      newer = record([unannotated_spec(file_path: "spec/models/cart_spec.rb", line_number: 90,
+                                       name: "Cart adds an item to the cart")], ci_run_id: "run-2")
+      winner = create_spec_identity(repository: repository, text: "Cart adds an item to the cart",
+                                    file_path: "spec/models/cart_spec.rb", line_number: 90,
+                                    last_seen_test_run_id: newer.id)
+
+      resolve_as_the_loser(older)
+
+      expect(winner.reload.location).to eq("spec/models/cart_spec.rb:90")
+      expect(winner.last_seen_test_run_id).to eq(newer.id)
+      # Refused the sighting, not the row: the older observation still gets its link.
+      expect(older.spec_observations.sole.spec_identity_id).to eq(winner.id)
+    end
+
     it "leaves the winner's own identity untouched — a conflict re-sights, it does not overwrite" do
       winner = create_spec_identity(repository: repository, text: "Cart adds an item to the cart")
       # Read back from the column rather than held from the insert: pgvector stores float4, so the
@@ -309,6 +330,22 @@ RSpec.describe Ingest::IdentityResolver do
   end
 
   describe "an example the provider cannot embed" do
+    # The provider, down and back. `reset` on the proxy rather than a second `allow`, so the "back"
+    # state is the real `LocalProvider` this group installed and not another stub.
+    def provider_down
+      allow(EmbeddingGenerator).to receive(:call).and_raise(EmbeddingGenerator::Error, "provider down")
+    end
+
+    def provider_back = RSpec::Mocks.space.proxy_for(EmbeddingGenerator).reset
+
+    # A LATER ingest of this repository, carrying a test that has nothing to do with the failed one.
+    # This is the production trigger under test everywhere below: nothing it contains can create the
+    # failed row's identity, so if that row resolves, the cross-run sweep is what resolved it.
+    def unrelated_ingest(ci_run_id:)
+      ingest([unannotated_spec(file_path: "spec/models/user_spec.rb", line_number: 3,
+                               name: "User#save rejects a duplicate email")], ci_run_id: ci_run_id)
+    end
+
     it "leaves the observation unresolved rather than writing an identity nothing can find again" do
       allow(EmbeddingGenerator).to receive(:call).and_raise(EmbeddingGenerator::Error, "provider down")
 
@@ -334,14 +371,155 @@ RSpec.describe Ingest::IdentityResolver do
       expect(run.spec_observations.where.not(spec_identity_id: nil).count).to eq(1)
     end
 
+    it "records that the embedding was attempted and failed, rather than leaving a bare NULL" do
+      provider_down
+
+      run = ingest([unannotated_spec(name: "Cart adds an item to the cart")], ci_run_id: "run-1")
+
+      observation = run.spec_observations.sole
+      expect(observation.embed_failed_at).to be_present
+      expect(observation.embed_failure_count).to eq(1)
+    end
+
+    it "tells a failed embed apart from a row with nothing to embed and from one not yet attempted" do
+      # The three populations one NULL `spec_identity_id` used to pool, built through the real path
+      # in the order that keeps each in its own state. The signalless row's name is nulled by hand
+      # because `Ingest::Payload#validate_name` refuses that shape today — which is exactly what
+      # `IdentityResolver#identity_for` says its `:none` branch is for, a row written before the
+      # validator existed — and it goes FIRST so no later sweep can be what left it alone.
+      signalless = record([unannotated_spec(file_path: "spec/c_spec.rb", line_number: 3,
+                                            name: "Order#checkout rejects an expired card")],
+                          ci_run_id: "run-1")
+      signalless.spec_observations.sole.update_columns(name: nil)
+      described_class.resolve(signalless)
+
+      provider_down
+      failed = ingest([unannotated_spec(file_path: "spec/a_spec.rb", line_number: 1,
+                                        name: "Cart adds an item to the cart")], ci_run_id: "run-2")
+      provider_back
+
+      # Recorded and not resolved: the state the endpoint answers `202` from.
+      unattempted = record([unannotated_spec(file_path: "spec/b_spec.rb", line_number: 2,
+                                             name: "User#save rejects a duplicate email")],
+                           ci_run_id: "run-3")
+
+      expect(repository.spec_observations.unresolved.pluck(:test_run_id))
+        .to contain_exactly(signalless.id, failed.id, unattempted.id)
+      # One predicate, and it picks the recoverable one out of the three.
+      expect(repository.spec_observations.embed_failed.pluck(:test_run_id)).to eq([failed.id])
+      expect(repository.spec_observations.embed_retryable.pluck(:test_run_id)).to eq([failed.id])
+    end
+
     it "resolves it on the next run once the provider is back — nothing is permanently lost" do
-      allow(EmbeddingGenerator).to receive(:call).and_raise(EmbeddingGenerator::Error, "provider down")
+      provider_down
       first = ingest([unannotated_spec(name: "Cart adds an item to the cart")], ci_run_id: "run-1")
+      provider_back
 
-      RSpec::Mocks.space.proxy_for(EmbeddingGenerator).reset
-      described_class.resolve(first.reload)
+      unrelated_ingest(ci_run_id: "run-2")
 
-      expect(first.spec_observations.sole.reload.spec_identity_id).to eq(repository.spec_identities.sole.id)
+      # No `described_class.resolve` by hand anywhere in this example. That line used to be here and
+      # was the only thing in the world that did this; the ingest above is now what does it.
+      identity = first.spec_observations.sole.reload.spec_identity
+      expect(identity.text).to eq("Cart adds an item to the cart")
+      # And the rescued row's own run is what the identity says last saw the test, not the run whose
+      # ingest happened to perform the rescue.
+      expect(identity.last_seen_test_run_id).to eq(first.id)
+    end
+
+    it "does not let a rescued older run overwrite a newer run's last known path" do
+      provider_down
+      ingest([unannotated_spec(file_path: "spec/models/cart_spec.rb", line_number: 5,
+                               name: "Cart adds an item to the cart")], ci_run_id: "run-1")
+      provider_back
+
+      second = ingest([unannotated_spec(file_path: "spec/models/cart_spec.rb", line_number: 90,
+                                        name: "Cart adds an item to the cart")], ci_run_id: "run-2")
+
+      # The backlog row and the newer run's own row, in one pass, resolved in that order. The
+      # falsifier for `SpecIdentity::SIGHTING_NOT_OLDER` on the half of the work list where the
+      # newer sighting arrives second.
+      identity = repository.spec_identities.sole
+      expect(identity.location).to eq("spec/models/cart_spec.rb:90")
+      expect(identity.last_seen_test_run_id).to eq(second.id)
+    end
+
+    it "keeps the newest run's path when an outage spanning two runs is rescued in one sweep" do
+      # The shape the whole slice exists to recover from — a provider down across MORE than one
+      # ingest — and the case iteration order alone never covered. Both rows are failed, both are in
+      # the backlog, and they are walked least-tried-first: run-1's row was already swept once by
+      # run-2's ingest, so it carries a HIGHER failure count than run-2's own row and is therefore
+      # walked LAST. Ordering cannot fix that without giving up the fairness key; the guard makes it
+      # not matter.
+      provider_down
+      first = ingest([unannotated_spec(file_path: "spec/models/cart_spec.rb", line_number: 5,
+                                       name: "Cart adds an item to the cart")], ci_run_id: "run-1")
+      second = ingest([unannotated_spec(file_path: "spec/models/cart_spec.rb", line_number: 90,
+                                        name: "Cart adds an item to the cart")], ci_run_id: "run-2")
+      provider_back
+
+      # Pin the premise rather than trusting it: this example is only about the newest-last order if
+      # the older row really does sort after the newer one.
+      expect(repository.spec_observations.embed_retryable.order(:embed_failure_count).pluck(:test_run_id))
+        .to eq([second.id, first.id])
+
+      unrelated_ingest(ci_run_id: "run-3")
+
+      identity = repository.spec_identities.find_by!(text: "Cart adds an item to the cart")
+      expect(identity.location).to eq("spec/models/cart_spec.rb:90")
+      expect(identity.last_seen_test_run_id).to eq(second.id)
+      # Both rows are still rescued — refusing the older sighting is not refusing the older row.
+      expect(first.spec_observations.sole.reload.spec_identity_id).to eq(identity.id)
+      expect(second.spec_observations.sole.reload.spec_identity_id).to eq(identity.id)
+    end
+
+    it "keeps the first failure's timestamp, so re-attempting cannot push the window forward" do
+      provider_down
+      first = ingest([unannotated_spec(name: "Cart adds an item to the cart")], ci_run_id: "run-1")
+      stamped = first.spec_observations.sole.embed_failed_at
+
+      # Still down: the sweep re-attempts the row and fails again.
+      unrelated_ingest(ci_run_id: "run-2")
+
+      observation = first.spec_observations.sole.reload
+      expect(observation.embed_failed_at).to eq(stamped)
+      expect(observation.embed_failure_count).to eq(2)
+    end
+
+    it "stops re-attempting a row once the window has closed on it" do
+      provider_down
+      first = ingest([unannotated_spec(name: "Cart adds an item to the cart")], ci_run_id: "run-1")
+      provider_back
+
+      # `update_all` rather than a time-travel helper, the choice
+      # spec/requests/api/v1/repository_latest_run_spec.rb states: assert the fact the fixture needs
+      # — this row first failed longer ago than the window — rather than moving the clock underneath
+      # everything else in the example.
+      first.spec_observations.update_all(embed_failed_at: SpecObservation::EMBED_RETRY_WINDOW.ago - 1.second)
+
+      unrelated_ingest(ci_run_id: "run-2")
+
+      expect(first.spec_observations.sole.reload.spec_identity_id).to be_nil
+      expect(repository.spec_observations.embed_retryable.count).to eq(0)
+      # Given up on, and queryable as such: "we stopped trying" is not the same figure as "we are
+      # still trying", which is the whole reason the bound is a scope and not a bare comparison.
+      expect(repository.spec_observations.embed_abandoned.count).to eq(1)
+    end
+
+    it "caps how much of a backlog one ingest inherits, and drains the rest across later ones" do
+      stub_const("#{described_class}::RETRY_SWEEP_LIMIT", 1)
+      provider_down
+      first = ingest([unannotated_spec(file_path: "spec/a_spec.rb", line_number: 1,
+                                       name: "Cart adds an item to the cart"),
+                      unannotated_spec(file_path: "spec/a_spec.rb", line_number: 2,
+                                       name: "Invoice#finalize locks the line items")],
+                     ci_run_id: "run-1")
+      provider_back
+
+      unrelated_ingest(ci_run_id: "run-2")
+      expect(first.spec_observations.unresolved.count).to eq(1)
+
+      unrelated_ingest(ci_run_id: "run-3")
+      expect(first.spec_observations.unresolved.count).to eq(0)
     end
   end
 
@@ -357,6 +535,20 @@ RSpec.describe Ingest::IdentityResolver do
   describe "what it reports" do
     it "counts the observations it gave an identity to" do
       expect(described_class.resolve(record(suite, ci_run_id: "run-1"))).to eq(3)
+    end
+
+    it "counts a rescued row of an earlier run, because this invocation is what resolved it" do
+      allow(EmbeddingGenerator).to receive(:call).and_raise(EmbeddingGenerator::Error, "provider down")
+      ingest([unannotated_spec(name: "Cart adds an item to the cart")], ci_run_id: "run-1")
+      RSpec::Mocks.space.proxy_for(EmbeddingGenerator).reset
+
+      second = record([unannotated_spec(file_path: "spec/models/user_spec.rb", line_number: 3,
+                                        name: "User#save rejects a duplicate email")],
+                      ci_run_id: "run-2")
+
+      # One row of its own and one rescued. Counting only `second`'s rows would report a sweep that
+      # did real work as a no-op — see the `@return` on `IdentityResolver#resolve`.
+      expect(described_class.resolve(second)).to eq(2)
     end
   end
 end

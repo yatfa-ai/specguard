@@ -1155,6 +1155,40 @@ RSpec.describe "POST /api/v1/ingest", type: :request do
         expect(shard_of("e2")).to eq(TestRun.sole.test_run_shards.find_by!(shard_id: "A").id)
       end
 
+      # `Ingest::ObservationRecorder::REMEASURABLE` decides what a collision may move, and the
+      # embed-failure stamp is deliberately NOT in it — the same reasoning that keeps
+      # `spec_identity_id` out. A redelivery says what the test COST this time; it says nothing
+      # whatever about whether the embedding provider was reachable when the resolver last asked. So
+      # the moved row keeps its place in `Ingest::IdentityResolver`'s retry backlog while its
+      # measurement moves onto it, which is what lets a rescue survive a rebalancing splitter.
+      it "re-measures the moved example without clearing its embed-failure stamp" do
+        failed_at = 2.hours.ago.change(usec: 0)
+        TestRun.sole.spec_observations.where(example_id: "./spec/e2_spec.rb[1:1]")
+               .update_all(embed_failed_at: failed_at, embed_failure_count: 2)
+
+        deliver("A", [["e1", 1.0], ["e2", 0.5]])
+
+        moved = TestRun.sole.spec_observations.find_by!(example_id: "./spec/e2_spec.rb[1:1]")
+        expect(moved.duration_seconds).to eq(0.5)
+        expect(moved).to have_attributes(embed_failed_at: failed_at, embed_failure_count: 2)
+      end
+
+      # The other half of that decision, and it is a different path rather than an exception to the
+      # one above: a row its OWN shard re-delivers is deleted and recreated, which the recorder's
+      # class comment calls starting a new history. The recreated row is genuinely
+      # unresolved-and-unattempted and earns a fresh stamp on its own merits if the provider is
+      # still down. What must not happen is a row silently keeping a stamp for an attempt that no
+      # longer refers to it.
+      it "starts the stamp afresh on a row its own shard recreated" do
+        TestRun.sole.spec_observations.where(example_id: "./spec/e1_spec.rb[1:1]")
+               .update_all(embed_failed_at: 2.hours.ago, embed_failure_count: 2)
+
+        deliver("A", [["e1", 1.0]])
+
+        expect(TestRun.sole.spec_observations.find_by!(example_id: "./spec/e1_spec.rb[1:1]"))
+          .to have_attributes(embed_failed_at: nil, embed_failure_count: 0)
+      end
+
       # The other side of the move, asserted so it is not mistaken for loss: B re-running without
       # the example it gave away does not take that row with it, because the row is A's now and B's
       # delete no longer matches it.

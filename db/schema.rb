@@ -10,7 +10,7 @@
 #
 # It's strongly recommended that you check this file into your version control system.
 
-ActiveRecord::Schema[8.1].define(version: 2026_08_11_130000) do
+ActiveRecord::Schema[8.1].define(version: 2026_08_11_140000) do
   # These are extensions that must be enabled in order to support this database
   enable_extension "pg_catalog.plpgsql"
   enable_extension "vector"
@@ -213,6 +213,8 @@ ActiveRecord::Schema[8.1].define(version: 2026_08_11_130000) do
   create_table "spec_observations", force: :cascade do |t|
     t.datetime "created_at", null: false
     t.float "duration_seconds"
+    t.datetime "embed_failed_at"
+    t.integer "embed_failure_count", default: 0, null: false
     t.string "example_id"
     t.string "file_path", null: false
     t.string "intent_action"
@@ -228,6 +230,7 @@ ActiveRecord::Schema[8.1].define(version: 2026_08_11_130000) do
     t.bigint "test_run_id", null: false
     t.bigint "test_run_shard_id"
     t.datetime "updated_at", null: false
+    t.index ["repository_id", "embed_failure_count", "embed_failed_at"], name: "index_spec_observations_on_embed_backlog", where: "((embed_failed_at IS NOT NULL) AND (spec_identity_id IS NULL))"
     t.index ["repository_id", "name"], name: "index_spec_observations_on_repository_id_and_name"
     t.index ["repository_id"], name: "index_spec_observations_on_repository_id"
     t.index ["spec_identity_id"], name: "index_spec_observations_on_spec_identity_id"
