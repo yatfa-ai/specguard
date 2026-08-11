@@ -44,6 +44,12 @@ RSpec.describe Ingest::IdentityResolver do
   def identity_texts = repository.spec_identities.pluck(:text).sort
 
   describe "the behaviour this slice exists for: a test that moved is the same test" do
+    # A shifted test's text is byte-identical, so two independent mechanisms both land it on the row
+    # it already had: similarity (its vector is unchanged, cosine 1.0) and the `(repository_id,
+    # text_digest)` conflict key. That overlap is deliberate — see `IdentityResolver#claim_identity`
+    # — and it means these examples do not, on their own, isolate the similarity path. The one that
+    # does is "still matches text that differs only in punctuation and whitespace" below: different
+    # bytes, so the key cannot help, and only the embedding can.
     it "resolves a suite shifted ten lines onto the rows it already had, without growing the table" do
       first = ingest(suite, ci_run_id: "run-1")
       identities = repository.spec_identities.order(:id).pluck(:id)

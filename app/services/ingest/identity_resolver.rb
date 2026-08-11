@@ -115,11 +115,18 @@ module Ingest
     # `update_columns` so this is one UPDATE with no callbacks and no validation pass over a 1536
     # element vector that has not changed.
     def resight(identity, observation)
-      identity.update_columns(
-        file_path: observation.file_path, line_number: observation.line_number,
-        last_seen_test_run_id: @run.id, updated_at: Time.current
-      )
+      identity.update_columns(sighting(observation, Time.current))
       identity.id
+    end
+
+    # What "seen again" moves, and the only definition of it. Sliced through
+    # {SpecIdentity::RESIGHTABLE} so this method and the `update_only:` clause in {#claim_identity}
+    # are the *same* list rather than two copies of it: the match path and the conflict path both
+    # end in a re-sighting, and one of them quietly moving a column the other does not is exactly
+    # the drift a shared constant is for.
+    def sighting(observation, now)
+      { file_path: observation.file_path, line_number: observation.line_number,
+        last_seen_test_run_id: @run.id, updated_at: now }.slice(*SpecIdentity::RESIGHTABLE)
     end
 
     # A test nothing matched: insert it — or lose the race to insert it and take the winner.
@@ -131,6 +138,12 @@ module Ingest
     # loser's values land on the winner as an ordinary re-sighting, and neither raises. A
     # `create!`-and-rescue would reach the same place in two statements and a savepoint; this is one
     # statement and needs neither.
+    #
+    # It is also what makes the *identical-text* case safe twice over. A test that merely moved
+    # embeds to the same vector and is found by {#nearest}; if that lookup ever missed it — an
+    # approximate index under-recalling, a threshold raised too far — this key would still land the
+    # ingest on the row it belongs to rather than growing the table. The two mechanisms overlap on
+    # purpose, and only similarity covers the case where the text is *not* byte-identical.
     #
     # `record_timestamps: false` because the row carries its own — {SpecIdentity::RESIGHTABLE} keeps
     # `created_at` out of the update list, so a row that already existed keeps when the test first
@@ -144,13 +157,8 @@ module Ingest
           text: signal.text,
           text_digest: SpecIdentity.digest_for(signal.text),
           signal_source: signal.source.to_s,
-          embedding: embedding,
-          file_path: observation.file_path,
-          line_number: observation.line_number,
-          last_seen_test_run_id: @run.id,
-          created_at: now,
-          updated_at: now
-        }],
+          embedding: embedding
+        }.merge(sighting(observation, now), created_at: now)],
         unique_by: %i[repository_id text_digest], update_only: SpecIdentity::RESIGHTABLE,
         record_timestamps: false, returning: %w[id]
       ).rows.dig(0, 0)
