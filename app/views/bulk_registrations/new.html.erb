@@ -1,0 +1,72 @@
+<% content_for :title, "Register an organization's repositories · SpecGuard" %>
+
+<%= render UI::PageComponent.new do %>
+  <%= render UI::BreadcrumbComponent.new(items: [
+        { label: "Repositories", href: repositories_path },
+        { label: "Register an organization" }
+      ]) %>
+
+  <%= render UI::PageHeaderComponent.new(
+        title: "Register an organization's repositories",
+        subtitle: "Pick a GitHub organization and register its repositories in one action. " \
+                  "SpecGuard checks with GitHub that you administer each one, exactly as it does " \
+                  "for a single repository."
+      ) do |header| %>
+    <% header.with_actions do %>
+      <%= render UI::ButtonComponent.new(variant: :ghost, href: new_repository_path) { "Register one repository" } %>
+    <% end %>
+  <% end %>
+
+  <%= render UI::PanelComponent.new do %>
+    <%# The same four-way split the single-repository form makes, in the same order and with the
+        same words — see GithubRepositoryListing, which is where both pages get them from. A second
+        page inventing its own phrasing for "GitHub refused" is how an SSO-blocked user ends up
+        told to wait on one screen and to call their org admin on the other. %>
+    <% if github_authorization_needed? %>
+      <%# `origin` is passed explicitly rather than defaulting to `request.fullpath`, for the reason
+          repositories/_form states in full: this panel's likely reader arrived by POST (they
+          submitted a batch and it came back needing a grant), and `request.fullpath` is then the
+          POST path. It happens to be the same URL here — both verbs answer at /repositories/bulk —
+          but that is a coincidence of this route, not a property to rest on. %>
+      <%= render UI::EmptyStateComponent.new(
+            title: "Connect your GitHub repositories",
+            description: github_authorization_disclosure
+          ) do %>
+        <%= github_authorize_button origin: bulk_repositories_path %>
+      <% end %>
+    <% elsif github_listing.nil? %>
+      <%# Two different reasons land here and they must not read the same: GitHub being down is
+          waitable, GitHub *refusing* is not. `github_listing_error_message` is nil only for the
+          genuine outage, which is the one case "try again shortly" is true of. %>
+      <% if github_listing_error_message %>
+        <%= render UI::AlertComponent.new(tone: :warning, title: "GitHub refused the request") do %>
+          <%= github_listing_error_message %>
+        <% end %>
+      <% else %>
+        <%= render UI::AlertComponent.new(tone: :warning, title: "GitHub is not answering right now") do %>
+          Your repository list could not be loaded, so there is nothing to pick from yet. Try again
+          shortly.
+        <% end %>
+      <% end %>
+
+      <div class="mt-4">
+        <%= render UI::ButtonComponent.new(variant: :ghost, href: repositories_path) { "Back" } %>
+      </div>
+    <% elsif organizations.empty? %>
+      <%# GitHub returned repositories, but none of them belongs to an organization this user
+          administers anything in. Said plainly rather than rendered as an empty chooser: the fix is
+          to register repositories one at a time, and this page cannot help. %>
+      <%= render UI::EmptyStateComponent.new(
+            title: "No organizations to register from",
+            description: "GitHub reports no organization in which you administer a repository. " \
+                         "Personal repositories are registered one at a time."
+          ) do %>
+        <%= render UI::ButtonComponent.new(variant: :primary, href: new_repository_path) { "Register one repository" } %>
+      <% end %>
+    <% elsif organization.nil? %>
+      <%= render "organizations" %>
+    <% else %>
+      <%= render "picker", organization: organization %>
+    <% end %>
+  <% end %>
+<% end %>

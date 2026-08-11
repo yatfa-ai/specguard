@@ -30,6 +30,18 @@
 # `forbidden:` takes a `GithubApi::Forbidden` reason (`:rate_limited`, `:sso_required`,
 # `:insufficient_scope`) rather than a boolean, because the whole point of that error is that its
 # three cases have three different remedies and must not collapse into one another.
+#
+# ## `owner_type` defaults to "Organization"
+#
+# `github_repo` describes an ORGANIZATION repository unless told otherwise, because the shared
+# fixtures are `acme/…` and because org repositories are what bulk registration groups
+# (`GithubOrganizations`). A personal one says so:
+#
+#   github_repo("octocat/dotfiles", owner_type: "User")
+#
+# The permissive default inside `FakeGithubApi#repository` deliberately leaves it nil — that path
+# answers the single-repository ownership question, which does not read the field, and inventing an
+# owner type there would make a spec about verification quietly also a spec about grouping.
 class FakeGithubApi
   # `calls` is a log, not a mock expectation. Some specs need "GitHub was asked exactly once" or
   # "GitHub was not asked at all" — an unchanged rename must not cost a round trip — and a counter
@@ -87,8 +99,9 @@ module GithubApiHelpers
     FakeGithubApi.new(**options).tap { |fake| GithubApi.factory = ->(_token) { fake } }
   end
 
-  def github_repo(full_name, admin: true, private: false, archived: false)
-    GithubApi::Repo.new(full_name: full_name, private: private, admin: admin, archived: archived)
+  def github_repo(full_name, admin: true, private: false, archived: false, owner_type: "Organization")
+    GithubApi::Repo.new(full_name: full_name, private: private, admin: admin, archived: archived,
+                        owner_type: owner_type)
   end
 
   # A signed-in user who has *not* taken the second authorization step — the state every user is in

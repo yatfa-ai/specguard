@@ -24,15 +24,16 @@ class RepositoriesController < ApplicationController
   # directly, where a non-String does not raise but answers a different question.
   include RequestedSpecDirectoryParam
 
+  # The repositories this user may pick from, straight off GitHub, and the four different things to
+  # say when that list cannot be loaded. Shared with `BulkRegistrationsController`, which renders a
+  # picker built from the same listing and has to answer the same questions the same way.
+  include GithubRepositoryListing
+
   before_action :require_authentication
 
   # The first four are per-card questions asked by repositories/index, once per repository in the
   # list. The fifth is a per-row question asked by repositories/show, once per API key.
   helper_method :owns_repository?, :key_count_visible?, :api_key_count, :latest_run, :former_member?
-  # Read by the registration and rename forms, which are the two views that have to render a picker
-  # of the viewer's real GitHub repositories and say something useful when there is none to render.
-  helper_method :github_listing, :github_listing_error, :github_listing_error_message,
-                :github_authorization_needed?
 
   # Everything the viewer can open: what they own, plus what has been shared with them. Kept as one
   # relation rather than `owned + shared`, because concatenating two Arrays orders them
@@ -640,56 +641,13 @@ class RepositoriesController < ApplicationController
   #
   # A listing failure is not an error page. The form still renders; it says what went wrong and
   # offers the fix. Nothing on this path is authorization — `save_with_verified_ownership` is the
-  # gate, and it asks GitHub again — so a stale or empty list cannot admit anything.
-  def github_listing
-    return @github_listing if defined?(@github_listing)
-
-    @github_listing =
-      begin
-        GithubApi.for(current_user)&.repositories if current_user.github_repository_access?
-      rescue GithubApi::Error => e
-        Rails.logger.warn("[RepositoriesController] listing repositories: #{e.class}: #{e.message}")
-        @github_listing_error = listing_error_for(e)
-        nil
-      end
-  end
-
-  # The same three-way split the verification path makes, for the same reason: the listing call
-  # hits GitHub with the same token and gets the same 403s, so an SSO-blocked user must not be
-  # shown "GitHub is not answering right now" — nothing is wrong with GitHub, and waiting will not
-  # help. `:token_rejected` and `:scope_too_narrow` are the two the authorize button can fix.
-  def listing_error_for(error)
-    case error
-    when GithubApi::Unauthorized then :token_rejected
-    when GithubApi::Forbidden
-      GithubOwnership::FORBIDDEN_VERDICTS.fetch(error.reason, :scope_too_narrow)
-    else :unavailable
-    end
-  end
-
-  def github_listing_error
-    github_listing
-    @github_listing_error
-  end
-
-  # The sentence to show when the repository list could not be loaded — reusing the verification
-  # path's wording so the two ways of hitting the same GitHub refusal do not explain it differently.
-  # Phrased for a whole-page panel, so it is the verdict message with a subject in front of it.
-  def github_listing_error_message
-    status = github_listing_error
-    return nil if status.nil? || status == :unavailable
-
-    "Your repository list #{GithubOwnership::MESSAGES.fetch(status)}"
-  end
-
-  # Whether the *fix* on offer is "authorize GitHub" rather than "pick something else". True before
-  # the user has ever granted repository access, and again after a token stops working or comes
-  # back too narrow to answer with.
-  def github_authorization_needed?
-    !current_user.github_repository_access? ||
-      %i[token_rejected scope_too_narrow].include?(github_listing_error) ||
-      @github_verdict&.reauthorize? || false
-  end
+  # gate, and it asks GitHub again — so a stale or empty list cannot admit anything. See
+  # `GithubRepositoryListing`, which holds all of that and is shared with the bulk path.
+  #
+  # What this controller adds is the verdict from a write it has just ATTEMPTED: a registration
+  # refused for a grant the user does not have must offer the authorize button, and the listing
+  # alone cannot know that happened.
+  def github_verdict = @github_verdict
 
   # Submitting the form unchanged is a valid save, so don't claim a rename that didn't happen.
   def rename_notice

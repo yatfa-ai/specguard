@@ -94,25 +94,101 @@ class GithubOwnership
       client = GithubApi.for(user)
       return verdict(:not_connected, full_name) if client.nil?
 
-      repo = client.repository(full_name)
-      repo.admin? ? verdict(:verified, full_name) : verdict(:not_admin, full_name)
-    rescue GithubApi::Unauthorized
-      verdict(:token_rejected, full_name)
-    rescue GithubApi::NotFound
-      verdict(:not_found, full_name)
-    rescue GithubApi::Forbidden => e
-      # Logged *and* differentiated. The log keeps GitHub's own sentence, which can name an
-      # organization and is not the browser's business; the verdict carries the reason, because
-      # "wait" and "get your org to approve this" are opposite instructions and a user given the
-      # wrong one is stuck for good.
-      Rails.logger.warn("[GithubOwnership] #{full_name}: #{e.class}(#{e.reason}): #{e.message}")
-      verdict(FORBIDDEN_VERDICTS.fetch(e.reason, :scope_too_narrow), full_name)
-    rescue GithubApi::Unavailable => e
-      Rails.logger.warn("[GithubOwnership] #{full_name}: #{e.class}: #{e.message}")
-      verdict(:unavailable, full_name)
+      decide(client.repository(full_name), full_name)
+    rescue GithubApi::Error => e
+      verdict(status_for(e, full_name), full_name)
+    end
+
+    # The same question asked of many repositories at once, for bulk registration — one `Verdict`
+    # per name, in the order given.
+    #
+    # ## Why this is not `full_names.map { verify(...) }`
+    #
+    # That is one GitHub round trip per repository. At the twenty-repository batch SPGD-355 is
+    # written for it is twenty sequential calls before the first row is saved, and it grows without
+    # a bound the user can see: a hundred-repository organization is a hundred, which is a request
+    # that times out rather than a batch that is slow. So the listing — ONE call, the same one the
+    # picker was rendered from — is the source, and `permissions.admin` on each row is the same
+    # field `verify` reads off `GET /repos/:owner/:repo`. It is GitHub's answer to the same
+    # question, and it is not a weaker one for having arrived in a list.
+    #
+    # This is re-asked at submit time and never trusted from the browser. The form's checkboxes are
+    # client-controlled, so a submitted name that GitHub does not report as administered is refused
+    # here whatever the page offered — which is the whole reason a bulk path may reuse the listing
+    # without reopening the gap SPGD-354 closed.
+    #
+    # ## The truncation fallback
+    #
+    # `MAX_PAGES` bounds the listing, so a name can be absent from it for two very different
+    # reasons. When the listing is COMPLETE, absent means GitHub does not report this repository to
+    # this token at all, which is exactly `:not_found`. When it is TRUNCATED, absent means only that
+    # we stopped reading — so the name is asked about individually rather than refused for a
+    # property of our own page walk. That fallback is per name and unbounded in principle, which is
+    # why `BulkRegistration::MAX_BATCH` bounds the input: the cap on the batch is what keeps the cap
+    # on the listing from turning into an unbounded fan-out.
+    #
+    # ## Failure is whole-batch and closed
+    #
+    # A listing call that raises gives EVERY name the verdict that error maps to, exactly as
+    # `verify` would have given it one at a time. Nothing is registered on a GitHub outage, for the
+    # reason `RepositoriesController#save_with_verified_ownership` states: verifying by default
+    # during an outage reopens the gap intermittently, which is worse than the gap itself.
+    def verify_batch(user:, full_names:)
+      names = Array(full_names).map { |name| name.to_s.strip }.reject(&:empty?)
+      return [] if names.empty?
+
+      return names.map { |name| verdict(:not_connected, name) } unless user&.github_repository_access?
+
+      client = GithubApi.for(user)
+      return names.map { |name| verdict(:not_connected, name) } if client.nil?
+
+      listing = client.repositories
+      # Keyed case-insensitively because GitHub logins and repository names are, and a name may
+      # arrive here having been round-tripped through a form.
+      index = listing.repos.index_by { |repo| repo.full_name.downcase }
+
+      names.map { |name| batch_verdict(user, name, index, listing.truncated?) }
+    rescue GithubApi::Error => e
+      status = status_for(e, "#{names.length} repositories")
+      names.map { |name| verdict(status, name) }
     end
 
     private
+
+    def batch_verdict(user, name, index, truncated)
+      repo = index[name.downcase]
+      return decide(repo, name) if repo
+
+      # Absent from a complete listing is GitHub's own answer; absent from a truncated one is our
+      # page walk's, and those must not read the same.
+      truncated ? verify(user: user, full_name: name) : verdict(:not_found, name)
+    end
+
+    def decide(repo, full_name)
+      repo.admin? ? verdict(:verified, full_name) : verdict(:not_admin, full_name)
+    end
+
+    # Which verdict a GitHub failure becomes, and what gets logged on the way.
+    #
+    # `Unauthorized` and `NotFound` are not logged: both are ordinary answers about the world (a
+    # revoked token, a repository this account cannot see) and neither carries anything the log does
+    # not already have. The other two do carry something — GitHub's own sentence, which can name an
+    # organization and is not the browser's business.
+    def status_for(error, subject)
+      case error
+      when GithubApi::Unauthorized then :token_rejected
+      when GithubApi::NotFound then :not_found
+      when GithubApi::Forbidden
+        # Logged *and* differentiated. The verdict carries the reason, because "wait" and "get your
+        # org to approve this" are opposite instructions and a user given the wrong one is stuck for
+        # good.
+        Rails.logger.warn("[GithubOwnership] #{subject}: #{error.class}(#{error.reason}): #{error.message}")
+        FORBIDDEN_VERDICTS.fetch(error.reason, :scope_too_narrow)
+      else
+        Rails.logger.warn("[GithubOwnership] #{subject}: #{error.class}: #{error.message}")
+        :unavailable
+      end
+    end
 
     def verdict(status, full_name)
       Verdict.new(status: status, full_name: full_name, message: MESSAGES[status])
