@@ -5,8 +5,9 @@ require "openssl"
 # A CI/agent credential for one repository.
 #
 # Only the SHA-256 digest is ever persisted. The raw token exists in memory for exactly the
-# request that created the key — that is what makes the UI "reveal once": there is no code path,
-# anywhere, that can recover it afterwards.
+# request that minted it — that is what makes the UI "reveal once": there is no code path,
+# anywhere, that can recover it afterwards. A key is minted on create and re-minted on every
+# `regenerate!`; each minting is revealed for that one request and never again.
 class ApiKey < ApplicationRecord
   TOKEN_PREFIX = "sgk_"
   TOKEN_BYTES = 24
@@ -19,7 +20,8 @@ class ApiKey < ApplicationRecord
   # this column existed, or through any non-UI path, legitimately have no creator.
   belongs_to :created_by_user, class_name: "User", optional: true
 
-  # Populated on create only. `nil` on every record loaded from the database.
+  # Populated by whichever request minted the current token — `create`, or `regenerate!`. `nil` on
+  # every record loaded from the database.
   attr_reader :raw_token
 
   before_validation :assign_token, on: :create
@@ -39,17 +41,37 @@ class ApiKey < ApplicationRecord
     find_by(token_digest: digest(token))
   end
 
+  # Rotate this key in place: fresh token, same row. Name, `created_by_user` and `created_at`
+  # survive, because a rotation is an event on this key rather than a new key plus a revocation.
+  #
+  # The old digest is OVERWRITTEN, not kept alongside the new one, and `authenticate` resolves a
+  # token only by looking its digest up — so the previous token stops authenticating the moment
+  # this saves. There is no grace window and no way back to it. Storage stays digest-only: the new
+  # plaintext lives in `raw_token`, in memory, for the rest of this request and nowhere else.
+  def regenerate!
+    # `assign_token` is idempotent by design, and that is exactly what has to be defeated here:
+    # this row is already carrying the token it was minted with.
+    @raw_token = nil
+    assign_token
+    save!
+    self
+  end
+
   def touch_last_used!
     update_column(:last_used_at, Time.current)
   end
 
-  # Safe to show anywhere: identifies the key without revealing it.
+  # Safe to show anywhere: identifies the key without revealing it. Derived from the digest, so it
+  # tracks a rotation — after `regenerate!` it fingerprints the new token, not the retired one.
   def token_hint
     "#{TOKEN_PREFIX}…#{token_digest.last(6)}"
   end
 
   private
 
+  # `||=` makes this idempotent: a `valid?` before the `save` runs the callback twice, and without
+  # it the second run would swap in a different token under anyone who had already read
+  # `raw_token`. `regenerate!` clears the ivar precisely to defeat that.
   def assign_token
     @raw_token ||= "#{TOKEN_PREFIX}#{SecureRandom.urlsafe_base64(TOKEN_BYTES)}"
     self.token_digest = self.class.digest(@raw_token)

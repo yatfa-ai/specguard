@@ -353,9 +353,13 @@ class RepositoriesController < ApplicationController
       @spec_directory_window_growth =
         SpecDirectoryWindowGrowth.for(trajectory_runs, branch: @trajectory_run&.branch)
     end
-    # Set by ApiKeysController#create and readable exactly once — see ApiKeysController.
+    # Set by ApiKeysController#create and #regenerate, and readable exactly once — see
+    # ApiKeysController.
     @revealed_token = flash[:revealed_api_key]
     @revealed_token_name = flash[:revealed_api_key_name]
+    # Whether the reveal is a rotation rather than a first minting: same token panel either way,
+    # plus the one fact only a rotation carries — an old token just stopped working.
+    @revealed_token_regenerated = flash[:revealed_api_key_regenerated].present?
   end
 
   def new

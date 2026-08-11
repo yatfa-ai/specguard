@@ -72,6 +72,13 @@ module RepositoriesHelper
       "history and every other member's access went with it."
   end
 
+  # Filename for the reveal-once token download. Named after the key, so an owner who rotates two
+  # of them in a sitting can tell the files apart; `parameterize` is also what stops a
+  # user-controlled key name from reaching the browser's `download` attribute as a path.
+  def revealed_token_filename(name)
+    ["specguard", name.to_s.parameterize.presence, "api-key"].compact.join("-") + ".txt"
+  end
+
   # Why the "Suite growth" panel is not drawing a line, when there are runs on the branch but fewer
   # than two the platform will compare.
   #

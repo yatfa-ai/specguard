@@ -10,7 +10,11 @@ Rails.application.routes.draw do
 
   # --- Dashboard ----------------------------------------------------------------
   resources :repositories, only: %i[index new create show edit update destroy] do
-    resources :api_keys, only: %i[create destroy]
+    resources :api_keys, only: %i[create destroy] do
+      # A member POST, not a second collection `create`: rotation changes an existing key in place
+      # and the route has to name which one. See ApiKeysController#regenerate.
+      post :regenerate, on: :member
+    end
     # `/repositories/:repository_id/members` reads as the thing it lists (people), while the
     # controller is named for the row it actually manipulates (RepositoryMembership). `edit`
     # /`update` change a member's permission set in place: the alternative is Revoke + re-add,
