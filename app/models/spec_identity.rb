@@ -289,10 +289,10 @@ class SpecIdentity < ApplicationRecord
   def self.digest_for(text) = Digest::SHA256.hexdigest(text.to_s)
 
   # Every pair of tests in ONE repository whose texts read alike enough to be worth a human's
-  # attention — each row an EDGE, together with the seed end's own weight in examples and wall
-  # clock. {NearDuplicateClusters} owns the threshold, the neighbour cap and the grouping; this
-  # method owns only the statement, which is the sibling arrangement `SpecObservation`'s grouped
-  # reads and `RepeatedDescriptions` already use.
+  # attention — each row an EDGE, together with what the seed end weighed in ONE run, in examples
+  # and wall clock. {NearDuplicateClusters} owns the threshold, the neighbour cap, the run and the
+  # grouping; this method owns only the statement, which is the sibling arrangement
+  # `SpecObservation`'s grouped reads and `RepeatedDescriptions` already use.
   #
   # == Why this is one statement and not `nearest_neighbors` in a loop
   #
@@ -337,12 +337,40 @@ class SpecIdentity < ApplicationRecord
   # and the wall clock they actually cost. **Do not "simplify" this join away**: without it the
   # object is blind to precisely the duplicates the shipped `RepeatedDescriptions` panel reports.
   #
+  # == ⭐ And the weight join is scoped to ONE run, which the `<=>` above deliberately is not
+  #
+  # The two halves of this statement have two different grains ON PURPOSE, and the asymmetry is the
+  # correction rather than an inconsistency. WHICH texts read alike is a question about the
+  # repository — an identity outlives the run that observed it, which is what makes suite-wide
+  # clustering reachable here and nowhere else. HOW MUCH those texts weigh is a question about a
+  # suite, and a suite is a run.
+  #
+  # Unscoped, this subquery counts one row per *(test × every run it was ever observed in)*, so
+  # every figure it feeds grows with how often the repository has ingested rather than with what its
+  # suite contains. The same three-example loop reports 3 after one ingest and 30 after ten, and the
+  # ranking one rung up — cumulative wall clock — would order clusters by *(per-run cost × runs
+  # ingested)*, so a cheap cluster outranks an expensive one once it has enough history behind it.
+  # A number that is only correct on a repository that ingested exactly once is not a number this
+  # object may print.
+  #
+  # It is also the convention of the table being joined. Every aggregate on {SpecObservation} takes
+  # a `test_run` or a list of run ids, and its single exemption, `.directory_growth_between`, states
+  # why it is allowed to span runs: it *"pairs none"* — it counts each run's rows separately and
+  # subtracts two integers. Pooling several runs' rows into one `COUNT(*)` and one `SUM` is neither
+  # the convention nor the exemption, and `example_count` already means "examples in a run"
+  # everywhere else in this model.
+  #
+  # A member the run never observed therefore weighs 0 rather than being dropped: a test that was
+  # deleted, renamed, or simply not selected still keeps its identity row, and it is still part of
+  # the group that reads alike. {NearDuplicateClusters::Cluster#unobserved_members?} is where that
+  # is said out loud.
+  #
   # Only the SEED end of each edge carries weight, and that is sufficient rather than a gap: cosine
   # is symmetric, so an identity close enough to be someone's neighbour is itself a seed with at
   # least one qualifying neighbour of its own, and therefore appears in this result with its own
   # weight row. `LEFT JOIN … ON TRUE` because the aggregate subquery yields one row unconditionally
-  # — an identity nothing resolved to comes back as `0` examples, which is a fact about the
-  # repository rather than a row to drop.
+  # — an identity the run did not observe comes back as `0` examples, which is a fact about that
+  # run rather than a row to drop.
   #
   # == What a missed neighbour costs here, which is not what it costs on ingest
   #
@@ -366,12 +394,16 @@ class SpecIdentity < ApplicationRecord
   #   hit the cap and says so rather than letting the truncation pass for a finding.
   # @param similarity [Float] cosine floor, inclusive. Converted to the `<=>` distance here so the
   #   comparison lands in SQL rather than being re-derived in Ruby over every returned row.
+  # @param run_id [Integer, nil] the run the WEIGHT columns are measured in — never the clustering,
+  #   which spans runs. `nil` is a repository that has ingested nothing yet: `o.test_run_id = NULL`
+  #   is unknown for every row, so every identity comes back at 0 examples, which is the honest
+  #   weight of a suite nobody has reported.
   # @return [Array<Array>] `[id, text, signal_source, file_path, line_number, example_count,
   #   total_seconds, timed_count, neighbour_id, similarity]` per edge. `total_seconds` is nil for an
-  #   identity none of whose examples were timed, and `example_count` is 0 for one nothing resolved
-  #   to.
-  def self.near_duplicate_pairs_in(repository, similarity:, neighbours:)
-    sql = sanitize_sql_array([ <<~SQL, neighbours, repository.id, 1 - similarity ])
+  #   identity none of whose examples in that run were timed, and `example_count` is 0 for one the
+  #   run did not observe.
+  def self.near_duplicate_pairs_in(repository, similarity:, neighbours:, run_id:)
+    sql = sanitize_sql_array([ <<~SQL, neighbours, run_id, repository.id, 1 - similarity ])
       SELECT a.id, a.text, a.signal_source, a.file_path, a.line_number,
              w.example_count, w.total_seconds, w.timed_count,
              b.neighbour_id, 1 - b.distance AS similarity
@@ -391,6 +423,7 @@ class SpecIdentity < ApplicationRecord
                COUNT(o.duration_seconds) AS timed_count
         FROM spec_observations o
         WHERE o.spec_identity_id = a.id
+          AND o.test_run_id = ?
       ) w ON TRUE
       WHERE a.repository_id = ?
         AND b.distance <= ?

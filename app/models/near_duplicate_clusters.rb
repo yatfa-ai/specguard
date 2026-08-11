@@ -31,6 +31,33 @@
 # to print separately. `SpecIdentity.near_duplicate_pairs_in` carries the same warning at the join
 # itself, because that is where it would be "simplified" away.
 #
+# == ⭐ Two grains, on purpose: membership spans runs, weight is ONE run's
+#
+# WHICH texts read alike is a repository question and it is answered across every run — an identity
+# outlives the run that observed it, which is exactly what makes suite-wide clustering reachable
+# here and nowhere else, and `#clusters` will happily put two tests in one group that never ran
+# together. HOW MUCH a cluster weighs is a different question with a different answer, because a
+# suite is a run: `#example_count`, `#total_seconds` and `#timed_count` are counted in the run
+# `#weighed_run` names, and nowhere else.
+#
+# The alternative was tried and it is wrong. Summed over a repository's whole history, the weight
+# counts one row per *(test × every run it was ever observed in)*, so it grows with how often the
+# project has ingested rather than with what its suite contains: a three-example table-driven loop
+# and its near-duplicate partner — four tests — report 4 examples after one ingest and 40 after ten.
+# The ranking inherits it, cumulative wall clock being *(per-run cost × runs ingested)*, so a
+# cluster costing 0.4s per run eventually outranks one costing 20s once it has enough history behind
+# it, and "an eight-member group costing two seconds matters less than a three-member group costing
+# ninety" stops being what the ordering delivers. That is also the convention of the table being
+# joined: every aggregate on {SpecObservation} takes a run or a list of runs, and its one exemption
+# says it is allowed to span them precisely because it *"pairs none"* and keeps each run's rows
+# apart.
+#
+# So the two numbers a surface prints side by side are read at their own grains and each says which:
+# `#member_count` is "texts in this repository", `#example_count` is "examples in this run". A
+# member the weighed run did not observe — deleted, renamed, or simply not selected — stays in the
+# cluster at zero examples, and `Cluster#unobserved_members?` is where that is said rather than left
+# to be inferred from a small number.
+#
 # == It presents, and does not judge
 #
 # {RepeatedDescriptions} states the rule and it is unchanged by the grain: a group of tests that
@@ -74,14 +101,14 @@
 # == The three silences, each said rather than dropped
 #
 # `SUM` skips NULLs, so every cluster states how many of its own examples reported a timing and the
-# object states the same fraction over the whole clustered population. An identity nothing has
-# resolved to yet contributes 0 examples rather than being dropped. And observations that reached
+# object states the same fraction over the whole clustered population. An identity the weighed run
+# did not observe contributes 0 examples rather than being dropped. And observations that reached
 # no identity at all — no text to embed, or an embedding that failed — are excluded *structurally*
 # rather than by a WHERE clause, so no window over the pair read could see them;
-# `SpecObservation.identity_presence_in` is the second round trip that answers for them, and
-# `#recorded_count` rides along with it because an empty ranking over a repository that ingested
-# nothing and one over a suite whose every test reads differently are the same empty list, and only
-# the first of them is silence.
+# `SpecObservation.identity_presence_in` is the second round trip that answers for them over that
+# same run, and `#recorded_count` rides along with it because an empty ranking over a repository
+# that ingested nothing and one over a suite whose every test reads differently are the same empty
+# list, and only the first of them is silence.
 class NearDuplicateClusters
   # **The clustering threshold: two tests are near-duplicates of each other at cosine ≥ 0.85.**
   #
@@ -192,21 +219,36 @@ class NearDuplicateClusters
   # comment's ⭐ section, which names the measured 0.31 pair this misses.
   SIMILARITY_BASIS = "lexical overlap, not meaning"
 
-  # @param repository [Repository] the grain. Never a run: identity spans runs by construction, and
-  #   a per-run duplicate read is `RepeatedDescriptions`, which answers a different question.
-  def self.for(repository, limit: LIMIT, similarity: SIMILARITY, neighbours: NEIGHBOURS)
+  # What a repository that has never ingested weighs, which is nothing — and there is no run to ask
+  # it of. Spelled here rather than by teaching `SpecObservation.identity_presence_in` to take a
+  # nil: the run is this object's own precondition, and a read whose argument may be absent invites
+  # every other caller to pass one.
+  UNRUN = { recorded_count: 0, unresolved_count: 0 }.freeze
+
+  # @param repository [Repository] the grain of the CLUSTERING. Never a run: identity spans runs by
+  #   construction, and a per-run duplicate read is `RepeatedDescriptions`, which answers a
+  #   different question.
+  # @param run [TestRun, nil] the run every WEIGHT figure is measured in — see the ⭐ "Two grains"
+  #   section. Defaults to the repository's newest run, which is the anchor `annotated_ratio` and
+  #   the rest of the dashboard already read the suite's present state from; pass one explicitly to
+  #   weigh the same clusters against a different run. `nil` only for a repository that has ingested
+  #   nothing, where every cluster weighs 0 and `#recorded?` says why.
+  def self.for(repository, run: repository.latest_test_run, limit: LIMIT, similarity: SIMILARITY,
+               neighbours: NEIGHBOURS)
     edges = SpecIdentity.near_duplicate_pairs_in(repository, similarity: similarity,
-                                                             neighbours: neighbours)
+                                                             neighbours: neighbours,
+                                                             run_id: run&.id)
     clusters = Assembly.new(edges, neighbours: neighbours).clusters
 
-    new(clusters: clusters, limit: limit,
+    new(clusters: clusters, limit: limit, run: run,
         population: SpecIdentity.clusterable_population_in(repository),
-        presence: SpecObservation.identity_presence_in(repository))
+        presence: run ? SpecObservation.identity_presence_in(run) : UNRUN)
   end
 
-  def initialize(clusters:, limit:, population:, presence:)
+  def initialize(clusters:, limit:, population:, presence:, run: nil)
     @all_clusters = clusters
     @limit = limit
+    @run = run
     @population = population
     @presence = presence
   end
@@ -231,15 +273,28 @@ class NearDuplicateClusters
   def cluster_count = @all_clusters.size
 
   # How many distinct IDENTITIES those clusters cover between them, and how many EXAMPLES ran under
-  # them — the two numbers the ⭐ section of the class comment exists to keep apart. Both over every
-  # cluster found rather than over the ones that fit on the page, because on a truncated repository
-  # those are different populations and a caption is about the finding rather than about the page.
+  # them IN THE WEIGHED RUN — the two numbers the ⭐ sections of the class comment exist to keep
+  # apart, at the two grains they are read at. Both over every cluster found rather than over the
+  # ones that fit on the page, because on a truncated repository those are different populations and
+  # a caption is about the finding rather than about the page.
   def clustered_identity_count = window(:member_count)
   def clustered_example_count = window(:example_count)
 
   # How many of those examples reported a timing. The denominator of `#coverage_label`, and the
   # figure that decides whether the ranking above is a ranking or a list in an arbitrary order.
   def clustered_timed_count = window(:timed_count)
+
+  # WHICH run every weight, timing and coverage figure on this object was measured in — and the
+  # reason it is a method rather than a private detail. The clusters span the repository's whole
+  # history while their weight is one run's, so a surface printing "4 examples, 12.00s" is making a
+  # claim about a run it has to be able to name. `nil` for a repository that has never ingested,
+  # where `#recorded?` is the question to ask instead.
+  def weighed_run = @run
+  def weighed_run_id = @run&.id
+
+  # There is a run to have weighed anything against at all. False leaves every cluster at zero
+  # examples — which is a fact about this repository's history, not about its duplication.
+  def weighed? = !@run.nil?
 
   # How many identities this repository holds at all, and how they split across the two sources.
   # Not a figure the ranking needs — they are the figures that decide whether an EMPTY ranking means
@@ -250,10 +305,12 @@ class NearDuplicateClusters
   def intent_identity_count = @population[:intent_count]
   def name_identity_count = @population[:name_count]
 
-  # How many per-example rows this repository recorded at all, and how many of them reached no
+  # How many per-example rows the WEIGHED RUN recorded at all, and how many of them reached no
   # identity. See `SpecObservation.identity_presence_in`: the second is this grain's "rows with no
   # resolvable text" — a spec with neither intent nor name, or one whose embedding failed — and it
   # is excluded from the clustering structurally, so it has to be counted separately or not at all.
+  # Counted over the same run's rows the weights were summed over, so the caption and the list are
+  # halves of one population rather than two.
   def recorded_count = @presence[:recorded_count]
   def unresolved_count = @presence[:unresolved_count]
 
@@ -272,11 +329,12 @@ class NearDuplicateClusters
   # threshold it is showing rather than leaving a reader to assume one.
   def similarity_floor = SIMILARITY
 
-  # This repository recorded per-example rows AT ALL — the question that decides whether the surface
-  # has anything to say, and the one an empty `clusters` cannot answer. The `recorded?` /
-  # `clusterable?` / `any?` split is `UnstableTests`' three-way split at this grain: "nothing was
-  # ingested", "nothing was embedded" and "nothing reads alike" are three different facts and a
-  # panel says them differently.
+  # The weighed run recorded per-example rows AT ALL — the question that decides whether the surface
+  # has anything to say, and the one an empty `clusters` cannot answer. False too for a repository
+  # with no run to weigh against, which is the same silence arriving one step earlier. The
+  # `recorded?` / `clusterable?` / `any?` split is `UnstableTests`' three-way split at this grain:
+  # "nothing was ingested", "nothing was embedded" and "nothing reads alike" are three different
+  # facts and a panel says them differently.
   def recorded? = recorded_count.positive?
 
   # At least one identity exists, so the search had something to search. False for a repository
@@ -320,16 +378,18 @@ class NearDuplicateClusters
   # the other 3,900 tests?", which a bare cluster count invites and cannot answer.
   def identity_coverage_label = "#{clustered_identity_count} of #{identity_count}"
 
-  # One group of tests that read alike, and what the examples under them cost between them.
+  # One group of tests that read alike, and what the examples under them cost in the weighed run.
   #
-  # `member_count` and `example_count` are different numbers ON PURPOSE — see the ⭐ section of the
-  # class comment. A cluster of two identities can cover eight examples, and reporting either figure
-  # as though it were the other is the specific mistake this whole object is shaped to avoid.
+  # `member_count` and `example_count` are different numbers ON PURPOSE, and they are read at two
+  # different grains — see the ⭐ sections of the class comment. A cluster of two identities can
+  # cover eight examples, or none at all if the run observed neither of them, and reporting either
+  # figure as though it were the other is the specific mistake this whole object is shaped to avoid.
   Cluster = Struct.new(:signal_source, :members, :example_count, :total_seconds, :timed_count,
                        :strongest_similarity, :weakest_similarity, :saturated_member_count,
                        keyword_init: true) do
-    # How many distinct TEXTS this cluster holds. Never the number of tests it stands for: exact
-    # duplicates were collapsed onto one row by the unique key before this object saw them.
+    # How many distinct TEXTS this cluster holds, across the repository's whole history. Never the
+    # number of tests it stands for: exact duplicates were collapsed onto one row by the unique key
+    # before this object saw them.
     def member_count = members.size
 
     # This cluster has a measured total. False when every example under it went untimed, which is
@@ -342,8 +402,10 @@ class NearDuplicateClusters
     def from_intent? = signal_source == "intent"
     def from_name? = signal_source == "name"
 
-    # At least one member is an identity nothing has resolved to in any ingested run, so the member
-    # list holds a row that contributes nothing to what this cluster costs.
+    # At least one member is an identity the weighed run did not observe, so the member list holds a
+    # row that contributes nothing to what this cluster costs. Not an anomaly and not rare: a test
+    # that was deleted or renamed keeps its identity, and it still belongs to the group that reads
+    # alike — which is why it is disclosed rather than filtered out.
     #
     # Asked of the MEMBERS, one at a time, and never of the cluster's arithmetic. `example_count <
     # member_count` is a tempting one-liner and it is wrong in this object's headline scenario: the
@@ -388,14 +450,15 @@ class NearDuplicateClusters
   end
 
   # One identity inside a cluster: the text, where it was last seen, and what the examples that
-  # resolved to it cost.
+  # resolved to it cost in the weighed run.
   Member = Struct.new(:id, :text, :signal_source, :file_path, :line_number, :example_count,
                       :total_seconds, :timed_count, keyword_init: true) do
     def timed? = !total_seconds.nil?
 
-    # No example in any ingested run resolved to this text. Not an error — an identity outlives the
-    # runs that observed it, so a deleted test keeps its row — but it contributes nothing to what
-    # this cluster costs, and a member list that did not say so would look like a member that ran.
+    # The weighed run ran at least one example under this text. Not an error when it did not — an
+    # identity outlives the runs that observed it, so a test that was deleted, renamed, or left out
+    # of this run keeps its row — but it contributes nothing to what this cluster costs, and a
+    # member list that did not say so would look like a member that ran.
     def observed? = example_count.positive?
 
     def duration_label = SpecObservation.humanized_duration(total_seconds)

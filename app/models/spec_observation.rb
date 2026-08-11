@@ -1298,9 +1298,9 @@ class SpecObservation < ApplicationRecord
       .limit(limit)
   end
 
-  # Whether a repository's examples carry a durable identity at all, and how many of them do not —
-  # the two facts a read grouped over `spec_identities` has to establish before anything it returns
-  # can be read.
+  # Whether ONE run's examples carry a durable identity at all, and how many of them do not — the
+  # two facts a read grouped over `spec_identities` has to establish before anything it returns can
+  # be read.
   #
   # The `spec_identities` grain's counterpart of `.description_presence_in`, and here for the same
   # reason that one exists: {NearDuplicateClusters} can only see examples that reached an identity,
@@ -1320,14 +1320,22 @@ class SpecObservation < ApplicationRecord
   # produce the identical empty ranking, and rendering "nothing here is repeated" over the first is
   # *Vacuous Green* — "nobody told us" wearing the spelling of "there is no redundancy".
   #
+  # == Scoped to the run, because the figures it is a caption FOR are
+  #
+  # {NearDuplicateClusters} weighs its clusters in one run's examples, so these two must be counted
+  # over that same run's rows or the caption is a fraction whose halves were measured over different
+  # populations — which is the property that object claims for itself. Repository-wide, the second
+  # figure is also monotonic in a way it must not be: SPGD-367 leaves a failed embed's
+  # `spec_identity_id` NULL forever, so a suite whose every current test resolves cleanly would go
+  # on reporting a growing count of exclusions from runs long past.
+  #
   # One aggregate rather than two round trips, for the reason `.coverage_in` gives: a caption
   # fetched separately from the list it describes is a claim with no structural reason to keep
-  # agreeing with it. `repository_id` leads, which is what `index_spec_observations_on_repository_id`
-  # serves — this grain is the repository, never a run.
+  # agreeing with it.
   #
   # @return [Hash{Symbol=>Integer}] `recorded_count` and `unresolved_count`, both counted in rows.
-  def self.identity_presence_in(repository)
-    counts = where(repository_id: repository.id).pick(
+  def self.identity_presence_in(test_run)
+    counts = where(test_run_id: test_run.id).pick(
       Arel.sql("COUNT(*)"),
       Arel.sql("COUNT(*) FILTER (WHERE spec_identity_id IS NULL)")
     )

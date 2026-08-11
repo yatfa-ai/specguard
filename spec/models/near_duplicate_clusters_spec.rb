@@ -98,18 +98,27 @@ RSpec.describe NearDuplicateClusters do
       expect(clusters.first.members.map(&:text)).to contain_exactly(EXPIRED, OUTRIGHT)
     end
 
-    # The grain is the REPOSITORY. `SpecObservation.repeated_descriptions_in` is scoped to one run
-    # and could never see this: the two tests never ran together.
+    # The grain of the MEMBERSHIP is the repository. `SpecObservation.repeated_descriptions_in` is
+    # scoped to one run and could never see this: the two tests never ran together.
     it "clusters across runs, because identity outlives the run that observed it" do
       first = create_test_run(repository: repository, commit_sha: "aaaa1111")
       second = create_test_run(repository: repository, commit_sha: "bbbb2222")
       observe(identity(EXPIRED, line: 3), test_run: first)
       observe(identity(OUTRIGHT, line: 9), test_run: second)
 
-      clusters = described_class.for(repository).clusters
+      result = described_class.for(repository)
+      cluster = result.clusters.first
 
-      expect(clusters.size).to eq(1)
-      expect(clusters.first.example_count).to eq(2)
+      expect(result.clusters.size).to eq(1)
+      expect(cluster.member_count).to eq(2)
+
+      # …and the grain of the WEIGHT is one run. The member the newest run never observed stays in
+      # the cluster at zero examples and is disclosed, rather than being dropped from the group or
+      # quietly added into a total that would then describe no run at all.
+      expect(result.weighed_run).to eq(second)
+      expect(cluster.example_count).to eq(1)
+      expect(cluster.members.reject(&:observed?).map(&:text)).to eq([ EXPIRED ])
+      expect(cluster).to be_unobserved_members
     end
 
     # The lower edge of the band. 0.80 is where "a different test" starts, per the provider's own
@@ -156,6 +165,64 @@ RSpec.describe NearDuplicateClusters do
 
       expect(cluster.total_seconds).to eq(8.0)
       expect(cluster.coverage_label).to eq("4 of 4")
+    end
+  end
+
+  # The reading that separates "the examples this suite contains" from "the rows this repository has
+  # accumulated". One ingest cannot tell the two apart — every figure agrees at a history of one —
+  # so the flagship fixture above is run forward ten times and asked for the same numbers.
+  #
+  # Unscoped, the weight lateral counts one row per *(test × every run it was ever observed in)*:
+  # this suite would report 40 examples and 80 seconds for four tests, and the ranking above would
+  # order clusters by how long they have existed rather than by what they cost.
+  describe "a suite that has been ingested many times over" do
+    let(:ingests) { 10 }
+
+    before do
+      loop_identity = identity(EXPIRED, line: 3)
+      partner = identity(OUTRIGHT, line: 9)
+
+      ingests.times do |index|
+        ingest = create_test_run(repository: repository, commit_sha: format("%08x", index))
+        3.times { observe(loop_identity, duration: 1.0, test_run: ingest) }
+        observe(partner, duration: 5.0, test_run: ingest)
+      end
+    end
+
+    it "weighs the four tests the suite holds, not the forty rows the ingests wrote" do
+      expect(repository.spec_observations.count).to eq(40)
+
+      cluster = described_class.for(repository).clusters.first
+
+      expect(cluster.member_count).to eq(2)
+      expect(cluster.example_count).to eq(4)
+      expect(cluster.total_seconds).to eq(8.0)
+      expect(cluster.coverage_label).to eq("4 of 4")
+    end
+
+    # Every figure on the object counted over the run the weights were summed in — the property the
+    # class comment claims for itself, and the one that fails if the caption is read repository-wide
+    # while the list is read per-run.
+    it "counts its captions over the same run it weighed" do
+      result = described_class.for(repository)
+
+      expect(result.weighed_run).to eq(repository.latest_test_run)
+      expect(result).to be_weighed
+      expect(result.recorded_count).to eq(4)
+      expect(result.clustered_example_count).to eq(4)
+      expect(result.coverage_label).to eq("4 of 4")
+    end
+
+    # The run is a parameter rather than a fact about the newest ingest, so a surface can weigh the
+    # same clusters against the run its reader is looking at.
+    it "weighs the same clusters against whatever run it is handed" do
+      first = repository.test_runs.order(:id).first
+
+      result = described_class.for(repository, run: first)
+
+      expect(result.weighed_run).to eq(first)
+      expect(result.clusters.first.example_count).to eq(4)
+      expect(result.clusters.first.total_seconds).to eq(8.0)
     end
   end
 
@@ -264,7 +331,11 @@ RSpec.describe NearDuplicateClusters do
       clusters = described_class.for(repository).clusters
 
       expect(clusters.map(&:member_count)).to eq([ 2, 3 ])
-      expect(clusters.map(&:total_seconds)).to eq([ 40.0, 0.30000000000000004 ])
+      expect(clusters.first.total_seconds).to eq(40.0)
+      # `be_within` rather than the literal sum of three 0.1s: what the ranking rests on is that the
+      # cheap cluster totals about a third of a second, not which IEEE-754 representation of it the
+      # addition happened to land on.
+      expect(clusters.last.total_seconds).to be_within(0.001).of(0.3)
     end
 
     it "puts a cluster nobody timed last, never first" do
@@ -313,6 +384,23 @@ RSpec.describe NearDuplicateClusters do
       expect(distinct).not_to be_any
     end
 
+    # A repository whose ingests wrote identities but whose runs are all gone — or which has not
+    # been ingested at all — has nothing to weigh clusters in. It says so, rather than presenting a
+    # cluster at zero examples as a cluster that costs nothing.
+    it "says there was no run to weigh against, rather than reporting a weightless finding" do
+      identity(EXPIRED, line: 3)
+      identity(OUTRIGHT, line: 9)
+
+      result = described_class.for(repository)
+
+      expect(result).not_to be_weighed
+      expect(result.weighed_run).to be_nil
+      expect(result).not_to be_recorded
+      expect(result).to be_clusterable
+      expect(result.clusters.first.example_count).to be_zero
+      expect(result.clusters.first).to be_unobserved_members
+    end
+
     # An observation that reached no identity is excluded structurally — there is nothing to cluster
     # it by — so no window over the pair read could ever have counted it.
     it "answers separately for the examples that reached no identity" do
@@ -334,6 +422,27 @@ RSpec.describe NearDuplicateClusters do
       observe(identity(EXPIRED, line: 3))
 
       expect(described_class.for(repository)).not_to be_excluded_unresolved_rows
+    end
+
+    # Counted repository-wide this figure could only ever grow: SPGD-367 leaves a failed embed's
+    # `spec_identity_id` NULL forever, so a suite whose every current test resolves cleanly would go
+    # on reporting exclusions from runs long past. Counted in the weighed run, it says what THIS run
+    # could not read — which is the only population the weights beside it were summed over.
+    it "does not carry a past run's unresolved rows into this run's caption" do
+      old = create_test_run(repository: repository, commit_sha: "0dd0dd00")
+      SpecObservation.create!(
+        repository: repository, test_run: old, example_id: "./spec/models/old_spec.rb[1:1]",
+        file_path: "spec/models/old_spec.rb", spec_file_path: "spec/models/old_spec.rb",
+        line_number: 1, name: nil, status: "unannotated"
+      )
+      observe(identity(EXPIRED, line: 3))
+
+      result = described_class.for(repository)
+
+      expect(result.weighed_run).to eq(run)
+      expect(result.recorded_count).to eq(1)
+      expect(result.unresolved_count).to be_zero
+      expect(result).not_to be_excluded_unresolved_rows
     end
   end
 
@@ -552,11 +661,18 @@ RSpec.describe NearDuplicateClusters do
     # plans statements about the query: the price binds to the transaction rather than to the block
     # that issued it, so a plan taken on the read's leftovers would be resting on the suite's
     # transaction strategy instead of on the code.
+    #
+    # And it puts the price back, for the same reason the read does. This helper would otherwise be
+    # the one thing in the file that leaves a 1536× operator price set on the example's transaction,
+    # twenty lines above the example that exists to prove nothing does.
     def plan_for_actual_sql(&)
       sql = captured_sql(&)
       connection = ActiveRecord::Base.connection
+      previous = connection.select_value("SHOW cpu_operator_cost")
       connection.execute("SET LOCAL cpu_operator_cost = #{SpecIdentity::VECTOR_OPERATOR_COST}")
       connection.select_values("EXPLAIN #{sql}").join("\n")
+    ensure
+      connection.execute("SET LOCAL cpu_operator_cost = #{previous}") if previous
     end
 
     it "answers each identity's neighbour question off the HNSW index" do
@@ -634,6 +750,7 @@ RSpec.describe NearDuplicateClusters do
     it "asks a fixed number of questions however large the suite is" do
       small = create_repository(user: create_user(github_uid: "4004", github_handle: "small"),
                                 github_full_name: "acme/small")
+      create_test_run(repository: small, commit_sha: "0000ffff")
       create_spec_identity(repository: small, text: EXPIRED, file_path: "spec/a_spec.rb",
                            line_number: 1)
 
@@ -641,15 +758,16 @@ RSpec.describe NearDuplicateClusters do
         .to eq(count_queries { described_class.for(small) })
     end
 
-    # Six, and each of them named: the price to be restored, the correction, the pair read, the
-    # restore, the identity population, and the observation presence. A bare total cannot tell "one
-    # read per question" from "one question read twice", so the number is asserted next to the list
-    # it stands for. Three of the six are the planner directive and its bookends, and none of them
-    # depends on how much the repository holds.
+    # Seven, and each of them named: the run to weigh in, the price to be restored, the correction,
+    # the pair read, the restore, the identity population, and the observation presence. A bare
+    # total cannot tell "one read per question" from "one question read twice", so the number is
+    # asserted next to the list it stands for. Three of the seven are the planner directive and its
+    # bookends, and none of them depends on how much the repository holds.
     it "reads spec_identities twice and spec_observations once, whatever it finds" do
       statements = executed_sql { described_class.for(repository) }
 
-      expect(statements.size).to eq(6)
+      expect(statements.size).to eq(7)
+      expect(statements.grep(/FROM "test_runs"/).size).to eq(1)
       expect(statements.grep(/SHOW cpu_operator_cost/).size).to eq(1)
       expect(statements.grep(/set_config\('cpu_operator_cost'/).size).to eq(2)
       expect(statements.grep(/CROSS JOIN LATERAL/).size).to eq(1)
