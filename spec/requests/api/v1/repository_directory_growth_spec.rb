@@ -381,7 +381,8 @@ RSpec.describe "GET /api/v1/repository — directory_growth", type: :request do
 
       expect(block).to include("state" => "anchor_unmeasured", "comparable" => false, "rows" => [],
                                "window_run_count" => 2, "anchor_commit_sha" => "emptyrun0001",
-                               "baseline_commit_sha" => nil)
+                               "baseline_commit_sha" => nil,
+                               "covered_run_count" => nil, "runs_back" => nil)
     end
 
     it "names a window of one run as having no earlier run, not as an empty comparison" do
@@ -390,7 +391,8 @@ RSpec.describe "GET /api/v1/repository — directory_growth", type: :request do
       _window, block = blocks(query: { branch: "main" })
 
       expect(block).to include("state" => "no_earlier_run", "comparable" => false, "rows" => [],
-                               "window_run_count" => 1, "covered_run_count" => 1,
+                               "window_run_count" => 1,
+                               "covered_run_count" => nil, "runs_back" => nil,
                                "anchor_commit_sha" => "onlyrun00001", "baseline_commit_sha" => nil)
     end
 
@@ -408,6 +410,7 @@ RSpec.describe "GET /api/v1/repository — directory_growth", type: :request do
                                "rows" => [], "window_run_count" => 3,
                                "skipped_unmeasured_count" => 2,
                                "skipped_assembled_differently_count" => 0,
+                               "covered_run_count" => nil, "runs_back" => nil,
                                "baseline_commit_sha" => nil)
     end
 
@@ -427,6 +430,7 @@ RSpec.describe "GET /api/v1/repository — directory_growth", type: :request do
                                "rows" => [], "window_run_count" => 3,
                                "skipped_unmeasured_count" => 0,
                                "skipped_assembled_differently_count" => 2,
+                               "covered_run_count" => nil, "runs_back" => nil,
                                "baseline_commit_sha" => nil)
     end
 
@@ -498,9 +502,64 @@ RSpec.describe "GET /api/v1/repository — directory_growth", type: :request do
       expect(window).to include("branch_scope" => "single_branch", "branch" => "does-not-exist",
                                 "grouped" => true)
       expect(block).to include("state" => "anchor_unmeasured", "window_run_count" => 0,
-                               "rows" => [], "anchor_commit_sha" => nil)
+                               "rows" => [], "anchor_commit_sha" => nil,
+                               "covered_run_count" => nil, "runs_back" => nil)
       expect(growth_grain_reads { get_repository(key: api_key, query: { branch: "does-not-exist" }) })
         .to be_empty
+    end
+
+    # ⭐ THE CONTRACT THE FIVE EXAMPLES ABOVE PIN, STATED ONCE AS AN INVARIANT: the span figures are
+    # served IF AND ONLY IF there is a baseline to count them to, which is the same condition
+    # `baseline_commit_sha` is served under and is read off the same `baseline_run` in the same
+    # serializer.
+    #
+    # `SpecDirectoryWindowGrowth#covered_run_count` is `runs_back + 1` over a `runs_back` that keeps
+    # its `0` DEFAULT in every state the walk landed on no baseline in — so a serializer passing it
+    # through answers "this comparison spans one run" where no comparison was taken, and the block
+    # then contradicts itself two keys apart: `shortened: false` claims the span equals the window
+    # while `covered_run_count: 1` against `window_run_count: 2` says it does not. The degenerate end
+    # is the third row below: an unknown branch selects ZERO runs and would report a span of one over
+    # a window holding none, beside an `anchor_commit_sha` of `null` in the same body.
+    #
+    # Swept across the three shapes AT ONCE, on three branches of one repository, because the defect
+    # is the pair coming apart rather than any single state's figure — and the middle row is what
+    # keeps this from being satisfiable by nulling the keys everywhere: a baseline the walk DID land
+    # on still owes its true span, and in the recorded-rows states that span is the actionable half
+    # of the answer ("the run that recorded nothing is one back, and it is this sha").
+    it "counts a span only where there is a baseline to count it to, and never against none" do
+      ingest_areas({ "spec/models" => 2 }, commit_sha: "loneanchor01", at: 10.days.ago,
+                   branch: "solo")
+      ingest(repository, [], commit_sha: "totalsonly01", at: 20.days.ago, total: 400, branch: "pair")
+      ingest_areas({ "spec/models" => 2 }, commit_sha: "pairanchor01", at: 10.days.ago,
+                   branch: "pair")
+
+      spans = %w[solo pair does-not-exist].to_h do |branch|
+        _window, block = blocks(query: { branch: branch })
+        [branch, block.values_at("state", "baseline_commit_sha", "covered_run_count", "runs_back")]
+      end
+
+      expect(spans).to eq(
+        "solo" => ["no_earlier_run", nil, nil, nil],
+        "pair" => ["baseline_unrecorded", "totalsonly01", 2, 1],
+        "does-not-exist" => ["anchor_unmeasured", nil, nil, nil]
+      )
+    end
+
+    # The key-always-present rule, asserted where nulling the two figures above could quietly break
+    # it: they go to `null` rather than going ABSENT. The exact-keys contract runs on the comparable
+    # fixture, so without this the absence states — which are seven of the eight, and the ones a
+    # client meets when something is wrong — would have no example stating their shape at all.
+    it "serves the same key set in a state with no comparison as in one with a comparison" do
+      ingest_areas({ "spec/models" => 2 }, commit_sha: "loneanchor01", at: 10.days.ago,
+                   branch: "solo")
+      asymmetric_window
+
+      _window, absent = blocks(query: { branch: "solo" })
+      _window, compared = blocks(query: { branch: "main" })
+
+      expect(compared["state"]).to eq("comparable")
+      expect(absent["state"]).to eq("no_earlier_run")
+      expect(absent.keys).to match_array(compared.keys)
     end
   end
 

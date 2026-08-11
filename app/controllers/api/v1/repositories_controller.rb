@@ -858,8 +858,9 @@ class Api::V1::RepositoriesController < Api::BaseController
   # finding it: a surface reporting a clean result for work it did not do. The `null` cannot be
   # misread, and this block says which of the two states produced it.
   #
-  # `order` NAMES ALL THREE KEYS, and `tie_break_served` is `true` here — the one place on this
-  # endpoint where it is. `UnstableTests#initialize` sorts by `(-failed_run_count, -run_count,
+  # `order` NAMES ALL THREE KEYS, and `tie_break_served` is `true` here — one of the two places on
+  # this endpoint where it is, the other being `serialized_directory_growth_window`.
+  # `UnstableTests#initialize` sorts by `(-failed_run_count, -run_count,
   # name)` and every one of those three is served on the row below, so unlike `history` and
   # `branches` — whose tie-breaks are an ingest sequence and a last-run timestamp that no row
   # carries — a client CAN reproduce this order from what it holds. Stated rather than assumed,
@@ -1133,10 +1134,31 @@ class Api::V1::RepositoriesController < Api::BaseController
   # run of the window and the baseline is the OLDER end, which is the direction every `change` on
   # every row below is signed in.
   #
+  # ⭐ THE SPAN IS NULL WHEREVER THE SHA IS — one predicate, `baseline_run`, read ONCE into a local
+  # and used for all three keys, so the figures and the run they are counted to cannot come apart.
+  # `#covered_run_count` is `runs_back + 1` and `runs_back` keeps its `0` default in exactly the four
+  # states the walk landed on no baseline in, so serving it raw asserts a ONE-RUN COMPARISON that was
+  # never taken: `anchor_unmeasured` would carry `covered_run_count: 1` beside `window_run_count: 2`
+  # and `shortened: false` — the block's own claim that the span equals the window, and its own
+  # figures denying it, two keys apart. The degenerate end is worse: an unknown `?branch=` selects
+  # ZERO runs and would serve a comparison spanning one run over a window holding none, next to an
+  # `anchor_commit_sha` of `null`. The panel never prints the figure in these states —
+  # `spec_directory_window_growth_span_sentence` is reached only under `comparable? &&
+  # any_movement?` — so this endpoint is the FIRST surface that can be wrong with it, and a
+  # fabricated span sitting among the honesty fields is the exact failure they exist to prevent.
+  # `null` is the same answer `baseline_commit_sha` already gives, for the same reason, and it is a
+  # PINNED CONTRACT rather than a default: the spec asserts both keys in every one of the four.
+  # The four states that DID land on a baseline — `comparable` and the three recorded-rows absences
+  # — carry a true span, and it is their actionable payload ("the run that recorded nothing is two
+  # back"), so the gate is `baseline_run` and never `comparable?`.
+  #
   # `truncated` DISCLOSES THE CAP with both operands beside it. `directory_count` is counted BEFORE
   # `SpecObservation::MOVED_DIRECTORIES_LIMIT` applies (a window function, so it runs before the
   # `LIMIT`), which is what makes the comparison answerable at all; `limit` is read off that
-  # constant rather than restated, so the response cannot claim a bound the query did not apply.
+  # constant rather than restated — this call site passes no `limit:`, so the constant IS the bound
+  # the query applied. It is the object's default that makes that true, not the serving of it: the
+  # object does not expose the limit it was built with, so a caller that ever passed `limit: 5` here
+  # would need this key taught to follow it rather than re-read the constant.
   #
   # `baseline_recorded_count`/`anchor_recorded_count` are the DENOMINATORS the recorded-rows states
   # turn on — how many per-example rows each end wrote in total — and deliberately not
@@ -1153,18 +1175,20 @@ class Api::V1::RepositoriesController < Api::BaseController
 
     return nil if growth.nil?
 
+    baseline = growth.baseline_run
+
     {
       state: growth.state,
       comparable: growth.comparable?,
       rows: growth.rows.map { |row| serialized_directory_growth_row(row) },
       window_run_count: growth.window_run_count,
-      covered_run_count: growth.covered_run_count,
-      runs_back: growth.runs_back,
+      covered_run_count: baseline && growth.covered_run_count,
+      runs_back: baseline && growth.runs_back,
       shortened: growth.shortened?,
       skipped_unmeasured_count: growth.skipped_unmeasured_count,
       skipped_assembled_differently_count: growth.skipped_assembled_differently_count,
       anchor_commit_sha: growth.anchor_run&.commit_sha,
-      baseline_commit_sha: growth.baseline_run&.commit_sha,
+      baseline_commit_sha: baseline&.commit_sha,
       directory_count: growth.directory_count,
       truncated: growth.truncated?,
       baseline_recorded_count: growth.baseline_recorded_count,
