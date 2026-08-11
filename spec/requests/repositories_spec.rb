@@ -5,6 +5,11 @@ require "rails_helper"
 RSpec.describe "Repository registration and API keys", type: :request do
   before { @user = sign_in_via_github }
 
+  # The rendered copy as a reader sees it, with the ERB's own line breaks and indentation
+  # collapsed — the examples below are about sentences, and a sentence assembled across two ERB
+  # tags is one sentence on the page whatever the source did with whitespace.
+  def page_text = Capybara.string(response.body).text.gsub(/\s+/, " ")
+
   it "registers a GitHub repository for the signed-in user" do
     expect {
       post repositories_path, params: { repository: { github_full_name: "acme/billing-service" } }
@@ -90,7 +95,17 @@ RSpec.describe "Repository registration and API keys", type: :request do
     expect(response.body).to include("Connect this repository")
     expect(response.body).to include("GET #{api_v1_repository_url}")
     expect(response.body).not_to include(%(curl -H "Authorization: Bearer &lt;token&gt;"))
-    expect(response.body).to include("This repository has no API key yet")
+
+    # The opening sentence is shared with the branch a member without `keys.manage` gets, so it
+    # cannot tell the two apart on its own. What this branch owes the reader is the POINTER — the
+    # ticket's "the guidance directs them to mint a key first" — so pin that sentence itself.
+    expect(page_text).to include("This repository has no API key yet")
+    expect(page_text).to include("Mint a key in API keys below")
+
+    # ...and the pointer has to point somewhere: #api-keys is the id of the keys panel below, which
+    # is gated on the same `keys.manage` this branch is, so the link never dangles for its reader.
+    expect(response.body).to include(%(<a href="#api-keys"))
+    expect(response.body).to include(%(id="api-keys"))
   end
 
   it "tells a member who cannot mint keys who to ask for one" do
@@ -100,9 +115,17 @@ RSpec.describe "Repository registration and API keys", type: :request do
 
     get repository_path(repository)
 
-    expect(response.body).to include("This repository has no API key yet")
-    expect(response.body).to include("octo-owner")
+    # The handle alone proves nothing here: the Overview panel renders an "Owner" row for view
+    # members too, so `include("octo-owner")` passes even if this branch never names anyone. Pin
+    # the sentence, which puts the handle in the one position that means "ask THIS person".
+    expect(page_text).to include("This repository has no API key yet")
+    expect(page_text).to include("Ask #{owner.display_name} to mint one")
+
+    # The other keyless branch's pointer is `keys.manage`-only — and it is positively asserted in
+    # the owner example above, so this negative is load-bearing: it fails if the two branches
+    # collapse into one, rather than passing because neither says anything.
     expect(response.body).not_to include("Mint a key in")
+    expect(response.body).not_to include(%(<a href="#api-keys"))
   end
 
   it "reports 'not connected' while no API key has ever been used" do
@@ -1622,10 +1645,8 @@ RSpec.describe "Repository registration and API keys", type: :request do
     # up as N of them rather than as a passing test — is the shared subscriber in
     # `spec/support/query_capture.rb`.
 
-    # The rendered copy as a reader sees it, with the ERB's own line breaks and indentation
-    # collapsed — the examples below are about sentences, and a sentence assembled across two ERB
-    # tags is one sentence on the page whatever the source did with whitespace.
-    def page_text = Capybara.string(response.body).text.gsub(/\s+/, " ")
+    # `page_text` — the rendered copy with the ERB's whitespace collapsed — is defined once at the
+    # top of this file; these examples are about sentences on the card, and use it unchanged.
 
     # The card's cost rows, asserted against `test_run_cost_rows` — the seam `show` renders too —
     # rather than only against literals spelled out here.

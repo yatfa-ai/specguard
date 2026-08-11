@@ -149,9 +149,12 @@
 
   <%# Asked ONCE for the whole page and passed down, not re-asked per panel: two panels branch on
       it (the connect panel's "Try it" below, and the API keys table), and `@api_keys.any?` on an
-      unloaded relation is a real SELECT each time. The keys panel used to be the only asker, so
-      re-asking here would have added a query to every render of this page — which the Overview
-      panel's query-count guard counts, cache hits included. %>
+      unloaded relation is a real SELECT each time.
+
+      Cost, precisely: for a `keys.manage` viewer this is free — the keys table was already asking,
+      and the Overview panel's query-count guard counts what that render costs. A view-only member
+      never asked before and now always does, so their page pays one SELECT it did not before. The
+      connect panel genuinely needs the answer, so that query is bought, not leaked. %>
   <% has_api_keys = @api_keys.any? %>
 
   <%# Deliberately OUTSIDE the @revealed_token gate above: the instructions have to outlive the
@@ -224,8 +227,14 @@
 
       That is the deliberate line on this page: controls and credential metadata are gated, the
       endpoint documentation and connection-health stat above are not. A `view` member legitimately
-      needs to know whether CI is reaching this repository, and nothing in that panel says anything
-      about a key. The owner holds every capability, so their page is unchanged. %>
+      needs to know whether CI is reaching this repository.
+
+      That line moved slightly, deliberately: the connect panel's "Try it" now branches on whether
+      a key EXISTS, so a view member reading it learns that one bit — previously confined to this
+      gated panel. It is the weakest fact about a key (that there is one, not its name, hint, or
+      last use), the Connection stat beside it already implies a version of it, and withholding it
+      would mean showing a member a placeholder command for a credential nobody has yet. The owner
+      holds every capability, so their page is unchanged. %>
   <% manage_keys = repository_policy.can?(:keys_manage) %>
 
   <div class="grid gap-4 lg:grid-cols-3">
