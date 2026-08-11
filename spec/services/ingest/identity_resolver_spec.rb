@@ -239,6 +239,97 @@ RSpec.describe Ingest::IdentityResolver do
     end
   end
 
+  describe "re-ingesting text that has not changed" do
+    # The optimisation itself, asserted as work NOT DONE rather than as a duration. A byte-identical
+    # re-ingest is the ordinary case and not a corner — run 2 of an unchanged suite is every row of
+    # it — and each of those rows is named outright by the `(repository_id, text_digest)` equality
+    # `#claim_identity` already upserts onto, so nothing has to be embedded to find it again.
+    #
+    # Counted through `EmbeddingGenerator.provider=`, the public swap seam `with lexical embeddings`
+    # itself uses, rather than by stubbing `EmbeddingGenerator.call`: what is counted is then the
+    # real call the resolver makes through the real interface, width validation and all. Delegating
+    # to `LocalProvider` rather than returning a fixture vector keeps every fallthrough behaving
+    # exactly as it does everywhere else in this file, so the counter can be installed without
+    # changing what the example under it measures.
+    let(:counting_provider) do
+      Class.new do
+        class << self
+          def calls = @calls ||= 0
+
+          def call(text)
+            @calls = calls + 1
+            EmbeddingGenerator::LocalProvider.call(text)
+          end
+        end
+      end
+    end
+
+    it "embeds nothing at all when every text is byte-identical to a row already held" do
+      ingest(suite, ci_run_id: "run-1")
+
+      EmbeddingGenerator.provider = counting_provider
+      ingest(suite(offset: 10), ci_run_id: "run-2")
+
+      expect(counting_provider.calls).to eq(0)
+    end
+
+    it "still embeds a text this repository has never seen" do
+      # The counter is only worth reading if it can move: same instrument, same three-example suite,
+      # one of them renamed. A rename's bytes differ, so the equality cannot answer and today's path
+      # runs — which is the fallthrough the whole change depends on, observed rather than assumed.
+      ingest(suite, ci_run_id: "run-1")
+
+      EmbeddingGenerator.provider = counting_provider
+      ingest(suite(offset: 10, renamed: "User#save refuses a handle that is already taken"),
+             ci_run_id: "run-2")
+
+      expect(counting_provider.calls).to eq(1)
+    end
+
+    it "re-sights every row whose embed it skipped, rather than becoming a no-op" do
+      # The failure mode a skip invites: returning early and never moving the row. Skipping the
+      # EMBED must not skip the SIGHTING — `SpecIdentity::RESIGHTABLE` is what a re-sighting moves,
+      # and none of it needs a vector.
+      ingest(suite, ci_run_id: "run-1")
+
+      EmbeddingGenerator.provider = counting_provider
+      second = ingest(suite(offset: 10), ci_run_id: "run-2")
+
+      expect(counting_provider.calls).to eq(0)
+      expect(repository.spec_identities.pluck(:line_number).sort).to eq([15, 20, 30])
+      expect(repository.spec_identities.pluck(:last_seen_test_run_id).uniq).to eq([second.id])
+      expect(repository.spec_identities.count).to eq(3)
+    end
+
+    it "counts a skipped row as resolved and links it, exactly as an embedded one" do
+      # What `#resolve` returns is unchanged by the shortcut: the row carries an identity, so it is
+      # resolved, and it is off the work list for the next job.
+      ingest(suite, ci_run_id: "run-1")
+
+      EmbeddingGenerator.provider = counting_provider
+      second = record(suite(offset: 10), ci_run_id: "run-2")
+
+      expect(described_class.resolve(second)).to eq(3)
+      expect(counting_provider.calls).to eq(0)
+      expect(second.spec_observations.unresolved.count).to eq(0)
+    end
+
+    it "resolves a known test even while the provider is down, because it never asks it" do
+      # A consequence worth pinning rather than leaving to be discovered: the shortcut returns
+      # before `#embed`, so an outage stops mattering for every test whose text this repository
+      # already holds. Only genuinely new text still needs the provider — and only that text is
+      # still left unresolved and stamped, which is the group below this one.
+      ingest(suite, ci_run_id: "run-1")
+
+      allow(EmbeddingGenerator).to receive(:call).and_raise(EmbeddingGenerator::Error, "provider down")
+      second = ingest(suite(offset: 10), ci_run_id: "run-2")
+
+      expect(second.spec_observations.unresolved).to be_empty
+      expect(second.spec_observations.embed_failed).to be_empty
+      expect(repository.spec_identities.count).to eq(3)
+    end
+  end
+
   describe "the tenant boundary" do
     it "never resolves a test onto another repository's identity" do
       other = create_repository(user: create_user(github_uid: "2002", github_handle: "other"),
@@ -258,14 +349,23 @@ RSpec.describe Ingest::IdentityResolver do
     # of a repository's first run resolves for the first time, so two of them reaching the same text
     # and both finding nothing is what normally happens.
     #
-    # Reproduced the way `spec/support/uniqueness_race.rb` describes the shape — the loser's lookup
-    # cannot see a winner that has not committed, so it returns nothing and goes to insert while the
-    # row is already there. That is stubbed at `#nearest`, the one call whose answer the race
-    # changes, rather than by racing threads a transactional example cannot run; everything after it
-    # — the upsert, the conflict, the link — is the real code path. Without the `ON CONFLICT` clause
-    # this example raises `ActiveRecord::RecordNotUnique` rather than merely counting wrong.
+    # Reproduced the way `spec/support/uniqueness_race.rb` describes the shape — the loser's lookups
+    # cannot see a winner that has not committed, so they return nothing and it goes to insert while
+    # the row is already there. That is stubbed at the two methods whose answer the race changes —
+    # `#identical_text`, the digest equality, and `#nearest`, the similarity lookup — rather than by
+    # racing threads a transactional example cannot run; everything after them (the upsert, the
+    # conflict, the link) is the real code path. Without the `ON CONFLICT` clause these examples
+    # raise `ActiveRecord::RecordNotUnique` rather than merely counting wrong.
+    #
+    # BOTH stubs are load-bearing, and the second one is why: these fixtures build the winner with
+    # the SAME text the observation carries, so the digest lookup would find it, `#identity_for`
+    # would return at the fast path, and every example below would stay green while testing the
+    # re-sighting path instead of the conflict path it names. That is also what genuinely happens to
+    # a loser — an uncommitted winner is invisible to an equality exactly as it is to an index scan
+    # — so stubbing both is the faithful reproduction, not a workaround for one.
     def resolve_as_the_loser(run)
       resolver = described_class.new(run)
+      allow(resolver).to receive(:identical_text).and_return(nil)
       allow(resolver).to receive(:nearest).and_return(nil)
       resolver.resolve
     end
