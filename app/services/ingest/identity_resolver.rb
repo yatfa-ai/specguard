@@ -96,12 +96,20 @@ module Ingest
     # the one place the number reaches a query rather than a buffer — so on the ordinary case, an
     # unchanged suite re-ingested, the whole page's DIGEST QUESTION is one round trip.
     #
-    # The PAGE is not, and the distinction is the whole point of the number: a re-sighting still
-    # issues its own `UPDATE`s per row, so a 12-row unchanged page measures 28 round trips of which
-    # exactly 1 is the lookup, and at this design point it is ~1,002. Those UPDATEs are O(N) by
-    # definition and untouched by this slice — the resolver spec's round-trip group narrows its
-    # count to the digest `SELECT` for that exact reason. What batching removed is the 500 lookups,
-    # not the page.
+    # The PAGE is not, and the distinction is the whole point of the number. Stated as the invariant,
+    # because that is the part that survives the next slice: an unchanged page costs **one digest
+    # lookup per PAGE, two `UPDATE`s per ROW** — the identity's `last_seen` touch and the
+    # observation's `spec_identity_id` — **plus a small constant for the work-list reads**. Those
+    # UPDATEs are O(N) by definition and untouched by this slice, which is why the resolver spec's
+    # round-trip group narrows its count to the digest `SELECT` rather than to a page total. What
+    # batching removed is the 500 lookups, not the page.
+    #
+    # As an illustration and not as the claim: on this tree a 12-row unchanged page measures 29 round
+    # trips — 24 UPDATEs, 1 digest lookup, and 4 reads (the repository, {#resolve}'s two backlog
+    # lists, and the run's own page) — so at this design point it is ~1,005. Deliberately phrased as
+    # the invariant plus an example, because the total is rebase-fragile in a way the invariant is
+    # not: this figure was 28 until SPGD-379 split the backlog into two reads, and a whole-`#resolve`
+    # total moves for any change to a method this constant has nothing to do with.
     #
     # That makes this a size worth tuning where it used not to be, but not a different KIND of
     # constant: both readings bound one page, and neither is a bound on how much work a delivery
