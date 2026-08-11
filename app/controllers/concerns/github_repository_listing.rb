@@ -72,10 +72,22 @@ module GithubRepositoryListing
   # Whether the *fix* on offer is "authorize GitHub" rather than "pick something else". True before
   # the user has ever granted repository access, and again after a token stops working or comes
   # back too narrow to answer with.
+  #
+  # The ORDER of these three is the whole point, and it is about cost as much as correctness. A
+  # verdict, when the request has one, is strictly better evidence than the listing: it comes from
+  # the write that was actually attempted, moments ago, with the same token. Reading
+  # `github_listing_error` first would force a full `GithubApi#repositories` page walk — up to
+  # `MAX_PAGES` round trips — to re-derive an answer the verdict already holds, on the one path
+  # (`BulkRegistrationsController#create`) that has just done N inline saves and already paid for
+  # that listing under a different memo.
+  #
+  # This is a no-op for `RepositoriesController`, whose failure path re-renders a picker and so
+  # needs the listing regardless.
   def github_authorization_needed?
-    !current_user.github_repository_access? ||
-      %i[token_rejected scope_too_narrow].include?(github_listing_error) ||
-      github_verdict&.reauthorize? || false
+    return true unless current_user.github_repository_access?
+    return github_verdict.reauthorize? if github_verdict
+
+    %i[token_rejected scope_too_narrow].include?(github_listing_error)
   end
 
   # A verdict this request has already collected about a repository, when there is one — a controller

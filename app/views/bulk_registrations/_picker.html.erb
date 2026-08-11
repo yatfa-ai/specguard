@@ -41,7 +41,20 @@
       <%= render UI::ButtonComponent.new(variant: :primary, href: repositories_path) { "Back to repositories" } %>
     <% end %>
   <% else %>
-    <%= form_with url: bulk_repositories_path, method: :post, data: { controller: "bulk-picker" } do %>
+    <%# `turbo: false` is what makes the summary reachable, and it is load-bearing rather than
+        incidental. Turbo Drive REQUIRES a redirect in response to a form submission: a 200 with a
+        rendered body is refused with "Form responses must redirect to another location", logged to
+        the console and otherwise swallowed. `#create` answers with a rendered summary by design
+        (see the controller's class comment for why a 20-row result is not flash material), so under
+        Turbo the repositories would be registered and the user would see the picker sit there
+        unchanged — silent success, the worst available failure for this action. Opting this one
+        form out of Turbo keeps the render-don't-flash design and costs a full page load on a
+        request that is already doing N GitHub verifications inline.
+
+        Note the refusal paths are NOT why this is here: `render_refusal` returns 422 and Turbo
+        renders 4xx happily. It is only the success path Turbo drops. %>
+    <%= form_with url: bulk_repositories_path, method: :post,
+                  data: { controller: "bulk-picker", turbo: false } do %>
       <%# Carried so a 422 re-render (nothing selected, too many selected) comes back to the same
           organization rather than dropping the reader at the chooser with their selection gone. %>
       <%= hidden_field_tag :organization, organization.login %>

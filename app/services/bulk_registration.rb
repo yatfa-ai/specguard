@@ -127,14 +127,28 @@ class BulkRegistration
 
   def self.call(...) = new(...).call
 
+  # The batch a submission is actually asking for: normalised, blanks dropped, and de-duplicated
+  # case-insensitively.
+  #
+  # A CLASS method because the caller has to be able to ask the same question before it decides
+  # anything. `BulkRegistrationsController#create` measures `MAX_BATCH` against this rather than
+  # against the raw params, so a submission of 101 names that collapses to forty is not refused with
+  # "101 repositories is more than one batch can register" — a true sentence about a batch the user
+  # did not submit.
+  #
+  # Normalisation runs BEFORE de-duplication, and the order is the point. `acme/api` and
+  # `https://github.com/acme/api` are one repository; de-duplicating the raw strings keeps both,
+  # registers the first, and reports the second as already-registered against a row this very batch
+  # had just created. De-duplication is case-insensitive for the same reason the uniqueness rule is:
+  # a repository stored as `Acme/API` is what refuses `acme/api`.
+  def self.normalized_names(full_names)
+    Array(full_names).filter_map { |name| Repository.normalize_full_name(name) }
+                     .uniq(&:downcase)
+  end
+
   def initialize(user:, full_names:)
     @user = user
-    # Deduplicated case-insensitively before anything else: GitHub names are case-insensitive, and
-    # the same repository named twice in one batch would otherwise register once and report itself
-    # as already registered, which is a true sentence about a batch the user did not submit.
-    @names = Array(full_names).map { |name| name.to_s.strip }
-                              .reject(&:empty?)
-                              .uniq { |name| name.downcase }
+    @names = self.class.normalized_names(full_names)
   end
 
   def call

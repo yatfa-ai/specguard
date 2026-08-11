@@ -27,6 +27,11 @@
 # this ticket exists to avoid. The cost is that a refresh re-submits, and that is survivable
 # precisely because the operation is idempotent by construction: everything registered the first
 # time comes back as `already_registered` the second.
+#
+# That choice has a hard prerequisite: the picker form opts out of Turbo. Turbo Drive refuses a
+# non-redirect response to a form submission, so rendering here is only reachable because
+# `_picker.html.erb` says `turbo: false` — see the comment there. The two decisions are one
+# decision, and changing either alone silently breaks the summary rather than failing loudly.
 class BulkRegistrationsController < ApplicationController
   # The picker is built from the same listing the single-repository form uses, and says the same
   # things when it cannot be loaded.
@@ -41,7 +46,10 @@ class BulkRegistrationsController < ApplicationController
   end
 
   def create
-    @full_names = submitted_full_names
+    # Normalised and de-duplicated up front, so the batch this action reasons about — what it
+    # refuses as oversized, and what the re-rendered picker shows as ticked — is the batch
+    # `BulkRegistration` would actually run. See `BulkRegistration.normalized_names`.
+    @full_names = BulkRegistration.normalized_names(submitted_full_names)
 
     return render_refusal(nothing_selected_message) if @full_names.empty?
     return render_refusal(too_many_message) if @full_names.length > BulkRegistration::MAX_BATCH
@@ -108,13 +116,16 @@ class BulkRegistrationsController < ApplicationController
   # dropped rather than `to_s`-ed, because `{"a" => "b"}.to_s` is a String that would then be
   # reported as a repository name in the summary.
   #
+  # Shape only. Normalising and de-duplicating the values is `BulkRegistration.normalized_names`'s
+  # job, so the controller and the service cannot disagree about what the batch is.
+  #
   # Nothing about the CONTENT is trusted either: these names are an assertion by the browser, and
   # `BulkRegistration` re-asks GitHub about every one of them.
   def submitted_full_names
     raw = params[:github_full_names]
     raw = raw.values if raw.respond_to?(:values) && !raw.is_a?(Array)
 
-    Array(raw).select { |name| name.is_a?(String) }.map(&:strip).reject(&:empty?)
+    Array(raw).grep(String)
   end
 
   def render_refusal(message)

@@ -196,6 +196,38 @@ RSpec.describe "Bulk organization registration", type: :request do
 
       expect(response.body).to include(repository_path(Repository.find_by(github_full_name: "acme/api")))
     end
+
+    # The summary is RENDERED rather than redirected to (see the controller's class comment), and
+    # Turbo Drive refuses a non-redirect response to a form submission — it logs "Form responses
+    # must redirect to another location" and leaves the page untouched. So the picker form opts out
+    # of Turbo, and that opt-out is the only reason the summary is reachable in a browser at all.
+    #
+    # Pinned here because the failure is SILENT: the repositories are registered either way, and
+    # every other example in this file still sees the rendered summary in `response.body` — only a
+    # real browser notices the user never gets it. Removing `turbo: false` from `_picker.html.erb`
+    # must break something, and this is that something at this layer. See
+    # spec/system/bulk_registration_spec.rb for the same claim through an actual browser.
+    it "opts the picker form out of Turbo so the rendered summary reaches the browser" do
+      stub_github(repos: [github_repo("acme/api")])
+
+      choose_organization("acme")
+
+      form = Capybara.string(response.body).find("form[action='#{bulk_repositories_path}']")
+      expect(form[:"data-turbo"]).to eq("false")
+    end
+
+    # The create path has already walked GitHub's listing inside `GithubOwnership.verify_batch`.
+    # Re-deriving "is authorization needed?" from the listing afterwards costs a second full page
+    # walk — up to `GithubApi::MAX_PAGES` round trips — to answer a question the verdict already
+    # holds. `GithubRepositoryListing#github_authorization_needed?` reads the verdict first.
+    it "asks GitHub for the listing exactly once across a registration" do
+      fake = stub_github(repos: [github_repo("acme/api"), github_repo("acme/web")], strict: true)
+
+      submit(%w[acme/api acme/web])
+
+      expect(response.body).to include("Registered 2 repositories.")
+      expect(fake.calls_to(:repositories)).to eq(1)
+    end
   end
 
   describe "refusing a submission before it reaches GitHub" do
@@ -228,6 +260,33 @@ RSpec.describe "Bulk organization registration", type: :request do
 
       expect(response.body).to include("acme/api")
       expect(response.body).to include("acme/web")
+    end
+
+    # The cap is measured against the batch that would actually RUN, not against the raw params.
+    # A submission that collapses to one repository is one repository, and refusing it with
+    # "101 repositories is more than one batch can register" would be a true sentence about a batch
+    # the user did not submit.
+    it "measures the batch cap after de-duplication, not before" do
+      names = Array.new(BulkRegistration::MAX_BATCH + 1) { "acme/api" }
+      stub_github(repos: [github_repo("acme/api")], strict: true)
+
+      expect { submit(names) }.to change(Repository, :count).by(1)
+
+      expect(response).to have_http_status(:ok)
+      expect(response.body).to include("Registered 1 repository.")
+    end
+
+    # De-duplication runs on the NORMALISED name, so the two spellings of one repository do not
+    # survive as two candidates — which would register the first and then report the second as
+    # already-registered against a row this very batch had just created.
+    it "treats a URL and a bare slug for one repository as one repository" do
+      stub_github(repos: [github_repo("acme/api")], strict: true)
+
+      expect { submit(["acme/api", "https://github.com/acme/api", "acme/api.git"]) }
+        .to change(Repository, :count).by(1)
+
+      expect(response.body).to include("Registered 1 repository.")
+      expect(response.body).not_to include("Already registered")
     end
 
     # `params` can be any shape a client cares to send. A Hash where an Array is expected, and
