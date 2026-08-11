@@ -5,6 +5,11 @@ require "rails_helper"
 RSpec.describe "Repository registration and API keys", type: :request do
   before { @user = sign_in_via_github }
 
+  # The rendered copy as a reader sees it, with the ERB's own line breaks and indentation
+  # collapsed — the examples below are about sentences, and a sentence assembled across two ERB
+  # tags is one sentence on the page whatever the source did with whitespace.
+  def page_text = Capybara.string(response.body).text.gsub(/\s+/, " ")
+
   it "registers a GitHub repository for the signed-in user" do
     expect {
       post repositories_path, params: { repository: { github_full_name: "acme/billing-service" } }
@@ -44,14 +49,83 @@ RSpec.describe "Repository registration and API keys", type: :request do
     expect(response.body).not_to match(/sgk_[A-Za-z0-9_-]{20,}/)
   end
 
+  it "hands back a ready-to-run curl carrying the just-minted token" do
+    repository = register_repository
+
+    post repository_api_keys_path(repository)
+    follow_redirect!
+
+    raw_token = response.body[/sgk_[A-Za-z0-9_-]{20,}/]
+    expect(raw_token).to be_present
+    # The whole point: at the reveal moment the command is complete, so there is nothing for the
+    # user to substitute while the only copy of the secret is on screen.
+    expect(response.body).to include(%(curl -H "Authorization: Bearer #{raw_token}" #{api_v1_repository_url}))
+
+    # ...and it really is the credential — the same value the API will accept, not a look-alike.
+    expect(ApiKey.last.token_digest).to eq(ApiKey.digest(raw_token))
+
+    # Next steps, tied to what is shipped: the endpoint, the Bearer header, and the connection
+    # stat on this page that reports whether it ever authenticated.
+    expect(response.body).to include("Next steps")
+    expect(response.body).to include("Authorization: Bearer $SPECGUARD_API_KEY")
+
+    # The reload case still has to be served, so the placeholder form survives alongside it.
+    expect(response.body).to include("&lt;token&gt;")
+  end
+
   it "shows the endpoint and a copyable curl snippet with no flash present" do
     repository = create_repository(user: @user)
+    repository.api_keys.create!(name: "CI")
 
     get repository_path(repository)
 
     expect(response.body).to include("Connect this repository")
     expect(response.body).to include("GET #{api_v1_repository_url}")
     expect(response.body).to include(%(curl -H "Authorization: Bearer &lt;token&gt;" #{api_v1_repository_url}))
+  end
+
+  it "points at minting a key instead of a placeholder curl when the repository has none" do
+    repository = create_repository(user: @user)
+
+    get repository_path(repository)
+
+    # A command whose only possible outcome is a 401, told to substitute a key that was never
+    # minted, is not something to show. The endpoint itself still is.
+    expect(repository.api_keys).to be_empty
+    expect(response.body).to include("Connect this repository")
+    expect(response.body).to include("GET #{api_v1_repository_url}")
+    expect(response.body).not_to include(%(curl -H "Authorization: Bearer &lt;token&gt;"))
+
+    # The opening sentence is shared with the branch a member without `keys.manage` gets, so it
+    # cannot tell the two apart on its own. What this branch owes the reader is the POINTER — the
+    # ticket's "the guidance directs them to mint a key first" — so pin that sentence itself.
+    expect(page_text).to include("This repository has no API key yet")
+    expect(page_text).to include("Mint a key in API keys below")
+
+    # ...and the pointer has to point somewhere: #api-keys is the id of the keys panel below, which
+    # is gated on the same `keys.manage` this branch is, so the link never dangles for its reader.
+    expect(response.body).to include(%(<a href="#api-keys"))
+    expect(response.body).to include(%(id="api-keys"))
+  end
+
+  it "tells a member who cannot mint keys who to ask for one" do
+    owner = create_user(github_uid: "8008", github_handle: "octo-owner")
+    repository = create_repository(user: owner)
+    create_membership(repository: repository, user: @user)
+
+    get repository_path(repository)
+
+    # The handle alone proves nothing here: the Overview panel renders an "Owner" row for view
+    # members too, so `include("octo-owner")` passes even if this branch never names anyone. Pin
+    # the sentence, which puts the handle in the one position that means "ask THIS person".
+    expect(page_text).to include("This repository has no API key yet")
+    expect(page_text).to include("Ask #{owner.display_name} to mint one")
+
+    # The other keyless branch's pointer is `keys.manage`-only — and it is positively asserted in
+    # the owner example above, so this negative is load-bearing: it fails if the two branches
+    # collapse into one, rather than passing because neither says anything.
+    expect(response.body).not_to include("Mint a key in")
+    expect(response.body).not_to include(%(<a href="#api-keys"))
   end
 
   it "reports 'not connected' while no API key has ever been used" do
@@ -1571,10 +1645,8 @@ RSpec.describe "Repository registration and API keys", type: :request do
     # up as N of them rather than as a passing test — is the shared subscriber in
     # `spec/support/query_capture.rb`.
 
-    # The rendered copy as a reader sees it, with the ERB's own line breaks and indentation
-    # collapsed — the examples below are about sentences, and a sentence assembled across two ERB
-    # tags is one sentence on the page whatever the source did with whitespace.
-    def page_text = Capybara.string(response.body).text.gsub(/\s+/, " ")
+    # `page_text` — the rendered copy with the ERB's whitespace collapsed — is defined once at the
+    # top of this file; these examples are about sentences on the card, and use it unchanged.
 
     # The card's cost rows, asserted against `test_run_cost_rows` — the seam `show` renders too —
     # rather than only against literals spelled out here.
