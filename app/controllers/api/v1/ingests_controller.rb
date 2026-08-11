@@ -16,6 +16,11 @@ class Api::V1::IngestsController < Api::BaseController
     test_run = Ingest::RunRecorder.record(current_repository, payload.test_run_attributes,
                                           shard_id: payload.shard_id, specs: payload.specs)
 
+    # Scheduled before the response is built rather than from inside the hash literal below: this
+    # writes to the queue and can fail, and a side effect with a failure mode does not belong in a
+    # value position where it reads as one more field being looked up.
+    embedding_status = enqueue_embeddings(test_run, payload.specs)
+
     render json: {
       test_run_id: test_run.id,
       # These are the whole CI run's totals, not this shard's own slice — the row *is* the run
@@ -29,7 +34,7 @@ class Api::V1::IngestsController < Api::BaseController
       # percentage via `TestRun#annotated_ratio`; the API and the UI differ in unit on purpose,
       # so neither side has to guess which one it is holding.
       annotated_ratio: test_run.annotated_fraction,
-      embedding_status: enqueue_embeddings(test_run, payload.specs)
+      embedding_status: embedding_status
     }, status: :accepted
   end
 

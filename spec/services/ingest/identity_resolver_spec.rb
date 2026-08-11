@@ -190,10 +190,41 @@ RSpec.describe Ingest::IdentityResolver do
       expect(repository.spec_identities.count).to eq(2)
     end
 
-    it "sits above the duplicate-detection band, so a duplicate pair stays two tests" do
-      # The two questions share an embedding and must never share a threshold: a pair the duplicate
-      # engine is meant to REPORT as redundant has to RESOLVE as two identities.
-      expect(SpecIdentity::MATCH_SIMILARITY).to be > 0.88
+    it "keeps a pair inside the duplicate-detection band as two identities" do
+      # The invariant that matters between the two thresholds, as behaviour rather than as a claim
+      # about a constant. These two score 0.9236 on the shipped provider: at or above the duplicate
+      # engine's 0.88, so it is entitled to report them as redundant, and below MATCH_SIMILARITY, so
+      # resolution still gives each its own history. Lower the constant to 0.75 and this merges them
+      # — which is the failure the "strictly above" rule exists to prevent.
+      ingest([unannotated_spec(file_path: "spec/a_spec.rb", line_number: 1,
+                               name: "Order#checkout rejects an expired card"),
+              unannotated_spec(file_path: "spec/a_spec.rb", line_number: 2,
+                               name: "Order#checkout rejects an expired card token")],
+             ci_run_id: "run-1")
+
+      expect(repository.spec_identities.count).to eq(2)
+    end
+
+    it "cannot separate two tests whose descriptions are identical — they collapse onto one row" do
+      # Where the threshold stops mattering, demonstrated rather than asserted. The duplicates the
+      # shipped surface reports are EXACT ones — `SpecObservation.repeated_descriptions_in` groups
+      # on `name` — and identical text embeds to an identical vector, so no value of
+      # MATCH_SIMILARITY makes these two examples two identities: `#nearest` matches at cosine 1.0,
+      # and the `(repository_id, text_digest)` key would land them together even if it did not.
+      # Stated on `SpecIdentity::MATCH_SIMILARITY`; asserted here so SPGD-114 slice 4 inherits it as
+      # a known property of these rows rather than a surprise.
+      run = ingest([unannotated_spec(file_path: "spec/models/invoice_spec.rb", line_number: 3,
+                                     name: "is valid"),
+                    unannotated_spec(file_path: "spec/models/user_spec.rb", line_number: 7,
+                                     name: "is valid")],
+                   ci_run_id: "run-1")
+
+      expect(repository.spec_identities.count).to eq(1)
+      # Two different tests, one history: the run's two observations point at the same row.
+      expect(run.spec_observations.pluck(:spec_identity_id).uniq.size).to eq(1)
+      # And its "last known path" is simply whichever of the two was resolved last — the flip-flop
+      # named in the constant's comment, pinned here so it is documented rather than folklore.
+      expect(repository.spec_identities.sole.location).to eq("spec/models/user_spec.rb:7")
     end
 
     it "still matches text that differs only in punctuation and whitespace" do

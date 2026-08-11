@@ -68,8 +68,14 @@ module Ingest
 
         # `update_column` rather than `update!`: there is nothing to validate on a foreign key the
         # database already enforces, and this runs once per example.
-        observation.update_column(:spec_identity_id, identity)
-        resolved += 1
+        #
+        # Counted only when the UPDATE actually matched a row. It returns `affected_rows == 1`, and
+        # the row can be gone by the time we get here — a concurrent shard redelivery deletes and
+        # re-upserts this run's observations, so one read out of the work list can be stale. Nothing
+        # is lost when that happens (the redelivered row is unresolved, so the next job picks it up),
+        # but the return value says "observations that NOW carry an identity", and in that window
+        # this one does not.
+        resolved += 1 if observation.update_column(:spec_identity_id, identity)
       end
 
       resolved
@@ -102,6 +108,33 @@ module Ingest
     # nothing else, and the tenant boundary is not a thing similarity gets to cross. `threshold:` is
     # `neighbor`'s own, a cosine *distance*, so the comparison lands in SQL rather than being
     # re-derived from `neighbor_distance` here; `first` on an ordered relation is `LIMIT 1`.
+    #
+    # == The scope filter is applied AFTER the index scan, and under-recall here costs an identity
+    #
+    # An HNSW scan produces `hnsw.ef_search` candidates (default 40) from the whole table and only
+    # then applies `repository_id`. Today `spec_identities` is small enough that the planner scans
+    # it outright and the question does not arise. Once it is large enough across all tenants that
+    # the index wins — the 20,000-per-repository design point multiplied by every repository — a
+    # small tenant's true nearest neighbour can fall outside those 40 global candidates, and this
+    # method returns nothing. A miss here is not a worse ranking, it is a second identity for a test
+    # that already had one, and a history split in two. That is what makes it worth stating:
+    # `spec_intents` carries the same shape and is only ever ranking.
+    #
+    # What it cannot cost is the identical-text case — a moved test, or the same test ingested by
+    # two shards — because `(repository_id, text_digest)` catches that in {#claim_identity} whatever
+    # this returns. The exposure is exactly the near-identical band, the case the spec's "differs
+    # only in punctuation and whitespace" example isolates: the bytes differ, so only similarity can
+    # find the row.
+    #
+    # **Deliberately not mitigated here.** pgvector 0.8.0 is installed and `hnsw.iterative_scan`
+    # addresses this directly, so the remedy is a one-line `SET` rather than an upgrade. It is left
+    # off because of what it costs on the axis this slice is explicitly not allowed to touch:
+    # iterative scan keeps descending until enough rows pass the filter or it hits
+    # `hnsw.max_scan_tuples`, which makes every *miss* dramatically more expensive — and a
+    # repository's first run is 20,000 consecutive misses. Choosing between that, a partitioned or
+    # per-tenant index, and a raised `ef_search` is a measurement against the 20k design point, and
+    # that is **SPGD-72's**, alongside the batching, caching and re-embed skipping it already owns.
+    # Handed to it by name rather than guessed at here.
     def nearest(embedding)
       @repository.spec_identities
                  .nearest_neighbors(:embedding, embedding, distance: "cosine",

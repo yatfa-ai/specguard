@@ -37,11 +37,31 @@ class SpecIdentity < ApplicationRecord
   # This is the *matching* threshold and it is explicitly **not** the duplicate-detection threshold
   # (0.88 / 0.75, SpecGuard — Duplicate-Detection Engine). Same embedding, opposite questions: that
   # one asks "are these two tests redundant with each other", this one asks "are these two
-  # observations the same test". The two must never share a constant, and this one must sit
-  # *strictly above* the duplicate threshold — a pair the duplicate engine is meant to report as two
-  # redundant tests has to resolve to **two** identities. A matching threshold at or below 0.88
-  # would silently merge exactly the pairs that product surface exists to show, destroying the
-  # finding and welding two histories together at the same time.
+  # observations the same test". The two must never share a constant, and this one sits *strictly
+  # above* the duplicate threshold, so a pair that merely *reads* alike — the 0.88–0.95 band —
+  # resolves to **two** identities while still being reportable as two redundant tests. A matching
+  # threshold at or below 0.88 would silently merge exactly the pairs that product surface exists to
+  # show, destroying the finding and welding two histories together at the same time.
+  #
+  # == Where that separation stops, which is not a threshold question
+  #
+  # It buys nothing against *exact* duplicates — and those are the ones the shipped surface actually
+  # reports. `SpecObservation.repeated_descriptions_in` (SPGD-344) groups on `name`, so what it
+  # shows is examples sharing a `full_description` **verbatim**: a table-driven loop, a shared
+  # example group, the same description in two files. Identical text embeds to an identical vector,
+  # so `Ingest::IdentityResolver#nearest` matches them at cosine 1.0 whatever this number is; and if
+  # it somehow missed, the `(repository_id, text_digest)` conflict key is an equality on that same
+  # text and lands them on one row anyway. Both mechanisms agree, and they agree on **one** identity
+  # for two tests.
+  #
+  # No threshold can separate them, because under this model there is nothing to separate them BY:
+  # identity is the text and only the text, and their text is the same. So a run's two observations
+  # point at one row, its last known path is whichever of the two the resolver reached last, and
+  # that row's history interleaves two tests' measurements. That is the settled model reaching its
+  # edge, not a defect in this constant — but it is a real property of these rows, and whoever
+  # builds clustering on them (SPGD-114 slice 4) needs it stated rather than discovered. Both halves
+  # are demonstrated against real rows in `spec/services/ingest/identity_resolver_spec.rb` rather
+  # than asserted about the constant here.
   #
   # == What the number is derived from
   #
