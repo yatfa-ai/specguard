@@ -16,6 +16,12 @@ class TestRun < ApplicationRecord
   # them, so they have to go first — and `delete_all` rather than `destroy_all` because a run is
   # 20,000 of these and there is no callback on them worth 20,000 round trips.
   has_many :spec_observations, dependent: :delete_all
+  # The tests this run was the last to observe. Nullified rather than destroyed, and the FK says so
+  # too (`on_delete: :nullify`): a {SpecIdentity} is durable and outlives every run, including the
+  # one that happened to see it most recently. Declared so a `destroy` on this row does not have to
+  # rely on the FK alone — the association is what keeps an in-memory object consistent with it.
+  has_many :spec_identities, foreign_key: :last_seen_test_run_id, dependent: :nullify,
+                             inverse_of: :last_seen_test_run
   has_many :test_run_shards, dependent: :destroy
 
   validates :commit_sha, presence: true

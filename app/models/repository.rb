@@ -26,6 +26,11 @@ class Repository < ApplicationRecord
   # per run. `delete_all` for the same reason it is `delete_all` on `TestRun` — the volume is a
   # row per example per run.
   has_many :spec_observations, dependent: :delete_all
+  # Deleted before `test_runs` for the same reason `spec_observations` is: these hang off the
+  # repository directly, so one statement clears them all. `delete_all` rather than `destroy_all`
+  # because the volume is a row per test in the repository — 20,000 at the design point — and there
+  # is no callback on the model that a destroy would run.
+  has_many :spec_identities, dependent: :delete_all
   has_many :test_runs, dependent: :destroy
   has_many :spec_intents, dependent: :destroy
   has_many :repository_memberships, dependent: :destroy

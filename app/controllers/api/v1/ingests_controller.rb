@@ -1,8 +1,9 @@
 # frozen_string_literal: true
 
 # Phase 2's synchronous half: accept one CI run, validate it, record the run's counts, and answer
-# `202 Accepted` immediately. Nothing here blocks on embedding — that is asynchronous by design,
-# so anything reading the embeddings will trail a run that just landed.
+# `202 Accepted` immediately. Nothing here blocks on embedding — that is asynchronous by design
+# (`Ingest::IdentityResolutionJob`), so anything reading the embeddings will trail a run that just
+# landed.
 #
 # One request is one *shard*, not necessarily one run: a sharded suite POSTs once per process, and
 # `Ingest::RunRecorder` is what folds those back into the single `TestRun` they came from.
@@ -14,6 +15,11 @@ class Api::V1::IngestsController < Api::BaseController
 
     test_run = Ingest::RunRecorder.record(current_repository, payload.test_run_attributes,
                                           shard_id: payload.shard_id, specs: payload.specs)
+
+    # Scheduled before the response is built rather than from inside the hash literal below: this
+    # writes to the queue and can fail, and a side effect with a failure mode does not belong in a
+    # value position where it reads as one more field being looked up.
+    embedding_status = enqueue_embeddings(test_run, payload.specs)
 
     render json: {
       test_run_id: test_run.id,
@@ -28,28 +34,38 @@ class Api::V1::IngestsController < Api::BaseController
       # percentage via `TestRun#annotated_ratio`; the API and the UI differ in unit on purpose,
       # so neither side has to guess which one it is holding.
       annotated_ratio: test_run.annotated_fraction,
-      embedding_status: enqueue_embeddings(test_run, payload.specs)
+      embedding_status: embedding_status
     }, status: :accepted
   end
 
   private
 
-  # The named seam slice 3 (SPGD-84) fills in: it will enqueue the embed + upsert job for each spec
-  # it can represent and report "queued". Until that job class and the queue behind it exist there
-  # is nothing to schedule, so this reports "pending" and enqueues nothing.
+  # Schedules the work that gives every example a durable identity, and reports whether it actually
+  # did. Two values, and the API Reference fixes both: `"queued"` **only** when a job was genuinely
+  # enqueued, `"pending"` otherwise. Reporting `"queued"` from a seam that scheduled nothing would be
+  # the cheapest possible lie — a success value read for work that never existed — and this method
+  # is where that stays true.
   #
   # It is handed the **whole** population rather than `payload.annotated_specs`, because the text
   # that represents a test is not only an intent: `Ingest::SpecSignal` answers for an unannotated
   # example out of its `name`, and passing the annotated slice here would decide — at the caller,
-  # silently, and before the seam exists — that a suite mid-adoption has nothing to embed. That is
-  # exactly the cold-start case the platform is for. The seam filters on
-  # `Ingest::SpecSignal#present?` and reports the source it used; it does not re-derive the rule.
+  # silently — that a suite mid-adoption has nothing to embed. That is exactly the cold-start case
+  # the platform is for. The filter below is `Ingest::SpecSignal#present?`; the rule itself is not
+  # re-derived here.
   #
-  # Reporting "queued" from here would be the cheapest possible lie: the client would read a
-  # success value for work that was never scheduled, and would keep reading it for as long as the
-  # seam stays empty. Deliberately no reference to a job constant either — eager loading a
-  # constant that does not exist yet would take the whole endpoint down at boot.
-  def enqueue_embeddings(_test_run, _specs)
-    "pending"
+  # The job is handed the run's id and nothing else. `Ingest::ObservationRecorder` has already
+  # written this delivery's examples, intent triple included, so the specs are in the database by the
+  # time it runs — and a 20,000-example payload passed as a job argument would be megabytes of JSON
+  # in `solid_queue_jobs` on the one path whose design point is exactly that size.
+  #
+  # `"pending"` here means "nothing to schedule", which is a payload with no spec carrying either an
+  # intent or a name. `Ingest::Payload#validate_name` refuses that spec, so in practice this is the
+  # empty run — a client POSTing `specs: []`. Saying `"queued"` for it would be the same lie in
+  # miniature.
+  def enqueue_embeddings(test_run, specs)
+    return "pending" unless specs.any? { |spec| Ingest::SpecSignal.for(spec).present? }
+
+    Ingest::IdentityResolutionJob.perform_later(test_run.id)
+    "queued"
   end
 end

@@ -10,7 +10,7 @@
 #
 # It's strongly recommended that you check this file into your version control system.
 
-ActiveRecord::Schema[8.1].define(version: 2026_08_11_000001) do
+ActiveRecord::Schema[8.1].define(version: 2026_08_11_120000) do
   # These are extensions that must be enabled in order to support this database
   enable_extension "pg_catalog.plpgsql"
   enable_extension "vector"
@@ -171,6 +171,23 @@ ActiveRecord::Schema[8.1].define(version: 2026_08_11_000001) do
     t.index ["key"], name: "index_solid_queue_semaphores_on_key", unique: true
   end
 
+  create_table "spec_identities", force: :cascade do |t|
+    t.datetime "created_at", null: false
+    t.vector "embedding", limit: 1536, null: false
+    t.string "file_path", null: false
+    t.bigint "last_seen_test_run_id"
+    t.integer "line_number", null: false
+    t.bigint "repository_id", null: false
+    t.string "signal_source", null: false
+    t.text "text", null: false
+    t.string "text_digest", limit: 64, null: false
+    t.datetime "updated_at", null: false
+    t.index ["embedding"], name: "index_spec_identities_on_embedding", opclass: :vector_cosine_ops, using: :hnsw
+    t.index ["last_seen_test_run_id"], name: "index_spec_identities_on_last_seen_test_run_id"
+    t.index ["repository_id", "text_digest"], name: "index_spec_identities_on_text", unique: true
+    t.index ["repository_id"], name: "index_spec_identities_on_repository_id"
+  end
+
   create_table "spec_intents", force: :cascade do |t|
     t.string "action", null: false
     t.text "behavior", null: false
@@ -198,17 +215,22 @@ ActiveRecord::Schema[8.1].define(version: 2026_08_11_000001) do
     t.float "duration_seconds"
     t.string "example_id"
     t.string "file_path", null: false
+    t.string "intent_action"
+    t.text "intent_behavior"
+    t.string "intent_entity"
     t.integer "line_number", null: false
     t.text "name"
     t.string "outcome"
     t.bigint "repository_id", null: false
     t.string "spec_file_path"
+    t.bigint "spec_identity_id"
     t.string "status", null: false
     t.bigint "test_run_id", null: false
     t.bigint "test_run_shard_id"
     t.datetime "updated_at", null: false
     t.index ["repository_id", "name"], name: "index_spec_observations_on_repository_id_and_name"
     t.index ["repository_id"], name: "index_spec_observations_on_repository_id"
+    t.index ["spec_identity_id"], name: "index_spec_observations_on_spec_identity_id"
     t.index ["test_run_id", "duration_seconds"], name: "index_spec_observations_on_test_run_id_and_duration_seconds"
     t.index ["test_run_id", "example_id"], name: "index_spec_observations_on_test_run_id_and_example_id", unique: true
     t.index ["test_run_id", "outcome"], name: "index_spec_observations_on_test_run_id_and_outcome"
@@ -270,9 +292,12 @@ ActiveRecord::Schema[8.1].define(version: 2026_08_11_000001) do
   add_foreign_key "solid_queue_ready_executions", "solid_queue_jobs", column: "job_id", on_delete: :cascade
   add_foreign_key "solid_queue_recurring_executions", "solid_queue_jobs", column: "job_id", on_delete: :cascade
   add_foreign_key "solid_queue_scheduled_executions", "solid_queue_jobs", column: "job_id", on_delete: :cascade
+  add_foreign_key "spec_identities", "repositories"
+  add_foreign_key "spec_identities", "test_runs", column: "last_seen_test_run_id", on_delete: :nullify
   add_foreign_key "spec_intents", "repositories"
   add_foreign_key "spec_intents", "test_runs"
   add_foreign_key "spec_observations", "repositories"
+  add_foreign_key "spec_observations", "spec_identities", on_delete: :nullify
   add_foreign_key "spec_observations", "test_run_shards", on_delete: :nullify
   add_foreign_key "spec_observations", "test_runs"
   add_foreign_key "test_run_shards", "test_runs"

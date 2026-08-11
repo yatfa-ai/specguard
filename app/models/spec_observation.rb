@@ -35,6 +35,38 @@ class SpecObservation < ApplicationRecord
   # shard rows at all — and null again if the shard row is later deleted; the observation belongs
   # to its run first.
   belongs_to :test_run_shard, optional: true
+  # Which durable test this measurement belongs to — the link that turns a pile of per-run rows into
+  # one test's history. Optional, and its nil is the *only* record of an unresolved example: the row
+  # is written inside the ingest transaction and resolved afterwards by
+  # {Ingest::IdentityResolutionJob}, and it stays nil when the embedding failed. Nothing scopes it
+  # away, which is the point — see the migration for why the invisible state was pushed here rather
+  # than left to live as a NULL embedding on `spec_identities`.
+  belongs_to :spec_identity, optional: true
+
+  # Rows this run brought in that no {SpecIdentity} has claimed yet. The resolver's work list, and
+  # by construction its own idempotency: a row drops out of this scope the moment it is resolved, so
+  # a job that runs twice — two shards of one run each enqueueing one — does the work once between
+  # them rather than twice each.
+  scope :unresolved, -> { where(spec_identity_id: nil) }
+
+  # What text represents this example, answered by the one class that decides it.
+  #
+  # `Ingest::SpecSignal` takes a spec hash exactly as it came off the JSON wire — string keys, an
+  # `"intent"` sub-hash, a `"name"` — and this rebuilds that shape from the columns. Deliberately
+  # NOT a second implementation of "intent first, name otherwise": the precedence lives in one place
+  # and a copy of it here would drift, which is the failure `SpecSignal`'s own class comment is
+  # about. `SpecSignal` already documents that it answers for rows read back out of storage, and
+  # this is that caller.
+  #
+  # @return [Ingest::SpecSignal] `#present?` is false for a row carrying neither — a shape the
+  #   envelope rejects today, but one that rows predating `Ingest::Payload#validate_name` have.
+  def signal
+    Ingest::SpecSignal.for(
+      "intent" => { "entity" => intent_entity, "action" => intent_action,
+                    "behavior" => intent_behavior },
+      "name" => name
+    )
+  end
 
   # How many rows a ranking returns. Named because the panel's caption reports the figure back to
   # the reader, and a sentence explaining a list's length must not be able to disagree with it.
