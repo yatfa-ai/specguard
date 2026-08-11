@@ -829,10 +829,22 @@ RSpec.describe Ingest::IdentityResolver do
       expect(repository.spec_observations.embed_unattempted_abandoned.count).to eq(2)
     end
 
-    it "shares one sweep budget with the failure backlog rather than inheriting twice it" do
-      # `RETRY_SWEEP_LIMIT` bounds what ONE JOB inherits from the deliveries before it. Two
-      # independently capped lists would quietly make that `2 × limit` while every word of the
-      # constant's comment went on reading as though it had not changed.
+    # `RETRY_SWEEP_LIMIT` bounds what ONE JOB inherits from the deliveries before it, and
+    # `#retry_backlog` spends that one allowance across two lists. It does so in two distinct
+    # behaviours, and they need an example each, because the one below cannot reach the other:
+    #
+    # * The failures SATURATE the budget — nothing is left, so the never-attempted list is not
+    #   queried at all (the early return).
+    # * The failures fill it PARTIALLY — the never-attempted list is asked for the REMAINDER (the
+    #   subtraction).
+    #
+    # The second is the arithmetic that actually enforces one budget, and it is the ordinary
+    # production shape rather than the exotic one: a saturated failure backlog is the provider
+    # outage, while a handful of failed rows beside a stranded backlog is the everyday state of a
+    # repository that has lost a job. An example seeded at a limit of 1 can only ever certify the
+    # first — "partial" does not exist there — so a `RETRY_SWEEP_LIMIT`-for-`remaining` mutant
+    # survives it while turning one budget back into two.
+    it "does not query the never-attempted list at all when the failures have taken the whole budget" do
       stub_const("#{described_class}::RETRY_SWEEP_LIMIT", 1)
 
       allow(EmbeddingGenerator).to receive(:call).and_raise(EmbeddingGenerator::Error, "provider down")
@@ -852,6 +864,43 @@ RSpec.describe Ingest::IdentityResolver do
       expect(stranded.spec_observations.unresolved.count).to eq(1)
 
       # Drained across the ingest that follows, exactly as an over-cap failure backlog is.
+      later_ingest(ci_run_id: "run-4")
+      expect(stranded.spec_observations.unresolved).to be_empty
+    end
+
+    it "gives the never-attempted list only what the failures left, not a second full budget" do
+      # The partial branch, and the one that pins the SUBTRACTION rather than the guard in front of
+      # it. Three slots, one of them spent on a failure, three rows stranded: the sweep is entitled
+      # to exactly two of them. Two independently capped lists would take all three here and the
+      # example above would not notice, because at a limit of 1 the remainder is always zero.
+      stub_const("#{described_class}::RETRY_SWEEP_LIMIT", 3)
+
+      allow(EmbeddingGenerator).to receive(:call).and_raise(EmbeddingGenerator::Error, "provider down")
+      failed = ingest([unannotated_spec(file_path: "spec/a_spec.rb", line_number: 1,
+                                        name: "Cart adds an item to the cart")], ci_run_id: "run-1")
+      RSpec::Mocks.space.proxy_for(EmbeddingGenerator).reset
+
+      # Three rows of one run, none of them reached: `die_after(rows: 0)` raises on the first ANN
+      # lookup, so nothing is claimed and nothing is stamped — the whole run is stranded.
+      stranded = record([
+                          unannotated_spec(file_path: "spec/b_spec.rb", line_number: 2,
+                                           name: "Invoice#finalize locks the line items"),
+                          unannotated_spec(file_path: "spec/c_spec.rb", line_number: 3,
+                                           name: "Order#checkout rejects an expired card"),
+                          unannotated_spec(file_path: "spec/d_spec.rb", line_number: 4,
+                                           name: "Session#destroy clears the remember token")
+                        ], ci_run_id: "run-2")
+      die_after(stranded, rows: 0)
+      strand(stranded)
+
+      later_ingest(ci_run_id: "run-3")
+
+      # One slot to the failure, and the OTHER TWO — not another three — to the stranding.
+      expect(failed.spec_observations.unresolved).to be_empty
+      expect(stranded.spec_observations.unresolved.count).to eq(1)
+
+      # And the row the budget refused is deferred rather than dropped: with the failure backlog now
+      # empty, the next ingest has the whole allowance to spend and drains it.
       later_ingest(ci_run_id: "run-4")
       expect(stranded.spec_observations.unresolved).to be_empty
     end
