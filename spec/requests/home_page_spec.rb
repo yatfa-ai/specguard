@@ -74,8 +74,17 @@ RSpec.describe "The signed-out landing page", type: :request do
     panel = Capybara.string(response.body).find("#roadmap")
 
     expect(panel).to have_text("Not available yet")
-    # The claim that dates fastest: it is true only while nothing writes a per-test row. Whoever
-    # builds that write path is meant to land here.
-    expect(panel).to have_text("stores nothing about individual tests")
+    # This line used to assert the panel SAID "stores nothing about individual tests" — true when
+    # written, and false from the moment `Ingest::ObservationRecorder` shipped the per-test write
+    # path. Asserting the sentence is what held the falsehood green: the guard meant to catch the
+    # drift was pinning it instead, so the storefront stayed wrong across a green suite.
+    #
+    # So what is pinned here is the CONTRACT rather than the copy. The panel is free to describe
+    # what is still unbuilt however it likes; what it may not do is go on telling visitors that
+    # per-test data is unstored, because it is stored and three panels and three API keys are
+    # served from it. Non-vacuous per the rule at :17-20 — `find` raises if `#roadmap` is missing
+    # and the positive assertion above proves the panel rendered with its own content, so this
+    # negative cannot pass on a blank page, a 500, or a deleted panel.
+    expect(panel).not_to have_text("stores nothing about individual tests")
   end
 end
