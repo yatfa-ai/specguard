@@ -234,10 +234,96 @@ module Ingest
         resolved += resolve_page(page)
       end
 
+      report(resolved)
+
       resolved
     end
 
     private
+
+    # **The one thing this pass says for itself.** Until it existed the whole asynchronous half of
+    # ingest had a single voice — the per-row warn in {#embed} — and that voice can only speak about
+    # rows the provider refused. So a resolve of 20,000 rows that worked perfectly and a resolve that
+    # was never scheduled at all were the same observable event, while a provider outage across the
+    # design point emitted 20,000 identical lines and no total. This is the complement: one line, per
+    # pass, whatever happened, carrying the number {#resolve} already computes and the population it
+    # left behind.
+    #
+    # `info` rather than `warn`, and unconditional rather than "only when something is wrong". The
+    # figure an operator most needs is `resolved=0`, and a report that stays silent when there is
+    # nothing to complain about cannot distinguish "nothing to complain about" from "did not run" —
+    # which is the defect this method exists for, reintroduced one level up.
+    #
+    # Emitted from HERE and not from {Ingest::IdentityResolutionJob} because the counts are this
+    # class's own vocabulary: which four scopes are the bounded ones, and why a raw `unresolved`
+    # count is not among them, is the knowledge {#retry_backlog} and {SpecObservation} hold. The job
+    # is thin by its own class comment's rule, and it stays thin. A run that no longer exists never
+    # reaches here at all — the job returns before it resolves, and there is nothing to report.
+    #
+    # A single line and not four, because a log is read by grep and by eye: four lines per job would
+    # have to be re-joined by whoever read them, and the joining key would be the run id they all
+    # already carry.
+    def report(resolved)
+      counts = unresolved_bounds.map { |label, relation| "#{label}=#{relation.count}" }
+
+      Rails.logger.info(
+        "[IdentityResolver] run=#{@run.id} resolved=#{resolved} " \
+        "repository=#{@repository.id} #{counts.join(' ')}"
+      )
+    end
+
+    # **The repository's remaining unresolved population, as the four figures it is honest to state
+    # it in** — and deliberately not as one.
+    #
+    # Each is `@repository.spec_observations` narrowed by a scope that already exists and had, until
+    # this method, no production caller at all. Repository scoping is the caller's on all four
+    # ({SpecObservation}'s scopes say so where they are defined), which is why they are narrowed here
+    # and exactly as {#failed_embed_backlog} and {#unattempted_embed_backlog} narrow theirs.
+    #
+    # == Why four figures and never a sum
+    #
+    # * **"We stopped trying" and "we are still trying" are different facts**, which is the reason
+    #   `.embed_abandoned` and `.embed_unattempted_abandoned` were given their own scopes:
+    #   *"a bound that cannot be queried is a bound nobody can audit"*. Pooling them back into one
+    #   `unresolved=N` here would spend that separation on the way out.
+    # * **The two backlogs are different facts**, because the reason nobody attended to them differs
+    #   — asked and refused, versus never asked — and that is the whole distinction {#retry_backlog}
+    #   is two lists for.
+    # * **`never_attempted_gave_up` is NOT a failure count**, and its name says so. That scope's own
+    #   comment forbids the other reading outright: the set is *"rows nothing will ever attempt
+    #   again"* and NOT *"rows we failed"*, because it pools rows a dead job stranded and outlived
+    #   with the frozen signalless tail that is behaving exactly as it should. Labelling it a failure
+    #   would ship *"an alarming number that is mostly legacy rows behaving correctly"*.
+    #
+    # == Why not `.unresolved.count`, which is the figure everyone reaches for first
+    #
+    # Because it is not bounded away from rows that are merely YOUNG. All four scopes here sit inside
+    # `EMBED_RETRY_WINDOW` and outside `EMBED_ATTEMPT_GRACE`; a raw count is neither, and
+    # {#unattempted_embed_backlog} states why that matters — the unattempted population *"cannot be
+    # empty on a healthy repository — every row is in it between the ingest commit and the job's
+    # pass"*. A raw count taken while a concurrent 20,000-row delivery is mid-flight reports that
+    # delivery as a problem, on every ingest, forever. The four figures stay at zero through it.
+    #
+    # == What these numbers are NOT
+    #
+    # They are a REPOSITORY snapshot read at the end of this pass — not a tally of what this pass
+    # did, which is what `resolved` is, and not a partition of anything. Every shard of a run
+    # enqueues a job for the run, so an N-shard delivery emits N of these over largely the same rows
+    # while other jobs are mutating them; the same distinction {#resolve}'s `@return` draws for the
+    # resolved count, kept rather than re-invented.
+    #
+    # And they do not add up to the run, or to the repository, or to each other's complement. Rows
+    # younger than the grace are outside all four, and so is the signalless tail pooled inside the
+    # last of them. Four bounded figures that answer four questions is the whole claim; a total would
+    # be a new vacuous figure replacing a missing one.
+    def unresolved_bounds
+      observations = @repository.spec_observations
+
+      { embed_failed_retrying: observations.embed_retryable,
+        embed_failed_gave_up: observations.embed_abandoned,
+        never_attempted_retrying: observations.embed_unattempted_retryable,
+        never_attempted_gave_up: observations.embed_unattempted_abandoned }
+    end
 
     # **The work that is not this run's**, under one budget — the rows of the repository's EARLIER
     # runs that this ingest is entitled to attempt on their behalf. Two populations, and they are

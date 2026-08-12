@@ -1443,4 +1443,297 @@ RSpec.describe Ingest::IdentityResolver do
       expect(described_class.resolve(second)).to eq(2)
     end
   end
+
+  # The count above had exactly one caller before this slice and that caller discarded it, so the
+  # pipeline knew the number and told nobody. These examples are about the line that now says it —
+  # and about the four bounded figures beside it, whose scopes shipped to be read and had, until
+  # now, no production reader at all.
+  describe "the completion report" do
+    # Every line a block emitted, in order, as `[level, message]`. Captured at `Rails.logger`
+    # because the properties under test are about WHAT WAS SAID AND HOW MANY TIMES: "exactly one
+    # summary per pass, whatever happened" is a count, and a count needs every emission to pass
+    # through one place. `warn` is captured alongside `info` for the outage example, which has to
+    # show the per-row warnings still there and the summary not one of them.
+    def logged
+      lines = []
+      allow(Rails.logger).to receive(:info) { |message| lines << [:info, message] }
+      allow(Rails.logger).to receive(:warn) { |message| lines << [:warn, message] }
+      yield
+      lines
+    end
+
+    def summaries(lines) = lines.select { |level, _| level == :info }.map(&:last)
+
+    def summary_of(&) = summaries(logged(&)).sole
+
+    # A row nothing ever attempted, old enough that no live job is plausibly still on its way to it.
+    # `update_all` rather than a time-travel helper, the choice this file already makes twice: assert
+    # the fact the fixture needs rather than moving the clock underneath everything else.
+    def strand(run, ago:)
+      run.spec_observations.unresolved.update_all(created_at: ago.ago)
+    end
+
+    it "says what the pass resolved, once, however many rows that was" do
+      run = record(suite, ci_run_id: "run-1")
+
+      lines = logged { described_class.resolve(run) }
+
+      # Once — not once per row, which is the shape the pipeline's only other voice has and the
+      # reason a 20,000-row outage says everything and reports nothing.
+      expect(summaries(lines).sole).to include("run=#{run.id}", "resolved=3")
+    end
+
+    # The figure an operator most needs, and the one a "log it only when it is interesting" report
+    # would drop. A pass that resolved nothing and a pass that never ran are the same observable
+    # event without this line, which is the defect the whole slice exists for.
+    it "still says so when it resolved nothing" do
+      run = ingest(suite, ci_run_id: "run-1")
+
+      expect(summary_of { described_class.resolve(run) }).to include("resolved=0")
+    end
+
+    it "reports the repository's figures beside the run's, named as the repository's" do
+      run = record(suite, ci_run_id: "run-1")
+
+      # The counts are a snapshot of the REPOSITORY read at the end of the pass, not a tally of what
+      # the pass did — `resolved` is that — so the line carries the repository they belong to. Every
+      # shard of a run enqueues a job for the run, so N of these are emitted over largely the same
+      # rows; a reader has to be able to tell which half of the line is which.
+      expect(summary_of { described_class.resolve(run) })
+        .to include("repository=#{repository.id}")
+    end
+
+    it "never reports a raw unresolved count, so a concurrent delivery's rows are not a problem" do
+      ingest(suite, ci_run_id: "run-1")
+      # Another delivery, mid-flight: recorded and committed, not yet resolved. This is the ordinary
+      # state of every healthy ingest between the commit and its job's pass, and at the design point
+      # it is 20,000 rows.
+      in_flight = record(suite(offset: 40), ci_run_id: "run-2")
+
+      summary = summary_of { described_class.resolve(record(suite(offset: 80), ci_run_id: "run-3")) }
+
+      # The falsifier for the whole criterion: a raw `.unresolved.count` would have reported these.
+      expect(in_flight.spec_observations.unresolved.count).to eq(3)
+      expect(summary).to include("embed_failed_retrying=0", "embed_failed_gave_up=0",
+                                 "never_attempted_retrying=0", "never_attempted_gave_up=0")
+      expect(summary).not_to match(/\bunresolved=/)
+    end
+
+    it "separates the failed backlog's 'still trying' from its 'stopped trying'" do
+      allow(EmbeddingGenerator).to receive(:call).and_raise(EmbeddingGenerator::Error, "provider down")
+      still_trying = ingest([unannotated_spec(file_path: "spec/a_spec.rb", line_number: 1,
+                                              name: "Cart adds an item to the cart")], ci_run_id: "run-1")
+      gave_up = ingest([unannotated_spec(file_path: "spec/b_spec.rb", line_number: 2,
+                                         name: "Invoice#finalize locks the line items")], ci_run_id: "run-2")
+      gave_up.spec_observations.update_all(embed_failed_at: SpecObservation::EMBED_RETRY_WINDOW.ago - 1.second)
+
+      # The outage is still going, which is the only shape in which both figures are non-zero at
+      # once: a recovered provider empties the retryable half on the very next ingest, because that
+      # is what the sweep is for. So run-3 fails on its own row and fails again re-attempting
+      # run-1's, while run-2's is past the window and nothing touches it any more.
+      summary = summary_of do
+        described_class.resolve(record([unannotated_spec(file_path: "spec/c_spec.rb", line_number: 3,
+                                                         name: "Order#checkout rejects an expired card")],
+                                       ci_run_id: "run-3"))
+      end
+
+      # Two figures and never one. `SpecObservation.embed_abandoned` exists because *"a bound that
+      # cannot be queried is a bound nobody can audit"*, and summing it back into its sibling here
+      # would spend that separation on the way out.
+      expect(still_trying.spec_observations.sole.reload.spec_identity_id).to be_nil
+      expect(summary).to include("resolved=0", "embed_failed_retrying=2", "embed_failed_gave_up=1")
+    end
+
+    it "separates the never-attempted backlog's two bounds, and calls neither of them a failure" do
+      # One slot in the sweep, so one of the two rows still inside the window is rescued and the
+      # other is still waiting when the count is taken — the ordinary state of a repository whose
+      # backlog is draining across the ingests that follow.
+      stub_const("#{described_class}::RETRY_SWEEP_LIMIT", 1)
+
+      # No stamp anywhere in this example: `#record_embed_failure` only runs where the provider was
+      # actually asked, and nothing here asked it. These are runs whose jobs never arrived.
+      strand(record([unannotated_spec(file_path: "spec/a_spec.rb", line_number: 1,
+                                      name: "Cart adds an item to the cart")], ci_run_id: "run-1"),
+             ago: SpecObservation::EMBED_ATTEMPT_GRACE + 1.minute)
+      strand(record([unannotated_spec(file_path: "spec/b_spec.rb", line_number: 2,
+                                      name: "Invoice#finalize locks the line items")], ci_run_id: "run-2"),
+             ago: SpecObservation::EMBED_ATTEMPT_GRACE + 2.minutes)
+      strand(record([unannotated_spec(file_path: "spec/c_spec.rb", line_number: 3,
+                                      name: "Order#checkout rejects an expired card")], ci_run_id: "run-3"),
+             ago: SpecObservation::EMBED_RETRY_WINDOW + 1.second)
+      # A SECOND row past the window, and the reason it is here is the assertion below rather than
+      # the scenario: with one row on each side the two figures are both 1, and `1 == 1` cannot tell
+      # the labels apart from the sets beneath them. Wiring `never_attempted_retrying` to
+      # `.embed_unattempted_abandoned` and its sibling to `.embed_unattempted_retryable` — the exact
+      # inversion criterion 3 forbids — leaves a symmetric fixture green while the report tells an
+      # operator "nothing will ever attempt this again" about a row we are still trying. The figures
+      # have to DIFFER for the assertion to reach the wiring, which is the discipline the failed
+      # backlog's example above already applies with its 2 and its 1.
+      strand(record([unannotated_spec(file_path: "spec/d_spec.rb", line_number: 4,
+                                      name: "Report#export streams the CSV in batches")], ci_run_id: "run-4"),
+             ago: SpecObservation::EMBED_RETRY_WINDOW + 2.seconds)
+
+      summary = summary_of do
+        described_class.resolve(record([unannotated_spec(file_path: "spec/e_spec.rb", line_number: 5,
+                                                         name: "Session#destroy clears the remember token")],
+                                       ci_run_id: "run-5"))
+      end
+
+      expect(summary).to include("never_attempted_retrying=1", "never_attempted_gave_up=2")
+      # `.embed_unattempted_abandoned` is two populations at once — rows a dead job stranded and
+      # then outlived, AND the frozen signalless tail doing exactly what it should — so its figure
+      # is "rows nothing will ever attempt again" and NOT "rows we failed". The model says so
+      # outright; a label claiming otherwise ships the alarming reading it refuses.
+      expect(summary).not_to match(/never_attempted\w*fail/)
+    end
+
+    it "reports the population an outage leaves, and leaves the per-row warnings exactly as they were" do
+      run = record(suite, ci_run_id: "run-1")
+      allow(EmbeddingGenerator).to receive(:call).and_raise(EmbeddingGenerator::Error, "provider down")
+
+      lines = logged { described_class.resolve(run) }
+
+      # The per-row voice, byte-identical to what `#embed` has always said. This slice adds a line;
+      # it does not edit one.
+      expect(lines.select { |level, _| level == :warn }.map(&:last))
+        .to eq(["[IdentityResolver] run=#{run.id} could not embed a spec signal: provider down"] * 3)
+      # And the total those three lines never carried, said once.
+      expect(summaries(lines).sole).to include("resolved=0", "embed_failed_retrying=3")
+    end
+
+    # The cost half. Four counts per pass is nothing against the 20,000 round trips the pass already
+    # makes — but "nothing" is a claim about the PLAN, and a plan is the only instrument that grades
+    # it. Seeded and certified exactly as "the plan Postgres chooses for it" above does, against the
+    # relations the report actually counts rather than against copies of them.
+    describe "the plan Postgres chooses for its counts" do
+      let(:resolved_runs) { 10 }
+      let(:rows_per_run) { 500 }
+
+      # Deliberately SMALL, and this is the one seed property that differs from the sweep's — so it
+      # is argued rather than copied.
+      #
+      # That example asserts a capped, ORDERED read and needs a backlog larger than the cap for the
+      # ordering half of the index to be worth anything. A count has no cap and no order, so that
+      # property has no counterpart here; what decides this plan instead is the FRACTION of the
+      # table each partial index holds. Small is the honest fixture because small is the case that
+      # runs: both indexes are partial on `spec_identity_id IS NULL`, the report fires on every
+      # ingest forever, and on a healthy repository it is asking four questions whose answer is
+      # zero.
+      #
+      # A repository genuinely sitting on thousands of abandoned rows gets a sequential scan for
+      # these counts, and that is the planner being right rather than a regression: counting a large
+      # matching set costs less by reading the table than by chasing that many index entries back
+      # into the heap. The claim this example certifies is the one worth having — the four counts do
+      # not scan the table to find NOTHING.
+      let(:backlog_rows) { 25 }
+
+      def seed(test_run, identity:, created_at:, rows:, embed_failed_at: nil)
+        SpecObservation.insert_all((1..rows).map do |index|
+          path = "spec/f#{index % 25}_spec.rb"
+          { test_run_id: test_run.id, repository_id: repository.id,
+            example_id: "./#{path}[1:#{index}]", spec_file_path: path, file_path: path,
+            line_number: index, name: "example #{index}", status: "unannotated",
+            spec_identity_id: identity&.id, embed_failed_at: embed_failed_at,
+            created_at: created_at, updated_at: created_at }
+        end)
+      end
+
+      def backlog(created_at:, embed_failed_at: nil)
+        seed(create_test_run(repository: repository), identity: nil, created_at: created_at,
+             rows: backlog_rows, embed_failed_at: embed_failed_at)
+      end
+
+      # Two of the three load-bearing properties of the sweep's own seed, unchanged and for the
+      # reasons it states at length: most rows resolved, so the partial indexes are a small fraction
+      # of the table; and the runs spread over TIME, because `created_at` and `spec_identity_id` are
+      # perfectly correlated in a single-instant seed and the planner then works from a row count
+      # production never has. The third — a backlog larger than the cap — is the one `backlog_rows`
+      # above explains has no counterpart in a count.
+      #
+      # Extended by one thing this report needs and that sweep does not: a FAILED population, on
+      # both sides of `EMBED_RETRY_WINDOW`. Two of the four counts read the failure index, and a
+      # count certified over an empty set certifies the emptiness rather than the read.
+      before do
+        identity = create_spec_identity(repository: repository)
+        resolved_runs.times do |index|
+          seed(create_test_run(repository: repository), identity: identity,
+               created_at: (index * 7).hours.ago, rows: rows_per_run)
+        end
+
+        backlog(created_at: (SpecObservation::EMBED_ATTEMPT_GRACE + 1.hour).ago)
+        backlog(created_at: (SpecObservation::EMBED_RETRY_WINDOW + 1.day).ago)
+        backlog(created_at: 2.days.ago, embed_failed_at: 2.days.ago)
+        backlog(created_at: 30.days.ago, embed_failed_at: (SpecObservation::EMBED_RETRY_WINDOW + 1.day).ago)
+
+        ActiveRecord::Base.connection.execute("ANALYZE spec_observations")
+      end
+
+      # The plan for the count the report ACTUALLY issues. The relation comes out of the reporting
+      # method itself rather than being rewritten here — a copy is a second definition of the query
+      # and a plan assertion against the copy certifies the copy — and `COUNT(*)` is AR's own
+      # projection for `#count` on exactly this relation.
+      def plan_for(relation)
+        sql = relation.select(Arel.star.count).to_sql
+        ActiveRecord::Base.connection.select_values("EXPLAIN #{sql}").join("\n")
+      end
+
+      def bounds
+        described_class.new(create_test_run(repository: repository)).send(:unresolved_bounds)
+      end
+
+      it "reads all four through an index rather than by scanning the table" do
+        # The reach of this guard is measured rather than assumed, and what the measurement found is
+        # worth recording because it is not symmetric. Re-seeded at `backlog_rows` of 2,000 instead
+        # of 25: the two never-attempted counts flip to `Seq Scan on spec_observations` and fail
+        # this example, while the two failed counts stay on their partial index and merely drop
+        # from an Index Only Scan to a Bitmap Heap Scan — indexed still, but paying the heap.
+        #
+        # So this assertion has real reach on one pair and is carried by the seed on the other. The
+        # example below is what holds the failed pair to something a larger seed would move.
+        bounds.each do |label, relation|
+          plan = plan_for(relation)
+
+          expect(plan).to match(/Index (Only )?Scan using/), "#{label} used no index:\n#{plan}"
+          expect(plan).not_to match(/Seq Scan on spec_observations/), "#{label} was scanned:\n#{plan}"
+        end
+      end
+
+      # The one place a plan SHAPE is claimed, and it is claimed because the plan grants it — not
+      # because the schema implied it. It is worth pinning precisely because reading the schema
+      # predicts the opposite: this index is `(repository_id, embed_failure_count, embed_failed_at)`
+      # and both scopes range on `embed_failed_at`, which is not the column after `repository_id`,
+      # so the expected plan was a partial-index read with `embed_failed_at` as a FILTER. Postgres
+      # instead takes it as an `Index Cond` and — since a count needs no columns off the heap —
+      # gets an Index ONLY Scan out of it. A cost claim is graded by the plan and this is the plan.
+      #
+      # `Index Only Scan` and not merely the index name, because the name alone survives the thing
+      # worth catching: at a 2,000-row backlog this same read stays on this same index and becomes a
+      # Bitmap Heap Scan, which is the version that goes back to the heap for every matching row.
+      it "counts the failed backlog off the partial index built for it, touching no heap" do
+        %i[embed_failed_retrying embed_failed_gave_up].each do |label|
+          plan = plan_for(bounds.fetch(label))
+
+          expect(plan).to include("Index Only Scan using index_spec_observations_on_embed_backlog"),
+                          "#{label}:\n#{plan}"
+        end
+      end
+
+      # And the two never-attempted counts are deliberately left WITHOUT a name assertion, which is
+      # the honest end of the same discipline.
+      #
+      # They are served here by `index_spec_observations_on_spec_identity_id` — a plain index on a
+      # nullable column, whose btree indexes its NULLs — with everything else as a filter, rather
+      # than by `index_spec_observations_on_unattempted_embed_backlog`, which is a genuine prefix
+      # range for both of them and is the index they were expected to use. Nothing is wrong: at this
+      # fixture's size the WHOLE TABLE holds ~100 unresolved rows, so narrowing on
+      # `spec_identity_id IS NULL` alone already reaches almost the whole answer. The partial index
+      # wins once that population is large across every tenant, which is the scale it was added for
+      # and one this seed cannot have without making THIS repository's counts large too — at which
+      # point the planner correctly stops using any index for them at all.
+      #
+      # Asserting either name here would pin a fixture-scale accident, and asserting the intended
+      # one would fail against a correct implementation. The example above certifies what is true at
+      # both sizes: these counts do not scan the table to find nothing.
+    end
+  end
 end
