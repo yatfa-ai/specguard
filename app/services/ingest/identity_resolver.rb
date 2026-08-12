@@ -86,18 +86,24 @@ module Ingest
   #
   # == What is deliberately not here
   #
-  # Batching the embed calls, and caching them — the rest of the *Cost* axis, still SPGD-72's. THREE
-  # of that paragraph's items ARE now here, and they are the three that do not depend on which
-  # provider is installed. Skipping the re-embed when a run's text is byte-identical to a row this
-  # repository already holds: {#identical_text}. Batching the lookup that answers it, so asking it
-  # costs one lookup per page rather than one per row: {#digest_index}. Batching the two `UPDATE`s
-  # the answer then writes, so an unchanged page costs a constant number of statements rather than
-  # two per row: {#flush_page}. They shipped in that order because the first removes work rather
-  # than reorganising it, and because the key both of the first two need already existed; each of
-  # the later ones was worth doing once round trips rather than work were what was left. What
-  # remains is the EMBED — batching it and caching it — which is a different thing entirely: it is
-  # the path a CHANGED suite takes, and no equality can shortcut it. Also the ANN recall measurement
-  # {#nearest} hands over by name.
+  # Caching the embeddings — the rest of the *Cost* axis, still SPGD-72's. FOUR of that paragraph's
+  # items ARE now here. Three of them do not depend on which provider is installed: skipping the
+  # re-embed when a run's text is byte-identical to a row this repository already holds
+  # ({#identical_text}); batching the lookup that answers it, so asking it costs one lookup per page
+  # rather than one per row ({#digest_index}); and batching the two `UPDATE`s the answer then writes,
+  # so an unchanged page costs a constant number of statements rather than two per row
+  # ({#flush_page}). They shipped in that order because the first removes work rather than
+  # reorganising it, and because the key both of the first two need already existed; each of the
+  # later ones was worth doing once round trips rather than work were what was left.
+  #
+  # The fourth is the EMBED, and it is the one that is entirely about which provider is installed:
+  # the path a CHANGED suite takes, which no equality can shortcut. {#page_embeddings} asks for a
+  # page's worth of vectors in ONE provider request, so a changed 20,000-example suite is ~40 round
+  # trips rather than 20,000 — free either way on the shipped `LocalProvider`, which is the whole
+  # reason it went last, and the difference between a usable deployment and an unusable one for
+  # anyone who installs `EmbeddingGenerator::OpenAIProvider`. What remains of the axis is CACHING
+  # those vectors, which is a store-and-invalidate question and not a batching one. Also the ANN
+  # recall measurement {#nearest} hands over by name.
   #
   # **Not** a `retry_on` / `discard_on` policy on {Ingest::IdentityResolutionJob}, and that omission
   # is now a finding rather than a deferral: `retry_on EmbeddingGenerator::Error` cannot fire.
@@ -153,9 +159,11 @@ module Ingest
     # methods this constant has nothing to do with.
     #
     # What it does NOT bound is a page of genuinely new text, and the paragraph above says why: the
-    # embed, the ANN lookup and the upsert are still one per row, so a first run is round-trip bound
-    # whatever this is. The number tuned here is what an UNCHANGED page costs, which is the ordinary
-    # case; the changed one is SPGD-72's remaining embed work.
+    # ANN lookup and the upsert are still one per row, so a first run is round-trip bound whatever
+    # this is. The embed no longer is — {#page_embeddings} asks for the page's vectors in one
+    # request — which lowers that page's floor without changing its shape. The number tuned here is
+    # what an UNCHANGED page costs, which is the ordinary case; the changed one is SPGD-72's
+    # remaining embed CACHING work.
     #
     # That makes this a size worth tuning where it used not to be, but not a different KIND of
     # constant: both readings bound one page, and neither is a bound on how much work a delivery
@@ -233,6 +241,10 @@ module Ingest
       # conditional on a page being open, and so that a page is a page's worth of entries rather
       # than the suite's.
       @digest_index = {}
+      # The page's embeddings, filled by {#page_embeddings} for the same reason and with the same
+      # guarantee: {#embedding_for} is total rather than conditional on a page being open, and falls
+      # back to a single embed for a text no page fetched.
+      @embeddings = {}
       # The page's two write buffers, emptied and refilled by every {#resolve_page} for the same
       # reason and with the same total-rather-than-conditional guarantee: {#resight} and {#claim}
       # append to them one row at a time, and {#flush_page} spends each on ONE statement. See
@@ -431,8 +443,9 @@ module Ingest
     end
 
     # One page of the work list: ask the database once which of these texts this repository already
-    # holds, decide each row against that answer, and write what the whole page decided in two
-    # statements rather than in two per row.
+    # holds, ask the provider once for the vectors the rest of them need, decide each row against
+    # those two answers, and write what the whole page decided in two statements rather than in two
+    # per row.
     #
     # This is where the page seam has to be. Both of {#resolve}'s lists run through {#claim}, and
     # {#identity_for} sees one observation at a time and cannot know what the other 499 are — so a
@@ -459,6 +472,13 @@ module Ingest
     # rescuing the flush would report rows as resolved that carry no identity. Both propagate, which
     # is the same line {#claim_inherited}'s stated non-promise draws.
     #
+    # {#page_embeddings} is the third page-shaped statement and it is the one exception, because the
+    # failure it can meet is one it CAN attribute: `EmbeddingGenerator::Error` is the provider's, the
+    # texts that were in the request are known, and {#embed_page} re-asks them one at a time so each
+    # lands back on the row that contributed it. Only that class is rescued there and only around the
+    # provider call, so anything else about the page — including a row whose signal cannot be read —
+    # propagates exactly as {#digest_index}'s does.
+    #
     # == The `ensure` is load-bearing, and it is what keeps a DIED pass behaving as it did
     #
     # A per-row write commits per row, so a pass that raises halfway through a page used to leave
@@ -480,6 +500,7 @@ module Ingest
     # failed twice" is a different event from either one alone.
     def resolve_page(observations, inherited: false)
       @digest_index = digest_index(observations)
+      @embeddings = page_embeddings(observations)
       @sightings = []
       @links = []
       resolved = 0
@@ -656,6 +677,93 @@ module Ingest
       @repository.spec_identities.where(text_digest: digests)
                  .pluck(:text_digest, :id, :signal_source)
                  .to_h { |digest, id, source| [digest, HeldIdentity.new(id, source)] }
+    end
+
+    # @return [Hash{String => Array<Float>, nil}] every vector this page's rows are going to need,
+    #   fetched in ONE provider request — nil for a text the provider could not answer about.
+    #
+    # **The third thing this page asks once instead of per row, and the last one SPGD-72's cost
+    # clause names.** {#digest_index} made the identical-text answer one query per page and
+    # {#flush_page} made the writes two statements per page; what was left was the embed, which the
+    # identical-text shortcut removes for an UNCHANGED suite and does nothing for a changed one. Any
+    # first run, any rename, any delivery whose text is not byte-identical to a row already held
+    # still reached the provider once per example — 20,000 sequential HTTPS round trips on a changed
+    # 20,000-example suite for a deployment that installed `EmbeddingGenerator::OpenAIProvider`,
+    # against an endpoint that takes the whole array in one request.
+    #
+    # It is free on the shipped provider and that is not a reason to leave it: the provider is
+    # swappable by design and this is the seam at which the swap becomes affordable.
+    #
+    # == The cost is per page and the DECISION is still per row
+    #
+    # The same division {#digest_index} and {#flush_page} made. Nothing here decides anything: it
+    # collects the texts the per-row path is going to ask for and puts the answers where
+    # {#embedding_for} can hand each row its own. {#identity_for} runs exactly as it did — its
+    # `:none` return, its {#identical_text} shortcut, its {#nearest} lookup, its upgrade and its
+    # insert — and a row whose vector is nil takes the same {#record_resolve_failure} stamp it took
+    # when its own embed returned nil.
+    #
+    # == What is deliberately NOT in the request
+    #
+    # `identical_text` is asked BEFORE a text joins the list, so a byte-identical re-ingest sends
+    # the provider nothing at all — the shortcut's whole point, and it would be undone by a batch
+    # that embedded the page indiscriminately. The list is deduped for the same reason
+    # {#digest_index}'s is: two examples carrying the same description are one text to embed, and
+    # the vector is a pure function of the text.
+    #
+    # The snapshot is taken before the first row is claimed, so a text that a LATER row of this same
+    # page will create an identity for is embedded here and its duplicate is not — {#claim_identity}
+    # puts the new row into `@digest_index` and the second occurrence takes the shortcut, exactly as
+    # it does today.
+    def page_embeddings(observations)
+      embed_page(unheld_texts(observations))
+    end
+
+    # The texts this page will have to embed: every row's signal text, minus the rows that have no
+    # text at all and minus the ones the page's map already names an identity for, deduped.
+    #
+    # Reads {#identical_text} rather than re-deriving the digest comparison, so the question asked
+    # here is by construction the same question {#identity_for} asks a moment later — a second
+    # phrasing of it could drift and would show up as a provider bill rather than as a failure.
+    def unheld_texts(observations)
+      observations.filter_map do |observation|
+        signal = observation.signal
+        next unless signal.present?
+        next if identical_text(signal)
+
+        signal.text
+      end.uniq
+    end
+
+    # @return [Hash{String => Array<Float>, nil}] text => vector, empty when there is nothing to
+    #   embed — which is the ordinary case, so it costs no call rather than an empty one.
+    #
+    # **The fallback is what keeps SPGD-367 true through a batch.** One unembeddable example must
+    # not abandon the other 19,999, and a batch fails as a batch: `EmbeddingGenerator.embed_many`
+    # raises for the whole page and cannot say which input was refused, because one bad text and a
+    # dropped connection arrive identically. Nilling the whole page on that error would stamp 20,000
+    # rows for one bad one — the exact regression the per-row rescue in {#embed} exists to prevent —
+    # so the page falls back to asking one text at a time, and each text then fails, or does not, on
+    # its own. That path is today's path unchanged, warning line and per-row nil included.
+    #
+    # It costs one wasted request on a page that fails, and only on a page that fails. A provider
+    # that is simply down pays it once and then behaves exactly as it does now.
+    #
+    # `zip` is where the interface's ORDER CONTRACT is consumed: `texts[i]`'s vector is
+    # `vectors[i]`, and `embed_many` guarantees both the order and the count (a short array is an
+    # `Error` there rather than a nil here, which would attach every later vector to the wrong
+    # text). Rescuing `EmbeddingGenerator::Error` and nothing wider, for the reason {#embed} gives:
+    # a broader rescue at a page-level call could swallow a failure that is not the provider's.
+    def embed_page(texts)
+      return {} if texts.empty?
+
+      texts.zip(EmbeddingGenerator.embed_many(texts)).to_h
+    rescue EmbeddingGenerator::Error => e
+      Rails.logger.warn(
+        "[IdentityResolver] run=#{@run.id} could not embed a page of #{texts.size} spec signals " \
+        "in one request: #{e.message}; falling back to one request per signal"
+      )
+      texts.to_h { |text| [text, embed(text)] }
     end
 
     # Every text this row could already be held under: the one that REPRESENTS it, and — when that
@@ -888,7 +996,7 @@ module Ingest
       identical = identical_text(signal)
       return resight(identical, observation) if identical
 
-      embedding = embed(signal.text)
+      embedding = embedding_for(signal.text)
       return record_resolve_failure(observation) if embedding.nil?
 
       match = nearest(embedding)
@@ -1514,13 +1622,33 @@ module Ingest
       id
     end
 
+    # @return [Array<Float>, nil] this row's vector out of the page's request — nil when the page
+    #   asked for it and the provider could not answer, which is the same nil {#embed} returned when
+    #   the ask was per row, and costs the same {#record_resolve_failure} stamp.
+    #
+    # `fetch` with a block rather than `[]`, because the two absences are different: a text the page
+    # embedded and FAILED on is present with a nil value and must stay a failure, while a text no
+    # page fetched at all — a caller reaching {#claim} outside {#resolve_page} — has no answer yet
+    # and gets today's single embed. Reading a missing key as a failure would strand the second
+    # case; reading a nil value as a miss would re-ask the provider for a text it has just refused,
+    # once per row, which is the amplification the batch exists to remove.
+    def embedding_for(text)
+      @embeddings.fetch(text) { embed(text) }
+    end
+
     # @return [Array<Float>, nil] nil when the provider failed, which leaves the observation
     #   unresolved and stamped — see {#record_resolve_failure}, which is what the nil now costs.
     #
     # Rescued rather than allowed to propagate so that one unembeddable example does not abandon the
-    # other 19,999 — and rescued *here*, at the single call, so the rescue cannot accidentally swallow
-    # a failure from the database work around it. `EmbeddingGenerator` promises this is the only class
-    # its callers see, whatever the provider did.
+    # other 19,999 — and rescued *here*, around the provider call and nothing else, so the rescue
+    # cannot accidentally swallow a failure from the database work around it. `EmbeddingGenerator`
+    # promises this is the only class its callers see, whatever the provider did.
+    #
+    # **The ONE-TEXT path, and it is no longer the ordinary one.** A page asks for its texts
+    # together ({#embed_page}) and this is what each of them falls back to: once per text when the
+    # batch request failed, and once for a text no page fetched. It is unchanged in what it does, and
+    # it is deliberately still the thing containment is expressed in — the batch has no way to say
+    # WHICH input a failed request was refused for, and this does, one text at a time.
     #
     # **This rescue is why a job-level retry policy would reach nothing.** The error is consumed
     # here, so `retry_on EmbeddingGenerator::Error` on {Ingest::IdentityResolutionJob} could never

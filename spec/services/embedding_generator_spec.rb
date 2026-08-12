@@ -30,6 +30,153 @@ RSpec.describe EmbeddingGenerator do
     end
   end
 
+  # The batch entry point. What it exists for is one provider REQUEST per page of changed tests
+  # rather than one per test — the last of `Ingest::IdentityResolver`'s per-row costs — so the
+  # figure every example here is really about is how many times the provider was asked anything.
+  describe ".embed_many" do
+    # A provider that has no batch of its own, which is the ordinary case and the one the interface
+    # has to carry for it. Counts BOTH shapes, so "asked once per text" and "asked once for the
+    # page" are distinguishable rather than inferred from a single number.
+    def install_counting_provider(batching: false)
+      provider = Class.new do
+        class << self
+          attr_reader :texts, :batches
+
+          def call(text)
+            (@texts ||= []) << text
+            EmbeddingGenerator::LocalProvider.call(text)
+          end
+        end
+      end
+
+      if batching
+        provider.define_singleton_method(:embed_many) do |texts|
+          @batches = (@batches || 0) + 1
+          texts.map { |text| EmbeddingGenerator::LocalProvider.call(text) }
+        end
+      end
+
+      described_class.provider = provider
+    end
+
+    let(:texts) do
+      ["Order#checkout rejects an expired card",
+       "User#save refuses a duplicate email",
+       "Cart#add appends the item to the cart"]
+    end
+
+    before { described_class.provider = described_class::LocalProvider }
+
+    it "returns one vector per text, in input order" do
+      # **The order IS the contract.** Callers assign vectors positionally, so a page returned in
+      # any other order attaches one test's history to another test — silently, because every
+      # vector is a perfectly valid vector. Asserted against `.call` of the SAME text rather than
+      # against a fixture, so it is the interface's own answer that has to line up.
+      expect(described_class.embed_many(texts)).to eq(texts.map { |text| described_class.call(text) })
+    end
+
+    it "is exactly a map of .call for a provider that has no batch of its own" do
+      # The default implementation, stated as an equivalence rather than as an implementation
+      # detail: a provider written before this entry point existed answers a batch correctly and
+      # without knowing anything about it.
+      install_counting_provider
+
+      vectors = described_class.embed_many(texts)
+
+      expect(described_class.provider.texts).to eq(texts)
+      expect(vectors).to eq(texts.map { |text| described_class::LocalProvider.call(text) })
+    end
+
+    it "asks a batching provider ONCE for the whole page, and never per text" do
+      # The win itself, for the only provider shape where it is a win: one request, not three.
+      install_counting_provider(batching: true)
+
+      described_class.embed_many(texts)
+
+      expect(described_class.provider.batches).to eq(1)
+      expect(described_class.provider.texts).to be_nil
+    end
+
+    it "asks the provider nothing at all for an empty page" do
+      # The ordinary case for the resolver — a re-ingest whose every text is already held asks for
+      # nothing — and an empty request is still a billed round trip.
+      install_counting_provider(batching: true)
+
+      expect(described_class.embed_many([])).to eq([])
+      expect(described_class.provider.batches).to be_nil
+      expect(described_class.provider.texts).to be_nil
+    end
+
+    it "carries a stub of .call through the default path, so a caller's seam still holds" do
+      # `Ingest::IdentityResolver`'s failure specs — and SPGD-367's containment — are expressed by
+      # making `.call` fail. The default batch goes through `.call` and not past it to the provider,
+      # so what fails for one text still fails for a page of them.
+      allow(described_class).to receive(:call).and_raise(described_class::Error, "provider down")
+
+      expect { described_class.embed_many(texts) }
+        .to raise_error(described_class::Error, "provider down")
+    end
+  end
+
+  # Everything the interface guarantees for one vector it guarantees for every vector of a page —
+  # plus the one guarantee only a page can break: that there is exactly one vector per input.
+  describe "guarantees that survive the swap, for a whole page at once" do
+    def install(&body)
+      described_class.provider = Class.new { define_singleton_method(:embed_many, &body) }
+    end
+
+    it "validates EVERY vector of the page, not merely the first" do
+      install { |texts| texts.each_with_index.map { |_text, index| Array.new(index.zero? ? 1536 : 3072, 0.5) } }
+
+      expect { described_class.embed_many(%w[a b]) }
+        .to raise_error(described_class::Error, /returned 3072 dimensions, expected 1536/)
+    end
+
+    it "refuses a page with fewer vectors than texts, rather than zipping a nil onto a text" do
+      # The failure a batch adds and a single embed cannot have. A short array is not merely a
+      # missing answer for the LAST text — the caller pairs positionally, so every vector after the
+      # gap lands on the wrong text, and every one of them validates.
+      install { |texts| texts.take(1).map { Array.new(1536, 0.5) } }
+
+      expect { described_class.embed_many(%w[a b c]) }
+        .to raise_error(described_class::Error, "embedding provider returned 1 vectors for 3 texts")
+    end
+
+    it "refuses a page with more vectors than texts, which is the same mis-pairing" do
+      install { |texts| (texts + ["extra"]).map { Array.new(1536, 0.5) } }
+
+      expect { described_class.embed_many(%w[a b]) }
+        .to raise_error(described_class::Error, "embedding provider returned 3 vectors for 2 texts")
+    end
+
+    it "refuses a non-Array page" do
+      install { |_texts| nil }
+
+      expect { described_class.embed_many(%w[a b]) }
+        .to raise_error(described_class::Error, /returned no vectors \(got NilClass\)/)
+    end
+
+    it "wraps a batching provider's transport exception rather than leaking it" do
+      install { |_texts| raise Faraday::ConnectionFailed, "econnrefused" }
+
+      expect { described_class.embed_many(%w[a b]) }
+        .to raise_error(described_class::Error, /embedding provider failed: econnrefused/)
+    end
+
+    it "lets a batching provider's own Error through unwrapped" do
+      install { |_texts| raise EmbeddingGenerator::Error, "provider is not configured" }
+
+      expect { described_class.embed_many(%w[a b]) }
+        .to raise_error(described_class::Error, "provider is not configured")
+    end
+
+    it "returns floats even when a batching provider hands back integers" do
+      install { |texts| texts.map { Array.new(1536, 1) } }
+
+      expect(described_class.embed_many(%w[a b]).flatten).to all(be_a(Float))
+    end
+  end
+
   describe "swappability" do
     it "routes calls to any object answering .call(text), leaving callers untouched" do
       alternative = Class.new do
@@ -425,6 +572,89 @@ RSpec.describe EmbeddingGenerator do
 
       expect(client).to have_received(:embeddings)
         .with(parameters: { model: "text-embedding-3-small", input: "Order checkout" })
+    end
+
+    # The reason the batch entry point exists at all: this is the provider that pays an HTTPS round
+    # trip — and a bill — per `.call`, and the endpoint has always taken the whole array.
+    describe "embedding a whole page at once" do
+      let(:texts) { ["Order checkout", "User save", "Cart add"] }
+
+      # One row of the response body per text, with the `index` the endpoint documents, each vector
+      # distinguishable from its neighbours so a mis-pairing cannot look like a pass.
+      def body(order = (0...texts.size).to_a)
+        { "data" => order.map { |index| { "index" => index, "embedding" => Array.new(1536, index + 1.0) } } }
+      end
+
+      it "issues ONE request carrying the array of inputs, not one request per text" do
+        # The 20,000 → ~40 round trips this slice is for, asserted as the request count and the
+        # `input` shape together: a loop that happened to send an array of one would pass either
+        # half alone.
+        allow(client).to receive(:embeddings).and_return(body)
+
+        described_class.embed_many(texts)
+
+        expect(client).to have_received(:embeddings)
+          .with(parameters: { model: "text-embedding-3-small", input: texts }).once
+      end
+
+      it "returns the vectors in input order" do
+        allow(client).to receive(:embeddings).and_return(body)
+
+        expect(described_class.embed_many(texts)).to eq([1.0, 2.0, 3.0].map { |value| Array.new(1536, value) })
+      end
+
+      it "orders by the response's own index rather than trusting the order it arrived in" do
+        # **Asserted, not assumed** — the interface's order contract is the one thing a caller
+        # cannot check for itself, and a shuffled page would hand every test its neighbour's
+        # history while every vector still validated. The endpoint states each row's position; this
+        # reads it.
+        allow(client).to receive(:embeddings).and_return(body([2, 0, 1]))
+
+        expect(described_class.embed_many(texts)).to eq([1.0, 2.0, 3.0].map { |value| Array.new(1536, value) })
+      end
+
+      it "falls back to arrival order when a body carries no index at all" do
+        # Degrades to the order the array came in rather than collapsing every row onto one sort
+        # key, which is what a bare `row["index"] || 0` would do.
+        allow(client).to receive(:embeddings)
+          .and_return({ "data" => [1.0, 2.0].map { |value| { "embedding" => Array.new(1536, value) } } })
+
+        expect(described_class.embed_many(%w[a b])).to eq([1.0, 2.0].map { |value| Array.new(1536, value) })
+      end
+
+      it "converts a transport error rather than leaking Faraday's" do
+        allow(client).to receive(:embeddings).and_raise(Faraday::ConnectionFailed, "econnrefused")
+
+        expect { described_class.embed_many(texts) }
+          .to raise_error(described_class::Error, /embedding provider failed/)
+      end
+
+      it "rejects a body with no page in it" do
+        allow(client).to receive(:embeddings).and_return({ "error" => "nope" })
+
+        expect { described_class.embed_many(texts) }
+          .to raise_error(described_class::Error, /returned no vectors/)
+      end
+
+      it "rejects a page that answers about fewer texts than it was asked" do
+        allow(client).to receive(:embeddings).and_return(body([0, 1]))
+
+        expect { described_class.embed_many(texts) }
+          .to raise_error(described_class::Error, "embedding provider returned 2 vectors for 3 texts")
+      end
+
+      it "refuses to call the provider at all when no API key is configured" do
+        allow(Rails.application.credentials).to receive(:dig).with(:openai, :api_key).and_return(nil)
+        allow(client).to receive(:embeddings)
+
+        with_api_key(nil) do
+          expect { described_class.embed_many(texts) }
+            .to raise_error(described_class::Error, /not configured/)
+        end
+
+        expect(OpenAI::Client).not_to have_received(:new)
+        expect(client).not_to have_received(:embeddings)
+      end
     end
   end
 end

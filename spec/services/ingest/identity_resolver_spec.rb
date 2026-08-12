@@ -1184,6 +1184,175 @@ RSpec.describe Ingest::IdentityResolver do
     end
   end
 
+  describe "what a page of CHANGED text costs in provider REQUESTS" do
+    # The complement of the two groups above, and the last cost `SPGD-72` names. They are about text
+    # that has NOT changed — the identical-text equality answers it, so nothing is embedded and
+    # nothing is asked. This one is about the case that equality cannot answer at all: a first run, a
+    # rename, anything whose bytes are new. Every one of those rows still needs a vector, and the
+    # question here is how many REQUESTS a page of them costs.
+    #
+    # `counting_provider` cannot answer it. It counts TEXTS, which is the right figure for the
+    # shipped `LocalProvider` (hashing in this process, N times, is the cheapest shape there is) and
+    # the wrong one for `OpenAIProvider`, where the bill and the latency are per REQUEST. So this
+    # group installs a provider that implements the batch entry point and counts both.
+    let(:batching_provider) do
+      Class.new do
+        class << self
+          def calls = @calls ||= 0
+          def batches = @batches ||= 0
+          def batched = @batched ||= []
+
+          def call(text)
+            @calls = calls + 1
+            EmbeddingGenerator::LocalProvider.call(text)
+          end
+
+          def embed_many(texts)
+            @batches = batches + 1
+            batched.concat(texts)
+            texts.map { |text| EmbeddingGenerator::LocalProvider.call(text) }
+          end
+        end
+      end
+    end
+
+    # Five tests this repository has never seen, each lexically distinct from the others so that
+    # nothing here is resolved by a similarity coincidence.
+    def new_page
+      ["Order#checkout rejects an expired card",
+       "User#save refuses a duplicate email",
+       "Cart#add appends the item to the cart",
+       "Invoice#finalize locks the line items",
+       "Report#export streams the CSV in batches"].each_with_index.map do |name, index|
+        unannotated_spec(file_path: "spec/models/a#{index}_spec.rb", line_number: index + 1, name: name)
+      end
+    end
+
+    # Which identity each run's row actually landed on, named by the text that identity is held
+    # under — the pairing itself, rather than a count that a shifted pairing would also satisfy.
+    def identity_by_file(run)
+      run.spec_observations.includes(:spec_identity).to_h { |row| [row.file_path, row.spec_identity&.text] }
+    end
+
+    it "asks the provider ONCE for a page of five tests it has never seen" do
+      # **The slice, stated as the figure it moves.** Five new tests were five sequential provider
+      # requests — 20,000 of them for a changed suite at the design point, against an endpoint that
+      # takes the whole array in one. The assertion is the REQUEST count and not the text count:
+      # five texts still get embedded, and that was never the expensive part.
+      run = record(new_page, ci_run_id: "run-1")
+      EmbeddingGenerator.provider = batching_provider
+
+      described_class.resolve(run)
+
+      expect(batching_provider.batches).to eq(1)
+      # And not one per row on the side: a batch that also fell through to `.call` would be the
+      # same round trips plus one.
+      expect(batching_provider.calls).to eq(0)
+      # The premise, pinned rather than trusted: all five really did fall through the digest
+      # equality to an embed, so "one" is a claim about a page of five and not about a page where
+      # nothing happened.
+      expect(batching_provider.batched.size).to eq(5)
+      expect(repository.spec_identities.count).to eq(5)
+    end
+
+    it "still asks for nothing at all when the page's every text is already held" do
+      # The identical-text shortcut runs BEFORE a text joins the request, so the optimisation the
+      # two groups above assert is not undone by a batch that embeds its page indiscriminately.
+      ingest(new_page, ci_run_id: "run-1")
+
+      EmbeddingGenerator.provider = batching_provider
+      ingest(new_page, ci_run_id: "run-2")
+
+      expect(batching_provider.batches).to eq(0)
+      expect(batching_provider.calls).to eq(0)
+      expect(repository.spec_identities.count).to eq(5)
+    end
+
+    it "asks once for two examples carrying the same text, not once each" do
+      # The page's request is deduped for the reason `#digest_index`'s `IN` list is: the vector is a
+      # pure function of the text, so two examples with one description are one thing to ask about.
+      run = record([unannotated_spec(file_path: "spec/models/invoice_spec.rb", line_number: 3, name: "is valid"),
+                    unannotated_spec(file_path: "spec/models/user_spec.rb", line_number: 7, name: "is valid")],
+                   ci_run_id: "run-1")
+      EmbeddingGenerator.provider = batching_provider
+
+      described_class.resolve(run)
+
+      expect(batching_provider.batched).to eq(["is valid"])
+    end
+
+    it "gives each test the vector for its own text, and not its neighbour's" do
+      # **The ORDER CONTRACT, consumed.** The page's vectors come back positionally and are pinned
+      # to rows positionally, so a page paired one place out would give every test its neighbour's
+      # vector — and would look like a pass to anything that counted rows, or identities, or even
+      # re-resolution: a CONSISTENT shift is self-consistent, so run 2 lands every row back on the
+      # row it had while every one of those rows holds the wrong vector. That is the mis-pairing
+      # this example is really for, and only the vector itself can see it.
+      #
+      # Asserted against `LocalProvider`'s answer for each row's OWN text rather than against a
+      # fixture, so what has to line up is the provider's real output. Compared within a tolerance
+      # because pgvector stores four-byte floats and Ruby's are eight — an exact `eq` would fail on
+      # the storage round trip rather than on the pairing.
+      EmbeddingGenerator.provider = batching_provider
+      first = ingest(new_page, ci_run_id: "run-1")
+
+      repository.spec_identities.each do |identity|
+        own = EmbeddingGenerator::LocalProvider.call(identity.text)
+        drift = own.zip(identity.embedding.to_a).map { |mine, stored| (mine - stored).abs }.max
+
+        expect(drift).to be < 1e-5
+      end
+
+      # And the consequence that mis-pairing would have on the product: run 2's text differs from
+      # run 1's in punctuation and whitespace only, so the digest equality cannot answer any of it
+      # and every row is resolved by the vector it holds and nothing else.
+      punctuated = new_page.map { |spec| spec.merge(name: "#{spec[:name].gsub(' ', '  ')}!") }
+      second = ingest(punctuated, ci_run_id: "run-2")
+
+      expect(repository.spec_identities.count).to eq(5)
+      expect(identity_by_file(second)).to eq(identity_by_file(first))
+      expect(identity_by_file(first)).to eq(new_page.to_h { |spec| [spec[:file_path], spec[:name]] })
+    end
+
+    it "contains a failed page to the row that caused it, rather than stamping all five" do
+      # **SPGD-367 through a batch, which is the whole risk of batching this call.** A request fails
+      # as a request: the provider cannot say WHICH input it refused, because one unembeddable text
+      # and a dropped connection arrive identically. Reading that as "the page failed" would stamp
+      # 20,000 rows for one bad one and undo the guarantee that one unembeddable example does not
+      # abandon the other 19,999 — so the page falls back to asking one text at a time and each text
+      # fails, or does not, on its own.
+      poison = new_page.first[:name]
+      provider = batching_provider
+      provider.define_singleton_method(:embed_many) do |texts|
+        @batches = batches + 1
+        raise EmbeddingGenerator::Error, "cannot embed the page" if texts.include?(poison)
+
+        texts.map { |text| EmbeddingGenerator::LocalProvider.call(text) }
+      end
+      provider.define_singleton_method(:call) do |text|
+        @calls = calls + 1
+        raise EmbeddingGenerator::Error, "cannot embed #{text}" if text == poison
+
+        EmbeddingGenerator::LocalProvider.call(text)
+      end
+
+      run = record(new_page, ci_run_id: "run-1")
+      EmbeddingGenerator.provider = provider
+      described_class.resolve(run)
+
+      # Four rows resolved on the fallback, and the fifth left exactly as a per-row failure leaves
+      # it: unresolved, stamped, and retryable by the cross-run sweep.
+      expect(repository.spec_identities.pluck(:text)).to match_array(new_page.drop(1).map { |spec| spec[:name] })
+      failed = run.spec_observations.embed_failed
+      expect(failed.pluck(:name)).to eq([poison])
+      expect(failed.sole.embed_failure_count).to eq(1)
+      # What the containment COSTS, stated rather than left to be discovered: one wasted request,
+      # then the five per-text asks that were the price before this slice.
+      expect(provider.batches).to eq(1)
+      expect(provider.calls).to eq(5)
+    end
+  end
+
   describe "the tenant boundary" do
     it "never resolves a test onto another repository's identity" do
       other = create_repository(user: create_user(github_uid: "2002", github_handle: "other"),
@@ -2298,10 +2467,20 @@ RSpec.describe Ingest::IdentityResolver do
 
       lines = logged { described_class.resolve(run) }
 
-      # The per-row voice, byte-identical to what `#embed` has always said. This slice adds a line;
-      # it does not edit one.
-      expect(lines.select { |level, _| level == :warn }.map(&:last))
+      # The per-row voice, byte-identical to what `#embed` has always said. An outage now reaches
+      # the provider a page at a time, so the failure is ANNOUNCED once for the page and then
+      # CONTAINED one row at a time exactly as before — three rows, three lines, three stamps. The
+      # page line is additive and is asserted separately below rather than folded in here, so this
+      # stays an assertion about the per-row voice.
+      warnings = lines.select { |level, _| level == :warn }.map(&:last)
+
+      expect(warnings.grep(/could not embed a spec signal/))
         .to eq(["[IdentityResolver] run=#{run.id} could not embed a spec signal: provider down"] * 3)
+      # The page's own line, said once, and the fallback it announces is what keeps the three above
+      # per-row rather than one verdict on the whole page.
+      expect(warnings.grep(/could not embed a page/))
+        .to eq(["[IdentityResolver] run=#{run.id} could not embed a page of 3 spec signals in one " \
+                "request: provider down; falling back to one request per signal"])
       # And the total those three lines never carried, said once.
       expect(summaries(lines).sole).to include("resolved=0", "embed_failed_retrying=3")
     end
