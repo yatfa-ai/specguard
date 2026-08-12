@@ -351,11 +351,16 @@ RSpec.describe Ingest::IdentityResolver do
     # query_capture.rb) drop `payload[:cached]` as well as `SCHEMA`/`TRANSACTION`, so what is counted
     # is round trips actually paid for.
     #
-    # Narrowed to the digest lookup rather than counted as a page total: the per-row UPDATEs a
-    # re-sighting issues are O(N) by definition and are not what this slice changed, so a total would
-    # move for reasons that have nothing to do with the claim. `\ASELECT` excludes the `INSERT … ON
-    # CONFLICT` in `#claim_identity`, which names the same column and is not a lookup.
+    # **Two instruments, because the page has two costs and they are bounded separately.** The
+    # digest lookup is the READ, and it is narrowed to `\ASELECT … text_digest` rather than counted
+    # as a page total so it cannot move for reasons that have nothing to do with the claim —
+    # `\ASELECT` also excludes the `INSERT … ON CONFLICT` in `#claim_identity`, which names the same
+    # column and is not a lookup. The re-sighting and the link are the WRITES, and they used to be
+    # O(N) by definition — this group deferred them in as many words, and SPGD-395 is what stopped
+    # deferring. They are counted by their own predicate rather than folded into the first, so a
+    # slice that batched one of the two and not the other cannot hide inside a total.
     def digest_lookups(&) = executed_sql(&).grep(/\ASELECT\b.*\btext_digest\b/m)
+    def update_statements(&) = executed_sql(&).grep(/\AUPDATE\b/)
 
     # Twelve deliberately UNLIKE descriptions. The count has to be a page-multiple to say anything,
     # and near-identical filler would collapse under `MATCH_SIMILARITY` into fewer identities than
@@ -400,6 +405,44 @@ RSpec.describe Ingest::IdentityResolver do
       # Twelve rows, one page, one lookup. Per row this was twelve; at the 20,000-example design
       # point it was 20,000.
       expect(digest_lookups { described_class.resolve(second) }.size).to eq(1)
+      expect(second.spec_observations.unresolved.count).to eq(0)
+    end
+
+    it "writes what a whole page decided in two statements, not in two per row" do
+      # **The WRITE half of the same page seam, and the figure `BATCH_SIZE` now states.** Every row
+      # of an unchanged re-ingest is a re-sighting, and a re-sighting is two `UPDATE`s: the
+      # identity's last known path, and the observation's link. Per row that is 24 statements for
+      # this fixture and 40,000 at the 20,000-example design point — for a run in which, by
+      # construction, nothing about the suite changed.
+      #
+      # Asserted as an EXACT constant rather than as "fewer than twelve": the claim is O(1) per page,
+      # and a bound that merely fell would stay green for an implementation that batched the link and
+      # left the sighting per row. Two, because those are the two writes — not two because there are
+      # twelve rows.
+      ingest(wide_suite, ci_run_id: "run-1")
+      second = record(wide_suite(offset: 100), ci_run_id: "run-2")
+
+      expect(update_statements { described_class.resolve(second) }.size).to eq(2)
+
+      # The premise, pinned rather than trusted: those two statements did the whole page's work. A
+      # resolver that simply skipped the writes would answer this count perfectly.
+      expect(second.spec_observations.unresolved.count).to eq(0)
+      expect(repository.spec_identities.pluck(:last_seen_test_run_id).uniq).to eq([second.id])
+      expect(repository.spec_identities.pluck(:line_number).sort).to eq((101..112).to_a)
+    end
+
+    it "keeps the page's write cost flat as the page grows" do
+      # The falsifier for the example above, which an implementation that issued one statement per
+      # row would also pass at a page of ONE. Same two statements over a page a third the size, so
+      # the number is a property of the page and not of its width — and a per-row implementation
+      # answers four here where it answered twelve above, which is exactly the shape a lone exact
+      # count cannot tell from O(1).
+      stub_const("#{described_class}::BATCH_SIZE", subjects.size / 3)
+      ingest(wide_suite, ci_run_id: "run-1")
+      second = record(wide_suite(offset: 100), ci_run_id: "run-2")
+
+      # Three pages of four rows: two statements each, and never eight.
+      expect(update_statements { described_class.resolve(second) }.size).to eq(6)
       expect(second.spec_observations.unresolved.count).to eq(0)
     end
 
@@ -473,6 +516,103 @@ RSpec.describe Ingest::IdentityResolver do
 
       expect(digest_lookups { described_class.resolve(run) }).to be_empty
       expect(run.spec_observations.sole.reload.spec_identity_id).to be_nil
+    end
+  end
+
+  describe "when one page re-sights the same identity more than once" do
+    # **The one way batching a page's re-sightings is silently wrong**, and it is reachable by two
+    # ordinary routes rather than one exotic one: two examples whose `full_description` is identical
+    # resolve to a single row (`SpecIdentity::MATCH_SIMILARITY` states why no threshold can separate
+    # them), and `#retry_backlog` mixes runs by design, so ONE backlog page holds an earlier run's
+    # row beside a later one's for the same test.
+    #
+    # Sequential guarded `UPDATE`s settled that by executing. Within a run whichever landed last had
+    # the final word, which is correct because two examples sharing a description have no order
+    # between them; across runs `SpecIdentity::SIGHTING_NOT_OLDER` refused the older one whatever
+    # order they were walked in. A single statement has no "last": `UPDATE … FROM (VALUES …)` joined
+    # on a DUPLICATED key applies exactly one of the duplicates and picks it arbitrarily, so unless
+    # the page arrives deduplicated the guard is asked about a row nobody chose — and a sighting
+    # travels backwards in time again, which is the failure that guard exists to make structurally
+    # impossible.
+    def provider_down
+      allow(EmbeddingGenerator).to receive(:call).and_raise(EmbeddingGenerator::Error, "provider down")
+    end
+
+    def provider_back = RSpec::Mocks.space.proxy_for(EmbeddingGenerator).reset
+
+    # Two tests, at one line offset, ingested as one run. Two so the example can put the newer
+    # sighting FIRST in the page for one of them and LAST for the other — see below for why one
+    # would certify nothing.
+    def pair(line_number:)
+      [unannotated_spec(file_path: "spec/models/cart_spec.rb", line_number: line_number,
+                        name: "Cart adds an item to the cart"),
+       unannotated_spec(file_path: "spec/models/order_spec.rb", line_number: line_number,
+                        name: "Order#checkout rejects an expired card")]
+    end
+
+    # Where a row sits in the backlog page, written directly onto the key `#failed_embed_backlog`
+    # orders by. `update_all` rather than an arrangement of ingests that happens to produce this
+    # order: the fact the fixture needs is "this row is walked at this position", and deriving it
+    # from the sweep's own fairness counter would make the example a test of that counter.
+    def walk_at(run, file_path, position)
+      run.spec_observations.where(file_path: file_path).update_all(embed_failure_count: position)
+    end
+
+    it "lands the sighting the sequential path would have landed: the newest run wins" do
+      provider_down
+      older = ingest(pair(line_number: 5), ci_run_id: "run-1")
+      newer = ingest(pair(line_number: 90), ci_run_id: "run-2")
+      provider_back
+
+      # Identities that exist but have NEVER been sighted, so the guard passes for either candidate
+      # and cannot be what decides this. That is deliberate: with a `last_seen_test_run_id` already
+      # set, `SIGHTING_NOT_OLDER` would refuse the older row on its own and the example would stay
+      # green over a page that was never deduplicated at all.
+      cart = create_spec_identity(repository: repository, text: "Cart adds an item to the cart")
+      order = create_spec_identity(repository: repository, text: "Order#checkout rejects an expired card")
+
+      # **The newest row first for one identity and last for the other**, which is what makes this
+      # falsifying rather than lucky. Postgres picks one of a duplicated join key's rows arbitrarily;
+      # whichever end of the list it happens to favour, an implementation that hands it both rows
+      # gets exactly one of these two identities wrong.
+      walk_at(newer, "spec/models/cart_spec.rb", 1)
+      walk_at(older, "spec/models/cart_spec.rb", 2)
+      walk_at(older, "spec/models/order_spec.rb", 3)
+      walk_at(newer, "spec/models/order_spec.rb", 4)
+
+      # A later ingest of an unrelated test: the production trigger, and the only thing that reads
+      # these four rows again. All four are inside one page — `RETRY_SWEEP_LIMIT` is 500 — which is
+      # the premise the whole example rests on.
+      ingest([unannotated_spec(file_path: "spec/models/user_spec.rb", line_number: 3,
+                               name: "User#save rejects a duplicate email")], ci_run_id: "run-3")
+
+      expect(cart.reload.location).to eq("spec/models/cart_spec.rb:90")
+      expect(order.reload.location).to eq("spec/models/order_spec.rb:90")
+      expect([cart.last_seen_test_run_id, order.last_seen_test_run_id]).to eq([newer.id, newer.id])
+    end
+
+    it "still links every observation, including the ones whose sighting it dropped" do
+      # De-duplicating the SIGHTINGS must not de-duplicate the ROWS. An observation of a test is an
+      # observation of it whether or not it is the most recent one — the same distinction the guard
+      # itself draws, applied one step earlier: the page picks one row per identity to write and
+      # still links all four.
+      provider_down
+      older = ingest(pair(line_number: 5), ci_run_id: "run-1")
+      newer = ingest(pair(line_number: 90), ci_run_id: "run-2")
+      provider_back
+
+      create_spec_identity(repository: repository, text: "Cart adds an item to the cart")
+      create_spec_identity(repository: repository, text: "Order#checkout rejects an expired card")
+
+      resolved = described_class.resolve(
+        record([unannotated_spec(file_path: "spec/models/user_spec.rb", line_number: 3,
+                                 name: "User#save rejects a duplicate email")], ci_run_id: "run-3")
+      )
+
+      expect(older.spec_observations.unresolved).to be_empty
+      expect(newer.spec_observations.unresolved).to be_empty
+      # And the count is what NOW carries an identity: four rescued rows plus run 3's own one.
+      expect(resolved).to eq(5)
     end
   end
 

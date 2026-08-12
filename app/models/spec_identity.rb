@@ -160,15 +160,38 @@ class SpecIdentity < ApplicationRecord
 
   private_constant :SIGHTING_NOT_OLDER
 
-  # The guard as a WHERE clause, for the match path — {Ingest::IdentityResolver#resight}, which has
-  # the sighting run's id in hand and binds it.
+  # The alias the batched match path gives the `VALUES` list it joins against, and therefore the
+  # name the guard below reads the sighting run out of. Public, and a constant rather than a letter
+  # written twice, because two places have to agree on it: {Ingest::IdentityResolver#resight_all}
+  # spells `AS v (…)` and this spells `v.last_seen_test_run_id`, and a guard that named a table
+  # alias nobody defined would be a syntax error at best and a silently different join at worst.
+  SIGHTING_VALUES_ALIAS = "v"
+
+  # The guard as a WHERE clause, for the match path — {Ingest::IdentityResolver#resight_all}, which
+  # re-sights a WHOLE PAGE in one statement and therefore has no single run id to bind: each row of
+  # its `VALUES` list carries its own, and the guard reads it off that row exactly as
+  # `RESIGHT_ON_CONFLICT` below reads its own off `excluded`.
   #
-  # A guard that fails means the UPDATE matches no row, which is the whole point: the identity is
-  # left exactly as it was, `updated_at` included, because nothing about it changed. The caller
-  # still links its observation to the row — being older than the last sighting does not make an
-  # observation any less an observation OF this test.
-  def self.sighting_not_older_than(test_run_id)
-    sanitize_sql_array([format(SIGHTING_NOT_OLDER, sighted_run: "?"), test_run_id])
+  # It replaced a `?`-bound spelling of the same clause, which existed only while that path issued
+  # one `UPDATE` per observation. Two instantiations rather than three, and — either way — **never a
+  # second spelling of the guard**: `SIGHTING_NOT_OLDER` is `private_constant`, so a caller cannot
+  # format it itself, and relaxing that so it could is precisely how a copy of this predicate would
+  # enter the tree. That is the whole reason the guard lives here for both paths rather than inside
+  # either of them.
+  #
+  # Per row and deliberately not hoisted out of the statement: it compares each identity against the
+  # sighting proposed FOR THAT identity, so a page whose rows resolve to different identities gets
+  # one verdict per row and not one for the page.
+  #
+  # A guard that fails means the UPDATE matches that row not at all, which is the whole point: the
+  # identity is left exactly as it was, `updated_at` included, because nothing about it changed. The
+  # caller still links its observation to the row — being older than the last sighting does not make
+  # an observation any less an observation OF this test.
+  #
+  # No binds, so this returns raw SQL rather than a sanitized fragment: the only value it
+  # interpolates is the alias above, which is a constant of this class.
+  def self.sighting_not_older_than_values
+    format(SIGHTING_NOT_OLDER, sighted_run: "#{SIGHTING_VALUES_ALIAS}.last_seen_test_run_id")
   end
 
   # The same guard as an `ON CONFLICT DO UPDATE SET` clause, for the insert path —
