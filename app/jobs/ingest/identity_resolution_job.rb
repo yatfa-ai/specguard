@@ -37,8 +37,47 @@ module Ingest
   # A run that no longer exists is not an error. Between the enqueue and the dequeue its repository
   # may have been deleted, which takes the run with it; there is nothing to resolve and nothing to
   # report.
+  #
+  # == Why one run's jobs run one at a time
+  #
+  # `Api::V1::IngestsController#enqueue_embeddings` enqueues one of these per POST, and one POST is
+  # one SHARD, not one run — so an N-shard delivery schedules N jobs over the same work list. The
+  # resolver survives that overlap (see its "Idempotency" section) but nothing ever PRICED it, and
+  # the price is the whole suite: the run-scoped list is uncapped, so each overlapping job pays an
+  # embed + ANN lookup + upsert for every row the others have not yet claimed — 20,000 of them at the
+  # roadmap's design point on a first or changed run.
+  #
+  # The honest bound on that waste is **`min(shard_count, worker threads)`, not N**. `config/queue.yml`
+  # runs `threads: 3` with one process by default, so at most three of the N jobs are ever in flight
+  # together; the rest queue behind and find the rows already resolved, which is cheap. Three is still
+  # the deployment's entire worker pool, so a sharded delivery resolving itself three times also stops
+  # everything else from progressing while it does.
+  #
+  # `limits_concurrency` keyed on the run collapses that to one. The other jobs are **blocked, not
+  # discarded** — `on_conflict:` stays at its `:block` default deliberately, because discarding a
+  # shard's job would silently strand every row that shard delivered until some later ingest's
+  # cross-run sweep noticed them. Each blocked job still runs, and finds only what is left, because
+  # the job ahead of it flushed its pages. Releasing the next one is the gem's job
+  # (`SolidQueue::ClaimedExecution#unblock_next_blocked_job`).
+  #
+  # The key derives from the ARGUMENT so it scopes to the run: the composed key is
+  # `"Ingest::IdentityResolutionJob/<test_run_id>"`, leaving different runs — and therefore different
+  # repositories — fully parallel. A constant key here would serialize identity resolution across the
+  # entire deployment.
+  #
+  # This makes overlap RARE, not impossible (semaphore expiry, a redelivered shard, two runs of one
+  # repository sharing the failure backlog), so the resolver's three overlap-survival mechanisms — the
+  # `claim_identity` upsert convergence, `SIGHTING_NOT_OLDER`, and `write_page`'s deadlock retry — are
+  # all still load-bearing and none of them may be deleted on the strength of this.
   class IdentityResolutionJob < ApplicationJob
     queue_as :default
+
+    # `duration:` bounds a STUCK semaphore, not an expected runtime: it is how long the dispatcher
+    # waits before assuming the holder died and releasing a blocked job anyway. It must therefore
+    # exceed the worst-case resolve wall clock — a 20,000-row resolve is minutes of embed + ANN work,
+    # and SolidQueue's 3-minute default would expire mid-resolve and quietly restore the overlap this
+    # exists to remove. Hours, so expiry means "something is wrong", never "this run is large".
+    limits_concurrency to: 1, key: ->(test_run_id) { test_run_id }, duration: 6.hours
 
     def perform(test_run_id)
       run = TestRun.find_by(id: test_run_id)

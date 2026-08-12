@@ -76,4 +76,50 @@ RSpec.describe Ingest::IdentityResolutionJob do
       expect(summaries { described_class.perform_now(id) }).to be_empty
     end
   end
+
+  # One POST is one shard, so an N-shard delivery enqueues N jobs over one run's rows and each
+  # uncapped run-scoped resolve costs an embed + lookup + upsert per row the others have not yet
+  # claimed. `limits_concurrency` collapses that to one job at a time per run.
+  #
+  # `config/environments/test.rb` pins this suite to ActiveJob's `:test` adapter — deliberately not
+  # `:solid_queue` — so NO example here can exercise the blocking at runtime, and none should try to
+  # manufacture one by swapping the adapter in. What is assertable is the configuration the Solid
+  # Queue dispatcher reads, and it is enough: it catches every way this can be got wrong.
+  describe "serializing one run's jobs" do
+    let(:run) { record([unannotated_spec]) }
+
+    it "admits one job at a time" do
+      expect(described_class.concurrency_limit).to eq(1)
+    end
+
+    it "keys the limit on the run, so two jobs for the same run share a key" do
+      expect(described_class.new(run.id).concurrency_key).to eq(described_class.new(run.id).concurrency_key)
+    end
+
+    # The other direction, and the one that matters: a constant key would satisfy the assertion above
+    # while serializing identity resolution across every run in the deployment — every repository's
+    # ingest queued behind every other's, a multi-tenant stall dressed as an optimisation.
+    it "keys the limit on the run, so jobs for different runs do not share a key" do
+      other = record([unannotated_spec(file_path: "spec/other_spec.rb", line_number: 9)])
+
+      expect(described_class.new(run.id).concurrency_key).not_to eq(described_class.new(other.id).concurrency_key)
+    end
+
+    # `duration` is how long the dispatcher waits before assuming a semaphore holder died and
+    # releasing a blocked job anyway. SolidQueue's 3-minute default is shorter than a design-point
+    # resolve, so leaving it there would expire the semaphore mid-run and silently restore the
+    # overlap — this slice voided with nothing turning red.
+    it "holds the semaphore for longer than a resolve can take, not SolidQueue's 3-minute default" do
+      expect(described_class.concurrency_duration).to be > SolidQueue.default_concurrency_control_period
+      expect(described_class.concurrency_duration).to be >= 1.hour
+    end
+
+    # The one change here that can LOSE work. `:discard` would drop a shard's job outright, stranding
+    # every row that shard delivered until some later ingest's cross-run sweep found them. The gem
+    # sanitises this attribute (an unrecognised value silently becomes `:block`), so a genuine
+    # `:discard` edit is caught by nothing else in the suite.
+    it "blocks the jobs it holds back rather than discarding them" do
+      expect(described_class.concurrency_on_conflict).to eq(:block)
+    end
+  end
 end

@@ -38,7 +38,13 @@ module Ingest
   # the same rows, and a redelivered shard schedules another. Both are ordinary, and neither is
   # special-cased:
   #
-  # * The work list is `SpecObservation.unresolved`, so a row already claimed is simply not in it.
+  # * The work list is `SpecObservation.unresolved`, so a row already claimed is simply not in it —
+  #   once the claim is WRITTEN. That write is per PAGE, not per row ({#link_all}, called from
+  #   {#flush_page}), so a row stays visible to a concurrent job for up to {BATCH_SIZE} rows of embed
+  #   + lookup + upsert rather than for one row. This bounds how much duplicate work an overlap costs;
+  #   it does not affect whether the result is correct, which the next bullet answers. How OFTEN the
+  #   overlap happens at all is {Ingest::IdentityResolutionJob}'s concern — it serializes one run's
+  #   jobs — but that reduces the frequency and never the need for what follows.
   # * Two jobs that read the list at the same moment and both miss on the same text converge on one
   #   row, because the insert is an upsert onto `(repository_id, text_digest)` — see
   #   {#claim_identity} and the migration's "The conflict key" section.
