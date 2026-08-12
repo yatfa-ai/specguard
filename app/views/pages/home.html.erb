@@ -94,7 +94,7 @@
           like the ones above and the whole point is that they are not the same kind of claim. %>
       <%= render UI::AlertComponent.new(tone: :warning, title: "Not available yet") do %>
         This is the product's direction, not its feature list. Ingestion does now record a row per
-        example, and the timing answers built on those rows have moved to the panel above. What is
+        example, and the timing answers built on those rows are in the panel above. What is
         left here is blocked on work that has not been done rather than on data alone: clustering
         across the whole suite, and the layer of each test, which ingestion does not read. No panel
         and no endpoint answers these today.
@@ -105,10 +105,16 @@
           why this panel still exists: `repeated_descriptions` is one run at description grain and
           its own panel says it "presents, and does not judge", which is not suite-wide clustering.
           Row 3's rationale is narrowed to the half that is genuinely open — `Ingest::ObservationRecorder`
-          writes the row per test, but deliberately does not read `layer`. %>
+          writes the row per test, but deliberately does not read `layer`.
+
+          That rationale has to stay phrased as a BLOCKER ("Needs ..."), not as a status report,
+          because the last row's "both of the above" resolves to the two needs printed above it. A
+          rationale that opens by naming something which already ships would leave row 4 pointing at
+          a shipped capability — the same checkable-claim-that-does-not-hold defect this panel was
+          edited to remove. Re-read row 4 against row 3 whenever either is reworded. %>
       <%= render UI::DefListComponent.new(rows: [
             ["Which groups of tests are potentially redundant?", "Needs suite-wide clustering"],
-            ["What already exists for this area, and at which layers?", "The row per test ships; its layer is not ingested"],
+            ["What already exists for this area, and at which layers?", "Needs the layer of each test, which ingestion does not read"],
             ["Which of those duplicates is safe to collapse?", "Needs both of the above"]
           ]) %>
     </div>
