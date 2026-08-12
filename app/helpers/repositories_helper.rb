@@ -357,6 +357,50 @@ module RepositoriesHelper
     end
   end
 
+  # == The opened repeated description's basis sentence
+
+  # What the drill-down list under a single repeated description IS — how much of the group it
+  # shows, and whether it is ordered by anything.
+  #
+  # The same two axes, in the same five sentences, as `#spec_file_examples_scope_sentence` above,
+  # and deliberately its own method rather than a widening of that one with a noun argument.
+  #
+  # The two are not the same claim wearing different words. That one says "in it", where "it" is a
+  # FILE and the phrase "this run recorded in it" is what makes the denominator a file's population;
+  # this says "under this description", where the population is the rows of one run that share a
+  # sentence and may sit in any number of files. Parameterising the noun would make one sentence
+  # stand for two claims about two different populations, which is the thing every `_LIMIT` constant
+  # in `SpecObservation` is kept separate to prevent — and it would put the wording of both panels
+  # behind a single edit nobody meant to make at either.
+  #
+  # The ORDER axis is louder here than one rung over, and it is why the unranked sentences are worth
+  # writing out. A file that timed nothing is an unusual file; a repeated description that timed
+  # nothing is an ORDINARY group — the ranking above sorts exactly such groups to the end of itself
+  # and says so — so the reader who opened one is meeting the unranked list as a normal state rather
+  # than an edge of one. "Slowest first" over it would promise an order nothing measured.
+  #
+  # Nothing here uses the word "duplicate", by the rule the panel this drills out of states: a shared
+  # description is equally a table-driven loop, a shared example group, or the same test written
+  # twice, and a sentence describing the list must not decide which.
+  def repeated_description_examples_scope_sentence(examples)
+    recorded = number_with_delimiter(examples.recorded_count)
+    shown = number_with_delimiter(examples.rows.size)
+    plural = "example".pluralize(examples.recorded_count)
+
+    if examples.any_timed?
+      return "All #{recorded} #{plural} this run recorded under it, slowest first." unless examples.truncated?
+      return repeated_description_examples_mixed_tail_sentence(examples) if examples.lists_untimed?
+
+      "The #{shown} slowest of the #{recorded} examples this run recorded under it, slowest first."
+    elsif examples.truncated?
+      "The first #{shown} of the #{recorded} examples this run recorded under it, in the order this " \
+        "run recorded them — nothing here was timed, so there is no order to rank them in."
+    else
+      "All #{recorded} #{plural} this run recorded under it, in the order this run recorded them — " \
+        "nothing here was timed, so there is no order to rank them in."
+    end
+  end
+
   # == The "Spec files in this directory" panel's sentences
 
   # Whether the area the drill-down panel is open on has its own row in the "Heaviest spec
@@ -770,6 +814,19 @@ module RepositoriesHelper
     "The #{number_with_delimiter(examples.shown_timed_count)} timed examples of the " \
       "#{number_with_delimiter(examples.recorded_count)} this run recorded in it, slowest first, " \
       "then #{number_with_delimiter(examples.shown_untimed_count)} of the " \
+      "#{number_with_delimiter(examples.untimed_count)} that reported no duration and nothing " \
+      "ranked — the remaining #{number_with_delimiter(examples.untimed_omitted_count)} are not " \
+      "shown."
+  end
+
+  # The same meeting of the two axes for the repeated-description drill-down, and its own sentence
+  # for the reason its caller is its own method: "in it" names a file's population and "under it"
+  # names a description's, and one string standing for both would make that a single edit nobody
+  # meant to make at either panel.
+  def repeated_description_examples_mixed_tail_sentence(examples)
+    "The #{number_with_delimiter(examples.shown_timed_count)} timed examples of the " \
+      "#{number_with_delimiter(examples.recorded_count)} this run recorded under it, slowest " \
+      "first, then #{number_with_delimiter(examples.shown_untimed_count)} of the " \
       "#{number_with_delimiter(examples.untimed_count)} that reported no duration and nothing " \
       "ranked — the remaining #{number_with_delimiter(examples.untimed_omitted_count)} are not " \
       "shown."

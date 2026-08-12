@@ -1678,10 +1678,16 @@
                       `aria-current` on the open file, because this is a list of choices with one
                       of them taken and the panel below is a long way down the page — a reader
                       arriving back at this table by keyboard needs to be told which row they are
-                      already looking at. %>
+                      already looking at.
+
+                      An open DESCRIPTION rides through for the same reason the area does, and it is
+                      the newest of the three: the repeated-description drill-down names each of its
+                      members' files, so following one from there and then following another from
+                      here would otherwise close the very list being worked through. %>
                   <%= link_to file.path,
                               repository_path(@repository, branch: @trajectory_branch_request,
                                               spec_directory: @spec_directory_request,
+                                              repeated_description: @repeated_description_request,
                                               spec_file: file.path, anchor: "spec-file-examples"),
                               class: "underline underline-offset-2 decoration-app-border-light " \
                                      "text-app-content hover:decoration-app-content",
@@ -1768,11 +1774,14 @@
               not — so dropping the area here would close the middle rung on the way back and land
               the reader at a list their file is absent from. This is the same invariant "Close
               directory" keeps in the other direction: closing a file is not a request to close the
-              area, exactly as closing an area is not a request to close the file. %>
+              area, exactly as closing an area is not a request to close the file. An open
+              DESCRIPTION rides through on that same rule — a reader who opened a file from one of
+              its member rows must land back on the list they were working through. %>
           <%= render UI::ButtonComponent.new(
                 variant: :ghost,
                 href: repository_path(@repository, branch: @trajectory_branch_request,
                                       spec_directory: @spec_directory_request,
+                                      repeated_description: @repeated_description_request,
                                       anchor: @spec_directory_request ? "spec-directory-files" : "spec-file-durations")
               ) { "Close file" } %>
         <% end %>
@@ -2064,9 +2073,13 @@
                       of links exactly as it did before.
 
                       `aria-current` on the open area, because this is a list of choices with one of
-                      them taken and the panel below is a long way down the page. %>
+                      them taken and the panel below is a long way down the page.
+
+                      An open DESCRIPTION rides through for the same reason the branch ask does: it
+                      anchors a panel of its own that opening an area is not a request to close. %>
                   <%= link_to directory.path,
                               repository_path(@repository, branch: @trajectory_branch_request,
+                                              repeated_description: @repeated_description_request,
                                               spec_directory: directory.path,
                                               anchor: "spec-directory-files"),
                               class: "underline underline-offset-2 decoration-app-border-light " \
@@ -2175,11 +2188,13 @@
               link and nothing else removes the parameter, so without this the only exit is editing
               the URL. It carries the branch ask through and anchors back at the panel the area was
               picked from. It also carries any OPEN FILE through — the file panel is a separate
-              panel a reader opened separately, and closing the area is not a request to close it. %>
+              panel a reader opened separately, and closing the area is not a request to close it —
+              and any OPEN DESCRIPTION, which is a third such panel and obeys the same rule. %>
           <%= render UI::ButtonComponent.new(
                 variant: :ghost,
                 href: repository_path(@repository, branch: @trajectory_branch_request,
                                       spec_file: @spec_file_request,
+                                      repeated_description: @repeated_description_request,
                                       anchor: "spec-directory-durations")
               ) { "Close directory" } %>
         <% end %>
@@ -2281,6 +2296,7 @@
                   <%= link_to file.path,
                               repository_path(@repository, branch: @trajectory_branch_request,
                                               spec_directory: @spec_directory_files.path,
+                                              repeated_description: @repeated_description_request,
                                               spec_file: file.path, anchor: "spec-file-examples"),
                               class: "underline underline-offset-2 decoration-app-border-light " \
                                      "text-app-content hover:decoration-app-content",
@@ -2477,7 +2493,38 @@
                 <% @repeated_descriptions.rows.each do |group| %>
                   <tr>
                     <td class="px-3 py-2 text-app-content">
-                      <%= group.name %>
+                      <%# The way INTO the group, and until it existed this ranking was the only one
+                          on the page whose rows dead-ended: the row states that eight examples share
+                          this sentence and cost ninety seconds between them, and nothing anywhere
+                          said which eight. `?repeated_description=`, following the `?spec_file=` and
+                          `?spec_directory=` precedent on this same page rather than a nested route:
+                          a description contains anything a person can type and makes a poor route
+                          segment, and the panel and its drill-down read one run on one page.
+
+                          The name is the link TEXT rather than a separate control, exactly as the
+                          file path is one rung over — the thing a reader wants to open is the thing
+                          they are already looking at.
+
+                          Every other ask is CARRIED THROUGH, and that is not incidental: `?branch=`
+                          anchors the "Suite growth" panel alone and `?spec_file=` / `?spec_directory=`
+                          anchor the two drill-downs above, so dropping any of them here would close a
+                          panel the reader did not touch as the side effect of opening a description.
+                          `nil` is omitted from the query string, so a page nobody asked those of
+                          links exactly as it did before.
+
+                          `aria-current` on the open description, because this is a list of choices
+                          with one of them taken and the panel below is a long way down the page — a
+                          reader arriving back at this table by keyboard needs to be told which row
+                          they are already looking at. %>
+                      <%= link_to group.name,
+                                  repository_path(@repository, branch: @trajectory_branch_request,
+                                                  spec_file: @spec_file_request,
+                                                  spec_directory: @spec_directory_request,
+                                                  repeated_description: group.name,
+                                                  anchor: "repeated-description-examples"),
+                                  class: "underline underline-offset-2 decoration-app-border-light " \
+                                         "text-app-content hover:decoration-app-content",
+                                  aria: { current: group.name == @repeated_description_request ? "true" : nil } %>
                       <%# The spec files the group's examples ran in, NAMED rather than counted:
                           "spans 2 files" sends a reader looking without saying where. One file is
                           named too — a group inside a single file is the case a reader can act on
@@ -2540,6 +2587,212 @@
                                "this panel cannot read."
                 ) %>
           </div>
+        <% end %>
+      <% end %>
+    <% end %>
+
+    <%# == One repeated description, opened
+        The rung BELOW the panel above, and the last ranked list on this page whose rows dead-ended.
+        That ranking says a description is carried by eight examples costing ninety seconds between
+        them and names the files they ran in; until this panel there was no way whatever to learn
+        WHICH eight, what each cost, where each sits or how each ended — `repeated_descriptions_in`
+        is an aggregate out of which no member row escapes.
+
+        And NOT reachable through the `?spec_file=` panel above, which is the obvious substitute and
+        does not work: that panel lists every example of a file, capped at fifty and ranked by
+        duration, so a reader following a two-file group through it gets two lists of up to fifty
+        unrelated rows — and this group's own members need not be among the fifty either list shows.
+        The narrowing this needs is by DESCRIPTION.
+
+        The claim boundary is INHERITED WHOLE from the panel above and nothing here widens it. A
+        shared description is equally a table-driven loop, a shared example group, or the same test
+        written twice, and nothing on this page decides which — so nothing below uses the word
+        "duplicate", and the rows carry where, when, how long and how it ended, and no verdict. What
+        the rows add is what the reader DECIDES from: three consecutive line numbers in one file read
+        as a loop, one definition site included by four files reads as a shared example group, and
+        the same sentence at three unrelated sites reads as neither.
+
+        Rendered only when a description was ASKED for, and the read is taken only then: a page
+        nobody asked a description of costs exactly what it cost before this existed.
+
+        An EQUALITY predicate on `name`, riding `index_spec_observations_on_test_run_id` — one query
+        bounded by the size of one RUN. See `SpecObservation.with_description`, where a plain `DESC`
+        would head a list captioned "slowest first" with the examples that never ran.
+
+        Same visibility rule and same gate as the panels above: read-only suite telemetry on
+        `current_repository(:view)`, outside `manage_keys`, and nothing here widens that. %>
+    <% if @repeated_description_examples %>
+      <%= render UI::PanelComponent.new(title: "Examples under this description",
+                                        id: "repeated-description-examples",
+                                        class: "lg:col-span-3") do |panel| %>
+        <% panel.with_actions do %>
+          <%# The way back OUT, for the reason "Close file" exists one drill-down over: this panel is
+              reached by a link and there is no other control that removes the parameter, so without
+              this the only exit is editing the URL — and the reader who most needs the drill-down is
+              the one least likely to want to do that. It carries every OTHER ask through and anchors
+              back at the ranking the description was picked from, so closing a description returns
+              the reader where they opened it rather than at the top of a long page, and does not
+              close a file or an area they opened separately. Closing one drill-down is not a request
+              to close another, in any direction. %>
+          <%= render UI::ButtonComponent.new(
+                variant: :ghost,
+                href: repository_path(@repository, branch: @trajectory_branch_request,
+                                      spec_file: @spec_file_request,
+                                      spec_directory: @spec_directory_request,
+                                      anchor: "repeated-descriptions")
+              ) { "Close description" } %>
+        <% end %>
+        <% if @repeated_description_examples.recorded? %>
+          <%# What the list IS, before the list — the same discipline and the same two axes as the
+              spec-file drill-down above, through the helper that holds both, because "the 25 slowest
+              of 40" is false on a group nothing timed and it is the sentence a reader would act on.
+              The unranked branch is not an edge case here: the ranking above sorts groups nothing
+              timed to the END of itself and says so, so a reader who opened one is meeting an
+              ordinary state.
+
+              Every figure is counted off THIS DESCRIPTION'S ROWS in the same read that returned the
+              list — `SpecObservation::DESCRIPTION_POPULATION_COUNTS` is two windows on that one
+              query — and never off `TestRun#total_specs_count`, which is re-derived by SUM over
+              shard reports and can legitimately differ. %>
+          <p class="text-xs text-app-muted mb-3" id="repeated-description-examples-basis">
+            <span class="text-app-content-secondary"><%= @repeated_description_examples.name %></span>
+            — <%= repeated_description_examples_scope_sentence(@repeated_description_examples) %>
+            <% if @repeated_description_examples.complete? %>
+              <%# Completeness is a claim about the group's TIMING and has to be spent on the
+                  population the page actually holds — `#complete?` is counted before the cap, so on
+                  a truncated group "the list covers the whole of what this run recorded here" is
+                  false and would contradict the scope sentence immediately before it inside one
+                  paragraph. The branch the file drill-down above was fixed to carry, at this
+                  grain. %>
+              <% if @repeated_description_examples.truncated? %>
+                Every one of the
+                <%= number_with_delimiter(@repeated_description_examples.recorded_count) %> reported
+                a duration, so the ranking these
+                <%= number_with_delimiter(@repeated_description_examples.rows.size) %> were drawn
+                from covers the whole of what this run recorded here — the cap is all that keeps the
+                rest off this page.
+              <% else %>
+                Every one of them reported a duration, so the list covers the whole of what this run
+                recorded here.
+              <% end %>
+            <% elsif @repeated_description_examples.any_timed? %>
+              <%# The coverage fraction through `RepeatedDescriptionExamples#coverage_label`, which is
+                  `RepeatedDescriptions::Row#coverage_label` in the same spelling — so the group's row
+                  in the ranking above and the group opened out of it state the same coverage rather
+                  than in two prose inventions that agree today.
+
+                  Three branches for the reason the file panel gives: "the other 300 reported none
+                  and sit at the END of the list" is true only while the list holds all of them, and
+                  the cap can also stop before reaching the untimed rows at all. %>
+              Durations here cover <%= @repeated_description_examples.coverage_label %> — the same
+              fraction the row for this description states in the panel above.
+              <% if @repeated_description_examples.untimed_omitted_count.zero? %>
+                The other
+                <%= number_with_delimiter(@repeated_description_examples.untimed_count) %> reported
+                none and sit at the END of the list rather than at the head of it.
+              <% elsif @repeated_description_examples.lists_untimed? %>
+                The other
+                <%= number_with_delimiter(@repeated_description_examples.untimed_count) %> reported
+                none:
+                <%= number_with_delimiter(@repeated_description_examples.shown_untimed_count) %> of
+                those are at the END of this list rather than at the head of it, and the remaining
+                <%= number_with_delimiter(@repeated_description_examples.untimed_omitted_count) %>
+                are not on this page at all.
+              <% else %>
+                The other
+                <%= number_with_delimiter(@repeated_description_examples.untimed_count) %> reported
+                none, and the cap was reached before the list got to any of them — none are on this
+                page at all.
+              <% end %>
+              An example that never ran has no duration to report, so a missing timing is a faithful
+              record rather than a gap — and it is not a zero.
+            <% end %>
+            <%# The two columns, said once, where a reader meets them — and on THIS panel that
+                sentence is most of the point rather than a footnote. "Ran in" is the including file
+                and "Defined at" is the definition site, and the case where they differ is exactly a
+                shared example group: one definition included by four files is four rows here that
+                are ONE test, which is the reading a reader most needs and the one a single path
+                column would hide. Kept as two columns for the same reason the panel above keeps its
+                location line — `spec_file_path` and `line_number` are two halves of different files
+                and must never be printed as one pair. %>
+            Each row names both the file that RAN it and the file and line where it is DEFINED. Those
+            differ when a shared example group is included by more than one file, and rows sharing
+            one definition site are one test run more than once rather than a description written
+            more than once.
+          </p>
+          <%= render UI::TableComponent.new(columns: ["Ran in", "Defined at", "Duration", "Outcome"],
+                                            describedby: "repeated-description-examples-basis") do %>
+            <% @repeated_description_examples.rows.each do |observation| %>
+              <tr>
+                <td class="px-3 py-2 text-app-content font-mono text-xs">
+                  <%# The file that RAN the example, and the link that CLOSES the chain: the
+                      controller's own comment says the drill-downs close area → file → example, and
+                      this is the rung that was missing — description → example → file. Every other
+                      ask rides through, this one included, so following it opens a file WITHOUT
+                      closing the description it was opened from.
+
+                      `spec_file_path` is NULLABLE in the schema — `Ingest::ObservationRecorder`
+                      populates it by falling back to `file_path`, but the column does not promise it
+                      — so a row that has none says so rather than rendering a link to nowhere or an
+                      empty cell. The definition site beside it is NOT NULL and is what such a row is
+                      read by. %>
+                  <% if observation.spec_file_path.present? %>
+                    <%= link_to observation.spec_file_path,
+                                repository_path(@repository, branch: @trajectory_branch_request,
+                                                spec_directory: @spec_directory_request,
+                                                repeated_description: @repeated_description_request,
+                                                spec_file: observation.spec_file_path,
+                                                anchor: "spec-file-examples"),
+                                class: "underline underline-offset-2 decoration-app-border-light " \
+                                       "text-app-content hover:decoration-app-content",
+                                aria: { current: observation.spec_file_path == @spec_file_request ? "true" : nil } %>
+                  <% else %>
+                    <span class="text-app-muted">not reported</span>
+                  <% end %>
+                </td>
+                <td class="px-3 py-2 text-app-content-secondary font-mono text-xs">
+                  <%# `#location_label` is `file_path` + `line_number` — the DEFINITION site, and
+                      specifically not `spec_file_path` + `line_number`, which for a shared example
+                      group pairs two halves from different files. Both columns are NOT NULL, so this
+                      one always names the row even where the one beside it cannot. %>
+                  <%= observation.location_label %>
+                </td>
+                <td class="px-3 py-2 text-app-content tabular-nums">
+                  <%# Through `SpecObservation#duration_label`, this table's one formatting seam and
+                      the same one every duration on this page renders through — so an untimed row
+                      here reads "not reported" rather than "0.00s", which is the whole reason those
+                      rows are allowed to be in this list at all. %>
+                  <%= observation.duration_label %>
+                </td>
+                <td class="px-3 py-2">
+                  <%# What CI said happened, through `#outcome_label` and `#outcome_tone` — the pair
+                      that keeps a nil out of the colour a pass wears. Load-bearing on THIS panel in
+                      its own way: a group whose members ended differently is a repetition that is
+                      doing different work under one sentence, and that is visible in no other
+                      column. %>
+                  <%= render UI::BadgeComponent.new(tone: observation.outcome_tone) do %>
+                    <%= observation.outcome_label %>
+                  <% end %>
+                </td>
+              </tr>
+            <% end %>
+          <% end %>
+        <% else %>
+          <%# The run recorded nothing under the description that was asked for. An ordinary answer
+              and not an error: `?repeated_description=` is a URL a reader types, edits and bookmarks,
+              so a test renamed since, a description edited and a typo all arrive here. It names the
+              description back — an empty state without a subject is a sentence about nothing, and
+              here the subject is a sentence somebody wrote, which is the one thing a reader can
+              check against their own suite — and points at the panel that ranks what this run DID
+              record more than once. %>
+          <%= render UI::EmptyStateComponent.new(
+                title: "No examples under this description",
+                description: "This run recorded no example described " \
+                             "“#{@repeated_description_examples.name}”. It may have been renamed or " \
+                             "reworded since, or never have run in this run at all — the " \
+                             "“Descriptions this run recorded more than once” panel above lists the " \
+                             "descriptions this run did record under more than one example."
+              ) %>
         <% end %>
       <% end %>
     <% end %>

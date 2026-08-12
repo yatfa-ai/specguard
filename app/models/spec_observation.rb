@@ -349,6 +349,26 @@ class SpecObservation < ApplicationRecord
   # explaining a list's length must not be able to disagree with it.
   REPEATED_DESCRIPTIONS_LIMIT = 10
 
+  # How many EXAMPLES a single repeated description's drill-down returns. Its own constant, by the
+  # rule the eight above it obey, and it caps the same KIND of thing `FILE_EXAMPLES_LIMIT` and
+  # `SPEC_DIRECTORY_FILES_LIMIT` cap — a LISTING of one already-picked row's contents, not a ranking
+  # of a whole run — which is exactly why sharing either would look harmless and would not be.
+  #
+  # The population is smaller than a file's by construction and in a way neither of those is. A file
+  # holds however many examples somebody wrote in it, with no upper bound in the shape of the thing;
+  # a repeated description holds the examples of ONE run that say the same sentence, and the shapes
+  # that produce one — a table-driven loop over its cases, a shared example group included by a
+  # handful of files — are sized by what a person wrote out, not by how big the suite got. A group
+  # of three hundred is a generated matrix rather than anything a reader is going to read.
+  #
+  # Twenty-five rather than the fifty of `FILE_EXAMPLES_LIMIT`, for that reason and for what the
+  # reader is DOING here: they are deciding whether a repetition is a loop, a shared group or the
+  # same test written three times, and that decision is made from the first rows — file, line and
+  # outcome — not from exhausting the list. Named, like all of them, because the panel's caption
+  # reports the figure back to the reader and a sentence explaining a list's length must not be able
+  # to disagree with it.
+  REPEATED_DESCRIPTION_EXAMPLES_LIMIT = 25
+
   # What the drill-down's caption has to say ABOUT the rows under it, counted in the SAME read that
   # returns them — `COUNT(*) OVER ()` and `COUNT(duration_seconds) OVER ()`, which count non-nulls.
   #
@@ -367,6 +387,25 @@ class SpecObservation < ApplicationRecord
   # counters ride along or not.
   FILE_POPULATION_COUNTS = "COUNT(*) OVER () AS file_recorded_count, " \
                            "COUNT(duration_seconds) OVER () AS file_timed_count"
+
+  # The same two figures for the repeated-description drill-down, counted the same way and in the
+  # same read, and its OWN constant rather than a reuse of the pair above.
+  #
+  # Not a style preference: the aliases are read back as record ATTRIBUTES by name, so sharing the
+  # constant would have `RepeatedDescriptionExamples` reading `file_recorded_count` off a row that
+  # was never narrowed to a file. On a description spanning two files that name is not merely
+  # ill-fitting, it is false — the window counts the DESCRIPTION'S rows, which is the population
+  # this panel's caption describes and precisely not the file's. A caption is a claim about the
+  # list; an attribute name is a claim about what was counted, and the two must not disagree.
+  #
+  # Windows are evaluated after the WHERE and before the LIMIT, so both figures cover the whole
+  # DESCRIPTION however few rows come back: the cap is disclosed against the group's real population
+  # rather than against itself, and the timing coverage is the group's rather than the listed head's.
+  # Riding on the listed rows rather than taken as a second aggregate, for the reason
+  # `FILE_POPULATION_COUNTS` gives — this list excludes nothing, so the population the caption
+  # describes is exactly the population the window sees.
+  DESCRIPTION_POPULATION_COUNTS = "COUNT(*) OVER () AS description_recorded_count, " \
+                                  "COUNT(duration_seconds) OVER () AS description_timed_count"
 
   # **The retention rule.** How many runs OF ONE BRANCH keep their rows; everything older than the
   # Nth most recent run on that branch is deleted by {Ingest::ObservationPruner} after the ingest
@@ -613,6 +652,68 @@ class SpecObservation < ApplicationRecord
   def self.in_file(test_run, spec_file_path, limit: FILE_EXAMPLES_LIMIT)
     where(test_run_id: test_run.id, spec_file_path: spec_file_path)
       .select(Arel.sql("spec_observations.*, #{FILE_POPULATION_COUNTS}"))
+      .order(Arel.sql("duration_seconds DESC NULLS LAST"), id: :asc)
+      .limit(limit)
+  end
+
+  # ONE description's examples in ONE run — the rows behind a single line of the repeated-description
+  # ranking, where `.repeated_descriptions_in` returns the group and no member of it.
+  #
+  # The sibling of `.in_file` above and deliberately shaped identically, because it is the same kind
+  # of read one axis over: that one narrows a run to the rows of a FILE, this narrows it to the rows
+  # carrying one NAME. `.repeated_descriptions_in` is an aggregate — `[name, SUM, COUNT(*), …,
+  # ARRAY_AGG(DISTINCT spec_file_path)]` — out of which no member row escapes, so a reader told that
+  # eight examples share a description and cost ninety seconds between them had, until this existed,
+  # no way whatever to learn WHICH eight.
+  #
+  # == Not answerable by `.in_file`, which is the obvious substitute
+  #
+  # The ranking names the group's files, and those paths are a link into the `?spec_file=` panel. But
+  # that panel lists EVERY example of a file, capped at `FILE_EXAMPLES_LIMIT` and ranked by duration:
+  # a reader following a two-file group through it gets two lists of up to fifty unrelated rows, and
+  # the group's own members need not be among the fifty either list shows. The narrowing this panel
+  # needs is by description, and it exists nowhere else.
+  #
+  # == An EQUALITY predicate on a nullable column, and why no nil ever reaches it
+  #
+  # `name` is nullable and `Ingest::ObservationRecorder#attributes` writes it through `presence_of`.
+  # `.repeated_descriptions_in` excludes null names in SQL, so a group only reaches the ranking if it
+  # HAS a name and the drill-down is never legitimately handed a nil; `RequestedRepeatedDescriptionParam`
+  # is what keeps a blank ask from arriving as one anyway. Nothing here re-checks it — a nil would
+  # answer no rows, which is the same honest empty state a description this run did not record gets.
+  #
+  # == Untimed rows are LISTED, which is why the ordering carries `NULLS LAST`
+  #
+  # Verbatim the argument `.in_file` makes: `scope :timed` excludes untimed rows from every RANKING
+  # because a row with nothing to compare cannot be the slowest of anything, and this is not a
+  # ranking of the suite but the GROUP's population. An example the client never timed is part of
+  # what shares this description — hiding it would make the list disagree with the `recorded_count`
+  # printed above it, and on this panel it would do worse than that: an untimed member is often
+  # exactly the row a reader has come to find, because a test that never ran is one way three
+  # examples come to say the same thing. So the rows stay, and `duration_seconds: :desc` alone would
+  # then be **NULLS FIRST** in Postgres — the examples that reported no duration at the head of a
+  # list captioned "slowest first". They sort to the END instead.
+  #
+  # `id` breaks ties, so a group whose examples tie — and a group none of whose examples were timed,
+  # where every row ties — has one stable order rather than one the planner picks afresh per request.
+  #
+  # == Query cost
+  #
+  # Rides `index_spec_observations_on_test_run_id`. There is no `(test_run_id, name)` index and this
+  # read does not want one: `index_spec_observations_on_repository_id_and_name` exists and is NOT the
+  # path here, for the reason `.repeated_descriptions_in` states at this exact grain — it leads on
+  # `repository_id`, which serves a WINDOW of runs, and a single-run narrow does not begin with it.
+  # One query, bounded by the size of ONE RUN rather than of the suite, and issued only when a
+  # description was asked for. EXPLAIN-certified at the 20-run seed in
+  # spec/models/spec_observation_spec.rb rather than argued for here.
+  #
+  # The projection carries `DESCRIPTION_POPULATION_COUNTS`, so a caller gets the group's recorded and
+  # timed counts off the same read as the rows. Those two are ATTRIBUTES of the returned records
+  # rather than a separate value, which makes this relation one to load and read —
+  # `RepeatedDescriptionExamples` is its one caller — rather than one to count or paginate further.
+  def self.with_description(test_run, name, limit: REPEATED_DESCRIPTION_EXAMPLES_LIMIT)
+    where(test_run_id: test_run.id, name: name)
+      .select(Arel.sql("spec_observations.*, #{DESCRIPTION_POPULATION_COUNTS}"))
       .order(Arel.sql("duration_seconds DESC NULLS LAST"), id: :asc)
       .limit(limit)
   end
