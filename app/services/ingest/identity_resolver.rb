@@ -9,6 +9,11 @@ module Ingest
   # nearest neighbour within {SpecIdentity::MATCH_DISTANCE}, and either re-sight the row that came
   # back or insert a new one. The observation is then pointed at whichever it was.
   #
+  # One case sits between those two outcomes: a test that just gained an `@intent` is represented by
+  # its triple where it used to be represented by its name, so nothing matches it and yet it is not
+  # new. {#upgrade_from_name} moves the row it already has onto the declaration rather than letting
+  # a second one be inserted beside it — the one path in this class that rewrites an identity's text.
+  #
   # Ahead of all of that sits one equality: text byte-identical to a row this repository already
   # holds is re-sighted without embedding anything at all ({#identical_text}). It answers the
   # ordinary case — an unchanged suite re-ingested — and it is a shortcut past the above rather than
@@ -193,14 +198,34 @@ module Ingest
     # meaning, which is precisely why they are two constants.
     RETRY_SWEEP_LIMIT = 500
 
+    # One row of {#digest_index}'s answer: the identity this repository holds under some digest, and
+    # **which of {Ingest::SpecSignal}'s sources supplied its text**.
+    #
+    # The id alone was the whole of what the map needed while the only question asked of it was "is
+    # this text already held". The name→intent upgrade ({#upgrade_from_name}) asks a second one — *is
+    # the row under this test's NAME a name-derived row* — and the answer decides whether a row is
+    # rewritten, so it cannot be inferred from the id. Carried here rather than fetched per candidate
+    # because it rides the same `pluck`: one more column on a query the page already issues, against
+    # a round trip per upgrade otherwise.
+    #
+    # Still no record and still no vector, which is {#digest_index}'s standing rule — `signal_source`
+    # is a short string, and loading identities to read one of their columns would put the 1536
+    # element embeddings that method exists to avoid touching straight into memory.
+    HeldIdentity = Struct.new(:id, :source) do
+      # Mirrors {SpecIdentity#from_name?} over the plucked value rather than over a record. The two
+      # read the same column and must agree; this one exists because there is no record here.
+      def from_name? = source == "name"
+    end
+
     def self.resolve(run) = new(run).resolve
 
     def initialize(run)
       @run = run
       @repository = run.repository
-      # Replaced wholesale by each {#resolve_page}; `{}` here so the two methods that touch it —
-      # {#identical_text} and {#claim_identity} — are total rather than conditional on a page being
-      # open, and so that a page is a page's worth of entries rather than the suite's.
+      # Replaced wholesale by each {#resolve_page}; `{}` here so the three methods that touch it —
+      # {#identical_text}, {#upgrade_from_name} and {#claim_identity} — are total rather than
+      # conditional on a page being open, and so that a page is a page's worth of entries rather
+      # than the suite's.
       @digest_index = {}
       # The page's two write buffers, emptied and refilled by every {#resolve_page} for the same
       # reason and with the same total-rather-than-conditional guarantee: {#resight} and {#claim}
@@ -568,7 +593,9 @@ module Ingest
       end
     end
 
-    # `digest => identity id`, for every text on this page that this repository already holds.
+    # `digest => {HeldIdentity}`, for every text on this page that this repository already holds —
+    # the text that represents each row, and, for an annotated one, the name it may still be held
+    # under ({#lookup_texts}).
     #
     # **One `WHERE text_digest IN (…)` against the unique `(repository_id, text_digest)` index**, in
     # place of the one equality per row this used to be. On run 2 of an unchanged 20,000-example
@@ -589,20 +616,26 @@ module Ingest
     # nothing has measured; and {#identity_for} taking a pre-built signal would move the seam that
     # `resolve_as_the_loser`'s stub hangs on. Not worth either.
     #
-    # `pluck` and not a relation of records: the value is an id, and {SpecIdentity::RESIGHTABLE} is
-    # what a re-sighting moves — `text`, `text_digest`, `signal_source` and `embedding` are
-    # deliberately absent from it, so nothing downstream of a hit ever reads the row. Loading 500
-    # identities to use 500 ids would put the vectors this method exists to avoid touching straight
-    # into memory.
+    # `pluck` and not a relation of records: what a hit is acted on with is an id and a
+    # `signal_source`, and {SpecIdentity::RESIGHTABLE} is what a re-sighting moves — `text`,
+    # `text_digest`, `signal_source` and `embedding` are all deliberately absent from it, so nothing
+    # downstream of a hit ever WRITES them by re-sighting. The second plucked column is one of those
+    # four and that is not a contradiction: it is READ here to answer `from_name?`, which is a
+    # different thing from a re-sighting moving it. Loading 500 identities to use 500 ids would put
+    # the vectors this method exists to avoid touching straight into memory; a short string alongside
+    # the id changes nothing about that. {#upgrade_from_name} WRITES the excluded columns, and writes
+    # them by id in one `UPDATE` rather than by loading the row first, for the same reason.
     #
     # `uniq` because a page may carry the same text twice — two examples with identical
     # `full_description` is the case `identity_resolver_spec.rb`'s "cannot separate two tests whose
-    # descriptions are identical" pins — and an `IN` list is not the place to repeat it. Empty page,
-    # or a page of nothing but `:none` rows, asks nothing at all rather than issuing `IN ()`.
-    # `filter_map` and not `map`: a `:none` row has no text, and `digest_for(nil)` is a perfectly
-    # good SHA-256 of the empty string — so a nil left in this list becomes a real digest that no row
-    # can ever hold, and a real round trip spent asking about it. That is the whole cost this method
-    # exists to remove, reintroduced by one method name.
+    # descriptions are identical" pins — and an `IN` list is not the place to repeat it. It now also
+    # collapses the ordinary overlap {#lookup_texts} creates, where one page carries a test's name
+    # both as its own row's text and as an annotated row's former text. Empty page, or a page of
+    # nothing but `:none` rows, asks nothing at all rather than issuing `IN ()`.
+    # {#lookup_texts} is what keeps that true: a `:none` row has no text, and `digest_for(nil)` is a
+    # perfectly good SHA-256 of the empty string — so a nil left in this list becomes a real digest
+    # that no row can ever hold, and a real round trip spent asking about it. That is the whole cost
+    # this method exists to remove, reintroduced by one method name.
     #
     # No early return for the empty case, deliberately: `where(text_digest: [])` compiles to `1=0`
     # and Rails answers it without a round trip, so a page of nothing but `:none` rows already costs
@@ -611,11 +644,52 @@ module Ingest
     # asserts the ABSENCE of the query rather than the presence of the guard — so it stays honest if
     # that optimisation ever goes away.
     def digest_index(observations)
-      digests = observations.filter_map { |observation| observation.signal.text }
+      digests = observations.flat_map { |observation| lookup_texts(observation) }
                             .uniq.map { |text| SpecIdentity.digest_for(text) }
 
-      @repository.spec_identities.where(text_digest: digests).pluck(:text_digest, :id).to_h
+      @repository.spec_identities.where(text_digest: digests)
+                 .pluck(:text_digest, :id, :signal_source)
+                 .to_h { |digest, id, source| [digest, HeldIdentity.new(id, source)] }
     end
+
+    # Every text this row could already be held under: the one that REPRESENTS it, and — when that
+    # is a declared triple — the NAME it was held under before the declaration existed.
+    #
+    # The second one is what makes {#upgrade_from_name} cost nothing extra. `Ingest::SpecSignal`
+    # prefers the intent deliberately (*"preferring the name would make annotating a test change
+    # nothing"*), so the run on which a test gains an `@intent` presents text this repository has
+    # never seen while the row it already has is held under text nobody will ever present again.
+    # Asking for both digests is one wider `IN` list against the same unique key — a longer list, not
+    # a second round trip — and it is the only reason the upgrade is affordable at all.
+    #
+    # Asked only for an intent-derived signal, and never the other way round. A name-derived row has
+    # no second text to be held under: `SpecSignal` yields the name only when there is no triple, so
+    # there is nothing to ask for. It is also the direction {#upgrade_from_name} refuses — see there
+    # for why intent→name must never be inferred — and a lookup nothing may act on is a wider list
+    # for nothing.
+    #
+    # `filter_map` semantics are preserved through `compact` and the `:none` guard: a row with no
+    # text contributes NOTHING rather than a digest of the empty string, which is the whole cost
+    # {#digest_index}'s own comment is about. `flat_map` because a row now contributes zero, one or
+    # two texts.
+    def lookup_texts(observation)
+      signal = observation.signal
+      return [] unless signal.present?
+      return [signal.text] unless signal.from_intent?
+
+      [signal.text, name_signal(observation).text].compact
+    end
+
+    # @return [Ingest::SpecSignal] what this row's identity WOULD have been built from before it was
+    #   annotated — its `full_description` and nothing else. `#present?` is false for a row that has
+    #   no name, which is the shape `Ingest::Payload#validate_name` refuses today and which rows
+    #   written before it exist in.
+    #
+    # Built through `SpecSignal` rather than by reading the column, so the stripping and the
+    # blank-rejection are the ones every other caller gets. {SpecObservation#signal} cannot answer
+    # this — it applies the precedence, which on an annotated row is exactly the answer that hides
+    # the name — so this asks the same class the narrower question.
+    def name_signal(observation) = Ingest::SpecSignal.for("name" => observation.name)
 
     # The rows an EARLIER run of this repository was reached on and failed to resolve — the provider
     # unable to answer, or a failure {#claim_inherited} contained — and which this ingest is entitled
@@ -814,6 +888,24 @@ module Ingest
       match = nearest(embedding)
       return resight(match.id, observation) if match
 
+      # Nothing matched the text that represents this test — and if this test just gained an
+      # `@intent`, nothing ever will, because the row it already has is held under a name no run
+      # will present again. Last question before inserting, and only for an intent-derived signal.
+      #
+      # **After {#nearest} and not before it**, which is worth stating because the ordering puts
+      # fuzzy evidence about SOME test ahead of exact evidence about THIS one: the upgrade's own
+      # question — does this repository hold a row under this example's `full_description`? — could
+      # be asked as soon as the embedding is in hand. It is asked here because a match at
+      # `SpecIdentity::MATCH_DISTANCE` is the settled answer on this path and the upgrade is the
+      # exception to it, not a replacement for it; moving it earlier would let a name-derived row
+      # take a test away from the identity similarity says it belongs to, on a run that changed
+      # nothing but an annotation. The exposure that ordering accepts is the mirror of it — a triple
+      # landing within `MATCH_DISTANCE` of a DIFFERENT identity re-sights that stranger and orphans
+      # the row this test owns — and `spec_identity.rb`'s threshold table puts a lexically similar
+      # but different test at 0.80 against a 0.95 bar, so it is the rarer of the two.
+      upgraded = upgrade_from_name(signal, embedding, observation)
+      return upgraded if upgraded
+
       claim_identity(signal, embedding, observation)
     end
 
@@ -866,7 +958,7 @@ module Ingest
     # absent from the page's map is absent for the same reason it missed the per-row `find_by`, and
     # falls through to the same place.
     def identical_text(signal)
-      @digest_index[SpecIdentity.digest_for(signal.text)]
+      @digest_index[SpecIdentity.digest_for(signal.text)]&.id
     end
 
     # Writes the one fact that makes this row's absence of an identity mean something: **it was
@@ -988,6 +1080,150 @@ module Ingest
                  .nearest_neighbors(:embedding, embedding, distance: "cosine",
                                     threshold: SpecIdentity::MATCH_DISTANCE)
                  .first
+    end
+
+    # **A test that gained an `@intent` is the test it already was.** Moves the identity it already
+    # has onto its declaration — `text`, `text_digest`, `signal_source`, `embedding` — instead of
+    # inserting a second row beside it and orphaning the first.
+    #
+    # @return [Integer, nil] the id of the upgraded identity, or nil when there is nothing to upgrade
+    #   and {#identity_for} should insert exactly as it did before.
+    #
+    # == Why nothing else can reach this case
+    #
+    # {Ingest::SpecSignal} prefers a declaration over a name deliberately — *"preferring the name
+    # would make annotating a test change nothing"* — so on the annotation run the text representing
+    # this test changes from its `full_description` to its triple, and the row it already has is held
+    # under a string no run will ever present again. {#identical_text} asks for the triple's digest
+    # and misses; {#nearest} misses too, and not by a margin a threshold could close: `LocalProvider`
+    # is lexical by construction, and this repository's own `annotated_spec` fixture — a triple that
+    # strictly CONTAINS the whole name — scores 0.8614 against a 0.95 bar. Lowering the bar that far
+    # would merge tests that merely read alike, which the resolver spec pins separately. So this is
+    # not similarity tuned too tight; it is a question similarity cannot answer.
+    #
+    # It does not have to. The evidence is already on the row: {Ingest::ObservationRecorder} writes
+    # `name` for every example, so at the moment of the miss this resolver is holding the exact
+    # string the old identity was built from. Nothing is embedded, inferred or guessed — it is one
+    # more digest, and {#lookup_texts} already rode it in on the page's `IN` list.
+    #
+    # == name → intent only, and never the reverse
+    #
+    # Guarded twice on purpose: the caller only reaches here for an intent-derived signal, and only a
+    # `from_name?` row is taken. A de-annotated test rewriting its identity BACKWARDS would let an
+    # ordinary rename masquerade as a de-annotation — the name a test presents after an author edits
+    # its `describe` block is not evidence about the triple that used to represent it, and treating
+    # it as such would move an identity onto text that has nothing to do with it. De-annotation is
+    # out of scope for this slice and is a decision rather than an omission.
+    #
+    # == This is NOT a re-sighting, and {SpecIdentity::RESIGHTABLE} stays as it is
+    #
+    # That list is what an ORDINARY re-observation moves, and the four columns written here are
+    # excluded from it *"because they are the identity itself"*. Widening it would make every
+    # re-sighting start rewriting `text` — the exclusion is load-bearing and is not touched. This is
+    # its own statement, made in one place, on one transition, under a `WHERE` that no ordinary
+    # re-sighting can satisfy. The SIGHTING is still a re-sighting and still goes through {#resight},
+    # so where the test was last seen moves FORWARD only, exactly as everywhere else.
+    #
+    # == The mirrored unique key, and why a collision falls back rather than raises
+    #
+    # `(repository_id, text_digest)` is UNIQUE, so if a DIFFERENT identity already holds this
+    # triple's digest the `UPDATE` cannot land. The page's map says otherwise or {#identical_text}
+    # would have answered already, which makes this a race against a concurrent job rather than a
+    # state — and the honest answer to it is today's behaviour, not a 500 on the ingest path. A
+    # duplicate identity is a defect; an ingest that fails to resolve is a worse one. So the conflict
+    # is contained and {#identity_for} goes on to {#claim_identity}, whose `ON CONFLICT` lands the
+    # observation on whichever row won.
+    #
+    # `requires_new: true` is what makes containing it possible at all: a failed statement poisons
+    # the enclosing transaction until something rolls back, so the rescue needs a savepoint to roll
+    # back TO. Two extra statements, once per test in its whole lifetime, on the run where it is
+    # annotated.
+    #
+    # == Where the name it looks up is not unambiguously its own
+    #
+    # The row it takes is whichever this repository holds under that `full_description`, and two
+    # examples can share one — a table-driven loop, a shared example group, `it "is valid"` in two
+    # files. So an annotated test whose description another, unannotated test also carries takes the
+    # row they were both going to share. That is not a new ambiguity introduced here: under this
+    # model identity IS the text, and `SpecIdentity::MATCH_SIMILARITY` already states that two
+    # examples with the same description collapse onto one row and no threshold can separate them.
+    # The upgrade inherits that edge rather than widening it, and it costs one row's history in a
+    # case where the model was already holding two tests' measurements on one row. Narrowing it by
+    # `file_path` was considered and refused: a test that is annotated and moved in the same commit
+    # is the ordinary case, and that guard would send it back to inserting a duplicate — trading a
+    # rare ambiguity for a common failure.
+    #
+    # == Concurrency needs nothing else
+    #
+    # `signal_source: "name"` in the `WHERE` makes this a compare-and-set in one statement: the
+    # shard that gets there first upgrades, and a second shard reaching the same row updates zero
+    # rows and falls through to {#claim_identity}, which conflicts onto the row the first one just
+    # wrote and re-sights it. Once the upgrade is committed every later run's {#identical_text} hits
+    # the triple's digest outright and takes the ordinary path. Self-converging, and idempotent
+    # because both writers were writing the same text, digest and vector.
+    #
+    # What the losing shard must still do is put its OWN page's map right, which is a separate
+    # statement from where its own observation lands: the row it was pointed at has moved off the
+    # name, so the entry that says otherwise has to go whether or not this shard is what moved it.
+    # See the `:conflict` guard below for the one outcome that leaves the entry standing.
+    def upgrade_from_name(signal, embedding, observation)
+      return nil unless signal.from_intent?
+
+      name = name_signal(observation)
+      return nil unless name.present?
+
+      name_digest = SpecIdentity.digest_for(name.text)
+      held = @digest_index[name_digest]
+      return nil unless held&.from_name?
+
+      digest = SpecIdentity.digest_for(signal.text)
+      outcome = upgrade(held.id, signal, digest, embedding)
+
+      # The page's map follows the row, and it follows it on **whether the row moved** rather than on
+      # whether THIS call is what moved it — which is why the invalidation is keyed on `:conflict`
+      # and not on `:upgraded`. The old key is DELETED and not merely superseded: nothing is held
+      # under that name any more, and a later row of this same page reading a stale entry would
+      # re-sight a row whose text it no longer matches — a name-only example sharing a description
+      # with the test that was just annotated is exactly that case, and it must claim its own row.
+      #
+      # `:lost_race` is that same hazard reached by the other branch, and it is the one this method
+      # first got wrong: a concurrent shard has already rewritten the row to a triple, so the row has
+      # moved just as surely as on the success path and the map is just as false — the losing shard
+      # must not leave the entry behind for its own sibling to read. `:conflict` is the one outcome
+      # that keeps the entry, and keeps it because it is still TRUE: the `UPDATE` was refused by the
+      # unique key, so the row never left the name and a sibling reading it re-sights correctly.
+      @digest_index.delete(name_digest) unless outcome == :conflict
+      return nil unless outcome == :upgraded
+
+      @digest_index[digest] = HeldIdentity.new(held.id, signal.source.to_s)
+
+      resight(held.id, observation)
+    end
+
+    # The upgrade itself, as one guarded statement.
+    #
+    # `update_all` and not `update!`: the row is named by id and nothing on it is read first, so
+    # loading it would fetch a 1536 element vector to overwrite it — and the model's mirrored
+    # `text_digest` uniqueness validation would answer from a SELECT that the unique index has to
+    # decide anyway. The index decides it, and the conflict is contained here.
+    #
+    # @return [Symbol] which of three things happened, because the caller's map invalidation turns on
+    #   the difference and a boolean cannot carry it. `:upgraded` — this call moved the row.
+    #   `:lost_race` — the guard matched zero rows, so another writer already moved it off the name.
+    #   `:conflict` — the unique key refused the target digest, so the row is still on the name. The
+    #   last two are both a fall-through to {#claim_identity} for THIS observation and opposite
+    #   answers about whether the page's `name_digest` entry is still true; see {#upgrade_from_name}.
+    def upgrade(identity_id, signal, digest, embedding)
+      updated = SpecIdentity.transaction(requires_new: true) do
+        SpecIdentity.where(id: identity_id, signal_source: "name")
+                    .update_all(text: signal.text, text_digest: digest,
+                                signal_source: signal.source.to_s, embedding: embedding,
+                                updated_at: Time.current)
+      end
+
+      updated.positive? ? :upgraded : :lost_race
+    rescue ActiveRecord::RecordNotUnique
+      :conflict
     end
 
     # An existing test, seen again. Moves only where it was last seen — see
@@ -1268,7 +1504,7 @@ module Ingest
         record_timestamps: false, returning: %w[id]
       ).rows.dig(0, 0)
 
-      @digest_index[digest] = id
+      @digest_index[digest] = HeldIdentity.new(id, signal.source.to_s)
       id
     end
 

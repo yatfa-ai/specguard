@@ -18,17 +18,21 @@ require "digest"
 #                                           threshold: MATCH_DISTANCE)
 #                        .first
 #
-# `text` and `embedding` are **immutable** once written. A match refreshes only where the test was
-# last seen — `file_path`, `line_number`, `last_seen_test_run_id` — so the thing a history hangs off
-# cannot drift out from under it. Those three move FORWARD only: see `SIGHTING_NOT_OLDER` below,
-# which is what stops an observation from a run older than the one already named here from reporting
-# a last known path that has travelled backwards in time.
+# `text` and `embedding` move on exactly one transition and are otherwise **immutable**. A match
+# refreshes only where the test was last seen — `file_path`, `line_number`, `last_seen_test_run_id`
+# — so the thing a history hangs off cannot drift out from under it. Those three move FORWARD only:
+# see `SIGHTING_NOT_OLDER` below, which is what stops an observation from a run older than the one
+# already named here from reporting a last known path that has travelled backwards in time.
 #
-# One consequence worth stating rather than leaving to be found: a test that *gains* an `@intent`
-# changes which text represents it, from its name to its triple, and those are usually far enough
-# apart to miss (measured below: 0.86 for a representative pair). It therefore starts a new identity.
-# That is the settled model working, not a defect in it — an annotated test is matched by its
-# declaration, and until the declaration existed there was nothing to match by.
+# The transition is a test GAINING an `@intent`. Which text represents it changes from its name to
+# its triple, and the two are usually far enough apart to miss (measured below: 0.86 for a
+# representative pair, and 0.8614 even for a triple that strictly contains the whole name) — so
+# nothing similarity can do finds the row again. `Ingest::IdentityResolver#upgrade_from_name` moves
+# the row onto the declaration instead, in place and keeping its id, because a test that acquired a
+# declaration is the test it already was and its history is the same history. It is the only writer
+# of these columns after the insert, it goes one way only — never intent→name, which would let an
+# ordinary rename masquerade as a de-annotation — and it is deliberately NOT in `RESIGHTABLE`: an
+# ordinary re-sighting still moves nothing but where the test was seen.
 class SpecIdentity < ApplicationRecord
   # Which of {Ingest::SpecSignal}'s sources supplied `text`. `SpecSignal::SOURCES` also carries
   # `:none`; it is absent here on purpose — a spec with no text has nothing to embed, so no row is
@@ -111,6 +115,12 @@ class SpecIdentity < ApplicationRecord
   # Everything a re-observation may move: where the test was last seen, and nothing else. `text`,
   # `text_digest`, `signal_source` and `embedding` are absent because they are the identity itself;
   # `created_at` is absent so a row keeps when the test first appeared.
+  #
+  # The four excluded columns have exactly one writer after the insert and it is not a re-sighting:
+  # `Ingest::IdentityResolver#upgrade_from_name`, on the single transition where a test acquires a
+  # declaration. Adding them here to serve that case would make EVERY ordinary re-observation start
+  # rewriting `text` — the exclusion is what makes an identity stable, so the one transition that
+  # moves it says so itself rather than being folded into this list.
   RESIGHTABLE = %i[file_path line_number last_seen_test_run_id updated_at].freeze
 
   # **A sighting may never move a row BACKWARDS in time**, and this is the one place that is
