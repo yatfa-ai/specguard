@@ -138,8 +138,11 @@ class Api::V1::RepositoriesController < Api::BaseController
       # `serialized_repeated_descriptions` below.
       repeated_descriptions: serialized_repeated_descriptions(test_run),
       # ONE AREA of `spec_directories` above, opened — the only key in this block that answers a
-      # question the client asked rather than one the endpoint always answers, and the only one that
-      # is `null` on a recorded run. See `serialized_spec_directory_files` below.
+      # question the client asked rather than one the endpoint always answers, and so the only one
+      # whose `null` is a fact about the REQUEST. `shards` is null for a fact about the run (it had
+      # one part, which is the ordinary case) and the four rollups for a fact about its rows (there
+      # were none); this one is null because no area was asked for, which is a statement about
+      # neither the run nor its rows. See `serialized_spec_directory_files` below.
       spec_directory_files: serialized_spec_directory_files(test_run),
       # `TestRun#suite_size_measured?`, the same predicate `serialized_history_row` serves below and
       # for the same reason: a run that reported zero tests has a `total_specs` but not a

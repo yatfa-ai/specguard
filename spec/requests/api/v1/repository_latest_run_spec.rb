@@ -131,12 +131,14 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
         # ran examples and repeated none of them, which is the *Vacuous Green* reading
         # `RepeatedDescriptions#recorded?` exists to refuse.
         "repeated_descriptions" => nil,
-        # And the drill-in into ONE area, null for a REASON NONE OF THE FOUR ABOVE SHARE: this
+        # And the drill-in into ONE area, null for a REASON NONE OF THE FIVE ABOVE SHARE: this
         # request sent no `?spec_directory=`, so no area was asked for and none was answered. It
         # would be null on this fixture either way — there are no rows to find — but the two are
-        # different facts and only this key can be null on a run that recorded plenty. The empty
-        # ANSWER is a present block with `rows: []` and the asked-for path restated in it; see
-        # `repository_spec_directory_files_spec.rb`, where the pair is asserted side by side.
+        # different facts, and only this key's `null` says nothing about the run at all. `shards`
+        # twenty lines up is null about the run, the four rollups about its rows; this one is null
+        # about the request. The empty ANSWER is a present block with `rows: []` and the asked-for
+        # path restated in it; see `repository_spec_directory_files_spec.rb`, where the pair is
+        # asserted side by side.
         "spec_directory_files" => nil,
         "suite_size_measured" => true,
         "ingested_at" => test_run.created_at.iso8601
