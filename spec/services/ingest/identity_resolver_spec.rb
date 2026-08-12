@@ -54,6 +54,11 @@ RSpec.describe Ingest::IdentityResolver do
   # that has not changed" asserts the embed does not happen on run 2, and "the page map is a
   # snapshot, and what that costs a FIRST run" asserts that batching those lookups did not quietly
   # add one back on run 1. One instrument, so the two cannot disagree about what an embed is.
+  #
+  # `normalize` is delegated for the same reason `call` is: `EmbeddingGenerator.equivalent?` asks
+  # the installed provider whether two spellings collapse together, and a counter that answered
+  # differently from `LocalProvider` would change the path it is supposed to be measuring — the
+  # drift refresh would go inert exactly in the examples that count what it costs.
   let(:counting_provider) do
     Class.new do
       class << self
@@ -63,6 +68,8 @@ RSpec.describe Ingest::IdentityResolver do
           @calls = calls + 1
           EmbeddingGenerator::LocalProvider.call(text)
         end
+
+        def normalize(text) = EmbeddingGenerator::LocalProvider.normalize(text)
       end
     end
   end
@@ -614,6 +621,155 @@ RSpec.describe Ingest::IdentityResolver do
              ci_run_id: "run-2")
 
       expect(repository.spec_identities.count).to eq(1)
+    end
+  end
+
+  # The group above proves the drifted row is FOUND. This one is about what finding it that way
+  # costs, and about the fact that — until this slice — it cost that on every ingest forever.
+  #
+  # The digest is over the raw text and the vector is over a normalised form of it, so a description
+  # that gained a comma matches at cosine 1.0 and is re-sighted correctly while the row keeps the
+  # ORIGINAL spelling. `#identical_text` then misses on every later ingest too, because neither side
+  # ever changes — one embed and one per-row ANN round trip, permanently, for a population that only
+  # grows as descriptions are edited. Re-pointing the row at the spelling that was actually presented
+  # is one write, once, and it converges.
+  describe "a description that drifted only in punctuation, on the ingests after the drift" do
+    def original = "Order#checkout rejects an expired card"
+    def drifted = "Order  checkout   rejects an expired card!"
+
+    def one(name, line: 1)
+      unannotated_spec(file_path: "spec/a_spec.rb", line_number: line, name: name)
+    end
+
+    def elsewhere(name, line: 1)
+      unannotated_spec(file_path: "spec/b_spec.rb", line_number: line, name: name)
+    end
+
+    it "asks the provider nothing at all, where it used to ask on every ingest forever" do
+      # **The figure this slice exists to move**, on the instrument that pins the unchanged path's
+      # zero, so the two cannot disagree about what an embed is. Run 2 is the drift and still pays
+      # for it; run 3 presents exactly what run 2 did and is the ingest that used to pay again.
+      ingest([one(original)], ci_run_id: "run-1")
+      ingest([one(drifted)], ci_run_id: "run-2")
+
+      EmbeddingGenerator.provider = counting_provider
+      ingest([one(drifted, line: 2)], ci_run_id: "run-3")
+
+      expect(counting_provider.calls).to eq(0)
+      expect(repository.spec_identities.count).to eq(1)
+    end
+
+    it "re-points the row it already had at the spelling that was presented" do
+      ingest([one(original)], ci_run_id: "run-1")
+      identity = repository.spec_identities.sole
+
+      ingest([one(drifted)], ci_run_id: "run-2")
+
+      # The same row, moved — not a second row, which is what makes this a refresh and not a rename.
+      expect(repository.spec_identities.count).to eq(1)
+      expect(identity.reload.text).to eq(drifted)
+    end
+
+    it "keeps the whole history on that row rather than starting one for the new spelling" do
+      ingest([one(original)], ci_run_id: "run-1")
+      identity = repository.spec_identities.sole
+
+      ingest([one(drifted, line: 2)], ci_run_id: "run-2")
+      third = ingest([one(drifted, line: 3)], ci_run_id: "run-3")
+
+      expect(identity.reload.spec_observations.count).to eq(3)
+      expect(identity.line_number).to eq(3)
+      expect(identity.last_seen_test_run_id).to eq(third.id)
+    end
+
+    it "leaves the text alone for an edit the provider CAN tell apart, inside the match band" do
+      # The falsifier for keying this on `SpecIdentity::MATCH_SIMILARITY` instead of on
+      # normalisation-equivalence. "card" → "cards" scores 0.9840 on the shipped provider — above
+      # the 0.95 bar, so it re-sights the row it already had, exactly as it did before this slice —
+      # and it is a genuine edit rather than another spelling of the same string, so the identity
+      # must keep its own text. An implementation that refreshed on "anything that matched" passes
+      # every other example in this group and fails here.
+      ingest([one(original)], ci_run_id: "run-1")
+      identity = repository.spec_identities.sole
+
+      ingest([one("Order#checkout rejects an expired cards")], ci_run_id: "run-2")
+
+      expect(repository.spec_identities.count).to eq(1)
+      expect(identity.reload.text).to eq(original)
+    end
+
+    it "keeps the page's sightings and its links when the convergence write itself fails" do
+      # **The refresh is the only OPTIONAL write on this path and it must not be able to cost the two
+      # that are not.** The sightings and the links are what the page decided, and `#resolve_page`
+      # flushes on every exit precisely so a page that died still writes them. Issued ahead of them,
+      # anything the refresh raises that its own rescue does not name — a deadlock, a lock timeout, a
+      # statement timeout on a page carrying many drifts — propagates before either required
+      # statement is reached, and a page that had already met an exception discards everything it
+      # resolved down the "keep the original" branch. Ordered behind them, the ingest loses its
+      # convergence and nothing else.
+      ingest([one(original)], ci_run_id: "run-1")
+      identity = repository.spec_identities.sole
+
+      second = record([one(drifted, line: 4)], ci_run_id: "run-2")
+      resolver = described_class.new(second)
+      allow(resolver).to receive(:refresh).and_raise(ActiveRecord::Deadlocked, "deadlock detected")
+
+      expect { resolver.resolve }.to raise_error(ActiveRecord::Deadlocked)
+
+      # Both required writes landed: the observation carries the identity it resolved to, and the
+      # identity moved to where the test was last seen. Only the spelling did not move.
+      expect(second.spec_observations.unresolved.count).to eq(0)
+      expect(identity.reload.line_number).to eq(4)
+      expect(identity.text).to eq(original)
+    end
+
+    it "settles one spelling for a page that carries both, rather than rewriting on every ingest" do
+      # Two examples whose descriptions differ only in punctuation share ONE identity — no threshold
+      # can separate them — so one of them presents a spelling the row does not hold, on every
+      # ingest, forever. Refreshing per matched row would rewrite the text every time, which is
+      # worse than the miss it is meant to fix. The page settles ONE spelling against the sighting it
+      # had already settled, and from then on the ingest costs the two statements any page costs.
+      page = [one(original, line: 1), one(drifted, line: 2)]
+      ingest(page, ci_run_id: "run-1")
+      expect(repository.spec_identities.count).to eq(1)
+
+      second = record(page, ci_run_id: "run-2")
+      updates = executed_sql { described_class.resolve(second) }.grep(/\AUPDATE\b/)
+
+      # The page's two batched writes and no third one: the re-sighting and the link.
+      expect(updates.size).to eq(2)
+      expect(second.spec_observations.unresolved.count).to eq(0)
+    end
+
+    it "settles one spelling for two variants that land in DIFFERENT pages, and stops writing" do
+      # **The same hazard one page boundary out, which is where a per-page bound stops working.**
+      # `#resolve` pages by `BATCH_SIZE` — forty pages of a suite at the design point — and nothing
+      # keeps two spellings of one test adjacent. Bounded per page, the earlier page misses on what
+      # the row holds and moves it, the later page rebuilds its map, misses on what the earlier page
+      # just wrote, and moves it back: every ingest, forever, and now two `UPDATE`s on top of the two
+      # embeds those rows already paid — a net regression in a slice whose premise is convergence.
+      #
+      # Two pages here rather than forty because the boundary is the whole mechanism and one is
+      # enough to cross it; `BATCH_SIZE` is stubbed for the reason the page-seam examples above stub
+      # it. Run 2 is the ingest that settles the spelling, so run 3 is the first steady-state one and
+      # the figures asserted are the steady state's: no refresh statement at all, and the one embed
+      # the variant that lost costs — where the unbounded shape pays two embeds and two `UPDATE`s
+      # here and on every ingest after it.
+      stub_const("#{described_class}::BATCH_SIZE", 1)
+      pages = [one(original), elsewhere(drifted)]
+
+      ingest(pages, ci_run_id: "run-1")
+      ingest(pages, ci_run_id: "run-2")
+      settled = repository.spec_identities.sole.text
+
+      EmbeddingGenerator.provider = counting_provider
+      third = record(pages, ci_run_id: "run-3")
+      updates = executed_sql { described_class.resolve(third) }.grep(/\AUPDATE\b/)
+
+      expect(repository.spec_identities.sole.text).to eq(settled)
+      expect(updates.size).to eq(4) # Two pages, two statements each. No third statement on either.
+      expect(counting_provider.calls).to eq(1)
+      expect(third.spec_observations.unresolved.count).to eq(0)
     end
   end
 
@@ -1212,6 +1368,12 @@ RSpec.describe Ingest::IdentityResolver do
             batched.concat(texts)
             texts.map { |text| EmbeddingGenerator::LocalProvider.call(text) }
           end
+
+          # Delegated for the same reason the two above are: an instrument must not change the path
+          # it measures. `EmbeddingGenerator.equivalent?` asks the INSTALLED provider which spellings
+          # collapse together, so a counter that stayed silent about normalisation would take the
+          # punctuation-drift example below down a branch production never takes.
+          def normalize(text) = EmbeddingGenerator::LocalProvider.normalize(text)
         end
       end
     end
@@ -1311,7 +1473,13 @@ RSpec.describe Ingest::IdentityResolver do
 
       expect(repository.spec_identities.count).to eq(5)
       expect(identity_by_file(second)).to eq(identity_by_file(first))
-      expect(identity_by_file(first)).to eq(new_page.to_h { |spec| [spec[:file_path], spec[:name]] })
+      # Each file's row is held under ITS OWN text — the presented spelling now, because a
+      # normalisation-equivalent match re-points the row it matched (see "a description that drifted
+      # only in punctuation"). Asserted on run ONE's rows, which the line above pins as the same rows:
+      # run 1's identities holding run 2's spellings is the stronger statement and the new truth. A
+      # page paired one place out puts a NEIGHBOUR's name here, which is the whole failure this
+      # example exists to catch, and it catches it either way.
+      expect(identity_by_file(first)).to eq(punctuated.to_h { |spec| [spec[:file_path], spec[:name]] })
     end
 
     it "contains a failed page to the row that caused it, rather than stamping all five" do

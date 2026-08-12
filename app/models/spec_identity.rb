@@ -116,11 +116,17 @@ class SpecIdentity < ApplicationRecord
   # `text_digest`, `signal_source` and `embedding` are absent because they are the identity itself;
   # `created_at` is absent so a row keeps when the test first appeared.
   #
-  # The four excluded columns have exactly one writer after the insert and it is not a re-sighting:
-  # `Ingest::IdentityResolver#upgrade_from_name`, on the single transition where a test acquires a
-  # declaration. Adding them here to serve that case would make EVERY ordinary re-observation start
-  # rewriting `text` — the exclusion is what makes an identity stable, so the one transition that
-  # moves it says so itself rather than being folded into this list.
+  # The four excluded columns have exactly two writers after the insert and neither of them is a
+  # re-sighting. `Ingest::IdentityResolver#upgrade_from_name` moves all four, on the single
+  # transition where a test acquires a declaration; `Ingest::IdentityResolver#refresh` moves `text`,
+  # `text_digest` and `embedding`, on the single transition where a description drifts into a
+  # spelling this repository's provider cannot tell apart from the stored one — the row is already
+  # matched at cosine 1.0 and re-sighted, and moving its spelling is what stops that match costing
+  # an embed and an index lookup on every ingest forever.
+  #
+  # Adding them here to serve either case would make EVERY ordinary re-observation start rewriting
+  # `text` — the exclusion is what makes an identity stable, so each transition that moves it says
+  # so itself, by id, in its own guarded statement, rather than being folded into this list.
   RESIGHTABLE = %i[file_path line_number last_seen_test_run_id updated_at].freeze
 
   # **A sighting may never move a row BACKWARDS in time**, and this is the one place that is

@@ -460,6 +460,79 @@ RSpec.describe EmbeddingGenerator do
         expect(described_class.call(nil)).to eq(Array.new(1536, 0.0))
       end
     end
+
+    # `.normalize` is published so that `Ingest::IdentityResolver` can tell a description that
+    # gained a comma apart from one that was edited. These examples pin it as what the VECTOR
+    # depends on rather than as a string utility — a normalisation that agreed with `#call` about
+    # everything except one character would be worse than none, because the resolver would re-point
+    # an identity at text that does not embed the same.
+    describe ".normalize" do
+      it "reduces punctuation, case and runs of whitespace to one canonical form" do
+        expect(described_class::LocalProvider.normalize("Order#checkout   rejects  an Expired card!"))
+          .to eq("order checkout rejects an expired card")
+      end
+
+      it "has nothing to say about text with no alphanumeric content, exactly as the vector does" do
+        expect(described_class::LocalProvider.normalize("--- !!! ---")).to eq("")
+        expect(described_class::LocalProvider.normalize(nil)).to eq("")
+      end
+
+      it "agrees with the vector: same normalised form means the same 1536 floats" do
+        # The property the resolver acts on, asserted as an equality of VECTORS and not of strings.
+        one = "Order#checkout rejects an expired card"
+        other = "Order  checkout   rejects an expired card!"
+
+        expect(described_class::LocalProvider.normalize(one))
+          .to eq(described_class::LocalProvider.normalize(other))
+        expect(described_class.call(one)).to eq(described_class.call(other))
+      end
+
+      it "does not collapse a real edit, so the vectors differ too" do
+        one = "Order#checkout rejects an expired card"
+        other = "Order#checkout rejects an expired cards"
+
+        expect(described_class::LocalProvider.normalize(one))
+          .not_to eq(described_class::LocalProvider.normalize(other))
+        expect(described_class.call(one)).not_to eq(described_class.call(other))
+      end
+    end
+  end
+
+  # The interface-level question, which is deliberately not "are these similar": callers need to know
+  # which inputs the installed provider collapses onto ONE vector, and only the provider can say.
+  describe ".equivalent?" do
+    it "is true for two spellings the shipped provider reduces to one vector" do
+      described_class.provider = described_class::LocalProvider
+
+      expect(described_class.equivalent?("Order#checkout rejects an expired card",
+                                         "Order  checkout   rejects an expired card!")).to be(true)
+    end
+
+    it "is false for an edit, however small, that the provider does not collapse" do
+      described_class.provider = described_class::LocalProvider
+
+      expect(described_class.equivalent?("rejects an expired card",
+                                         "rejects an expired cards")).to be(false)
+    end
+
+    it "answers false for a provider that publishes no normalisation, rather than guessing" do
+      # The conservative default, and the one that matters in production: `OpenAIProvider` sends the
+      # text as written, so two different strings really are two different vectors and nothing may
+      # be treated as the same input. A caller acting on this `false` does what it did before the
+      # predicate existed.
+      described_class.provider = described_class::OpenAIProvider
+
+      expect(described_class.equivalent?("Order#checkout", "Order  checkout")).to be(false)
+    end
+
+    it "is true for byte-identical text whatever the provider is, without asking it" do
+      described_class.provider = Class.new do
+        def self.call(_text) = Array.new(EmbeddingGenerator::DIMENSIONS, 0.0)
+        def self.normalize(_text) = raise("must not be asked")
+      end
+
+      expect(described_class.equivalent?("x", "x")).to be(true)
+    end
   end
 
   describe "configuration" do

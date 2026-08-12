@@ -231,6 +231,16 @@ module Ingest
       def from_name? = source == "name"
     end
 
+    # One identity's pending spelling refresh — see {#note_drift} for what earns a row one and
+    # {#refresh_all} for which of a page's candidates is actually written.
+    #
+    # Carries the observation because the page settles WHICH spelling wins by settling which
+    # SIGHTING wins ({#newest_sighting_per_identity}), and that is a question about observations.
+    # Carries `from_digest` — the digest the identity was holding when the match was made — because
+    # the write is a compare-and-set on it, so a concurrent writer that has already moved the row
+    # off that digest refuses this statement instead of racing it.
+    Drift = Struct.new(:observation, :text, :digest, :from_digest, :embedding)
+
     def self.resolve(run) = new(run).resolve
 
     def initialize(run)
@@ -251,6 +261,20 @@ module Ingest
       # {#resolve_page} for why the decision stays per row while the write is per page.
       @sightings = []
       @links = []
+      # The page's pending spelling refreshes, `identity_id => {Drift}` — one entry per identity by
+      # construction, which is {#note_drift}'s first bound against thrash. Same total-rather-than-
+      # conditional guarantee as the two buffers above.
+      @drifts = {}
+      # **The two PASS-scoped sets, and they are the only state here {#resolve_page} does not empty.**
+      # Everything above is a page's worth by design; these are deliberately a whole `#resolve`'s,
+      # because the hazard they answer is a page BOUNDARY and a per-page set cannot see across one.
+      # See {#refresh_all} for what each refuses and why one page's bound was not enough.
+      #
+      # `@refreshed` — identities this pass has already written a spelling to. `@spellings_in_use` —
+      # identities some observation of this pass matched by exact text ({#identity_for}), so their
+      # stored spelling is demonstrably still presented and is not stale.
+      @refreshed = Set.new
+      @spellings_in_use = Set.new
     end
 
     # @return [Integer] how many observations now carry an identity that did not before — **across
@@ -503,6 +527,7 @@ module Ingest
       @embeddings = page_embeddings(observations)
       @sightings = []
       @links = []
+      @drifts = {}
       resolved = 0
 
       begin
@@ -541,11 +566,48 @@ module Ingest
     # other. Whatever contention is left is inside a single table, which is what {#write_page}'s
     # sort and its retry are about.
     #
+    # **{#refresh_all} goes LAST, after both of them, and that ordering is load-bearing.** It is the
+    # only write on this path that is OPTIONAL: the sightings and the links are what the page
+    # decided and what {#resolve_page}'s `ensure` exists to get written even when the walk died
+    # halfway; the refresh is a convergence write whose entire benefit is that the NEXT ingest is
+    # cheaper. Issued first, any error it raised that its own rescue does not name — a deadlock, a
+    # lock timeout, a statement timeout on a page carrying many drifts — would propagate out of here
+    # before either required statement was issued, and a page that had already met an exception
+    # would take the "keep the original" branch and silently discard everything the page resolved.
+    # An optional write must not be able to cost the page its required ones, so it is ordered behind
+    # them and the count is taken before it. (It has no lock-ordering claim to make by going first:
+    # it commits its own transaction per row and holds nothing while the two statements above run.)
+    #
+    # **It IS a per-row write in a burst, and the bound is page-shaped rather than lifetime-shaped.**
+    # An ordinary page issues nothing at all, and an identity crosses the drift transition once —
+    # but "once" is the bound over an identity's LIFETIME, not over an ingest. A single style change
+    # that reformats punctuation across a suite drifts every row on the same ingest, and this then
+    # issues one single-row `UPDATE` per drifted identity: up to `BATCH_SIZE` per page, 20,000 across
+    # a suite at the design point, on that one ingest. That is the per-row shape this lineage exists
+    # to remove, and it is chosen here with the trade named: the batched `VALUES` form is available
+    # ({#resight_all}'s statement with the compare-and-set moved into the join), but one identity
+    # whose presented spelling is already held by another row raises `RecordNotUnique` and would
+    # abort the whole batch with it, losing every other row's convergence to one row's conflict.
+    # Per-row keeps that refusal contained to the row it belongs to ({#refresh}), and it is paid on
+    # the ingest AFTER a mass edit and never again — the population it walks is the population that
+    # has not converged yet, which is empty on every steady-state page.
+    #
+    # **{#newest_sighting_per_identity} is settled ONCE, here, and handed to both readers.** It was
+    # {#resight_all}'s private business while it had one; {#refresh_all} is the second, and the two
+    # must agree about which of a page's observations speaks for an identity or the row could take
+    # one observation's path and another observation's spelling. Passing the settled list is what
+    # makes that agreement structural rather than a property of calling the same method twice.
+    #
     # @return [Integer] how many observations this page actually linked — see {#link_all}, which
     #   counts the rows the statement MATCHED rather than the rows it was handed.
     def flush_page
-      resight_all
-      link_all
+      sightings = newest_sighting_per_identity
+
+      resight_all(sightings)
+      resolved = link_all
+      refresh_all(sightings)
+
+      resolved
     end
 
     # **The page's write, issued once and retried at most once if Postgres picks it as the deadlock
@@ -994,13 +1056,26 @@ module Ingest
       # The cheap answer first, and only when it is certain — see {#identical_text} for why a miss
       # here proves nothing and must fall through to the embed rather than stand in for it.
       identical = identical_text(signal)
-      return resight(identical, observation) if identical
+      if identical
+        # A hit is also the one piece of evidence that an identity's stored spelling is NOT stale:
+        # this observation presented it verbatim. {#refresh_all} refuses to move a row that any
+        # observation of this pass matched exactly, which is what stops two equivalent spellings of
+        # one identity from taking turns rewriting each other. Recorded here rather than inside
+        # {#identical_text} so that method stays a pure read of the page's map.
+        @spellings_in_use << identical
+        return resight(identical, observation)
+      end
 
       embedding = embedding_for(signal.text)
       return record_resolve_failure(observation) if embedding.nil?
 
       match = nearest(embedding)
-      return resight(match.id, observation) if match
+      if match
+        # Before the re-sighting and not instead of it: a drifted row is re-sighted exactly as it
+        # was, and {#note_drift} only records that this identity's SPELLING is worth moving too.
+        note_drift(match, signal, embedding, observation)
+        return resight(match.id, observation)
+      end
 
       # Nothing matched the text that represents this test — and if this test just gained an
       # `@intent`, nothing ever will, because the row it already has is held under a name no run
@@ -1071,6 +1146,11 @@ module Ingest
     # that pair and which only similarity can resolve. **Batching does not touch that**: a digest
     # absent from the page's map is absent for the same reason it missed the per-row `find_by`, and
     # falls through to the same place.
+    #
+    # That miss is now paid ONCE per drift rather than on every ingest: {#note_drift} re-points the
+    # identity at the spelling that was actually presented, so the run after the drift asks this
+    # equality and gets its answer for free. The fallthrough is unchanged — what changed is that the
+    # row stops needing it.
     def identical_text(signal)
       @digest_index[SpecIdentity.digest_for(signal.text)]&.id
     end
@@ -1194,6 +1274,62 @@ module Ingest
                  .nearest_neighbors(:embedding, embedding, distance: "cosine",
                                     threshold: SpecIdentity::MATCH_DISTANCE)
                  .first
+    end
+
+    # **The one match that can never learn from itself, marked so it stops recurring.** A test whose
+    # description drifts only in punctuation or whitespace embeds to the SAME vector as the row it
+    # already has, so {#nearest} finds it at cosine 1.0 and it is re-sighted correctly — and the row
+    # keeps the ORIGINAL spelling's `text_digest` forever, because {SpecIdentity::RESIGHTABLE} does
+    # not move it. Every later ingest presents the new spelling, {#identical_text} misses again
+    # (neither side ever changes), and the row pays a full embed and a per-row ANN round trip again.
+    # Permanently, and for a population that only grows: every punctuation edit ever made adds a row
+    # that can never take the cheap path again.
+    #
+    # Re-pointing the identity at the presented spelling converges it — one write, once, and from
+    # the next ingest on {#identical_text} answers the row for free like any other. That is the whole
+    # of what this records; {#refresh_all} decides which candidate is written and {#refresh} writes
+    # it.
+    #
+    # == Why the band is normalisation-equivalence and NOT {SpecIdentity::MATCH_SIMILARITY}
+    #
+    # Refreshing on any match at or above 0.95 would move an identity's text on an ordinary edit,
+    # which is the opposite of what this class decides everywhere else: *"a renamed unannotated test
+    # is a different test"*, and the resolver spec pins that a rename starts a new identity and
+    # leaves the old row's text alone. The stuck population is not "everything that matched" — it is
+    # exactly the texts the provider cannot tell apart, which is why only they can never self-heal
+    # and why only they are touched here.
+    #
+    # `EmbeddingGenerator.equivalent?` and not a comparison against a cosine of 1.0: the provider
+    # knows which of its inputs collapse together, and a float distance is the wrong instrument for
+    # an exact question. A provider that publishes no normalisation answers `false` for every pair
+    # of different strings, so this whole path is inert under `OpenAIProvider` — correctly, because
+    # there the two spellings really are two different vectors and the drift really is an edit.
+    #
+    # == Same source only
+    #
+    # A cosine-1.0 match ACROSS sources — an intent triple whose words happen to normalise onto the
+    # name a row is still held under — is {#upgrade_from_name}'s question and not this one. That
+    # transition moves `signal_source` too, deliberately in one direction only; answering it here
+    # would let a de-annotation ride in as a spelling refresh and leave a row claiming a source its
+    # text no longer matches. Skipped rather than guessed at, and it costs only that today's
+    # behaviour continues for a case the upgrade path already owns.
+    #
+    # == At most one refresh per identity per page — and {#refresh_all} bounds the rest
+    #
+    # `@drifts` is keyed by identity, so a page carrying several spellings of one test records one
+    # candidate and not one per row. WHICH of them survives is not decided here: the last writer into
+    # the hash is arbitrary and {#refresh_all} re-settles it against the sighting the page actually
+    # chose. That answers a page and only a page — two examples differing only in punctuation can
+    # land in different pages and would otherwise rewrite each other's text on every ingest — so the
+    # bound against thrash is finished there, by two refusals scoped to the whole `#resolve` rather
+    # than to one of its pages.
+    def note_drift(match, signal, embedding, observation)
+      digest = SpecIdentity.digest_for(signal.text)
+      return if digest == match.text_digest
+      return unless match.signal_source == signal.source.to_s
+      return unless EmbeddingGenerator.equivalent?(match.text, signal.text)
+
+      @drifts[match.id] = Drift.new(observation, signal.text, digest, match.text_digest, embedding)
     end
 
     # **A test that gained an `@intent` is the test it already was.** Moves the identity it already
@@ -1340,6 +1476,134 @@ module Ingest
       :conflict
     end
 
+    # **The page's spelling refreshes — the candidates {#note_drift} collected, filtered down to the
+    # ones the page's own settled sightings agree with.**
+    #
+    # @param sightings [Array<(Integer, SpecObservation)>] one observation per identity, already
+    #   settled by {#newest_sighting_per_identity} — see {#flush_page} for why it is passed in.
+    #
+    # == Newest spelling wins, and it is not a second way of asking that
+    #
+    # A backlog page mixes runs by design ({#retry_backlog}), so two observations of one test can
+    # propose two different spellings and one of them is older. {#newest_sighting_per_identity} has
+    # ALREADY answered exactly that question — newest run by `(created_at, id)`, ties to the row
+    # walked last — in order to decide which sighting the row takes, so the spelling is taken from
+    # the observation that won there rather than from a second predicate that could disagree with
+    # it. {SpecIdentity::SIGHTING_NOT_OLDER} is deliberately not instantiated a third time for this:
+    # it is `private_constant` precisely so a caller cannot format its own copy, and its two public
+    # seams are shaped for a `VALUES` join and for an upsert's `excluded`, neither of which is a
+    # single-row `UPDATE` by id.
+    #
+    # A candidate whose observation did NOT win is dropped and not deferred. That is the right
+    # answer rather than a lost write: the identity carries the winner's spelling, and if the winner
+    # is the row that is already stored then there is nothing to move at all.
+    #
+    # **Bounded by the ordering it is derived from, not by it being a guard.** An observation of an
+    # OLDER run reaching a page alone — a rescued row of a run that has since been superseded — is
+    # the winner of that page and does write its spelling, which can move a row backwards onto a
+    # spelling a newer run had already replaced. It is contained by construction and it converges:
+    # both spellings are the same test and the same vector, so nothing is misattributed, and the
+    # next ingest presenting the newer spelling refreshes it forward again. One extra write on a
+    # rescued page, against a permanent per-ingest embed — and against a third copy of a predicate
+    # {SpecIdentity} states outright must not have one.
+    #
+    # Sorted by identity id for the reason {#write_page} argues at length: these are row locks on
+    # `spec_identities`, and two concurrent jobs over overlapping pages should take the rows they
+    # share in the same relative order.
+    #
+    # == The two PASS-scoped refusals, because a page's bound is one page-boundary short
+    #
+    # {#note_drift}'s `@drifts` key bounds this to one candidate per identity per PAGE, which settles
+    # a page carrying two equivalent spellings and settles nothing at all when they land in different
+    # pages — and `#resolve` pages by `BATCH_SIZE`, so at the design point a suite is forty of them
+    # and nothing keeps two variants of one test adjacent. Unbounded across pages the row ping-pongs:
+    # the earlier page misses on the spelling the row holds and moves it, the later page rebuilds its
+    # map, misses on what the earlier page just wrote, and moves it back — forever, and now with two
+    # `UPDATE`s an ingest on top of the two embeds it was already paying. That is a net regression in
+    # a slice whose whole premise is convergence, so both refusals are scoped to the `#resolve` and
+    # not to the page:
+    #
+    # 1. `@refreshed` — **one spelling write per identity per pass.** The first page to reach a
+    #    drifted identity settles it and every later page of the same pass leaves it alone, so the
+    #    cycle cannot complete a lap.
+    # 2. `@spellings_in_use` — **never move a spelling that is demonstrably still presented.** An
+    #    identity some observation matched by exact text ({#identity_for}) is not stale, whatever a
+    #    second observation's equivalent spelling proposes; moving it would only make the row that
+    #    matched miss next time. This is what makes the pair CONVERGE rather than merely stop
+    #    thrashing: once one spelling is stored, the observation presenting it hits the digest
+    #    equality on every later ingest, records the identity here, and the other spelling's drift is
+    #    refused permanently. The pair settles on the first-walked spelling and costs one embed an
+    #    ingest, against the two it costs today.
+    #
+    # **Both are read at flush time, so a later page's exact hit cannot retroactively refuse an
+    # earlier page's refresh** — page 1 has committed before page 40 is walked. That is what makes
+    # the convergence take one extra ingest rather than being instant, and it is the whole of the
+    # residual: the ingest after the drift settles the spelling, the ingest after that observes the
+    # exact hit and refuses the other, and it is stable from there. The same one-ingest lag is what a
+    # backlog page costs when it carries an OLD run's observation presenting the spelling the row is
+    # being moved off: the drift is refused that pass and applies on the next, by which time the
+    # rescued row is resolved and gone from the backlog.
+    def refresh_all(sightings)
+      return if @drifts.empty?
+
+      settled = sightings.to_h
+
+      @drifts.sort_by(&:first).each do |identity_id, drift|
+        next if @refreshed.include?(identity_id) || @spellings_in_use.include?(identity_id)
+        next unless settled[identity_id] == drift.observation
+
+        @refreshed << identity_id
+        refresh(identity_id, drift)
+      end
+    end
+
+    # The refresh itself, as one guarded statement — {#upgrade}'s shape, for {#upgrade}'s reasons.
+    # `update_all` by id and never a loaded record: the row is named outright and nothing on it is
+    # read first, so loading it would fetch a 1536 element vector in order to overwrite it.
+    #
+    # **`text_digest` is the compare-and-set.** The refresh is only ever correct against the row as
+    # it was when {#nearest} matched it, and a concurrent shard resolving the same test — or
+    # {#upgrade_from_name} moving this row onto a declaration — changes that digest. Either way the
+    # `WHERE` matches nothing, this call writes nothing, and the row keeps whatever the other writer
+    # gave it. Nothing is lost: the losing spelling is normalisation-equivalent to the winning one,
+    # so the row is on a spelling of the same test either way and the next ingest converges it.
+    #
+    # `signal_source` is deliberately NOT in the `SET` — {#note_drift} only records a candidate whose
+    # source already matches, so there is nothing to move, and this transition must not become a
+    # second way to change it.
+    #
+    # The vector is rewritten alongside the text even though normalisation-equivalence means it is
+    # the same vector: the two are written from ONE observation, so the row's text and its embedding
+    # cannot disagree by construction rather than by an argument about the provider that has to stay
+    # true.
+    #
+    # `RecordNotUnique` is contained because the unique `(repository_id, text_digest)` key can refuse
+    # the target: another identity in this repository may already hold the presented spelling — a
+    # row a concurrent shard inserted after this page took its {#digest_index} snapshot, which is why
+    # {#identical_text} did not find it. The row is left exactly where it is and the next ingest asks
+    # again against a map that now knows about it. `transaction(requires_new: true)` so that refusal
+    # is contained here rather than poisoning anything around it, exactly as in {#upgrade}.
+    #
+    # No {#write_page} wrapper and no deadlock retry, unlike the page's two batched statements: this
+    # takes ONE row lock, inside one statement, and a transaction that never holds a second lock
+    # cannot be half of a cycle — the same argument {#write_page} makes about the per-row path it
+    # replaced. That argument covers `Deadlocked` and not every error a statement can raise, which is
+    # why {#flush_page} issues this AFTER the page's two required writes: anything this raises that
+    # the rescue below does not name costs the ingest its convergence and never the page's sightings
+    # or its links.
+    def refresh(identity_id, drift)
+      SpecIdentity.transaction(requires_new: true) do
+        SpecIdentity.where(id: identity_id, text_digest: drift.from_digest)
+                    .update_all(text: drift.text, text_digest: drift.digest,
+                                embedding: drift.embedding, updated_at: Time.current)
+      end
+    rescue ActiveRecord::RecordNotUnique
+      Rails.logger.info(
+        "[IdentityResolver] run=#{@run.id} left identity #{identity_id} on its original spelling: " \
+        "another identity in this repository already holds the presented text"
+      )
+    end
+
     # An existing test, seen again. Moves only where it was last seen — see
     # {SpecIdentity::RESIGHTABLE} for why the text and the vector are not in that set — and moves it
     # only FORWARD, which is {SpecIdentity::SIGHTING_NOT_OLDER}'s job.
@@ -1372,6 +1636,10 @@ module Ingest
     # first of the two an unchanged re-ingest paid for every example it had already seen, and at the
     # 20,000-example design point 20,000 sequential round trips to write what the page already knew.
     #
+    # @param sightings [Array<(Integer, SpecObservation)>] one observation per identity, already
+    #   settled by {#newest_sighting_per_identity}. Taken as an argument rather than read here since
+    #   {#refresh_all} became a second reader of the same answer — see {#flush_page}.
+    #
     # `UPDATE … FROM (VALUES …)` and not an `IN` list, because every row carries its own values:
     # each identity takes ITS observation's path, line and run, so there is nothing to hoist into a
     # single `SET`. {SpecIdentity::RESIGHTABLE} builds both the `SET` and the tuple, so this
@@ -1397,11 +1665,11 @@ module Ingest
     # argues why that matters and why it is not sufficient on its own. It has no effect on WHICH
     # sighting lands — {#newest_sighting_per_identity} has already settled that, one row per
     # identity, before there is anything to sort.
-    def resight_all
-      return if @sightings.empty?
+    def resight_all(sightings)
+      return if sightings.empty?
 
       now = Time.current
-      rows = newest_sighting_per_identity.map do |identity_id, observation|
+      rows = sightings.map do |identity_id, observation|
         [identity_id, *sighting(observation, now).values_at(*SpecIdentity::RESIGHTABLE)]
       end.sort_by(&:first)
       table = SpecIdentity::SIGHTING_VALUES_ALIAS
@@ -1424,6 +1692,10 @@ module Ingest
     # one row (`SpecIdentity::MATCH_SIMILARITY` states why no threshold can separate them), and
     # {#retry_backlog} mixes runs by design, so a backlog page can hold this run's row and an
     # earlier one's for the same test.
+    #
+    # It settles the identity's SPELLING as well, and by settling nothing extra: {#refresh_all} reads
+    # this same answer, so the observation whose path a row takes is the observation whose text it
+    # takes. Two questions, one adjudication.
     #
     # Sequential guarded `UPDATE`s settled it by executing: within one run last-writer-wins, which
     # is correct because two examples sharing a description have no order between them; across runs

@@ -136,6 +136,29 @@ class EmbeddingGenerator
       raise Error, "embedding provider failed: #{e.message}"
     end
 
+    # @return [Boolean] whether these two texts are the SAME INPUT as far as the current provider is
+    #   concerned — different bytes that it reduces to one identical vector.
+    #
+    # **Not a similarity question and deliberately not answerable by one.** `Ingest::IdentityResolver`
+    # needs to tell "this description gained a comma" apart from "this description was edited", and a
+    # cosine cannot: the first is exactly 1.0 in theory and a float comparison against 1.0 in
+    # practice, while the second lands wherever it lands. The provider knows which of its inputs
+    # collapse together because it is the thing that collapses them, so it is asked rather than
+    # inferred from a distance.
+    #
+    # Optional on the interface, and the default is the CONSERVATIVE one: a provider that does not
+    # publish a normalisation makes no promise that two different strings embed alike, so nothing but
+    # byte equality is treated as equivalence. `OpenAIProvider` is that case — it sends the text as
+    # written — and a caller acting on a `false` here does exactly what it did before this method
+    # existed. Only `LocalProvider`, which really does drop punctuation and collapse whitespace
+    # (see its `.normalize`), can answer `true` for two different strings.
+    def equivalent?(one, other)
+      return true if one == other
+      return false unless provider.respond_to?(:normalize)
+
+      provider.normalize(one) == provider.normalize(other)
+    end
+
     # Delegated, so a provider needing no credentials at all (a local Ollama embedder) reports the
     # truth instead of OpenAI's answer. A provider that does not implement the predicate has
     # nothing to configure, so it is ready by definition.
@@ -266,6 +289,19 @@ class EmbeddingGenerator
         new(text).call
       end
 
+      # The form step 1 above reduces a text to, and therefore the ONLY thing the vector is a
+      # function of: `#features` reads its words and its n-grams off this string and nothing else
+      # touches `@text`. So two texts with the same normalised form embed identically — not
+      # approximately, not at cosine 1.0 within tolerance, but to the same array of floats.
+      #
+      # Public because that equality is a fact callers need and cannot safely re-derive:
+      # `EmbeddingGenerator.equivalent?` is the interface-level question and this is this provider's
+      # answer to it. A second copy of the tokenisation elsewhere would drift from this one and the
+      # symptom would be an identity quietly re-pointed at text that does not embed the same.
+      def normalize(text)
+        text.to_s.downcase.scan(WORD).join(" ")
+      end
+
       # Nothing to configure — that is the entire point of this provider. Stated rather than
       # inherited from the interface's default so that "needs no credentials" is legible here,
       # where someone comparing the two providers is looking.
@@ -304,14 +340,20 @@ class EmbeddingGenerator
     private
 
     def words
-      @text.downcase.scan(WORD)
+      normalized.split(" ")
     end
 
     def ngrams
-      subject = words.join(" ")
-      return [] if subject.length < NGRAM_SIZE
+      return [] if normalized.length < NGRAM_SIZE
 
-      (0..subject.length - NGRAM_SIZE).map { |offset| subject[offset, NGRAM_SIZE] }
+      (0..normalized.length - NGRAM_SIZE).map { |offset| normalized[offset, NGRAM_SIZE] }
+    end
+
+    # Both feature kinds are read off the SAME normalised string rather than each re-deriving it,
+    # which is what makes `.normalize` the whole of what this vector depends on rather than a third
+    # spelling of the tokenisation that happens to agree with the other two today.
+    def normalized
+      @normalized ||= self.class.normalize(@text)
     end
 
     # A text with no alphanumeric content has no features and so no direction to point in. Zero is
