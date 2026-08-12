@@ -123,15 +123,23 @@ module Ingest
     # WIDTH is a claim worth a falsifier, and it was O(N) while this comment's previous revision
     # said so.
     #
-    # As an illustration and not as the claim: on this tree a 12-row unchanged page measures 11
-    # round trips — 1 digest lookup, 2 UPDATEs, 4 reads (the repository, {#resolve}'s two backlog
-    # lists, and the run's own page) and {#report}'s 4 counts — and a FULL page of 500 measures the
-    # same 11, where it measured ~1,009. That is the whole of what this slice bought, and it is why
-    # the figure is now flat in the width rather than proportional to it. Deliberately phrased as
-    # the invariant plus an example, because the total is rebase-fragile in a way the invariant is
-    # not: it was 28 before SPGD-379 split the backlog into two reads, 29 after, and 33 once
-    # SPGD-388 added the completion report — three revisions of one number for changes to methods
-    # this constant has nothing to do with.
+    # As an illustration and not as the claim: on this tree a 12-row unchanged page measures 11 round
+    # trips — 1 digest lookup, 2 UPDATEs, 4 reads (the repository, {#resolve}'s two backlog lists,
+    # and the run's own page) and {#report}'s 4 counts — where it measured 33.
+    #
+    # A page that is exactly FULL measures **12 and not 11**, at any width, and the extra trip is
+    # `find_in_batches`: a batch that comes back exactly `batch_size` wide cannot be known to have
+    # exhausted the relation, so one more `SELECT` is issued and returns nothing. Worth the sentence
+    # because the full page is the case this constant is ABOUT and the 12-row fixture is under-full —
+    # the one width at which the probe cannot appear. Measured on this branch at two widths, 6 and
+    # 12, and it is 12 at both; before this slice the same two measured 22 and 34, i.e. `2N + 10`,
+    # which puts a full page of 500 at ~1,010. That flatness in the width — not the size of the drop
+    # — is the whole of what this slice bought.
+    #
+    # Deliberately phrased as the invariant plus an example, because the total is rebase-fragile in a
+    # way the invariant is not: it was 28 before SPGD-379 split the backlog into two reads, 29 after,
+    # and 33 once SPGD-388 added the completion report — three revisions of one number for changes to
+    # methods this constant has nothing to do with.
     #
     # What it does NOT bound is a page of genuinely new text, and the paragraph above says why: the
     # embed, the ANN lookup and the upsert are still one per row, so a first run is round-trip bound
@@ -429,6 +437,16 @@ module Ingest
     # widen that: everything the page had decided would be discarded, and rows the resolver had
     # genuinely resolved would go back to looking never-attempted. So the flush runs on the way out
     # whatever the way out is, and the exception propagates after it exactly as before.
+    #
+    # **And it must not cost the diagnosis it exists to preserve.** A flush that raises while an
+    # exception is already propagating would replace it — Ruby discards the in-flight exception for
+    # whatever an `ensure` raises — so a page that died on {#nearest} and then met a deadlock in
+    # {#flush_page} would report the deadlock and lose the cause. That is not hypothetical now that
+    # the flush is where a page's database errors surface ({#write_page}): the two writes are the
+    # only statements left on this path that a concurrent job can collide with. So the flush's own
+    # failure is logged and dropped WHEN there is an original to keep, and raised as before when
+    # there is not. Dropped and never swallowed silently: the log line names both, because "the page
+    # failed twice" is a different event from either one alone.
     def resolve_page(observations, inherited: false)
       @digest_index = digest_index(observations)
       @sightings = []
@@ -440,7 +458,18 @@ module Ingest
           inherited ? claim_inherited(observation) : claim(observation)
         end
       ensure
-        resolved = flush_page
+        in_flight = $!
+
+        begin
+          resolved = flush_page
+        rescue StandardError => e
+          raise if in_flight.nil?
+
+          Rails.logger.error(
+            "[IdentityResolver] run=#{@run.id} page flush failed with #{e.class}: #{e.message} " \
+            "while #{in_flight.class} was already propagating; keeping the original"
+          )
+        end
       end
 
       resolved
@@ -454,11 +483,89 @@ module Ingest
     # in the same relative order they were written in when they were written per row, so a pass that
     # dies between them leaves the same state a pass that died between two rows' UPDATEs did.
     #
+    # It is also, now, a lock order. Both statements are multi-row ({#write_page} argues what that
+    # changed), and every page of every job issues them in this order — identities, then
+    # observations — so two concurrent passes cannot hold one of these tables while waiting for the
+    # other. Whatever contention is left is inside a single table, which is what {#write_page}'s
+    # sort and its retry are about.
+    #
     # @return [Integer] how many observations this page actually linked — see {#link_all}, which
     #   counts the rows the statement MATCHED rather than the rows it was handed.
     def flush_page
       resight_all
       link_all
+    end
+
+    # **The page's write, issued once and retried at most once if Postgres picks it as the deadlock
+    # victim.** Both statements below go through here, and this is the whole of what answers the
+    # concurrency question batching them asks.
+    #
+    # The per-row path could not deadlock, structurally rather than by luck. `update_column` and a
+    # one-row `update_all` each ran in autocommit: one row lock, taken and released inside one
+    # statement. A transaction that never holds a second lock cannot be half of a cycle. {#resight_all}
+    # and {#link_all} each take up to `BATCH_SIZE` row locks and hold them all until the statement
+    # ends, which is a lock footprint three orders of magnitude wider at the design point.
+    #
+    # That would be academic if two passes could not overlap, and this class says twice that they do:
+    # every shard of a run enqueues a job for the run ({#unresolved_bounds}, {RETRY_SWEEP_LIMIT}),
+    # and {#record_resolve_failure} increments atomically precisely because N of them run over the
+    # same rows. {#retry_backlog} is repository-scoped rather than run-scoped, so those N jobs read
+    # substantially the SAME page.
+    #
+    # == The sort first, because it removes the systematic disagreement
+    #
+    # Overlapping row sets are not enough for a deadlock; overlapping sets acquired in DIFFERENT
+    # orders are. The reads that build a page do not agree on an order between two jobs and cannot be
+    # made to: {#failed_embed_backlog} orders by `embed_failure_count`, which is exactly the column
+    # those concurrent jobs are incrementing, so two reads moments apart legitimately return the same
+    # rows in different positions. Both `VALUES` lists are therefore sorted by their join key before
+    # the statement is built ({#resight_all}, {#link_all}), which makes the statement a function of
+    # the SET of rows the page holds and not of the order it read them in. Two jobs over overlapping
+    # sets then present the rows they share in the same relative order.
+    #
+    # **That is a strong tendency and not a guarantee, which is why it is not the whole answer.**
+    # Postgres does not promise to lock in `VALUES` order — a sort or hash node in the join can
+    # reorder the scan — so the sort makes agreement the overwhelmingly likely case rather than a
+    # coincidence, and the retry below is what makes the path CORRECT rather than merely lucky.
+    #
+    # == Why a retry is sound here, and why exactly one
+    #
+    # A deadlock aborts the victim's statement entirely. These are single statements in autocommit,
+    # so there is no partial application to compensate for and nothing to unwind — the retry is the
+    # same statement against a database that never saw the first attempt.
+    #
+    # Both are safe to re-issue. The re-sighting is guarded per row against the row's own
+    # `last_seen_test_run_id`, so a second attempt either writes exactly what the first would have or
+    # is refused by a newer sighting that landed in between — and being refused is the correct
+    # outcome, not a lost write. The link sets one column to one value and counts what it MATCHED, so
+    # a row a concurrent redelivery deleted meanwhile is not counted on the retry either, which is
+    # the contract {#link_all} states.
+    #
+    # Once, and deliberately not a loop or a job-level `retry_on`. The detector aborts one side of a
+    # pair and lets the other finish, so a single retry runs against locks that have just been
+    # released — the case a retry can actually fix. A page that deadlocks twice is under contention
+    # trying harder cannot resolve, and this class already has a recovery for a pass that dies: the
+    # rows stay unresolved and unstamped, and the next ingest's cross-run sweep picks them up
+    # ({Ingest::IdentityResolutionJob} states that this, and not a redelivery, is what re-does the
+    # work). Spending a delivery in a retry loop would only postpone that while the page goes stale.
+    #
+    # `warn` and not `info`: a retried page is not an error — nothing was lost — but a deadlock here
+    # is the signal that two shards' jobs are colliding, and that is worth being able to grep for.
+    def write_page
+      retried = false
+
+      begin
+        yield
+      rescue ActiveRecord::Deadlocked => e
+        raise if retried
+
+        retried = true
+        Rails.logger.warn(
+          "[IdentityResolver] run=#{@run.id} page write chosen as a deadlock victim, " \
+          "retrying once: #{e.message}"
+        )
+        retry
+      end
     end
 
     # `digest => identity id`, for every text on this page that this repository already holds.
@@ -932,13 +1039,21 @@ module Ingest
     # `updated_at`. They were microseconds apart before and are now equal; nothing reads that column
     # as an ordering key — {SpecIdentity::SIGHTING_NOT_OLDER} orders by the RUN's `(created_at, id)`
     # and never by this.
+    #
+    # **Sorted by the identity id**, which is the join key and therefore the key this statement takes
+    # its row locks on. Not cosmetic and not for the reader: it makes the tuple list a function of
+    # WHICH identities the page holds rather than of the order the work list happened to return them
+    # in, so two concurrent jobs over overlapping pages agree about the shared rows. {#write_page}
+    # argues why that matters and why it is not sufficient on its own. It has no effect on WHICH
+    # sighting lands — {#newest_sighting_per_identity} has already settled that, one row per
+    # identity, before there is anything to sort.
     def resight_all
       return if @sightings.empty?
 
       now = Time.current
       rows = newest_sighting_per_identity.map do |identity_id, observation|
         [identity_id, *sighting(observation, now).values_at(*SpecIdentity::RESIGHTABLE)]
-      end
+      end.sort_by(&:first)
       table = SpecIdentity::SIGHTING_VALUES_ALIAS
 
       sql = <<~SQL.squish
@@ -949,7 +1064,9 @@ module Ingest
           AND #{SpecIdentity.sighting_not_older_than_values}
       SQL
 
-      SpecIdentity.connection.exec_update(SpecIdentity.sanitize_sql_array([sql, *rows.flatten]))
+      write_page do
+        SpecIdentity.connection.exec_update(SpecIdentity.sanitize_sql_array([sql, *rows.flatten]))
+      end
     end
 
     # **A page may re-sight ONE identity from SEVERAL observations, and this is what settles which
@@ -1016,20 +1133,29 @@ module Ingest
     # history, which is the rule {#record_resolve_failure} and `ObservationRecorder::REMEASURABLE`
     # keep from the other side.
     #
+    # **Sorted by the observation id**, the join key and the key the row locks are taken on, for the
+    # reason {#resight_all} is and {#write_page} argues. A page's links are one per observation
+    # already — {#claim} appends exactly one entry per row it resolved — so unlike the sightings
+    # there is nothing to deduplicate first and the sort is the whole of what fixes the order.
+    #
     # @return [Integer] how many of this page's observations now carry an identity.
     def link_all
       return 0 if @links.empty?
 
+      rows = @links.sort_by(&:first)
+
       sql = <<~SQL.squish
         UPDATE spec_observations SET spec_identity_id = link.spec_identity_id
-        FROM #{values_clause(@links, SpecObservation, %i[id spec_identity_id], 'link')}
+        FROM #{values_clause(rows, SpecObservation, %i[id spec_identity_id], 'link')}
         WHERE spec_observations.id = link.id
         RETURNING spec_observations.id
       SQL
 
-      SpecObservation.connection.exec_query(
-        SpecObservation.sanitize_sql_array([sql, *@links.flatten])
-      ).rows.size
+      write_page do
+        SpecObservation.connection.exec_query(
+          SpecObservation.sanitize_sql_array([sql, *rows.flatten])
+        ).rows.size
+      end
     end
 
     # A `(VALUES …) AS alias (columns)` join source with a `?` per value, for the two statements
@@ -1045,10 +1171,16 @@ module Ingest
     # The types come off the TARGET MODEL's own columns rather than from a list written here, so a
     # migration that widens a column cannot leave a cast behind naming what it used to be. `id` is
     # taken from the model too — {SpecIdentity}'s join key is its primary key under another name.
+    #
+    # The holes are counted off `columns` and not off the row, though a correct call has as many
+    # values as columns and either would do. `types` is indexed by column, so deriving the hole count
+    # from the row would be two indexes that merely happen to agree: a row one value short would
+    # produce `CAST(? AS )` or a short tuple, and the first anyone heard of it would be a Postgres
+    # syntax error a long way from the caller that built the row.
     def values_clause(rows, model, columns, table)
       types = columns.map { |column| model.columns_hash[column == :identity_id ? "id" : column.to_s].sql_type }
-      tuples = rows.map.with_index do |row, index|
-        holes = row.each_index.map { |column| index.zero? ? "CAST(? AS #{types[column]})" : "?" }
+      tuples = Array.new(rows.size) do |index|
+        holes = columns.each_index.map { |column| index.zero? ? "CAST(? AS #{types[column]})" : "?" }
         "(#{holes.join(', ')})"
       end
 
