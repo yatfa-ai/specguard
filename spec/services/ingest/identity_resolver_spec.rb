@@ -197,6 +197,16 @@ RSpec.describe Ingest::IdentityResolver do
                      **intent)
     end
 
+    # A SECOND example of the same page carrying the same `full_description` — a shared example
+    # group, the same `it` string under two describes — which never gains an annotation. Run 1
+    # collapses the two onto one row, which is `SpecIdentity::MATCH_SIMILARITY`'s stated behaviour
+    # and not this slice's doing. It exists here because it is the only row that can READ the page
+    # map entry `#upgrade_from_name` writes or removes, and so the only row either race group can
+    # observe that decision through.
+    def sibling
+      unannotated_spec(file_path: "spec/models/other_spec.rb", line_number: 3, name: name)
+    end
+
     it "upgrades the row it already had in place, rather than inserting a second one beside it" do
       ingest([unannotated_version], ci_run_id: "run-1")
       original = repository.spec_identities.sole
@@ -395,6 +405,127 @@ RSpec.describe Ingest::IdentityResolver do
         resolve_as_the_loser(record([annotated_version(line_number: 40)], ci_run_id: "run-2"))
 
         expect(original.reload.slice(*before.keys)).to eq(before)
+      end
+
+      it "leaves the page still holding the name, which the refused UPDATE kept true" do
+        # The half of the map decision that is NOT the lost race. A conflict means the `UPDATE` was
+        # REFUSED, so the row never left the name and the page's entry for it is still true — a
+        # sibling reading it re-sights the row it really does belong to, for free. Invalidating on
+        # this branch as well would still be CORRECT (`#claim_identity`'s `ON CONFLICT` lands the
+        # sibling on the same row either way), so the claim here is about cost, and it is asserted as
+        # cost: the sibling resolves without embedding anything.
+        #
+        # Reaching a conflict at all means the winner committed BETWEEN this page's lookups and this
+        # row's `UPDATE`, which is why both lookups are stubbed — and stubbed for the intent-derived
+        # row ONLY, so the sibling that this example is actually about runs entirely for real.
+        ingest([unannotated_version, sibling], ci_run_id: "run-1")
+        shared = repository.spec_identities.sole
+        create_spec_identity(repository: repository, text: triple, signal_source: "intent",
+                             file_path: "spec/models/invoice_spec.rb", line_number: 12)
+        triple_embedding = EmbeddingGenerator.call(triple)
+        second = record([annotated_version, sibling], ci_run_id: "run-2")
+
+        resolver = described_class.new(second)
+        allow(resolver).to receive(:identical_text).and_wrap_original do |original, signal|
+          signal.from_intent? ? nil : original.call(signal)
+        end
+        allow(resolver).to receive(:nearest).and_wrap_original do |original, embedding|
+          embedding == triple_embedding ? nil : original.call(embedding)
+        end
+        EmbeddingGenerator.provider = counting_provider
+        resolver.resolve
+
+        # One embed, and it is the annotated row's. The sibling's answer came out of the page map.
+        expect(counting_provider.calls).to eq(1)
+        expect(second.spec_observations.order(:id).pluck(:spec_identity_id).last).to eq(shared.id)
+        expect(shared.reload.text).to eq(name)
+        expect(shared).to be_from_name
+      end
+    end
+
+    describe "when a concurrent shard has already upgraded the row" do
+      # The OTHER way the guarded `UPDATE` does not land, and the one that leaves the page holding a
+      # lie. `WHERE signal_source = 'name'` matches ZERO rows because another shard rewrote this row
+      # to the triple first — so unlike the conflict above, the row HAS moved off the name, and the
+      # page's map still pointing `name_digest` at it is now false in exactly the way
+      # `#upgrade_from_name`'s invalidation comment describes. Both branches return "did not
+      # upgrade"; only one of them leaves the name still held.
+      #
+      # Two examples of one page share a `full_description` ({#sibling}) and one of them gains the
+      # `@intent`. What must not happen on run 2 is the name-only sibling reading the stale entry and
+      # re-sighting the row that just became the annotated test's, which would both misattribute its
+      # observation AND drag that row's last known path to a file the annotated test is not in.
+
+      # The winner's `UPDATE` runs and THEN the real `#upgrade` does, so the zero-row result is the
+      # database's own answer rather than a double's. Stubbing `#upgrade` to simply return
+      # `:lost_race` would assert against a value production might never produce; here the guard
+      # genuinely fails against genuinely committed state. The winner writes the same text, digest,
+      # source and VECTOR, because that is what the real one writes — leaving the name's embedding
+      # behind would let similarity rescue the sibling and hide the stale key this is about.
+      def resolve_losing_the_upgrade(run)
+        resolver = described_class.new(run)
+        upgrade = resolver.method(:upgrade)
+
+        allow(resolver).to receive(:upgrade) do |identity_id, signal, digest, embedding|
+          SpecIdentity.where(id: identity_id)
+                      .update_all(text: signal.text, text_digest: digest, signal_source: "intent",
+                                  embedding: embedding, updated_at: Time.current)
+          upgrade.call(identity_id, signal, digest, embedding).tap { |outcome| outcomes << outcome }
+        end
+
+        resolver.resolve
+        resolver
+      end
+
+      def outcomes = @outcomes ||= []
+
+      it "really does take the losing branch, so the examples below are about something" do
+        # The premise, pinned against the real method's return rather than trusted. If the page ever
+        # stopped reaching `#upgrade` at all — a similarity match, a digest hit — every assertion
+        # below would go green while testing nothing.
+        ingest([unannotated_version, sibling], ci_run_id: "run-1")
+
+        resolve_losing_the_upgrade(record([annotated_version, sibling], ci_run_id: "run-2"))
+
+        expect(outcomes).to eq([:lost_race])
+      end
+
+      it "does not resolve the name-only sibling onto the row that moved out from under it" do
+        ingest([unannotated_version, sibling], ci_run_id: "run-1")
+        shared = repository.spec_identities.sole
+
+        second = record([annotated_version, sibling], ci_run_id: "run-2")
+        resolve_losing_the_upgrade(second)
+
+        annotated, unannotated = second.spec_observations.order(:id).pluck(:spec_identity_id)
+        # The annotated example still converges onto the row the winner upgraded — `#claim_identity`'s
+        # `ON CONFLICT` — which is the half that already worked and must keep working.
+        expect(annotated).to eq(shared.id)
+        expect(unannotated).not_to eq(shared.id)
+      end
+
+      it "leaves the upgraded row's last known path belonging to the test that was annotated" do
+        # The consequence a misattribution carries past the observation link: the sibling re-sights
+        # through the stale key, and `#resight` moves `file_path`/`line_number`, so the row ends up
+        # reporting a location belonging to a different test entirely.
+        ingest([unannotated_version, sibling], ci_run_id: "run-1")
+
+        resolve_losing_the_upgrade(record([annotated_version, sibling], ci_run_id: "run-2"))
+
+        upgraded = repository.spec_identities.find_by(text: triple)
+        expect(upgraded.file_path).to eq("spec/models/invoice_spec.rb")
+        expect(upgraded.line_number).to eq(12)
+      end
+
+      it "gives the sibling a row of its own, under the name the upgraded row no longer holds" do
+        ingest([unannotated_version, sibling], ci_run_id: "run-1")
+
+        resolve_losing_the_upgrade(record([annotated_version, sibling], ci_run_id: "run-2"))
+
+        expect(repository.spec_identities.count).to eq(2)
+        own = repository.spec_identities.find_by(text: name)
+        expect(own).to be_from_name
+        expect(own.file_path).to eq("spec/models/other_spec.rb")
       end
     end
   end

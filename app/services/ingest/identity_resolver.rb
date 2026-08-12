@@ -448,11 +448,13 @@ module Ingest
     #
     # `pluck` and not a relation of records: what a hit is acted on with is an id and a
     # `signal_source`, and {SpecIdentity::RESIGHTABLE} is what a re-sighting moves — `text`,
-    # `text_digest` and `embedding` are deliberately absent from it, so nothing downstream of a hit
-    # ever reads the row. Loading 500 identities to use 500 ids would put the vectors this method
-    # exists to avoid touching straight into memory; the second plucked column is a short string and
-    # changes nothing about that. {#upgrade_from_name} WRITES those excluded columns, and writes them
-    # by id in one `UPDATE` rather than by loading the row first, for the same reason.
+    # `text_digest`, `signal_source` and `embedding` are all deliberately absent from it, so nothing
+    # downstream of a hit ever WRITES them by re-sighting. The second plucked column is one of those
+    # four and that is not a contradiction: it is READ here to answer `from_name?`, which is a
+    # different thing from a re-sighting moving it. Loading 500 identities to use 500 ids would put
+    # the vectors this method exists to avoid touching straight into memory; a short string alongside
+    # the id changes nothing about that. {#upgrade_from_name} WRITES the excluded columns, and writes
+    # them by id in one `UPDATE` rather than by loading the row first, for the same reason.
     #
     # `uniq` because a page may carry the same text twice — two examples with identical
     # `full_description` is the case `identity_resolver_spec.rb`'s "cannot separate two tests whose
@@ -707,6 +709,18 @@ module Ingest
       # Nothing matched the text that represents this test — and if this test just gained an
       # `@intent`, nothing ever will, because the row it already has is held under a name no run
       # will present again. Last question before inserting, and only for an intent-derived signal.
+      #
+      # **After {#nearest} and not before it**, which is worth stating because the ordering puts
+      # fuzzy evidence about SOME test ahead of exact evidence about THIS one: the upgrade's own
+      # question — does this repository hold a row under this example's `full_description`? — could
+      # be asked as soon as the embedding is in hand. It is asked here because a match at
+      # `SpecIdentity::MATCH_DISTANCE` is the settled answer on this path and the upgrade is the
+      # exception to it, not a replacement for it; moving it earlier would let a name-derived row
+      # take a test away from the identity similarity says it belongs to, on a run that changed
+      # nothing but an annotation. The exposure that ordering accepts is the mirror of it — a triple
+      # landing within `MATCH_DISTANCE` of a DIFFERENT identity re-sights that stranger and orphans
+      # the row this test owns — and `spec_identity.rb`'s threshold table puts a lexically similar
+      # but different test at 0.80 against a 0.95 bar, so it is the rarer of the two.
       upgraded = upgrade_from_name(signal, embedding, observation)
       return upgraded if upgraded
 
@@ -965,6 +979,11 @@ module Ingest
     # wrote and re-sights it. Once the upgrade is committed every later run's {#identical_text} hits
     # the triple's digest outright and takes the ordinary path. Self-converging, and idempotent
     # because both writers were writing the same text, digest and vector.
+    #
+    # What the losing shard must still do is put its OWN page's map right, which is a separate
+    # statement from where its own observation lands: the row it was pointed at has moved off the
+    # name, so the entry that says otherwise has to go whether or not this shard is what moved it.
+    # See the `:conflict` guard below for the one outcome that leaves the entry standing.
     def upgrade_from_name(signal, embedding, observation)
       return nil unless signal.from_intent?
 
@@ -976,13 +995,24 @@ module Ingest
       return nil unless held&.from_name?
 
       digest = SpecIdentity.digest_for(signal.text)
-      return nil unless upgrade(held.id, signal, digest, embedding)
+      outcome = upgrade(held.id, signal, digest, embedding)
 
-      # The page's map follows the row. The old key is DELETED and not merely superseded: nothing is
-      # held under that name any more, and a later row of this same page reading a stale entry would
+      # The page's map follows the row, and it follows it on **whether the row moved** rather than on
+      # whether THIS call is what moved it — which is why the invalidation is keyed on `:conflict`
+      # and not on `:upgraded`. The old key is DELETED and not merely superseded: nothing is held
+      # under that name any more, and a later row of this same page reading a stale entry would
       # re-sight a row whose text it no longer matches — a name-only example sharing a description
       # with the test that was just annotated is exactly that case, and it must claim its own row.
-      @digest_index.delete(name_digest)
+      #
+      # `:lost_race` is that same hazard reached by the other branch, and it is the one this method
+      # first got wrong: a concurrent shard has already rewritten the row to a triple, so the row has
+      # moved just as surely as on the success path and the map is just as false — the losing shard
+      # must not leave the entry behind for its own sibling to read. `:conflict` is the one outcome
+      # that keeps the entry, and keeps it because it is still TRUE: the `UPDATE` was refused by the
+      # unique key, so the row never left the name and a sibling reading it re-sights correctly.
+      @digest_index.delete(name_digest) unless outcome == :conflict
+      return nil unless outcome == :upgraded
+
       @digest_index[digest] = HeldIdentity.new(held.id, signal.source.to_s)
 
       resight(held.id, observation)
@@ -995,19 +1025,23 @@ module Ingest
     # `text_digest` uniqueness validation would answer from a SELECT that the unique index has to
     # decide anyway. The index decides it, and the conflict is contained here.
     #
-    # @return [Boolean] whether this call is the one that upgraded the row. False both when another
-    #   writer got there first (`signal_source` no longer `"name"`) and when a different identity
-    #   already holds the target digest — the two ways {#identity_for} must fall through to
-    #   {#claim_identity} rather than stop.
+    # @return [Symbol] which of three things happened, because the caller's map invalidation turns on
+    #   the difference and a boolean cannot carry it. `:upgraded` — this call moved the row.
+    #   `:lost_race` — the guard matched zero rows, so another writer already moved it off the name.
+    #   `:conflict` — the unique key refused the target digest, so the row is still on the name. The
+    #   last two are both a fall-through to {#claim_identity} for THIS observation and opposite
+    #   answers about whether the page's `name_digest` entry is still true; see {#upgrade_from_name}.
     def upgrade(identity_id, signal, digest, embedding)
-      SpecIdentity.transaction(requires_new: true) do
+      updated = SpecIdentity.transaction(requires_new: true) do
         SpecIdentity.where(id: identity_id, signal_source: "name")
                     .update_all(text: signal.text, text_digest: digest,
                                 signal_source: signal.source.to_s, embedding: embedding,
                                 updated_at: Time.current)
-      end.positive?
+      end
+
+      updated.positive? ? :upgraded : :lost_race
     rescue ActiveRecord::RecordNotUnique
-      false
+      :conflict
     end
 
     # An existing test, seen again. Moves only where it was last seen — see
