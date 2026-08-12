@@ -20,8 +20,10 @@
 # rollup, once for the by-area one, TWICE for the per-example ranking (a capped scan and a coverage
 # aggregate), TWICE for the by-description one (a grouped aggregate and the presence count it cannot
 # window over) — and, for its two CROSS-RUN blocks, UP TO FOUR MORE for flakiness and UP TO ONE MORE
-# for growth-by-area, which are the only grains here whose count depends on state rather than only
-# on shape. Each block that uses these bounds its OWN grain rather than the table, because a bare
+# for growth-by-area, which are not the only grains here whose count depends on state rather than
+# only on shape: the drill-in into ONE area's files is ONE MORE, and it is the only one whose count
+# depends on what the CLIENT ASKED rather than on what the window holds — no `?spec_directory=`, no
+# read. Each block that uses these bounds its OWN grain rather than the table, because a bare
 # total cannot tell "one aggregate per grain" from "one grain reading twice", and it has to be
 # rebaselined by hand every time a grain is added — the silent rebaseline `queries_against` was
 # chosen over `baseline + 1` to avoid.
@@ -71,26 +73,46 @@
 # selects: the flakiness grain's own unnamed-row read is a `.count` over `where(name: nil)` and
 # spells that condition as the QUOTED-COLUMN form the fourth pattern below matches, so the two
 # cannot collide.
+# THE FILE PATTERN WAS TIGHTENED THE THIRD TIME THE SAME LESSON ARRIVED, when the drill-in into one
+# area's files was added. `.file_durations_in` (the run's heaviest files) and `.files_in_directory`
+# (ONE area's files) both `GROUP BY "spec_observations"."spec_file_path"` and both rank on
+# `SUM(duration_seconds)` — they are the same rollup over two different populations, so nothing in
+# the GROUP BY or the ORDER BY can tell them apart, and the loose pattern adopted the second into
+# the first. The two are separated on the PREDICATE instead, which is where they genuinely differ:
+# the drill-in narrows on `DIRECTORY_EXPRESSION = <area>` and the rollup narrows on the run alone.
+# So the drill-in's grain is matched on that predicate BESIDE the grouping — a conjunction only it
+# produces — and the file grain is matched on the grouping WITHOUT it. That second half is the one
+# concession this file makes to a negative match, and it is a narrowing of one pattern rather than a
+# residual definition: `file` still means "the whole-run by-file rollup" and still adopts nothing,
+# because a read has to group by `spec_file_path` to be a candidate at all.
 module ObservationGrainReads
   # `queries_against` counts cached repeats and TRANSACTIONs, unlike `executed_sql` — see
   # `QueryCapture`, where the two rules and the difference between them are stated in full.
   def observation_reads(&) = queries_against("spec_observations", &)
 
-  # `[area, file, example, description, flakiness, growth]` — the six grains, each an array of the
-  # statements matched. The single-run grains come first, in the order `serialized_latest_run`
-  # serves them, and the two CROSS-RUN grains last in the order `show` serves them — so a
-  # destructuring caller reads the endpoint's own shape, and a caller written before a grain was
-  # appended keeps naming the same lists it always did.
+  # The area predicate `SpecObservation.files_in_directory` narrows on — `DIRECTORY_EXPRESSION`
+  # compared for EQUALITY against one area — which no other read of this table issues: the two
+  # reads that share the expression GROUP on it, and neither compares it to anything.
+  AREA_PREDICATE = /COALESCE\(substring\(spec_file_path from '\^\(\.\*\)\/\[\^\/\]\*\$'\), '\.'\) = /
+
+  # `[area, file, example, description, flakiness, growth, directory_files]` — the seven grains,
+  # each an array of the statements matched. The single-run grains come first, in the order
+  # `serialized_latest_run` serves them, and the two CROSS-RUN grains after them in the order `show`
+  # serves them — so a destructuring caller reads the endpoint's own shape, and a caller written
+  # before a grain was appended keeps naming the same lists it always did. The drill-in is LAST
+  # rather than beside the two rollups it sits between, for exactly that reason: it was added after
+  # the six, and every existing caller destructures a prefix of this array.
   def observation_reads_by_grain(&)
     reads = observation_reads(&)
     [reads.grep(/GROUP BY COALESCE\(substring\(spec_file_path.*ORDER BY SUM\(duration_seconds\)/m),
-     reads.grep(/GROUP BY "spec_observations"\."spec_file_path"/),
+     reads.grep(/GROUP BY "spec_observations"\."spec_file_path"/).grep_v(AREA_PREDICATE),
      reads.grep(/ORDER BY "spec_observations"\."duration_seconds" DESC/) +
        reads.grep(/COUNT\(\*\) FILTER \(WHERE outcome = 'pending'\)/),
      reads.grep(/HAVING \(COUNT\(\*\) > 1\)/) +
        reads.grep(/COUNT\(\*\) FILTER \(WHERE name IS NULL\)/),
      flakiness_grain_patterns.flat_map { |pattern| reads.grep(pattern) },
-     reads.grep(/ORDER BY ABS\(COUNT\(\*\) FILTER \(WHERE test_run_id = /)]
+     reads.grep(/ORDER BY ABS\(COUNT\(\*\) FILTER \(WHERE test_run_id = /),
+     reads.grep(/GROUP BY "spec_observations"\."spec_file_path"/).grep(AREA_PREDICATE)]
   end
 
   # `UnstableTests.for`'s four reads, in the order it issues them: the gating outcome-reporting
@@ -113,6 +135,7 @@ module ObservationGrainReads
   def description_grain_reads(&) = observation_reads_by_grain(&)[3]
   def flakiness_grain_reads(&) = observation_reads_by_grain(&)[4]
   def growth_grain_reads(&) = observation_reads_by_grain(&)[5]
+  def directory_files_grain_reads(&) = observation_reads_by_grain(&)[6]
 end
 
 RSpec.configure do |config|

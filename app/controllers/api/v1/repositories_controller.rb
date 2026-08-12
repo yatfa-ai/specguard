@@ -23,6 +23,16 @@ class Api::V1::RepositoriesController < Api::BaseController
   # reasoning, which used to sit here in full.
   include RequestedBranchParam
 
+  # `?spec_directory=` read as a spec directory path, to open ONE area of the by-area rollup below.
+  # Shared with `RepositoriesController`, which reads the same parameter under the same guard for
+  # the drill-in panel on repositories#show — the third sibling of the include above, and included
+  # here for the same reason that one is: the guard is the parameter's, not the surface's, and a
+  # second copy of it would be a second answer to "which shapes does `?spec_directory=` tolerate".
+  #
+  # It reaches a SQL equality comparison directly, where a non-String does not raise but answers a
+  # different question — see `RequestedSpecDirectoryParam`, which holds that reasoning in full.
+  include RequestedSpecDirectoryParam
+
   # The bound on `history` below. Ten rows is ten rows whether the suite holds three tests or
   # twenty thousand — `Repository#recent_test_runs` argues that in its own comment — so this is a
   # bound and not the first page of a pagination contract there is no cursor to continue.
@@ -127,6 +137,10 @@ class Api::V1::RepositoriesController < Api::BaseController
       # rollup of "where" can see that two of those rows say the same thing. See
       # `serialized_repeated_descriptions` below.
       repeated_descriptions: serialized_repeated_descriptions(test_run),
+      # ONE AREA of `spec_directories` above, opened — the only key in this block that answers a
+      # question the client asked rather than one the endpoint always answers, and the only one that
+      # is `null` on a recorded run. See `serialized_spec_directory_files` below.
+      spec_directory_files: serialized_spec_directory_files(test_run),
       # `TestRun#suite_size_measured?`, the same predicate `serialized_history_row` serves below and
       # for the same reason: a run that reported zero tests has a `total_specs` but not a
       # measurement, and a difference taken against it describes the report rather than the suite.
@@ -641,6 +655,88 @@ class Api::V1::RepositoriesController < Api::BaseController
       repeated_recorded_count: repeated.repeated_recorded_count,
       repeated_timed_count: repeated.repeated_timed_count,
       limit: SpecObservation::REPEATED_DESCRIPTIONS_LIMIT
+    }
+  end
+
+  # WHICH FILES ONE AREA HOLDS — the middle rung of area → file → example, and the one move an
+  # agent holding every other key on this endpoint could not make. `spec_directories` above names
+  # the ten areas the run spent its wall clock in and stops there; `spec_files` is a capped ten of
+  # the run's own heaviest files, and `SpecDirectoryDurations`' comment states why that is not the
+  # same list under another name — *"a directory holding forty files at two seconds each is eighty
+  # seconds of the run with not one of its rows in that list"*. The heaviest AREA is exactly the one
+  # whose files a by-file top ten cannot show. `slowest_examples` reaches the per-example grain only
+  # for the ten examples that are slowest RUN-WIDE, so for every other area the sentence its own
+  # comment opens with — *"an agent that has learned `spec/models/` cost ninety seconds has no way
+  # to get from there to a test to open"* — was still true after that block shipped.
+  #
+  # INSIDE `latest_run` rather than beside it, on the membership test the comment on
+  # `unstable_tests` states in full: every key this block serves is a statement about ONE run's
+  # rows. `SpecDirectoryFiles.for` narrows to a single `test_run_id`, so it belongs with the other
+  # five. And `latest_run` is not re-anchored by `?branch=`, so an area ask composes with a branch
+  # ask without either touching the other: the drill-in always describes the newest run, exactly as
+  # the panel does.
+  #
+  # THE SAME OBJECT THE PANEL READS, never a hand-written query — this file's governing rule, stated
+  # in full on `serialized_spec_files` above. `SpecDirectoryFiles` is view-free, so the API and the
+  # panel list the same files of the same area of the same run, in the same order, off the one read.
+  #
+  # OPERANDS, NEVER THE PANEL'S LABELS, on the rule `serialized_repeated_descriptions` states.
+  # `Row#duration_label` and `Row#coverage_label` are both one call away and both fold prose into a
+  # value: an untimed file renders "not reported", which a client must receive as `null` rather than
+  # as a string it would have to recognise, and `"1 of 3"` is two integers a client cannot subtract.
+  #
+  # `null` — with the key present — MEANS "YOU DID NOT ASK", and it is the one thing this key must
+  # not spell the way its siblings do. Those are served unconditionally and gate on `#recorded?`;
+  # copying that gate here would collapse two different facts into one spelling — *"you did not
+  # ask"* and *"the area you asked about has no rows"* — which is precisely the collapse
+  # `serialized_history` refuses for an unknown `?branch=`, where the ask is RESTATED beside a zero
+  # rather than answered with somebody else's rows. So an ask that matched nothing gets the block
+  # with `rows: []` and its `path` restated, and a client can tell the two apart because the second
+  # never wears the first's spelling. An area a run recorded nothing for is an ordinary answer — a
+  # stale bookmark, a directory deleted since, a typo — and never an error, as
+  # `RequestedSpecDirectoryParam` argues for the malformed shapes it treats as no ask at all.
+  #
+  # `file_count` is the AREA's, off the read's `COUNT(*) OVER ()` and never `rows.size`, which is
+  # the truncated figure — the rule `spec_files.file_count` states one grain up. `recorded_count`
+  # and `timed_count` are the area's too, off the two `SUM(COUNT(...)) OVER ()` windows, so they
+  # describe the population the list was cut from rather than the files that fit on the page. A
+  # client that folded the serialized rows to re-derive either would be computing the page's figure
+  # under the area's name, which is the figure `SpecDirectoryFiles#any_timed?` exists to refuse.
+  # `limit` is READ OFF `SpecObservation::SPEC_DIRECTORY_FILES_LIMIT` rather than restated, on the
+  # precedent every capped block here sets — it is its own constant and neither of the tens above.
+  #
+  # EXACTLY ONE ADDITIONAL QUERY WHEN ASKED, AND NONE WHEN NOT — which is where this key departs
+  # from `spec_directories`, whose read is issued on every request so that `#recorded?` is an answer
+  # derived from it. Here the gate is the ASK and it is decided before any query is issued, so a
+  # client that never sends the parameter pays nothing for the key's existence. The read is bounded
+  # by the size of the AREA rather than of the suite and needs no index of its own: it narrows on
+  # `test_run_id` and adds an EXPRESSION predicate no index can serve, so
+  # `index_spec_observations_on_test_run_id` serves it — EXPLAIN-certified at the 20-run seed in
+  # `spec/models/spec_observation_spec.rb`, which is where a plan belongs.
+  def serialized_spec_directory_files(test_run)
+    return nil if requested_spec_directory.nil?
+
+    files = SpecDirectoryFiles.for(test_run, requested_spec_directory)
+
+    {
+      # The ask, restated as the server read it — never echoed from the raw parameter, on
+      # `history_window.branch`'s rule: a malformed shape is no ask at all and reaches no block, so
+      # what is served here is always the path the rows were actually gathered under.
+      path: files.path,
+      rows: files.rows.map do |row|
+        {
+          path: row.path,
+          # Nullable, never coalesced to `0.0`: a file whose every example went untimed is SQL NULL
+          # out of the aggregate, and a zero there would assert a file that cost nothing.
+          total_seconds: row.total_seconds,
+          recorded_count: row.recorded_count,
+          timed_count: row.timed_count
+        }
+      end,
+      file_count: files.file_count,
+      recorded_count: files.recorded_count,
+      timed_count: files.timed_count,
+      limit: SpecObservation::SPEC_DIRECTORY_FILES_LIMIT
     }
   end
 

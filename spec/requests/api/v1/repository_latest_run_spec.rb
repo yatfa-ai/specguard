@@ -131,6 +131,13 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
         # ran examples and repeated none of them, which is the *Vacuous Green* reading
         # `RepeatedDescriptions#recorded?` exists to refuse.
         "repeated_descriptions" => nil,
+        # And the drill-in into ONE area, null for a REASON NONE OF THE FOUR ABOVE SHARE: this
+        # request sent no `?spec_directory=`, so no area was asked for and none was answered. It
+        # would be null on this fixture either way — there are no rows to find — but the two are
+        # different facts and only this key can be null on a run that recorded plenty. The empty
+        # ANSWER is a present block with `rows: []` and the asked-for path restated in it; see
+        # `repository_spec_directory_files_spec.rb`, where the pair is asserted side by side.
+        "spec_directory_files" => nil,
         "suite_size_measured" => true,
         "ingested_at" => test_run.created_at.iso8601
       )
@@ -443,7 +450,7 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
         .to contain_exactly("commit_sha", "branch", "total_specs", "annotated_specs",
                             "annotated_ratio", "duration_seconds", "shards", "spec_files",
                             "spec_directories", "slowest_examples", "repeated_descriptions",
-                            "suite_size_measured", "ingested_at")
+                            "spec_directory_files", "suite_size_measured", "ingested_at")
     end
 
     it "serves exactly the shards keys this contract pins once the decomposition is open" do
@@ -2205,6 +2212,9 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
         "annotated_specs" => 10, "annotated_ratio" => 0.25, "duration_seconds" => 42.5,
         "shards" => nil, "spec_files" => nil, "spec_directories" => nil,
         "slowest_examples" => nil, "repeated_descriptions" => nil,
+        # Null because this request asked for no area — the key present and unasked, exactly as it
+        # was before the drill-in existed and on every request that does not send the parameter.
+        "spec_directory_files" => nil,
         "suite_size_measured" => true,
         "ingested_at" => third.created_at.iso8601
       )
