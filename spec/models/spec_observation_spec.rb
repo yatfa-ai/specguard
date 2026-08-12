@@ -373,6 +373,34 @@ RSpec.describe SpecObservation do
         expect(plan).not_to match(/Seq Scan on spec_observations/)
       end
 
+      # The same certification for the description drill-down beside it, and the assertion is
+      # deliberately the SHARED `INDEXED_BY_RUN` matcher rather than a named index — which is the
+      # whole finding this example carries.
+      #
+      # There is no `(test_run_id, name)` index and this read does not want one: it narrows on
+      # `test_run_id`, reads one run's rows through the index that leads on it, and sorts the
+      # matching handful afterwards. `index_spec_observations_on_repository_id_and_name` DOES exist
+      # and is NOT the path here, for the reason `.repeated_descriptions_in` states at this exact
+      # grain — it leads on `repository_id`, which serves a WINDOW of runs, and a single-run narrow
+      # does not begin with it. What has to stay true at the design point is what this asserts: one
+      # run reached through an index rather than every run's rows walked.
+      #
+      # The ORDER BY is on `duration_seconds`, which no index here leads on, so the group's rows are
+      # sorted after they are read — bounded by the size of the RUN, and precisely why this must not
+      # instead ride `index_spec_observations_on_test_run_id_and_duration_seconds`, whose backward
+      # scan would walk the run from its slowest example down, discarding every row carrying another
+      # description.
+      #
+      # Captured off the wire rather than EXPLAINed from a hand-written copy, for the reason the
+      # example above gives: the predicate alone is not the read the panel makes, which adds a
+      # projection, an ordering and a cap on top of it.
+      it "reads the panel's one-description drill-down off an index rather than scanning the table" do
+        plan = plan_for_actual_sql { described_class.with_description(run, "example 3").to_a }
+
+        expect(plan).to match(INDEXED_BY_RUN)
+        expect(plan).not_to match(/Seq Scan on spec_observations/)
+      end
+
       # The plan for the SQL `.file_durations_in` ACTUALLY runs, captured off the wire rather than
       # EXPLAINed from a hand-written copy of it — a copy is a second definition of the query that
       # can drift from the one the panel makes, and a plan assertion against the copy would then be

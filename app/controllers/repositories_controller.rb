@@ -24,6 +24,13 @@ class RepositoriesController < ApplicationController
   # directly, where a non-String does not raise but answers a different question.
   include RequestedSpecDirectoryParam
 
+  # `?repeated_description=` read as a test description, for the drill-down under the "Descriptions
+  # this run recorded more than once" panel. Its own concern rather than a widening of either above,
+  # for the reason all three carry in full — and at this grain the `.presence` half of the guard
+  # earns its place twice over: `spec_observations.name` is nullable, so an empty ask would become
+  # `WHERE name = ''`, a query for a description no row can carry.
+  include RequestedRepeatedDescriptionParam
+
   # The repositories this user may pick from, straight off GitHub, and the four different things to
   # say when that list cannot be loaded. Shared with `BulkRegistrationsController`, which renders a
   # picker built from the same listing and has to answer the same questions the same way.
@@ -240,6 +247,39 @@ class RepositoriesController < ApplicationController
     # suite: the grouped ranking, and the description-presence counts it must exclude before it can
     # group (see `SpecObservation.description_presence_in` for why those cannot ride the same read).
     @repeated_descriptions = RepeatedDescriptions.for(@latest_test_run) if @latest_test_run
+    # ONE of those descriptions, opened: not that eight examples of this run say the same sentence
+    # and cost ninety seconds between them, but WHICH eight — what each cost, where each sits, how
+    # each ended. The rung the panel above had none of, and the last ranked list on this page whose
+    # rows dead-ended.
+    #
+    # And specifically not reachable through `?spec_file=`. The ranking names the group's files and
+    # those paths link into the file panel, but that panel lists EVERY example of a file capped at
+    # fifty and ranked by duration — a reader following a two-file group through it gets two lists of
+    # unrelated rows that need not contain the group's members at all. The narrowing is by
+    # DESCRIPTION and exists nowhere else; see `SpecObservation.with_description`.
+    #
+    # Presented for review and never as a verdict, the boundary the panel above holds and this one
+    # inherits: a shared description is equally a table-driven loop, a shared example group, or the
+    # same test written twice. These rows are what a reader decides that FROM — three consecutive
+    # line numbers in one file read differently from the same sentence at three unrelated sites — and
+    # nothing here decides it for them.
+    #
+    # Guarded on a description having been ASKED for as well as on there being a run, so a page
+    # nobody asked a description of issues no query at all. The ask is the guarded parameter and is
+    # kept whatever it names: a run that recorded nothing under it is an ordinary answer (a test
+    # renamed since, a description edited, a stale bookmark) and `RepeatedDescriptionExamples` names
+    # it in an empty state rather than a 404.
+    #
+    # Anchored on `@latest_test_run` for the reason both drill-downs above are: the description was
+    # picked out of a ranking of that run, so its examples must come from that same run or the panel
+    # would be answering about rows the reader did not click.
+    #
+    # ONE query, bounded by the size of one RUN and not of the suite, and none at all without an ask.
+    @repeated_description_request = requested_repeated_description
+    if @latest_test_run && @repeated_description_request
+      @repeated_description_examples =
+        RepeatedDescriptionExamples.for(@latest_test_run, @repeated_description_request)
+    end
     # One area out of THAT rollup, opened: not which areas the wall clock went into but WHICH SPEC
     # FILES are in the one the reader picked. The middle rung of the drill-in, and the rung that was
     # missing — the by-file rollup above is a capped ten, so the heaviest area on this page is
