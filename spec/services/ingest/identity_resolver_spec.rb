@@ -176,6 +176,229 @@ RSpec.describe Ingest::IdentityResolver do
     end
   end
 
+  describe "a test that gains an @intent is the test it already was" do
+    # **The adoption path every customer walks**, and the one transition that changes which text
+    # represents a test without changing the test. `Ingest::SpecSignal` prefers a declaration over a
+    # name deliberately, so run 2 presents a string this repository has never seen while the row it
+    # already has is held under one nothing will ever present again — a miss on both the digest
+    # equality and similarity, and yet not a new test.
+    #
+    # The same example on both runs: one file, one line, one `id`. Only the `@intent` appears.
+    def name = "Invoice#finalize locks the line items"
+
+    def triple = "Invoice finalize locks the line items once the invoice is finalized"
+
+    def unannotated_version(line_number: 12)
+      unannotated_spec(file_path: "spec/models/invoice_spec.rb", line_number: line_number, name: name)
+    end
+
+    def annotated_version(line_number: 12, **intent)
+      annotated_spec(file_path: "spec/models/invoice_spec.rb", line_number: line_number, name: name,
+                     **intent)
+    end
+
+    it "upgrades the row it already had in place, rather than inserting a second one beside it" do
+      ingest([unannotated_version], ci_run_id: "run-1")
+      original = repository.spec_identities.sole
+      expect(original).to be_from_name
+
+      ingest([annotated_version], ci_run_id: "run-2")
+
+      identity = repository.spec_identities.sole
+      # The SAME row — the id is what a history hangs off, so re-creating an equivalent row would
+      # satisfy a count and lose everything the count was standing for.
+      expect(identity.id).to eq(original.id)
+      expect(identity).to be_from_intent
+      expect(identity.text).to eq(triple)
+    end
+
+    it "leaves both runs' observations pointing at that one identity" do
+      first = ingest([unannotated_version], ci_run_id: "run-1")
+      second = ingest([annotated_version], ci_run_id: "run-2")
+      identity = repository.spec_identities.sole
+
+      expect(first.spec_observations.sole.spec_identity_id).to eq(identity.id)
+      expect(second.spec_observations.sole.spec_identity_id).to eq(identity.id)
+      # One test, one history, across the annotation boundary — the thing the duplicate row severed.
+      expect(identity.spec_observations.count).to eq(2)
+    end
+
+    it "keeps when the test first appeared, and moves where it was last seen" do
+      # An upgrade is not an insert: `created_at` says when this test first appeared and must not be
+      # reset to the run that annotated it. The sighting still moves, and still through `#resight`.
+      first = ingest([unannotated_version], ci_run_id: "run-1")
+      created_at = repository.spec_identities.sole.created_at
+
+      second = ingest([annotated_version(line_number: 40)], ci_run_id: "run-2")
+
+      identity = repository.spec_identities.sole
+      expect(identity.created_at).to eq(created_at)
+      expect(identity.line_number).to eq(40)
+      expect(identity.last_seen_test_run_id).to eq(second.id)
+      expect(first.spec_observations.sole.spec_identity_id).to eq(identity.id)
+    end
+
+    it "moves the vector too, so the next run finds the row by its declaration" do
+      # The falsifier for a half-done upgrade. Rewriting `text` and `text_digest` while leaving the
+      # NAME's embedding on the row goes green on every example above — they all re-find it by the
+      # digest equality. This run's triple differs only in punctuation, so its digest does not match
+      # and only similarity can answer: against the triple's vector it is cosine 1.0, against the
+      # name's it is 0.8614 and this becomes two rows.
+      ingest([unannotated_version], ci_run_id: "run-1")
+      ingest([annotated_version], ci_run_id: "run-2")
+      upgraded = repository.spec_identities.sole.id
+
+      ingest([annotated_version(line_number: 40,
+                                behavior: "locks the line items  once the invoice is finalized!")],
+             ci_run_id: "run-3")
+
+      expect(repository.spec_identities.pluck(:id)).to eq([upgraded])
+    end
+
+    it "upgrades nothing when the name it would upgrade belongs to no row of this repository" do
+      # The premise under every example above, stated as its own claim: the upgrade is reached by the
+      # NAME's digest, so a test that was annotated from its very first run has nothing to upgrade
+      # and takes the ordinary insert.
+      ingest([annotated_version], ci_run_id: "run-1")
+
+      identity = repository.spec_identities.sole
+      expect(identity).to be_from_intent
+      expect(identity.text).to eq(triple)
+    end
+
+    it "does not rewrite an identity backwards when a test LOSES its @intent" do
+      # **Direction is name→intent only, and this is why.** A de-annotated test presenting its name
+      # is indistinguishable from an ordinary rename of an annotated one, so an upgrade that ran in
+      # both directions would let a rename quietly rewrite a declaration's identity. De-annotation is
+      # out of scope for this slice; today's behaviour — a new identity — is what it must keep.
+      ingest([annotated_version], ci_run_id: "run-1")
+      declared = repository.spec_identities.sole
+
+      ingest([unannotated_version(line_number: 40)], ci_run_id: "run-2")
+
+      expect(repository.spec_identities.count).to eq(2)
+      expect(declared.reload.text).to eq(triple)
+      expect(declared).to be_from_intent
+    end
+
+    it "does not touch a name-derived row that is not this test's" do
+      # The upgrade is keyed on the annotated example's OWN name and nothing looser. A repository
+      # full of name-derived rows must see none of them move when one of its tests is annotated.
+      ingest([unannotated_version,
+              unannotated_spec(file_path: "spec/models/user_spec.rb", line_number: 4,
+                               name: "User#save rejects a duplicate email")],
+             ci_run_id: "run-1")
+      bystander = repository.spec_identities.find_by(text: "User#save rejects a duplicate email")
+
+      ingest([annotated_version,
+              unannotated_spec(file_path: "spec/models/user_spec.rb", line_number: 4,
+                               name: "User#save rejects a duplicate email")],
+             ci_run_id: "run-2")
+
+      expect(repository.spec_identities.count).to eq(2)
+      expect(bystander.reload.text).to eq("User#save rejects a duplicate email")
+      expect(bystander).to be_from_name
+    end
+
+    it "never reaches across the tenant boundary to upgrade another repository's row" do
+      other = create_repository(user: create_user(github_uid: "2002", github_handle: "other"),
+                                github_full_name: "acme/other-service")
+      theirs = create_spec_identity(repository: other, text: name)
+
+      ingest([annotated_version], ci_run_id: "run-1")
+
+      expect(theirs.reload.text).to eq(name)
+      expect(theirs).to be_from_name
+      expect(repository.spec_identities.sole.text).to eq(triple)
+    end
+
+    # Matched on the PROJECTION `#digest_index` plucks, and not on "a SELECT naming `text_digest`"
+    # the way the round-trip group's helper is. That group's pages never fall through to similarity,
+    # so nothing there can be miscounted; every row of THIS page does, and `#nearest` selects every
+    # column — `text_digest` among them — so the looser instrument would count five similarity
+    # lookups as digest lookups and the claim would be untestable.
+    def digest_lookups(&) = executed_sql(&).grep(/\ASELECT "spec_identities"\."text_digest"/)
+
+    def annotated_page
+      (1..5).map do |index|
+        annotated_spec(file_path: "spec/models/a#{index}_spec.rb", line_number: index,
+                       name: "Subject #{index} does the thing", entity: "Subject#{index}",
+                       action: "call", behavior: "does the thing it was asked to do")
+      end
+    end
+
+    def unannotated_page
+      (1..5).map do |index|
+        unannotated_spec(file_path: "spec/models/a#{index}_spec.rb", line_number: index,
+                         name: "Subject #{index} does the thing")
+      end
+    end
+
+    it "asks one query for a page of annotated rows, though each carries two texts to look up" do
+      # The cost of the upgrade, which is the reason it is affordable: the name's digest rides the
+      # `IN` list `#digest_index` already issues. A wider list, not a second round trip — and not a
+      # lookup per candidate row either.
+      ingest(unannotated_page, ci_run_id: "run-1")
+      expect(repository.spec_identities.pluck(:signal_source).uniq).to eq(["name"])
+
+      second = record(annotated_page, ci_run_id: "run-2")
+      EmbeddingGenerator.provider = counting_provider
+
+      expect(digest_lookups { described_class.resolve(second) }.size).to eq(1)
+      # The premise, pinned rather than trusted: every row of this page really did fall through the
+      # digest equality to an embed and a similarity lookup, which is what makes "one" a claim about
+      # a page of five upgrades rather than about a page nothing happened on.
+      expect(counting_provider.calls).to eq(5)
+      expect(repository.spec_identities.count).to eq(5)
+      expect(repository.spec_identities.pluck(:signal_source).uniq).to eq(["intent"])
+    end
+
+    describe "when another identity already holds the declaration's text" do
+      # `(repository_id, text_digest)` is UNIQUE, so the upgrade cannot land on a digest another row
+      # already holds. The page's map would ordinarily have answered that at `#identical_text`, so
+      # reaching the `UPDATE` at all means a concurrent job committed the row in between — the race
+      # `spec/support/uniqueness_race.rb` describes, reproduced the way this file's other race group
+      # reproduces it: stub the two lookups a loser cannot see a winner through, and let everything
+      # after them run for real.
+      #
+      # What must NOT happen is a `RecordNotUnique` escaping onto the ingest path. A duplicate
+      # identity is a defect; a 500 on ingest is a worse one, so the conflict falls back to today's
+      # behaviour and `#claim_identity`'s `ON CONFLICT` lands the observation on the winner.
+      def resolve_as_the_loser(run)
+        resolver = described_class.new(run)
+        allow(resolver).to receive(:identical_text).and_return(nil)
+        allow(resolver).to receive(:nearest).and_return(nil)
+        resolver.resolve
+      end
+
+      it "resolves the observation onto the winner without raising or duplicating" do
+        ingest([unannotated_version], ci_run_id: "run-1")
+        winner = create_spec_identity(repository: repository, text: triple, signal_source: "intent",
+                                      file_path: "spec/models/invoice_spec.rb", line_number: 12)
+        second = record([annotated_version(line_number: 40)], ci_run_id: "run-2")
+
+        expect { resolve_as_the_loser(second) }.not_to change(SpecIdentity, :count)
+
+        expect(second.spec_observations.sole.spec_identity_id).to eq(winner.id)
+        expect(winner.reload.line_number).to eq(40)
+      end
+
+      it "leaves the name-derived row exactly as it was rather than half-upgrading it" do
+        # The failure mode a partial write invites: `text` moved, the unique `text_digest` refused,
+        # and a row describing itself as two different tests. One statement, so there is no half.
+        ingest([unannotated_version], ci_run_id: "run-1")
+        original = repository.spec_identities.sole
+        before = original.reload.slice(:text, :text_digest, :signal_source, :embedding, :created_at)
+        create_spec_identity(repository: repository, text: triple, signal_source: "intent",
+                             file_path: "spec/models/invoice_spec.rb", line_number: 12)
+
+        resolve_as_the_loser(record([annotated_version(line_number: 40)], ci_run_id: "run-2"))
+
+        expect(original.reload.slice(*before.keys)).to eq(before)
+      end
+    end
+  end
+
   describe "a renamed unannotated test is a different test" do
     it "starts a new identity rather than re-pointing the old one" do
       ingest(suite, ci_run_id: "run-1")
