@@ -235,12 +235,12 @@ RSpec.describe "GET /api/v1/repository — latest_run.spec_file_examples", type:
     end
   end
 
-  # AC3. The distinction this key must not collapse, and it shares it with exactly one sibling on
-  # this block: the other five are served unconditionally and gate on `#recorded?`, while these two
-  # answer a question the CLIENT asked. Copying that gate here would spell "you did not ask" and
-  # "the file you asked about has no rows" the same way — the collapse `serialized_history` already
-  # refuses for an unknown `?branch=`, where the ask is RESTATED beside a zero rather than answered
-  # with somebody else's rows.
+  # AC3. The distinction this key must not collapse, and it shares it with exactly two siblings on
+  # this block: the other five are served unconditionally and gate on `#recorded?`, while these
+  # three answer a question the CLIENT asked. Copying that gate here would spell "you did not ask"
+  # and "the file you asked about has no rows" the same way — the collapse `serialized_history`
+  # already refuses for an unknown `?branch=`, where the ask is RESTATED beside a zero rather than
+  # answered with somebody else's rows.
   describe "the two ways this key can be empty" do
     it "is null — with the key present — when no file was asked for" do
       body = get_repository
@@ -329,7 +329,7 @@ RSpec.describe "GET /api/v1/repository — latest_run.spec_file_examples", type:
     end
   end
 
-  # AC6. The cost, and the axis this key shares with exactly one sibling: the other blocks issue
+  # AC6. The cost, and the axis this key shares with exactly two siblings: the other blocks issue
   # their reads unconditionally, so `#recorded?` is an answer DERIVED from a read that was paid for
   # anyway. Here the gate is the ASK and it is decided before any query is issued, so a client that
   # never sends the parameter pays nothing at all for the key's existence.

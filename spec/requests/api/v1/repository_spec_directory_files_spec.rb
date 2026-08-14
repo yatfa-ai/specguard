@@ -199,12 +199,12 @@ RSpec.describe "GET /api/v1/repository — latest_run.spec_directory_files", typ
     end
   end
 
-  # AC3. The distinction this key must not collapse, and the one its siblings on this block do not
-  # have to draw at all: they are served unconditionally and gate on `#recorded?`, while this one is
-  # the only key here that answers a question the CLIENT asked. Copying that gate would spell "you
-  # did not ask" and "the area you asked about has no rows" the same way — the collapse
-  # `serialized_history` already refuses for an unknown `?branch=`, where the ask is RESTATED beside
-  # a zero rather than answered with somebody else's rows.
+  # AC3. The distinction this key must not collapse, and it shares it with two siblings on this
+  # block: the five rollups are served unconditionally and gate on `#recorded?`, while these three
+  # answer a question the CLIENT asked. Copying that gate would spell "you did not ask" and "the
+  # area you asked about has no rows" the same way — the collapse `serialized_history` already
+  # refuses for an unknown `?branch=`, where the ask is RESTATED beside a zero rather than answered
+  # with somebody else's rows.
   describe "the two ways this key can be empty" do
     it "is null — with the key present — when no area was asked for" do
       body = get_repository
