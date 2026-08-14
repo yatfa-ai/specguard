@@ -131,6 +131,34 @@ class Api::V1::RepositoriesController < Api::BaseController
       # See `serialized_directory_run_growth_window`.
       directory_run_growth_window: serialized_directory_run_growth_window,
       directory_run_growth: serialized_directory_run_growth,
+      # ONE GRAIN BELOW THE PAIR ABOVE, for the ONE area a caller asked about — not which areas
+      # moved but which FILES of the picked area moved. The pair above answers
+      # `spec/models 412 → 459 (+47)` and dead-ends on the only question that provokes: WHICH FILES
+      # DID THAT. `repositories#show` has answered it since SPGD-456 and this endpoint could not be
+      # asked at all, so an agent holding `directory_run_growth` reached exactly the dead end the
+      # panel had already removed for a human reader.
+      #
+      # It matters most for the doubt the pair above DISCLOSES and then leaves the caller holding: a
+      # moved directory appears there as one area growing and another shrinking by the same amount,
+      # with nothing added and nothing deleted. The file grain is what resolves it —
+      # `user_spec.rb` new beside `legacy_user_spec.rb` removed reads as a rename, and
+      # `billing_spec.rb 3 → 50` does not. Neither surface ASSERTS either reading; both put the
+      # operands where the reader can pair them, which is the pairing
+      # `SpecObservation`'s positional-instability rule forbids the application from doing.
+      #
+      # NO NEW PARAMETER. The ask is `?spec_directory=` — the SAME one `latest_run.spec_directory_files`
+      # reads, deliberately not a second one, exactly as the two panels on `show` are opened by one
+      # click. One ask now opens TWO blocks on this endpoint, each answering in its own grain: which
+      # files carry the area's wall clock, and which of them moved since the previous run. A later
+      # reader should not "fix" it by splitting the parameter in two.
+      #
+      # Out here beside its parent rather than inside `latest_run` for that block's own membership
+      # rule: `latest_run` is single-run facts by construction, and "this file gained forty
+      # examples" is a statement about one run measured against another.
+      #
+      # See `serialized_directory_run_file_growth_window`.
+      directory_run_file_growth_window: serialized_directory_run_file_growth_window,
+      directory_run_file_growth: serialized_directory_run_file_growth,
       branches_window: serialized_branches_window,
       branches: serialized_branches
     }
@@ -1783,6 +1811,151 @@ class Api::V1::RepositoriesController < Api::BaseController
     }
   end
 
+  # The contract the PER-FILE growth rows below are served under — and, when they are `null`, which
+  # of the two reasons applies. Served UNCONDITIONALLY, on the key-always-present rule the two
+  # blocks above it argue for: a block that explains a `null` is worthless if it is itself absent
+  # whenever the `null` happens, and here it is absent on the commonest request of all — the one
+  # that named no area.
+  #
+  # ⭐ `path` IS THE ASK RESTATED, AND IT IS THE DISCRIMINATOR. The rows block is `null` in two
+  # different situations and a client must be able to tell them apart:
+  #
+  # * `path` is `null` — YOU DID NOT ASK. No `?spec_directory=` reached the server, or the shape it
+  #   carried was not a string (`RequestedSpecDirectoryParam` treats a malformed shape as no ask at
+  #   all, which is why this is never echoed from the raw parameter).
+  # * `path` is set and `comparable` is `false` — you asked, and the comparison this drills out of
+  #   refuses. `state` says which of the eight refusals.
+  # * `path` is set and `comparable` is `true` — the rows block is populated.
+  #
+  # So the rows block is non-null exactly when `path` is non-null AND `comparable` is true. This is
+  # the same separation `serialized_spec_directory_files` keeps between *"you did not ask"* and
+  # *"the area you asked about has no rows"*, reached the other way round: that key is `null`
+  # wholesale when unasked, and this one cannot be, because its `null` has a second cause to
+  # explain.
+  #
+  # ⭐ `state` AND `comparable` ARE THE PARENT'S VERDICT, READ OFF THE PARENT — never re-derived and
+  # never read off this drill-in's own object, which is not even constructed when nobody asked.
+  # `SpecDirectoryFileGrowth` carries the parent's state verbatim and refuses to build anything the
+  # moment the parent is not comparable, and its class comment gives the load-bearing reason: two of
+  # the six model states (`previous_unrecorded`/`latest_unrecorded`) are facts about a RUN, and
+  # everything this object reads is narrowed to one area. An area only the latest run recorded has
+  # zero previous-side rows — `previous_unrecorded` spelled identically and meaning something else
+  # entirely. So this block's `state` is `directory_run_growth_window.state`, always, by
+  # construction: the drill-in is ABSENT whenever the block it drills out of cannot compare, and it
+  # never offers a second opinion about two runs.
+  #
+  # The safe navigation is LOAD BEARING and not stylistic — `spec_directory_growth` is `nil` in the
+  # two serializer-level states, and the same `latest_test_run.nil?` fallback the sibling window
+  # block uses tells those two apart off the one memoized accessor.
+  #
+  # NO SECOND SPELLING OF THE OPERANDS. `branch`, `anchor_commit_sha` and `baseline_commit_sha` are
+  # served once, on `directory_run_growth_window`, and are identical here by construction — this is
+  # the SAME comparison between the SAME two runs, narrowed to one area. Repeating them would be two
+  # blocks under one request naming one run two ways, which is the hazard the shared
+  # anchor/baseline vocabulary exists to prevent.
+  #
+  # `limit` LIVES HERE rather than on the rows block, unlike its sibling's: it is a fact about how
+  # the array beside it may be read, and a client that asked for an area and got `null` should still
+  # be able to learn what a populated answer would have been capped at. Read off
+  # `SpecObservation::SPEC_DIRECTORY_FILE_GROWTH_LIMIT` rather than restated — it is its own
+  # constant, neither the areas' ten nor the durations drill-down's.
+  def serialized_directory_run_file_growth_window
+    growth = spec_directory_growth
+
+    {
+      path: requested_spec_directory,
+      order: "abs_change_desc,path_asc",
+      tie_break_served: true,
+      basis: "previous_run_on_branch",
+      state: growth&.state || (latest_test_run.nil? ? :no_latest_run : :no_previous_run),
+      comparable: growth&.comparable? || false,
+      limit: SpecObservation::SPEC_DIRECTORY_FILE_GROWTH_LIMIT
+    }
+  end
+
+  # WHICH FILES OF THE ASKED-FOR AREA GREW OR SHRANK IN THE LATEST PUSH — the agent-readable half of
+  # the "Files that grew or shrank in this directory" panel `repositories#show` renders from the
+  # same object, off the same two runs, in the same order.
+  #
+  # THE SAME OBJECT THE PANEL READS, never a hand-written query — this file's governing rule, stated
+  # in full on `serialized_spec_files`. `SpecDirectoryFileGrowth` is view-free, so the API and the
+  # panel cannot name different files or different operands for the same area of the same
+  # repository.
+  #
+  # ⭐ `null` IN EVERY NON-COMPARABLE STATE, AND NOT A BLOCK OF ZEROS — the rule its parent block
+  # pins by its own example. `SpecDirectoryFileGrowth.for` returns `new(path:, state:)` for a parent
+  # that cannot compare, WITHOUT any of the counts, so every aggregate falls back to its `0`
+  # default: serving them raw would print `anchor_recorded_count: 0` for a latest run that recorded
+  # four hundred rows in that very area — a fabricated denominator sitting among the fields that
+  # exist to be trustworthy. The actionable half of those states is the `state` token, and it is
+  # served unconditionally one key up.
+  #
+  # `file_count` is the AREA's — every file EITHER run recorded a row for, counted BEFORE the
+  # `LIMIT` by a window function and therefore never `rows.size`, which is the truncated figure. So
+  # `truncated` is disclosed against a population rather than against the list's own length, and the
+  # caption a client builds from these figures cannot describe a different row set from the rows it
+  # was handed.
+  #
+  # `baseline_recorded_count`/`anchor_recorded_count` are THIS AREA'S rows, deliberately not the
+  # identically-named whole-run figures on the parent block: every figure here comes back from the
+  # one grouped aggregate that returned the rows, narrowed by the same area predicate. A client
+  # mixing the two would divide an area's population by the suite's.
+  #
+  # ONE READ OF `spec_observations` AT MOST, and none at all unless a caller asked for an area AND
+  # the parent comparison is comparable — the gate is a read of an object already in memory, so it
+  # short-circuits before any query in all eight refusing states even with `?spec_directory=` set.
+  # The read is bounded by the size of the AREA rather than of the suite and needs no index of its
+  # own: see `SpecObservation.file_growth_between`.
+  def serialized_directory_run_file_growth
+    growth = spec_directory_file_growth
+
+    return nil unless growth&.comparable?
+
+    {
+      rows: growth.rows.map { |row| serialized_directory_file_growth_row(row) },
+      file_count: growth.file_count,
+      truncated: growth.truncated?,
+      baseline_recorded_count: growth.previous_recorded_count,
+      anchor_recorded_count: growth.latest_recorded_count
+    }
+  end
+
+  # One spec file's movement between two runs, and BOTH OPERANDS it was taken across — never one of
+  # the labels the row builds for the panel. `SpecDirectoryFileGrowth::Row` carries `change_label`,
+  # `change_reading`, `previous_count_label` and `latest_count_label`, which are typographic and
+  # screen-reader spellings of these same numbers; `serialized_directory_growth_row` states in full
+  # why a client served those would be splitting strings and stripping glyphs.
+  #
+  # `previous_count`/`latest_count` go out as `baseline_count`/`anchor_count`, the vocabulary both
+  # growth pairs on this endpoint already use, so the two blocks under one request cannot name the
+  # same run two ways. ANCHOR IS THE LATEST RUN and BASELINE IS THE PREVIOUS ONE, which is the
+  # direction every `change` is signed in.
+  #
+  # NOT `serialized_directory_growth_row` REUSED, though the arithmetic and the two translated names
+  # are identical. `new_file`/`removed_file` are not `new_area`/`removed_area` — they are claims
+  # about a different grain, and a shared mapper would have to take its own nouns as arguments,
+  # which is a parameterised key name standing where two plain ones were. That is the disposition
+  # `SpecDirectoryFileGrowth::Row` itself takes on the same question one layer down.
+  #
+  # `new_file` and `removed_file` are NOT derivable from `change` alone: a file at zero on one side
+  # is that file's real absence, and `+47` against an absent side reads identically to an existing
+  # file that gained forty-seven examples. At THIS grain that distinction is the whole subject — a
+  # file at "new" beside one at "removed" is the shape of a rename, and two files at `+47` and `−47`
+  # is not. The block holding these rows has already established, through the parent's gate, that
+  # BOTH runs recorded rows, which is what makes a zero on one side that file's own absence rather
+  # than a run that recorded nothing anywhere.
+  def serialized_directory_file_growth_row(row)
+    {
+      path: row.path,
+      baseline_count: row.previous_count,
+      anchor_count: row.latest_count,
+      change: row.change,
+      moved: row.moved?,
+      new_file: row.new_file?,
+      removed_file: row.removed_file?
+    }
+  end
+
   # The repository's newest run, memoized across the nil — read by `latest_run` and by BOTH
   # run-over-run growth blocks above, which is why it is an accessor here and not three calls to
   # `Repository#latest_test_run` (which memoizes nothing and would issue the query once per reader).
@@ -1853,6 +2026,46 @@ class Api::V1::RepositoriesController < Api::BaseController
 
     @spec_directory_growth =
       latest_test_run && previous_test_run && SpecDirectoryGrowth.for(latest_test_run, previous_test_run)
+  end
+
+  # The per-file drill-in for the ONE area a caller asked about, or `nil` when nobody asked or there
+  # was no comparison to narrow — memoized across the nil with `defined?` rather than `||=`, on the
+  # idiom every nullable accessor in this file uses. Unlike `spec_directory_growth` above,
+  # `spec_directory_window_growth` below, and `unstable_tests` further up, this accessor is read
+  # ONCE: the contract block reads the PARENT, deliberately, so the verdict is never taken off this
+  # object — which is not even constructed when nobody asked. The memoization is this file's idiom
+  # held, not a second read paid for; the two guards below are what actually keep the key cheap.
+  #
+  # ⭐ TWO GUARDS, AND THEY REFUSE DIFFERENT THINGS. `requested_spec_directory` is the ASK — decided
+  # from the params before any query, so a client that never sends the parameter pays nothing at all
+  # for this key's existence. `spec_directory_growth` is the parent COMPARISON, and it is guarded
+  # here for a reason the HTML call site is structurally immune to: `repositories_controller#show`
+  # only ever reaches `SpecDirectoryFileGrowth.for` inside `if @latest_test_run && @previous_test_run`,
+  # where the growth object has already been built. This endpoint serves the key on every request,
+  # and `spec_directory_growth` is `nil` in both serializer-level states — a repository CI has never
+  # reported on, and a latest run with no earlier run on its branch. `.for` dereferences its
+  # `growth:` argument on its first line (`unless growth.comparable?`), so handing it that `nil` is
+  # a `NoMethodError` on a plain `GET /api/v1/repository?spec_directory=spec/models`.
+  #
+  # GUARDED HERE AND NOT BY WIDENING THE MODEL, for the reason `spec_directory_growth` states about
+  # its own guard one method up: teaching `.for` to accept a nil growth would give it an absence
+  # state the dashboard — its other caller, which guards for itself — can never reach.
+  #
+  # ⭐ AND ONLY THOSE TWO. Comparability is NOT re-asked here: `.for` takes the parent object and
+  # refuses on its own first line, reading memory rather than the database, so the six model-level
+  # refusals cost this endpoint nothing while still producing an object that carries the parent's
+  # state verbatim. Adding a `&.comparable?` to the condition above would be a fourth spelling of
+  # predicates the parent has already asked on these same two runs — see `SpecDirectoryFileGrowth`,
+  # which prices exactly that and explains why two of the six states are not re-derivable at this
+  # grain in any case.
+  def spec_directory_file_growth
+    return @spec_directory_file_growth if defined?(@spec_directory_file_growth)
+
+    @spec_directory_file_growth =
+      if requested_spec_directory && spec_directory_growth
+        SpecDirectoryFileGrowth.for(latest_test_run, previous_test_run, requested_spec_directory,
+                                    growth: spec_directory_growth)
+      end
   end
 
   # The presenter, or `nil` when no comparison was allowed — memoized across the nil with `defined?`

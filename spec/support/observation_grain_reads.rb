@@ -141,6 +141,12 @@
 # subtraction cannot be satisfied by both blocks going quiet. A bare count of two here is a fact
 # about the endpoint and attributes nothing.
 #
+# A THIRD growth read exists and is NOT in that list: `directory_run_file_growth` issues
+# `.file_growth_between`, the same comparison narrowed to ONE AREA. That narrow is a predicate the
+# log DOES carry, so it separates cleanly and gets its own grain — see `GROWTH_ORDER`. The
+# indistinguishability above is a property of the two AREA-grain reads specifically, not of growth
+# reads in general.
+#
 module ObservationGrainReads
   # `queries_against` counts cached repeats and TRANSACTIONs, unlike `executed_sql` — see
   # `QueryCapture`, where the two rules and the difference between them are stated in full.
@@ -175,15 +181,33 @@ module ObservationGrainReads
   # reads that share the expression GROUP on it, and neither compares it to anything.
   AREA_PREDICATE = /COALESCE\(substring\(spec_file_path from '\^\(\.\*\)\/\[\^\/\]\*\$'\), '\.'\) = /
 
+  # The run-over-run RANKING, shared by BOTH growth reads: `.directory_growth_between` and
+  # `.file_growth_between` both order by the absolute difference of two per-run `FILTER` counts, and
+  # no other read of this table subtracts one run's count from another's.
+  #
+  # It is a whole grain on its own no longer, and that is the point of naming it here. The file-grain
+  # read is the area read's own narrow — it carries `AREA_PREDICATE` — so it matches this ordering
+  # AND the by-file grouping the durations drill-in is matched by, and would land in TWO grains at
+  # once. A double-classified read makes the parts sum to MORE than the total, which is exactly the
+  # defect `classified_observation_reads` exists to catch, so the two grains it collides with each
+  # exclude it explicitly and it gets a grain of its own at the end.
+  GROWTH_ORDER = /ORDER BY ABS\(COUNT\(\*\) FILTER \(WHERE test_run_id = /
+
   # `[area, file, example, description, flakiness, growth, directory_files, file_examples,
-  # repeated_description_examples]` — the nine grains, each an array of the statements matched. The
+  # repeated_description_examples, directory_file_growth]` — the ten grains, each an array of the
+  # statements matched. The
   # single-run grains come first, in the order `serialized_latest_run` serves them, and the two
   # CROSS-RUN grains after them in the order `show` serves them — so a destructuring caller reads
   # the endpoint's own shape, and a caller written before a grain was appended keeps naming the same
-  # lists it always did. The three DRILL-INS are last rather than beside the rollups they sit
+  # lists it always did. The DRILL-INS are last rather than beside the rollups they sit
   # between, for exactly that reason: each was added after the grains before it, and every existing
   # caller destructures a prefix of this array. Appending is what keeps `directory_files` at index 6
   # for the callers already naming it there.
+  #
+  # `growth` (5) and `directory_files` (6) each carry an EXCLUSION rather than only their own
+  # pattern, and the exclusions are not decoration: `directory_file_growth` (9) is the intersection
+  # of the two — a growth-ordered read narrowed to one area, grouped by file — so without them one
+  # statement would be counted three times. See `GROWTH_ORDER`.
   def observation_reads_by_grain(&)
     reads = observation_reads(&)
     [reads.grep(/GROUP BY COALESCE\(substring\(spec_file_path.*ORDER BY SUM\(duration_seconds\)/m),
@@ -193,10 +217,11 @@ module ObservationGrainReads
      reads.grep(/HAVING \(COUNT\(\*\) > 1\)/) +
        reads.grep(/COUNT\(\*\) FILTER \(WHERE name IS NULL\)/),
      flakiness_grain_patterns.flat_map { |pattern| reads.grep(pattern) },
-     reads.grep(/ORDER BY ABS\(COUNT\(\*\) FILTER \(WHERE test_run_id = /),
-     reads.grep(/GROUP BY "spec_observations"\."spec_file_path"/).grep(AREA_PREDICATE),
+     reads.grep(GROWTH_ORDER).grep_v(AREA_PREDICATE),
+     reads.grep(/GROUP BY "spec_observations"\."spec_file_path"/).grep(AREA_PREDICATE).grep_v(GROWTH_ORDER),
      reads.grep(/AS file_recorded_count/),
-     reads.grep(/AS description_recorded_count/)]
+     reads.grep(/AS description_recorded_count/),
+     reads.grep(GROWTH_ORDER).grep(AREA_PREDICATE)]
   end
 
   # `UnstableTests.for`'s four reads, in the order it issues them: the gating outcome-reporting
@@ -222,6 +247,7 @@ module ObservationGrainReads
   def directory_files_grain_reads(&) = observation_reads_by_grain(&)[6]
   def file_examples_grain_reads(&) = observation_reads_by_grain(&)[7]
   def repeated_description_examples_grain_reads(&) = observation_reads_by_grain(&)[8]
+  def directory_file_growth_grain_reads(&) = observation_reads_by_grain(&)[9]
 end
 
 RSpec.configure do |config|
