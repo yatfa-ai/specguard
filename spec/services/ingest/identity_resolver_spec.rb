@@ -41,6 +41,46 @@ RSpec.describe Ingest::IdentityResolver do
                                shard_id: payload.shard_id, specs: payload.specs)
   end
 
+  # Twelve deliberately UNLIKE descriptions, and the wide suite built from them. The count has to be
+  # a page-multiple to say anything, and near-identical filler would collapse under
+  # `MATCH_SIMILARITY` into fewer identities than examples — which would leave a query count
+  # technically green while the fixture no longer meant what it says. Every example using it pins
+  # that premise before asserting anything.
+  #
+  # Top-level for the reason `counting_provider` is: TWO groups now count statements over one page
+  # of twelve — "what a page of unchanged text costs in round trips" bounds what a re-ingest pays,
+  # and "what a page of NEW tests costs in INSERT statements" bounds what a FIRST ingest of the same
+  # twelve pays. One fixture, so the two cannot disagree about what a page of twelve is.
+  #
+  # A method and not a constant: a constant assigned in a `describe` block takes the file's
+  # lexical cref, not the example group's, so `SUBJECTS = [...]` would define a GLOBAL `::SUBJECTS`
+  # — a name generic enough to collide with the next spec that wants it, and to collide
+  # load-order-dependently. Every other fixture in this file (`suite`, `wide_suite`, `record`,
+  # `ingest`) is a method for the same reason.
+  def subjects
+    [
+      "Invoice#finalize locks the line items",
+      "User#save rejects a duplicate email",
+      "Cart adds an item to the cart",
+      "Order#checkout rejects an expired card",
+      "Payment#refund returns money to the original card",
+      "Shipment#dispatch assigns a tracking number",
+      "Coupon#apply reduces the total by a percentage",
+      "Session#expire logs the visitor out",
+      "Ledger#post balances debits against credits",
+      "Report#render writes a PDF to disk",
+      "Webhook#deliver retries after a server error",
+      "Search#query ranks by relevance and then recency"
+    ].freeze
+  end
+
+  def wide_suite(offset: 0, width: subjects.size)
+    subjects.first(width).each_with_index.map do |name, index|
+      unannotated_spec(file_path: "spec/models/subject_#{index}_spec.rb",
+                       line_number: index + 1 + offset, name: name)
+    end
+  end
+
   def identity_texts = repository.spec_identities.pluck(:text).sort
 
   # How many embeddings a block caused, counted through `EmbeddingGenerator.provider=` — the public
@@ -374,6 +414,39 @@ RSpec.describe Ingest::IdentityResolver do
       expect(counting_provider.calls).to eq(5)
       expect(repository.spec_identities.count).to eq(5)
       expect(repository.spec_identities.pluck(:signal_source).uniq).to eq(["intent"])
+    end
+
+    it "refuses the upgrade when the row under the name is one THIS PAGE has not inserted yet" do
+      # **The one shape deferring the insert takes the upgrade away from, pinned rather than left to
+      # be discovered.** `#upgrade` names its target by id, and a row this page has only DECIDED to
+      # insert has no id yet — so an `UPDATE` issued for it would match nothing, and reading that as
+      # "another writer moved the row" would invalidate a map entry that is still perfectly true. The
+      # upgrade is refused instead, and the annotated example claims its own row.
+      #
+      # The shape it costs is a page carrying BOTH an unannotated example and an annotated one whose
+      # `full_description` is the same string — two observations of what the upgrade path treats as
+      # one test, arriving in a single delivery, which is the case it was not built for. And what it
+      # costs is one ingest of earliness rather than a different destination: the per-row path
+      # upgrades the row here and then re-splits it on the NEXT ingest, when the unannotated example
+      # re-presents a name the upgraded row no longer holds and scores ~0.86 against a 0.95 bar. Two
+      # rows is where both paths end up; this one gets there without rewriting a row in between.
+      run = ingest([unannotated_spec(file_path: "spec/models/invoice_spec.rb", line_number: 1,
+                                     name: "Invoice finalize locks the line items"),
+                    annotated_spec(file_path: "spec/models/invoice_spec.rb", line_number: 2,
+                                   name: "Invoice finalize locks the line items")],
+                   ci_run_id: "run-1")
+
+      expect(repository.spec_identities.pluck(:signal_source).sort).to eq(%w[intent name])
+      expect(run.spec_observations.unresolved).to be_empty
+      expect(run.spec_observations.pluck(:spec_identity_id).uniq.size).to eq(2)
+
+      # And it is STABLE rather than merely different: the next ingest of the same page finds both
+      # rows by their own digests, upgrades nothing and inserts nothing.
+      expect { ingest([unannotated_spec(file_path: "spec/models/invoice_spec.rb", line_number: 1,
+                                        name: "Invoice finalize locks the line items"),
+                       annotated_spec(file_path: "spec/models/invoice_spec.rb", line_number: 2,
+                                      name: "Invoice finalize locks the line items")],
+                      ci_run_id: "run-2") }.not_to change(SpecIdentity, :count)
     end
 
     describe "when another identity already holds the declaration's text" do
@@ -993,40 +1066,6 @@ RSpec.describe Ingest::IdentityResolver do
     def digest_lookups(&) = executed_sql(&).grep(/\ASELECT\b.*\btext_digest\b/m)
     def update_statements(&) = executed_sql(&).grep(/\AUPDATE\b/)
 
-    # Twelve deliberately UNLIKE descriptions. The count has to be a page-multiple to say anything,
-    # and near-identical filler would collapse under `MATCH_SIMILARITY` into fewer identities than
-    # examples — which would leave the query count technically green while the fixture no longer
-    # meant what it says. Each example below pins that premise before asserting anything.
-    #
-    # A method and not a constant: a constant assigned in a `describe` block takes the file's
-    # lexical cref, not the example group's, so `SUBJECTS = [...]` here would define a GLOBAL
-    # `::SUBJECTS` — a name generic enough to collide with the next spec that wants it, and to
-    # collide load-order-dependently. Every other fixture in this file (`suite`, `wide_suite`,
-    # `record`, `ingest`, `digest_lookups`) is a method for the same reason.
-    def subjects
-      [
-        "Invoice#finalize locks the line items",
-        "User#save rejects a duplicate email",
-        "Cart adds an item to the cart",
-        "Order#checkout rejects an expired card",
-        "Payment#refund returns money to the original card",
-        "Shipment#dispatch assigns a tracking number",
-        "Coupon#apply reduces the total by a percentage",
-        "Session#expire logs the visitor out",
-        "Ledger#post balances debits against credits",
-        "Report#render writes a PDF to disk",
-        "Webhook#deliver retries after a server error",
-        "Search#query ranks by relevance and then recency"
-      ].freeze
-    end
-
-    def wide_suite(offset: 0, width: subjects.size)
-      subjects.first(width).each_with_index.map do |name, index|
-        unannotated_spec(file_path: "spec/models/subject_#{index}_spec.rb",
-                         line_number: index + 1 + offset, name: name)
-      end
-    end
-
     it "asks one query for a whole page's digests rather than one per example" do
       ingest(wide_suite, ci_run_id: "run-1")
       expect(repository.spec_identities.count).to eq(subjects.size)
@@ -1198,6 +1237,120 @@ RSpec.describe Ingest::IdentityResolver do
 
       expect(digest_lookups { described_class.resolve(run) }).to be_empty
       expect(run.spec_observations.sole.reload.spec_identity_id).to be_nil
+    end
+  end
+
+  describe "what a page of NEW tests costs in INSERT statements" do
+    # **The FIRST-run mirror of the group above, and the last O(N)-per-row write on this path.** That
+    # group is about a re-ingest: every row is already held, so the page's cost is its lookups and
+    # its two `UPDATE`s. This one is about the case that has no rows to find — a repository's first
+    # ingest is 20,000 misses by construction at the design point — and the write those misses used
+    # to cost was one `INSERT … ON CONFLICT … RETURNING id` per test, issued from inside the walk.
+    #
+    # Its own group rather than a fourth example over there for the reason that one gives for
+    # separating its two instruments: a page has several costs and they are bounded separately, so
+    # each gets a predicate of its own and a slice that batched one of them cannot hide inside a
+    # total. `\AINSERT` is that predicate here, and it names exactly one statement in the resolver.
+    def insert_statements(&) = executed_sql(&).grep(/\AINSERT\b/)
+
+    it "writes a whole page's new identities in one INSERT, not in one per test" do
+      # Asserted as an EXACT constant rather than as "fewer than twelve", the discipline the group
+      # above states: the claim is O(1) per page, and a bound that merely FELL would stay green for
+      # an implementation that batched half the page. One, because that is the page's insert — not
+      # one because there are twelve rows.
+      EmbeddingGenerator.provider = counting_provider
+      first = record(wide_suite, ci_run_id: "run-1")
+
+      expect(insert_statements { described_class.resolve(first) }.size).to eq(1)
+
+      # The premises, pinned rather than trusted, because a resolver that inserted NOTHING would
+      # answer a count of one just as well as it would answer zero: the page really was all misses,
+      # twelve identities really were created, and every row really did end up linked to one.
+      expect(repository.spec_identities.count).to eq(subjects.size)
+      expect(identity_texts).to eq(subjects.sort)
+      expect(first.spec_observations.unresolved.count).to eq(0)
+
+      # And the figure this slice must not have moved. The embed is the expensive thing the whole
+      # path exists to avoid and the provider is swappable for a billed one, so a batch that
+      # re-embedded anything on its way to one statement would be a regression the count above
+      # cannot see. Twelve texts, twelve embeds — one per NEW test and never more.
+      expect(counting_provider.calls).to eq(subjects.size)
+    end
+
+    it "keeps that ONE statement a property of the page and not of the suite" do
+      # The falsifier for the example above, which a per-row implementation also passes at a page of
+      # ONE. Three pages of four brand-new tests: three statements, and never twelve.
+      stub_const("#{described_class}::BATCH_SIZE", subjects.size / 3)
+      first = record(wide_suite, ci_run_id: "run-1")
+
+      expect(insert_statements { described_class.resolve(first) }.size).to eq(3)
+
+      expect(repository.spec_identities.count).to eq(subjects.size)
+      expect(first.spec_observations.unresolved.count).to eq(0)
+    end
+
+    it "carries a page that presents the same text twice as ONE row rather than refusing it" do
+      # **The trap batching this write introduces, and it is a crash rather than a cost.** Postgres
+      # refuses an `ON CONFLICT DO UPDATE` that carries two rows with the same conflict key —
+      # "command cannot affect row a second time" — and kills the whole statement with them. The
+      # per-row path could not reach that: two identical texts were two statements, and the second
+      # simply conflicted onto the first. A page can, and this fixture is the pair
+      # "cannot separate two tests whose descriptions are identical" builds.
+      #
+      # Two mechanisms keep it out of the statement — `#claim_identity`'s map write, which stops the
+      # second row reaching it at all, and the buffer's own digest key behind that — and this example
+      # is what says the page as a whole survives the shape, whichever of them did it.
+      EmbeddingGenerator.provider = counting_provider
+      run = record([unannotated_spec(file_path: "spec/models/invoice_spec.rb", line_number: 3,
+                                     name: "is valid"),
+                    unannotated_spec(file_path: "spec/models/user_spec.rb", line_number: 7,
+                                     name: "is valid")],
+                   ci_run_id: "run-1")
+
+      expect(insert_statements { described_class.resolve(run) }.size).to eq(1)
+
+      # One row, and BOTH observations on it — the second row's placeholder resolved to the id the
+      # statement returned rather than staying a placeholder or becoming a second identity.
+      expect(repository.spec_identities.count).to eq(1)
+      expect(run.spec_observations.pluck(:spec_identity_id).uniq.size).to eq(1)
+      expect(run.spec_observations.unresolved).to be_empty
+      expect(counting_provider.calls).to eq(1)
+    end
+
+    it "gives ONE row to two spellings of one test that are both new and both on this page" do
+      # **What deferring the insert takes away, and the repair that gives it back.** `#nearest` reads
+      # the table, and a row this page has decided to insert is not in it yet — so the second of two
+      # punctuation-variant descriptions, on a FIRST ingest where neither is held, misses the index
+      # that used to find the first one committed a moment earlier. Two identities for one test is a
+      # PERMANENT split of its history: every later ingest presents both spellings, each hits its own
+      # digest, and nothing reconciles them.
+      #
+      # `#pending_equivalent` answers it out of the page's own vectors — the band where the provider
+      # reduces both texts to one identical vector, which is the band `EmbeddingGenerator.equivalent?`
+      # is defined over. Asserted on a FIRST run, which is the only run where it can be reached: on
+      # any later one the row exists and `#nearest` finds it the ordinary way.
+      run = ingest([unannotated_spec(file_path: "spec/models/order_spec.rb", line_number: 1,
+                                     name: "Order#checkout rejects an expired card"),
+                    unannotated_spec(file_path: "spec/models/order_spec.rb", line_number: 2,
+                                     name: "Order  checkout   rejects an expired card!")],
+                   ci_run_id: "run-1")
+
+      expect(repository.spec_identities.count).to eq(1)
+      expect(run.spec_observations.pluck(:spec_identity_id).uniq.size).to eq(1)
+      expect(run.spec_observations.unresolved).to be_empty
+    end
+
+    it "issues none at all when every test on the page is already held" do
+      # The complement, and the guard on the buffer being spent rather than merely filled: a
+      # re-ingest decides nothing new, so the page's insert must not be issued empty — an
+      # `INSERT … VALUES` with no rows is a syntax error, not a no-op.
+      ingest(wide_suite, ci_run_id: "run-1")
+      second = record(wide_suite(offset: 100), ci_run_id: "run-2")
+
+      expect(insert_statements { described_class.resolve(second) }).to be_empty
+
+      expect(repository.spec_identities.count).to eq(subjects.size)
+      expect(second.spec_observations.unresolved.count).to eq(0)
     end
   end
 
