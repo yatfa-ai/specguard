@@ -1529,6 +1529,113 @@ RSpec.describe Ingest::IdentityResolver do
       expect(provider.batches).to eq(1)
       expect(provider.calls).to eq(5)
     end
+
+    # A provider that refuses everything, built out of the counting instrument above by the same
+    # singleton redefinition the containment example uses — so the two failure shapes are measured
+    # by one instrument and cannot disagree about what a request is.
+    #
+    # `batched` is appended to BEFORE the raise, which is what makes it the record of what went ON
+    # THE WIRE rather than of what came back. The examples below assert against it directly: a page
+    # the breaker skipped contributes no texts to it, and no count of successes could say that.
+    def refusing(provider)
+      provider.define_singleton_method(:embed_many) do |texts|
+        @batches = batches + 1
+        batched.concat(texts)
+        raise EmbeddingGenerator::Error, "provider down"
+      end
+      provider.define_singleton_method(:call) do |_text|
+        @calls = calls + 1
+        raise EmbeddingGenerator::Error, "provider down"
+      end
+      provider
+    end
+
+    it "stops asking a provider that failed a whole page's batch AND every one of its retries" do
+      # **The bound this slice exists for, and it did not exist at all before it.** The fallback
+      # above is per PAGE, so a provider that is simply down was asked once per page plus once per
+      # text on every page of the pass — 40 batch + 20,000 single requests at `BATCH_SIZE = 500` and
+      # the roadmap's 20,000-example design point, for zero identities, serially, inside a job
+      # holding a six-hour semaphore. `RETRY_SWEEP_LIMIT` bounds the failure a delivery INHERITS;
+      # nothing bounded the failure one pass CREATES.
+      #
+      # Three pages at this width, so the figure is a claim about the pass and not about a page: a
+      # per-page cost would be 3 × (1 + 2) and the bound is the first page's asks alone.
+      stub_const("#{described_class}::BATCH_SIZE", 2)
+      provider = refusing(batching_provider)
+      run = record(new_page, ci_run_id: "run-1")
+      EmbeddingGenerator.provider = provider
+
+      described_class.resolve(run)
+
+      expect(provider.batches).to eq(1)
+      # And the direct falsifier for the nil-versus-omitted constraint on the tripped return: a
+      # tripped `#embed_page` answering `{}` — or omitting its skipped texts — would send all three
+      # remaining rows through `#embedding_for`'s `fetch` block and this figure would be 5, with no
+      # page-level warning anywhere to see it by.
+      expect(provider.calls).to eq(2)
+      # Said in the texts themselves rather than only in the counts: pages two and three were never
+      # put on the wire in any form.
+      expect(provider.batched).to eq(new_page.first(2).pluck(:name))
+      expect(repository.spec_identities.count).to eq(0)
+    end
+
+    it "does not trip on a one-signal page, where a refusal is evidence about the signal" do
+      # The other half of the rule, and it is not a tuning knob. The fallback's whole justification
+      # is that *"one bad text and a dropped connection arrive identically"* — which is true OF ONE
+      # TEXT, so a page of one is precisely the case the two readings cannot be told apart in. It
+      # pays its ask and says nothing about the provider.
+      stub_const("#{described_class}::BATCH_SIZE", 1)
+      provider = refusing(batching_provider)
+      run = record(new_page.first(3), ci_run_id: "run-1")
+      EmbeddingGenerator.provider = provider
+
+      described_class.resolve(run)
+
+      # Every page asked, and every page's one retry asked: the breaker never fires, so this is the
+      # unbounded shape on purpose.
+      expect(provider.batches).to eq(3)
+      expect(provider.calls).to eq(3)
+    end
+
+    it "leaves every signal it skipped stamped and retryable, and strands none of them" do
+      # **Identical observable row state is the whole licence for skipping the ask.** A skipped row
+      # is stamped by `#record_resolve_failure` exactly as a refused one is, so it is in
+      # `.embed_retryable` and the cross-run sweep rescues it for `EMBED_RETRY_WINDOW` — and it is
+      # in neither `.embed_unattempted`, which is the population that is invisible to that sweep.
+      # A breaker that returned early WITHOUT stamping would look identical in request count and
+      # would strand three rows in exactly the set `#unattempted_embed_backlog` exists because
+      # nothing else can see.
+      stub_const("#{described_class}::BATCH_SIZE", 2)
+      run = record(new_page, ci_run_id: "run-1")
+      EmbeddingGenerator.provider = refusing(batching_provider)
+
+      described_class.resolve(run)
+
+      expect(run.spec_observations.embed_retryable.count).to eq(5)
+      expect(run.spec_observations.embed_unattempted.count).to eq(0)
+      # And the lifecycle is the one a refusal produces, not a demoted variant of it: abandonment is
+      # time-based, so the three skipped rows carry the same single attempt the two asked ones do.
+      expect(run.spec_observations.pluck(:embed_failure_count).uniq).to eq([1])
+    end
+
+    it "does not carry the trip into the next pass, so a recovered provider is asked again" do
+      # **Pass-scoped and never process-scoped**, which is the difference between this and a circuit
+      # breaker. A flag that outlived its `#resolve` would leave the NEXT ingest skipping a provider
+      # that has recovered, with no ask to discover the recovery with and nothing but a deploy to
+      # end it. Every pass re-earns the trip from scratch.
+      stub_const("#{described_class}::BATCH_SIZE", 2)
+      run = record(new_page, ci_run_id: "run-1")
+      EmbeddingGenerator.provider = refusing(batching_provider)
+      described_class.resolve(run)
+
+      expect(repository.spec_identities.count).to eq(0) # the premise: the outage really did bite.
+
+      EmbeddingGenerator.provider = counting_provider
+      described_class.resolve(run)
+
+      expect(repository.spec_identities.count).to eq(5)
+      expect(run.spec_observations.unresolved.count).to eq(0)
+    end
   end
 
   describe "what a page of changed text costs the SECOND time this deployment sees it" do
@@ -1716,6 +1823,52 @@ RSpec.describe Ingest::IdentityResolver do
 
       expect(caching_provider.batched.size).to eq(asked_before)
       expect(repository.spec_identities.count).to eq(5)
+    end
+
+    it "still serves a cached page after the provider breaker has tripped on an uncached one" do
+      # **The reason the breaker sits at the provider ask and not at `#page_embeddings`.** That
+      # method reads the cache FIRST and passes only `texts - cached.keys` down, so a suite whose
+      # vectors this deployment already owns must keep resolving normally right through an outage —
+      # it needs nothing from the provider. A breaker one layer up would be indistinguishable in
+      # every request count in this file and would break the one thing that still works.
+      #
+      # Two pages, and the order is the whole fixture: the first is uncached and trips the breaker,
+      # the second is the page another tenant already paid for. `BATCH_SIZE` is narrowed AFTER the
+      # cache is filled, so the fill itself is the one batch the premise below asserts.
+      EmbeddingGenerator.provider = caching_provider
+      ingest_into(other_repository, shared_page, ci_run_id: "run-1")
+
+      expect(caching_provider.batches).to eq(1) # the premise: the cache really was filled.
+
+      stub_const("#{described_class}::BATCH_SIZE", 2)
+      provider = caching_provider
+      provider.define_singleton_method(:embed_many) do |texts|
+        @batches = batches + 1
+        batched.concat(texts)
+        raise EmbeddingGenerator::Error, "provider down"
+      end
+      provider.define_singleton_method(:call) do |_text|
+        @calls = calls + 1
+        raise EmbeddingGenerator::Error, "provider down"
+      end
+
+      uncached = ["Webhook#deliver retries on a 500", "Export#zip compresses the archive"]
+        .each_with_index.map do |name, index|
+          unannotated_spec(file_path: "spec/models/c#{index}_spec.rb", line_number: index + 1, name: name)
+        end
+      run = record(uncached + shared_page, ci_run_id: "run-2")
+
+      described_class.resolve(run)
+
+      # The trip happened — one batch and its two per-signal retries, and nothing after that.
+      expect(provider.batches).to eq(2)
+      expect(provider.calls).to eq(2)
+      # And the five cached rows resolved anyway, with the provider dark and the breaker tripped,
+      # because the cache answered them before anything asked.
+      expect(repository.spec_identities.pluck(:text)).to match_array(shared_page.pluck(:name))
+      expect(run.spec_observations.where(name: shared_page.pluck(:name)).where(spec_identity_id: nil))
+        .to be_empty
+      expect(run.spec_observations.embed_failed.pluck(:name)).to match_array(uncached.pluck(:name))
     end
 
     it "buys nothing at all when the provider publishes no fingerprint" do
@@ -2962,6 +3115,10 @@ RSpec.describe Ingest::IdentityResolver do
       # Once — not once per row, which is the shape the pipeline's only other voice has and the
       # reason a 20,000-row outage says everything and reports nothing.
       expect(summaries(lines).sole).to include("run=#{run.id}", "resolved=3")
+      # The negative control for the breaker marker below, and it belongs on the healthy pass: the
+      # field is emitted only when the pass stopped asking the provider, so a line that carries it
+      # on a pass that asked and was answered would make the marker mean nothing.
+      expect(summaries(lines).sole).not_to include("provider_breaker")
     end
 
     # The figure an operator most needs, and the one a "log it only when it is interesting" report
@@ -3090,6 +3247,31 @@ RSpec.describe Ingest::IdentityResolver do
                 "request: provider down; falling back to one request per signal"])
       # And the total those three lines never carried, said once.
       expect(summaries(lines).sole).to include("resolved=0", "embed_failed_retrying=3")
+    end
+
+    it "names a pass that STOPPED asking the provider, rather than leaving it to be inferred" do
+      # A pass that stopped asking and a pass that asked and was refused are different events, and
+      # `embed_failed_retrying` cannot tell them apart: both populations are stamped identically, on
+      # purpose. Without this marker the only evidence of a trip is an ABSENCE — the per-row warn
+      # lines that are no longer there — which is exactly the inference this report exists to stop
+      # asking an operator to make.
+      stub_const("#{described_class}::BATCH_SIZE", 2)
+      allow(EmbeddingGenerator).to receive(:call).and_raise(EmbeddingGenerator::Error, "provider down")
+      allow(EmbeddingGenerator).to receive(:embed_many).and_raise(EmbeddingGenerator::Error, "provider down")
+      run = record(suite, ci_run_id: "run-1")
+
+      lines = logged { described_class.resolve(run) }
+
+      # One line still, with the marker on it — not a second line, for the reason `#report` gives.
+      expect(summaries(lines).sole).to include("resolved=0", "embed_failed_retrying=3",
+                                              "provider_breaker=tripped")
+      # And the trip said so where the provider's own message still is, once, at the moment it
+      # started. The report is the end-of-pass half and neither stands in for the other.
+      expect(lines.select { |level, _| level == :warn }.map(&:last).grep(/stopped asking/))
+        .to eq(["[IdentityResolver] run=#{run.id} stopped asking the embedding provider: a page's " \
+                "batch request and all 2 of its per-signal retries failed, which is evidence about " \
+                "the provider and not about those signals; the rest of this pass is stamped " \
+                "without a request and stays retryable"])
     end
 
     # The cost half. Four counts per pass is nothing against the 20,000 round trips the pass already
