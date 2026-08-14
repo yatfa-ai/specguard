@@ -26,6 +26,23 @@ class TestRun < ApplicationRecord
 
   validates :commit_sha, presence: true
 
+  # Share of this run's suite that carries an @intent annotation — the headline dashboard metric.
+  #
+  # Read off this run's own counters, not from `spec_intents`, and a row count could not stand in
+  # for it — today or after an intent write path exists, for two different reasons.
+  #
+  # Today nothing writes `spec_intents` outside the test suite. `Ingest::RunRecorder` — the only
+  # write path the ingest endpoint reaches — writes `test_runs` and `test_run_shards` and nothing
+  # per spec (pinned by spec/requests/api/v1/ingest_spec.rb). Counting rows would report every
+  # repository as 0% annotated however many runs its CI has pushed.
+  #
+  # Counting rows would not become right once that path is built either: `spec_intents.entity`,
+  # `.action`, `.behavior` and `.layer` are all NOT NULL, so an unannotated spec — which by
+  # definition has none of them — is not a row that can exist. The figure would flip from a
+  # structural 0% to a structural 100% without passing through the truth on the way.
+  #
+  # The run's own counters are the honest denominator because `Ingest::Payload#test_run_attributes`
+  # derives them from every spec in the payload, annotated or not.
   def annotated_ratio
     return 0.0 if total_specs_count.to_i.zero?
 

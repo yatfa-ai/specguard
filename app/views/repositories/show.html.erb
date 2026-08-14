@@ -307,7 +307,7 @@
 
         <% if @latest_test_run.nil? %>
           <%# "Never ingested" is not "measured zero". Rendering `0%` here — which is what
-              `Repository#annotated_ratio` returns by contract — makes a repository whose CI has
+              flooring a repository-wide figure at 0.0 amounts to — makes a repository whose CI has
               never reported byte-identical to one that reported and found no annotations. The
               distinction is drawn here, on `@latest_test_run` presence, and NOT by loosening the
               model to return nil. %>

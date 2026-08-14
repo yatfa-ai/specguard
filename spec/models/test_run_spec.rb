@@ -50,17 +50,16 @@ RSpec.describe TestRun do
       expect(run.annotated_ratio).to eq(100.0)
     end
 
-    # Both ratios read the same counters now, so this is a real agreement rather than the old
-    # coincidence: it used to hold only because a factory fabricated a `status: "unannotated"`
+    # Read off this run's own counters, which is why intent rows sitting beside the run cannot
+    # move it: the figure used to hold only because a factory fabricated a `status: "unannotated"`
     # spec_intent, which the four NOT NULL intent columns make impossible for ingestion to write.
-    it "agrees with the repository-wide ratio it is the source of" do
+    it "is unmoved by the intent rows sitting beside the run" do
       run = repository.test_runs.create!(commit_sha: "abc123", annotated_specs_count: 2,
                                          total_specs_count: 3)
       create_spec_intent(repository: repository, line_number: 1, test_run: run)
       create_spec_intent(repository: repository, line_number: 2, test_run: run)
 
       expect(run.annotated_ratio).to eq(66.7)
-      expect(repository.annotated_ratio).to eq(run.annotated_ratio)
     end
   end
 
