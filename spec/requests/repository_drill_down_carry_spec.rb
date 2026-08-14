@@ -6,10 +6,10 @@ require "rails_helper"
 # panels rather than inside any one of them.
 #
 # Four asks (`?branch=`, `?spec_file=`, `?spec_directory=`, `?repeated_description=`) each anchor a
-# panel of their own, and eight links open or close one of them. The rule is that a gesture aimed at
+# panel of their own, and ten links open or close one of them. The rule is that a gesture aimed at
 # ONE ask leaves the other three alone: opening a file is not a request to close the area, closing an
-# area is not a request to close the file, and so on in every direction. That is thirty-two
-# decisions — eight links × four asks — and every one of them used to be re-made by hand at the link
+# area is not a request to close the file, and so on in every direction. That is forty
+# decisions — ten links × four asks — and every one of them used to be re-made by hand at the link
 # site, because the READ side of these asks was abstracted into four controller concerns while the
 # EMIT side was copied.
 #
@@ -21,17 +21,21 @@ require "rails_helper"
 #
 # So this file is deliberately not a section of any panel's spec. It owns the invariant, not the
 # panel — the panels' own files keep asserting what their rows say, their captions, their empty
-# states and their queries, and this one asserts only which asks survive which gesture. When a NINTH
-# link is added it gets a row in `gestures` below and its four cells are checked by construction,
-# which is the entire point of `RepositoriesHelper#drill_down_path` existing.
+# states and their queries, and this one asserts only which asks survive which gesture. When an
+# ELEVENTH link is added it gets a row in `gestures` below and its four cells are checked by
+# construction, which is the entire point of `RepositoriesHelper#drill_down_path` existing.
 #
 # The rows are written by `Ingest::ObservationRecorder` through `Ingest::RunRecorder` rather than
 # inserted by hand, for the reason every sibling spec states: a hand-built fixture would assert
 # against a shape nothing in production writes.
+#
+# TWO runs rather than one, since the two growth panels compare the latest run against the previous
+# run ON THE SAME BRANCH and render nothing without it. The single-run panels read the latest run
+# and are untouched by the earlier one — their gestures below are the same gestures they were.
 RSpec.describe "Repository drill-down carry-through", type: :request do
   before { @user = sign_in_via_github }
 
-  # THE ask set: all four open at once. Every panel renders, so all eight links exist on one page
+  # THE ask set: all four open at once. Every panel renders, so all ten links exist on one page
   # and each one can be asked what it did with the three asks it does not own. Anything less and the
   # matrix has holes exactly where the defect lived — a link cannot be caught dropping an ask that
   # was never in the request.
@@ -46,7 +50,7 @@ RSpec.describe "Repository drill-down carry-through", type: :request do
   def other_description = "refuses a negative quantity"
 
   # Shaped so every panel has rows AND so no link's target is its own subject: the file the
-  # by-file panel links to is NOT the open file, the area the by-area panel links to is NOT the open
+  # by-file panel links to is NOT the open file, the area the by-area panels link to is NOT the open
   # area, the description it links to is NOT the open description. A link that carried an ask by
   # accident — because the value it SETS happens to equal the value it should CARRY — would pass a
   # sloppier fixture and prove nothing.
@@ -54,15 +58,45 @@ RSpec.describe "Repository drill-down carry-through", type: :request do
   # TWO descriptions are carried by two examples each, because the ranking is `HAVING COUNT(*) > 1`:
   # a description recorded once is not in that panel at all, so a second repeated one is what gives
   # the open-description gesture a row to link to that is not the row already open.
+  #
+  # The EARLIER run exists for the two growth panels, which compare the latest run against the
+  # previous run on the same branch and render nothing without one. It is shaped so both of them
+  # have a row to link FROM and neither links to its own subject:
+  #
+  #   - `spec/requests` moved (2 → 1), so "Areas that grew or shrank" has a row for an area that is
+  #     not the open one — `spec/models` moved too (3 → 2), and its being present is what makes the
+  #     other row's link a real choice rather than the only one.
+  #   - inside the open area, `refund_spec.rb` moved (2 → 1) while `order_spec.rb` — the OPEN file —
+  #     did not, so the per-file drill-in has a row to link to that is neither the open file nor a
+  #     file the latest run lacks. A file the latest run does not have is deliberately not linked at
+  #     all, so a fixture whose only moved file was a deleted one would leave that gesture with no
+  #     link to find.
+  #
+  # Both runs are ingested in one piece and both report tests, so the panels' comparability gate
+  # passes; the earlier run is backdated so `previous_test_run_on_branch` finds it.
   def drill_down_run
     repository = create_repository(user: @user)
     ingest(repository, [example_spec(file_path: "spec/models/order_spec.rb", duration: 3.5, line_number: 1,
                                      name: description_ask),
                         example_spec(file_path: "spec/models/refund_spec.rb", duration: 2.0, line_number: 2,
                                      name: description_ask),
-                        example_spec(file_path: "spec/models/user_spec.rb", duration: 1.0, line_number: 3,
+                        example_spec(file_path: "spec/models/refund_spec.rb", duration: 2.0, line_number: 3,
+                                     name: description_ask),
+                        example_spec(file_path: "spec/models/user_spec.rb", duration: 1.0, line_number: 4,
                                      name: other_description),
-                        example_spec(file_path: "spec/requests/checkout_spec.rb", duration: 9.0, line_number: 4,
+                        example_spec(file_path: "spec/requests/checkout_spec.rb", duration: 9.0, line_number: 5,
+                                     name: other_description),
+                        example_spec(file_path: "spec/requests/checkout_spec.rb", duration: 9.0, line_number: 6,
+                                     name: other_description)],
+           commit_sha: "feedfacecafe0000")
+    repository.test_runs.last.update!(created_at: 2.hours.ago)
+    ingest(repository, [example_spec(file_path: "spec/models/order_spec.rb", duration: 3.5, line_number: 11,
+                                     name: description_ask),
+                        example_spec(file_path: "spec/models/refund_spec.rb", duration: 2.0, line_number: 12,
+                                     name: description_ask),
+                        example_spec(file_path: "spec/models/user_spec.rb", duration: 1.0, line_number: 13,
+                                     name: other_description),
+                        example_spec(file_path: "spec/requests/checkout_spec.rb", duration: 9.0, line_number: 14,
                                      name: other_description)])
     repository
   end
@@ -87,7 +121,7 @@ RSpec.describe "Repository drill-down carry-through", type: :request do
                         spec_directory: area_ask, repeated_description: description_ask)
   end
 
-  # The eight links, as the page offers them.
+  # The ten links, as the page offers them.
   #
   # `find` is scoped to the panel that OWNS each gesture, never to the page: three of these panels
   # carry a link with the same text as a link in another panel (a file path appears in three of
@@ -129,6 +163,12 @@ RSpec.describe "Repository drill-down carry-through", type: :request do
       clears: :repeated_description },
     { name: "open a file from Examples under this description",
       panel: "#repeated-description-examples", link: "spec/models/refund_spec.rb",
+      sets: { spec_file: "spec/models/refund_spec.rb" } },
+    { name: "open an area from Areas that grew or shrank",
+      panel: "#spec-directory-growth", link: "spec/requests",
+      sets: { spec_directory: "spec/requests" } },
+    { name: "open a file from Files that grew or shrank in this directory",
+      panel: "#spec-directory-file-growth", link: "spec/models/refund_spec.rb",
       sets: { spec_file: "spec/models/refund_spec.rb" } }
   ]
 

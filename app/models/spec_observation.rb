@@ -333,6 +333,27 @@ class SpecObservation < ApplicationRecord
   # a sentence explaining a list's length must not be able to disagree with it.
   SPEC_DIRECTORY_FILES_LIMIT = 25
 
+  # How many spec FILES one area's cross-run growth drill-in returns. Its own constant, by the rule
+  # the seven above it obey, and it would be the easiest of them all to mistake for a rename of
+  # `SPEC_DIRECTORY_FILES_LIMIT` directly above: the same grain, the same area, a list of that
+  # area's files either way.
+  #
+  # The population is not the same population. That constant caps ONE RUN's files in an area; this
+  # caps the UNION of two runs' — every file EITHER run recorded there — and the difference is not a
+  # rounding error, because the movement this panel exists to make readable is precisely the
+  # movement that inflates it. A file that was renamed within the area occupies TWO rows here, its
+  # old path at `n → 0` and its new one at `0 → n`, where in a single run's listing it is one row
+  # both before and after. An area reorganised wholesale therefore presents twice the file count
+  # either run alone would show, on exactly the page a reader opened to see that reorganisation.
+  #
+  # So it sits ABOVE its neighbour rather than equal to it, and it is deliberately not equal: two
+  # lists whose lengths coincide by assignment are one edit away from being one list, and the edit
+  # that wants a longer union has no reason to want a longer single-run listing.
+  #
+  # Named, like its siblings, because the panel's caption reports the figure back to the reader and
+  # a sentence explaining a list's length must not be able to disagree with it.
+  SPEC_DIRECTORY_FILE_GROWTH_LIMIT = 30
+
   # How many repeated-DESCRIPTION groups the redundancy ranking returns. Its own constant, by the
   # rule the seven above it obey, and the population it ranks is unlike any of theirs: not files,
   # not areas, not examples, but the DESCRIPTIONS that more than one example of one run recorded.
@@ -1293,6 +1314,79 @@ class SpecObservation < ApplicationRecord
       .order(Arel.sql("ABS(#{latest} - #{previous}) DESC"), Arel.sql("#{DIRECTORY_EXPRESSION} ASC"))
       .limit(limit)
       .pluck(Arel.sql(DIRECTORY_EXPRESSION), Arel.sql(previous), Arel.sql(latest),
+             Arel.sql("COUNT(*) OVER ()"),
+             Arel.sql("SUM(#{previous}) OVER ()"), Arel.sql("SUM(#{latest}) OVER ()"))
+  end
+
+  # How ONE area's individual spec FILES moved between two runs — `.directory_growth_between` above
+  # at one grain down, narrowed to the area a reader picked out of it.
+  #
+  # == What it lets a reader do that the panel above cannot
+  #
+  # That panel's own caption discloses a doubt it then gives the reader no way to resolve: a test
+  # that was MOVED is the same test, so a renamed or relocated directory appears there as one area
+  # growing and another shrinking by the same amount, with nothing added and nothing deleted. The
+  # disclosure is correct and it is unactionable — an area at `+47` and another at `−47` is the same
+  # shape whether somebody moved forty-seven tests or wrote forty-seven and deleted forty-seven
+  # others.
+  #
+  # At the FILE grain the two shapes stop looking alike. `spec/models/user_spec.rb 0 → 47` beside
+  # `spec/legacy/user_spec.rb 47 → 0` reads as a relocation at a glance; `billing_spec.rb 3 → 50`
+  # does not. This read asserts NEITHER of those readings — it counts rows per file per run exactly
+  # as its parent counts them per area, and pairs no example with any other example, which
+  # `SpecObservation`'s positional-instability rule forbids at every grain. It puts the operands in
+  # front of the reader and lets them do the pairing the application is not allowed to do for them.
+  #
+  # == The narrow is an EQUALITY, exactly as `.files_in_directory` is
+  #
+  # Through `DIRECTORY_EXPRESSION` and `= ?`, never a prefix `LIKE`: `spec/models/orders` is its own
+  # area here as it is its own row in the panel this drills out of, so these rows partition the area
+  # the way that panel's partition the run. `.files_in_directory` carries the full argument,
+  # including why a subtree would want the `text_pattern_ops` index — and therefore the migration —
+  # that this read does not.
+  #
+  # It matters twice as much here as it does there, because the link that opens this panel is the
+  # SAME `?spec_directory=` the durations drill-down answers. Two reads answering one ask through
+  # two different definitions of what an area IS would open one panel with rows beside another that
+  # says the area is empty, on one click. Hence the shared constant rather than a second hand-copy
+  # of the expression.
+  #
+  # == Why the totals are the AREA's and not the run's
+  #
+  # The two `SUM(...) OVER ()` windows here are narrowed by the same predicate the rows are, so they
+  # count what each run recorded IN THIS AREA — which is the denominator this panel's caption is
+  # spent on and is deliberately not the figure the parent read returns under the same name. The
+  # parent compares whole runs and its windows are whole runs'; this compares one area and its
+  # windows are that area's. A caller that needs "did this run write per-example rows at all" must
+  # ask the parent, and `SpecDirectoryFileGrowth` does exactly that rather than reading it off here
+  # — an area only the latest run has would otherwise report the previous run as having recorded
+  # nothing, which is a true statement about the area and a false one about the run.
+  #
+  # == Why this needs no index of its own
+  #
+  # The same argument `.directory_growth_between` makes, unchanged by the extra predicate: it
+  # narrows on `test_run_id` — an `IN` list of two, served by
+  # `index_spec_observations_on_test_run_id` — and the area predicate is an EXPRESSION that no index
+  # can serve and that therefore decides nothing about the access path. It only ever removes rows
+  # from a scan that was already happening. The grouping is on a plain column here rather than on an
+  # expression, which is if anything the easier of the two shapes.
+  #
+  # @return [Array<Array>] `[spec_file_path, previous_count, latest_count, file_count,
+  #   previous_recorded, latest_recorded]` per file, ranked by absolute movement with a path
+  #   tiebreak. The last three are the same figures on every row: how many files the two runs
+  #   touched in this area between them, and how many rows each run recorded in it — all three
+  #   counted before the `LIMIT`, so a capped list cannot disagree with the sentence describing it.
+  def self.file_growth_between(test_run, previous_test_run, directory,
+                               limit: SPEC_DIRECTORY_FILE_GROWTH_LIMIT)
+    latest = sanitize_sql_array(["COUNT(*) FILTER (WHERE test_run_id = ?)", test_run.id])
+    previous = sanitize_sql_array(["COUNT(*) FILTER (WHERE test_run_id = ?)", previous_test_run.id])
+
+    where(test_run_id: [test_run.id, previous_test_run.id])
+      .where(sanitize_sql_array(["#{DIRECTORY_EXPRESSION} = ?", directory]))
+      .group(:spec_file_path)
+      .order(Arel.sql("ABS(#{latest} - #{previous}) DESC"), spec_file_path: :asc)
+      .limit(limit)
+      .pluck(Arel.sql("spec_file_path"), Arel.sql(previous), Arel.sql(latest),
              Arel.sql("COUNT(*) OVER ()"),
              Arel.sql("SUM(#{previous}) OVER ()"), Arel.sql("SUM(#{latest}) OVER ()"))
   end

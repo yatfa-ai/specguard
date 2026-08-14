@@ -323,6 +323,32 @@ class RepositoriesController < ApplicationController
     # the size of the suite: see `SpecDirectoryGrowth`.
     if @latest_test_run && @previous_test_run
       @spec_directory_growth = SpecDirectoryGrowth.for(@latest_test_run, @previous_test_run)
+
+      # ONE grain down, for the ONE area the reader asked about: not which areas moved but which
+      # FILES of the picked area moved. The panel above discloses that it cannot tell a relocation
+      # from a real gain and a real loss — this puts the per-file operands in front of the reader so
+      # they can tell, without the application ever pairing an example with another example.
+      #
+      # Guarded on the same two runs AND on an area having been asked for, so a page nobody asked an
+      # area of issues no query at all. The ask is `?spec_directory=` — the SAME parameter the
+      # durations drill-down above reads, deliberately not a second one. One ask now opens TWO
+      # panels, each answering in its own grain: which files carry the area's wall clock, and which
+      # of them moved since the previous run. That is how `drill_down_path` composes asks and it is
+      # intended — a later reader should not "fix" it by splitting the parameter in two.
+      #
+      # `@spec_directory_growth` is passed rather than the runs alone: this drill-in inherits that
+      # panel's comparability verdict instead of re-deriving it, so it cannot assert a comparison
+      # the panel above refuses, and two of that verdict's five states are not derivable at this
+      # grain at all. See `SpecDirectoryFileGrowth`.
+      #
+      # ONE query when there is a comparison to make and an area to make it in, none otherwise, and
+      # it is bounded by the size of the AREA rather than of the suite.
+      if @spec_directory_request
+        @spec_directory_file_growth = SpecDirectoryFileGrowth.for(
+          @latest_test_run, @previous_test_run, @spec_directory_request,
+          growth: @spec_directory_growth
+        )
+      end
       # The same two runs and the same areas, ranked by an INDEPENDENT quantity: not which area
       # changed size but which area changed TIME. Neither panel derives the other — an area where
       # somebody made an existing spec slow adds zero examples, so it sorts last on the panel above
