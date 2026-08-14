@@ -1521,6 +1521,404 @@ RSpec.describe Ingest::IdentityResolver do
     end
   end
 
+  describe "what a page of changed text costs the SECOND time this deployment sees it" do
+    # The complement of every group above, and the last of the three cost levers `SPGD-72` names.
+    #
+    # "Changed" is answered by `#identical_text`, which reads `#digest_index`, which is built from
+    # **`@repository.spec_identities`**. So the question that shortcut can answer is *"is this text
+    # on one of THIS repository's identity rows"* — and the set that misses it is strictly wider
+    # than the set this deployment has never embedded. Two things live in that gap and both are
+    # billed today: another repository's copy of the same string, and this repository's own text
+    # from before a rename moved the row out from under it. `EmbeddingCacheEntry` is keyed
+    # `(provider_fingerprint, text_digest)` with no repository in it, so both become hits.
+    #
+    # These examples also discharge the substrate criterion by simply running: the cache is an
+    # ActiveRecord table in the primary database, so it works here with no special-casing, no
+    # `cache_store` change and no second database. A `Rails.cache` implementation could not have
+    # been tested at all — `config/environments/test.rb` sets `:null_store` — which is why it is
+    # not the substrate.
+
+    # `batching_provider` plus the one thing the cache turns on: a published fingerprint.
+    #
+    # A separate instrument rather than a `fingerprint` bolted onto that one, because that one is
+    # the control. Every other embedding example in this suite — and the whole rest of the suite
+    # via `spec/support/embedding_generator.rb` — runs on a provider that publishes NO fingerprint
+    # and is therefore uncached, which is what keeps those examples measuring what they always
+    # measured. Adding the key there would have quietly moved 186 examples onto a new path.
+    #
+    # `call`, `embed_many` and `normalize` all delegate to `LocalProvider` for the reason
+    # `batching_provider` states: an instrument must not change the path it measures.
+    let(:caching_provider) do
+      Class.new do
+        class << self
+          attr_writer :fingerprint
+
+          def fingerprint = @fingerprint ||= "test-provider:v1"
+          def calls = @calls ||= 0
+          def batches = @batches ||= 0
+          def batched = @batched ||= []
+
+          def call(text)
+            @calls = calls + 1
+            EmbeddingGenerator::LocalProvider.call(text)
+          end
+
+          def embed_many(texts)
+            @batches = batches + 1
+            batched.concat(texts)
+            texts.map { |text| EmbeddingGenerator::LocalProvider.call(text) }
+          end
+
+          def normalize(text) = EmbeddingGenerator::LocalProvider.normalize(text)
+        end
+      end
+    end
+
+    # The control: the same instrument with the fingerprint withheld. What every other embedding
+    # example in this file runs on, and what the whole suite runs on via
+    # `spec/support/embedding_generator.rb` — kept here so the "no fingerprint means no caching"
+    # example measures the difference against a provider identical in every other respect.
+    let(:uncached_provider) do
+      Class.new do
+        class << self
+          def batches = @batches ||= 0
+
+          def call(text) = EmbeddingGenerator::LocalProvider.call(text)
+
+          def embed_many(texts)
+            @batches = batches + 1
+            texts.map { |text| EmbeddingGenerator::LocalProvider.call(text) }
+          end
+
+          def normalize(text) = EmbeddingGenerator::LocalProvider.normalize(text)
+        end
+      end
+    end
+
+    # A second tenant, so that "this deployment has embedded it" can be demonstrated without
+    # "this repository has an identity row for it" also being true — which is the only way to show
+    # the cache reaching past what `#digest_index` can answer.
+    let(:other_repository) do
+      create_repository(user: create_user(github_uid: "3003", github_handle: "second-tenant"),
+                        github_full_name: "acme/second-service")
+    end
+
+    # Which identity each run's row landed on, named by the text that identity is held under — the
+    # pairing itself, rather than a count that a shifted pairing would also satisfy.
+    def identity_by_file(run)
+      run.spec_observations.includes(:spec_identity).to_h { |row| [row.file_path, row.spec_identity&.text] }
+    end
+
+    # `ingest`/`record` are bound to the `repository` let; these are the same two steps against
+    # whichever tenant an example names.
+    def ingest_into(target, specs, ci_run_id:)
+      payload = Ingest::Payload.new(ingest_payload(specs: specs, ci_run_id: ci_run_id).deep_stringify_keys)
+      raise "payload invalid: #{payload.errors.inspect}" unless payload.valid?
+
+      run = Ingest::RunRecorder.record(target, payload.test_run_attributes,
+                                       shard_id: payload.shard_id, specs: payload.specs)
+      described_class.resolve(run)
+      run
+    end
+
+    # Five tests, each lexically distinct from the others so nothing here is resolved by a
+    # similarity coincidence — the same shape `new_page` uses in the group above.
+    def shared_page
+      ["Session#create rejects a bad password",
+       "Payment#refund restores the balance",
+       "Token#expire revokes the session",
+       "Upload#scan rejects an oversized file",
+       "Search#query paginates the results"].each_with_index.map do |name, index|
+        unannotated_spec(file_path: "spec/models/b#{index}_spec.rb", line_number: index + 1, name: name)
+      end
+    end
+
+    # Statements this deployment issued against the cache table, in the order it issued them.
+    def cache_statements(&) = executed_sql(&).grep(/embedding_cache_entries/i)
+
+    it "asks the provider NOTHING for a page another repository has already paid to embed" do
+      # **The slice, stated as the figure it moves.** These five texts are new to
+      # `other_repository` in every sense `#digest_index` can see: it has no identity rows at all,
+      # so the digest equality misses all five and every one of them would have been embedded.
+      # They are not new to the DEPLOYMENT, and that is the distinction this table exists to draw.
+      EmbeddingGenerator.provider = caching_provider
+      ingest(shared_page, ci_run_id: "run-1")
+
+      expect(caching_provider.batches).to eq(1) # the premise: the first tenant really did pay.
+
+      ingest_into(other_repository, shared_page, ci_run_id: "run-2")
+
+      # Zero REQUESTS, by either entry point — a cache that fell through to `.call` on the side
+      # would be the same bill with an extra table.
+      expect(caching_provider.batches).to eq(1)
+      expect(caching_provider.calls).to eq(0)
+      expect(caching_provider.batched.size).to eq(5)
+
+      # And the resolve is a real one, not a page that was skipped: the second tenant ends with its
+      # own five identities, built from vectors it never asked for.
+      expect(other_repository.spec_identities.count).to eq(5)
+      expect(other_repository.spec_identities.pluck(:text)).to match_array(shared_page.pluck(:name))
+    end
+
+    it "asks nothing again for text THIS repository's rows no longer hold" do
+      # The second half of the gap, and the one that needs no second tenant.
+      #
+      # **A re-point is what actually moves a text out from under `#digest_index`, and a rename is
+      # not.** `spec_identities` rows are never pruned, so a test renamed by SUFFIX leaves its old
+      # row standing and the old text stays answerable by the digest equality forever — an example
+      # built that way would embed nothing on run 3 whether or not this cache existed, and would
+      # pass with the cache read deleted. What genuinely removes the digest is the punctuation-drift
+      # re-point: run 2's spelling is normalisation-equivalent to run 1's, so `#resight` re-points
+      # the row ONTO the new spelling (see "a description that drifted only in punctuation") and the
+      # repository now holds no row under the original digest at all.
+      #
+      # So run 3 presents text this repository cannot answer for and this DEPLOYMENT bought on run
+      # 1. Today that is five vectors paid for twice.
+      EmbeddingGenerator.provider = caching_provider
+      ingest(shared_page, ci_run_id: "run-1")
+      drifted = shared_page.map { |spec| spec.merge(name: "#{spec[:name].gsub(' ', '  ')}!") }
+      ingest(drifted, ci_run_id: "run-2")
+
+      # The premise, pinned rather than trusted: the originals really are gone from this
+      # repository's rows, so run 3 cannot be answered by the digest equality.
+      expect(repository.spec_identities.count).to eq(5)
+      expect(repository.spec_identities.pluck(:text)).to match_array(drifted.pluck(:name))
+
+      asked_before = caching_provider.batched.size
+      ingest(shared_page, ci_run_id: "run-3")
+
+      expect(caching_provider.batched.size).to eq(asked_before)
+      expect(repository.spec_identities.count).to eq(5)
+    end
+
+    it "buys nothing at all when the provider publishes no fingerprint" do
+      # **The conservative default, which is what the whole existing suite runs on.** A provider
+      # that will not say what it is gets no caching rather than a guessed key — the alternative
+      # would attach a vector from one model to a text embedded by another, silently. Asserted as
+      # the absence of both statements, so it stays true if the table's shape ever changes.
+      EmbeddingGenerator.provider = uncached_provider # publishes no `fingerprint`
+
+      statements = cache_statements { ingest(shared_page, ci_run_id: "run-1") }
+
+      expect(statements).to be_empty
+      expect(EmbeddingCacheEntry.count).to eq(0)
+      # And the page behaves exactly as it did before this slice: one request, five texts.
+      expect(uncached_provider.batches).to eq(1)
+      expect(repository.spec_identities.count).to eq(5)
+    end
+
+    describe "when the provider fingerprint moves" do
+      it "re-embeds the page rather than serving vectors the old model produced" do
+        # **Unreadable rather than stale, which is the difference between a cache and a bug.** A
+        # `text-embedding-3-small` vector handed to a deployment now running `-3-large` is a
+        # perfectly valid vector of the wrong function, and nothing downstream could ever notice:
+        # `#nearest` would rank it, `EmbeddingGenerator.validate` would pass it, and the identity it
+        # produced would look exactly like a correct one. So the model is IN the key, and a key that
+        # moved cannot be hit.
+        EmbeddingGenerator.provider = caching_provider
+        ingest(shared_page, ci_run_id: "run-1")
+        expect(EmbeddingCacheEntry.count).to eq(5)
+
+        caching_provider.fingerprint = "test-provider:v2"
+        ingest_into(other_repository, shared_page, ci_run_id: "run-2")
+
+        # Asked in full, exactly as if the cache were empty.
+        expect(caching_provider.batches).to eq(2)
+        expect(caching_provider.batched.size).to eq(10)
+        expect(other_repository.spec_identities.count).to eq(5)
+      end
+
+      it "leaves the old entries in place, unreadable, rather than deleting them" do
+        # The distinction the sentence above turns on, asserted rather than implied. Nothing sweeps
+        # on a fingerprint change: the old rows are simply unreachable by any key the deployment
+        # now asks with. That matters because a fingerprint can move BACK — an environment variable
+        # set by mistake and reverted an hour later — and a delete would have made that hour cost a
+        # full re-embed of every repository. It is also what makes the change atomic and free:
+        # there is no migration of entries, no sweep to schedule, and no window in which the cache
+        # is half one model and half another.
+        EmbeddingGenerator.provider = caching_provider
+        ingest(shared_page, ci_run_id: "run-1")
+
+        caching_provider.fingerprint = "test-provider:v2"
+        ingest_into(other_repository, shared_page, ci_run_id: "run-2")
+
+        expect(EmbeddingCacheEntry.where(provider_fingerprint: "test-provider:v1").count).to eq(5)
+        expect(EmbeddingCacheEntry.where(provider_fingerprint: "test-provider:v2").count).to eq(5)
+
+        # And reverting reaches the originals again, at no cost — the reason they were kept.
+        caching_provider.fingerprint = "test-provider:v1"
+        asked_before = caching_provider.batched.size
+        third = create_repository(user: create_user(github_uid: "4004", github_handle: "third-tenant"),
+                                  github_full_name: "acme/third-service")
+        ingest_into(third, shared_page, ci_run_id: "run-3")
+
+        expect(caching_provider.batched.size).to eq(asked_before)
+        expect(third.spec_identities.count).to eq(5)
+      end
+    end
+
+    describe "the cache is read and written ONCE PER PAGE" do
+      # The same bound `SPGD-382`, `-395` and `-406` assert for the three statements before it, and
+      # for the same reason: a lookup driven from `#embedding_for` would be correct, would pass
+      # every example above, and would be a round trip per row — which on the 20,000-example suite
+      # this class is designed around is the cost the whole lineage exists to remove. Only a query
+      # count can tell the two apart.
+
+      it "reads once and writes once for a page of five texts it has never seen" do
+        EmbeddingGenerator.provider = caching_provider
+        run = record(shared_page, ci_run_id: "run-1")
+
+        statements = cache_statements { described_class.resolve(run) }
+
+        expect(statements.grep(/SELECT/i).size).to eq(1)
+        expect(statements.grep(/INSERT/i).size).to eq(1)
+        expect(statements.size).to eq(2)
+      end
+
+      it "reads once and writes NOTHING for a page that hits on every text" do
+        # The write is skipped entirely rather than issued empty: a page that bought nothing has
+        # nothing to remember, and `upsert_all` of an empty list is a statement with no rows.
+        EmbeddingGenerator.provider = caching_provider
+        ingest(shared_page, ci_run_id: "run-1")
+        run = Ingest::Payload.new(ingest_payload(specs: shared_page, ci_run_id: "run-2").deep_stringify_keys)
+                             .then do |payload|
+          Ingest::RunRecorder.record(other_repository, payload.test_run_attributes,
+                                     shard_id: payload.shard_id, specs: payload.specs)
+        end
+
+        statements = cache_statements { described_class.resolve(run) }
+
+        expect(statements.grep(/SELECT/i).size).to eq(1)
+        expect(statements.grep(/INSERT/i)).to be_empty
+      end
+
+      it "asks nothing at all when the page carries no text to look up" do
+        # The counterpart of `#digest_index`'s "still costs nothing when a page carries no text at
+        # all", and asserted the same way — as the ABSENCE of the statement rather than the
+        # presence of a guard, so it stays honest if the guard is ever replaced by relying on
+        # `where(text_digest: [])` compiling to `1=0`.
+        EmbeddingGenerator.provider = caching_provider
+        run = record(shared_page, ci_run_id: "run-1")
+        run.spec_observations.update_all(name: nil, intent_entity: nil, intent_action: nil,
+                                         intent_behavior: nil)
+
+        expect(cache_statements { described_class.resolve(run) }).to be_empty
+      end
+    end
+
+    describe "a cache failure costs the ingest nothing but money" do
+      # **Criterion 3, and the property that makes this table safe to add at all.** A cache is not
+      # allowed to become load-bearing: the vector is reproducible by asking the provider, which is
+      # exactly what a miss does, so every failure mode here has the same correct answer and it is
+      # not an incident.
+      #
+      # The rescue in `#cached_embeddings` is deliberately WIDE IN CLASS — these failures are not
+      # `EmbeddingGenerator::Error`, they are ActiveRecord's — and NARROW IN SCOPE, wrapping the
+      # cache call and nothing else. It does not widen what `#page_embeddings` may swallow; the
+      # provider request inside it still fails exactly as loudly as it did.
+
+      it "embeds the page normally when the READ fails" do
+        # `StatementInvalid` specifically, because the realistic instance of this is a deployment
+        # that shipped the code before running the migration. That must degrade to the previous
+        # release's behaviour, not fail every ingest.
+        EmbeddingGenerator.provider = caching_provider
+        allow(EmbeddingCacheEntry).to receive(:vectors_for)
+          .and_raise(ActiveRecord::StatementInvalid, 'relation "embedding_cache_entries" does not exist')
+
+        expect { ingest(shared_page, ci_run_id: "run-1") }.not_to raise_error
+
+        expect(caching_provider.batches).to eq(1)
+        expect(caching_provider.batched.size).to eq(5)
+        expect(repository.spec_identities.count).to eq(5)
+      end
+
+      it "resolves the page normally when the WRITE fails" do
+        # The rows are already resolved by the time the write is attempted, so the only thing lost
+        # is that the next page pays again.
+        EmbeddingGenerator.provider = caching_provider
+        allow(EmbeddingCacheEntry).to receive(:store).and_raise(ActiveRecord::StatementInvalid, "disk full")
+
+        run = nil
+        expect { run = ingest(shared_page, ci_run_id: "run-1") }.not_to raise_error
+
+        expect(repository.spec_identities.count).to eq(5)
+        expect(run.spec_observations.unresolved).to be_empty
+      end
+
+      it "embeds the page normally when the provider cannot say what its fingerprint is" do
+        # A provider that raises where it should have answered is the same situation as one that
+        # declines to answer, and it costs the ingest the same nothing.
+        EmbeddingGenerator.provider = caching_provider
+        allow(caching_provider).to receive(:fingerprint).and_raise(RuntimeError, "config unreadable")
+
+        expect { ingest(shared_page, ci_run_id: "run-1") }.not_to raise_error
+
+        expect(caching_provider.batches).to eq(1)
+        expect(repository.spec_identities.count).to eq(5)
+        expect(EmbeddingCacheEntry.count).to eq(0)
+      end
+
+      it "still lets a PROVIDER failure behave exactly as it did" do
+        # The other half of "narrow in scope", and the regression the wide rescue could have caused.
+        # `EmbeddingGenerator::Error` must still reach `#embed_page`'s fallback and still stamp the
+        # one row that caused it — a cache rescue that had been placed around the provider call
+        # would have swallowed it and silently resolved nothing.
+        poison = shared_page.first[:name]
+        provider = caching_provider
+        provider.define_singleton_method(:embed_many) do |texts|
+          @batches = batches + 1
+          raise EmbeddingGenerator::Error, "cannot embed the page" if texts.include?(poison)
+
+          texts.map { |text| EmbeddingGenerator::LocalProvider.call(text) }
+        end
+        provider.define_singleton_method(:call) do |text|
+          @calls = calls + 1
+          raise EmbeddingGenerator::Error, "cannot embed #{text}" if text == poison
+
+          EmbeddingGenerator::LocalProvider.call(text)
+        end
+
+        run = record(shared_page, ci_run_id: "run-1")
+        EmbeddingGenerator.provider = provider
+        described_class.resolve(run)
+
+        failed = run.spec_observations.embed_failed
+        expect(failed.pluck(:name)).to eq([poison])
+        expect(provider.batches).to eq(1)
+        expect(provider.calls).to eq(5)
+        # And the four that DID succeed on the fallback are cached, while the refused one is not —
+        # a nil is the absence of an answer, not an answer to remember.
+        expect(EmbeddingCacheEntry.count).to eq(4)
+        expect(EmbeddingCacheEntry.where(text_digest: SpecIdentity.digest_for(poison))).to be_empty
+      end
+    end
+
+    it "gives a cached row the same identity a freshly embedded row gets" do
+      # **The correctness backstop for every count above.** Each of those asserts that a request was
+      # not made; none of them would notice if the vector served in its place were the wrong one —
+      # a mis-keyed cache returns a valid vector and the resolve completes, silently pairing tests
+      # with each other's histories. So this pairs the two paths against each other: the second
+      # tenant, resolved entirely from cache, must land on the same text-to-file mapping the first
+      # tenant got from the provider.
+      EmbeddingGenerator.provider = caching_provider
+      first = ingest(shared_page, ci_run_id: "run-1")
+      second = ingest_into(other_repository, shared_page, ci_run_id: "run-2")
+
+      expect(identity_by_file(second)).to eq(identity_by_file(first))
+      expect(identity_by_file(second).values).to match_array(shared_page.pluck(:name))
+
+      # And the vectors themselves agree with what the provider would have returned, within the
+      # four-byte float the column stores — the same tolerance the order-contract example uses, and
+      # for the same reason.
+      other_repository.spec_identities.each do |identity|
+        own = EmbeddingGenerator::LocalProvider.call(identity.text)
+        drift = own.zip(identity.embedding.to_a).map { |mine, stored| (mine - stored).abs }.max
+
+        expect(drift).to be < 1e-5
+      end
+    end
+  end
+
   describe "the tenant boundary" do
     it "never resolves a test onto another repository's identity" do
       other = create_repository(user: create_user(github_uid: "2002", github_handle: "other"),

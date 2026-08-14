@@ -161,9 +161,9 @@ module Ingest
     # What it does NOT bound is a page of genuinely new text, and the paragraph above says why: the
     # ANN lookup and the upsert are still one per row, so a first run is round-trip bound whatever
     # this is. The embed no longer is — {#page_embeddings} asks for the page's vectors in one
-    # request — which lowers that page's floor without changing its shape. The number tuned here is
-    # what an UNCHANGED page costs, which is the ordinary case; the changed one is SPGD-72's
-    # remaining embed CACHING work.
+    # request, and asks for none of the ones this deployment already owns — which lowers that
+    # page's floor without changing its shape. The number tuned here is what an UNCHANGED page
+    # costs, which is the ordinary case.
     #
     # That makes this a size worth tuning where it used not to be, but not a different KIND of
     # constant: both readings bound one page, and neither is a bound on how much work a delivery
@@ -744,8 +744,9 @@ module Ingest
     # @return [Hash{String => Array<Float>, nil}] every vector this page's rows are going to need,
     #   fetched in ONE provider request — nil for a text the provider could not answer about.
     #
-    # **The third thing this page asks once instead of per row, and the last one SPGD-72's cost
-    # clause names.** {#digest_index} made the identical-text answer one query per page and
+    # **The third thing this page asks once instead of per row, and — with the cache below — the
+    # last of the three SPGD-72's cost clause names.** {#digest_index} made the identical-text
+    # answer one query per page and
     # {#flush_page} made the writes two statements per page; what was left was the embed, which the
     # identical-text shortcut removes for an UNCHANGED suite and does nothing for a changed one. Any
     # first run, any rename, any delivery whose text is not byte-identical to a row already held
@@ -777,8 +778,134 @@ module Ingest
     # page will create an identity for is embedded here and its duplicate is not — {#claim_identity}
     # puts the new row into `@digest_index` and the second occurrence takes the shortcut, exactly as
     # it does today.
+    #
+    # == The vectors this deployment already owns are not bought again
+    #
+    # The last of SPGD-72's three cost levers, and the one the other two cannot reach.
+    # {#identical_text} answers *"is this text on one of THIS repository's identity rows"* — that
+    # is what {#digest_index} is built from — so a page of genuinely new bytes gets no help from it
+    # and is billed in full. But "new to this repository" is not "new to this deployment": another
+    # repository's suite contains `"validates the email format"` too, and this repository's own
+    # renamed test was embedded under its old text last week. {EmbeddingCacheEntry} is keyed
+    # `(provider_fingerprint, text_digest)` across every repository, so those are hits, and a page
+    # that hits on all of them asks the provider nothing at all.
+    #
+    # **Read once, embed the remainder, write what was bought.** Three page-shaped statements where
+    # there were two, and the division is the one this class has made four times now: the cost is
+    # per page and the DECISION is still per row. Nothing here decides anything — a row whose vector
+    # came from the cache takes precisely the path a row whose vector came from the provider takes,
+    # through {#embedding_for}, {#nearest} and {#claim_identity}, and a text that missed both is a
+    # nil exactly as it was.
+    #
+    # `texts - cached.keys` is the whole of the change to what gets asked. When the provider
+    # publishes no fingerprint — which every provider this repository ships does except
+    # `OpenAIProvider`, and which the whole test suite's provider does — `cached` is empty, the
+    # subtraction is a no-op, and this method is byte-for-byte the behaviour it had before.
     def page_embeddings(observations)
-      embed_page(unheld_texts(observations))
+      texts = unheld_texts(observations)
+      fingerprint = cache_fingerprint
+      cached = cached_embeddings(fingerprint, texts)
+      fresh = embed_page(texts - cached.keys)
+      store_embeddings(fingerprint, fresh)
+
+      cached.merge(fresh)
+    end
+
+    # @return [String, nil] the current provider's cache key, or nil for "do not cache".
+    #
+    # Asked once per PAGE rather than once per cache call, so that the read and the write of one
+    # page cannot disagree about which provider they are talking about — and per page rather than
+    # per process, because `EmbeddingGenerator.fingerprint` is required to be recomputed on every
+    # call and memoizing it here would reintroduce exactly the staleness that contract exists to
+    # prevent.
+    #
+    # Rescued because it runs provider code: `OpenAIProvider.fingerprint` reads the environment
+    # today and a future provider might read a config file or a socket. Whatever it does, a
+    # provider that cannot say what it is must cost this ingest nothing more than the caching it
+    # declines to authorise. Nil is the same answer as "no fingerprint published", and the caller
+    # already treats that as "no caching".
+    def cache_fingerprint
+      EmbeddingGenerator.fingerprint
+    rescue StandardError => e
+      Rails.logger.warn(
+        "[IdentityResolver] run=#{@run.id} could not read the embedding provider fingerprint: " \
+        "#{e.message}; embedding this page without the cache"
+      )
+      nil
+    end
+
+    # @return [Hash{String => Array<Float>}] the subset of this page's texts this deployment has
+    #   already embedded under `fingerprint` — one query, an `IN` list on the unique key.
+    #
+    # == The rescue is WIDE in class and NARROW in scope, and both halves are deliberate
+    #
+    # {#page_embeddings} is the one exception inside {#resolve_page}'s containment, and `:499-505`
+    # argues exactly why it is allowed to be: `EmbeddingGenerator::Error` is attributable to known
+    # texts that {#embed_page} re-asks one at a time, so each failure lands back on the row that
+    # contributed it. **A cache failure is not that**, and this rescue must not be read as widening
+    # that licence. It is a different claim on a different statement.
+    #
+    # *Wide in class* because the failures are not the provider's: an unrun migration is
+    # `ActiveRecord::StatementInvalid`, a saturated pool is `ActiveRecord::ConnectionTimeoutError`,
+    # a dropped socket is lower still. Rescuing `EmbeddingGenerator::Error` here would catch none of
+    # them and a deployment that had not yet run the migration would fail every ingest — the cache
+    # would have become load-bearing, which is the one thing a cache must never be. Every one of
+    # those has the same correct answer, and it is not an incident: ask the provider, as this class
+    # did before the table existed.
+    #
+    # *Narrow in scope* because it wraps this call and nothing else. The provider request, the
+    # per-row decisions, {#nearest}, {#claim_identity} and {#flush_page} are all outside it and
+    # every one of them fails exactly as loudly as it did before. What {#page_embeddings} is
+    # permitted to swallow is unchanged: this adds a rescue AROUND A NEW STATEMENT, it does not
+    # loosen the existing one.
+    #
+    # Logged at `warn` and not `error`: the ingest is correct and merely more expensive, which is
+    # the same register {#embed_page}'s fallback line uses for the same reason.
+    def cached_embeddings(fingerprint, texts)
+      return {} if fingerprint.blank? || texts.empty?
+
+      EmbeddingCacheEntry.vectors_for(fingerprint, texts)
+    rescue StandardError => e
+      Rails.logger.warn(
+        "[IdentityResolver] run=#{@run.id} could not read #{texts.size} cached embeddings: " \
+        "#{e.message}; asking the provider for the whole page"
+      )
+      {}
+    end
+
+    # Remember what this page just paid for — one statement, on the way out.
+    #
+    # Both of {#embed_page}'s paths land here, which is why the write is at this seam and not
+    # inside it: the batch path and the one-at-a-time fallback return the same shape, and the
+    # fallback's per-text nils are dropped by {EmbeddingCacheEntry.store} rather than remembered as
+    # answers. A text the provider refused must be re-asked next time, not permanently cached as a
+    # failure.
+    #
+    # Rescued on the same terms as the read, and with more at stake in getting it right: a write is
+    # the half that can meet a unique-key conflict, a read-only replica or a full disk, and none of
+    # those is a reason to fail an ingest whose rows are already resolved. The page's vectors are in
+    # hand and the resolve continues with them; the only thing lost is that the next page pays again.
+    #
+    # **It commits on its own, and that is a property worth keeping.** {#resolve_page} holds no
+    # transaction — this class runs in a job precisely so that it is out of the ingest's, and
+    # {#claim_identity} commits per row — so this `upsert_all` is its own statement and its own
+    # transaction. Two consequences, both wanted: a page that dies later at {#nearest} or
+    # {#flush_page} still keeps the vectors it paid for, which is exactly the behaviour a cache
+    # should have on a failed pass; and the row locks the upsert takes are released at the end of
+    # the statement rather than held for the length of a page, so the concurrent shards of a first
+    # run — the case where two ingests upsert the SAME digest at the same moment — queue for
+    # microseconds instead of for each other's whole page. Wrapping the page in a transaction later
+    # would quietly reverse both.
+    def store_embeddings(fingerprint, fresh)
+      return if fingerprint.blank? || fresh.empty?
+
+      EmbeddingCacheEntry.store(fingerprint, fresh)
+    rescue StandardError => e
+      Rails.logger.warn(
+        "[IdentityResolver] run=#{@run.id} could not cache #{fresh.size} fresh embeddings: " \
+        "#{e.message}; this page's vectors will be bought again"
+      )
+      nil
     end
 
     # The texts this page will have to embed: every row's signal text, minus the rows that have no

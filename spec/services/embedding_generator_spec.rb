@@ -5,12 +5,16 @@ require "rails_helper"
 RSpec.describe EmbeddingGenerator do
   # Swap the whole ENV key rather than stubbing ENV#[] — a `with`-constrained partial double on ENV
   # breaks every other ENV read in the stack.
-  def with_api_key(value)
-    original = ENV["OPENAI_API_KEY"]
-    ENV["OPENAI_API_KEY"] = value
+  def with_api_key(value, &) = with_env("OPENAI_API_KEY", value, &)
+
+  # The general form of the above, for the second key `OpenAIProvider` reads. Same reasoning, and
+  # the same restore-in-`ensure` so a raising example cannot leak the value into the next one.
+  def with_env(key, value)
+    original = ENV[key]
+    ENV[key] = value
     yield
   ensure
-    ENV["OPENAI_API_KEY"] = original
+    ENV[key] = original
   end
 
   describe ".call" do
@@ -174,6 +178,95 @@ RSpec.describe EmbeddingGenerator do
       install { |texts| texts.map { Array.new(1536, 1) } }
 
       expect(described_class.embed_many(%w[a b]).flatten).to all(be_a(Float))
+    end
+  end
+
+  describe ".fingerprint" do
+    # The cache key's first half — what makes `EmbeddingCacheEntry` safe to share across every
+    # repository in a deployment. A cached vector is reusable only if the thing that would produce
+    # it again is the same thing, and this is the provider's own claim about what that means.
+
+    it "returns nothing at all for a provider that does not publish one" do
+      # **The conservative default, and the shape `.equivalent?` and `.configured?` already use.**
+      # No caching is the right answer to "I do not know what I am": it costs money and behaves
+      # exactly as this application did before the cache existed. A GUESSED key — the class name,
+      # say — would be wrong the moment a provider read its model from the environment, and the
+      # symptom is a vector from the previous model silently attached to a test, which no
+      # assertion anywhere would catch. Refusal is free; a wrong key is not.
+      described_class.provider = Class.new { def self.call(text) = [text.length.to_f] }
+
+      expect(described_class.fingerprint).to be_nil
+    end
+
+    it "treats a blank answer as a refusal rather than as a key everyone shares" do
+      described_class.provider = Class.new { def self.fingerprint = "" }
+
+      expect(described_class.fingerprint).to be_nil
+    end
+
+    it "delegates to a provider that does publish one" do
+      described_class.provider = Class.new { def self.fingerprint = "vendor:model-x" }
+
+      expect(described_class.fingerprint).to eq("vendor:model-x")
+    end
+
+    it "asks the provider again on every call, so a moved model is never served from a stale key" do
+      # ⚠️ Not a style preference. `OpenAIProvider.model` reads `ENV["SPECGUARD_EMBEDDING_MODEL"]`
+      # each time it is asked, so a fingerprint captured once at boot would go on naming the model
+      # the process started with and would keep authorising cache hits from it after the
+      # deployment had moved — which is the "unreadable rather than stale" guarantee inverted.
+      provider = Class.new do
+        class << self
+          attr_accessor :current
+          def fingerprint = current
+        end
+      end
+      provider.current = "vendor:before"
+      described_class.provider = provider
+
+      expect(described_class.fingerprint).to eq("vendor:before")
+
+      provider.current = "vendor:after"
+
+      expect(described_class.fingerprint).to eq("vendor:after")
+    end
+
+    describe "OpenAIProvider's answer" do
+      it "names the vendor and the model, and moves when the model does" do
+        # `text-embedding-3-small` and `-3-large` are different functions of the same text, so a
+        # deployment that changes `SPECGUARD_EMBEDDING_MODEL` must not read a single entry written
+        # under the old one.
+        expect(described_class::OpenAIProvider.fingerprint)
+          .to eq("openai:#{described_class::OpenAIProvider::DEFAULT_MODEL}")
+
+        with_env("SPECGUARD_EMBEDDING_MODEL", "text-embedding-3-large") do
+          expect(described_class::OpenAIProvider.fingerprint).to eq("openai:text-embedding-3-large")
+        end
+      end
+
+      it "never carries the API key" do
+        # The value is written to a database column and is deployment-global. Two deployments
+        # holding different keys against the same model produce the same vectors for the same text,
+        # so including the key would partition the cache by something that does not change its
+        # contents — and would write a credential-derived value into a column, which is a leak with
+        # no upside.
+        with_api_key("sk-super-secret-value") do
+          expect(described_class::OpenAIProvider.fingerprint).not_to include("sk-super-secret-value")
+          expect(described_class::OpenAIProvider.fingerprint).to eq("openai:text-embedding-3-small")
+        end
+      end
+    end
+
+    it "is withheld by LocalProvider, so the shipped default is uncached" do
+      # Stated as an assertion because the absence is the decision, not an oversight. The vector is
+      # a hash computed in this process, so a cache hit would replace arithmetic with a database
+      # round trip and a table write — slower than the thing it caches, and filling a
+      # deployment-global table with entries that can never repay their storage. It is also what
+      # keeps this application's shipped behaviour byte-identical to what it was before the cache.
+      described_class.provider = described_class::LocalProvider
+
+      expect(described_class::LocalProvider).not_to respond_to(:fingerprint)
+      expect(described_class.fingerprint).to be_nil
     end
   end
 
