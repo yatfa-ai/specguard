@@ -289,7 +289,7 @@ RSpec.describe "GET /api/v1/repository — latest_run.spec_file_examples", type:
 
     # There is no `latest_run` at all for a repository whose CI has never reported, so the ask
     # cannot conjure one — the rule the whole block follows, restated here because this is one of
-    # the two keys on it a client can ask for by name.
+    # the three keys on it a client can ask for by name.
     it "serves no block at all when CI has never reported" do
       silent = create_repository(user: @user, github_full_name: "acme/never-ran")
 
