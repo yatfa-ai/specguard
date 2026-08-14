@@ -4,8 +4,8 @@ require "rails_helper"
 
 # The retention rule for `embedding_cache_entries`, which before this class bounded only what was
 # SERVED: `live` kept an expired vector from ever being returned, and nothing on any path deleted a
-# row, so the table grew forever at ~6KB per distinct text per fingerprint. `expired` had been
-# written as the queryable half of the rule and had zero callers.
+# row, so the table grew forever at ~8.5KB of disk per distinct text per fingerprint. `expired` had
+# been written as the queryable half of the rule and had zero callers.
 #
 # Two directions are graded here and they are not the same claim. "The table stops growing" is
 # trivially satisfiable by deleting everything, so every example that asserts a row went is paired
@@ -15,8 +15,11 @@ require "rails_helper"
 RSpec.describe Ingest::EmbeddingCachePruner do
   # One deterministic vector, at the column's real width. `vector(1536)` is float4 per element, so a
   # round trip rounds — irrelevant to every assertion here, which are about WHICH ROWS exist, but
-  # the width matters: it is what makes a row ~6KB and therefore what the batch size is chosen
-  # against.
+  # the width matters INDIRECTLY, and not the way this comment used to say. It does not make the
+  # ROW ~6KB: the column is stored out of line, so the heap tuple is a 168-byte stub. What the width
+  # drives is 6,148 logical bytes into four TOAST chunks — ~8.5KB of disk per row once the chunk
+  # overhead is counted — and THAT is what the batch size is chosen against. See
+  # `Ingest::EmbeddingCachePruner::DELETE_BATCH_SIZE` for the measurement.
   let(:vector) { Array.new(EmbeddingGenerator::DIMENSIONS) { |i| (i % 7) / 7.0 } }
   let(:fingerprint) { "test-provider:v1" }
 
@@ -147,7 +150,7 @@ RSpec.describe Ingest::EmbeddingCachePruner do
   describe "convergence across invocations" do
     # The ceiling is a bound on ONE invocation, so what it buys is convergence rather than
     # completeness. Stubbed small because the shipped ceiling is 10,000 rows and a fixture of that
-    # many 1536-dimension vectors would be ~60MB of spec — the constants are the mechanism and the
+    # many 1536-dimension vectors would be ~81MB of spec — the constants are the mechanism and the
     # numbers are not.
     before do
       stub_const("#{described_class}::DELETE_BATCH_SIZE", 2)

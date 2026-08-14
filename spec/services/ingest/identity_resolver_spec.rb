@@ -1756,9 +1756,15 @@ RSpec.describe Ingest::IdentityResolver do
     # ⚠️ **THREE rules write to `embedding_cache_entries` and only two of them are caching.** The
     # read (`\ASELECT`) and the write (`\AINSERT … ON CONFLICT`) are the cache; the `\ADELETE` is
     # `Ingest::EmbeddingCachePruner` enforcing the retention window against the disk, which is a
-    # different rule on a different trigger — it is not gated on the fingerprint, it runs once per
-    # PASS rather than once per page, and its own bound is graded in
+    # different rule on a different trigger — it is not gated on the fingerprint, it is issued per
+    # PASS rather than per page, and its own bound is graded in
     # `spec/services/ingest/embedding_cache_pruner_spec.rb`.
+    #
+    # ⚠️ **Per pass is not the same as ONCE per pass.** The pruner issues at most one DELETE per
+    # batch, up to `Ingest::EmbeddingCachePruner::MAX_BATCHES_PER_RESOLVE`, breaking early on a
+    # short batch. These examples see exactly one because they run against an EMPTY cache table, so
+    # the first batch comes back short — not because the code guarantees one. An example here that
+    # pinned a DELETE count would be pinning that fixture state, not the class's contract.
     #
     # So the examples below classify POSITIVELY by which rule issued the statement and pin the total
     # beside the parts, rather than folding the prune into a caching figure or filtering it out of
@@ -1988,15 +1994,22 @@ RSpec.describe Ingest::IdentityResolver do
         # presence of a guard, so it stays honest if the guard is ever replaced by relying on
         # `where(text_digest: [])` compiling to `1=0`.
         #
-        # Both CACHING statements, and not the pass's prune: that one is issued once per pass
-        # whatever the page carries, because what is past the retention window has nothing to do
-        # with what this page is asking for.
+        # Both CACHING statements, and not the pass's prune: that one is issued whatever the page
+        # carries, because what is past the retention window has nothing to do with what this page
+        # is asking for.
         EmbeddingGenerator.provider = caching_provider
         run = record(shared_page, ci_run_id: "run-1")
         run.spec_observations.update_all(name: nil, intent_entity: nil, intent_action: nil,
                                          intent_behavior: nil)
 
-        expect(cache_statements { described_class.resolve(run) }.grep(/\ASELECT|\AINSERT/i)).to be_empty
+        statements = cache_statements { described_class.resolve(run) }
+
+        expect(statements.grep(/\ASELECT|\AINSERT/i)).to be_empty
+        # Pinned beside the parts, like the sibling above: the prune is the only statement left, so
+        # an unclassified one cannot hide behind the grep. One rather than up to
+        # `MAX_BATCHES_PER_RESOLVE` because the cache table is empty here, which is fixture state
+        # and not a guarantee — see the `cache_statements` doc.
+        expect(statements.size).to eq(1)
       end
     end
 
@@ -3412,7 +3425,8 @@ RSpec.describe Ingest::IdentityResolver do
 
   describe "reclaiming the disk the retention window has already stopped serving from" do
     # `EmbeddingCacheEntry::RETENTION_WINDOW` bounded what was SERVED and nothing enforced it
-    # against the table, so the cache grew forever at ~6KB per distinct text per fingerprint. The
+    # against the table, so the cache grew forever at ~8.5KB of disk per distinct text per
+    # fingerprint. The
     # rule itself — batching, the ceiling, convergence, what survives — is graded in
     # `spec/services/ingest/embedding_cache_pruner_spec.rb`. What is graded HERE is the seam: which
     # path pays for it, and what it may cost that path when it fails.
