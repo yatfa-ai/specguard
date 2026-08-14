@@ -200,7 +200,8 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
       expect(get_repository.keys)
         .to contain_exactly("repository", "api_key", "latest_run", "history_window", "history",
                             "unstable_tests_window", "unstable_tests", "directory_growth_window",
-                            "directory_growth", "branches_window", "branches")
+                            "directory_growth", "directory_run_growth_window",
+                            "directory_run_growth", "branches_window", "branches")
     end
 
     it "scopes latest_run to the key's own repository" do
@@ -2511,7 +2512,8 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
       expect(body.keys)
         .to contain_exactly("repository", "api_key", "latest_run", "history_window", "history",
                             "unstable_tests_window", "unstable_tests", "directory_growth_window",
-                            "directory_growth", "branches_window", "branches")
+                            "directory_growth", "directory_run_growth_window",
+                            "directory_run_growth", "branches_window", "branches")
       expect(body["history"].first.keys).to contain_exactly(
         "commit_sha", "branch", "total_specs", "annotated_specs", "annotated_ratio",
         "duration_seconds", "shard_count", "timed_shard_count", "suite_size_measured", "ingested_at"
@@ -2942,20 +2944,28 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
     # is meant to measure; forty rows is what proves the bound is enforced rather than the fixture
     # merely being small.
     #
-    # TWO ROWS AND NOT ONE, and the reason is a property of this endpoint rather than a concession.
-    # Two of the blocks served here read CONDITIONALLY ON STATE rather than on window size —
+    # TWO ROWS WAS ONCE THE BASELINE AND IS NOW THREE, and the reason is a property of this endpoint
+    # rather than a concession. Blocks served here read CONDITIONALLY ON STATE rather than on window
+    # size, so the baseline has to be taken in the same STATE as the full window or it sits inside
+    # the leak it is meant to measure.
+    #
     # `SpecDirectoryWindowGrowth` asks `spec_observations` nothing at all where the window holds a
-    # single run, because there is no earlier run to compare against — so a one-row baseline is
-    # taken in a state no larger window can be in, and the "extra" query at thirty rows is a second
-    # END appearing rather than a per-row cost. Two rows is the smallest window in the same state as
-    # thirty and forty, and it is still twenty-eight rows short of the bound: a per-row `pick` for
-    # `shard_count` reads as twenty-eight extra statements here, which is the leak this bounds.
-    it "costs the same at 2 branch rows, at 30 and at 40" do
-      create_main_runs(2, prefix: "cost")
+    # single run, because there is no earlier run to compare against — which is what ruled out ONE
+    # row. THREE is what rules out two, and the mechanism is the query cache rather than a gate:
+    # `directory_run_growth` compares the latest run against the PREVIOUS run on its branch, and at
+    # a window of two those ARE the window's two ends, so both growth blocks emit a BYTE-IDENTICAL
+    # statement and the second is served from the cache — one read where every larger window pays
+    # two. At three rows the window spans runs 1→3 and the run-over-run pair spans 2→3, the two
+    # statements differ, and the state is the one thirty and forty are in.
+    #
+    # Three rows is still TWENTY-SEVEN short of the bound: a per-row `pick` for `shard_count` reads
+    # as twenty-seven extra statements here, which is the leak this bounds.
+    it "costs the same at 3 branch rows, at 30 and at 40" do
+      create_main_runs(3, prefix: "cost")
       get_repository(query: { branch: "main" })
       baseline = executed_sql { get_repository(query: { branch: "main" }) }.length
 
-      create_main_runs(28, prefix: "grow")
+      create_main_runs(27, prefix: "grow")
       expect(repository.test_runs.where(branch: "main").count).to eq(30)
       expect(executed_sql { get_repository(query: { branch: "main" }) }.length).to eq(baseline)
 
@@ -2982,6 +2992,7 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
       statements = executed_sql { get_repository(query: { branch: "main" }) }
 
       history_queries = statements.grep(/FROM "test_runs"/).grep(/"branch" = /)
+                                  .grep_v(/\(test_runs\.created_at, test_runs\.id\) < /)
       grouped_counts = statements.grep(/FROM "test_run_shards"/).grep(/GROUP BY/)
 
       expect(history_queries.length).to eq(1)
@@ -2999,10 +3010,12 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
       # And no row pays a `pick` of its own for the timed count. The cheap way to serve
       # `timed_shard_count` per row is thirty un-grouped reads, which the two greps above cannot
       # see: they are not `GROUP BY` statements, so `grouped_counts` stays at one and this example
-      # stays green while the window costs thirty-two. Exactly two reads of the table — the window's
-      # one grouped aggregate, plus the single un-grouped `shard_totals` `latest_run` pays for its
-      # own one row — is the bound that catches it.
-      expect(statements.grep(/FROM "test_run_shards"/).length).to eq(2)
+      # stays green while the window costs thirty-two. Exactly THREE reads of the table — the
+      # window's one grouped aggregate, plus TWO single un-grouped `shard_totals` picks, one for the
+      # `latest_run` row and one for the PREVIOUS run on its branch, which `directory_run_growth`'s
+      # `TestRun#assembled_like?` gate has to ask about a row `preload_shard_counts` never saw — is
+      # the bound that catches it.
+      expect(statements.grep(/FROM "test_run_shards"/).length).to eq(3)
     end
 
     # The branch predicate and the LIMIT are ONE query, which is the entire fix: a window bounded
@@ -3015,10 +3028,14 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
 
       history = executed_sql { get_repository(query: { branch: "main" }) }
                 .grep(/FROM "test_runs"/).grep(/"branch" = /)
+                .grep_v(/\(test_runs\.created_at, test_runs\.id\) < /)
 
       expect(history.length).to eq(1)
       # Both clauses, in that order, in one statement. `latest_run`'s own `LIMIT 1` read carries no
-      # branch predicate and is filtered out above, so this cannot pass by matching that row.
+      # branch predicate and is filtered out above, and so is `directory_run_growth`'s previous-run
+      # lookup, which DOES carry one — it is excluded on the row-value predicate
+      # `Repository#previous_test_run_on_branch` emits and `recent_test_runs` does not, so this
+      # cannot pass by matching either.
       expect(history.first).to match(/"branch" = .*LIMIT/m)
     end
 

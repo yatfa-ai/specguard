@@ -625,8 +625,13 @@ RSpec.describe "GET /api/v1/repository — unstable_tests", type: :request do
 
       expect(flakiness_grain_reads { get_repository(key: api_key) }).to be_empty
       # And the endpoint's other grains are untouched at their own established count, so the zero
-      # above is this grain declining to read rather than the table going quiet.
-      expect(observation_reads { get_repository(key: api_key) }.length).to eq(6)
+      # above is this grain declining to read rather than the table going quiet. SEVEN and not six:
+      # the six single-run reads, plus the ONE `directory_run_growth` adds — that pair compares the
+      # latest run against the previous one on its branch and is served UNCONDITIONALLY, so it reads
+      # on an unfiltered window where both branch-gated blocks decline. It is counted here rather
+      # than excluded, because the point of this line is that a read belonging to another grain
+      # cannot disappear into this one's zero.
+      expect(observation_reads { get_repository(key: api_key) }.length).to eq(7)
       expect(get_repository(key: api_key)["unstable_tests"]).to be_nil
     end
 
@@ -664,12 +669,14 @@ RSpec.describe "GET /api/v1/repository — unstable_tests", type: :request do
     end
 
     # And the four are ALL of the reads this window adds — the assertion the per-grain count cannot
-    # make, because a read matching no grain's pattern is invisible to every one of them. Eleven is
-    # the endpoint's six single-run reads, plus these four, plus the ONE the growth-by-area block
-    # beside this one adds on the same branch-scoped window. That eleventh read is counted here
-    # rather than folded into the four, because the whole point of this example is that a read
-    # belonging to no grain is caught by the total: `spec/requests/api/v1/repository_directory_growth_spec.rb`
-    # bounds it, this line only refuses to let it disappear.
+    # make, because a read matching no grain's pattern is invisible to every one of them. Twelve is
+    # the endpoint's six single-run reads, plus these four, plus the TWO the growth-by-area grain
+    # adds on the same branch-scoped window: one for `directory_growth` (the branch window's two
+    # endpoints) and one for `directory_run_growth` (the latest run against the previous one on its
+    # branch). Those two are counted here rather than folded into the four, because the whole point
+    # of this example is that a read belonging to no grain is caught by the total:
+    # `spec/requests/api/v1/repository_directory_growth_spec.rb` and its run-over-run sibling bound
+    # them, this line only refuses to let them disappear.
     it "adds exactly those four to the table's total, and no fifth" do
       repository_with(%w[passed failed passed])
       get_repository(key: api_key)
@@ -679,22 +686,28 @@ RSpec.describe "GET /api/v1/repository — unstable_tests", type: :request do
 
       expect([area.length, file.length, example.length, description.length, flakiness.length])
         .to eq([1, 1, 2, 2, 4])
-      expect(growth.length).to eq(1)
+      expect(growth.length).to eq(2)
       expect(observation_reads { get_repository(key: api_key, query: { branch: "main" }) }.length)
         .to eq(classified_observation_reads { get_repository(key: api_key, query: { branch: "main" }) })
       expect(observation_reads { get_repository(key: api_key, query: { branch: "main" }) }.length)
-        .to eq(11)
+        .to eq(12)
     end
 
     # NO RUN-WINDOW QUERY. The block is drawn on `history_runs`, which is materialized once and
     # already read twice by `show`, so a second `recent_test_runs` would be invisible to every
     # count above and would read as one more branch-scoped SELECT here.
+    #
+    # `directory_run_growth`'s previous-run lookup ALSO carries a branch predicate, and is excluded
+    # on the ROW-VALUE predicate `Repository#previous_test_run_on_branch` emits and
+    # `recent_test_runs` does not — so this still pins the window at one statement rather than
+    # absorbing a regression into a widened total.
     it "adds no query against test_runs, whatever the window holds" do
       repository_with(Array.new(12) { |index| index == 3 ? "failed" : "passed" })
       get_repository(key: api_key)
 
       statements = executed_sql { get_repository(key: api_key, query: { branch: "main" }) }
       window_selects = statements.grep(/FROM "test_runs"/).grep(/"branch" = /)
+                                 .grep_v(/\(test_runs\.created_at, test_runs\.id\) < /)
 
       expect(window_selects.length).to eq(1)
       expect(window_selects.first).to include("LIMIT")

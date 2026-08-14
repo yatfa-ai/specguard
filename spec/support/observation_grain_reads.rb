@@ -19,7 +19,7 @@
 # The endpoint reads `spec_observations` once per single-run grain it serves — once for the by-file
 # rollup, once for the by-area one, TWICE for the per-example ranking (a capped scan and a coverage
 # aggregate), TWICE for the by-description one (a grouped aggregate and the presence count it cannot
-# window over) — and, for its two CROSS-RUN blocks, UP TO FOUR MORE for flakiness and UP TO ONE MORE
+# window over) — and, for its two CROSS-RUN blocks, UP TO FOUR MORE for flakiness and UP TO TWO MORE
 # for growth-by-area, which are not the only grains here whose count depends on state rather than
 # only on shape: the THREE drill-ins are ONE MORE EACH, and they are the grains whose count depends
 # on what the CLIENT ASKED rather than on what the window holds — no `?spec_directory=`, no read of
@@ -125,6 +125,22 @@
 # because it needs `NULLS LAST`, exactly as `.in_file` does. That makes the by-duration reads THREE
 # statements separated by an accident of quoting rather than two, and resting a third grain on it
 # would be resting it on the same accident twice.
+# == The growth grain has TWO READERS, and no pattern can separate them
+#
+# `growth_grain_reads` is the one accessor here that does not answer "did block X read". Both growth
+# blocks on `GET /api/v1/repository` — `directory_growth` (the branch WINDOW's two endpoints) and
+# `directory_run_growth` (the latest run against the PREVIOUS run on its branch) — call
+# `SpecObservation.directory_growth_between`, so they emit the SAME statement and land in the same
+# list. Tightening the pattern cannot fix that and should not be attempted: the two reads differ
+# only in the run ids bound into them, which the log does not carry.
+#
+# What separates them is the GATE, not the SQL. `directory_growth` is constructed only under
+# `?branch=`; `directory_run_growth` is constructed under every request. So a block measuring its
+# own contribution measures a DIFFERENCE — unfiltered against named on one fixture — and
+# `repository_directory_growth_spec.rb` does exactly that, with both terms asserted so the
+# subtraction cannot be satisfied by both blocks going quiet. A bare count of two here is a fact
+# about the endpoint and attributes nothing.
+#
 module ObservationGrainReads
   # `queries_against` counts cached repeats and TRANSACTIONs, unlike `executed_sql` — see
   # `QueryCapture`, where the two rules and the difference between them are stated in full.
