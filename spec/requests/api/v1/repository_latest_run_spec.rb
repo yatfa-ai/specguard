@@ -147,6 +147,15 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
         # block with `rows: []` and the asked-for path restated in it; see
         # `repository_spec_file_examples_spec.rb`, where that pair is asserted side by side.
         "spec_file_examples" => nil,
+        # And the drill-in into ONE DESCRIPTION, null for the same request-shaped reason as the two
+        # keys above it and NOT for a third one: this request sent no `?repeated_description=`. It
+        # sits with them because all three are the client's asks, and last of the three because it is
+        # the one that leaves their ladder — those two open a PLACE, area then file, and this opens a
+        # SENTENCE, whose rows routinely span several of both. The empty ANSWER is a present block
+        # with `rows: []` and the asked-for description restated in it; see
+        # `repository_repeated_description_examples_spec.rb`, where that pair is asserted side by
+        # side.
+        "repeated_description_examples" => nil,
         "suite_size_measured" => true,
         "ingested_at" => test_run.created_at.iso8601
       )
@@ -459,7 +468,8 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
         .to contain_exactly("commit_sha", "branch", "total_specs", "annotated_specs",
                             "annotated_ratio", "duration_seconds", "shards", "spec_files",
                             "spec_directories", "slowest_examples", "repeated_descriptions",
-                            "spec_directory_files", "spec_file_examples", "suite_size_measured",
+                            "spec_directory_files", "spec_file_examples",
+                            "repeated_description_examples", "suite_size_measured",
                             "ingested_at")
     end
 
@@ -2228,6 +2238,9 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
         # And null because it asked for no file either — the key present and unasked, exactly as it
         # was before the drill-in existed and on every request that does not send the parameter.
         "spec_file_examples" => nil,
+        # And null because it asked for no description either, on the same rule and for the same
+        # reason as the two above it.
+        "repeated_description_examples" => nil,
         "suite_size_measured" => true,
         "ingested_at" => third.created_at.iso8601
       )
