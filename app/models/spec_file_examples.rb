@@ -17,6 +17,14 @@
 # was taken from. Fetched separately they are figures that agree today with no structural reason to
 # keep agreeing.
 #
+# ⚠️ This class's prose states this panel's page capacity in THREE places — the worked caption just
+# above, the truncation argument at `#shown_timed_count`, and the tail test at `#lists_untimed?`.
+# All three are derived from `SpecObservation::FILE_EXAMPLES_LIMIT`, not from each other and not
+# from any of these sentences: that constant is the figure's one owner, and a resize rots all three
+# at once. Re-resolve it before touching any of them — a correction pass that trusts the adjacent
+# prose over the constant propagates the wrong number instead of fixing it, which is exactly how
+# one of the three came to disagree with the other two.
+#
 # It derives no figure of its own, and here it does not even take a second query for them: the
 # file's recorded and timed counts ride back on the listed rows as window counts — see
 # `SpecObservation::FILE_POPULATION_COUNTS` for why that is available at this grain and was not at
@@ -80,7 +88,7 @@ class SpecFileExamples
   # The three figures above are windows counted before the cap, which is what makes them true of
   # the FILE. That is the whole point of them and it is also the trap: on a truncated file they
   # describe rows a reader cannot see, and a caption that spends them as though they were the list
-  # says "the other 300 sit at the end of this list" over a page holding ten of them.
+  # says "the other 300 sit at the end of this list" over a page holding fifty of them.
   #
   # These two are counted off the LOADED ROWS instead — the ones rendered — so a caption can say
   # how much of each population it is showing. Counted rather than derived from the ordering: it is
