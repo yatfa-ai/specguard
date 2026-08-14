@@ -140,6 +140,13 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
         # path restated in it; see `repository_spec_directory_files_spec.rb`, where the pair is
         # asserted side by side.
         "spec_directory_files" => nil,
+        # And the drill-in into ONE FILE, null for the same reason as the key above it and for none
+        # of the reasons the five above THAT share: this request sent no `?spec_file=`. The two
+        # request-shaped nulls sit together at the bottom of the block because they are two rungs of
+        # one ladder — area opened, then file opened — and the empty ANSWER to either is a present
+        # block with `rows: []` and the asked-for path restated in it; see
+        # `repository_spec_file_examples_spec.rb`, where that pair is asserted side by side.
+        "spec_file_examples" => nil,
         "suite_size_measured" => true,
         "ingested_at" => test_run.created_at.iso8601
       )
@@ -452,7 +459,8 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
         .to contain_exactly("commit_sha", "branch", "total_specs", "annotated_specs",
                             "annotated_ratio", "duration_seconds", "shards", "spec_files",
                             "spec_directories", "slowest_examples", "repeated_descriptions",
-                            "spec_directory_files", "suite_size_measured", "ingested_at")
+                            "spec_directory_files", "spec_file_examples", "suite_size_measured",
+                            "ingested_at")
     end
 
     it "serves exactly the shards keys this contract pins once the decomposition is open" do
@@ -2217,6 +2225,9 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
         # Null because this request asked for no area — the key present and unasked, exactly as it
         # was before the drill-in existed and on every request that does not send the parameter.
         "spec_directory_files" => nil,
+        # And null because it asked for no file either — the key present and unasked, exactly as it
+        # was before the drill-in existed and on every request that does not send the parameter.
+        "spec_file_examples" => nil,
         "suite_size_measured" => true,
         "ingested_at" => third.created_at.iso8601
       )

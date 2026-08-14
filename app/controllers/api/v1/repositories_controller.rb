@@ -33,6 +33,18 @@ class Api::V1::RepositoriesController < Api::BaseController
   # different question — see `RequestedSpecDirectoryParam`, which holds that reasoning in full.
   include RequestedSpecDirectoryParam
 
+  # `?spec_file=` read as a spec file path, to open ONE FILE of the area opened above — the rung
+  # below `?spec_directory=` and the last one the ladder has. Shared with `RepositoriesController`
+  # on the reasoning the include above gives verbatim: the guard is the parameter's, not the
+  # surface's, and a second copy of it would be a second answer to "which shapes does `?spec_file=`
+  # tolerate".
+  #
+  # It reaches `where(spec_file_path: …)` directly, which is the harder half of that argument
+  # rather than a restatement of it: a non-String does not raise here at all. An Array becomes an
+  # `IN` list and answers a question nobody asked, under a `path` naming one file — see
+  # `RequestedSpecFileParam`, which holds that reasoning in full.
+  include RequestedSpecFileParam
+
   # The bound on `history` below. Ten rows is ten rows whether the suite holds three tests or
   # twenty thousand — `Repository#recent_test_runs` argues that in its own comment — so this is a
   # bound and not the first page of a pagination contract there is no cursor to continue.
@@ -144,6 +156,13 @@ class Api::V1::RepositoriesController < Api::BaseController
       # were none); this one is null because no area was asked for, which is a statement about
       # neither the run nor its rows. See `serialized_spec_directory_files` below.
       spec_directory_files: serialized_spec_directory_files(test_run),
+      # ONE FILE of that area, opened — the rung below the key above it and the last one this ladder
+      # has: area → file → example, with nothing under an example to open. Its `null` is a fact
+      # about the REQUEST for the same reason `spec_directory_files`' is, and it is the second key
+      # on this block to which that applies rather than an exception to the rule the four rollups
+      # follow. `shards` is null about the run, the four rollups about its rows, and these two about
+      # what the client asked. See `serialized_spec_file_examples` below.
+      spec_file_examples: serialized_spec_file_examples(test_run),
       # `TestRun#suite_size_measured?`, the same predicate `serialized_history_row` serves below and
       # for the same reason: a run that reported zero tests has a `total_specs` but not a
       # measurement, and a difference taken against it describes the report rather than the suite.
@@ -740,6 +759,98 @@ class Api::V1::RepositoriesController < Api::BaseController
       recorded_count: files.recorded_count,
       timed_count: files.timed_count,
       limit: SpecObservation::SPEC_DIRECTORY_FILES_LIMIT
+    }
+  end
+
+  # WHICH EXAMPLES ONE FILE HOLDS — the bottom rung of area → file → example, and the move an agent
+  # holding every other key on this endpoint still could not make. The key above names the files of
+  # one area and stops there; an agent that has walked `spec/models/` down to
+  # `spec/models/order_spec.rb — 340 examples, six minutes` has learned WHICH file to open and has
+  # nothing to open it with. Neither per-example block already here answers it: `slowest_examples`
+  # reaches this grain only for the ten examples that are slowest RUN-WIDE — usually holding not one
+  # row of the file that was opened — and `spec_files` is a capped ten RANKING of the run's heaviest
+  # files rather than a listing of anything.
+  #
+  # INSIDE `latest_run` rather than beside it, on the membership test the comment on `unstable_tests`
+  # states in full: every key this block serves is a statement about ONE run's rows.
+  # `SpecObservation.in_file` narrows to a single `test_run_id`, so it belongs with the others. And
+  # `latest_run` is not re-anchored by `?branch=`, so a file ask composes with a branch ask and with
+  # an area ask without any of the three touching another: the drill-in always describes the newest
+  # run, exactly as the panel does.
+  #
+  # THE SAME OBJECT THE PANEL READS, never a hand-written query — this file's governing rule, stated
+  # in full on `serialized_spec_files` above. `SpecFileExamples` is view-free apart from
+  # `#coverage_label`, which is skipped here exactly as the rung above skips `Row#duration_label` and
+  # `Row#coverage_label`, so the API and the panel list the same examples of the same file of the
+  # same run, in the same order, off the one read.
+  #
+  # THE ROW SHAPE IS `serialized_slowest_examples`' SIX FIELDS, field for field, because this
+  # endpoint's two per-example blocks describe the same rows of the same table and a client that
+  # learned to read one must not have to learn a second shape to read the other. `duration_seconds`
+  # is nullable and NEVER coalesced to `0.0`: an example this run recorded and did not time has no
+  # duration to report — `Ingest::ObservationRecorder#attributes` writes the nil faithfully — and a
+  # zero there would assert an example that cost nothing. Those rows are LISTED rather than
+  # excluded, at the end of the list, which is the whole reason this block's population counts can
+  # ride back on the rows at all where `slowest_examples`' had to be a second read.
+  #
+  # NO `reported_outcome_count`. `SlowestExamples` exposes one and this object does not, and the
+  # difference is not an oversight to paper over with a re-derivation off the serialized rows: that
+  # figure would be the PAGE's, computed under the file's name, which is the one thing every count
+  # on this block is arranged to avoid.
+  #
+  # `null` — with the key present — MEANS "YOU DID NOT ASK", on the spelling the key above fixed and
+  # for the same reason: the siblings are served unconditionally and gate on `#recorded?`, and
+  # copying that gate here would collapse *"you did not ask"* and *"the file you asked about has no
+  # rows"* into one answer. So an ask that matched nothing gets the block with `rows: []` and its
+  # `path` restated — HTTP 200, never a 404, since a deleted spec file, a renamed one and a stale
+  # bookmark are all ordinary ways to arrive here, as `RequestedSpecFileParam` argues in full.
+  #
+  # `recorded_count` and `timed_count` are the FILE's, off the two `COUNT(…) OVER ()` windows of
+  # `SpecObservation::FILE_POPULATION_COUNTS` — evaluated after the WHERE and before the LIMIT, so
+  # they describe the population the list was cut from rather than the examples that fit on the
+  # page. A client that folded the serialized rows to re-derive either would be computing the page's
+  # figure under the file's name. `limit` is READ OFF `SpecObservation::FILE_EXAMPLES_LIMIT` rather
+  # than restated, on the precedent every capped block here sets — it is its own constant and
+  # neither `SLOWEST_LIMIT` nor `SPEC_DIRECTORY_FILES_LIMIT`.
+  #
+  # EXACTLY ONE ADDITIONAL QUERY WHEN ASKED, AND NONE WHEN NOT, on the key above's rule: the gate is
+  # the ASK and it is decided before any read is issued, so a client that never sends the parameter
+  # pays nothing for the key's existence. The read is bounded by the FILE rather than by the suite
+  # and rides `index_spec_observations_on_test_run_id_and_spec_file_path`, the composite index
+  # EXPLAIN-certified for exactly this narrow in `spec/models/spec_observation_spec.rb`. Because
+  # this block issues the read the panel issues, unchanged, that certification transfers rather than
+  # needing to be repeated in a request spec.
+  def serialized_spec_file_examples(test_run)
+    return nil if requested_spec_file.nil?
+
+    examples = SpecFileExamples.for(test_run, requested_spec_file)
+
+    {
+      # The ask, restated as the server read it — never echoed from the raw parameter, on
+      # `history_window.branch`'s rule: a malformed shape is no ask at all and reaches no block, so
+      # what is served here is always the path the rows were actually gathered under.
+      path: examples.path,
+      # THE SAME SIX FIELDS `serialized_slowest_examples` SERVES, AND THE REPETITION IS CHOSEN. The
+      # two per-example blocks on this endpoint must agree field for field, and a shared
+      # `serialized_example_row` would make that structural rather than asserted — the stronger
+      # guarantee, and it is declined here for this file's standing reason: each block states its
+      # own contract beside its own rows, and a field list extracted to a helper sits where neither
+      # block's comment can explain why it holds what it holds. What enforces the agreement instead
+      # is a `contain_exactly` over these names in each block's request spec, so a field added to
+      # one and not the other goes red rather than shipping a client two per-example shapes.
+      rows: examples.rows.map do |observation|
+        {
+          name: observation.name,
+          file_path: observation.file_path,
+          line_number: observation.line_number,
+          spec_file_path: observation.spec_file_path,
+          duration_seconds: observation.duration_seconds,
+          outcome: observation.outcome
+        }
+      end,
+      recorded_count: examples.recorded_count,
+      timed_count: examples.timed_count,
+      limit: SpecObservation::FILE_EXAMPLES_LIMIT
     }
   end
 
