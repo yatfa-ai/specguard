@@ -976,37 +976,47 @@ RSpec.describe Ingest::IdentityResolver do
       # about.** Every other example in this group runs an UNDER-full page — 12 rows into a page of
       # 500 — and that is the one width at which `find_in_batches` can tell the relation is
       # exhausted without asking. A page that comes back exactly `batch_size` wide cannot, so it
-      # issues one more `SELECT` that returns nothing, and a FULL page therefore costs 12 round
-      # trips where the fixture above costs 11.
+      # issues one more `SELECT` that returns nothing, and a FULL page therefore costs one round
+      # trip more than the under-full fixture above.
       #
       # Pinned rather than left in prose because that paragraph is the tree's committed statement of
       # what a page costs, and its previous revision claimed the full page measured "the same 11" —
       # arithmetic on the under-full case rather than a measurement of the full one.
+      #
+      # The total is a PAGE total and isolates nothing, so it legitimately carries the pass's other
+      # costs too — including the one `DELETE` `Ingest::EmbeddingCachePruner` issues per pass, which
+      # is attributed below rather than left inside the number.
       stub_const("#{described_class}::BATCH_SIZE", subjects.size)
       ingest(wide_suite, ci_run_id: "run-1")
       second = record(wide_suite(offset: 100), ci_run_id: "run-2")
 
       sql = executed_sql { described_class.resolve(second) }
 
-      expect(sql.size).to eq(12)
+      expect(sql.size).to eq(13)
       # And the extra one is the probe and nothing else: two reads of the run's own page, the second
       # of which returns nothing. A total that grew for some other reason would pass the count alone.
       expect(sql.grep(/\ASELECT.*FROM "spec_observations" WHERE "spec_observations"\."test_run_id"/m).size).to eq(2)
+      # The pass's retention sweep, once — not once per page and not once per row.
+      expect(sql.grep(/\ADELETE\b.*embedding_cache_entries/m).size).to eq(1)
       expect(second.spec_observations.unresolved.count).to eq(0)
     end
 
     it "costs the same full page whatever the page's width is" do
       # The falsifier for the example above, and for the word "flat" in `BATCH_SIZE`'s comment: half
-      # the width, exactly full again, same 12. A resolver that had gone back to writing per row
-      # answers 22 here and 34 there — the `2N + 10` this slice replaced — so the pair of numbers
-      # says O(1)-in-the-width in a way neither says alone.
+      # the width, exactly full again, same 13. A resolver that had gone back to writing per row
+      # answers 23 here and 35 there — the `2N + 10` this slice replaced — so the pair of numbers
+      # says O(1)-in-the-width in a way neither says alone. The prune contributes exactly one to
+      # both, which is what keeps the pair a statement about the WIDTH.
       stub_const("#{described_class}::BATCH_SIZE", 6)
       ingest(wide_suite(width: 6), ci_run_id: "run-1")
       expect(repository.spec_identities.count).to eq(6)
 
       second = record(wide_suite(offset: 100, width: 6), ci_run_id: "run-2")
 
-      expect(executed_sql { described_class.resolve(second) }.size).to eq(12)
+      sql = executed_sql { described_class.resolve(second) }
+
+      expect(sql.size).to eq(13)
+      expect(sql.grep(/\ADELETE\b.*embedding_cache_entries/m).size).to eq(1)
       expect(second.spec_observations.unresolved.count).to eq(0)
     end
 
@@ -1634,6 +1644,23 @@ RSpec.describe Ingest::IdentityResolver do
     end
 
     # Statements this deployment issued against the cache table, in the order it issued them.
+    # Every statement of the pass that names this table, whatever issued it.
+    #
+    # ⚠️ **THREE rules write to `embedding_cache_entries` and only two of them are caching.** The
+    # read (`\ASELECT`) and the write (`\AINSERT … ON CONFLICT`) are the cache; the `\ADELETE` is
+    # `Ingest::EmbeddingCachePruner` enforcing the retention window against the disk, which is a
+    # different rule on a different trigger — it is not gated on the fingerprint, it runs once per
+    # PASS rather than once per page, and its own bound is graded in
+    # `spec/services/ingest/embedding_cache_pruner_spec.rb`.
+    #
+    # So the examples below classify POSITIVELY by which rule issued the statement and pin the total
+    # beside the parts, rather than folding the prune into a caching figure or filtering it out of
+    # one. Absorbing it would leave a per-page caching count that could double while the prune's
+    # dropped and still read green; filtering it out would leave a statement no example counts. An
+    # unclassified statement belongs to no bucket and is caught by the total.
+    #
+    # `\A`-anchored, and that anchor is load-bearing rather than tidy: the prune's statement is
+    # `DELETE … WHERE id IN (SELECT … LIMIT n)`, so an unanchored `/SELECT/` counts it as a read.
     def cache_statements(&) = executed_sql(&).grep(/embedding_cache_entries/i)
 
     it "asks the provider NOTHING for a page another repository has already paid to embed" do
@@ -1700,7 +1727,12 @@ RSpec.describe Ingest::IdentityResolver do
 
       statements = cache_statements { ingest(shared_page, ci_run_id: "run-1") }
 
-      expect(statements).to be_empty
+      # Neither CACHING statement is issued. The prune's `DELETE` is on this table and is
+      # deliberately outside this claim: an expired row is expired whoever wrote it, so reclaiming
+      # it must not depend on the current provider being willing to say what it is — see
+      # "prunes even though this provider publishes no fingerprint and the cache is inert".
+      expect(statements.grep(/\ASELECT|\AINSERT/i)).to be_empty
+      expect(statements.grep(/\ADELETE/i).size).to eq(1)
       expect(EmbeddingCacheEntry.count).to eq(0)
       # And the page behaves exactly as it did before this slice: one request, five texts.
       expect(uncached_provider.batches).to eq(1)
@@ -1770,9 +1802,12 @@ RSpec.describe Ingest::IdentityResolver do
 
         statements = cache_statements { described_class.resolve(run) }
 
-        expect(statements.grep(/SELECT/i).size).to eq(1)
-        expect(statements.grep(/INSERT/i).size).to eq(1)
-        expect(statements.size).to eq(2)
+        expect(statements.grep(/\ASELECT/i).size).to eq(1)
+        expect(statements.grep(/\AINSERT/i).size).to eq(1)
+        # The prune, attributed rather than absorbed into either caching figure: once per PASS,
+        # where the two above are once per page.
+        expect(statements.grep(/\ADELETE/i).size).to eq(1)
+        expect(statements.size).to eq(3)
       end
 
       it "reads once and writes NOTHING for a page that hits on every text" do
@@ -1788,8 +1823,10 @@ RSpec.describe Ingest::IdentityResolver do
 
         statements = cache_statements { described_class.resolve(run) }
 
-        expect(statements.grep(/SELECT/i).size).to eq(1)
-        expect(statements.grep(/INSERT/i)).to be_empty
+        expect(statements.grep(/\ASELECT/i).size).to eq(1)
+        expect(statements.grep(/\AINSERT/i)).to be_empty
+        expect(statements.grep(/\ADELETE/i).size).to eq(1)
+        expect(statements.size).to eq(2)
       end
 
       it "asks nothing at all when the page carries no text to look up" do
@@ -1797,12 +1834,16 @@ RSpec.describe Ingest::IdentityResolver do
         # all", and asserted the same way — as the ABSENCE of the statement rather than the
         # presence of a guard, so it stays honest if the guard is ever replaced by relying on
         # `where(text_digest: [])` compiling to `1=0`.
+        #
+        # Both CACHING statements, and not the pass's prune: that one is issued once per pass
+        # whatever the page carries, because what is past the retention window has nothing to do
+        # with what this page is asking for.
         EmbeddingGenerator.provider = caching_provider
         run = record(shared_page, ci_run_id: "run-1")
         run.spec_observations.update_all(name: nil, intent_entity: nil, intent_action: nil,
                                          intent_behavior: nil)
 
-        expect(cache_statements { described_class.resolve(run) }).to be_empty
+        expect(cache_statements { described_class.resolve(run) }.grep(/\ASELECT|\AINSERT/i)).to be_empty
       end
     end
 
@@ -3184,6 +3225,105 @@ RSpec.describe Ingest::IdentityResolver do
       # Asserting either name here would pin a fixture-scale accident, and asserting the intended
       # one would fail against a correct implementation. The example above certifies what is true at
       # both sizes: these counts do not scan the table to find nothing.
+    end
+  end
+
+  describe "reclaiming the disk the retention window has already stopped serving from" do
+    # `EmbeddingCacheEntry::RETENTION_WINDOW` bounded what was SERVED and nothing enforced it
+    # against the table, so the cache grew forever at ~6KB per distinct text per fingerprint. The
+    # rule itself — batching, the ceiling, convergence, what survives — is graded in
+    # `spec/services/ingest/embedding_cache_pruner_spec.rb`. What is graded HERE is the seam: which
+    # path pays for it, and what it may cost that path when it fails.
+
+    let(:stale_vector) { Array.new(EmbeddingGenerator::DIMENSIONS) { |index| (index % 7) / 7.0 } }
+
+    # One entry past the window, written under a fingerprint this deployment no longer runs — the
+    # ordinary shape of a reclaimable row. `update_all` rather than moving the clock, the choice
+    # this file already makes elsewhere.
+    def expired_cache_entry
+      EmbeddingCacheEntry.store("retired-provider:v0", { "embedded a quarter ago" => stale_vector })
+      EmbeddingCacheEntry.update_all(updated_at: (EmbeddingCacheEntry::RETENTION_WINDOW + 1.day).ago)
+    end
+
+    def warnings
+      lines = []
+      allow(Rails.logger).to receive(:warn) { |message| lines << message }
+      yield
+      lines
+    end
+
+    # ⭐ **The seam decision, discriminated rather than asserted in a comment.** Two paths were
+    # defensible — this class, which is the table's ONLY writer, and `Ingest::RunRecorder`, where
+    # the sibling `Ingest::ObservationPruner` is called after each commit. The reason this one was
+    # chosen is argued on `Ingest::EmbeddingCachePruner`; this example is what makes the choice a
+    # fact about the code. `#record` here is `RunRecorder` alone — the synchronous half the endpoint
+    # answers `202` from — so the first assertion is also the whole of the "no 202 is affected"
+    # claim: the ingest request never issues this delete at all.
+    it "prunes on the RESOLVE pass and not on the ingest write path" do
+      expired_cache_entry
+
+      run = record(suite, ci_run_id: "run-1")
+
+      # The write path ran in full — it recorded the run, and it called the OTHER pruner — and left
+      # this table alone.
+      expect(EmbeddingCacheEntry.count).to eq(1)
+
+      described_class.resolve(run)
+
+      expect(EmbeddingCacheEntry.count).to eq(0)
+    end
+
+    it "prunes even though this provider publishes no fingerprint and the cache is inert" do
+      # The prune is deliberately NOT gated on `#cache_fingerprint`. Under `with lexical
+      # embeddings` the provider publishes no fingerprint, so this whole pass reads nothing from the
+      # cache and writes nothing to it — and the expired rows still go. Gating on the fingerprint
+      # would strand the table of exactly the deployment that has stopped being able to use it.
+      expired_cache_entry
+      expect(EmbeddingGenerator.fingerprint).to be_nil
+
+      described_class.resolve(record(suite, ci_run_id: "run-1"))
+
+      expect(EmbeddingCacheEntry.count).to eq(0)
+    end
+
+    # ⚠️ **The failure policy is `Ingest::ObservationPruner`'s INVERTED, and that is the point of
+    # this example.** That class lets a prune failure fail the ingest on purpose. Here the table is
+    # a cache that every caller is required to be able to lose, so the same failure must cost this
+    # resolve nothing: the rows still resolve, the pass still reports, and nothing raises. Asserted
+    # in a spec rather than promised in a comment, because the containment is the whole claim.
+    it "resolves the whole run anyway when the prune fails, and says so at warn" do
+      allow(Ingest::EmbeddingCachePruner).to receive(:prune)
+        .and_raise(ActiveRecord::StatementInvalid, "PG::UndefinedTable: relation does not exist")
+
+      run = record(suite, ci_run_id: "run-1")
+      lines = warnings { expect(described_class.resolve(run)).to eq(3) }
+
+      expect(run.spec_observations.unresolved.count).to eq(0)
+      expect(repository.spec_identities.count).to eq(3)
+      # `warn` and not `error`, the register `#cached_embeddings` and `#store_embeddings` already
+      # use for this table: the resolve is correct and the deployment is merely holding disk its own
+      # rule says it should not.
+      expect(lines.grep(/could not reclaim expired cache entries/).size).to eq(1)
+    end
+
+    it "does not let a prune failure discard what the pass already resolved" do
+      # The ordering half of the containment. The prune runs after both work lists have been walked,
+      # so a raising prune cannot reach past the writes those lists made — but a prune placed ahead
+      # of them, or one allowed to propagate out of `#resolve`, would abandon a page of rows that
+      # had already been embedded and paid for. Pinned against the identities rather than the count.
+      expired_cache_entry
+      allow(Ingest::EmbeddingCachePruner).to receive(:prune).and_raise(ActiveRecord::Deadlocked, "deadlock detected")
+
+      run = record(suite, ci_run_id: "run-1")
+      described_class.resolve(run)
+
+      # Every row of the page carries the identity it resolved to, and the identities are on the
+      # repository — the two writes `#resolve_page` flushes, both landed and neither rolled back.
+      expect(run.spec_observations.unresolved.count).to eq(0)
+      expect(run.spec_observations.count).to eq(3)
+      expect(repository.spec_identities.count).to eq(3)
+      # And the row the prune failed to reclaim is still there, rather than half-deleted.
+      expect(EmbeddingCacheEntry.count).to eq(1)
     end
   end
 end

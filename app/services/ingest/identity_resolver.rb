@@ -101,9 +101,11 @@ module Ingest
   # page's worth of vectors in ONE provider request, so a changed 20,000-example suite is ~40 round
   # trips rather than 20,000 — free either way on the shipped `LocalProvider`, which is the whole
   # reason it went last, and the difference between a usable deployment and an unusable one for
-  # anyone who installs `EmbeddingGenerator::OpenAIProvider`. What remains of the axis is CACHING
-  # those vectors, which is a store-and-invalidate question and not a batching one. Also the ANN
-  # recall measurement {#nearest} hands over by name.
+  # anyone who installs `EmbeddingGenerator::OpenAIProvider`. CACHING those vectors was the rest of
+  # that axis and it is now here too — {EmbeddingCacheEntry} for the store (SPGD-420) and
+  # {#reclaim_expired_cache} for the half that bounds what it costs to keep (SPGD-428), which is
+  # what makes it a store-and-invalidate answer rather than only the store. Also the ANN recall
+  # measurement {#nearest} hands over by name.
   #
   # **Not** a `retry_on` / `discard_on` policy on {Ingest::IdentityResolutionJob}, and that omission
   # is now a finding rather than a deferral: `retry_on EmbeddingGenerator::Error` cannot fire.
@@ -140,18 +142,22 @@ module Ingest
     # WIDTH is a claim worth a falsifier, and it was O(N) while this comment's previous revision
     # said so.
     #
-    # As an illustration and not as the claim: on this tree a 12-row unchanged page measures 11 round
+    # As an illustration and not as the claim: on this tree a 12-row unchanged page measures 12 round
     # trips — 1 digest lookup, 2 UPDATEs, 4 reads (the repository, {#resolve}'s two backlog lists,
-    # and the run's own page) and {#report}'s 4 counts — where it measured 33.
+    # and the run's own page), {#report}'s 4 counts, and 1 retention sweep
+    # ({Ingest::EmbeddingCachePruner}, once per pass) — where it measured 33.
     #
-    # A page that is exactly FULL measures **12 and not 11**, at any width, and the extra trip is
+    # A page that is exactly FULL measures **13 and not 12**, at any width, and the extra trip is
     # `find_in_batches`: a batch that comes back exactly `batch_size` wide cannot be known to have
     # exhausted the relation, so one more `SELECT` is issued and returns nothing. Worth the sentence
     # because the full page is the case this constant is ABOUT and the 12-row fixture is under-full —
     # the one width at which the probe cannot appear. Measured on this branch at two widths, 6 and
-    # 12, and it is 12 at both; before this slice the same two measured 22 and 34, i.e. `2N + 10`,
+    # 12, and it is 13 at both; before SPGD-395 the same two measured 22 and 34, i.e. `2N + 10`,
     # which puts a full page of 500 at ~1,010. That flatness in the width — not the size of the drop
-    # — is the whole of what this slice bought.
+    # — is the whole of what that slice bought, and the sweep does not touch it: it is one statement
+    # per PASS, so it moves both of these figures by exactly one and neither of them with the width.
+    # (The `2N + 10` figures were measured before this pass carried a retention sweep, so the
+    # like-for-like comparison against them is 12 rather than 13.)
     #
     # Deliberately phrased as the invariant plus an example, because the total is rebase-fragile in a
     # way the invariant is not: it was 28 before SPGD-379 split the backlog into two reads, 29 after,
@@ -331,12 +337,46 @@ module Ingest
         resolved += resolve_page(page)
       end
 
+      reclaim_expired_cache
       report(resolved)
 
       resolved
     end
 
     private
+
+    # Reclaim the disk {EmbeddingCacheEntry::RETENTION_WINDOW} has already stopped serving from —
+    # see {Ingest::EmbeddingCachePruner} for the rule, for why the ceiling converges, and for why
+    # this seam and not `Ingest::RunRecorder`'s.
+    #
+    # **Here because this class is the table's only writer**, on the same rule that puts the
+    # `spec_observations` pruner at the write path that grows THAT table. It runs after both lists
+    # have been walked and before {#report}, so a pass reclaims what it can only once the work
+    # somebody is waiting for is done, and so the report stays the last line of the pass.
+    #
+    # ⚠️ **Contained on exactly the terms {#store_embeddings} is contained, and the sibling
+    # pruner's opposite policy must not be read across.** `Ingest::ObservationPruner` lets a prune
+    # failure fail the ingest on purpose, because the rows it bounds are the product's data and a
+    # rule that has stopped keeping up is the last thing that should fail quietly. This table is a
+    # cache and every caller is required to be able to lose it, so the same failure here — an unrun
+    # migration, a saturated pool, a statement timeout on a table that got large before this rule
+    # arrived — must cost this resolve nothing at all. A prune that could abandon a page of rows
+    # mid-pass would have made a losable cache load-bearing for the only path that resolves
+    # anything, which is the one thing {EmbeddingCacheEntry} forbids.
+    #
+    # `warn` and not `error`, and the register is the point rather than a formality: nothing is
+    # wrong with this resolve. It is the same line {#cached_embeddings} and {#store_embeddings}
+    # emit, saying the same thing — the application is correct and merely holding more disk than
+    # its own rule says it should, until the next ingest tries again.
+    def reclaim_expired_cache
+      Ingest::EmbeddingCachePruner.prune
+    rescue StandardError => e
+      Rails.logger.warn(
+        "[IdentityResolver] run=#{@run.id} could not reclaim expired cache entries: " \
+        "#{e.message}; the retention window still bounds what is served"
+      )
+      nil
+    end
 
     # **The one thing this pass says for itself.** Until it existed the whole asynchronous half of
     # ingest had a single voice — the per-row warn in {#embed} — and that voice can only speak about
