@@ -411,6 +411,7 @@ RSpec.describe "GET /api/v1/repository — directory_growth", type: :request do
                                "skipped_unmeasured_count" => 2,
                                "skipped_assembled_differently_count" => 0,
                                "covered_run_count" => nil, "runs_back" => nil,
+                               "shortened" => nil,
                                "baseline_commit_sha" => nil)
     end
 
@@ -431,6 +432,7 @@ RSpec.describe "GET /api/v1/repository — directory_growth", type: :request do
                                "skipped_unmeasured_count" => 0,
                                "skipped_assembled_differently_count" => 2,
                                "covered_run_count" => nil, "runs_back" => nil,
+                               "shortened" => nil,
                                "baseline_commit_sha" => nil)
     end
 
@@ -521,27 +523,43 @@ RSpec.describe "GET /api/v1/repository — directory_growth", type: :request do
     # is the third row below: an unknown branch selects ZERO runs and would report a span of one over
     # a window holding none, beside an `anchor_commit_sha` of `null` in the same body.
     #
-    # Swept across the three shapes AT ONCE, on three branches of one repository, because the defect
-    # is the pair coming apart rather than any single state's figure — and the middle row is what
+    # `shortened` IS THE FOURTH SPAN KEY and the FOURTH ROW is what makes this example falsifiable
+    # for it. The first three rows reach only `no_earlier_run` and `anchor_unmeasured`, which never
+    # enter the walk: their skip counters keep their `0` default and `shortened?` is benignly `false`
+    # there, so an ungated `shortened` passes all three — which is exactly how it stayed ungated
+    # while this example was green (SPGD-429). The `skipped` branch reaches `no_measured_baseline`,
+    # which is reachable ONLY by every earlier run being skipped, so `skipped_count.positive?` — and
+    # therefore `shortened?` — is necessarily TRUE there. Ungated, that row reads `true` beside three
+    # nulls; the row fails unless the key is gated, and it is the only row here that can say so.
+    #
+    # Swept across the four shapes AT ONCE, on four branches of one repository, because the defect
+    # is the pair coming apart rather than any single state's figure — and the `pair` row is what
     # keeps this from being satisfiable by nulling the keys everywhere: a baseline the walk DID land
-    # on still owes its true span, and in the recorded-rows states that span is the actionable half
-    # of the answer ("the run that recorded nothing is one back, and it is this sha").
+    # on still owes its true span, `shortened: false` included, and in the recorded-rows states that
+    # span is the actionable half of the answer ("the run that recorded nothing is one back, and it
+    # is this sha").
     it "counts a span only where there is a baseline to count it to, and never against none" do
       ingest_areas({ "spec/models" => 2 }, commit_sha: "loneanchor01", at: 10.days.ago,
                    branch: "solo")
       ingest(repository, [], commit_sha: "totalsonly01", at: 20.days.ago, total: 400, branch: "pair")
       ingest_areas({ "spec/models" => 2 }, commit_sha: "pairanchor01", at: 10.days.ago,
                    branch: "pair")
+      ingest(repository, [], commit_sha: "skipunmeas01", at: 20.days.ago, total: 0,
+             branch: "skipped")
+      ingest_areas({ "spec/models" => 2 }, commit_sha: "skipanchor01", at: 10.days.ago,
+                   branch: "skipped")
 
-      spans = %w[solo pair does-not-exist].to_h do |branch|
+      spans = %w[solo pair skipped does-not-exist].to_h do |branch|
         _window, block = blocks(query: { branch: branch })
-        [branch, block.values_at("state", "baseline_commit_sha", "covered_run_count", "runs_back")]
+        [branch, block.values_at("state", "baseline_commit_sha", "covered_run_count", "runs_back",
+                                 "shortened")]
       end
 
       expect(spans).to eq(
-        "solo" => ["no_earlier_run", nil, nil, nil],
-        "pair" => ["baseline_unrecorded", "totalsonly01", 2, 1],
-        "does-not-exist" => ["anchor_unmeasured", nil, nil, nil]
+        "solo" => ["no_earlier_run", nil, nil, nil, nil],
+        "pair" => ["baseline_unrecorded", "totalsonly01", 2, 1, false],
+        "skipped" => ["no_measured_baseline", nil, nil, nil, nil],
+        "does-not-exist" => ["anchor_unmeasured", nil, nil, nil, nil]
       )
     end
 

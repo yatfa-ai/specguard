@@ -1244,19 +1244,36 @@ class Api::V1::RepositoriesController < Api::BaseController
   # every row below is signed in.
   #
   # ⭐ THE SPAN IS NULL WHEREVER THE SHA IS — one predicate, `baseline_run`, read ONCE into a local
-  # and used for all three keys, so the figures and the run they are counted to cannot come apart.
-  # `#covered_run_count` is `runs_back + 1` and `runs_back` keeps its `0` default in exactly the four
-  # states the walk landed on no baseline in, so serving it raw asserts a ONE-RUN COMPARISON that was
-  # never taken: `anchor_unmeasured` would carry `covered_run_count: 1` beside `window_run_count: 2`
-  # and `shortened: false` — the block's own claim that the span equals the window, and its own
-  # figures denying it, two keys apart. The degenerate end is worse: an unknown `?branch=` selects
-  # ZERO runs and would serve a comparison spanning one run over a window holding none, next to an
-  # `anchor_commit_sha` of `null`. The panel never prints the figure in these states —
-  # `spec_directory_window_growth_span_sentence` is reached only under `comparable? &&
-  # any_movement?` — so this endpoint is the FIRST surface that can be wrong with it, and a
-  # fabricated span sitting among the honesty fields is the exact failure they exist to prevent.
-  # `null` is the same answer `baseline_commit_sha` already gives, for the same reason, and it is a
-  # PINNED CONTRACT rather than a default: the spec asserts both keys in every one of the four.
+  # and used for all FOUR span keys, so the figures and the run they are counted to cannot come
+  # apart. `#covered_run_count` is `runs_back + 1` and `runs_back` keeps its `0` default in exactly
+  # the four states the walk landed on no baseline in, so serving it raw asserts a ONE-RUN
+  # COMPARISON that was never taken: `anchor_unmeasured` would carry `covered_run_count: 1` beside
+  # `window_run_count: 2` and `shortened: false` — the block's own claim that the span equals the
+  # window, and its own figures denying it, two keys apart. The degenerate end is worse: an unknown
+  # `?branch=` selects ZERO runs and would serve a comparison spanning one run over a window holding
+  # none, next to an `anchor_commit_sha` of `null`.
+  #
+  # `shortened` IS THE FOURTH, and it fails in the opposite direction from the other three, which is
+  # why enumerating from `anchor_unmeasured` alone once left it ungated. The four no-baseline states
+  # split in half on this key. `anchor_unmeasured` and `no_earlier_run` never enter the walk, so the
+  # skip counters keep their `0` default and `shortened?` is benignly `false`. `no_measured_baseline`
+  # and `no_comparable_composition` are reached ONLY from inside the walk, and only by every earlier
+  # run being skipped — `skipped_count.positive?` is the very mechanism that reaches them — so
+  # `shortened?` is necessarily `true` in both, ALWAYS, not merely sometimes. Ungated it printed
+  # `shortened: true` beside `covered_run_count: null` and `baseline_commit_sha: null`: a shortened
+  # span asserted for a comparison that was never taken. `false` would be no better than `true`
+  # here — it is equally a claim about a span, namely that it equals the window — so the answer is
+  # `null`, the same answer the other three give, for the same reason.
+  #
+  # The two SKIP COUNTS are NOT gated and must not be: they are facts about the walk rather than
+  # about the span, they are the actionable half of both those states ("two earlier runs reported no
+  # tests"), and they are true whether or not the walk found somewhere to land.
+  #
+  # The panel never prints the span in these states — `spec_directory_window_growth_span_sentence`
+  # is reached only under `comparable? && any_movement?` — so this endpoint is the FIRST surface that
+  # can be wrong with it, and a fabricated span sitting among the honesty fields is the exact failure
+  # they exist to prevent. `null` is the same answer `baseline_commit_sha` already gives, and it is a
+  # PINNED CONTRACT rather than a default: the spec asserts the keys in every one of the four.
   # The four states that DID land on a baseline — `comparable` and the three recorded-rows absences
   # — carry a true span, and it is their actionable payload ("the run that recorded nothing is two
   # back"), so the gate is `baseline_run` and never `comparable?`.
@@ -1293,7 +1310,7 @@ class Api::V1::RepositoriesController < Api::BaseController
       window_run_count: growth.window_run_count,
       covered_run_count: baseline && growth.covered_run_count,
       runs_back: baseline && growth.runs_back,
-      shortened: growth.shortened?,
+      shortened: baseline && growth.shortened?,
       skipped_unmeasured_count: growth.skipped_unmeasured_count,
       skipped_assembled_differently_count: growth.skipped_assembled_differently_count,
       anchor_commit_sha: growth.anchor_run&.commit_sha,
