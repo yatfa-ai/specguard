@@ -53,13 +53,15 @@ class EmbeddingCacheEntry < ApplicationRecord
   # per day in the worst case, spread across pages, and pays nothing at all for the texts it has
   # renamed away from.
   #
-  # ⚠️ **This bounds what is READ, not what is stored.** The window is enforced by `live`, which
-  # `.vectors_for` filters on, so an expired entry stops being served the moment it expires. It is
-  # not enforced by a sweeper: reclaiming the disk is a scheduled-deletion concern with its own
-  # batching and convergence problem (`Ingest::ObservationPruner` is what that costs when done
-  # properly), and it is not this slice's. `expired` is the queryable set for whoever does it, and
-  # the index on `updated_at` is what makes that scan affordable. Until then the table grows, and
-  # the honest figure is ~6KB per distinct text per fingerprint.
+  # ⚠️ **This is a bound on what is READ, and it is `Ingest::EmbeddingCachePruner` that makes it a
+  # bound on what is STORED.** The two halves are enforced in different places and by different
+  # mechanisms, which is worth keeping straight: `live` is what `.vectors_for` filters on, so an
+  # expired entry stops being SERVED at the instant it expires, on every deployment, with nothing
+  # scheduled and nothing able to be off. The DISK is reclaimed by a sweeper over `expired` — in
+  # bounded batches, triggered by the next resolve rather than by a cron — so it converges over
+  # subsequent ingests rather than at an instant, and a deployment that stops ingesting stops
+  # reclaiming while still never serving a stale vector. Reading is bounded absolutely; storage is
+  # bounded eventually, and that asymmetry is deliberate rather than a gap.
   RETENTION_WINDOW = 90.days
 
   # Readable: written by a provider within the window. The read filters on this, so "expired" and
@@ -68,8 +70,10 @@ class EmbeddingCacheEntry < ApplicationRecord
   scope :live, -> { where(updated_at: RETENTION_WINDOW.ago..) }
 
   # The reclaimable set — rows past the window, which nothing will ever serve again. Queryable so
-  # that the retention rule is a fact about this table rather than a sentence in a comment, and so
-  # that a sweeper, when there is one, has the set already named rather than re-deriving it.
+  # that the retention rule is a fact about this table rather than a sentence in a comment, and read
+  # by `Ingest::EmbeddingCachePruner` rather than re-derived there: the set this names and the set
+  # the sweeper deletes are one definition, so the disk rule cannot drift from the read rule. The
+  # index on `updated_at` is what makes that scan affordable.
   scope :expired, -> { where(updated_at: ...RETENTION_WINDOW.ago) }
 
   # Every text of this page that this deployment has already embedded under this fingerprint.
