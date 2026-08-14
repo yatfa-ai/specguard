@@ -45,6 +45,22 @@ class Api::V1::RepositoriesController < Api::BaseController
   # `RequestedSpecFileParam`, which holds that reasoning in full.
   include RequestedSpecFileParam
 
+  # `?repeated_description=` read as a test description, to open ONE GROUP of the by-description
+  # ranking below — the fourth `Requested*Param` this controller reads and the one the three above
+  # cannot stand in for, because it opens a ranking of WHAT tests say rather than of where they
+  # live. Shared with `RepositoriesController` on the reasoning the two includes above give
+  # verbatim: the guard is the parameter's, not the surface's, and a second copy of it would be a
+  # second answer to "which shapes does `?repeated_description=` tolerate".
+  #
+  # It reaches `where(name: …)` on a plain text column, which is the same silent half of that
+  # argument `?spec_file=` makes rather than a restatement of it — an Array does not raise, it
+  # becomes an `IN` list and answers about SEVERAL descriptions under a `name` restating one. And
+  # the `.presence` half is load-bearing here in a way it is not one rung up:
+  # `spec_observations.name` is NULLABLE, so a blank ask would become `WHERE name = ''`, a query for
+  # a description no row can carry. See `RequestedRepeatedDescriptionParam`, which holds that
+  # reasoning in full.
+  include RequestedRepeatedDescriptionParam
+
   # The bound on `history` below. Ten rows is ten rows whether the suite holds three tests or
   # twenty thousand — `Repository#recent_test_runs` argues that in its own comment — so this is a
   # bound and not the first page of a pagination contract there is no cursor to continue.
@@ -163,6 +179,12 @@ class Api::V1::RepositoriesController < Api::BaseController
       # follow. `shards` is null about the run, the four rollups about its rows, and these two about
       # what the client asked. See `serialized_spec_file_examples` below.
       spec_file_examples: serialized_spec_file_examples(test_run),
+      # ONE GROUP of `repeated_descriptions` above, opened — the third key on this block whose
+      # `null` is a fact about the REQUEST, and the one drill-in that leaves the area → file →
+      # example ladder entirely. Those two open a place; this one opens a SENTENCE, and the ranking
+      # it drills out of is the only one here that is not a rollup of where the code lives. See
+      # `serialized_repeated_description_examples` below.
+      repeated_description_examples: serialized_repeated_description_examples(test_run),
       # `TestRun#suite_size_measured?`, the same predicate `serialized_history_row` serves below and
       # for the same reason: a run that reported zero tests has a `total_specs` but not a
       # measurement, and a difference taken against it describes the report rather than the suite.
@@ -851,6 +873,110 @@ class Api::V1::RepositoriesController < Api::BaseController
       recorded_count: examples.recorded_count,
       timed_count: examples.timed_count,
       limit: SpecObservation::FILE_EXAMPLES_LIMIT
+    }
+  end
+
+  # WHICH EXAMPLES SAY ONE THING — the drill-in out of `repeated_descriptions` above, and the last
+  # ranking on this endpoint whose rows dead-ended. That block reports that a description is carried
+  # by eight examples costing ninety seconds between them and names the files they ran in, and
+  # `files_seen` is where it stops: a string array a client can read and cannot act on. Until this
+  # key, writing SQL was the only way to learn WHICH eight, what each cost, where each sits and how
+  # each ended.
+  #
+  # NOT REACHABLE FROM ANY OTHER KEY HERE, which is the whole reason it is served. `slowest_examples`
+  # is the run-wide top ten and a group's members are usually absent from it entirely;
+  # `spec_file_examples` over each path in `files_seen` is N unrelated lists, each capped at fifty by
+  # DURATION, with no guarantee any of the group's members are in any of them — a two-file group
+  # followed that way returns two lists of rows that need not include one row of it. The reason is
+  # the one `serialized_repeated_descriptions` states above and this key inherits: the three rollups
+  # name where the code LIVES, and no rollup of "where" can see that two of those rows say the same
+  # thing.
+  #
+  # THE THIRD DRILL-IN AND NOT A FOURTH RUNG. `spec_directory_files` and `spec_file_examples` are
+  # the middle and bottom of area → file → example, and this is not under either of them: it opens
+  # a SENTENCE rather than a place, and its rows routinely span several files — which is precisely
+  # the shape a reader came to see. A group whose three rows sit at consecutive line numbers in one
+  # file reads as a table-driven loop; the same description at three unrelated sites reads as
+  # something else, and nothing here decides which.
+  #
+  # INSIDE `latest_run` rather than beside it, on the membership test the comment on `unstable_tests`
+  # states in full: `SpecObservation.with_description` narrows to a single `test_run_id`, so this is
+  # a statement about ONE run's rows. And `latest_run` is not re-anchored by `?branch=`, so a
+  # description ask composes with all three of the other asks without any of the four touching
+  # another: the drill-in always describes the newest run, exactly as the panel does.
+  #
+  # THE SAME OBJECT THE PANEL READS, never a hand-written query — this file's governing rule, stated
+  # in full on `serialized_spec_files` above. `RepeatedDescriptionExamples` is view-free apart from
+  # `#coverage_label`, which is skipped here exactly as the two rungs above skip `Row#duration_label`
+  # and `SpecFileExamples#coverage_label`: `"25 of 40"` is two integers a client cannot subtract.
+  #
+  # THE ROW SHAPE IS `serialized_slowest_examples`' SIX FIELDS, field for field, on the rule
+  # `serialized_spec_file_examples` states: this endpoint's now THREE per-example blocks describe the
+  # same rows of the same table, and a client that learned to read one must not have to learn a
+  # second shape to read the others. `duration_seconds` is nullable and NEVER coalesced to `0.0` —
+  # and at this grain an untimed row is often exactly the row a reader came for, because a test that
+  # never ran is one way three examples come to say the same thing. Those rows are LISTED rather than
+  # excluded, at the END of the list, which is what `with_description`'s `NULLS LAST` is for.
+  #
+  # NO CAPTION PREDICATES. The object exposes `#lists_untimed?`, `#truncated?`, `#complete?` and
+  # `#any_timed?`, and every one of them is a COMPARISON between figures served below. This endpoint
+  # ships the operands and lets a client word it — `recorded_count > rows.length` is `#truncated?`
+  # without this block shipping the comparison instead of the two numbers it is drawn from.
+  #
+  # `recorded_count` and `timed_count` are the GROUP's, off the two `COUNT(…) OVER ()` windows of
+  # `SpecObservation::DESCRIPTION_POPULATION_COUNTS` — evaluated after the WHERE and before the
+  # LIMIT, so they describe the population the list was cut from rather than the examples that fit on
+  # the page. On a truncated group neither is re-derivable from the serialized rows, which is the
+  # point of serving them: a client that folded `rows` to count them would be computing the page's
+  # figure under the description's name. `limit` is READ OFF
+  # `SpecObservation::REPEATED_DESCRIPTION_EXAMPLES_LIMIT` rather than restated, on the precedent
+  # every capped block here sets — it is its own constant and is neither `FILE_EXAMPLES_LIMIT` nor
+  # `SPEC_DIRECTORY_FILES_LIMIT`.
+  #
+  # `null` — with the key present — MEANS "YOU DID NOT ASK", on the spelling the two keys above fixed
+  # and for the same reason: the siblings are served unconditionally and gate on `#recorded?`, and
+  # copying that gate here would collapse *"you did not ask"* and *"the description you asked about
+  # has no rows"* into one answer. So an ask that matched nothing gets the block with `rows: []` and
+  # its `name` restated — HTTP 200, never a 404, since a test renamed since, a description edited and
+  # a stale bookmark are all ordinary ways to arrive here, as `RequestedRepeatedDescriptionParam`
+  # argues in full.
+  #
+  # EXACTLY ONE ADDITIONAL QUERY WHEN ASKED, AND NONE WHEN NOT, on the two keys above's rule: the
+  # gate is the ASK and it is decided before any read is issued, so a client that never sends the
+  # parameter pays nothing for the key's existence. The read is bounded by the GROUP's run rather
+  # than by the suite and rides `index_spec_observations_on_test_run_id`, EXPLAIN-certified for
+  # exactly this narrow in `spec/models/spec_observation_spec.rb`. Because this block issues the read
+  # the panel issues, unchanged, that certification transfers rather than needing to be repeated in a
+  # request spec.
+  def serialized_repeated_description_examples(test_run)
+    return nil if requested_repeated_description.nil?
+
+    examples = RepeatedDescriptionExamples.for(test_run, requested_repeated_description)
+
+    {
+      # The ask, restated as the server read it — never echoed from the raw parameter, on the rule
+      # `path` follows on both sibling blocks: a malformed shape is no ask at all and reaches no
+      # block, so what is served here is always the description the rows were actually gathered
+      # under.
+      name: examples.name,
+      # THE SAME SIX FIELDS the two per-example blocks above serve, and the repetition is chosen for
+      # the reason `serialized_spec_file_examples` states in full: each block states its own contract
+      # beside its own rows, and what enforces the agreement is a `contain_exactly` over these names
+      # in each block's request spec, so a field added to one and not the others goes red rather than
+      # shipping a client three per-example shapes.
+      rows: examples.rows.map do |observation|
+        {
+          name: observation.name,
+          file_path: observation.file_path,
+          line_number: observation.line_number,
+          spec_file_path: observation.spec_file_path,
+          duration_seconds: observation.duration_seconds,
+          outcome: observation.outcome
+        }
+      end,
+      recorded_count: examples.recorded_count,
+      timed_count: examples.timed_count,
+      limit: SpecObservation::REPEATED_DESCRIPTION_EXAMPLES_LIMIT
     }
   end
 
