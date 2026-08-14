@@ -130,6 +130,24 @@ module ObservationGrainReads
   # `QueryCapture`, where the two rules and the difference between them are stated in full.
   def observation_reads(&) = queries_against("spec_observations", &)
 
+  # The classified total: the sum of EVERY grain's reads. Defined here rather than at the call sites
+  # for the reason the partition itself is — a sum written by hand is free to name a SUBSET, and the
+  # omitted term is silently correct only while its fixture holds it at zero. That is not a tidiness
+  # complaint: the two compose-several-drill-ins-at-once examples run SIX and SEVEN of the nine grains
+  # non-zero at once, more than any other fixture here (the single-ask blocks reach five), so they are
+  # where a cross-grain misclassification is likeliest to be observable — and they were the two that
+  # shipped with no sum at all, because when a sum is hand-written the richest fixture is the most
+  # tedious one to write it for. Appending a grain to `observation_reads_by_grain` extends this
+  # automatically; nothing downstream has to be edited.
+  #
+  # Paired with `observation_reads`, this is the assertion the three TIGHTENED paragraphs above name
+  # as the guard: a read double-classified into two grains makes the parts sum to MORE than the total,
+  # and a read matching no grain at all makes them sum to LESS. Neither is visible to any per-grain
+  # count, and neither is visible to a bare literal total, which cannot tell "one aggregate per grain"
+  # from "one grain reading twice". Like every `observation_reads { ... }` pin beside it, this
+  # re-executes its block — the established idiom in these files.
+  def classified_observation_reads(&) = observation_reads_by_grain(&).sum(&:length)
+
   # The area predicate `SpecObservation.files_in_directory` narrows on — `DIRECTORY_EXPRESSION`
   # compared for EQUALITY against one area — which no other read of this table issues: the two
   # reads that share the expression GROUP on it, and neither compares it to anything.

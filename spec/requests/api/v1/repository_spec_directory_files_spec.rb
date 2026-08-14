@@ -325,7 +325,7 @@ RSpec.describe "GET /api/v1/repository — latest_run.spec_directory_files", typ
       # And the classified reads are ALL of them — the assertion no per-grain count can make,
       # because a read matching no grain's pattern is invisible to every one of them.
       expect(observation_reads { get_repository(query: { spec_directory: "spec/models" }) }.length)
-        .to eq(area.length + file.length + example.length + description.length + directory_files.length)
+        .to eq(classified_observation_reads { get_repository(query: { spec_directory: "spec/models" }) })
       expect(observation_reads { get_repository(query: { spec_directory: "spec/models" }) }.length).to eq(7)
       # Six without the ask — the total `repository_latest_run_spec.rb` pins for this endpoint,
       # restated here as the thing this slice did NOT change.

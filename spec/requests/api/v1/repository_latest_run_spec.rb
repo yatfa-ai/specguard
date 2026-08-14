@@ -3363,7 +3363,7 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
       # And the classified reads are ALL of them — the assertion the per-grain blocks cannot make,
       # because a read matching no grain's pattern is invisible to every one of them.
       expect(observation_reads { get_repository }.length)
-        .to eq(area.length + file.length + example.length + description.length + flakiness.length)
+        .to eq(classified_observation_reads { get_repository })
       expect(observation_reads { get_repository }.length).to eq(6)
     end
   end
