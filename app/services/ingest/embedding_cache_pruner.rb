@@ -154,10 +154,17 @@ module Ingest
   # (SPGD-273 P7a/P7d), and would go red on seed and suite ordering. What the spec pins instead is
   # the shape this class does control: one statement per batch, bounded inside the statement.
   class EmbeddingCachePruner
-    # How many rows one DELETE may remove. Deliberately a tenth of {Ingest::ObservationPruner}'s
-    # batch, because the rows are not comparable: a `spec_observations` row is a few hundred bytes
-    # and one of these is ~8.5KB on disk. Almost none of that is in the heap, and the distinction
-    # matters to every other claim made about this table.
+    # How many rows one DELETE may remove. Deliberately a fifth of
+    # `Ingest::ObservationPruner::DELETE_BATCH_SIZE`, which is 10,000, because the rows are not
+    # comparable: a `spec_observations` row is a few hundred bytes and one of these is ~8.5KB on
+    # disk. Almost none of that is in the heap, and the distinction matters to every other claim
+    # made about this table.
+    #
+    # ⚠️ Every figure below that scales with the sibling's batch is derived from THAT CONSTANT, not
+    # from this sentence. A previous revision said "a tenth", and a later correction pass trusted
+    # the adjacent prose over the constant and doubled a figure at {MAX_BATCHES_PER_RESOLVE}'s
+    # ceiling. Re-resolve `Ingest::ObservationPruner::DELETE_BATCH_SIZE` before touching a number
+    # here.
     #
     # == Where a row actually lives, MEASURED rather than inferred from the column width
     #
@@ -185,9 +192,13 @@ module Ingest
     #
     # The batch is ~16MB of dead tuples per statement, the great majority of it in the TOAST
     # relation rather than the heap — a DELETE reclaims both. A batch sized like the sibling's
-    # would be ~160MB in one statement, which is a long lock and a large WAL record for
-    # housekeeping nobody asked for. That argument is indifferent to WHERE the bytes live, which
-    # is why the correction above moves the numbers and not this value.
+    # 10,000 would be ~81MB in ONE statement, which is a long lock and a large WAL record for
+    # housekeeping nobody asked for. Note what that comparison is and is not: it is the SAME 10,000
+    # rows this class's own ceiling reclaims (see {MAX_BATCHES_PER_RESOLVE}, which is why the figure
+    # there is also ~81MB), spread over five short statements instead of one long one. The total
+    # bytes are identical; what the smaller batch buys is the lock and the WAL record, not less
+    # work. That argument is indifferent to WHERE the bytes live, which is why the correction above
+    # moves the numbers and not this value.
     DELETE_BATCH_SIZE = 2_000
 
     # How many of those statements one resolve may issue. With the batch size above this is the

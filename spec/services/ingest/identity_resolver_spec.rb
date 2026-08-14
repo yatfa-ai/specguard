@@ -3243,7 +3243,8 @@ RSpec.describe Ingest::IdentityResolver do
 
   describe "reclaiming the disk the retention window has already stopped serving from" do
     # `EmbeddingCacheEntry::RETENTION_WINDOW` bounded what was SERVED and nothing enforced it
-    # against the table, so the cache grew forever at ~6KB per distinct text per fingerprint. The
+    # against the table, so the cache grew forever at ~8.5KB of disk per distinct text per
+    # fingerprint. The
     # rule itself — batching, the ceiling, convergence, what survives — is graded in
     # `spec/services/ingest/embedding_cache_pruner_spec.rb`. What is graded HERE is the seam: which
     # path pays for it, and what it may cost that path when it fails.
