@@ -386,16 +386,7 @@ RSpec.describe "Repository repeated descriptions", type: :request do
   end
 
   describe "what the panel costs the page" do
-    def queries_against(table)
-      queries = []
-      subscriber = ActiveSupport::Notifications.subscribe("sql.active_record") do |_, _, _, _, payload|
-        queries << payload[:sql] if payload[:name] != "SCHEMA" && payload[:sql].to_s.include?(table)
-      end
-      yield
-      queries
-    ensure
-      ActiveSupport::Notifications.unsubscribe(subscriber)
-    end
+    # `queries_against` comes from spec/support/query_capture.rb.
 
     # An EQUALITY across two suite sizes, which is the guard an absolute count cannot give: the
     # failure this panel could plausibly acquire is a per-group follow-up — one trip to fetch the

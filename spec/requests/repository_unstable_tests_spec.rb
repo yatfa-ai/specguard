@@ -688,16 +688,7 @@ RSpec.describe "Repository unstable tests", type: :request do
   # spec/requests/repository_suite_trajectory_spec.rb gives about its own budget examples: a render
   # against a render has a control walking the same code path.
   describe "what the panel costs the page" do
-    def queries_against(table)
-      queries = []
-      subscriber = ActiveSupport::Notifications.subscribe("sql.active_record") do |_, _, _, _, payload|
-        queries << payload[:sql] if payload[:name] != "SCHEMA" && payload[:sql].to_s.include?(table)
-      end
-      yield
-      queries
-    ensure
-      ActiveSupport::Notifications.unsubscribe(subscriber)
-    end
+    # `queries_against` comes from spec/support/query_capture.rb.
 
     # An ABSOLUTE count, not a difference against a control. Thirteen reads of this table serve this
     # page in the state that costs the most: two for the "Slowest tests" panel, one for "Heaviest
