@@ -144,8 +144,9 @@ module Ingest
     #
     # As an illustration and not as the claim: on this tree a 12-row unchanged page measures 12 round
     # trips — 1 digest lookup, 2 UPDATEs, 4 reads (the repository, {#resolve}'s two backlog lists,
-    # and the run's own page), {#report}'s 4 counts, and 1 retention sweep
-    # ({Ingest::EmbeddingCachePruner}, once per pass) — where it measured 33.
+    # and the run's own page), {#report}'s 4 counts, and 1 retention sweep statement
+    # ({Ingest::EmbeddingCachePruner}, against an empty cache — see the caveat below) — where it
+    # measured 33.
     #
     # A page that is exactly FULL measures **13 and not 12**, at any width, and the extra trip is
     # `find_in_batches`: a batch that comes back exactly `batch_size` wide cannot be known to have
@@ -154,8 +155,17 @@ module Ingest
     # the one width at which the probe cannot appear. Measured on this branch at two widths, 6 and
     # 12, and it is 13 at both; before SPGD-395 the same two measured 22 and 34, i.e. `2N + 10`,
     # which puts a full page of 500 at ~1,010. That flatness in the width — not the size of the drop
-    # — is the whole of what that slice bought, and the sweep does not touch it: it is one statement
-    # per PASS, so it moves both of these figures by exactly one and neither of them with the width.
+    # — is the whole of what that slice bought, and the sweep does not touch it: the sweep is issued
+    # per PASS rather than per page, so it moves both of these figures by a constant and neither of
+    # them with the width.
+    #
+    # ⚠️ **That constant is one only when the backlog is empty.** {Ingest::EmbeddingCachePruner}
+    # issues AT MOST ONE statement PER BATCH and up to
+    # {Ingest::EmbeddingCachePruner::MAX_BATCHES_PER_RESOLVE} of them, breaking early on a short
+    # batch — so a pass costs 1 statement with nothing to reclaim and up to 5 with a backlog. The
+    # figures above read as exactly one because the specs run against an empty cache table, which
+    # makes the first batch short. The invariant that holds at every width is what matters here:
+    # the sweep is O(1) in the page width, not that it is exactly one statement.
     # (The `2N + 10` figures were measured before this pass carried a retention sweep, so the
     # like-for-like comparison against them is 12 rather than 13.)
     #

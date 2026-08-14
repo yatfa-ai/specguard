@@ -4,13 +4,14 @@ module Ingest
   # Enforces {EmbeddingCacheEntry::RETENTION_WINDOW} against the DISK, which until this class
   # nothing did. The window bounded what was SERVED — `live` is what `.vectors_for` filters on, so
   # an expired entry stopped being readable the moment it expired — and nothing ever deleted a row,
-  # so the table grew forever at ~6KB per distinct text per fingerprint. `expired` was written as
-  # the queryable half of that rule and had zero callers. This is its caller.
+  # so the table grew forever at ~8.5KB of disk per distinct text per fingerprint. `expired` was
+  # written as the queryable half of that rule and had zero callers. This is its caller.
   #
   # A retention rule that bounds only the read converts a bounded compute cost into an unbounded
   # storage cost and reports it as a saving. What it is worth reclaiming is stated at the design
   # point rather than in the abstract: 20,000 examples is one cold start, so one repository's first
-  # ingest under a new fingerprint writes up to 20,000 rows — ~123MB — and every one of them is
+  # ingest under a new fingerprint writes up to 20,000 rows — ~161MB, nearly all of it TOAST rather
+  # than heap; see {DELETE_BATCH_SIZE} for the measurement — and every one of them is
   # unreadable 90 days later and still resident.
   #
   # == ⭐ The key is DEPLOYMENT-GLOBAL, and that is why this converges completely
@@ -48,6 +49,12 @@ module Ingest
   # planner's business. It is that every row in the candidate set is already past the window, so any
   # batch is progress — the work left for the next invocation is strictly smaller by exactly what
   # this one deleted, whichever rows those were.
+  #
+  # Concurrent resolves racing one unpartitioned candidate set was considered and left alone: with
+  # no `ORDER BY` and no `SKIP LOCKED`, two passes can select overlapping ids, but the loser's EPQ
+  # recheck simply yields a short batch and the early `break` — and a deadlock is caught by
+  # `IdentityResolver#reclaim_expired_cache`'s rescue and retried on the next pass. Nothing is
+  # lost either way, because these rows are all equally dead. Recorded so it is not re-derived.
   #
   # == Why the resolve pass and not the ingest write path
   #
@@ -128,9 +135,15 @@ module Ingest
   #                  Index Cond: (updated_at < '...')
   #
   # The window predicate lands in the **`Index Cond`** and not in a post-`Filter`, which is the half
-  # worth certifying: the candidate set is found through the index rather than by reading the table
-  # and discarding rows — and reading this table is unusually expensive per row, since ~6KB rows put
-  # roughly one row on a heap page.
+  # worth certifying: the candidate set is FOUND THROUGH the index rather than by reading the table
+  # and discarding rows. That is the whole of what the index buys here — it is worth having because
+  # of what it does not read, not because each row it skips would have been costly.
+  #
+  # ⚠️ **It is NOT that this table is expensive per row to read.** The vector lives out of line (see
+  # {DELETE_BATCH_SIZE} for the storage measurement), so the heap tuple is a 168-byte stub and the
+  # sequential alternative would scan those, not 6KB rows. {#delete_batch}'s subquery selects only
+  # `id` under a predicate on `updated_at` and never detoasts anything, so the vector's width does
+  # not enter this plan's cost at all. The index is the right plan; this is the reason it is.
   #
   # ⚠️ **The OUTER half of the statement is the planner's business and nothing here asserts it.** At
   # this size it chose a `Hash Semi Join` over a `Seq Scan` to match the bounded id list, which is
@@ -143,14 +156,43 @@ module Ingest
   class EmbeddingCachePruner
     # How many rows one DELETE may remove. Deliberately a tenth of {Ingest::ObservationPruner}'s
     # batch, because the rows are not comparable: a `spec_observations` row is a few hundred bytes
-    # and one of these is ~6KB — `vector(1536)` is 1536 float4s — so roughly one row per 8KB heap
-    # page. 2,000 rows is therefore ~12MB of dead tuples per statement, and a batch sized like the
-    # sibling's would be ~60MB in one, which is a long lock and a large WAL record for housekeeping
-    # nobody asked for.
+    # and one of these is ~8.5KB on disk. Almost none of that is in the heap, and the distinction
+    # matters to every other claim made about this table.
+    #
+    # == Where a row actually lives, MEASURED rather than inferred from the column width
+    #
+    # `vector(1536)` is 1536 float4s — 6,148 bytes with its header — which is far past
+    # `TOAST_TUPLE_THRESHOLD`, so the column is stored OUT OF LINE. On `embedding_cache_entries`,
+    # `pg_attribute.attstorage` for `embedding` is `e` (EXTERNAL: out-of-line and NOT compressed)
+    # and `pg_class.reltoastrelid` is populated. What remains in the heap is a stub — `id`, two
+    # timestamps, `text_digest`, `provider_fingerprint`, and an 18-byte TOAST pointer.
+    #
+    # Measured on a faithful reproduction of this table (identical DDL and `attstorage`, the
+    # production `openai:text-embedding-3-small` fingerprint, a real 64-char digest), at exactly
+    # this batch size, after `VACUUM ANALYZE`:
+    #
+    #   heap tuple           168 bytes exactly (`pageinspect.heap_page_items.lp_len`)
+    #   heap density         47 rows on a full 8KB page
+    #   TOAST               exactly 4 chunks per row (1,996 x 3 + 160 = 6,148)
+    #   2,000 rows           ~16MB on disk: 344KB of heap, ~15.9MB of TOAST
+    #
+    # ⚠️ **A previous revision of this comment said ~6KB rows put roughly ONE row on a heap page,
+    # and every storage figure in this file was derived from that.** It is false — the width never
+    # reaches the heap — and it understated the figures, because it also missed that TOAST chunking
+    # costs more than the logical bytes (4 chunk tuples, ~8.1KB, to store 6,148 bytes).
+    #
+    # == What the constant rests on, which is unchanged
+    #
+    # The batch is ~16MB of dead tuples per statement, the great majority of it in the TOAST
+    # relation rather than the heap — a DELETE reclaims both. A batch sized like the sibling's
+    # would be ~160MB in one statement, which is a long lock and a large WAL record for
+    # housekeeping nobody asked for. That argument is indifferent to WHERE the bytes live, which
+    # is why the correction above moves the numbers and not this value.
     DELETE_BATCH_SIZE = 2_000
 
     # How many of those statements one resolve may issue. With the batch size above this is the
-    # per-invocation ceiling — 10,000 rows, ~60MB — that makes the convergence paragraph true.
+    # per-invocation ceiling — 10,000 rows, ~81MB measured on the same probe — that makes the
+    # convergence paragraph true.
     #
     # Stated against the design point rather than picked round: 20,000 rows is one cold start of a
     # 20,000-example suite, so one resolve reclaims half of one and a delivery of four shards
