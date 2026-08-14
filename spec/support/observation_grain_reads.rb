@@ -134,11 +134,17 @@ module ObservationGrainReads
   # for the reason the partition itself is — a sum written by hand is free to name a SUBSET, and the
   # omitted term is silently correct only while its fixture holds it at zero. That is not a tidiness
   # complaint: the two compose-several-drill-ins-at-once examples run SIX and SEVEN of the nine grains
-  # non-zero at once, more than any other fixture here (the single-ask blocks reach five), so they are
-  # where a cross-grain misclassification is likeliest to be observable — and they were the two that
-  # shipped with no sum at all, because when a sum is hand-written the richest fixture is the most
-  # tedious one to write it for. Appending a grain to `observation_reads_by_grain` extends this
-  # automatically; nothing downstream has to be edited.
+  # non-zero at once, among the most any fixture here runs, so they are where a cross-grain
+  # misclassification is likeliest to be observable — and they were the two that shipped with no sum
+  # at all, because when a sum is hand-written the richest fixture is the most tedious one to write it
+  # for. SIX is a TIE rather than a maximum, and the two available measures disagree about which
+  # fixture is richest: the SINGLE-ASK blocks in `repository_unstable_tests_spec.rb` and
+  # `repository_directory_growth_spec.rb` also run six grains non-zero, and both issue MORE total
+  # reads — 11 and 10, against these two examples' 8 and 9 — because a cross-run grain can read four
+  # times where a drill-in reads once. So a block needs this sum whenever its own fixture leaves
+  # SEVERAL GRAINS LIVE, which is not the same as composing drill-ins and does not stop at five.
+  # Appending a grain to `observation_reads_by_grain` extends this automatically; nothing downstream
+  # has to be edited.
   #
   # Paired with `observation_reads`, this is the assertion the three TIGHTENED paragraphs above name
   # as the guard: a read double-classified into two grains makes the parts sum to MORE than the total,
