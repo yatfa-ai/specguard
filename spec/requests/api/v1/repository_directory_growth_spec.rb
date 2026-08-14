@@ -341,15 +341,32 @@ RSpec.describe "GET /api/v1/repository — directory_growth", type: :request do
     end
 
     # The gate is BEFORE the read, which is the difference between a refusal and a discarded answer.
-    it "reads spec_observations for this grain not at all, and leaves the other grains alone" do
+    #
+    # ⚠️ THE GRAIN NOW HAS TWO READERS, WHICH IS WHY THIS IS A DIFFERENCE AND NOT A ZERO.
+    # `directory_run_growth` — the run-over-run pair added beside this one (see
+    # `repository_directory_run_growth_spec.rb`) — issues the SAME `directory_growth_between`
+    # aggregate, so `growth_grain_reads` cannot tell the two apart by pattern, and it is served
+    # UNCONDITIONALLY: this fixture's two newest `main` runs are comparable, so one read is present
+    # here whatever this block does. The window block's own contribution is therefore measured as
+    # the DIFFERENCE the `?branch=` gate makes on one fixture, which is exactly the quantity this
+    # example was always about.
+    it "adds no read of its own for this grain, and leaves the other grains alone" do
       interleaved_repository
       get_repository(key: api_key)
 
-      expect(growth_grain_reads { get_repository(key: api_key) }).to be_empty
-      # The endpoint's single-run grains are untouched at their established count, so the zero above
-      # is this grain declining to read rather than the table going quiet.
-      expect(observation_reads { get_repository(key: api_key) }.length).to eq(6)
+      unfiltered = growth_grain_reads { get_repository(key: api_key) }.length
+      named = growth_grain_reads { get_repository(key: api_key, query: { branch: "main" }) }.length
+
+      # Unfiltered, this block adds NOTHING to what the run-over-run pair beside it already read;
+      # named, it adds exactly its one aggregate.
+      expect(named - unfiltered).to eq(1)
+      expect(unfiltered).to eq(1)
+      # The endpoint's single-run grains are untouched at their established count, so the figure
+      # above is this grain's readers being counted rather than the table going quiet.
+      expect(observation_reads { get_repository(key: api_key) }.length).to eq(7)
       expect(get_repository(key: api_key)["directory_growth"]).to be_nil
+      # And the read that IS issued unfiltered belongs to the pair that answers unconditionally.
+      expect(get_repository(key: api_key)["directory_run_growth"]).not_to be_nil
     end
 
     # And the refusal is not a claim that there was nothing to find: named, the same window compares
@@ -506,8 +523,13 @@ RSpec.describe "GET /api/v1/repository — directory_growth", type: :request do
       expect(block).to include("state" => "anchor_unmeasured", "window_run_count" => 0,
                                "rows" => [], "anchor_commit_sha" => nil,
                                "covered_run_count" => nil, "runs_back" => nil)
-      expect(growth_grain_reads { get_repository(key: api_key, query: { branch: "does-not-exist" }) })
-        .to be_empty
+      # "Reads nothing to do it" is now a DIFFERENCE rather than a zero: the run-over-run pair
+      # beside this one issues the same aggregate unconditionally, and this repository's two newest
+      # runs are comparable, so one read is present under every request here. An unknown branch adds
+      # NONE OF ITS OWN — the count is the same as on a request that named no branch at all.
+      unknown = growth_grain_reads { get_repository(key: api_key, query: { branch: "does-not-exist" }) }
+      expect(unknown.length).to eq(growth_grain_reads { get_repository(key: api_key) }.length)
+      expect(unknown.length).to eq(1)
     end
 
     # ⭐ THE CONTRACT THE FIVE EXAMPLES ABOVE PIN, STATED ONCE AS AN INVARIANT: the span figures are
@@ -665,22 +687,33 @@ RSpec.describe "GET /api/v1/repository — directory_growth", type: :request do
   describe "what the growth block costs the endpoint" do
     # ONE READ, and it is also the MEMOIZATION GUARD — the only form of one this endpoint can have.
     # `show` reads the presenter twice, once for the window block's `grouped` and once for the rows,
-    # so an unmemoized gate builds it twice and this count is two.
+    # so an unmemoized gate builds it twice and the difference below is two.
+    #
+    # ⚠️ MEASURED AS A DIFFERENCE, BECAUSE THE GRAIN HAS TWO READERS. The run-over-run pair beside
+    # this one (`repository_directory_run_growth_spec.rb`) issues the same
+    # `directory_growth_between` aggregate and is served UNCONDITIONALLY, so a bare count here is
+    # two and neither read is attributable. Unfiltered, THIS block is not constructed at all — that
+    # is its own gate — so the unfiltered count is the other pair's alone and the difference is
+    # exactly this block's.
     it "reads spec_observations exactly once on a comparable branch-scoped window" do
       asymmetric_window
       get_repository(key: api_key)
 
-      expect(growth_grain_reads { get_repository(key: api_key, query: { branch: "main" }) }.length)
-        .to eq(1)
+      unfiltered = growth_grain_reads { get_repository(key: api_key) }.length
+      named = growth_grain_reads { get_repository(key: api_key, query: { branch: "main" }) }.length
+
+      expect(named - unfiltered).to eq(1)
+      # Both terms are stated, so the difference cannot be satisfied by both blocks going quiet.
+      expect([unfiltered, named]).to eq([1, 2])
     end
 
     # And that one read is ALL this block adds — the assertion a per-grain count cannot make,
-    # because a read matching no grain's pattern is invisible to every one of them. Ten here is the
-    # endpoint's six single-run reads, plus THREE for flakiness, plus this one: nothing failed in
-    # this fixture, so `UnstableTests` finds no candidate and never issues its composition read.
-    # That is a fact about this window rather than about the block, which is exactly why the total
-    # is also asserted as the SUM OF THE PARTS — a read that stopped being issued and a different
-    # one that started cannot cancel out into a passing number.
+    # because a read matching no grain's pattern is invisible to every one of them. Eleven here is
+    # the endpoint's six single-run reads, plus THREE for flakiness, plus this block's one and the
+    # run-over-run pair's one: nothing failed in this fixture, so `UnstableTests` finds no candidate
+    # and never issues its composition read. That is a fact about this window rather than about the
+    # block, which is exactly why the total is also asserted as the SUM OF THE PARTS — a read that
+    # stopped being issued and a different one that started cannot cancel out into a passing number.
     it "adds exactly that one to the table's total, and no second" do
       asymmetric_window
       get_repository(key: api_key)
@@ -688,25 +721,34 @@ RSpec.describe "GET /api/v1/repository — directory_growth", type: :request do
       area, file, example, description, flakiness, growth =
         observation_reads_by_grain { get_repository(key: api_key, query: { branch: "main" }) }
 
+      # TWO in the growth grain, and they are this block's and the run-over-run pair's — the split
+      # is pinned by the difference example above, which this one cannot make.
       expect([area.length, file.length, example.length, description.length, flakiness.length,
-              growth.length]).to eq([1, 1, 2, 2, 3, 1])
+              growth.length]).to eq([1, 1, 2, 2, 3, 2])
       expect(observation_reads { get_repository(key: api_key, query: { branch: "main" }) }.length)
         .to eq(classified_observation_reads { get_repository(key: api_key, query: { branch: "main" }) })
       expect(observation_reads { get_repository(key: api_key, query: { branch: "main" }) }.length)
-        .to eq(10)
+        .to eq(11)
     end
 
     # NO RUN-WINDOW QUERY. The block is drawn on `history_runs`, which is materialized once and
     # already read twice by `show` — a second `recent_test_runs` would be invisible to the count
     # above and would read as one more branch-scoped SELECT here.
+    #
+    # The branch-scoped `test_runs` selects are TWO: this window, and the run-over-run pair's
+    # previous-run lookup. They are told apart by the ROW-VALUE PREDICATE, which
+    # `Repository#previous_test_run_on_branch` emits and `recent_test_runs` does not — so this still
+    # pins the window's count at one rather than absorbing a regression into a widened total.
     it "adds no query against test_runs, whatever the window holds" do
       asymmetric_window
       get_repository(key: api_key)
 
       statements = executed_sql { get_repository(key: api_key, query: { branch: "main" }) }
-      window_selects = statements.grep(/FROM "test_runs"/).grep(/"branch" = /)
+      branch_selects = statements.grep(/FROM "test_runs"/).grep(/"branch" = /)
+      window_selects = branch_selects.grep_v(/\(test_runs\.created_at, test_runs\.id\) < /)
 
       expect(window_selects.length).to eq(1)
+      expect(branch_selects.length).to eq(2)
       expect(get_repository(key: api_key, query: { branch: "main" })
                .dig("directory_growth", "window_run_count")).to eq(3)
     end
@@ -726,7 +768,7 @@ RSpec.describe "GET /api/v1/repository — directory_growth", type: :request do
       get_repository(key: api_key)
 
       expect(growth_grain_reads { get_repository(key: api_key, query: { branch: "main" }) }.length)
-        .to eq(1)
+        .to eq(2)
       expect(count_queries { get_repository(key: api_key, query: { branch: "main" }) }).to eq(baseline)
       # And the window really did grow, so the equality above is not two identical small windows.
       expect(get_repository(key: api_key, query: { branch: "main" })
@@ -746,7 +788,7 @@ RSpec.describe "GET /api/v1/repository — directory_growth", type: :request do
       get_repository(key: api_key)
 
       expect(growth_grain_reads { get_repository(key: api_key, query: { branch: "main" }) }.length)
-        .to eq(1)
+        .to eq(2)
       expect(count_queries { get_repository(key: api_key, query: { branch: "main" }) }).to eq(baseline)
       expect(get_repository(key: api_key, query: { branch: "main" })
                .dig("directory_growth", "anchor_recorded_count")).to eq(100)

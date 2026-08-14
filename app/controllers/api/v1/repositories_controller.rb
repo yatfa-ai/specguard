@@ -111,6 +111,26 @@ class Api::V1::RepositoriesController < Api::BaseController
       # `serialized_directory_growth_window`.
       directory_growth_window: serialized_directory_growth_window,
       directory_growth: serialized_directory_growth,
+      # BESIDE `directory_growth` and NEVER IN PLACE OF IT — a different comparison over the same
+      # grain, not a refinement of that one. The pair above compares the two ENDPOINTS of a
+      # thirty-run branch window and is served only when `?branch=` named the branch to walk; this
+      # pair compares the latest run against THE PREVIOUS RUN ON ITS OWN BRANCH, which is the
+      # comparison `repositories#show` renders as "Areas that grew or shrank" and the one an agent
+      # asks for by pushing: *which areas moved in the push I just made*.
+      #
+      # It needs no `?branch=` and takes none. `Repository#previous_test_run_on_branch` scopes to
+      # the latest run's own branch, so the hazard the window pair's gate exists to prevent —
+      # anchoring on a `main` run and baselining against a same-sharded `feature/x` one — cannot
+      # arise here by construction. That is what makes a plain unparameterised `GET` carry growth
+      # at all, which until now it did not: unfiltered, `directory_growth` is `null`.
+      #
+      # Out here rather than inside `latest_run` for the reason stated at the top of that block and
+      # again on `unstable_tests`: that block is single-run facts by construction, and "this area
+      # gained forty examples" is a statement about one run measured against another.
+      #
+      # See `serialized_directory_run_growth_window`.
+      directory_run_growth_window: serialized_directory_run_growth_window,
+      directory_run_growth: serialized_directory_run_growth,
       branches_window: serialized_branches_window,
       branches: serialized_branches
     }
@@ -132,7 +152,7 @@ class Api::V1::RepositoriesController < Api::BaseController
   # a `main` row and `latest_run` is the `feature/x` one, and they are *supposed* to differ.
   # `history_window.branch_scope` is what says so.
   def serialized_latest_run
-    test_run = current_repository.latest_test_run
+    test_run = latest_test_run
 
     return nil if test_run.nil?
 
@@ -1591,6 +1611,228 @@ class Api::V1::RepositoriesController < Api::BaseController
       new_area: row.new_area?,
       removed_area: row.removed_area?
     }
+  end
+
+  # The contract the RUN-OVER-RUN growth rows below are served under — and, when they are `null`,
+  # the reason they are. Served UNCONDITIONALLY, on the key-always-present rule
+  # `serialized_directory_growth_window` and `latest_run.shards` both argue for: a block that
+  # explains a `null` is worthless if it is itself absent whenever the `null` happens.
+  #
+  # `_window` NAMES THE CONTRACT BLOCK HERE, NOT A RUN WINDOW — the suffix this endpoint has used
+  # three times for "the facts that decide how the array beside it may be read". This comparison
+  # spans exactly TWO runs and `basis` says so in a token rather than leaving the suffix to be read
+  # as a claim about depth. The pairing is kept because a client that learned the shape once
+  # (`history_window`/`history`, `unstable_tests_window`/`unstable_tests`,
+  # `directory_growth_window`/`directory_growth`) should not have to learn a fourth.
+  #
+  # ⭐ `state` LIVES HERE AND NOT ON THE ROWS BLOCK, WHICH IS WHERE THIS BLOCK DIVERGES FROM ITS
+  # WINDOW SIBLING AND WHY. There, `state` rides on the rows block because that block is `null`
+  # only when the object was never constructed, and `grouped` out here covers that one case. Here
+  # there are TWO ways to have no rows — the object was not constructed (no runs to compare) and
+  # the object was constructed and could not compare — and a `state` on the rows block would be
+  # absent in exactly the first of them. So the nine-way answer is served on the block that is
+  # always present, and the rows block carries figures only.
+  #
+  # THE STATE ENUMERATION, in full, because a client must be able to enumerate it:
+  #
+  # * `no_latest_run` — CI has never reported. Serializer-level; see `spec_directory_growth`.
+  # * `no_previous_run` — there is a latest run and no earlier run on its branch to compare it
+  #   against. Serializer-level, and it covers TWO shapes that `branch` separates: a `branch` of
+  #   `null` is a latest run whose client sent no branch (there is no branch to compare on, and
+  #   `Repository#previous_test_run_on_branch` refuses to pool anonymous runs into a fictional
+  #   history), and a named `branch` is a genuine first run on that branch.
+  # * `latest_unmeasured`, `previous_unmeasured`, `assembled_differently` — `SpecDirectoryGrowth`'s
+  #   three pre-query states, decided from the two runs alone.
+  # * `neither_recorded`, `previous_unrecorded`, `latest_unrecorded` — its three row-decided states.
+  # * `comparable` — the rows block below is non-null.
+  #
+  # The first two are ADDED AT THIS CALL SITE and are not model states, deliberately.
+  # `SpecDirectoryGrowth.for` dereferences its second argument on its second line, so it must not be
+  # handed a nil; widening it to accept one would change a contract the dashboard already guards for
+  # itself (`repositories_controller.rb`, `if @latest_test_run && @previous_test_run`). The guard is
+  # duplicated here rather than the model relaxed, and `no_previous_run` is a DISTINCT token from
+  # `previous_unmeasured` because they are different repairs: "there is nothing to compare against"
+  # against "the run we compared against reported no tests".
+  #
+  # `comparable` RIDES BESIDE `state` as the single boolean a client that only wants the rows can
+  # branch on, read off the object's own predicate rather than re-derived from the symbol — and it
+  # is exactly `directory_run_growth != null`, so there is one boolean here and not two.
+  #
+  # NO `?branch=` GATE, AND THAT IS THE FEATURE. `branch_scope` is the constant `single_branch`
+  # because this comparison is branch-correct BY CONSTRUCTION rather than by a parameter:
+  # `Repository#previous_test_run_on_branch` scopes to the latest run's own branch and refuses a
+  # blank one. So `branch` names the branch the comparison WAS MADE ON — read off the latest run,
+  # never off `requested_branch`, which narrows `history` and must not be read as having narrowed
+  # this. Like `latest_run`, this block is NOT re-anchored by `?branch=`: under `?branch=main` on a
+  # repository whose newest run is on `feature/x`, this still compares the two newest `feature/x`
+  # runs, and `branch` says `feature/x` so the two cannot be confused.
+  #
+  # `basis` IS WHAT SEPARATES THIS PAIR FROM THE ONE ABOVE IT, and it is the key a client reads to
+  # know which of the two growth measurements it is holding. `two_endpoints` there says the figures
+  # are the two ends of a thirty-run window and not a series over it; `previous_run_on_branch` here
+  # says the baseline is one specific run, named by `baseline_commit_sha`, and that the comparison
+  # therefore has NO such gap in it — an area that gained 300 examples and gave them back cannot
+  # hide inside a two-run comparison. Spelled as the baseline's RULE rather than as "adjacent_runs",
+  # which would be read as adjacent in the history `history` serves and is not what this is: the two
+  # runs are consecutive ON THEIR BRANCH, and the all-branch history routinely has other branches'
+  # runs between them.
+  #
+  # `order` and `tie_break_served` are the WINDOW SIBLING'S OWN VALUES because they are the same
+  # query's: `SpecObservation.directory_growth_between` orders by `ABS(...) DESC` then `path ASC`,
+  # and both operands and the path go out on every row, so a client can reproduce this order from
+  # what it holds.
+  #
+  # `anchor_commit_sha`/`baseline_commit_sha` NAME THE TWO RUNS, under the sibling's names rather
+  # than "latest"/"previous", because the ROWS below are served as `anchor_count`/`baseline_count`
+  # and a client must be able to tell which sha each operand was counted on. ANCHOR IS THE LATEST
+  # RUN and BASELINE IS THE PREVIOUS ONE, which is the direction every `change` is signed in. Both
+  # are nullable and independently so: `baseline_commit_sha` is `null` in both serializer states,
+  # and `anchor_commit_sha` in `no_latest_run` alone.
+  def serialized_directory_run_growth_window
+    growth = spec_directory_growth
+
+    {
+      order: "abs_change_desc,path_asc",
+      tie_break_served: true,
+      basis: "previous_run_on_branch",
+      branch_scope: "single_branch",
+      branch: latest_test_run&.branch,
+      state: growth&.state || (latest_test_run.nil? ? :no_latest_run : :no_previous_run),
+      comparable: growth&.comparable? || false,
+      anchor_commit_sha: latest_test_run&.commit_sha,
+      baseline_commit_sha: previous_test_run&.commit_sha
+    }
+  end
+
+  # WHICH AREAS OF THE SUITE GREW OR SHRANK IN THE LATEST PUSH — the agent-readable half of the
+  # "Areas that grew or shrank" panel `repositories#show` renders from the same object, off the same
+  # two runs, in the same order. It is the question the dashboard answers with no parameter at all
+  # and this endpoint could not be asked: `directory_growth` beside it needs a `?branch=` and then
+  # answers about the two ends of a thirty-run window, which is a different measurement.
+  #
+  # THE SAME OBJECT THE PANEL READS, never a hand-written query — this file's governing rule, stated
+  # in full on `serialized_spec_files`. `SpecDirectoryGrowth` is view-free, so the API and the panel
+  # cannot name different areas or different operands for the same repository.
+  #
+  # ⭐ `null` IN EVERY NON-COMPARABLE STATE, AND NOT A BLOCK OF ZEROS. The window sibling serves its
+  # honesty figures in seven of its eight states because its object KEEPS them there; this object
+  # does not, and that is the whole reason this block is gated where that one is not.
+  # `SpecDirectoryGrowth.from_tuples` returns `new(state: :previous_unrecorded)` and friends WITHOUT
+  # the counts it just read, so every aggregate falls back to its `0` default. Serving them raw
+  # would print `anchor_recorded_count: 0` for a latest run that recorded four hundred rows — a
+  # fabricated denominator sitting among the fields that exist to be trustworthy, which is the
+  # failure the sibling's ⭐ span gate exists to prevent, reached here by a different route. The
+  # actionable half of those states is the `state` token, and it is served unconditionally one key
+  # up.
+  #
+  # So this block is non-null exactly when `directory_run_growth_window.comparable` is true, and
+  # every figure in it was counted off the rows the `rows` array lists.
+  #
+  # ROWS THROUGH `serialized_directory_growth_row`, SHARED VERBATIM WITH THE WINDOW BLOCK and not a
+  # second copy of it. That method is written entirely against `SpecDirectoryGrowth::Row` — `change`,
+  # `moved?`, `new_area?` and `removed_area?` are all defined on the parent Struct, and
+  # `SpecDirectoryWindowGrowth::Row` inherits them — so the two growth blocks read alike row for row,
+  # including the `previous_count`/`latest_count` → `baseline_count`/`anchor_count` translation and
+  # the rule against serving the panel's `*_label`/`change_reading` strings.
+  #
+  # `truncated` DISCLOSES THE CAP with both operands beside it, exactly as the sibling does:
+  # `directory_count` is counted BEFORE the `LIMIT` applies (a window function, so it runs first),
+  # and `limit` is read off `SpecObservation::MOVED_DIRECTORIES_LIMIT` rather than restated —
+  # this call site passes no `limit:`, so the constant IS the bound the query applied.
+  #
+  # `baseline_recorded_count`/`anchor_recorded_count` are the DENOMINATORS the recorded-rows states
+  # turn on, and deliberately not `TestRun#total_specs_count`, which is re-derived by SUM over shard
+  # reports and can legitimately differ from the rows a run actually wrote.
+  #
+  # ONE READ OF `spec_observations` AT MOST, and none at all in five of the nine states: the two
+  # serializer states never construct the object, and its own gate short-circuits three more before
+  # any query. The comparison itself is two run ids in an `IN` list — the same aggregate already
+  # plan-certified in `spec/models/spec_observation_spec.rb`, so that certification transfers.
+  def serialized_directory_run_growth
+    growth = spec_directory_growth
+
+    return nil unless growth&.comparable?
+
+    {
+      rows: growth.rows.map { |row| serialized_directory_growth_row(row) },
+      directory_count: growth.directory_count,
+      truncated: growth.truncated?,
+      baseline_recorded_count: growth.previous_recorded_count,
+      anchor_recorded_count: growth.latest_recorded_count,
+      limit: SpecObservation::MOVED_DIRECTORIES_LIMIT
+    }
+  end
+
+  # The repository's newest run, memoized across the nil — read by `latest_run` and by BOTH
+  # run-over-run growth blocks above, which is why it is an accessor here and not three calls to
+  # `Repository#latest_test_run` (which memoizes nothing and would issue the query once per reader).
+  #
+  # Memoizing also makes the ONE INSTANCE shared, which is what keeps `assembled_like?` free: that
+  # predicate reads `TestRun#shard_count`, which memoizes `shard_totals` PER INSTANCE, and
+  # `latest_run.shards` has already paid for it on this row by the time the growth gate asks.
+  #
+  # NOT RE-ANCHORED BY `?branch=` — see `serialized_latest_run`, which states that at length.
+  def latest_test_run
+    return @latest_test_run if defined?(@latest_test_run)
+
+    @latest_test_run = current_repository.latest_test_run
+  end
+
+  # The run the latest one is compared against: the newest run STRICTLY OLDER than it ON ITS OWN
+  # BRANCH. `nil` — never a fallback row — when there is no honest comparison to make, which
+  # `Repository#previous_test_run_on_branch` argues for itself at length: the row immediately before
+  # the latest one in the interleaved all-branch history is routinely a different branch, and a
+  # difference taken against it reports a suite-size change no commit ever made.
+  #
+  # FREE WHEN THERE IS NOTHING TO ASK. That method returns `nil` before any read when the run is nil
+  # or its branch is blank, so a repository CI has never reported on, and a run whose client sent no
+  # branch, cost this endpoint nothing at all. Otherwise it is one indexed row lookup.
+  #
+  # THIS ROW IS NOT PRIMED, and that is a known second query rather than an oversight.
+  # `SpecDirectoryGrowth`'s gate asks `TestRun#assembled_like?`, which reads `shard_count` on BOTH
+  # sides; `latest_test_run` has already paid for its own `shard_totals` under `latest_run.shards`,
+  # and this row is not in `history_runs` under every request — it is a different branch's row
+  # whenever `?branch=` narrowed elsewhere, and outside the bound on a busy branch — so there is no
+  # primed instance to read it off. `preload_shard_counts([previous_test_run])` would trade this
+  # un-grouped `pick` for an equally-sized grouped read and buy nothing. One aggregate over one run's
+  # shards, and `spec/requests/api/v1/repository_latest_run_spec.rb` pins the count so a third does
+  # not appear unnoticed.
+  #
+  # Memoized across the nil with `defined?` rather than `||=` — `show` reads it twice through the
+  # window block's `baseline_commit_sha` and the growth object below, and a `||=` would re-issue the
+  # lookup on every repository that has no previous run, which is the case this most needs to be
+  # cheap in.
+  def previous_test_run
+    return @previous_test_run if defined?(@previous_test_run)
+
+    @previous_test_run = current_repository.previous_test_run_on_branch(latest_test_run)
+  end
+
+  # The run-over-run presenter, or `nil` when there are not two runs to hand it — memoized across
+  # the nil with `defined?` for the reason `unstable_tests` states, and under the same double read
+  # (`show` asks the window block for `state` and then this block for the rows).
+  #
+  # ⭐ THE GUARD IS THIS METHOD'S WHOLE SUBTLETY AND IT IS NOT OPTIONAL. `SpecDirectoryGrowth.for`
+  # dereferences `previous_test_run` on its SECOND LINE (`unless previous_test_run.suite_size_measured?`)
+  # and has no nil state of its own — there are six non-comparable states and "there is no previous
+  # run" is none of them. `previous_test_run` above is nil for three ordinary live shapes: a
+  # repository CI has never reported on, a latest run whose client sent no branch, and the first run
+  # on a branch. Handed straight in, every one of those is a `NoMethodError` on a plain
+  # `GET /api/v1/repository`.
+  #
+  # GUARDED HERE AND NOT BY WIDENING THE MODEL, which is the same shape `RepositoriesController#show`
+  # already uses (`if @latest_test_run && @previous_test_run`). Teaching `SpecDirectoryGrowth.for` to
+  # accept a nil would give the object a seventh absence state that the dashboard — its other caller,
+  # which guards for itself — can never reach, and would move a decision the two call sites make
+  # identically into a contract only one of them relies on.
+  #
+  # The two guarded cases are told apart one key up, by `latest_test_run.nil?`, off this same
+  # memoized accessor — so the state token and the object it stands in for cannot come apart.
+  def spec_directory_growth
+    return @spec_directory_growth if defined?(@spec_directory_growth)
+
+    @spec_directory_growth =
+      latest_test_run && previous_test_run && SpecDirectoryGrowth.for(latest_test_run, previous_test_run)
   end
 
   # The presenter, or `nil` when no comparison was allowed — memoized across the nil with `defined?`
