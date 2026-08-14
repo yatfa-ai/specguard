@@ -2010,8 +2010,11 @@ class Api::V1::RepositoriesController < Api::BaseController
 
   # The per-file drill-in for the ONE area a caller asked about, or `nil` when nobody asked or there
   # was no comparison to narrow — memoized across the nil with `defined?` rather than `||=`, on the
-  # idiom every nullable accessor in this file uses, and under a genuine double read: the contract
-  # block and the rows block are both served on every request.
+  # idiom every nullable accessor in this file uses. Unlike `spec_directory_growth` above, and unlike
+  # `spec_directory_window_growth` and `unstable_tests` below, this accessor is read ONCE: the
+  # contract block reads the PARENT, deliberately, so the verdict is never taken off this object —
+  # which is not even constructed when nobody asked. The memoization is this file's idiom held, not a
+  # second read paid for; the two guards below are what actually keep the key cheap.
   #
   # ⭐ TWO GUARDS, AND THEY REFUSE DIFFERENT THINGS. `requested_spec_directory` is the ASK — decided
   # from the params before any query, so a client that never sends the parameter pays nothing at all

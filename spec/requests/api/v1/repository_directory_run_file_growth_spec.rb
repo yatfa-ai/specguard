@@ -677,9 +677,10 @@ RSpec.describe "GET /api/v1/repository — directory_run_file_growth", type: :re
       expect(get_repository(key: api_key)["directory_run_file_growth"]).to be_nil
     end
 
-    # ONE READ WHEN ASKED, and it is also the MEMOIZATION GUARD — the contract block and the rows
-    # block both reach the presenter, so an unmemoized accessor builds it twice and this count is
-    # two.
+    # ONE READ WHEN ASKED. Deliberately NOT a memoization guard: this accessor has a single call
+    # site, because the contract block reads the PARENT rather than this object, so an unmemoized
+    # build would read once too and this count would still be one. What it does pin is the cost of
+    # the ask itself — naming an area buys exactly this grain's single query and nothing more.
     it "reads spec_observations exactly once for its own grain when an area is named" do
       adjacent_runs
       get_repository(key: api_key)
