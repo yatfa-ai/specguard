@@ -269,7 +269,9 @@ module Ingest
       @digest_index = {}
       # The page's embeddings, filled by {#page_embeddings} for the same reason and with the same
       # guarantee: {#embedding_for} is total rather than conditional on a page being open, and falls
-      # back to a single embed for a text no page fetched.
+      # back to a single embed for a text no page fetched — unless `@provider_dark` below has been
+      # tripped, in which case that fallback answers nil rather than asking. See {#embedding_for},
+      # which explains where the missing key comes from and why the breaker has to be re-read there.
       @embeddings = {}
       # The page's two write buffers, emptied and refilled by every {#resolve_page} for the same
       # reason and with the same total-rather-than-conditional guarantee: {#resight} and {#claim}
@@ -2225,7 +2227,9 @@ module Ingest
     #
     # **The ONE-TEXT path, and it is no longer the ordinary one.** A page asks for its texts
     # together ({#embed_page}) and this is what each of them falls back to: once per text when the
-    # batch request failed, and once for a text no page fetched. It is unchanged in what it does, and
+    # batch request failed, and once for a text no page fetched — that second arm only while the pass
+    # is not dark, because {#embedding_for} answers such a text nil instead of reaching here once
+    # `@provider_dark` is set. It is unchanged in what it does, and
     # it is deliberately still the thing containment is expressed in — the batch has no way to say
     # WHICH input a failed request was refused for, and this does, one text at a time.
     #
