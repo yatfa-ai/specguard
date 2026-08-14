@@ -4,10 +4,10 @@
 #
 # Deliberately its own module rather than a widening of any sibling `Requested*Param`, and one
 # module per parameter is the point of the split — the argument `RequestedSpecFileParam` makes for
-# itself, unchanged here. The parameters mean different things, are read by different panels, and
-# one guard answering several of them would make "which shapes does each tolerate" a single
-# question nobody asked. What they share is the hazard, and the guard for it is the same two lines
-# in the same order.
+# itself. The parameters mean different things, are read by different panels, and one guard
+# answering several of them would make "which shapes does each tolerate" a single question nobody
+# asked. What they share is the hazard, and the guard for it is the same two lines in the same
+# order.
 #
 # `is_a?(String)` FIRST, and it is not defensive noise: `?repeated_description[]=x` parses to an
 # Array, `?repeated_description[a]=b` to `ActionController::Parameters` and
