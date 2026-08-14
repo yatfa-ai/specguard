@@ -366,7 +366,7 @@ RSpec.describe "GET /api/v1/repository — latest_run.spec_file_examples", type:
       # And the classified reads are ALL of them — the assertion no per-grain count can make,
       # because a read matching no grain's pattern is invisible to every one of them.
       expect(observation_reads { get_repository(query: { spec_file: TARGET_FILE }) }.length)
-        .to eq(area.length + file.length + example.length + description.length + file_examples.length)
+        .to eq(classified_observation_reads { get_repository(query: { spec_file: TARGET_FILE }) })
       expect(observation_reads { get_repository(query: { spec_file: TARGET_FILE }) }.length).to eq(7)
       # Six without the ask — the total `repository_latest_run_spec.rb` pins for this endpoint,
       # restated here as the thing this slice did NOT change.
@@ -378,15 +378,22 @@ RSpec.describe "GET /api/v1/repository — latest_run.spec_file_examples", type:
     # partition's own separation of these patterns exists to make assertable, and the shape neither
     # single-ask block above can speak for. Eight reads: the six, plus one per ask.
     it "keeps the two drill-ins in their own grains when both are asked for at once" do
+      query = { spec_file: TARGET_FILE, spec_directory: "spec/models" }
+
       _area, _file, _example, _description, _flakiness, _growth, directory_files, file_examples =
-        observation_reads_by_grain do
-          get_repository(query: { spec_file: TARGET_FILE, spec_directory: "spec/models" })
-        end
+        observation_reads_by_grain { get_repository(query: query) }
 
       expect([directory_files.length, file_examples.length]).to eq([1, 1])
-      expect(observation_reads do
-        get_repository(query: { spec_file: TARGET_FILE, spec_directory: "spec/models" })
-      end.length).to eq(8)
+      # And the classified reads are ALL of them — asserted HERE most of all. This is the second
+      # richest fixture in the suite, SIX of the nine grains non-zero at once, so it is where a
+      # cross-grain misclassification is most observable. The `eq([1, 1])` above covers the two
+      # drill-ins alone, and the bare `8` below is exactly the total that
+      # spec/support/observation_grain_reads.rb argues cannot tell "one aggregate per grain" from "one
+      # grain reading twice" — so without this line a read adopted into another grain, or matching no
+      # grain at all, is invisible to every assertion in the example.
+      expect(observation_reads { get_repository(query: query) }.length)
+        .to eq(classified_observation_reads { get_repository(query: query) })
+      expect(observation_reads { get_repository(query: query) }.length).to eq(8)
     end
 
     # The suite-size axis, and the one that decides whether this key is affordable at the roadmap's

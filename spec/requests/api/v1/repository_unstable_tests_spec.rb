@@ -681,8 +681,7 @@ RSpec.describe "GET /api/v1/repository — unstable_tests", type: :request do
         .to eq([1, 1, 2, 2, 4])
       expect(growth.length).to eq(1)
       expect(observation_reads { get_repository(key: api_key, query: { branch: "main" }) }.length)
-        .to eq(area.length + file.length + example.length + description.length + flakiness.length +
-               growth.length)
+        .to eq(classified_observation_reads { get_repository(key: api_key, query: { branch: "main" }) })
       expect(observation_reads { get_repository(key: api_key, query: { branch: "main" }) }.length)
         .to eq(11)
     end

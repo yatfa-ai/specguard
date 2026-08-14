@@ -691,8 +691,7 @@ RSpec.describe "GET /api/v1/repository — directory_growth", type: :request do
       expect([area.length, file.length, example.length, description.length, flakiness.length,
               growth.length]).to eq([1, 1, 2, 2, 3, 1])
       expect(observation_reads { get_repository(key: api_key, query: { branch: "main" }) }.length)
-        .to eq(area.length + file.length + example.length + description.length + flakiness.length +
-               growth.length)
+        .to eq(classified_observation_reads { get_repository(key: api_key, query: { branch: "main" }) })
       expect(observation_reads { get_repository(key: api_key, query: { branch: "main" }) }.length)
         .to eq(10)
     end
