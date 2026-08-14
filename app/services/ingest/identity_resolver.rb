@@ -885,6 +885,17 @@ module Ingest
     # the half that can meet a unique-key conflict, a read-only replica or a full disk, and none of
     # those is a reason to fail an ingest whose rows are already resolved. The page's vectors are in
     # hand and the resolve continues with them; the only thing lost is that the next page pays again.
+    #
+    # **It commits on its own, and that is a property worth keeping.** {#resolve_page} holds no
+    # transaction — this class runs in a job precisely so that it is out of the ingest's, and
+    # {#claim_identity} commits per row — so this `upsert_all` is its own statement and its own
+    # transaction. Two consequences, both wanted: a page that dies later at {#nearest} or
+    # {#flush_page} still keeps the vectors it paid for, which is exactly the behaviour a cache
+    # should have on a failed pass; and the row locks the upsert takes are released at the end of
+    # the statement rather than held for the length of a page, so the concurrent shards of a first
+    # run — the case where two ingests upsert the SAME digest at the same moment — queue for
+    # microseconds instead of for each other's whole page. Wrapping the page in a transaction later
+    # would quietly reverse both.
     def store_embeddings(fingerprint, fresh)
       return if fingerprint.blank? || fresh.empty?
 

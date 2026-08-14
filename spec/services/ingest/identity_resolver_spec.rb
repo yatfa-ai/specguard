@@ -1660,20 +1660,35 @@ RSpec.describe Ingest::IdentityResolver do
       expect(other_repository.spec_identities.pluck(:text)).to match_array(shared_page.pluck(:name))
     end
 
-    it "asks nothing again for text THIS repository renamed away from" do
-      # The second half of the gap, and the one that needs no second tenant. Run 2 renames every
-      # test, so run 3's restoration of the original names presents text this repository holds no
-      # identity row for any more — `#digest_index` misses it — while the deployment embedded it on
-      # run 1. Today that is five vectors bought a second time.
+    it "asks nothing again for text THIS repository's rows no longer hold" do
+      # The second half of the gap, and the one that needs no second tenant.
+      #
+      # **A re-point is what actually moves a text out from under `#digest_index`, and a rename is
+      # not.** `spec_identities` rows are never pruned, so a test renamed by SUFFIX leaves its old
+      # row standing and the old text stays answerable by the digest equality forever — an example
+      # built that way would embed nothing on run 3 whether or not this cache existed, and would
+      # pass with the cache read deleted. What genuinely removes the digest is the punctuation-drift
+      # re-point: run 2's spelling is normalisation-equivalent to run 1's, so `#resight` re-points
+      # the row ONTO the new spelling (see "a description that drifted only in punctuation") and the
+      # repository now holds no row under the original digest at all.
+      #
+      # So run 3 presents text this repository cannot answer for and this DEPLOYMENT bought on run
+      # 1. Today that is five vectors paid for twice.
       EmbeddingGenerator.provider = caching_provider
       ingest(shared_page, ci_run_id: "run-1")
-      renamed = shared_page.map { |spec| spec.merge(name: "#{spec[:name]} under load") }
-      ingest(renamed, ci_run_id: "run-2")
+      drifted = shared_page.map { |spec| spec.merge(name: "#{spec[:name].gsub(' ', '  ')}!") }
+      ingest(drifted, ci_run_id: "run-2")
+
+      # The premise, pinned rather than trusted: the originals really are gone from this
+      # repository's rows, so run 3 cannot be answered by the digest equality.
+      expect(repository.spec_identities.count).to eq(5)
+      expect(repository.spec_identities.pluck(:text)).to match_array(drifted.pluck(:name))
 
       asked_before = caching_provider.batched.size
       ingest(shared_page, ci_run_id: "run-3")
 
       expect(caching_provider.batched.size).to eq(asked_before)
+      expect(repository.spec_identities.count).to eq(5)
     end
 
     it "buys nothing at all when the provider publishes no fingerprint" do
