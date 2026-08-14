@@ -17,18 +17,21 @@
 # was taken from. Fetched separately they are figures that agree today with no structural reason to
 # keep agreeing.
 #
-# ⚠️ This class's prose states this panel's page capacity in THREE places — the worked caption just
-# above, the truncation argument at `#shown_timed_count`, and the tail test at `#lists_untimed?`.
-# All three are derived from `SpecObservation::FILE_EXAMPLES_LIMIT`, not from each other and not
-# from any of these sentences: that constant is the figure's one owner, and a resize rots all three
-# at once. Re-resolve it before touching any of them — a correction pass that trusts the adjacent
-# prose over the constant propagates the wrong number instead of fixing it, which is exactly how
-# one of the three came to disagree with the other two.
-#
 # It derives no figure of its own, and here it does not even take a second query for them: the
 # file's recorded and timed counts ride back on the listed rows as window counts — see
 # `SpecObservation::FILE_POPULATION_COUNTS` for why that is available at this grain and was not at
 # the one above.
+#
+# ⚠️ This class's prose states this panel's page capacity in THREE places — the worked caption
+# opening this section, the truncation argument at `#shown_timed_count`, and the tail test at
+# `#lists_untimed?`. All three are derived from `SpecObservation::FILE_EXAMPLES_LIMIT`, not from
+# each other and not from any of these sentences: that constant is the figure's one owner, and a
+# resize rots all three at once. Re-resolve it before touching any of them — a correction pass that
+# trusts the adjacent prose over the constant propagates the wrong number instead of fixing it. One
+# of the three was born wrong rather than drifting later: it shipped in the same commit that set
+# the constant to fifty, while the other two shipped right, so the figure it carried was never a
+# cap this panel has held. A pass that had trusted that sentence would have spread a number that
+# was never correct, not restored one that had gone stale.
 #
 # == The denominator is this file's rows, not the run's and not the suite's
 #
