@@ -61,7 +61,7 @@
 # rows and the sentences about them together.
 #
 # What differs from those two is the shape of the absences. There, a panel either had rows or said
-# it had none. Here there are five distinct reasons a comparison cannot be made and they are
+# it had none. Here there are six distinct reasons a comparison cannot be made and they are
 # different facts, so `#state` names WHICH one rather than collapsing them into a single "cannot
 # compare" — the register `repositories/show.html.erb` sets for the Overview delta's own
 # no-comparison states, where withholding a figure means saying why.
@@ -74,7 +74,7 @@ class SpecDirectoryGrowth
   # (`RepositoriesController#show`), and `assembled_like?` reads `shard_count` out of the memoized
   # `TestRun#shard_totals` that page has already taken for both rows — so the gate itself is free.
   #
-  # The remaining two states are decidable only from the rows, and cost the one query the
+  # The remaining three states are decidable only from the rows, and cost the one query the
   # comparison costs anyway.
   def self.for(test_run, previous_test_run, limit: SpecObservation::MOVED_DIRECTORIES_LIMIT)
     return new(state: :latest_unmeasured) unless test_run.suite_size_measured?
@@ -111,8 +111,8 @@ class SpecDirectoryGrowth
     @latest_recorded_count = latest_recorded_count
   end
 
-  # Which of the six states this is — one comparable, five not. A symbol rather than a boolean
-  # because the five absences are different facts about the two runs and a reader is owed the one
+  # Which of the seven states this is — one comparable, six not. A symbol rather than a boolean
+  # because the six absences are different facts about the two runs and a reader is owed the one
   # that applies: "the earlier run reported no tests" and "the earlier run recorded no per-example
   # rows" are the same blank panel and two different things to go and fix.
   attr_reader :state

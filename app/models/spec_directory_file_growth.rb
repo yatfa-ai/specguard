@@ -39,8 +39,9 @@
 #
 # == The comparability gate is the PARENT'S verdict, not a second spelling of it
 #
-# The five states in which there is no comparison to draw — `latest_unmeasured`,
-# `previous_unmeasured`, `assembled_differently`, `previous_unrecorded`, `latest_unrecorded` — are
+# The six states in which there is no comparison to draw — `latest_unmeasured`,
+# `previous_unmeasured`, `assembled_differently`, `neither_recorded`, `previous_unrecorded`,
+# `latest_unrecorded` — are
 # `SpecDirectoryGrowth`'s, and they are INHERITED here rather than re-derived. `.for` takes the
 # parent panel's own object and refuses to build anything the moment that panel is not comparable.
 #
@@ -71,7 +72,7 @@
 #
 # == Zero queries when there is nothing to compare
 #
-# The gate is a read of an object already in memory, so it runs BEFORE the query in all five states
+# The gate is a read of an object already in memory, so it runs BEFORE the query in all six states
 # and the drill-in costs the page nothing on a page that cannot compare — even with
 # `?spec_directory=` set. The parent's own gate has already paid for itself; this adds no round trip
 # to it.
@@ -96,7 +97,7 @@ class SpecDirectoryFileGrowth
   # `growth` is the parent panel's own `SpecDirectoryGrowth`, already built by the controller for
   # this same pair of runs. It is passed rather than rebuilt so the two panels cannot disagree about
   # whether these runs are comparable, and so this costs no second gate — see the class comment for
-  # why the last two of its five states are not re-derivable at this grain in any case.
+  # why the last two of its six states are not re-derivable at this grain in any case.
   def self.for(test_run, previous_test_run, path, growth:,
                limit: SpecObservation::SPEC_DIRECTORY_FILE_GROWTH_LIMIT)
     return new(path: path, state: growth.state) unless growth.comparable?
@@ -109,7 +110,7 @@ class SpecDirectoryFileGrowth
   # the first; `to_i` over the nil of an empty read, where zero files and zero rows on both sides is
   # the honest count. An empty read is exactly the "neither run recorded anything in this area"
   # state — a group exists here if and only if a row exists — so it needs no separate count to
-  # detect, and it is `#recorded?` rather than a sixth state: the five states are about the RUNS and
+  # detect, and it is `#recorded?` rather than a seventh state: the six states are about the RUNS and
   # this is about the AREA.
   def self.from_tuples(path, tuples)
     rows = tuples.map do |file_path, previous, latest, *|
@@ -137,7 +138,7 @@ class SpecDirectoryFileGrowth
   # empty state has to name it — "no spec files" without a subject is a sentence about nothing.
   attr_reader :path
 
-  # The parent panel's verdict on the two runs, carried verbatim. `:comparable` or one of its five
+  # The parent panel's verdict on the two runs, carried verbatim. `:comparable` or one of its six
   # refusals — never a state of this object's own devising, which is the whole point of it being
   # inherited.
   attr_reader :state
@@ -161,7 +162,7 @@ class SpecDirectoryFileGrowth
   def comparable? = state == :comparable
 
   # Either run recorded at least one example in this area. False for an area that is a typo, a stale
-  # bookmark, or a directory both runs are innocent of — distinct from every one of the five
+  # bookmark, or a directory both runs are innocent of — distinct from every one of the six
   # non-comparable states, which are about the RUNS and would be wrong to spell here.
   def recorded? = rows.any?
 

@@ -64,7 +64,7 @@ RSpec.describe "Repository drill-down carry-through", type: :request do
   # have a row to link FROM and neither links to its own subject:
   #
   #   - `spec/requests` moved (2 → 1), so "Areas that grew or shrank" has a row for an area that is
-  #     not the open one — `spec/models` moved too (3 → 2), and its being present is what makes the
+  #     not the open one — `spec/models` moved too (4 → 3), and its being present is what makes the
   #     other row's link a real choice rather than the only one.
   #   - inside the open area, `refund_spec.rb` moved (2 → 1) while `order_spec.rb` — the OPEN file —
   #     did not, so the per-file drill-in has a row to link to that is neither the open file nor a

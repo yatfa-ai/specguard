@@ -2936,7 +2936,7 @@
                              "did not grow or shrink anywhere between them."
               ) %>
         <% else %>
-          <%# The five states in which there is no comparison to draw, said apart rather than
+          <%# The six states in which there is no comparison to draw, said apart rather than
               collapsed into one blank panel — the register the Overview delta's own no-comparison
               states set above: withheld rather than hedged, and withholding means saying why. They
               are not one fact. "The earlier run reported no tests" and "the earlier run recorded no
@@ -3034,7 +3034,7 @@
         It renders ONLY where the panel above is comparable, and that is not a nicety: a drill-in
         that compared two runs the panel it hangs off refuses to compare would assert, in a closer
         view, a comparison the wider view has just withheld. `SpecDirectoryFileGrowth` inherits that
-        verdict rather than re-deriving it — two of its five states are facts about a RUN and are
+        verdict rather than re-deriving it — two of its six states are facts about a RUN and are
         not derivable from one area's rows at all.
 
         No "Close directory" of its own. `?spec_directory=` is ONE ask with one exit, and that exit
@@ -3061,13 +3061,13 @@
               the <%= number_with_delimiter(@spec_directory_file_growth.rows.size) %> spec files that
               moved most, of the
               <%= number_with_delimiter(@spec_directory_file_growth.file_count) %> either run
-              recorded in this area — largest movement first, in both directions.
+              recorded in this area — largest movement first, in both directions
             <% else %>
               all <%= number_with_delimiter(@spec_directory_file_growth.file_count) %>
               <%= "spec file".pluralize(@spec_directory_file_growth.file_count) %> either run
-              recorded in this area — largest movement first, in both directions.
+              recorded in this area — largest movement first, in both directions
             <% end %>
-            measured between this run and
+            — measured between this run and
             <span class="font-mono"><%= @previous_test_run.commit_sha.first(7) %></span>, the
             previous run on this branch.
             <%# Only where it is TRUE of the rows below, for the reason the panel above states: a

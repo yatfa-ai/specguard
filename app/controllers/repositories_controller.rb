@@ -338,7 +338,7 @@ class RepositoriesController < ApplicationController
       #
       # `@spec_directory_growth` is passed rather than the runs alone: this drill-in inherits that
       # panel's comparability verdict instead of re-deriving it, so it cannot assert a comparison
-      # the panel above refuses, and two of that verdict's five states are not derivable at this
+      # the panel above refuses, and two of that verdict's six states are not derivable at this
       # grain at all. See `SpecDirectoryFileGrowth`.
       #
       # ONE query when there is a comparison to make and an area to make it in, none otherwise, and

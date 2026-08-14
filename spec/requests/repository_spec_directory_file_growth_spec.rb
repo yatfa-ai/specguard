@@ -246,10 +246,18 @@ RSpec.describe "Repository spec directory file growth", type: :request do
     # The caption's load-bearing claims. The totals are the AREA's — the fixture's `spec/requests`
     # holds nine examples per run precisely so a caption built on the parent panel's whole-run
     # figures prints a visibly different number here.
+    #
+    # The covered-set fragment is asserted ACROSS the seam into the measured-over clause, because
+    # the join is built by a conditional and the two branches meet there: an assertion stopping at
+    # the end of either branch leaves the one place the sentence can be broken unobserved, which is
+    # exactly where it was broken once.
     it "states what the panel covered and what it was measured over" do
       get repository_path(moved_area, spec_directory: "spec/models")
 
-      expect(basis_text).to include("all 3 spec files either run recorded in this area")
+      expect(basis_text).to include(
+        "all 3 spec files either run recorded in this area — largest movement first, " \
+        "in both directions — measured between this run and"
+      )
       expect(basis_text).to include("Counted off the 9 and 7 example rows the two runs recorded in this area")
       expect(basis_text).to include("prev000")
     end
@@ -287,7 +295,10 @@ RSpec.describe "Repository spec directory file growth", type: :request do
       get repository_path(repository, spec_directory: "spec/models")
 
       expect(rows.size).to eq(SpecObservation::SPEC_DIRECTORY_FILE_GROWTH_LIMIT)
-      expect(basis_text).to include("the 30 spec files that moved most, of the 33 either run recorded")
+      expect(basis_text).to include(
+        "the 30 spec files that moved most, of the 33 either run recorded in this area — " \
+        "largest movement first, in both directions — measured between this run and"
+      )
     end
 
     # Two comparable runs whose every file in the area holds the same number of examples. A real
