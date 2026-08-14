@@ -326,6 +326,9 @@ RSpec.describe "Repository heaviest spec files", type: :request do
       # waited on: the rollup shipped without one, because the index that comment named governs a
       # prefix predicate this read does not issue.
       expect(source).not_to include("needs its own migration")
+      # The replacement truth the retired carve-outs gave way to is still stated — if this read
+      # stops reaching the panels, this fails instead of passing.
+      expect(source).to include("Both rollups now exist, in the two panels below this one")
     end
   end
 end
