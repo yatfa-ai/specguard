@@ -667,6 +667,20 @@ RSpec.describe "Repository heaviest spec directories", type: :request do
         expect(panel.find("a", text: "spec/models")[:href]).to include("branch=main")
       end
 
+      # The reciprocal of "Close directory", which has carried the open FILE the other way since it
+      # was written: the file panel is a panel the reader opened separately, and closing an area is
+      # not a request to close it — nor is OPENING one. This link dropped the file from the day it
+      # was written (`?spec_file=` had shipped the day before, in SPGD-309) while the page's own
+      # prose, in two places, said it must not, and this example is the pin that was missing. See
+      # `RepositoriesHelper#drill_down_path`, where the rule is stated once instead of re-argued at
+      # each of the eight links that obey it.
+      it "carries an open file through the link rather than dropping it" do
+        get repository_path(area_run, spec_file: "spec/models/order_spec.rb")
+
+        expect(panel.find("a", text: "spec/models")[:href])
+          .to include("spec_file=#{CGI.escape('spec/models/order_spec.rb')}")
+      end
+
       it "renders no panel at all when no directory was asked for" do
         get repository_path(area_run)
 

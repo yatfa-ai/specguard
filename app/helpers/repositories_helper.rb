@@ -16,6 +16,57 @@ module RepositoriesHelper
   # can support it.
   TRAJECTORY_BRANCH_CHOICES = 8
 
+  # ONE statement of the carry-through rule this page's drill-downs all obey, for every link that
+  # opens or closes one of them.
+  #
+  # The rule itself is old and is argued at each panel: `?branch=` anchors the "Suite growth" chart,
+  # and `?spec_file=` / `?spec_directory=` / `?repeated_description=` each anchor a drill-down panel
+  # of their own, so a gesture aimed at ONE of them must not close the others as a side effect.
+  # Opening a file is not a request to close the area; closing an area is not a request to close the
+  # file; and so on in every direction.
+  #
+  # What was missing was a place to SAY it once. The READ side of these four asks has been abstracted
+  # since they were built — `app/controllers/concerns/requested_*_param.rb`, one concern each — but
+  # the EMIT side was hand-enumerated at eight link sites, thirty-two independent argument decisions
+  # re-made by hand every time a rung was added. That is not a rule, it is a matrix maintained by
+  # remembering, and it failed exactly the way such a matrix fails: the area-open link was written
+  # after `?spec_file=` already shipped, did not carry it, and was later edited to ADD another ask
+  # without anyone noticing the missing one. Every new drill-down cost a retrofit at every
+  # pre-existing site, and every pre-existing site was a place to forget.
+  #
+  # So: CARRY IS THE DEFAULT, and a caller names only what it CHANGES.
+  #
+  #   carry — omit the key entirely; the reader's own ask rides through
+  #   set   — pass a value (`spec_file: file.path`)
+  #   clear — pass an explicit `nil` (`spec_file: nil`); `repository_path` drops nil params
+  #
+  # `asks.merge(overrides)` and specifically NOT `asks.merge(overrides.compact)`. The three "Close"
+  # buttons clear their own ask by passing nil, and compacting the OVERRIDES drops that nil before it
+  # can override anything — the reader's current ask survives the merge and all three buttons become
+  # no-ops that navigate to the page they are already on. That is the precise inversion of the defect
+  # this exists to make impossible. A nil in `overrides` is a decision, not an absence.
+  #
+  # Compacting the merged RESULT is merely pointless rather than harmful (`repository_path` already
+  # omits nil params), but it reads as though nils were unwanted here, which is the belief that leads
+  # to the fatal version. Neither belongs in this chain.
+  #
+  # `anchor:` is required and stays per-site: where a gesture lands is a property of the gesture, not
+  # of the asks, and one of them ("Close file") chooses its anchor from what else is open.
+  #
+  # The asks are read from the raw REQUEST ivars, never from a resolved object — `branch` is
+  # `@trajectory_branch_request` and not the run the fallback settled on, so a link reproduces what
+  # the reader asked for rather than what they got. A site that wants a resolved value passes it as
+  # an override instead (the area-files table names `@spec_directory_files.path`, its own panel's
+  # subject, rather than leaning on that ivar and the request agreeing).
+  def drill_down_path(repository, anchor:, **overrides)
+    asks = { branch: @trajectory_branch_request,
+             spec_file: @spec_file_request,
+             spec_directory: @spec_directory_request,
+             repeated_description: @repeated_description_request }
+
+    repository_path(repository, **asks.merge(overrides), anchor: anchor)
+  end
+
   # Both halves of the same disclosure for repository removal: what the presser is told *before*
   # they confirm, and what they are told *after*. They live together for the reason
   # `MembershipsHelper#revoke_confirmation` and `#revoke_notice` do — they make the same claim about

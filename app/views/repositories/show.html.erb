@@ -1661,34 +1661,24 @@
                       than a nested route: a path contains `/` and makes a poor route segment, and
                       the panel and its drill-down read one run on one page.
 
-                      The branch ask is CARRIED THROUGH, and that is not incidental. `?branch=`
-                      anchors the "Suite growth" panel and nothing else; dropping it here would
-                      re-anchor a chart the reader did not touch as the side effect of opening a
-                      file. `nil` is omitted from the query string, so a page nobody asked a branch
-                      of links exactly as it did before.
-
-                      The AREA ask rides through for the same reason, and the reciprocity is the
-                      point: the "Spec files in this directory" panel below offers this identical
-                      gesture on files this capped ten cannot show, and it carries the area through.
-                      If this one did not, the same gesture on the same target panel would close
-                      the area from one list and keep it from the other, with nothing on the page
-                      telling a reader which they were about to get. Picking a file is not a
-                      request to close the area, from either list.
+                      Through `drill_down_path`, which states the carry-through rule once for every
+                      link on this page: every OTHER ask rides through and only `spec_file` is set
+                      here. The reciprocity is the point, and this link is one half of it — the
+                      "Spec files in this directory" panel below offers this identical gesture on
+                      files this capped ten cannot show, and it carries the area through. If this
+                      one did not, the same gesture on the same target panel would close the area
+                      from one list and keep it from the other, with nothing on the page telling a
+                      reader which they were about to get. Picking a file is not a request to close
+                      the area, from either list, nor to close a branch or a description panel the
+                      reader opened separately.
 
                       `aria-current` on the open file, because this is a list of choices with one
                       of them taken and the panel below is a long way down the page — a reader
                       arriving back at this table by keyboard needs to be told which row they are
-                      already looking at.
-
-                      An open DESCRIPTION rides through for the same reason the area does, and it is
-                      the newest of the three: the repeated-description drill-down names each of its
-                      members' files, so following one from there and then following another from
-                      here would otherwise close the very list being worked through. %>
+                      already looking at. %>
                   <%= link_to file.path,
-                              repository_path(@repository, branch: @trajectory_branch_request,
-                                              spec_directory: @spec_directory_request,
-                                              repeated_description: @repeated_description_request,
-                                              spec_file: file.path, anchor: "spec-file-examples"),
+                              drill_down_path(@repository, spec_file: file.path,
+                                              anchor: "spec-file-examples"),
                               class: "underline underline-offset-2 decoration-app-border-light " \
                                      "text-app-content hover:decoration-app-content",
                               aria: { current: file.path == @spec_file_request ? "true" : nil } %>
@@ -1764,11 +1754,15 @@
           <%# The way back OUT. This panel is reached by a link and there is no other control that
               removes the parameter, so without this the only exit is editing the URL — and the
               reader who most needs the drill-down is the one least likely to want to do that. It
-              carries the branch ask through and anchors back at the panel the file was picked
-              from, so closing a file returns the reader where they opened it rather than at the
-              top of a long page.
+              anchors back at the panel the file was picked from, so closing a file returns the
+              reader where they opened it rather than at the top of a long page.
 
-              It carries any OPEN AREA through, and the panel it anchors at follows the area rather
+              Through `drill_down_path`, and `spec_file: nil` is the whole gesture: this is one of
+              the three controls that CLEAR an ask, so it names that ask explicitly rather than
+              omitting it — under the carry-by-default rule an omission would mean "keep the file
+              open" and this button would do nothing.
+
+              Every other ask rides through, and the panel it anchors at follows the area rather
               than being fixed. A file reached through the area drill-down was NOT picked from
               "Heaviest spec files" — that panel's capped ten is precisely where such a file is
               not — so dropping the area here would close the middle rung on the way back and land
@@ -1779,9 +1773,7 @@
               its member rows must land back on the list they were working through. %>
           <%= render UI::ButtonComponent.new(
                 variant: :ghost,
-                href: repository_path(@repository, branch: @trajectory_branch_request,
-                                      spec_directory: @spec_directory_request,
-                                      repeated_description: @repeated_description_request,
+                href: drill_down_path(@repository, spec_file: nil,
                                       anchor: @spec_directory_request ? "spec-directory-files" : "spec-file-durations")
               ) { "Close file" } %>
         <% end %>
@@ -2066,21 +2058,19 @@
                       contains `/` and makes a poor route segment, and the panel and its drill-down
                       read one run on one page.
 
-                      The branch ask is CARRIED THROUGH for the reason the file link gives: `?branch=`
-                      anchors the "Suite growth" panel and nothing else, and dropping it here would
-                      re-anchor a chart the reader did not touch as the side effect of opening an
-                      area. `nil` is omitted from the query string, so a page nobody asked a branch
-                      of links exactly as it did before.
+                      Through `drill_down_path`: every OTHER ask rides through and only
+                      `spec_directory` is set here. That includes an OPEN FILE, which this link
+                      dropped from the day it was written — `?spec_file=` had shipped the day
+                      before — while "Close directory" below carried the file back the other way,
+                      so opening an area destroyed what closing one preserved. The rule is stated
+                      once in the helper now rather than re-decided in thirty-two hand-written
+                      arguments, which is how that asymmetry survived a later edit to this very
+                      list that ADDED a different ask without noticing the missing one.
 
                       `aria-current` on the open area, because this is a list of choices with one of
-                      them taken and the panel below is a long way down the page.
-
-                      An open DESCRIPTION rides through for the same reason the branch ask does: it
-                      anchors a panel of its own that opening an area is not a request to close. %>
+                      them taken and the panel below is a long way down the page. %>
                   <%= link_to directory.path,
-                              repository_path(@repository, branch: @trajectory_branch_request,
-                                              repeated_description: @repeated_description_request,
-                                              spec_directory: directory.path,
+                              drill_down_path(@repository, spec_directory: directory.path,
                                               anchor: "spec-directory-files"),
                               class: "underline underline-offset-2 decoration-app-border-light " \
                                      "text-app-content hover:decoration-app-content",
@@ -2186,15 +2176,17 @@
         <% panel.with_actions do %>
           <%# The way back OUT, for the reason the file drill-down gives: this panel is reached by a
               link and nothing else removes the parameter, so without this the only exit is editing
-              the URL. It carries the branch ask through and anchors back at the panel the area was
-              picked from. It also carries any OPEN FILE through — the file panel is a separate
-              panel a reader opened separately, and closing the area is not a request to close it —
-              and any OPEN DESCRIPTION, which is a third such panel and obeys the same rule. %>
+              the URL. It anchors back at the panel the area was picked from.
+
+              Through `drill_down_path`, with `spec_directory: nil` naming the one ask it clears —
+              explicitly, because under carry-by-default an omission would mean "keep the area
+              open". Everything else rides through: an OPEN FILE (the file panel is a separate panel
+              a reader opened separately, and closing the area is not a request to close it), an
+              OPEN DESCRIPTION, which is a third such panel and obeys the same rule, and the branch
+              ask. %>
           <%= render UI::ButtonComponent.new(
                 variant: :ghost,
-                href: repository_path(@repository, branch: @trajectory_branch_request,
-                                      spec_file: @spec_file_request,
-                                      repeated_description: @repeated_description_request,
+                href: drill_down_path(@repository, spec_directory: nil,
                                       anchor: "spec-directory-durations")
               ) { "Close directory" } %>
         <% end %>
@@ -2287,17 +2279,20 @@
                       "Heaviest spec files" panel carries, offered here on files that panel's own
                       cap cannot show. Area → file → example, closed.
 
-                      Both parameters ride on the one URL — the area ask is carried through beside
-                      the file ask — so opening a file out of this list does not close the area it
-                      was opened from, and the reader can pick a second file without navigating
-                      back. The branch ask rides along too, for the reason every link on this page
-                      carries it: it anchors the "Suite growth" chart and nothing here should
-                      re-anchor a chart the reader did not touch. %>
+                      Through `drill_down_path`, with TWO overrides rather than one. `spec_file` is
+                      the gesture. `spec_directory` is passed explicitly as
+                      `@spec_directory_files.path` — the area THIS PANEL was built for, read off the
+                      panel rather than off the request. The controller builds the panel from the
+                      ask, so the two carry the same string today and the helper's default carry
+                      would render the same href; it stays explicit because the link belongs to the
+                      panel and must name the panel's own subject, which is what keeps it correct if
+                      the resolved area ever stops being the raw ask verbatim. Opening a file out of
+                      this list does not close the area it was opened from, and the reader can pick a
+                      second file without navigating back. %>
                   <%= link_to file.path,
-                              repository_path(@repository, branch: @trajectory_branch_request,
+                              drill_down_path(@repository, spec_file: file.path,
                                               spec_directory: @spec_directory_files.path,
-                                              repeated_description: @repeated_description_request,
-                                              spec_file: file.path, anchor: "spec-file-examples"),
+                                              anchor: "spec-file-examples"),
                               class: "underline underline-offset-2 decoration-app-border-light " \
                                      "text-app-content hover:decoration-app-content",
                               aria: { current: file.path == @spec_file_request ? "true" : nil } %>
@@ -2505,22 +2500,18 @@
                           file path is one rung over — the thing a reader wants to open is the thing
                           they are already looking at.
 
-                          Every other ask is CARRIED THROUGH, and that is not incidental: `?branch=`
-                          anchors the "Suite growth" panel alone and `?spec_file=` / `?spec_directory=`
-                          anchor the two drill-downs above, so dropping any of them here would close a
-                          panel the reader did not touch as the side effect of opening a description.
-                          `nil` is omitted from the query string, so a page nobody asked those of
-                          links exactly as it did before.
+                          Every other ask is CARRIED THROUGH by `drill_down_path`, and that is not
+                          incidental: `?branch=` anchors the "Suite growth" panel alone and
+                          `?spec_file=` / `?spec_directory=` anchor the two drill-downs above, so
+                          dropping any of them here would close a panel the reader did not touch as
+                          the side effect of opening a description.
 
                           `aria-current` on the open description, because this is a list of choices
                           with one of them taken and the panel below is a long way down the page — a
                           reader arriving back at this table by keyboard needs to be told which row
                           they are already looking at. %>
                       <%= link_to group.name,
-                                  repository_path(@repository, branch: @trajectory_branch_request,
-                                                  spec_file: @spec_file_request,
-                                                  spec_directory: @spec_directory_request,
-                                                  repeated_description: group.name,
+                                  drill_down_path(@repository, repeated_description: group.name,
                                                   anchor: "repeated-description-examples"),
                                   class: "underline underline-offset-2 decoration-app-border-light " \
                                          "text-app-content hover:decoration-app-content",
@@ -2629,16 +2620,18 @@
           <%# The way back OUT, for the reason "Close file" exists one drill-down over: this panel is
               reached by a link and there is no other control that removes the parameter, so without
               this the only exit is editing the URL — and the reader who most needs the drill-down is
-              the one least likely to want to do that. It carries every OTHER ask through and anchors
-              back at the ranking the description was picked from, so closing a description returns
-              the reader where they opened it rather than at the top of a long page, and does not
-              close a file or an area they opened separately. Closing one drill-down is not a request
-              to close another, in any direction. %>
+              the one least likely to want to do that. It anchors back at the ranking the description
+              was picked from, so closing a description returns the reader where they opened it
+              rather than at the top of a long page.
+
+              Through `drill_down_path`, with `repeated_description: nil` naming the one ask it
+              clears — the third of the three clearing controls, explicit for the same reason they
+              are. Every OTHER ask rides through, so this does not close a file or an area the
+              reader opened separately. Closing one drill-down is not a request to close another, in
+              any direction. %>
           <%= render UI::ButtonComponent.new(
                 variant: :ghost,
-                href: repository_path(@repository, branch: @trajectory_branch_request,
-                                      spec_file: @spec_file_request,
-                                      spec_directory: @spec_directory_request,
+                href: drill_down_path(@repository, repeated_description: nil,
                                       anchor: "repeated-descriptions")
               ) { "Close description" } %>
         <% end %>
@@ -2728,8 +2721,8 @@
                   <%# The file that RAN the example, and the link that CLOSES the chain: the
                       controller's own comment says the drill-downs close area → file → example, and
                       this is the rung that was missing — description → example → file. Every other
-                      ask rides through, this one included, so following it opens a file WITHOUT
-                      closing the description it was opened from.
+                      ask rides through `drill_down_path`, this one included, so following it opens
+                      a file WITHOUT closing the description it was opened from.
 
                       `spec_file_path` is NULLABLE in the schema — `Ingest::ObservationRecorder`
                       populates it by falling back to `file_path`, but the column does not promise it
@@ -2738,10 +2731,7 @@
                       read by. %>
                   <% if observation.spec_file_path.present? %>
                     <%= link_to observation.spec_file_path,
-                                repository_path(@repository, branch: @trajectory_branch_request,
-                                                spec_directory: @spec_directory_request,
-                                                repeated_description: @repeated_description_request,
-                                                spec_file: observation.spec_file_path,
+                                drill_down_path(@repository, spec_file: observation.spec_file_path,
                                                 anchor: "spec-file-examples"),
                                 class: "underline underline-offset-2 decoration-app-border-light " \
                                        "text-app-content hover:decoration-app-content",
