@@ -159,6 +159,42 @@ class EmbeddingGenerator
       provider.normalize(one) == provider.normalize(other)
     end
 
+    # @return [String, nil] a value that changes whenever the vectors this generator produces would
+    #   change, or nil when the current provider will not say.
+    #
+    # **The cache key's first half**, and the reason `EmbeddingCacheEntry` can be deployment-global
+    # without ever serving a wrong vector. A cached vector is only reusable if the thing that would
+    # produce it again is the same thing; this is the provider's own claim about what "the same
+    # thing" means for it.
+    #
+    # Optional on the interface, with the CONSERVATIVE default — the shape `#equivalent?` and
+    # `#configured?` above use. A provider that does not publish a fingerprint gets **no caching at
+    # all**, not a default key: the two failure modes are not comparable. No caching costs money and
+    # behaves exactly as this application did before the cache existed. A guessed key — the class
+    # name, say — would be *wrong* the moment a provider read a model from the environment, and the
+    # symptom is a vector from the previous model silently attached to a test, which no assertion
+    # anywhere would catch. So the absence of an answer is treated as a refusal, and refusal is
+    # free.
+    #
+    # ⚠️ **Computed on every call and never memoized**, for the same reason `.provider` is resolved
+    # on every call. `OpenAIProvider.model` reads `ENV["SPECGUARD_EMBEDDING_MODEL"]` each time it is
+    # asked, so a fingerprint captured once at boot would keep naming the model the process started
+    # with and would go on authorising cache hits from it after the deployment had moved. This is a
+    # correctness requirement, not a style preference: a memoized fingerprint is exactly the
+    # "unreadable rather than stale" guarantee inverted.
+    #
+    # `presence` so that a provider answering `""` is treated as having refused rather than as
+    # having a key that every other empty-string provider would share.
+    #
+    # **It must never carry the credential.** The value is written to a database column, is
+    # deployment-global, and identifies a *configuration*, not an authorisation — two deployments
+    # with different API keys and the same model produce identical vectors and should share entries.
+    def fingerprint
+      return nil unless provider.respond_to?(:fingerprint)
+
+      provider.fingerprint.presence
+    end
+
     # Delegated, so a provider needing no credentials at all (a local Ollama embedder) reports the
     # truth instead of OpenAI's answer. A provider that does not implement the predicate has
     # nothing to configure, so it is ready by definition.
@@ -308,6 +344,19 @@ class EmbeddingGenerator
       def configured?
         true
       end
+
+      # **No `fingerprint`, and its absence is the decision.** `EmbeddingGenerator.fingerprint`
+      # reads a provider that does not publish one as a refusal to be cached, which is the right
+      # answer for this one: the vector is a hash computed in this process, so a cache hit would
+      # replace arithmetic with a database round trip and a table write. It would be slower than
+      # the thing it is caching, and it would fill a deployment-global table with entries that can
+      # never repay their own storage.
+      #
+      # It is stated as a comment rather than a method because there is no method to write — but it
+      # is stated, because "the default provider is uncached" looks like an oversight otherwise,
+      # and because it is what keeps this application's shipped behaviour byte-identical to what it
+      # was before the cache existed. `OpenAIProvider`, where a repeat embed is a billed HTTPS
+      # round trip, is the case the cache exists for and the one that publishes a key.
     end
 
     def initialize(text)
@@ -396,6 +445,26 @@ class EmbeddingGenerator
 
       def configured?
         api_key != PLACEHOLDER
+      end
+
+      # What this provider's vectors are a function of: the vendor and the model, and nothing else.
+      # `text-embedding-3-small` and `text-embedding-3-large` are different functions of the same
+      # text, so `SPECGUARD_EMBEDDING_MODEL` moving must make every entry written under the old one
+      # unreadable — and does, because the key stops matching. Read through `.model` rather than
+      # from the constant, so an environment override is included; asked per call rather than
+      # memoized, because `.model` itself is (see `EmbeddingGenerator.fingerprint`).
+      #
+      # **Not the API key**, deliberately. Two deployments holding different keys against the same
+      # model get the same vectors for the same text, so including the key would partition the
+      # cache by something that does not change its contents — and would write a credential-derived
+      # value into a database column, which is a leak with no upside. `PLACEHOLDER` is likewise not
+      # consulted: an unconfigured provider raises at `#call` long before anything is cached, so
+      # there is nothing to protect against here.
+      #
+      # Prefixed with the vendor so that a future provider defaulting to the same model name cannot
+      # collide with this one's entries.
+      def fingerprint
+        "openai:#{model}"
       end
 
       private
