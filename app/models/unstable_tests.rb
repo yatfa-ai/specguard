@@ -68,8 +68,21 @@ class UnstableTests
     window = { branch: branch, run_count: runs.size, **reporting }
     # Nothing below this line may be read as a fact about outcomes on a window that reported fewer
     # than two of them, so nothing below this line is asked. See `#comparable?`.
+    #
+    # THREE ZEROS AND A NIL, and the split is the point. `candidate_count` and `examined_count` are
+    # OUTCOME-derived — the candidate step reads `outcome`, and in a window nothing was examined in
+    # they are the true counts of an examination that correctly did not happen. `unnamed_count` is
+    # not: `.unnamed_row_count_in` carries no outcome predicate at all, so the number of unnamed
+    # rows is a real and answerable fact here that this branch simply never asks. Serving `0` for it
+    # would be a fabricated exclusion count — indistinguishable, on the wire, from a window measured
+    # to have excluded nothing — and this key exists precisely so a client can tell how much of the
+    # window the matching had to drop.
+    #
+    # `nil` rather than the count, because asking would cost a second read and the API doc states as
+    # a deliberate property that an incomparable window costs ONE read and stops. Absence at zero
+    # cost, on the precedent SPGD-474 set for the same fabrication.
     unless reporting[:runs_reporting_outcomes] >= 2
-      return new(**window, groups: [], candidate_count: 0, examined_count: 0, unnamed_count: 0)
+      return new(**window, groups: [], candidate_count: 0, examined_count: 0, unnamed_count: nil)
     end
 
     candidates = SpecObservation.unstable_candidates_in(run_ids)
@@ -128,6 +141,11 @@ class UnstableTests
 
   # How many rows of the window carried no description and were therefore excluded from the
   # matching. Rows, not tests — an unnamed row is precisely a row this panel cannot say is a test.
+  #
+  # `nil` — never `0` — wherever `#comparable?` is false, because that branch returns before the
+  # count is read and a zero there would be an exclusion figure nothing measured. Every reader of
+  # this must therefore be behind a `comparable?` guard or handle the nil; `#unnamed_clause` on the
+  # HTML side is the former (`show.html.erb` renders it only inside that guard).
   attr_reader :unnamed_count
 
   # Whether this window has any per-example grain AT ALL — the question that decides whether the

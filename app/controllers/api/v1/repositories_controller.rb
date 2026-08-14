@@ -1331,6 +1331,17 @@ class Api::V1::RepositoriesController < Api::BaseController
   # matching before anything is grouped. Counted in ROWS and never in tests, because an unnamed row
   # is precisely a row this block cannot say is a test.
   #
+  # It is `null` wherever the outcome gate below short-circuited — the ONE key on that line that
+  # goes null while `candidate_count`, `examined_count`, `truncated` and `unexamined_count` stay at
+  # their zeros. The split is not a stylistic one. Those four are OUTCOME facts, and in a window
+  # nothing was examined in their zeros are true: no candidate was found because none was sought.
+  # This one is a ROW fact — its query carries no outcome predicate — so the number of unnamed rows
+  # is fully determined in that window and merely never asked. A `0` would be a fabricated
+  # exclusion, wire-identical to a window measured to hold none, and a client reading this key to
+  # learn how much of the window the matching dropped could not tell "not counted" from "counted
+  # zero". Null rather than the true count because asking costs the second read the ONE-read
+  # property below rules out; the HTML panel refuses to print any count over this same state.
+  #
   # `shared_description_rows` IS ITS OWN LIST and never folded into `rows` — exactly as the panel
   # lists them separately. These are descriptions that varied across the window AND were carried by
   # more than one example in at least one run of it, so the description is not a key for that run:
