@@ -249,8 +249,7 @@ class RepositoriesController < ApplicationController
     @repeated_descriptions = RepeatedDescriptions.for(@latest_test_run) if @latest_test_run
     # ONE of those descriptions, opened: not that eight examples of this run say the same sentence
     # and cost ninety seconds between them, but WHICH eight — what each cost, where each sits, how
-    # each ended. The rung the panel above had none of, and the last ranked list on this page whose
-    # rows dead-ended.
+    # each ended. The rung the panel above had none of: that ranking's rows dead-ended.
     #
     # And specifically not reachable through `?spec_file=`. The ranking names the group's files and
     # those paths link into the file panel, but that panel lists EVERY example of a file capped at

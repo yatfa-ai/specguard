@@ -6,10 +6,10 @@
 #
 # The rung below `RepeatedDescriptions`, and the third drill-down on this page rather than a new kind
 # of thing: `SpecFileExamples` opens a file out of the by-file rollup and `SpecDirectoryFiles` opens
-# an area out of the by-area one. That panel was the only ranked list on the page whose rows
-# dead-ended. It says a description is carried by eight examples costing ninety seconds between them
-# and names the files they ran in, and until this existed writing SQL was the only way to learn WHICH
-# eight, what each cost, where each sits and how each ended.
+# an area out of the by-area one. That panel's rows dead-ended: it says a description is carried by
+# eight examples costing ninety seconds between them and names the files they ran in, and until this
+# existed writing SQL was the only way to learn WHICH eight, what each cost, where each sits and how
+# each ended.
 #
 # == The decision these rows exist to serve
 #
