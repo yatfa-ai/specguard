@@ -1397,6 +1397,57 @@ RSpec.describe Ingest::IdentityResolver do
       expect(run.spec_observations.pluck(:spec_identity_id).uniq.size).to eq(1)
     end
 
+    it "does not move a spelling a LATER page finds, when an earlier page's rows presented it" do
+      # **The third buffer the placeholder reaches, and the only one whose loss changes what a
+      # repository stores rather than what it costs.** `#substitute_pending` resolves placeholders in
+      # three buffers; `@links` and `@sightings` are pinned by every example above, because a
+      # placeholder surviving into either writes a bogus foreign key and nothing passes. The third,
+      # `@spellings_in_use`, is silent when it is wrong — the page still writes correct links and
+      # correct sightings, and a DIFFERENT page moves a row's text.
+      #
+      # The route is the byte-identical pair again. Row two of page 1 takes `#identical_text`'s hit
+      # branch, which appends the id it found to `@spellings_in_use` — and on a first ingest that id
+      # is a {PendingIdentity}. That Set is PASS-scoped, not page-scoped, and it is what
+      # `#refresh_all` consults to honour the rule stated at its own guard: never move a spelling
+      # that is demonstrably still presented. Left as a placeholder it never matches the real id, so
+      # page 2's drift candidate for that same row sails past the guard and rewrites the text — even
+      # though two observations of page 1 presented the original verbatim.
+      #
+      # The cost is the permanent one this lineage exists to remove, not a cosmetic one: moving
+      # `text` and `text_digest` makes the two examples that presented the original miss
+      # `#identical_text` on EVERY later ingest and pay an embed plus an ANN round trip forever,
+      # which is exactly what SPGD-411 bought back. See "a description that drifted only in
+      # punctuation, on the ingests after the drift" for the refresh's own behaviour — that group
+      # owns the drift rule and this example only pins that a page-pending row is subject to it.
+      #
+      # A page boundary is load-bearing and it is why no other example reaches this: with all three
+      # rows on one page nothing is committed when the variant is resolved, so `#nearest` finds
+      # nothing, no drift is raised, and the guard is never consulted. At the design point
+      # `BATCH_SIZE` is 500 over a suite of 20,000, so there are forty boundaries and nothing keeps
+      # these rows adjacent — byte-identical descriptions in two files plus a punctuation variant in
+      # a third is an ordinary suite. Two rows per page here because the boundary is the whole
+      # mechanism and one crossing is enough to show it.
+      stub_const("#{described_class}::BATCH_SIZE", 2)
+      original = "Order#checkout rejects an expired card"
+      drifted = "Order  checkout   rejects an expired card!"
+
+      run = record([unannotated_spec(file_path: "spec/a_spec.rb", line_number: 1, name: original),
+                    unannotated_spec(file_path: "spec/b_spec.rb", line_number: 1, name: original),
+                    unannotated_spec(file_path: "spec/c_spec.rb", line_number: 1, name: drifted)],
+                   ci_run_id: "run-1")
+      described_class.resolve(run)
+
+      # The premises, pinned rather than trusted: all three rows really did land on ONE identity, so
+      # the drift candidate really was raised against the row the earlier page's pair claimed, and
+      # the pair really was split from the variant by a page boundary rather than merged before it.
+      expect(repository.spec_identities.count).to eq(1)
+      expect(run.spec_observations.pluck(:spec_identity_id).uniq.size).to eq(1)
+      expect(run.spec_observations.unresolved).to be_empty
+
+      # And the spelling itself: still the one two observations presented, not the one variant's.
+      expect(repository.spec_identities.sole.text).to eq(original)
+    end
+
     it "issues none at all when every test on the page is already held" do
       # The complement, and the guard on the buffer being spent rather than merely filled: a
       # re-ingest decides nothing new, so the page's insert must not be issued empty — an

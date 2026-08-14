@@ -1627,7 +1627,21 @@ module Ingest
     # at the index, where pgvector answers NaN rather than a confident wrong neighbour.
     #
     # {#nearest} is still asked FIRST and still wins: a committed row is at least as good an answer
-    # as a pending one, and asking the index first is the order the per-row path had.
+    # as a pending one, and the row that is already in the table is the one a later page would find
+    # anyway.
+    #
+    # That ordering is NOT a reproduction of the per-row path's, and the difference is worth stating
+    # where the reader meets it. The per-row path asked ONE question, over a union that already
+    # contained this page's earlier rows because each was committed before the next row asked, and
+    # it took the global best. This asks two questions in sequence, so **a committed row over the
+    # bar wins regardless of margin** — a committed candidate at 0.96 takes an observation that a
+    # pending one at 0.99 would have taken before. Reaching that needs a triple where the two
+    # candidates score below {SpecIdentity::MATCH_SIMILARITY} against EACH OTHER while both sit above
+    # it against the incoming text, which is a narrower shape than the band this method exists to
+    # close, and every candidate in it is inside the threshold's own declared ambiguity: the bar says
+    # these are the same test, and it does not rank two rows that both clear it. Preferring the
+    # committed row is the deliberate call — it is the answer that does not depend on where the page
+    # boundary fell, which is the property the rest of this method buys.
     #
     # No {#note_drift} on this path, and that is not an omission. A drift candidate says an EXISTING
     # row's stored spelling is worth moving; this row has no stored spelling yet — it is being
