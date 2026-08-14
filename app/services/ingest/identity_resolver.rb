@@ -1051,12 +1051,19 @@ module Ingest
     # == A skipped text is present with a NIL VALUE and is never OMITTED
     #
     # The whole of what the tripped return has to get right, and it is not obvious from here.
-    # {#embedding_for} is `@embeddings.fetch(text) { embed(text) }`, and its comment is explicit that
-    # the two absences are different: a MISSING KEY means "no page fetched this" and gets a single
-    # embed, while a PRESENT NIL means "asked and refused" and stays a failure. So returning `{}` on
+    # {#embedding_for} treats the two absences differently: a MISSING KEY means "no page fetched
+    # this", while a PRESENT NIL means "asked and refused" and stays a failure. So returning `{}` on
     # the tripped path — or omitting the skipped texts from it — would send every skipped row through
-    # that block and re-ask the provider once per row, reproducing the exact 20,000 requests this
-    # breaker exists to remove, one layer down and with no page-level warn line to see it by.
+    # that block rather than leaving it holding this page's own answer.
+    #
+    # **That block is now breakered too, and this rule is still the one that matters.** SPGD-478
+    # added the same `@provider_dark` check inside {#embedding_for}, for a missing key this method
+    # cannot reach — {#upgrade_from_name}'s mid-page invalidation, which produces a key no page ever
+    # asked for — so a tripped `{}` would today be caught one layer down rather than costing 20,000
+    # requests. It is a second line and not a replacement: the per-signal FALLBACK below reaches that
+    # same block with the breaker NOT tripped (a batch that failed while at least one retry succeeded
+    # leaves nil values and no trip), and omitting those texts would re-ask the provider for a text
+    # it has just refused, once per row. Nil-valued and never omitted is what keeps both true.
     #
     # `zip` is where the interface's ORDER CONTRACT is consumed: `texts[i]`'s vector is
     # `vectors[i]`, and `embed_many` guarantees both the order and the count (a short array is an
@@ -2173,12 +2180,39 @@ module Ingest
     #
     # `fetch` with a block rather than `[]`, because the two absences are different: a text the page
     # embedded and FAILED on is present with a nil value and must stay a failure, while a text no
-    # page fetched at all — a caller reaching {#claim} outside {#resolve_page} — has no answer yet
-    # and gets today's single embed. Reading a missing key as a failure would strand the second
-    # case; reading a nil value as a miss would re-ask the provider for a text it has just refused,
-    # once per row, which is the amplification the batch exists to remove.
+    # page fetched at all has no answer yet and gets a single embed. Reading a missing key as a
+    # failure would strand the second case; reading a nil value as a miss would re-ask the provider
+    # for a text it has just refused, once per row, which is the amplification the batch exists to
+    # remove. That distinction is load-bearing on the healthy path and is unchanged.
+    #
+    # == Where the missing key actually comes from
+    #
+    # **{#upgrade_from_name}, mid-page**, and it is an ordinary path rather than an exotic one. That
+    # method DELETES the name entry from `@digest_index` on both `:upgraded` and `:lost_race`, so a
+    # name-only sibling later in the SAME page — an example sharing a `full_description` with the
+    # test that was just annotated, which its comment names outright — stops matching
+    # {#identical_text} and must claim its own row. Its text was never embedded, because
+    # {#unheld_texts} correctly skipped it as held when the page was built, and {#lookup_texts} put
+    # it in {#digest_index} but not in `@embeddings`. So the lookup lands here with no key.
+    #
+    # == Why the breaker has to be re-asked here
+    #
+    # {#embed_page} answers a tripped page with nil-VALUED keys and never `{}` so that no text OF
+    # THAT PAGE reaches this block. That bounds the page's own set and nothing else: the key above
+    # is one this page never asked for, so it arrives as a miss whatever the page did. Within a
+    # single page the two states cannot meet — a dark provider gives the annotated row a nil and
+    # {#identity_for} returns at its `embedding.nil?` guard before any upgrade — but the breaker is
+    # sited at the provider ask and NOT at {#page_embeddings}, which reads {EmbeddingCacheEntry}
+    # first. A later page whose vectors this deployment already owns therefore resolves normally
+    # right through an outage, upgrades, evicts the name, and drops its sibling here with the pass
+    # long since dark. Unguarded, that is one provider request per such row, invisible: no page-level
+    # warn line covers it and {#report} still says `provider_breaker=tripped`.
+    #
+    # The nil is the fully-handled answer and not a new outcome — {#identity_for} stamps through
+    # {#record_resolve_failure} and the row stays retryable for the whole window, byte-identical to
+    # every other text this pass skipped.
     def embedding_for(text)
-      @embeddings.fetch(text) { embed(text) }
+      @embeddings.fetch(text) { @provider_dark ? nil : embed(text) }
     end
 
     # @return [Array<Float>, nil] nil when the provider failed, which leaves the observation
