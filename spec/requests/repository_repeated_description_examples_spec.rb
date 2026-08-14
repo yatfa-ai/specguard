@@ -10,7 +10,7 @@ require "rails_helper"
 # file, for the reason every sibling drill-down spec states for itself: every example here needs the
 # same per-example fixture, and the panels above are edited by sibling slices.
 #
-# Until this panel, that ranking was the only ranked list on the page whose rows dead-ended.
+# Until this panel, that ranking's rows dead-ended.
 # `SpecObservation.repeated_descriptions_in` is an aggregate — a name, a SUM, two counts and the
 # distinct files — out of which no member row escapes, so a reader told that eight examples share a
 # description and cost ninety seconds between them had no way whatever to learn which eight.
