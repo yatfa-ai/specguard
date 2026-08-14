@@ -271,16 +271,28 @@ module Ingest
       # construction, which is {#note_drift}'s first bound against thrash. Same total-rather-than-
       # conditional guarantee as the two buffers above.
       @drifts = {}
-      # **The two PASS-scoped sets, and they are the only state here {#resolve_page} does not empty.**
+      # **The PASS-scoped state, and it is the only state here {#resolve_page} does not empty.**
       # Everything above is a page's worth by design; these are deliberately a whole `#resolve`'s,
-      # because the hazard they answer is a page BOUNDARY and a per-page set cannot see across one.
-      # See {#refresh_all} for what each refuses and why one page's bound was not enough.
+      # because the hazard each answers is a page BOUNDARY and a per-page value cannot see across
+      # one. See {#refresh_all} for what the two sets refuse and why one page's bound was not enough.
       #
       # `@refreshed` — identities this pass has already written a spelling to. `@spellings_in_use` —
       # identities some observation of this pass matched by exact text ({#identity_for}), so their
       # stored spelling is demonstrably still presented and is not stale.
       @refreshed = Set.new
       @spellings_in_use = Set.new
+      # `@provider_dark` — this pass has watched a whole page's batch request AND every one of its
+      # per-signal retries fail, which is evidence about the PROVIDER rather than about any of those
+      # texts, so it asks the provider nothing more. See {#embed_page} for the trip condition and
+      # what a skipped text costs, and {#report} for where a tripped pass says so.
+      #
+      # **Pass-scoped and deliberately never process-scoped**, which is the difference between this
+      # and a circuit breaker. A flag that outlived its `#resolve` would make the NEXT ingest skip a
+      # provider that has since recovered — silently, with no ask to discover the recovery with and
+      # nothing but a deploy to end the skipping. A per-pass flag is re-earned from scratch by every
+      # pass, so the cost of being wrong about an outage is one page of requests and never a
+      # deployment that has stopped embedding.
+      @provider_dark = false
     end
 
     # @return [Integer] how many observations now carry an identity that did not before — **across
@@ -400,13 +412,25 @@ module Ingest
     # A single line and not four, because a log is read by grep and by eye: four lines per job would
     # have to be re-joined by whoever read them, and the joining key would be the run id they all
     # already carry.
+    #
+    # **A tripped provider breaker is named on that same line**, for the reason the resolved count
+    # is here at all. A pass that STOPPED ASKING and a pass that asked and was refused are different
+    # events, and the difference is invisible in `embed_failed_retrying`: both populations are
+    # stamped identically, on purpose ({#embed_page}). Without the marker an operator would have to
+    # infer the trip from an ABSENCE — the per-row warn lines that are no longer there — which is
+    # exactly the inference this method exists to stop asking anybody to make.
     def report(resolved)
-      counts = unresolved_bounds.map { |label, relation| "#{label}=#{relation.count}" }
+      fields = ["run=#{@run.id}", "resolved=#{resolved}", "repository=#{@repository.id}"]
+      fields.concat(unresolved_bounds.map { |label, relation| "#{label}=#{relation.count}" })
+      # The one conditional field here, and the asymmetry with the four counts above is deliberate.
+      # Each of those is a FIGURE whose zero is a positive statement an operator needs to read; this
+      # is an EVENT, and `provider_breaker=healthy` on every line of every pass forever would be
+      # noise standing in for the absence of one. Greppable in the direction that matters:
+      # `provider_breaker=tripped` finds every pass that stopped asking, and the passes that did not
+      # are already enumerable by the line itself.
+      fields << "provider_breaker=tripped" if @provider_dark
 
-      Rails.logger.info(
-        "[IdentityResolver] run=#{@run.id} resolved=#{resolved} " \
-        "repository=#{@repository.id} #{counts.join(' ')}"
-      )
+      Rails.logger.info("[IdentityResolver] #{fields.join(' ')}")
     end
 
     # **The repository's remaining unresolved population, as the four figures it is honest to state
@@ -965,7 +989,10 @@ module Ingest
     end
 
     # @return [Hash{String => Array<Float>, nil}] text => vector, empty when there is nothing to
-    #   embed — which is the ordinary case, so it costs no call rather than an empty one.
+    #   embed — which is the ordinary case, so it costs no call rather than an empty one. Every text
+    #   is a KEY of the result whenever there was one to ask about, including on the paths that asked
+    #   nothing: see the nil-versus-omitted section below, which is the one thing a caller here can
+    #   get wrong.
     #
     # **The fallback is what keeps SPGD-367 true through a batch.** One unembeddable example must
     # not abandon the other 19,999, and a batch fails as a batch: `EmbeddingGenerator.embed_many`
@@ -975,8 +1002,51 @@ module Ingest
     # so the page falls back to asking one text at a time, and each text then fails, or does not, on
     # its own. That path is today's path unchanged, warning line and per-row nil included.
     #
-    # It costs one wasted request on a page that fails, and only on a page that fails. A provider
-    # that is simply down pays it once and then behaves exactly as it does now.
+    # == What the fallback costs, and the breaker that bounds it
+    #
+    # One wasted request on a page that fails, plus a request per text behind it — **once per PAGE,
+    # and that is the part the previous revision of this comment got wrong.** It said a provider that
+    # is simply down "pays it once and then behaves exactly as it does now"; it paid it once per
+    # page, every page, and a full page of single-text requests each time. At {BATCH_SIZE} = 500 a
+    # first or fully-changed run at the roadmap's 20,000-example design point is 40 pages, so a
+    # provider that was simply down cost 40 batch + 20,000 single requests, 20,040 `warn` lines,
+    # 20,000 {#record_resolve_failure} `UPDATE`s — and zero identities. Under `OpenAIProvider`, where
+    # every `.call` is a serial HTTPS round trip, that is hours of a three-thread pool spent inside a
+    # job holding a six-hour run-scoped semaphore, with every other shard's job queued behind it.
+    # {RETRY_SWEEP_LIMIT} bounds how much failure a delivery INHERITS; nothing bounded how much one
+    # pass CREATES.
+    #
+    # So a page whose batch failed AND whose every per-text retry also failed, over **at least two
+    # texts**, trips `@provider_dark` and the rest of the pass asks the provider nothing
+    # ({#stop_asking_the_provider}). The trip condition is the fallback's own justification read
+    # carefully: *"one bad text and a dropped connection arrive identically"* is true OF ONE TEXT and
+    # is not true of a page. Both halves of the rule follow from that and neither is a tuning knob:
+    #
+    # * **Zero successes**, because one poison text among successes is evidence about that text and
+    #   about nothing else — which is what keeps *"contains a failed page to the row that caused
+    #   it"* green, and an over-trip there would undo SPGD-367 wholesale rather than bound anything.
+    # * **At least two texts**, because a one-text page is precisely the case the two readings cannot
+    #   be told apart in. It pays its ask and says nothing about the provider. Two texts each
+    #   individually unembeddable is already unlikely and 500 of them is not a thing that happens; a
+    #   provider being down is.
+    #
+    # The bound is **~501 requests where it was 20,040**, and the observable row state is identical:
+    # a skipped text is stamped by {#record_resolve_failure} exactly as a refused one is and stays
+    # retryable for {SpecObservation::EMBED_RETRY_WINDOW} through the cross-run sweep. Identical
+    # rather than merely similar, because abandonment is TIME-based and not attempt-count-based
+    # (`SpecObservation.embed_abandoned`) — `embed_failure_count` only orders the sweep's fairness —
+    # so a row stamped without a fresh ask has no lifecycle side effect at all. It is also the honest
+    # record: the page's batch request did carry that text.
+    #
+    # == A skipped text is present with a NIL VALUE and is never OMITTED
+    #
+    # The whole of what the tripped return has to get right, and it is not obvious from here.
+    # {#embedding_for} is `@embeddings.fetch(text) { embed(text) }`, and its comment is explicit that
+    # the two absences are different: a MISSING KEY means "no page fetched this" and gets a single
+    # embed, while a PRESENT NIL means "asked and refused" and stays a failure. So returning `{}` on
+    # the tripped path — or omitting the skipped texts from it — would send every skipped row through
+    # that block and re-ask the provider once per row, reproducing the exact 20,000 requests this
+    # breaker exists to remove, one layer down and with no page-level warn line to see it by.
     #
     # `zip` is where the interface's ORDER CONTRACT is consumed: `texts[i]`'s vector is
     # `vectors[i]`, and `embed_many` guarantees both the order and the count (a short array is an
@@ -985,6 +1055,7 @@ module Ingest
     # a broader rescue at a page-level call could swallow a failure that is not the provider's.
     def embed_page(texts)
       return {} if texts.empty?
+      return texts.to_h { |text| [text, nil] } if @provider_dark
 
       texts.zip(EmbeddingGenerator.embed_many(texts)).to_h
     rescue EmbeddingGenerator::Error => e
@@ -992,7 +1063,32 @@ module Ingest
         "[IdentityResolver] run=#{@run.id} could not embed a page of #{texts.size} spec signals " \
         "in one request: #{e.message}; falling back to one request per signal"
       )
-      texts.to_h { |text| [text, embed(text)] }
+      embedded = texts.to_h { |text| [text, embed(text)] }
+      stop_asking_the_provider(texts.size) if texts.size > 1 && embedded.values.none?
+      embedded
+    end
+
+    # Trip the pass-scoped breaker: for the remainder of this `#resolve`, {#embed_page} asks the
+    # provider nothing and answers every text with the nil a refusal would have produced.
+    #
+    # Said once and at `warn`, in the register {#embed}'s per-row line uses and for the same reason:
+    # nothing here is broken on this side of the wire, and the rows this pass stops asking for are
+    # stamped and retryable exactly as refused rows are. This is the line that makes the skipping
+    # visible at the moment it starts, where the provider's own message still is; {#report} carries
+    # the same fact to the end of the pass, where the totals are. Neither is the other, on the same
+    # rule {#embed} states for its log line and its stamp.
+    #
+    # `asked` is the width of the page that earned the trip rather than a total, because that is the
+    # evidence: this many separate per-signal requests were made and this many came back refused.
+    def stop_asking_the_provider(asked)
+      @provider_dark = true
+
+      Rails.logger.warn(
+        "[IdentityResolver] run=#{@run.id} stopped asking the embedding provider: a page's batch " \
+        "request and all #{asked} of its per-signal retries failed, which is evidence about the " \
+        "provider and not about those signals; the rest of this pass is stamped without a request " \
+        "and stays retryable"
+      )
     end
 
     # Every text this row could already be held under: the one that REPRESENTS it, and — when that
