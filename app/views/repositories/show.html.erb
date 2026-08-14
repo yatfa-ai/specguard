@@ -2063,7 +2063,7 @@
                       dropped from the day it was written — `?spec_file=` had shipped the day
                       before — while "Close directory" below carried the file back the other way,
                       so opening an area destroyed what closing one preserved. The rule is stated
-                      once in the helper now rather than re-decided in thirty-two hand-written
+                      once in the helper now rather than re-decided in forty hand-written
                       arguments, which is how that asymmetry survived a later edit to this very
                       list that ADDED a different ask without noticing the missing one.
 
@@ -2870,7 +2870,38 @@
                                             describedby: "spec-directory-growth-basis") do %>
             <% @spec_directory_growth.rows.each do |area| %>
               <tr>
-                <td class="px-3 py-2 font-mono text-xs text-app-content"><%= area.path %></td>
+                <td class="px-3 py-2 font-mono text-xs text-app-content">
+                  <%# The way INTO the only question this row provokes. `spec/models 412 → 459
+                      (+47)` is a finding a reader cannot act on until they know WHICH FILES did it,
+                      and until this link existed there was no route to that anywhere: "Heaviest
+                      spec files" is a run-wide top ten ranked by DURATION, so an area that gained
+                      forty-seven fast examples has not one of its rows in it.
+
+                      It matters most for the doubt the caption above discloses and could not
+                      resolve — a MOVED test is the same test, so a relocation reads here as one
+                      area growing and another shrinking with nothing added and nothing deleted. The
+                      file grain does not resolve it either; it puts the operands where a HUMAN can.
+
+                      `?spec_directory=`, the SAME ask "Heaviest spec directories" sets. One ask now
+                      opens TWO panels — that panel's by-duration file listing and this one's
+                      cross-run movement — each answering in its own grain over the same area. That
+                      is intended and is how `drill_down_path` composes asks: it is not a collision
+                      to be fixed by minting a second parameter.
+
+                      Through `drill_down_path`, so every OTHER ask rides through. Stated once in
+                      the helper rather than re-decided in a hand-written argument here — which is
+                      exactly how the sibling link at "Heaviest spec directories" came to drop an
+                      open file for as long as it did.
+
+                      `aria-current` on the open area, as that link carries: this is a list of
+                      choices with one of them taken, and the panel it opens is a long way down. %>
+                  <%= link_to area.path,
+                              drill_down_path(@repository, spec_directory: area.path,
+                                              anchor: "spec-directory-file-growth"),
+                              class: "underline underline-offset-2 decoration-app-border-light " \
+                                     "text-app-content hover:decoration-app-content",
+                              aria: { current: area.path == @spec_directory_request ? "true" : nil } %>
+                </td>
                 <%# Both operands, always, and never only the change. A signed number alone cannot
                     say whether an area of forty tests gained twelve or an area of four thousand
                     did, and those are different facts about the same `+12`. %>
@@ -2905,7 +2936,7 @@
                              "did not grow or shrink anywhere between them."
               ) %>
         <% else %>
-          <%# The five states in which there is no comparison to draw, said apart rather than
+          <%# The six states in which there is no comparison to draw, said apart rather than
               collapsed into one blank panel — the register the Overview delta's own no-comparison
               states set above: withheld rather than hedged, and withholding means saying why. They
               are not one fact. "The earlier run reported no tests" and "the earlier run recorded no
@@ -2973,6 +3004,173 @@
                                "totals rather than these rows."
                 ) %>
           <% end %>
+        <% end %>
+      <% end %>
+    <% end %>
+
+    <%# == WHICH FILES of one area moved — the rung below the panel above
+        The panel above ranks AREAS by how far their example count moved and, until this existed,
+        stopped there: its directory cell was inert text, so the one question a row like
+        `spec/models 412 → 459 (+47)` provokes had no answer on this page or on any other. Nothing
+        in the application read growth at the file grain at all.
+
+        "Heaviest spec files" could not stand in, for the reason `SpecDirectoryDurations` gives
+        about its own rollup: that list is a run-wide top ten ranked by DURATION, so an area that
+        gained forty-seven FAST examples has not one of its rows in it. The panel that sees the
+        movement cannot see the files; the panel that sees files cannot see the movement.
+
+        Its subject is the doubt the caption above discloses and cannot resolve — a MOVED test is
+        the same test, so a relocation reads there as one area growing and another shrinking with
+        nothing added and nothing deleted. This panel does not resolve it either and asserts nothing
+        new: it counts rows per FILE per run, pairs no example with any other example, and puts the
+        operands where a HUMAN can read the difference. `user_spec.rb` at "New file" beside
+        `legacy_user_spec.rb` at "File removed" is a rename at a glance; two files at `+47` and
+        `−47` are not.
+
+        Reached by the SAME `?spec_directory=` ask the durations drill-down reads, so one ask opens
+        TWO panels over one area, each answering in its own grain. Intended, and how
+        `drill_down_path` composes asks.
+
+        It renders ONLY where the panel above is comparable, and that is not a nicety: a drill-in
+        that compared two runs the panel it hangs off refuses to compare would assert, in a closer
+        view, a comparison the wider view has just withheld. `SpecDirectoryFileGrowth` inherits that
+        verdict rather than re-deriving it — two of its six states are facts about a RUN and are
+        not derivable from one area's rows at all.
+
+        No "Close directory" of its own. `?spec_directory=` is ONE ask with one exit, and that exit
+        already exists on "Spec files in this directory" above, the panel that owns the gesture. A
+        second button clearing the same ask would be two ways out of one state and an eleventh row in
+        the carry-through matrix that duplicates an existing cell.
+
+        Same visibility rule and same gate as the panels around it: read-only suite telemetry on
+        `current_repository(:view)`, outside `manage_keys`, and nothing here widens that. %>
+    <% if @spec_directory_file_growth&.comparable? %>
+      <%= render UI::PanelComponent.new(title: "Files that grew or shrank in this directory",
+                                        id: "spec-directory-file-growth", class: "lg:col-span-3") do %>
+        <% if @spec_directory_file_growth.recorded? && @spec_directory_file_growth.any_movement? %>
+          <%# What the list IS, before the list — the discipline every panel on this page keeps.
+              Every figure below comes back as a window on the ONE aggregate that returned the rows,
+              counted before the cap, so the sentence cannot describe a different row set from the
+              table under it. %>
+          <p class="text-xs text-app-muted mb-3" id="spec-directory-file-growth-basis">
+            <span class="font-mono text-app-content-secondary"><%= @spec_directory_file_growth.path %></span>
+            —
+            <%# The cap is disclosed against the FILE count the comparison covered, never against
+                the list's own length, which equals a limit the reader cannot see. %>
+            <% if @spec_directory_file_growth.truncated? %>
+              the <%= number_with_delimiter(@spec_directory_file_growth.rows.size) %> spec files that
+              moved most, of the
+              <%= number_with_delimiter(@spec_directory_file_growth.file_count) %> either run
+              recorded in this area — largest movement first, in both directions
+            <% else %>
+              all <%= number_with_delimiter(@spec_directory_file_growth.file_count) %>
+              <%= "spec file".pluralize(@spec_directory_file_growth.file_count) %> either run
+              recorded in this area — largest movement first, in both directions
+            <% end %>
+            — measured between this run and
+            <span class="font-mono"><%= @previous_test_run.commit_sha.first(7) %></span>, the
+            previous run on this branch.
+            <%# Only where it is TRUE of the rows below, for the reason the panel above states: a
+                clause that is always printed is a description of nothing. %>
+            <% if @spec_directory_file_growth.any_unmoved? %>
+              Where the movement runs out before the list does, files that did not move are listed
+              too, as ±0.
+            <% end %>
+            <%# The disclosure the finer grain EARNS rather than repeats. One rung up the reader is
+                told a rename is indistinguishable from a gain and a loss and can do nothing about
+                it; here they are told what to look for, because the two shapes finally differ on
+                the page. Still without the page asserting either one. %>
+            A file listed as new beside one listed as removed is what a RENAMED or relocated file
+            looks like from here — and so is a real addition beside a real deletion. This panel
+            counts each run's rows and pairs no example with any other example, so it cannot tell
+            the two apart and does not try; both files are named so a reader can.
+            This area is the immediate parent of the files listed, so a nested area such as a
+            subdirectory of it is its own area rather than part of this list.
+            Counted off the
+            <%= number_with_delimiter(@spec_directory_file_growth.previous_recorded_count) %> and
+            <%= number_with_delimiter(@spec_directory_file_growth.latest_recorded_count) %> example
+            rows the two runs recorded in this area — this area's own rows, not the suite totals the
+            panel above is counted over and not the suite size on the Overview panel.
+          </p>
+          <%= render UI::TableComponent.new(columns: ["Spec file", "Examples then", "Examples now", "Change"],
+                                            describedby: "spec-directory-file-growth-basis") do %>
+            <% @spec_directory_file_growth.rows.each do |file| %>
+              <tr>
+                <td class="px-3 py-2 font-mono text-xs text-app-content">
+                  <%# The rung BELOW, and it already exists: the same `?spec_file=` link three other
+                      panels carry. `spec_directory` is passed explicitly as this panel's OWN
+                      subject rather than left to the helper's carry, for the reason the sibling
+                      area-files table gives — the link belongs to the panel and must name what the
+                      panel was built for, which keeps it correct if the resolved area ever stops
+                      being the raw ask verbatim. Opening a file does not close the area.
+
+                      A file the LATEST run did not record has no examples to list, so it is not
+                      linked: `?spec_file=` reads the latest run, and a row here can name a file
+                      only the PREVIOUS run had. A link that opened a panel guaranteed to be empty
+                      is an invitation to a dead end, and this is the one panel that routinely
+                      produces such rows — naming a removed file is half its subject. %>
+                  <% if file.removed_file? %>
+                    <%= file.path %>
+                  <% else %>
+                    <%= link_to file.path,
+                                drill_down_path(@repository, spec_file: file.path,
+                                                spec_directory: @spec_directory_file_growth.path,
+                                                anchor: "spec-file-examples"),
+                                class: "underline underline-offset-2 decoration-app-border-light " \
+                                       "text-app-content hover:decoration-app-content",
+                                aria: { current: file.path == @spec_file_request ? "true" : nil } %>
+                  <% end %>
+                </td>
+                <%# Both operands, always, and never only the change. A signed number alone cannot
+                    say whether a file of four examples gained twelve or a file of four hundred did,
+                    and those are different facts about the same `+12`. %>
+                <td class="px-3 py-2 text-app-content-secondary tabular-nums">
+                  <%= file.previous_count_label %>
+                </td>
+                <td class="px-3 py-2 text-app-content-secondary tabular-nums">
+                  <%= file.latest_count_label %>
+                </td>
+                <%# The `aria-label` carries what the glyph cannot: U+2212 is announced
+                    inconsistently across screen readers, and "New file" beside three unattached
+                    numbers is not a sentence. Same treatment every signed figure on this page
+                    gets. %>
+                <td class="px-3 py-2 text-app-content tabular-nums" aria-label="<%= file.change_reading %>">
+                  <%= file.change_label %>
+                </td>
+              </tr>
+            <% end %>
+          <% end %>
+        <% elsif @spec_directory_file_growth.recorded? %>
+          <%# Two comparable runs whose every file in this area holds the same number of examples.
+              A real and unremarkable answer — and precisely the one a reader who suspected a rename
+              wants confirmed — so it is said in words rather than shown as a table of `±0` under a
+              heading promising files that grew or shrank. Stated in FILES, which is exact:
+              `file_count` is counted before the cap. %>
+          <%= render UI::EmptyStateComponent.new(
+                title: "No file moved",
+                description: "Every one of the " \
+                             "#{number_with_delimiter(@spec_directory_file_growth.file_count)} " \
+                             "#{'spec file'.pluralize(@spec_directory_file_growth.file_count)} " \
+                             "either run recorded in #{@spec_directory_file_growth.path} holds the " \
+                             "same number of examples in both, so nothing in this area grew or " \
+                             "shrank between them."
+              ) %>
+        <% else %>
+          <%# Neither run recorded anything in the area that was asked for. An ordinary answer and
+              not an error: `?spec_directory=` is a URL a reader types, edits and bookmarks, so a
+              deleted directory, a renamed one and a typo all arrive here. It names the path back —
+              an empty state without a subject is a sentence about nothing — and points at the panel
+              above described by what it ACTUALLY holds: that panel is a capped ten, not a catalogue
+              of the areas these runs touched, so on a suite of forty areas the correct spelling may
+              not be in it either. %>
+          <%= render UI::EmptyStateComponent.new(
+                title: "No spec files in this directory",
+                description: "Neither this run nor the previous run on this branch recorded any " \
+                             "examples in #{@spec_directory_file_growth.path}. It may have been " \
+                             "renamed or deleted before both of them, or never have run in either " \
+                             "— the “Areas that grew or shrank” panel above lists the areas whose " \
+                             "example count moved most between the two."
+              ) %>
         <% end %>
       <% end %>
     <% end %>

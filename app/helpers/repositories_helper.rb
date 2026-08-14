@@ -27,12 +27,12 @@ module RepositoriesHelper
   #
   # What was missing was a place to SAY it once. The READ side of these four asks has been abstracted
   # since they were built — `app/controllers/concerns/requested_*_param.rb`, one concern each — but
-  # the EMIT side was hand-enumerated at eight link sites, thirty-two independent argument decisions
-  # re-made by hand every time a rung was added. That is not a rule, it is a matrix maintained by
-  # remembering, and it failed exactly the way such a matrix fails: the area-open link was written
-  # after `?spec_file=` already shipped, did not carry it, and was later edited to ADD another ask
-  # without anyone noticing the missing one. Every new drill-down cost a retrofit at every
-  # pre-existing site, and every pre-existing site was a place to forget.
+  # the EMIT side was hand-enumerated at every link site — ten of them today, forty independent
+  # argument decisions — re-made by hand every time a rung was added. That is not a rule, it is a
+  # matrix maintained by remembering, and it failed exactly the way such a matrix fails: the
+  # area-open link was written after `?spec_file=` already shipped, did not carry it, and was later
+  # edited to ADD another ask without anyone noticing the missing one. Every new drill-down cost a
+  # retrofit at every pre-existing site, and every pre-existing site was a place to forget.
   #
   # So: CARRY IS THE DEFAULT, and a caller names only what it CHANGES.
   #

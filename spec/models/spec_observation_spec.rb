@@ -573,6 +573,33 @@ RSpec.describe SpecObservation do
         expect(plan).not_to match(/Seq Scan on spec_observations/)
       end
 
+      # The same certification for the two-run comparison NARROWED to one area, and the reason it
+      # ships without a migration either. The extra predicate changes nothing about the access path:
+      # it narrows on `test_run_id` with the same two-value `IN` list the read above does, and the
+      # area predicate is an EXPRESSION over `spec_file_path` that no index can serve — it only ever
+      # removes rows from a scan that was already happening.
+      #
+      # The `text_pattern_ops` index a SUBTREE narrow would want serves a prefix predicate, and this
+      # read issues none: the example in "what they return" pins that the narrowing is an equality
+      # at one depth. If a future edit turns it into a prefix `LIKE`, that example fails first and
+      # this one records what the plan cost.
+      #
+      # `INDEXED_OR_COVERED_BY_RUN` rather than the shared matcher, for the reason the by-area count
+      # read above claims it: this projects nothing outside
+      # `index_spec_observations_on_test_run_id_and_spec_file_path` — it narrows on `test_run_id`,
+      # and groups, counts and filters on `spec_file_path` — so an `Index Only Scan` is available to
+      # it and is a STRONGER plan than the two the shared matcher accepts, not a weaker one. Which
+      # of the three Postgres picks turns on the visibility map, hence on when the table was last
+      # vacuumed; the `Seq Scan` assertion beside it is what keeps the claim falsifiable whichever
+      # it picks.
+      it "reads the panel's two-run one-area comparison off an index rather than scanning the table" do
+        previous_run = repository.test_runs.where.not(id: run.id).first
+        plan = plan_for_actual_sql { described_class.file_growth_between(run, previous_run, "spec/d3") }
+
+        expect(plan).to match(INDEXED_OR_COVERED_BY_RUN)
+        expect(plan).not_to match(/Seq Scan on spec_observations/)
+      end
+
       # The "no extra cost" claim for the outcome counters, ASSERTED rather than reasoned about.
       # The two `FILTER` aggregates are new expressions over a row set the existing `COUNT(*)`
       # already reads, so they should add no scan — but that is a claim about a plan, and a query
@@ -1672,6 +1699,253 @@ RSpec.describe SpecObservation do
 
         expect(described_class.directory_growth_between(run, previous_run).map(&:first))
           .to match_array([".", "spec/models", "spec/models/orders"])
+      end
+    end
+
+    # The read above at one grain down, narrowed to ONE area — which FILES of it moved, rather than
+    # which areas of the suite did.
+    #
+    # Every fixture below is built so a file-grain answer and an area-grain answer differ. An area
+    # that moved by nothing can hold two files that moved by a great deal in opposite directions —
+    # which is exactly the rename the panel above discloses it cannot see — so a read that had
+    # quietly become the area read narrowed would be green under any fixture where the two agree,
+    # and none of these agree.
+    describe ".file_growth_between" do
+      let(:previous_run) { create_test_run(repository: repository, commit_sha: "prev123") }
+
+      # One file's worth of rows in one run, at line numbers that cannot collide within it. `from`
+      # is what keeps the two runs' example ids from lining up: a correspondence between the runs is
+      # the one thing this read never claims, so no fixture here supplies one.
+      def observe_file(test_run, path, count, from: 1)
+        count.times do |i|
+          observe(test_run, duration: 1.0, line_number: from + i, spec_file_path: path)
+        end
+      end
+
+      # The pivot itself: one row per FILE carrying both runs' counts, not one row per (file, run)
+      # pair left for a caller to fold together.
+      it "puts both runs' counts for a file on one row" do
+        observe_file(previous_run, "spec/models/order_spec.rb", 2)
+        observe_file(previous_run, "spec/models/user_spec.rb", 1, from: 10)
+        observe_file(run, "spec/models/order_spec.rb", 5, from: 20)
+        observe_file(run, "spec/models/user_spec.rb", 1, from: 30)
+
+        expect(described_class.file_growth_between(run, previous_run, "spec/models")).to eq(
+          [["spec/models/order_spec.rb", 2, 5, 2, 3, 6],
+           ["spec/models/user_spec.rb", 1, 1, 2, 3, 6]]
+        )
+      end
+
+      # THE ranking this read exists for, and the one a `DESC`-only ordering on the signed change
+      # passes right over — a file that LOST examples is half of the rename this panel was built to
+      # make visible, and signed ranking puts every loss below every gain and off the end of the
+      # cap. Asserted at `limit: 1` as well, so the claim is about which file SURVIVES the cap
+      # rather than only about the order two surviving rows sit in.
+      it "ranks by absolute movement, so a shrinkage outranks a smaller growth" do
+        observe_file(previous_run, "spec/models/legacy_spec.rb", 6)
+        observe_file(previous_run, "spec/models/order_spec.rb", 1, from: 20)
+        observe_file(run, "spec/models/legacy_spec.rb", 2, from: 40)
+        observe_file(run, "spec/models/order_spec.rb", 3, from: 60)
+
+        expect(described_class.file_growth_between(run, previous_run, "spec/models")).to eq(
+          [["spec/models/legacy_spec.rb", 6, 2, 2, 7, 5],
+           ["spec/models/order_spec.rb", 1, 3, 2, 7, 5]]
+        )
+        expect(described_class.file_growth_between(run, previous_run, "spec/models", limit: 1).map(&:first))
+          .to eq(["spec/models/legacy_spec.rb"])
+      end
+
+      # THE shape the whole panel is for, and the one that only exists at this grain: an area that
+      # moved by NOTHING, holding one file that appeared and one that vanished by the same amount.
+      # One rung up this is a single `±0` row and the reader is told the page cannot tell a
+      # relocation from a gain-and-a-loss; here both operands are on the table. The read still
+      # asserts no correspondence between the two files — it counts rows — which is why the fixture
+      # gives them different line numbers throughout.
+      it "shows a vanished file and an appeared one as two rows where the area itself did not move" do
+        observe_file(previous_run, "spec/models/user_spec.rb", 4)
+        observe_file(run, "spec/models/users_spec.rb", 4, from: 50)
+
+        expect(described_class.file_growth_between(run, previous_run, "spec/models")).to eq(
+          [["spec/models/user_spec.rb", 4, 0, 2, 4, 4],
+           ["spec/models/users_spec.rb", 0, 4, 2, 4, 4]]
+        )
+        expect(described_class.directory_growth_between(run, previous_run))
+          .to eq([["spec/models", 4, 4, 1, 4, 4]])
+      end
+
+      # A file the earlier run never wrote a row for comes back with a real 0 on that side rather
+      # than being dropped — the caller needs the row in order to say "new file" at all.
+      it "reports a file only the latest run recorded, with a zero for the run that did not" do
+        observe_file(previous_run, "spec/models/order_spec.rb", 3)
+        observe_file(run, "spec/models/order_spec.rb", 3, from: 20)
+        observe_file(run, "spec/models/refund_spec.rb", 4, from: 40)
+
+        expect(described_class.file_growth_between(run, previous_run, "spec/models")).to eq(
+          [["spec/models/refund_spec.rb", 0, 4, 2, 3, 7],
+           ["spec/models/order_spec.rb", 3, 3, 2, 3, 7]]
+        )
+      end
+
+      # THE fence this read draws, and the assertion that fails the moment it is crossed. The
+      # predicate is an EQUALITY on the area — the same one `.files_in_directory` uses and through
+      # the same constant — so `spec/models/orders` is its own area exactly as it is its own row in
+      # the panel this drills out of. A prefix `LIKE 'spec/models/%'` would gather it in and this
+      # panel would double-count rows against the one above it on a single click.
+      it "reads the area at its own depth, gathering no nested area into it" do
+        observe_file(previous_run, "spec/models/order_spec.rb", 1)
+        observe_file(previous_run, "spec/models/orders/refund_spec.rb", 5, from: 10)
+        observe_file(run, "spec/models/order_spec.rb", 3, from: 20)
+        observe_file(run, "spec/models/orders/refund_spec.rb", 1, from: 40)
+
+        expect(described_class.file_growth_between(run, previous_run, "spec/models"))
+          .to eq([["spec/models/order_spec.rb", 1, 3, 1, 1, 3]])
+        expect(described_class.file_growth_between(run, previous_run, "spec/models/orders"))
+          .to eq([["spec/models/orders/refund_spec.rb", 5, 1, 1, 5, 1]])
+      end
+
+      # The area name is computed by the SAME expression the panel above groups by, so the path a
+      # link carries is a path this read can answer. A repository-root file's area is `.` up there
+      # and has to be `.` here, or the one row that panel names that way opens an empty drill-in.
+      it "answers for the repository root under the name the panel above gives it" do
+        observe_file(previous_run, "smoke_spec.rb", 1)
+        observe_file(run, "smoke_spec.rb", 3, from: 10)
+        observe_file(run, "spec/models/order_spec.rb", 1, from: 20)
+
+        expect(described_class.file_growth_between(run, previous_run, "."))
+          .to eq([["smoke_spec.rb", 1, 3, 1, 1, 3]])
+      end
+
+      # The two runs' rows are counted apart, which is the whole method: a single `COUNT(*)` over
+      # the `IN` list would give each file the SUM of both sides and every change would be zero.
+      it "counts each run's rows against that run and not against the pair" do
+        observe_file(previous_run, "spec/models/order_spec.rb", 4)
+        observe_file(run, "spec/models/order_spec.rb", 5, from: 20)
+
+        expect(described_class.file_growth_between(run, previous_run, "spec/models"))
+          .to eq([["spec/models/order_spec.rb", 4, 5, 1, 4, 5]])
+      end
+
+      # A third run on the same repository is not part of this comparison, and its rows must not
+      # reach either column or either total — including a run that touched the very same file.
+      it "reads the two runs it was asked about and no others" do
+        other = create_test_run(repository: repository, commit_sha: "0ther99")
+        observe_file(previous_run, "spec/models/order_spec.rb", 1)
+        observe_file(run, "spec/models/order_spec.rb", 2, from: 20)
+        observe_file(other, "spec/models/order_spec.rb", 50, from: 100)
+
+        expect(described_class.file_growth_between(run, previous_run, "spec/models"))
+          .to eq([["spec/models/order_spec.rb", 1, 2, 1, 1, 2]])
+      end
+
+      # Keyed on the INCLUDING file, so a shared example group's rows land on the file that RAN
+      # them — the rule `Ingest::ObservationRecorder` writes `spec_file_path` for, and the rule both
+      # rollups above are asserted against. A read keyed on `file_path` would list
+      # `spec/support/shared_examples.rb` under an area that never included it.
+      it "counts a shared example group's row against the file that ran it" do
+        observe(previous_run, duration: 1.0, line_number: 4, file_path: "spec/support/shared_examples.rb",
+                              spec_file_path: "spec/models/order_spec.rb",
+                              example_id: "./spec/models/order_spec.rb[1:1:1]")
+        observe(run, duration: 1.0, line_number: 9, file_path: "spec/support/shared_examples.rb",
+                     spec_file_path: "spec/models/order_spec.rb",
+                     example_id: "./spec/models/order_spec.rb[1:1:2]")
+
+        expect(described_class.file_growth_between(run, previous_run, "spec/models").map(&:first))
+          .to eq(["spec/models/order_spec.rb"])
+        expect(described_class.file_growth_between(run, previous_run, "spec/support")).to eq([])
+      end
+
+      # Two files that moved the same distance is ordinary — a rename moves exactly that way, and
+      # this panel puts both halves of one on the page — so the order has to be total, or two
+      # requests against unchanged rows list them differently.
+      it "breaks ties by path, so equal movements have one order" do
+        observe_file(previous_run, "spec/models/b_spec.rb", 3)
+        observe_file(previous_run, "spec/models/a_spec.rb", 3, from: 20)
+        observe_file(run, "spec/models/b_spec.rb", 5, from: 40)
+        observe_file(run, "spec/models/a_spec.rb", 5, from: 60)
+
+        expect(described_class.file_growth_between(run, previous_run, "spec/models").map(&:first))
+          .to eq(["spec/models/a_spec.rb", "spec/models/b_spec.rb"])
+      end
+
+      # Its OWN limit, and the default is asserted through `SPEC_DIRECTORY_FILE_GROWTH_LIMIT` BY
+      # NAME. The neighbouring `SPEC_DIRECTORY_FILES_LIMIT` caps one run's listing of the same
+      # area's files and this caps the two-run UNION of them, so a reuse of it would pass any
+      # example asserting a bare number and silently make one edit move both panels.
+      it "caps at the limit it was given, and defaults to the panel's own" do
+        32.times { |i| observe_file(run, "spec/models/f#{i}_spec.rb", i + 1, from: (i * 40) + 1) }
+        observe_file(previous_run, "spec/models/gone_spec.rb", 1)
+
+        expect(described_class.file_growth_between(run, previous_run, "spec/models").size)
+          .to eq(described_class::SPEC_DIRECTORY_FILE_GROWTH_LIMIT)
+        expect(described_class.file_growth_between(run, previous_run, "spec/models", limit: 3).map(&:first))
+          .to eq(["spec/models/f31_spec.rb", "spec/models/f30_spec.rb", "spec/models/f29_spec.rb"])
+      end
+
+      # What the capped list is the head OF, in the same round trip — and it counts FILES across
+      # BOTH runs, which is the figure a caption saying "of the N either run recorded" needs.
+      # `COUNT(*) OVER ()` runs after `GROUP BY` and before `LIMIT`, so a truncated read reports the
+      # same total an untruncated one does.
+      #
+      # Twelve files in the latest run and one only the previous run has: thirteen, a figure neither
+      # run alone could produce. Deliberately not equal to any single file's row count — the biggest
+      # here holds twelve — because a `COUNT(*)` where the window total belongs reads the leading
+      # GROUP's size, and a fixture where those two numbers coincide is green under exactly that
+      # mutation.
+      it "reports how many files the comparison covered, whatever the limit returns" do
+        12.times { |i| observe_file(run, "spec/models/f#{i}_spec.rb", i + 1, from: (i * 40) + 1) }
+        observe_file(previous_run, "spec/models/gone_spec.rb", 1)
+
+        expect(described_class.file_growth_between(run, previous_run, "spec/models", limit: 3)
+                              .map { |row| row[3] }).to eq([13, 13, 13])
+        expect(described_class.file_growth_between(run, previous_run, "spec/models", limit: 100)
+                              .map { |row| row[3] }.uniq).to eq([13])
+      end
+
+      # The two per-run totals, counted before the cap and narrowed to THIS AREA — and the reason
+      # they are on the query rather than derived by the caller: summing the returned rows' counts
+      # would total a CAPPED three of them and answer a question about the page.
+      #
+      # The previous run is what makes this sharp. It recorded one row, in a file whose movement
+      # does not survive the cap, so the rows on hand carry ZERO of its examples while the run
+      # recorded one in this area. A caller deriving the figure from the rows would read "the
+      # previous run recorded nothing here" off a comparison that is perfectly sound.
+      it "reports what each run recorded in this area in total, before the limit" do
+        12.times { |i| observe_file(run, "spec/models/f#{i}_spec.rb", 1, from: (i * 40) + 1) }
+        observe_file(run, "spec/models/f0_spec.rb", 1, from: 900)
+        observe_file(previous_run, "spec/models/gone_spec.rb", 1)
+
+        rows = described_class.file_growth_between(run, previous_run, "spec/models", limit: 3)
+
+        expect(rows.map { |row| row[4] }.uniq).to eq([1])
+        expect(rows.map { |row| row[5] }.uniq).to eq([13])
+        expect(rows.sum { |row| row[1] }).to eq(0)
+        expect(rows.sum { |row| row[2] }).to eq(4)
+      end
+
+      # Those totals are the AREA's and deliberately not the RUNS'. The caller's caption states what
+      # this panel was measured over, and this panel is measured over one area — while the read one
+      # rung up returns whole-run totals under the same position. Rows in a SECOND area are what
+      # tells the two apart, and a read that reported the run's totals here would divide an area's
+      # population by the suite's.
+      it "counts its totals over the asked-for area and not over the whole run" do
+        observe_file(previous_run, "spec/models/order_spec.rb", 2)
+        observe_file(previous_run, "spec/requests/checkout_spec.rb", 40, from: 100)
+        observe_file(run, "spec/models/order_spec.rb", 5, from: 200)
+        observe_file(run, "spec/requests/checkout_spec.rb", 60, from: 400)
+
+        expect(described_class.file_growth_between(run, previous_run, "spec/models"))
+          .to eq([["spec/models/order_spec.rb", 2, 5, 1, 2, 5]])
+      end
+
+      # Zero groups, which for this read means neither run wrote a row IN THIS AREA — a group exists
+      # here if and only if a row does. `?spec_directory=` is a URL a reader types and bookmarks, so
+      # a typo and a deleted directory both arrive here and neither is an error; the caller depends
+      # on the empty read to name that state, so it is pinned rather than left to the SQL.
+      it "reads nothing at all for an area neither run recorded" do
+        observe_file(previous_run, "spec/models/order_spec.rb", 1)
+        observe_file(run, "spec/models/order_spec.rb", 2, from: 20)
+
+        expect(described_class.file_growth_between(run, previous_run, "spec/ghosts")).to eq([])
       end
     end
 

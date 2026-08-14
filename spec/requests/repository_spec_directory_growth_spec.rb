@@ -33,7 +33,7 @@ RSpec.describe "Repository spec directory growth", type: :request do
 
   def panel? = Capybara.string(response.body).has_css?("#spec-directory-growth")
 
-  # ELEMENT-scoped, never panel-scoped. Six states render inside this panel and five of them are
+  # ELEMENT-scoped, never panel-scoped. Seven states render inside this panel and six of them are
   # sentences sharing most of their words ("no comparison to draw", "the previous run on this
   # branch") — so a panel-level `have_text` passes for the wrong state with the deciding branch
   # deleted. Every assertion below names the element it means.
@@ -383,7 +383,7 @@ RSpec.describe "Repository spec directory growth", type: :request do
       expect(empty_state_text).to include("Neither this run nor the previous run")
     end
 
-    # The five states share a title and most of their words, so an implementation that rendered one
+    # The six states share a title and most of their words, so an implementation that rendered one
     # sentence for all of them would satisfy every example above that only checked the shared half.
     # This one pins that the two states nothing else on the page distinguishes are distinguished
     # here: "reported no tests" and "recorded no per-example detail" of the SAME side.
