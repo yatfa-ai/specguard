@@ -1300,6 +1300,13 @@ RSpec.describe Ingest::IdentityResolver do
       # Two mechanisms keep it out of the statement — `#claim_identity`'s map write, which stops the
       # second row reaching it at all, and the buffer's own digest key behind that — and this example
       # is what says the page as a whole survives the shape, whichever of them did it.
+      #
+      # **Shares its fixture with "does not make a first run embed twice for two examples carrying
+      # the same text"** in "the page map is a snapshot, and what that costs a FIRST run", and the
+      # two are not redundant: that one asks what the page map costs the PROVIDER and is authoritative
+      # on the embed count, this one asks whether the batched statement is legal at all. The
+      # assertions overlap because both need the same page to have ended up correct; the predicates
+      # do not. If this fixture has to change, change it there first — that group owns it.
       EmbeddingGenerator.provider = counting_provider
       run = record([unannotated_spec(file_path: "spec/models/invoice_spec.rb", line_number: 3,
                                      name: "is valid"),
@@ -1325,10 +1332,11 @@ RSpec.describe Ingest::IdentityResolver do
       # PERMANENT split of its history: every later ingest presents both spellings, each hits its own
       # digest, and nothing reconciles them.
       #
-      # `#pending_equivalent` answers it out of the page's own vectors — the band where the provider
-      # reduces both texts to one identical vector, which is the band `EmbeddingGenerator.equivalent?`
-      # is defined over. Asserted on a FIRST run, which is the only run where it can be reached: on
-      # any later one the row exists and `#nearest` finds it the ordinary way.
+      # `#nearest_pending` answers it out of the page's own vectors. Asserted on a FIRST run, which
+      # is the only run where it can be reached: on any later one the row exists and `#nearest` finds
+      # it the ordinary way. This is the cosine-1.0 end of the band — the provider reduces both texts
+      # to one identical vector — and the example below it is the rest of the band, which a repair
+      # keyed on vector equality would leave open.
       run = ingest([unannotated_spec(file_path: "spec/models/order_spec.rb", line_number: 1,
                                      name: "Order#checkout rejects an expired card"),
                     unannotated_spec(file_path: "spec/models/order_spec.rb", line_number: 2,
@@ -1338,6 +1346,55 @@ RSpec.describe Ingest::IdentityResolver do
       expect(repository.spec_identities.count).to eq(1)
       expect(run.spec_observations.pluck(:spec_identity_id).uniq.size).to eq(1)
       expect(run.spec_observations.unresolved).to be_empty
+    end
+
+    it "gives ONE row to two new spellings that MATCH without embedding to the same vector" do
+      # **The rest of the band the example above opens, and the reason `#nearest_pending` scans at a
+      # threshold instead of looking up a vector.** These two descriptions differ by one pluralised
+      # word. They are not equivalent under the provider — different features, different vectors —
+      # but they score cosine 0.9926 against a `MATCH_SIMILARITY` bar of 0.95, so `#nearest` on the
+      # per-row path called them one test and re-sighted the second onto the first.
+      #
+      # A page-pending repair keyed on vector EQUALITY answers nil here and lets them split, which
+      # is the same permanent fork the example above exists to prevent, reached by an ordinary edit
+      # rather than a punctuation one. Pinned as its own example because the two repairs look alike
+      # from the outside and only this fixture tells them apart.
+      first = "Invoice#finalize locks the line items when the invoice is finalized and posted to the ledger"
+      second = "#{first}s"
+
+      # The premise, pinned rather than trusted: this pair really is inside the band and really is
+      # NOT the identical-vector case, so a failure here is the band being open and nothing else.
+      expect(EmbeddingGenerator.call(first)).not_to eq(EmbeddingGenerator.call(second))
+      expect(EmbeddingGenerator.equivalent?(first, second)).to be(false)
+
+      run = ingest([unannotated_spec(file_path: "spec/models/invoice_spec.rb", line_number: 1,
+                                     name: first),
+                    unannotated_spec(file_path: "spec/models/invoice_spec.rb", line_number: 2,
+                                     name: second)],
+                   ci_run_id: "run-1")
+
+      expect(repository.spec_identities.count).to eq(1)
+      expect(run.spec_observations.pluck(:spec_identity_id).uniq.size).to eq(1)
+      expect(run.spec_observations.unresolved).to be_empty
+    end
+
+    it "gives the same ONE row to that pair however the page boundary falls" do
+      # **`BATCH_SIZE` decides cost and not the identity graph**, which is the property the scan
+      # buys and the one a cheaper repair silently sold: with the pair split across two pages the
+      # second row finds the first through `#nearest` because it has been committed, and with both
+      # on one page it finds it through `#nearest_pending`. Same answer, so the constant stays
+      # tunable for throughput without changing what a repository ends up holding.
+      stub_const("#{described_class}::BATCH_SIZE", 1)
+
+      first = "Invoice#finalize locks the line items when the invoice is finalized and posted to the ledger"
+      run = ingest([unannotated_spec(file_path: "spec/models/invoice_spec.rb", line_number: 1,
+                                     name: first),
+                    unannotated_spec(file_path: "spec/models/invoice_spec.rb", line_number: 2,
+                                     name: "#{first}s")],
+                   ci_run_id: "run-1")
+
+      expect(repository.spec_identities.count).to eq(1)
+      expect(run.spec_observations.pluck(:spec_identity_id).uniq.size).to eq(1)
     end
 
     it "issues none at all when every test on the page is already held" do
@@ -1452,7 +1509,7 @@ RSpec.describe Ingest::IdentityResolver do
   end
 
   describe "when two shards' jobs collide on the page's writes" do
-    # **The lock footprint is what batching these two statements actually changed**, and this group
+    # **The lock footprint is what batching these three statements actually changed**, and this group
     # is that question. Per row, each write ran in autocommit: one row lock, taken and released
     # inside one statement, and a transaction that never holds a second lock cannot be half of a
     # cycle. The batched statements take a page of row locks and hold them to the end of the
@@ -1460,10 +1517,17 @@ RSpec.describe Ingest::IdentityResolver do
     # enqueues a job and `#retry_backlog` is repository-scoped rather than run-scoped, so N of them
     # read substantially the same rows.
     #
-    # `#write_page` answers it in two parts and both are pinned below: the `VALUES` lists are sorted
-    # by the join key, so what a page emits depends on WHICH rows it holds and not on the order its
-    # read returned them in; and a statement chosen as the deadlock victim is retried once, because
-    # the sort makes agreement likely without Postgres promising to lock in `VALUES` order.
+    # `#write_page` answers it in two parts and both are pinned below, once per statement: the
+    # `VALUES` lists are sorted by the join key, so what a page emits depends on WHICH rows it holds
+    # and not on the order its read returned them in; and a statement chosen as the deadlock victim
+    # is retried once, because the sort makes agreement likely without Postgres promising to lock in
+    # `VALUES` order.
+    #
+    # Three and not two since `#insert_pending_identities` — the page's `INSERT` goes through
+    # `#write_page` like the two `UPDATE`s, sorts by the conflict key rather than by an id, and
+    # survives a retry differently again. Each of those gets its own example rather than riding on
+    # the `UPDATE`s', because "the wrapper is applied" and "this statement is correct when it is
+    # applied twice" are different claims.
     def provider_down
       allow(EmbeddingGenerator).to receive(:call).and_raise(EmbeddingGenerator::Error, "provider down")
     end
@@ -1510,7 +1574,7 @@ RSpec.describe Ingest::IdentityResolver do
       statement[/\(VALUES (.+?)\) AS \w+/m, 1].split(/\),\s*\(/).map { |tuple| tuple[/\d+/].to_i }
     end
 
-    it "presents both statements' rows in join-key order, whatever order the page was read in" do
+    it "presents both UPDATEs' rows in join-key order, whatever order the page was read in" do
       run = stranded_backlog_walked_in_reverse
       walked = repository.spec_observations.embed_retryable
                          .order(:embed_failure_count, :embed_failed_at, :id).pluck(:id)
@@ -1526,6 +1590,50 @@ RSpec.describe Ingest::IdentityResolver do
       expect(walked).to eq(walked.sort.reverse)
       expect(values_join_keys(links)).to eq(walked.sort)
       expect(values_join_keys(sightings)).to eq(values_join_keys(sightings).sort)
+    end
+
+    # The `text_digest` of every tuple in the page's `INSERT`, in the order the statement presents
+    # them — `#values_join_keys`'s sibling for the third batched statement, which joins on a hex
+    # digest rather than on an integer id.
+    #
+    # One scan of the whole `VALUES` clause rather than a split into tuples: a digest is 64 hex
+    # characters and every row carries exactly one, while the embedding beside it is a 1536-element
+    # vector literal that any tuple-splitting regex would have to survive first.
+    def values_digests(statement)
+      statement[/VALUES (.+) ON CONFLICT/m, 1].scan(/\b[0-9a-f]{64}\b/)
+    end
+
+    # Three texts whose digests do NOT ascend or descend in the order the page reads them — a 3-cycle
+    # rather than a reversal. `#three_specs` happens to be walked in exactly reverse digest order,
+    # which would leave the example below green under a `.reverse` in place of the `.sort` it exists
+    # to pin. This orders them so that neither the read order nor its reverse is the sorted one, and
+    # the example pins both of those premises before asserting anything.
+    def three_specs_scrambled_by_digest
+      [["invoice", "Invoice#finalize locks the line items"],
+       ["ledger", "Ledger#post balances debits against credits"],
+       ["order", "Order#checkout rejects an expired card"]].map.with_index do |(file, name), index|
+        unannotated_spec(file_path: "spec/models/#{file}_spec.rb", line_number: index + 1, name: name)
+      end
+    end
+
+    it "presents the page's INSERT rows in conflict-key order too" do
+      # The third batched statement, and the same property for the same reason: an upsert that
+      # conflicts locks the row it conflicts onto, so two jobs whose pages overlap should ask for the
+      # rows they share in one order. `repository_id` is constant across a page, so `text_digest` is
+      # the whole of the conflict key that varies and the whole of what there is to sort by.
+      specs = three_specs_scrambled_by_digest
+      run = record(specs, ci_run_id: "run-1")
+      walked = specs.map { |spec| SpecIdentity.digest_for(spec[:name]) }
+
+      statement = executed_sql { described_class.resolve(run) }.grep(/\AINSERT/).first
+
+      # The premises, pinned rather than assumed, exactly as the example above pins its own — and
+      # two of them rather than one. The page must be walked in an order that is not the sorted one,
+      # or emitting what it read would pass; and not in the REVERSE of the sorted one either, or
+      # reversing what it read would pass just as well.
+      expect(walked).not_to eq(walked.sort)
+      expect(walked).not_to eq(walked.sort.reverse)
+      expect(values_digests(statement)).to eq(walked.sort)
     end
 
     # Postgres chooses one side of a lock cycle and aborts it; this injects that abort at the
@@ -1576,6 +1684,28 @@ RSpec.describe Ingest::IdentityResolver do
       expect(repository.spec_identities.pluck(:line_number).sort).to eq([51, 52, 53])
     end
 
+    it "retries the page's INSERT too, and a second attempt lands one row per text" do
+      # The third statement, and it survives a retry differently again — which is why it gets its own
+      # example rather than being assumed to behave like the two above. The link sets one column to
+      # one value and the re-sighting is guarded per row; this one is the statement that CREATES the
+      # rows, so a retry that were not an upsert would insert the page twice.
+      #
+      # It is not. A deadlocked statement is rolled back whole, so the second attempt either inserts
+      # exactly what the first would have, or conflicts onto a row that arrived meanwhile and
+      # re-sights it under `SpecIdentity::SIGHTING_NOT_OLDER`. Both land one row per text, which is
+      # what the identity count below is actually asking.
+      run = record(three_specs, ci_run_id: "run-1")
+      attempts = deadlock_on(SpecIdentity, :exec_insert_all, 'INSERT INTO "spec_identities"')
+
+      # The page's own count, and it comes from `#link_all` matching rows — so a retry whose ids
+      # never reached the links would answer 0 here rather than 3.
+      expect(described_class.resolve(run)).to eq(3)
+
+      expect(attempts.size).to eq(2)
+      expect(repository.spec_identities.count).to eq(3)
+      expect(run.spec_observations.unresolved).to be_empty
+    end
+
     it "gives up after one retry and leaves the pass in the state a died pass leaves" do
       # **Once, and not a loop.** A page that deadlocks twice is under contention this class cannot
       # resolve by trying harder, and there is already a recovery for a pass that dies: the rows stay
@@ -1598,6 +1728,11 @@ RSpec.describe Ingest::IdentityResolver do
     # run over text that is not unchanged, and it asserts an EMBED COUNT rather than a round trip.
     # It answers a different question from the group it used to sit in, so it is filed under the
     # question it actually answers.
+    #
+    # **This group owns the same-text-twice fixture.** "carries a page that presents the same text
+    # twice as ONE row rather than refusing it" rebuilds it to ask a different question — whether
+    # the batched `INSERT` is a legal statement when the page holds that pair — and says so where it
+    # does. The embed count is settled here.
 
     it "does not make a first run embed twice for two examples carrying the same text" do
       # **The cost of a page map being a SNAPSHOT, resolved deliberately rather than discovered.**

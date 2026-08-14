@@ -184,6 +184,21 @@ module Ingest
     # number tuned here is what an UNCHANGED page costs, which is the ordinary case; the changed one
     # is SPGD-375's lookup.
     #
+    # **It is the one number here whose square something pays, and that is worth knowing before
+    # raising it.** Deferring the insert means a page's misses are compared against each other in
+    # process ({#nearest_pending}) rather than through the index, which is O(page²) on a page of
+    # pure misses — measured at ~1.3s for a full page of 500, against the ~1.0s of statement
+    # overhead batching the insert saves on that same page. Doubling this quadruples that term while
+    # only halving the round trips it is bought with, so the batching's case gets WORSE as this
+    # grows, not better. Nothing on an unchanged page touches it. {#nearest_pending} carries the
+    # whole ledger.
+    #
+    # **What it does not decide is how many identities a suite gets**, and that is a property worth
+    # stating because one revision of this slice broke it: a page-pending row is matched at the same
+    # `SpecIdentity::MATCH_SIMILARITY` the index applies, so two near-identical new tests land on one
+    # identity whether they share a page or straddle the boundary between two. This stays a knob on
+    # cost, tunable without changing what a repository ends up holding.
+    #
     # That makes this a size worth tuning where it used not to be, but not a different KIND of
     # constant: both readings bound one page, and neither is a bound on how much work a delivery
     # inherits — that is {RETRY_SWEEP_LIMIT}, and it stays separate for the reason stated there.
@@ -268,6 +283,28 @@ module Ingest
     # that has to agree about which row it is.
     PendingIdentity = Struct.new(:digest)
 
+    # **One pending row's vector, in the form {#nearest_pending} can compare cheaply.** The page's
+    # answer to a question {#nearest} can no longer be asked: the rows this page has decided to
+    # insert are not in the table yet, so the index cannot see them.
+    #
+    # Sparse — the indices of the non-zero dimensions and their values, rather than the 1536-wide
+    # array — because that is the whole of what makes the scan affordable, and because it is what
+    # the shipped provider actually produces. `LocalProvider` hashes a description's words and
+    # trigrams into 1536 dimensions and touches about 94 of them for an ordinary RSpec description
+    # (measured: 6% density), so a dot product that walks the non-zero dimensions does about 94
+    # multiplications where a dense one does 1536. A provider whose vectors are dense stores every
+    # dimension here and pays the dense cost — correctly, and see {#nearest_pending} for what that
+    # costs and why it is still bounded.
+    #
+    # Carries its own `magnitude` so the comparison is a true COSINE rather than a bare dot product.
+    # Both shipped providers return unit vectors, which would make the two identical and the
+    # division dead code — but `EmbeddingGenerator.validate` checks width and finiteness and does
+    # NOT check normalisation, so a provider returning unrolled vectors would silently turn every
+    # similarity here into a number that is not one, against a threshold that assumes it is. One
+    # `Math.sqrt` per pending row buys the guarantee that this method and `nearest` are answering
+    # the same question.
+    PendingVector = Struct.new(:digest, :indices, :values, :magnitude)
+
     # One identity's pending spelling refresh — see {#note_drift} for what earns a row one and
     # {#refresh_all} for which of a page's candidates is actually written.
     #
@@ -307,11 +344,12 @@ module Ingest
       # {#claim_identity} writes is what stops a second byte-identical row reaching it at all; this
       # key is the belt to that brace, and it is the same key the returned ids arrive under.
       @pending_identities = {}
-      # `embedding => digest`, for the rows above — **what {#nearest} cannot see, answered without
-      # asking it.** A page's pending rows are not in the table yet, so the index lookup misses them,
-      # and the per-row path this replaced did not: it inserted each row before the next row asked.
-      # See {#pending_equivalent} for which band of that gap is closed here and which is not.
-      @pending_by_embedding = {}
+      # The vectors of the rows above, as {PendingVector}s — **what {#nearest} cannot see, answered
+      # without asking it.** A page's pending rows are not in the table yet, so the index lookup
+      # misses them, and the per-row path this replaced did not: it inserted each row before the
+      # next row asked. Scanned by {#nearest_pending}, which is what keeps a page's identity graph
+      # the same one the per-row path produced.
+      @pending_vectors = []
       # The page's pending spelling refreshes, `identity_id => {Drift}` — one entry per identity by
       # construction, which is {#note_drift}'s first bound against thrash. Same total-rather-than-
       # conditional guarantee as the two buffers above.
@@ -637,7 +675,7 @@ module Ingest
       @sightings = []
       @links = []
       @pending_identities = {}
-      @pending_by_embedding = {}
+      @pending_vectors = []
       @drifts = {}
       resolved = 0
 
@@ -1409,7 +1447,7 @@ module Ingest
     # below is reached through {#identity_for} rather than through this rescue, and SPGD-367's
     # behaviour is untouched. Everything else the class comment lists as "what a job-level policy
     # would have to cover" is what this catches, and what is left of that list is {#nearest}'s
-    # lookup.
+    # lookup and {#nearest_pending}'s scan of it in memory — the two questions still asked per row.
     #
     # What it can no longer catch is the row's own two `UPDATE`s — nor, since this slice, its
     # `INSERT` — and that is not a narrowing of the containment so much as a consequence of those
@@ -1486,8 +1524,8 @@ module Ingest
 
       # The same question about the rows THIS PAGE has decided to insert and has not inserted yet,
       # which the lookup above cannot see. Asked here and not earlier because that is exactly where
-      # the lookup answered it while the insert was per row — see {#pending_equivalent}.
-      pending = pending_equivalent(embedding)
+      # the lookup answered it while the insert was per row — see {#nearest_pending}.
+      pending = nearest_pending(embedding)
       return resight(pending, observation) if pending
 
       # Nothing matched the text that represents this test — and if this test just gained an
@@ -1511,57 +1549,159 @@ module Ingest
       claim_identity(signal, embedding, observation)
     end
 
-    # @return [PendingIdentity, nil] the row THIS PAGE has already decided to insert for a text the
-    #   provider reduces to the vector this observation embedded to — nil when the page holds no
+    # @return [PendingIdentity, nil] the row THIS PAGE has already decided to insert whose text this
+    #   observation's is a match for at {SpecIdentity::MATCH_SIMILARITY} — nil when the page holds no
     #   such row, which is every page in the steady state.
     #
-    # **The half of the page's snapshot {#digest_index}'s map cannot cover.** That map is the same
-    # idea one band down: {#claim_identity} writes its row into it so a second BYTE-IDENTICAL row of
-    # the same page finds it instead of inserting beside it. This is the same repair for the second
-    # NOT-byte-identical one — "Order#checkout rejects an expired card" and
-    # "Order  checkout rejects an expired card!" arriving in one page of a repository's FIRST ingest,
-    # neither held, the digests different. The per-row path answered that at {#nearest}, because the
-    # first row was inserted and committed before the second row asked. Deferring the insert takes
-    # that answer away, and getting two identities for one test is a permanent split of its history —
-    # every later ingest presents both spellings, each hits its own digest, and nothing ever
-    # reconciles them.
+    # **The half of the page's snapshot {#nearest} cannot cover, and the reason this method exists at
+    # all.** {#nearest} asks the HNSW index, and a page's pending rows are not in the table yet. The
+    # per-row path never had that gap: it inserted and committed each row before the next row asked,
+    # so the second of two near-identical BRAND-NEW tests — "Order#checkout rejects an expired card"
+    # and "Order  checkout rejects an expired card!" arriving in one page of a repository's FIRST
+    # ingest, neither held, the digests different — found the first at the index and was re-sighted
+    # onto it. Deferring the insert takes that answer away, and getting two identities for one test
+    # is a permanent split of its history: every later ingest presents both spellings, each hits its
+    # own digest, and nothing ever reconciles them.
     #
-    # **Keyed on the VECTOR and not on a distance, which is what makes it O(1).** Comparing the page's
-    # pending vectors pairwise is the faithful reading of "what {#nearest} would have said" and it is
-    # not affordable: 1536 dimensions over a full page's 124,750 pairs measures ~8 seconds of Ruby
-    # per page on this tree — 40 pages of a 20,000-example first ingest is five minutes added to the
-    # very path this slice exists to make cheaper, and it would be paid whether or not the page holds
-    # a single duplicate. A Hash lookup on the vector is one `hash` of an array the page already
-    # holds.
+    # So this scans, and it scans at the SAME threshold {#nearest} uses rather than a cheaper one.
+    # That is what makes deferring the insert invisible in the identity graph — the page a repository
+    # ends up with is the page the per-row path would have written — and it is what keeps `BATCH_SIZE`
+    # a cost knob rather than a decision about how many identities a suite has. An earlier revision
+    # of this method keyed a Hash on the vector and closed only the cosine-1.0 band; that left an
+    # ordinary pair of descriptions differing by one pluralised word (measured at cosine 0.9926 on
+    # the shipped provider, against a 0.95 bar) splitting into two identities on a first ingest, and
+    # splitting or not according to where the page boundary fell. Both are refused here.
     #
-    # What that buys is exactly the cosine-1.0 band, and it buys it by the definition
-    # {EmbeddingGenerator.equivalent?} is written in: two texts are the same input to a provider when
-    # it "reduces them to one identical vector". Identical, not near — so the key is the provider's
-    # own verdict rather than a threshold restated here, and it needs no `normalize` seam to be
-    # public. A provider that publishes no normalisation collapses nothing, its vectors differ, and
-    # this map answers nil — which is the same conservative default `equivalent?` gives that provider,
-    # reached without asking it.
+    # == What the scan costs, measured rather than assumed — and it is not free
     #
-    # **What it does NOT restore, stated rather than left to be discovered.** Two GENUINELY DIFFERENT
-    # new texts landing within {SpecIdentity::MATCH_DISTANCE} of each other in ONE page — similar
-    # enough for the index to have called them one test, not equal enough to embed alike — now get a
-    # row each where the per-row path gave them one. It is the narrow band and the rarer half of it:
-    # `spec_identity.rb`'s own threshold table puts a lexically similar but different test at 0.80
-    # against a 0.95 bar, so the pairs that reach it are near-copies, and the page is a page of
-    # BRAND-NEW tests, so it is a repository's first ingest or a mass rename. What it costs there is
-    # a duplicate row that this application's own duplication surfaces then report as the duplicate
-    # they are, against five minutes on every first ingest to close it. Named here so the next slice
-    # can price it rather than rediscover it.
+    # It is O(pending) per miss and therefore O(page²) over a page of pure misses. Measured on this
+    # tree by resolving one `BATCH_SIZE` page of 500 genuinely new tests (124,750 pairs) end to end,
+    # against a local Postgres socket:
+    #
+    #   per-row `INSERT`, no scan needed (origin/main)   3.4s   492 identities
+    #   batched `INSERT`, no scan (the band left open)   2.4s   500 identities  ← wrong
+    #   batched `INSERT` + this scan                     4.0s   492 identities
+    #
+    # Read the identity column first: batching the insert without this scan splits eight of those
+    # 500 into rows the per-row path did not create, and the scan puts all eight back. Read the time
+    # column second and honestly — **on a local socket this slice is now a net slowdown on the page
+    # shape it targets**, because batching saves ~1.0s of statement overhead there and the scan
+    # spends ~1.3s. What the batching also removes is 499 round TRIPS, which cost nothing measurable
+    # over a Unix socket and are the whole of the cost over a network: the slice pays for itself once
+    # a statement's round trip exceeds about 0.6ms, and is a loss below that. That is the trade, and
+    # it is a real one rather than a rounding error.
+    #
+    # A dense dot over all 1536 dimensions instead of the non-zero ones measures 8.4s for the same
+    # page, which is the version that would make the slice indefensible; {PendingVector} is what
+    # keeps it merely marginal. A Cauchy-Schwarz early exit over entries sorted by descending
+    # magnitude was tried and measured at 0.655s against 0.645s — no gain, because these vectors
+    # spread their mass evenly over ~78 features, so the remaining-norm bound decays as a square root
+    # and never bites early. Refused on the measurement rather than carried as dead complexity.
+    #
+    # And it is paid ONLY on that shape. `@pending_vectors` holds the page's misses SO FAR, which is
+    # empty on every page of an unchanged suite and stays empty however large the page is: an
+    # ordinary re-ingest never reaches this method, because {#identical_text} answered it. The cost
+    # is a first ingest and a mass rename, where it buys the identity lineage those two ingests
+    # establish for the life of the repository — and a permanent split is not a cost that a later
+    # ingest can pay off, which is what makes it worth a second on a page that happens once.
+    #
+    # A provider returning DENSE vectors pays the 8.4s figure rather than the 1.3s one, because
+    # {PendingVector} stores what the provider gives it. Named rather than guarded against: the
+    # shipped provider is `LocalProvider` by owner decision ("SpecGuard does not pay for
+    # embeddings"), a dense provider is a deliberate act with an initializer behind it, and the
+    # remedy if one is ever chosen belongs with the ANN lookup that same page is already bound by —
+    # **SPGD-375's**, which owns this path's remaining per-row round trip.
+
+    #
+    # == Cosine and not a dot product, and the best match and not the first
+    #
+    # Divided by both magnitudes so the number compared against `SpecIdentity::MATCH_SIMILARITY` is
+    # the same number pgvector's `cosine` operator produces for {#nearest}. See {PendingVector} for
+    # why that division is not dead code even though both shipped providers return unit vectors.
+    #
+    # The whole buffer is scanned and the BEST match taken, rather than returning the first row over
+    # the bar, because that is what `nearest_neighbors(...).first` does and the two must not disagree
+    # about which identity a text belongs to depending on which side of the page boundary it fell.
+    # A zero-magnitude vector — a description with no alphanumeric content, which {LocalProvider}
+    # honestly reduces to no direction at all — matches nothing here, exactly as it matches nothing
+    # at the index, where pgvector answers NaN rather than a confident wrong neighbour.
+    #
+    # {#nearest} is still asked FIRST and still wins: a committed row is at least as good an answer
+    # as a pending one, and asking the index first is the order the per-row path had.
     #
     # No {#note_drift} on this path, and that is not an omission. A drift candidate says an EXISTING
     # row's stored spelling is worth moving; this row has no stored spelling yet — it is being
     # written by this same page, from the observation that claimed it — so there is nothing to
     # converge, and a candidate keyed by a placeholder would be a fifth buffer for
     # {#substitute_pending} to keep straight.
-    def pending_equivalent(embedding)
-      digest = @pending_by_embedding[embedding]
+    def nearest_pending(embedding)
+      return nil if @pending_vectors.empty?
 
-      PendingIdentity.new(digest) if digest
+      magnitude = magnitude_of(embedding)
+      return nil if magnitude.zero?
+
+      best = nil
+      best_similarity = 0.0
+
+      @pending_vectors.each do |pending|
+        next if pending.magnitude.zero?
+
+        indices = pending.indices
+        values = pending.values
+        width = indices.size
+        dot = 0.0
+        offset = -1
+        while (offset += 1) < width
+          dot += embedding[indices[offset]] * values[offset]
+        end
+
+        similarity = dot / (magnitude * pending.magnitude)
+        next unless similarity > best_similarity
+
+        best_similarity = similarity
+        best = pending.digest
+      end
+
+      PendingIdentity.new(best) if best && best_similarity >= SpecIdentity::MATCH_SIMILARITY
+    end
+
+    # This page's record of a row it has decided to insert, in the shape {#nearest_pending} scans —
+    # see {PendingVector} for why it is sparse and why it carries its own magnitude.
+    #
+    # Built once, when the row is claimed, rather than re-derived per comparison: a page of pure
+    # misses compares each new vector against every earlier one, so anything done here is done once
+    # per row and anything done in the scan's inner loop is done up to 124,750 times.
+    def pending_vector(digest, embedding)
+      indices = []
+      values = []
+      total = 0.0
+      index = -1
+
+      while (index += 1) < embedding.size
+        value = embedding[index]
+        next if value.zero?
+
+        indices << index
+        values << value
+        total += value * value
+      end
+
+      PendingVector.new(digest, indices, values, Math.sqrt(total))
+    end
+
+    # The Euclidean norm of a raw embedding — the divisor that turns {#nearest_pending}'s dot product
+    # into a cosine. Walks the dense array because the vector being scored has not been reduced to a
+    # {PendingVector} yet and may never be: it becomes one only if it turns out to be a miss.
+    def magnitude_of(embedding)
+      total = 0.0
+      index = -1
+
+      while (index += 1) < embedding.size
+        value = embedding[index]
+        total += value * value
+      end
+
+      Math.sqrt(total)
     end
 
     # @return [Integer, PendingIdentity, nil] the identity this repository already holds for text
@@ -2486,17 +2626,24 @@ module Ingest
       now = Time.current
       digest = SpecIdentity.digest_for(signal.text)
 
-      @pending_identities[digest] ||= {
-        repository_id: @repository.id,
-        text: signal.text,
-        text_digest: digest,
-        signal_source: signal.source.to_s,
-        embedding: embedding
-      }.merge(sighting(observation, now), created_at: now)
+      unless @pending_identities.key?(digest)
+        @pending_identities[digest] = {
+          repository_id: @repository.id,
+          text: signal.text,
+          text_digest: digest,
+          signal_source: signal.source.to_s,
+          embedding: embedding
+        }.merge(sighting(observation, now), created_at: now)
+        # Pushed under the same guard as the row itself and never beside it: `@pending_identities`
+        # is a map keyed by digest and this is a list, so a second claim of one digest that the two
+        # brace against would leave the list holding the row twice — scored twice by
+        # {#nearest_pending} for no change in the answer, and growing a page's worst case past the
+        # square it is bounded at above.
+        @pending_vectors << pending_vector(digest, embedding)
+      end
 
       pending = PendingIdentity.new(digest)
       @digest_index[digest] = HeldIdentity.new(pending, signal.source.to_s)
-      @pending_by_embedding[embedding] ||= digest
       pending
     end
 
