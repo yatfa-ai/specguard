@@ -8,11 +8,11 @@
 # String, and the single guard they all land on is
 # `RequestedRepeatedDescriptionParam#requested_repeated_description`.
 #
-# Its own file rather than a widening of `malformed_spec_file_param.rb`, and that is the point of
-# all three files. Each one's doc comment governs *one parameter on every surface* — its list is the
-# answer to "which shapes does `?repeated_description=` tolerate", and folding a second parameter
-# into it would make one list stand for two questions that are free to be answered differently. What
-# they share is a hazard, not a subject.
+# Its own file rather than a widening of `malformed_spec_file_param.rb`, and one file per parameter
+# is the point of the split. Each one's doc comment governs *one parameter on every surface* — its
+# list is the answer to "which shapes does `?repeated_description=` tolerate", and folding a second
+# parameter into it would make one list stand for two questions that are free to be answered
+# differently. What they share is a hazard, not a subject.
 #
 # The consequence is the SILENT one rather than the loud one, exactly as it is for `?spec_file=` and
 # unlike `?branch=`, whose `where(branch: [...])` raises. This parameter reaches `where(name: …)` on

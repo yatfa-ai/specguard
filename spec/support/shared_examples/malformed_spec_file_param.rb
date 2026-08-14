@@ -7,11 +7,11 @@
 # `?spec_file[][a]=b` is an Array of them. None is a String, and the single guard they all land on
 # is `RequestedSpecFileParam#requested_spec_file`.
 #
-# Its own file rather than a widening of `malformed_branch_param.rb`, and that is the point of both
-# files. That one's doc comment governs *the branch parameter on every surface* — its list is the
-# answer to "which shapes does `?branch=` tolerate", and folding a second parameter into it would
-# make one list stand for two questions that are free to be answered differently. What the two
-# share is a hazard, not a subject.
+# Its own file rather than a widening of `malformed_branch_param.rb`, and one file per parameter is
+# the point of the split. That one's doc comment governs *the branch parameter on every surface* —
+# its list is the answer to "which shapes does `?branch=` tolerate", and folding a second parameter
+# into it would make one list stand for two questions that are free to be answered differently. What
+# they share is a hazard, not a subject.
 #
 # The consequence differs from the branch parameter's and is worth stating, because it is why a
 # shape that merely "works" is not enough here. `?branch[]=main` reaches a `where(branch: [...])`

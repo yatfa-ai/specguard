@@ -8,10 +8,10 @@
 # on is `RequestedSpecDirectoryParam#requested_spec_directory`.
 #
 # Its own file rather than a widening of `malformed_spec_file_param.rb` or `malformed_branch_param.rb`,
-# and that is the point of all three files. Each one's doc comment governs *one parameter on every
-# surface* — its list is the answer to "which shapes does `?spec_directory=` tolerate", and folding
-# a second parameter into it would make one list stand for two questions that are free to be
-# answered differently. What the three share is a hazard, not a subject.
+# and one file per parameter is the point of the split. Each one's doc comment governs *one parameter
+# on every surface* — its list is the answer to "which shapes does `?spec_directory=` tolerate", and
+# folding a second parameter into it would make one list stand for two questions that are free to be
+# answered differently. What they share is a hazard, not a subject.
 #
 # The consequence here is the spec-file parameter's rather than the branch parameter's, and it is
 # why a shape that merely "works" is not enough. `?branch[]=main` reaches a `where(branch: [...])`
