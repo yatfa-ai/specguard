@@ -1548,6 +1548,23 @@ class Api::V1::RepositoriesController < Api::BaseController
   # `TestRun#total_specs_count`, which is re-derived by SUM over shard reports and can legitimately
   # differ from the rows a run actually wrote. Every figure on this block is counted off those rows.
   #
+  # ⭐ THOSE COUNTS ARE GATED ON `baseline_run` TOO, on the same rule as the span keys above them.
+  # `SpecDirectoryWindowGrowth.from_tuples` is the ONLY path that reads the aggregate, and the only
+  # one that passes `baseline_run:` — so the four states the walk short-circuits into before it
+  # (`anchor_unmeasured`, `no_earlier_run`, `no_measured_baseline`, `no_comparable_composition`)
+  # carry no totals at all and fall back to the object's `0` defaults. `baseline_run.nil?` is
+  # therefore EXACTLY "the totals were never counted", with no third case. Served raw, those
+  # defaults would print `anchor_recorded_count: 0` for an anchor that wrote four hundred rows, and
+  # `directory_count: 0` for a comparison whose query was never issued — fabricated denominators
+  # sitting among the fields that exist to be trustworthy. `truncated` rides along because it is
+  # DERIVED from `directory_count` (`directory_count > rows.size`): once its operand is `null`, a
+  # `false` beside it would be a completeness claim about a list this same body declares unknown.
+  #
+  # NOT `comparable?`, which is the weaker predicate and would null too much: `neither_recorded`,
+  # `baseline_unrecorded` and `anchor_unrecorded` are non-comparable but DID read the aggregate, so
+  # their totals are true — including their genuine `0`s — and are the actionable half of those
+  # states. Four of the eight states carry these figures; the other four have none to carry.
+  #
   # ONE READ OF `spec_observations` AT MOST, and none at all where there is nothing to compare. The
   # walk is pure in-memory predicates over rows already loaded, and the comparison itself is two run
   # ids in an `IN` list whatever the window's length — already plan-certified at the seeded table
@@ -1572,10 +1589,10 @@ class Api::V1::RepositoriesController < Api::BaseController
       skipped_assembled_differently_count: growth.skipped_assembled_differently_count,
       anchor_commit_sha: growth.anchor_run&.commit_sha,
       baseline_commit_sha: baseline&.commit_sha,
-      directory_count: growth.directory_count,
-      truncated: growth.truncated?,
-      baseline_recorded_count: growth.baseline_recorded_count,
-      anchor_recorded_count: growth.anchor_recorded_count,
+      directory_count: baseline && growth.directory_count,
+      truncated: baseline && growth.truncated?,
+      baseline_recorded_count: baseline && growth.baseline_recorded_count,
+      anchor_recorded_count: baseline && growth.anchor_recorded_count,
       limit: SpecObservation::MOVED_DIRECTORIES_LIMIT
     }
   end
@@ -1714,14 +1731,17 @@ class Api::V1::RepositoriesController < Api::BaseController
   # in full on `serialized_spec_files`. `SpecDirectoryGrowth` is view-free, so the API and the panel
   # cannot name different areas or different operands for the same repository.
   #
-  # ⭐ `null` IN EVERY NON-COMPARABLE STATE, AND NOT A BLOCK OF ZEROS. The window sibling serves its
-  # honesty figures in seven of its eight states because its object KEEPS them there; this object
-  # does not, and that is the whole reason this block is gated where that one is not.
+  # ⭐ `null` IN EVERY NON-COMPARABLE STATE, AND NOT A BLOCK OF ZEROS. The window sibling can gate
+  # its honesty figures KEY BY KEY, on `baseline_run`, because its object keeps them in four of its
+  # eight states — the four its aggregate read reaches — and drops them in the other four; this
+  # object keeps them in ONE state only, so there is no per-key line to draw and the whole block
+  # goes. (Seven-of-eight is the count of the window sibling's ABSENCE states, not of the states
+  # that retain totals; it is a different figure and does not belong to this argument.)
   # `SpecDirectoryGrowth.from_tuples` returns `new(state: :previous_unrecorded)` and friends WITHOUT
   # the counts it just read, so every aggregate falls back to its `0` default. Serving them raw
   # would print `anchor_recorded_count: 0` for a latest run that recorded four hundred rows — a
   # fabricated denominator sitting among the fields that exist to be trustworthy, which is the
-  # failure the sibling's ⭐ span gate exists to prevent, reached here by a different route. The
+  # failure the sibling's ⭐ gates exist to prevent, refused here by a different route. The
   # actionable half of those states is the `state` token, and it is served unconditionally one key
   # up.
   #
