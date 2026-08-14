@@ -830,6 +830,14 @@ class Api::V1::RepositoriesController < Api::BaseController
       # `history_window.branch`'s rule: a malformed shape is no ask at all and reaches no block, so
       # what is served here is always the path the rows were actually gathered under.
       path: examples.path,
+      # THE SAME SIX FIELDS `serialized_slowest_examples` SERVES, AND THE REPETITION IS CHOSEN. The
+      # two per-example blocks on this endpoint must agree field for field, and a shared
+      # `serialized_example_row` would make that structural rather than asserted — the stronger
+      # guarantee, and it is declined here for this file's standing reason: each block states its
+      # own contract beside its own rows, and a field list extracted to a helper sits where neither
+      # block's comment can explain why it holds what it holds. What enforces the agreement instead
+      # is a `contain_exactly` over these names in each block's request spec, so a field added to
+      # one and not the other goes red rather than shipping a client two per-example shapes.
       rows: examples.rows.map do |observation|
         {
           name: observation.name,

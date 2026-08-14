@@ -351,21 +351,42 @@ RSpec.describe "GET /api/v1/repository — latest_run.spec_file_examples", type:
       expect(count_queries { get_repository(query: { spec_file: [TARGET_FILE] }) }).to eq(baseline)
     end
 
-    # The same bound stated against the TABLE rather than against the request, so "one more query"
-    # cannot be satisfied by this grain reading none while some other grain reads twice. The seven
-    # grains `spec/support/observation_grain_reads.rb` partitions are asserted UNCHANGED by the ask,
-    # which is the positive half: the extra read is a new read of `spec_observations` and not an
-    # existing grain quietly learning to fire twice. That file's own comment is what licenses
-    # leaving the new read unclassified — every grain there is matched positively so that an
-    # unclassified read "belongs to no list and is caught by a total instead", and the total is
-    # exactly what the first two expectations below are.
-    it "reads spec_observations once more for the file, and leaves every other grain alone" do
-      expect(observation_reads { get_repository }.length).to eq(6)
-      expect(observation_reads { get_repository(query: { spec_file: TARGET_FILE }) }.length).to eq(7)
+    # The same bound classified rather than counted, so "one more query" cannot be satisfied by a
+    # different grain reading twice while this one reads none. `file_examples_grain_reads` and the
+    # partition it belongs to come from spec/support/observation_grain_reads.rb, which is also where
+    # the argument for matching every grain POSITIVELY is made — and where this grain's pattern is
+    # separated from the per-example ranking's, which also ranks this table by duration.
+    it "reads spec_observations once for its own grain, and leaves every other grain alone" do
+      area, file, example, description, flakiness, growth, directory_files, file_examples =
+        observation_reads_by_grain { get_repository(query: { spec_file: TARGET_FILE }) }
 
-      expect(observation_reads_by_grain { get_repository(query: { spec_file: TARGET_FILE }) }
-               .map(&:length))
-        .to eq(observation_reads_by_grain { get_repository }.map(&:length))
+      expect([area.length, file.length, example.length, description.length, flakiness.length,
+              growth.length, directory_files.length, file_examples.length])
+        .to eq([1, 1, 2, 2, 0, 0, 0, 1])
+      # And the classified reads are ALL of them — the assertion no per-grain count can make,
+      # because a read matching no grain's pattern is invisible to every one of them.
+      expect(observation_reads { get_repository(query: { spec_file: TARGET_FILE }) }.length)
+        .to eq(area.length + file.length + example.length + description.length + file_examples.length)
+      expect(observation_reads { get_repository(query: { spec_file: TARGET_FILE }) }.length).to eq(7)
+      # Six without the ask — the total `repository_latest_run_spec.rb` pins for this endpoint,
+      # restated here as the thing this slice did NOT change.
+      expect(observation_reads { get_repository }.length).to eq(6)
+      expect(file_examples_grain_reads { get_repository }).to be_empty
+    end
+
+    # The two drill-ins compose without either being classified as the other — the pairing that the
+    # partition's own separation of these patterns exists to make assertable, and the shape neither
+    # single-ask block above can speak for. Eight reads: the six, plus one per ask.
+    it "keeps the two drill-ins in their own grains when both are asked for at once" do
+      _area, _file, _example, _description, _flakiness, _growth, directory_files, file_examples =
+        observation_reads_by_grain do
+          get_repository(query: { spec_file: TARGET_FILE, spec_directory: "spec/models" })
+        end
+
+      expect([directory_files.length, file_examples.length]).to eq([1, 1])
+      expect(observation_reads do
+        get_repository(query: { spec_file: TARGET_FILE, spec_directory: "spec/models" })
+      end.length).to eq(8)
     end
 
     # The suite-size axis, and the one that decides whether this key is affordable at the roadmap's

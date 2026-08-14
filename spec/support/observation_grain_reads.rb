@@ -21,9 +21,11 @@
 # aggregate), TWICE for the by-description one (a grouped aggregate and the presence count it cannot
 # window over) — and, for its two CROSS-RUN blocks, UP TO FOUR MORE for flakiness and UP TO ONE MORE
 # for growth-by-area, which are not the only grains here whose count depends on state rather than
-# only on shape: the drill-in into ONE area's files is ONE MORE, and it is the only one whose count
-# depends on what the CLIENT ASKED rather than on what the window holds — no `?spec_directory=`, no
-# read. Each block that uses these bounds its OWN grain rather than the table, because a bare
+# only on shape: the TWO drill-ins are ONE MORE EACH, and they are the grains whose count depends on
+# what the CLIENT ASKED rather than on what the window holds — no `?spec_directory=`, no read of
+# that area's files; no `?spec_file=`, no read of that file's examples. Both gates are decided
+# before any read, so an unasked drill-in costs nothing rather than costing an empty one. Each
+# block that uses these bounds its OWN grain rather than the table, because a bare
 # total cannot tell "one aggregate per grain" from "one grain reading twice", and it has to be
 # rebaselined by hand every time a grain is added — the silent rebaseline `queries_against` was
 # chosen over `baseline + 1` to avoid.
@@ -85,6 +87,28 @@
 # concession this file makes to a negative match, and it is a narrowing of one pattern rather than a
 # residual definition: `file` still means "the whole-run by-file rollup" and still adopts nothing,
 # because a read has to group by `spec_file_path` to be a candidate at all.
+#
+# == The fourth arrival, where the lesson did NOT have to be relearned
+#
+# The drill-in into ONE file's examples is the only grain here matched on a SELECT ALIAS rather than
+# on a grouping, a predicate or an order, and the reason is that every other candidate was worse.
+# It ranks by duration like the per-example grain does, and the two are told apart today only by
+# Arel's quoting — `.in_file` orders on an unquoted `duration_seconds DESC NULLS LAST` (it needs
+# `NULLS LAST`, so it passes a SQL literal) where `.slowest_in` orders on the quoted
+# `"spec_observations"."duration_seconds" DESC`. Neither string is a candidate for the other, so
+# matching on the order WOULD work; it is not done, because resting a partition on which of two
+# reads happened to need a literal is resting it on an accident that a later `NULLS LAST` elsewhere
+# would quietly end.
+#
+# `AS file_recorded_count` is emitted by `SpecObservation::FILE_POPULATION_COUNTS` and by nothing
+# else, and — unlike all three tightenings above — that uniqueness did not have to be discovered by
+# being wrong first. The sibling window pair `DESCRIPTION_POPULATION_COUNTS` is its own constant
+# PRECISELY so the two cannot share an alias: both are read back as record ATTRIBUTES by name, so a
+# shared alias would have one panel reading the other's population under its own name, which that
+# constant's comment calls not merely ill-fitting but false. The alias is therefore guaranteed
+# distinct by a rule already written down in the model, rather than by an observation about today's
+# call sites — the firmest match in this file, and the only one whose guarantee lives beside the SQL
+# it describes rather than here.
 module ObservationGrainReads
   # `queries_against` counts cached repeats and TRANSACTIONs, unlike `executed_sql` — see
   # `QueryCapture`, where the two rules and the difference between them are stated in full.
@@ -95,13 +119,14 @@ module ObservationGrainReads
   # reads that share the expression GROUP on it, and neither compares it to anything.
   AREA_PREDICATE = /COALESCE\(substring\(spec_file_path from '\^\(\.\*\)\/\[\^\/\]\*\$'\), '\.'\) = /
 
-  # `[area, file, example, description, flakiness, growth, directory_files]` — the seven grains,
-  # each an array of the statements matched. The single-run grains come first, in the order
-  # `serialized_latest_run` serves them, and the two CROSS-RUN grains after them in the order `show`
-  # serves them — so a destructuring caller reads the endpoint's own shape, and a caller written
-  # before a grain was appended keeps naming the same lists it always did. The drill-in is LAST
-  # rather than beside the two rollups it sits between, for exactly that reason: it was added after
-  # the six, and every existing caller destructures a prefix of this array.
+  # `[area, file, example, description, flakiness, growth, directory_files, file_examples]` — the
+  # eight grains, each an array of the statements matched. The single-run grains come first, in the
+  # order `serialized_latest_run` serves them, and the two CROSS-RUN grains after them in the order
+  # `show` serves them — so a destructuring caller reads the endpoint's own shape, and a caller
+  # written before a grain was appended keeps naming the same lists it always did. The two DRILL-INS
+  # are last rather than beside the rollups they sit between, for exactly that reason: each was
+  # added after the grains before it, and every existing caller destructures a prefix of this array.
+  # Appending is what keeps `directory_files` at index 6 for the callers already naming it there.
   def observation_reads_by_grain(&)
     reads = observation_reads(&)
     [reads.grep(/GROUP BY COALESCE\(substring\(spec_file_path.*ORDER BY SUM\(duration_seconds\)/m),
@@ -112,7 +137,8 @@ module ObservationGrainReads
        reads.grep(/COUNT\(\*\) FILTER \(WHERE name IS NULL\)/),
      flakiness_grain_patterns.flat_map { |pattern| reads.grep(pattern) },
      reads.grep(/ORDER BY ABS\(COUNT\(\*\) FILTER \(WHERE test_run_id = /),
-     reads.grep(/GROUP BY "spec_observations"\."spec_file_path"/).grep(AREA_PREDICATE)]
+     reads.grep(/GROUP BY "spec_observations"\."spec_file_path"/).grep(AREA_PREDICATE),
+     reads.grep(/AS file_recorded_count/)]
   end
 
   # `UnstableTests.for`'s four reads, in the order it issues them: the gating outcome-reporting
@@ -136,6 +162,7 @@ module ObservationGrainReads
   def flakiness_grain_reads(&) = observation_reads_by_grain(&)[4]
   def growth_grain_reads(&) = observation_reads_by_grain(&)[5]
   def directory_files_grain_reads(&) = observation_reads_by_grain(&)[6]
+  def file_examples_grain_reads(&) = observation_reads_by_grain(&)[7]
 end
 
 RSpec.configure do |config|
