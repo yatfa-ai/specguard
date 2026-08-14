@@ -2,14 +2,12 @@
 
 # `?spec_directory=` read as a spec directory path, or `nil` for "no ask".
 #
-# The third sibling of `RequestedBranchParam` and `RequestedSpecFileParam`, and deliberately its own
-# module rather than a widening of either — the argument both of them make, made a third time
-# because it does not weaken with repetition. The three parameters mean different things, are read
-# by different surfaces and narrow different grains, and one guard answering all three would make
-# "which shapes does the branch parameter tolerate", "which shapes does the spec-file parameter
-# tolerate" and "which shapes does the spec-directory parameter tolerate" a single question nobody
-# asked. What they share is the hazard, and the guard for it is the same two lines in the same
-# order.
+# Deliberately its own module rather than a widening of any sibling `Requested*Param`, and one
+# module per parameter is the point of the split — the argument each of them makes, restated here
+# because it does not weaken with repetition. The parameters mean different things, are read by
+# different surfaces and narrow different grains, and one guard answering several of them would
+# make "which shapes does each tolerate" a single question nobody asked. What they share is the
+# hazard, and the guard for it is the same two lines in the same order.
 #
 # `is_a?(String)` FIRST, and it is not defensive noise: `?spec_directory[]=x` parses to an Array,
 # `?spec_directory[a]=b` to `ActionController::Parameters` and `?spec_directory[][a]=b` to an Array

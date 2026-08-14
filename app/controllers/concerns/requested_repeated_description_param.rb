@@ -2,11 +2,10 @@
 
 # `?repeated_description=` read as a test description, or `nil` for "no ask".
 #
-# The third sibling of `RequestedBranchParam` and `RequestedSpecFileParam`, and deliberately its own
-# module rather than a widening of either, for the reason `RequestedSpecFileParam` gives about the
-# first: the three parameters mean different things, are read by different panels, and one guard
-# answering all of them would make "which shapes does `?branch=` tolerate", "which shapes does
-# `?spec_file=` tolerate" and "which shapes does `?repeated_description=` tolerate" a single
+# Deliberately its own module rather than a widening of any sibling `Requested*Param`, and one
+# module per parameter is the point of the split — the argument `RequestedSpecFileParam` makes for
+# itself, unchanged here. The parameters mean different things, are read by different panels, and
+# one guard answering several of them would make "which shapes does each tolerate" a single
 # question nobody asked. What they share is the hazard, and the guard for it is the same two lines
 # in the same order.
 #
