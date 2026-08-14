@@ -165,19 +165,19 @@ class Api::V1::RepositoriesController < Api::BaseController
       # rollup of "where" can see that two of those rows say the same thing. See
       # `serialized_repeated_descriptions` below.
       repeated_descriptions: serialized_repeated_descriptions(test_run),
-      # ONE AREA of `spec_directories` above, opened — the only key in this block that answers a
-      # question the client asked rather than one the endpoint always answers, and so the only one
-      # whose `null` is a fact about the REQUEST. `shards` is null for a fact about the run (it had
-      # one part, which is the ordinary case) and the four rollups for a fact about its rows (there
-      # were none); this one is null because no area was asked for, which is a statement about
-      # neither the run nor its rows. See `serialized_spec_directory_files` below.
+      # ONE AREA of `spec_directories` above, opened — the first of the three keys in this block
+      # that answer a question the client asked rather than one the endpoint always answers, and so
+      # the first whose `null` is a fact about the REQUEST. `shards` is null for a fact about the
+      # run (it had one part, which is the ordinary case) and the four rollups for a fact about its
+      # rows (there were none); this one is null because no area was asked for, which is a statement
+      # about neither the run nor its rows. See `serialized_spec_directory_files` below.
       spec_directory_files: serialized_spec_directory_files(test_run),
       # ONE FILE of that area, opened — the rung below the key above it and the last one this ladder
       # has: area → file → example, with nothing under an example to open. Its `null` is a fact
       # about the REQUEST for the same reason `spec_directory_files`' is, and it is the second key
       # on this block to which that applies rather than an exception to the rule the four rollups
-      # follow. `shards` is null about the run, the four rollups about its rows, and these two about
-      # what the client asked. See `serialized_spec_file_examples` below.
+      # follow. `shards` is null about the run, the four rollups about its rows, and the three
+      # drill-ins about what the client asked. See `serialized_spec_file_examples` below.
       spec_file_examples: serialized_spec_file_examples(test_run),
       # ONE GROUP of `repeated_descriptions` above, opened — the third key on this block whose
       # `null` is a fact about the REQUEST, and the one drill-in that leaves the area → file →

@@ -21,15 +21,14 @@
 # aggregate), TWICE for the by-description one (a grouped aggregate and the presence count it cannot
 # window over) — and, for its two CROSS-RUN blocks, UP TO FOUR MORE for flakiness and UP TO ONE MORE
 # for growth-by-area, which are not the only grains here whose count depends on state rather than
-# only on shape: the THREE drill-ins are ONE MORE EACH, and they are the grains whose count depends on
-# what the CLIENT ASKED rather than on what the window holds — no `?spec_directory=`, no read of
+# only on shape: the THREE drill-ins are ONE MORE EACH, and they are the grains whose count depends
+# on what the CLIENT ASKED rather than on what the window holds — no `?spec_directory=`, no read of
 # that area's files; no `?spec_file=`, no read of that file's examples; no `?repeated_description=`,
-# no read of that group's members. All three gates are decided
-# before any read, so an unasked drill-in costs nothing rather than costing an empty one. Each
-# block that uses these bounds its OWN grain rather than the table, because a bare
-# total cannot tell "one aggregate per grain" from "one grain reading twice", and it has to be
-# rebaselined by hand every time a grain is added — the silent rebaseline `queries_against` was
-# chosen over `baseline + 1` to avoid.
+# no read of that group's members. All three gates are decided before any read, so an unasked
+# drill-in costs nothing rather than costing an empty one. Each block that uses these bounds its OWN
+# grain rather than the table, because a bare total cannot tell "one aggregate per grain" from "one
+# grain reading twice", and it has to be rebaselined by hand every time a grain is added — the
+# silent rebaseline `queries_against` was chosen over `baseline + 1` to avoid.
 #
 # == Why some grains are several patterns rather than one
 #
@@ -137,14 +136,14 @@ module ObservationGrainReads
   AREA_PREDICATE = /COALESCE\(substring\(spec_file_path from '\^\(\.\*\)\/\[\^\/\]\*\$'\), '\.'\) = /
 
   # `[area, file, example, description, flakiness, growth, directory_files, file_examples,
-  # repeated_description_examples]` — the
-  # nine grains, each an array of the statements matched. The single-run grains come first, in the
-  # order `serialized_latest_run` serves them, and the two CROSS-RUN grains after them in the order
-  # `show` serves them — so a destructuring caller reads the endpoint's own shape, and a caller
-  # written before a grain was appended keeps naming the same lists it always did. The three DRILL-INS
-  # are last rather than beside the rollups they sit between, for exactly that reason: each was
-  # added after the grains before it, and every existing caller destructures a prefix of this array.
-  # Appending is what keeps `directory_files` at index 6 for the callers already naming it there.
+  # repeated_description_examples]` — the nine grains, each an array of the statements matched. The
+  # single-run grains come first, in the order `serialized_latest_run` serves them, and the two
+  # CROSS-RUN grains after them in the order `show` serves them — so a destructuring caller reads
+  # the endpoint's own shape, and a caller written before a grain was appended keeps naming the same
+  # lists it always did. The three DRILL-INS are last rather than beside the rollups they sit
+  # between, for exactly that reason: each was added after the grains before it, and every existing
+  # caller destructures a prefix of this array. Appending is what keeps `directory_files` at index 6
+  # for the callers already naming it there.
   def observation_reads_by_grain(&)
     reads = observation_reads(&)
     [reads.grep(/GROUP BY COALESCE\(substring\(spec_file_path.*ORDER BY SUM\(duration_seconds\)/m),
