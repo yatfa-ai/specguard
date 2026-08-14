@@ -387,8 +387,9 @@ RSpec.describe "GET /api/v1/repository — directory_growth", type: :request do
     end
   end
 
-  # CRITERION 6 — every non-comparable state round-trips as its own symbol, and each still carries
-  # the totals and the chosen-baseline figures that make it actionable.
+  # CRITERION 6 — every non-comparable state round-trips as its own symbol, carrying the figures it
+  # actually has: the four states the walk short-circuits into before the aggregate read carry no
+  # totals at all and serve them as `null`, while the three that DID read carry their true ones.
   describe "a branch-scoped window with no comparison to draw" do
     it "names the run that reported no tests, rather than serving a comparison against it" do
       ingest_areas({ "spec/models" => 2 }, commit_sha: "measured0001", at: 20.days.ago)
@@ -399,7 +400,9 @@ RSpec.describe "GET /api/v1/repository — directory_growth", type: :request do
       expect(block).to include("state" => "anchor_unmeasured", "comparable" => false, "rows" => [],
                                "window_run_count" => 2, "anchor_commit_sha" => "emptyrun0001",
                                "baseline_commit_sha" => nil,
-                               "covered_run_count" => nil, "runs_back" => nil)
+                               "covered_run_count" => nil, "runs_back" => nil,
+                               "directory_count" => nil, "truncated" => nil,
+                               "baseline_recorded_count" => nil, "anchor_recorded_count" => nil)
     end
 
     it "names a window of one run as having no earlier run, not as an empty comparison" do
@@ -410,7 +413,9 @@ RSpec.describe "GET /api/v1/repository — directory_growth", type: :request do
       expect(block).to include("state" => "no_earlier_run", "comparable" => false, "rows" => [],
                                "window_run_count" => 1,
                                "covered_run_count" => nil, "runs_back" => nil,
-                               "anchor_commit_sha" => "onlyrun00001", "baseline_commit_sha" => nil)
+                               "anchor_commit_sha" => "onlyrun00001", "baseline_commit_sha" => nil,
+                               "directory_count" => nil, "truncated" => nil,
+                               "baseline_recorded_count" => nil, "anchor_recorded_count" => nil)
     end
 
     # A branch whose earlier runs all reported zero tests — a client that stopped reporting totals.
@@ -429,7 +434,9 @@ RSpec.describe "GET /api/v1/repository — directory_growth", type: :request do
                                "skipped_assembled_differently_count" => 0,
                                "covered_run_count" => nil, "runs_back" => nil,
                                "shortened" => nil,
-                               "baseline_commit_sha" => nil)
+                               "baseline_commit_sha" => nil,
+                               "directory_count" => nil, "truncated" => nil,
+                               "baseline_recorded_count" => nil, "anchor_recorded_count" => nil)
     end
 
     # A branch whose earlier runs measured a suite and were assembled differently — sharding
@@ -450,7 +457,9 @@ RSpec.describe "GET /api/v1/repository — directory_growth", type: :request do
                                "skipped_assembled_differently_count" => 2,
                                "covered_run_count" => nil, "runs_back" => nil,
                                "shortened" => nil,
-                               "baseline_commit_sha" => nil)
+                               "baseline_commit_sha" => nil,
+                               "directory_count" => nil, "truncated" => nil,
+                               "baseline_recorded_count" => nil, "anchor_recorded_count" => nil)
     end
 
     # The four states above are decided from rows already in memory, so a window with nothing to
@@ -532,10 +541,10 @@ RSpec.describe "GET /api/v1/repository — directory_growth", type: :request do
       expect(unknown.length).to eq(1)
     end
 
-    # ⭐ THE CONTRACT THE FIVE EXAMPLES ABOVE PIN, STATED ONCE AS AN INVARIANT: the span figures are
-    # served IF AND ONLY IF there is a baseline to count them to, which is the same condition
-    # `baseline_commit_sha` is served under and is read off the same `baseline_run` in the same
-    # serializer.
+    # ⭐ THE CONTRACT THE FIVE EXAMPLES ABOVE PIN, STATED ONCE AS AN INVARIANT: the span figures AND
+    # the count/completeness figures are served IF AND ONLY IF there is a baseline to count them to,
+    # which is the same condition `baseline_commit_sha` is served under and is read off the same
+    # `baseline_run` in the same serializer.
     #
     # `SpecDirectoryWindowGrowth#covered_run_count` is `runs_back + 1` over a `runs_back` that keeps
     # its `0` DEFAULT in every state the walk landed on no baseline in — so a serializer passing it
@@ -554,12 +563,20 @@ RSpec.describe "GET /api/v1/repository — directory_growth", type: :request do
     # therefore `shortened?` — is necessarily TRUE there. Ungated, that row reads `true` beside three
     # nulls; the row fails unless the key is gated, and it is the only row here that can say so.
     #
+    # THE FOUR COUNT/COMPLETENESS KEYS RIDE THE SAME PREDICATE and are swept here for the same
+    # reason: `directory_count`, `baseline_recorded_count` and `anchor_recorded_count` are set ONLY
+    # on the `from_tuples` path, which is also the only path that passes `baseline_run:`, so in the
+    # three no-baseline rows they would each pass their fabricated `0` through — and `truncated`,
+    # derived as `directory_count > rows.size`, would derive `false` from it. The `pair` row is what
+    # keeps this from being satisfiable by nulling them everywhere: it landed on a baseline and DID
+    # read the aggregate, so it owes its TRUE totals — a `0` there is counted, not defaulted, and
+    # `truncated: true` is the honest reading of one covered area against a state that lists no rows.
+    #
     # Swept across the four shapes AT ONCE, on four branches of one repository, because the defect
-    # is the pair coming apart rather than any single state's figure — and the `pair` row is what
-    # keeps this from being satisfiable by nulling the keys everywhere: a baseline the walk DID land
-    # on still owes its true span, `shortened: false` included, and in the recorded-rows states that
-    # span is the actionable half of the answer ("the run that recorded nothing is one back, and it
-    # is this sha").
+    # is the pair coming apart rather than any single state's figure — and a baseline the walk DID
+    # land on still owes its true span, `shortened: false` included, which in the recorded-rows
+    # states is the actionable half of the answer ("the run that recorded nothing is one back, and
+    # it is this sha").
     it "counts a span only where there is a baseline to count it to, and never against none" do
       ingest_areas({ "spec/models" => 2 }, commit_sha: "loneanchor01", at: 10.days.ago,
                    branch: "solo")
@@ -574,14 +591,15 @@ RSpec.describe "GET /api/v1/repository — directory_growth", type: :request do
       spans = %w[solo pair skipped does-not-exist].to_h do |branch|
         _window, block = blocks(query: { branch: branch })
         [branch, block.values_at("state", "baseline_commit_sha", "covered_run_count", "runs_back",
-                                 "shortened")]
+                                 "shortened", "directory_count", "truncated",
+                                 "baseline_recorded_count", "anchor_recorded_count")]
       end
 
       expect(spans).to eq(
-        "solo" => ["no_earlier_run", nil, nil, nil, nil],
-        "pair" => ["baseline_unrecorded", "totalsonly01", 2, 1, false],
-        "skipped" => ["no_measured_baseline", nil, nil, nil, nil],
-        "does-not-exist" => ["anchor_unmeasured", nil, nil, nil, nil]
+        "solo" => ["no_earlier_run", nil, nil, nil, nil, nil, nil, nil, nil],
+        "pair" => ["baseline_unrecorded", "totalsonly01", 2, 1, false, 1, true, 0, 2],
+        "skipped" => ["no_measured_baseline", nil, nil, nil, nil, nil, nil, nil, nil],
+        "does-not-exist" => ["anchor_unmeasured", nil, nil, nil, nil, nil, nil, nil, nil]
       )
     end
 
