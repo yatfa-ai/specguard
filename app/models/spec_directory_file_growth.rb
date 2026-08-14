@@ -41,9 +41,9 @@
 #
 # The six states in which there is no comparison to draw — `latest_unmeasured`,
 # `previous_unmeasured`, `assembled_differently`, `neither_recorded`, `previous_unrecorded`,
-# `latest_unrecorded` — are
-# `SpecDirectoryGrowth`'s, and they are INHERITED here rather than re-derived. `.for` takes the
-# parent panel's own object and refuses to build anything the moment that panel is not comparable.
+# `latest_unrecorded` — are `SpecDirectoryGrowth`'s, and they are INHERITED here rather than
+# re-derived. `.for` takes the parent panel's own object and refuses to build anything the moment
+# that panel is not comparable.
 #
 # That is stricter than reproducing the gate and it is stricter on purpose. Two reasons, and the
 # second is the load-bearing one:
@@ -110,8 +110,8 @@ class SpecDirectoryFileGrowth
   # the first; `to_i` over the nil of an empty read, where zero files and zero rows on both sides is
   # the honest count. An empty read is exactly the "neither run recorded anything in this area"
   # state — a group exists here if and only if a row exists — so it needs no separate count to
-  # detect, and it is `#recorded?` rather than a seventh state: the six states are about the RUNS and
-  # this is about the AREA.
+  # detect, and it is `#recorded?` rather than a state of its own: the six states are about the RUNS
+  # and this is about the AREA.
   def self.from_tuples(path, tuples)
     rows = tuples.map do |file_path, previous, latest, *|
       Row.new(path: file_path, previous_count: previous.to_i, latest_count: latest.to_i)
