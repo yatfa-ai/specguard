@@ -78,6 +78,26 @@ class Api::V1::RepositoriesController < Api::BaseController
   # `RequestedUnstableTestParam`, which holds that reasoning in full.
   include RequestedUnstableTestParam
 
+  # `?commit_sha=` read as a commit sha, to name WHICH RUN this endpoint describes — the sixth
+  # `Requested*Param` here and the only one that re-anchors rather than narrows. The five above take
+  # the anchor as given: `?branch=` narrows a history and the three drill-in parameters open one
+  # area, one file or one description OF the run `latest_test_run` had already picked. This one
+  # picks it, which is why it is read in exactly ONE place — the `latest_test_run` memo below — and
+  # every block hanging off that memo re-anchors without reading the parameter at all.
+  #
+  # NOT included by `RepositoriesController`, like `?unstable_test=` and unlike the four before it,
+  # and that is a fact about the surfaces rather than an omission: the human page anchors its panels
+  # on the repository's newest run and offers no run selector, so there is no second reader to share
+  # a guard with yet. When one arrives it includes this module rather than re-deriving the guard.
+  #
+  # It reaches `where(commit_sha: …)` on a plain string column, which is the same silent hazard
+  # `?spec_file=` documents — an Array does not raise, it becomes an `IN` list — and at THIS position
+  # the wrong answer is the widest one the endpoint can give: an `IN` list would anchor on whichever
+  # of several unrelated commits sorted newest, and every rollup, every drill-in and both growth
+  # windows would then describe that run under a `run_anchor` naming the sha the client asked for.
+  # See `RequestedCommitShaParam`, which holds that reasoning in full.
+  include RequestedCommitShaParam
+
   # The bound on `history` below. Ten rows is ten rows whether the suite holds three tests or
   # twenty thousand — `Repository#recent_test_runs` argues that in its own comment — so this is a
   # bound and not the first page of a pagination contract there is no cursor to continue.
@@ -109,6 +129,11 @@ class Api::V1::RepositoriesController < Api::BaseController
         name: current_api_key.name,
         last_used_at: current_api_key.last_used_at&.iso8601
       },
+      # WHICH RUN THE RUN-GRAIN HALF OF THIS BODY DESCRIBES, and why that run. Placed before
+      # `latest_run` on the `*_window` blocks' own convention — the disclosure precedes what it
+      # discloses about — and it is the window-shaped block for the anchor rather than for a series.
+      # See `serialized_run_anchor`.
+      run_anchor: serialized_run_anchor,
       latest_run: serialized_latest_run,
       history_window: serialized_history_window,
       history: serialized_history,
@@ -250,20 +275,79 @@ class Api::V1::RepositoriesController < Api::BaseController
 
   private
 
+  # WHICH RUN THE RUN-GRAIN HALF OF THIS BODY DESCRIBES, and why that one — the disclosure block for
+  # the anchor, shaped like the `*_window` blocks and serving the same purpose they do: a client must
+  # not have to infer from the figures which question was answered.
+  #
+  # PRESENT ON EVERY RESPONSE, never `null`, including on a repository CI has never reported to. It
+  # is a statement about the REQUEST — which run was asked for and which one was picked — and that
+  # statement exists whether or not there are runs to pick from. `latest_run` is the key that goes
+  # `null` for "CI has never reported"; this one then says `commit_sha: null` beside a `source` that
+  # still reports whether anybody asked, which is a different fact and the one that distinguishes
+  # "no runs at all" from "no run for the sha you named".
+  #
+  # `source` is the client's first read: `"requested"` means `?commit_sha=` named a run, `"default"`
+  # means this is the repository's newest run because nobody asked. It is a fact about the ASK and
+  # NOT about whether the ask worked — an unknown sha is still `"requested"` — which is exactly the
+  # split `history_window` draws with `branch_scope` beside its raw `branch`.
+  #
+  # `requested_commit_sha` is the RAW ASK, echoed back and kept EVEN ON FALLBACK. Without it a client
+  # handed a body anchored on a different sha could not tell a fallback from its own bug, because the
+  # only other place the ask appears is the URL it no longer holds. `null` when there was none, and
+  # `null` too for the malformed shapes `RequestedCommitShaParam` reads as no ask — the guard's
+  # answer is the one serialized, so the block never claims a request the endpoint did not honour.
+  #
+  # `resolved` is FALSE IN EXACTLY ONE CASE: the client named a sha and is not being served it.
+  # Deliberately not "did something resolve" — on a default call there was no ask to fail, so this is
+  # `true` and a client's `unless resolved` warning fires only on a real fallback rather than on
+  # every unparameterised GET. Served off `requested_test_run` — the same memo the anchor itself is
+  # picked from — and never re-derived by comparing the two shas, so the disclosure and the choice it
+  # discloses cannot come apart.
+  #
+  # `commit_sha`/`branch` NAME THE RUN ACTUALLY SERVED, which is what makes the fallback legible:
+  # under `source: "requested", resolved: false` they are the newest run's, and they will not equal
+  # `requested_commit_sha`. Both nullable, and `branch` independently so — it is nullable by schema
+  # and `Ingest::Payload` accepts a body without it, so `null` there means "the client did not say"
+  # exactly as it does on `latest_run`.
+  #
+  # ⭐ `history[0] == latest_run` HOLDS ON A DEFAULT CALL AND IS NOT EXPECTED TO HOLD UNDER AN
+  # EXPLICIT ASK. `history` is not re-anchored by `?commit_sha=` — it stays the repository's recent
+  # runs, newest first, narrowed only by `?branch=` — so naming an older run makes `latest_run` a row
+  # from the middle of that array or from behind its bound entirely. That is the contract rather than
+  # a bug, and this block is what says so, the way `history_window.branch_scope` says it for the
+  # branch-filtered case. A client that needs the identity back omits the parameter.
+  def serialized_run_anchor
+    {
+      source: requested_commit_sha ? "requested" : "default",
+      requested_commit_sha: requested_commit_sha,
+      resolved: requested_commit_sha.nil? || !requested_test_run.nil?,
+      commit_sha: latest_test_run&.commit_sha,
+      branch: latest_test_run&.branch
+    }
+  end
+
   # `nil` — not a zeroed block — when CI has never reported. A repository whose CI has never run
   # must not serialize byte-identically to one that ran and genuinely found an empty suite; that is
   # the conflation the Overview panel refuses too (see RepositoriesController#show).
   # A repository-wide ratio floored at 0.0 cannot express the difference, which is why this reads
   # the run.
   #
-  # NOT RE-ANCHORED BY `?branch=`. This names the repository's newest run and keeps naming it under
-  # every request; only `history` narrows. A client filtering the history has asked a question about
-  # a series, not for a different latest run, and re-anchoring would silently change the meaning of
-  # four blocks (`latest_run`, `shards`, and the `history[0] == latest_run` identity the tie-break
-  # examples pin) to answer one. The consequence is worth stating because it is the one surprise
-  # here: under `?branch=main` on a repository whose newest run is on `feature/x`, `history[0]` is
-  # a `main` row and `latest_run` is the `feature/x` one, and they are *supposed* to differ.
-  # `history_window.branch_scope` is what says so.
+  # NOT RE-ANCHORED BY `?branch=`. This names the run `run_anchor` above resolved to and keeps
+  # naming it under every request; only `history` narrows. A client filtering the history has asked
+  # a question about a series, not for a different latest run, and re-anchoring would silently change
+  # the meaning of four blocks (`latest_run`, `shards`, and the `history[0] == latest_run` identity
+  # the tie-break examples pin) to answer one. The consequence is worth stating because it is the one
+  # surprise here: under `?branch=main` on a repository whose newest run is on `feature/x`,
+  # `history[0]` is a `main` row and `latest_run` is the `feature/x` one, and they are *supposed* to
+  # differ. `history_window.branch_scope` is what says so.
+  #
+  # RE-ANCHORED BY `?commit_sha=`, which is the one parameter that does and is deliberately a
+  # different kind of ask: `?branch=` asks about a SERIES, this asks WHICH RUN. It is read once, in
+  # the `latest_test_run` memo, so this block and everything hanging off it move together rather than
+  # each re-reading the parameter — see that memo, and `serialized_run_anchor` for what the response
+  # says about the move. The `history[0] == latest_run` identity above holds on a default call and is
+  # NOT expected to hold under an explicit ask; `run_anchor` is what says so, the way
+  # `history_window.branch_scope` does for its own block.
   def serialized_latest_run
     test_run = latest_test_run
 
@@ -855,8 +939,13 @@ class Api::V1::RepositoriesController < Api::BaseController
   # `unstable_tests` states in full: every key this block serves is a statement about ONE run's
   # rows. `SpecDirectoryFiles.for` narrows to a single `test_run_id`, so it belongs with the other
   # five. And `latest_run` is not re-anchored by `?branch=`, so an area ask composes with a branch
-  # ask without either touching the other: the drill-in always describes the newest run, exactly as
-  # the panel does.
+  # ask without either touching the other. It IS re-anchored by `?commit_sha=`, and this drill-in
+  # follows it there WITHOUT READING THE PARAMETER: both hang off the one `latest_test_run` memo, so
+  # the rows here and the `latest_run` they are an area OF can never come from two different runs.
+  # Which run that is, `run_anchor` says. The panel is the surface that now diverges: on a default
+  # call this list is the panel's, but `RepositoriesController` deliberately does not include
+  # `RequestedCommitShaParam` (see that module's own comment), so under `?commit_sha=` the API
+  # describes the named run and the human page stays on the newest.
   #
   # THE SAME OBJECT THE PANEL READS, never a hand-written query — this file's governing rule, stated
   # in full on `serialized_spec_files` above. `SpecDirectoryFiles` is view-free, so the API and the
@@ -935,8 +1024,12 @@ class Api::V1::RepositoriesController < Api::BaseController
   # states in full: every key this block serves is a statement about ONE run's rows.
   # `SpecObservation.in_file` narrows to a single `test_run_id`, so it belongs with the others. And
   # `latest_run` is not re-anchored by `?branch=`, so a file ask composes with a branch ask and with
-  # an area ask without any of the three touching another: the drill-in always describes the newest
-  # run, exactly as the panel does.
+  # an area ask without any of the three touching another. `?commit_sha=` is the one ask that DOES
+  # move the anchor, and this drill-in moves with it unread — the file is always a file OF the run
+  # `latest_run` named, because both read the single `latest_test_run` memo, and `run_anchor` names
+  # that run. It is the repository's newest one only on a default call, which is also the only call
+  # on which this list is the panel's: `RepositoriesController` has no run selector and does not
+  # include `RequestedCommitShaParam`, so under an explicit ask the two surfaces genuinely diverge.
   #
   # THE SAME OBJECT THE PANEL READS, never a hand-written query — this file's governing rule, stated
   # in full on `serialized_spec_files` above. `SpecFileExamples` is view-free apart from
@@ -1041,7 +1134,12 @@ class Api::V1::RepositoriesController < Api::BaseController
   # states in full: `SpecObservation.with_description` narrows to a single `test_run_id`, so this is
   # a statement about ONE run's rows. And `latest_run` is not re-anchored by `?branch=`, so a
   # description ask composes with all three of the other asks without any of the four touching
-  # another: the drill-in always describes the newest run, exactly as the panel does.
+  # another. The fifth ask is the exception and is meant to be: `?commit_sha=` re-anchors
+  # `latest_run`, and this drill-in re-anchors with it without reading the parameter, because the
+  # group is always a group WITHIN the run that one `latest_test_run` memo picked. `run_anchor` is
+  # what names it. Only on a default call is that the repository's newest run and these rows the
+  # panel's — `RepositoriesController` does not include `RequestedCommitShaParam`, so under an
+  # explicit ask the panel stays on the newest run and this list does not.
   #
   # THE SAME OBJECT THE PANEL READS, never a hand-written query — this file's governing rule, stated
   # in full on `serialized_spec_files` above. `RepeatedDescriptionExamples` is view-free apart from
@@ -1917,7 +2015,13 @@ class Api::V1::RepositoriesController < Api::BaseController
   # never off `requested_branch`, which narrows `history` and must not be read as having narrowed
   # this. Like `latest_run`, this block is NOT re-anchored by `?branch=`: under `?branch=main` on a
   # repository whose newest run is on `feature/x`, this still compares the two newest `feature/x`
-  # runs, and `branch` says `feature/x` so the two cannot be confused.
+  # runs, and `branch` says `feature/x` so the two cannot be confused. And like `latest_run` again,
+  # it IS re-anchored by `?commit_sha=` — the one parameter that moves the anchor. Under an explicit
+  # ask `anchor_commit_sha` and `branch` are the NAMED run's, and the baseline is the run before THAT
+  # one on ITS branch, because `previous_test_run_on_branch` is handed the very `latest_test_run`
+  # memo `latest_run` was built from. Both halves are stated here deliberately: this block is one of
+  # the few that enumerates what does and does not move it, and an enumeration that named only the
+  # parameter with no effect would be the more misleading half to leave standing alone.
   #
   # `basis` IS WHAT SEPARATES THIS PAIR FROM THE ONE ABOVE IT, and it is the key a client reads to
   # know which of the two growth measurements it is holding. `two_endpoints` there says the figures
@@ -2109,7 +2213,11 @@ class Api::V1::RepositoriesController < Api::BaseController
   # because `Repository#previous_test_run_on_branch` scopes to the latest run's OWN branch and
   # refuses a blank one, so this is branch-correct by construction rather than by a parameter. Like
   # `latest_run` and the count pair, this block is NOT re-anchored by `?branch=`: `branch` names the
-  # branch the comparison WAS MADE ON, read off the latest run and never off `requested_branch`.
+  # branch the comparison WAS MADE ON, read off the latest run and never off `requested_branch`. And
+  # like both of them it IS re-anchored by `?commit_sha=`, the one parameter that moves the anchor:
+  # `anchor_commit_sha` and `branch` become the NAMED run's and the baseline the run before THAT one
+  # on ITS branch, off the same `latest_test_run` memo. That is what keeps the two growth windows
+  # under one request from sitting on two different runs — neither chooses, both follow.
   #
   # `basis` is `previous_run_on_branch`, the count pair's token and for its reason: the baseline is
   # one specific run, named by `baseline_commit_sha`, so the comparison has no gap in it — an area
@@ -2554,19 +2662,68 @@ class Api::V1::RepositoriesController < Api::BaseController
     }
   end
 
-  # The repository's newest run, memoized across the nil — read by `latest_run` and by BOTH
-  # run-over-run growth blocks above, which is why it is an accessor here and not three calls to
-  # `Repository#latest_test_run` (which memoizes nothing and would issue the query once per reader).
+  # THE RUN THE CLIENT NAMED, or `nil` when it named none and `nil` when the one it named has no run
+  # — the single source of truth for both halves of the anchor decision, so `latest_test_run` below
+  # and `run_anchor.resolved` above cannot come apart.
+  #
+  # It exists because the fallback is otherwise UNOBSERVABLE once it has happened: `latest_test_run`
+  # returns a row either way, and the only remaining way to ask "did the ask hit?" would be to
+  # compare the served sha against the requested one — a re-derivation of a decision that was already
+  # made, and one that reads as a coincidence check rather than as the fact it is standing in for.
+  #
+  # Memoized across the nil with `defined?` rather than `||=`, because `nil` — no ask — is the common
+  # answer on this endpoint and both readers ask; `||=` would re-issue the finder on every default
+  # call, which is the case this most needs to cost nothing.
+  #
+  # The `requested_commit_sha &&` guard is what makes the no-ask path issue NO QUERY AT ALL.
+  # `Repository#latest_test_run_for_commit` returns `nil` for a blank on its own, so this is not
+  # correctness — it is the difference between a default `GET` paying for a lookup it cannot use and
+  # paying for nothing.
+  def requested_test_run
+    return @requested_test_run if defined?(@requested_test_run)
+
+    @requested_test_run =
+      requested_commit_sha && current_repository.latest_test_run_for_commit(requested_commit_sha)
+  end
+
+  # THE RUN THIS ENDPOINT DESCRIBES, memoized across the nil — the repository's newest run by
+  # default, or the newest run on the sha `?commit_sha=` named. Read by `latest_run`, by `run_anchor`
+  # and by BOTH run-over-run growth blocks above, which is why it is an accessor here and not several
+  # calls to `Repository#latest_test_run` (which memoizes nothing and would issue the query once per
+  # reader).
   #
   # Memoizing also makes the ONE INSTANCE shared, which is what keeps `assembled_like?` free: that
   # predicate reads `TestRun#shard_count`, which memoizes `shard_totals` PER INSTANCE, and
   # `latest_run.shards` has already paid for it on this row by the time the growth gate asks.
   #
   # NOT RE-ANCHORED BY `?branch=` — see `serialized_latest_run`, which states that at length.
+  #
+  # ⭐ RE-ANCHORED BY `?commit_sha=`, AND THIS IS THE ONLY PLACE THE ANCHOR IS CHOSEN. Every run-grain
+  # block on the endpoint hangs off this one memo — `latest_run` and its five rollups, the three
+  # drill-ins, `shards`, both growth windows' `anchor_commit_sha`/`branch`, and `previous_test_run`
+  # below — so re-anchoring here is what makes them describe the named run COHERENTLY. A second place
+  # SELECTING a run is how they would come to disagree about which run they are on, which is the one
+  # failure this shape exists to make impossible: a client cannot be served a `latest_run` on one sha
+  # and a growth window anchored on another.
+  #
+  # The parameter itself is read by `requested_test_run` above and echoed by `serialized_run_anchor`,
+  # and neither is a second anchor: the first is the memo this one falls back FROM, and the second
+  # reports the choice rather than making one. No serializer reads `requested_commit_sha` to pick a
+  # row.
+  #
+  # `previous_test_run` follows without a change of its own. It is already "the newest run strictly
+  # older than THIS one, on THIS one's branch", which is the right baseline for a named run for the
+  # same reason it is for the newest one — and it reads the branch off whatever row this returns.
+  #
+  # FALLS BACK RATHER THAN 404s when the sha resolves to nothing, and the `||` is where that happens.
+  # A stale bookmark, a pruned run and a commit whose CI never reported are ordinary ways to arrive,
+  # so the endpoint answers with the run it would have answered with anyway — and `run_anchor`
+  # DISCLOSES the fallback rather than leaving the client to infer it from a sha that did not match
+  # the one it asked for.
   def latest_test_run
     return @latest_test_run if defined?(@latest_test_run)
 
-    @latest_test_run = current_repository.latest_test_run
+    @latest_test_run = requested_test_run || current_repository.latest_test_run
   end
 
   # The run the latest one is compared against: the newest run STRICTLY OLDER than it ON ITS OWN

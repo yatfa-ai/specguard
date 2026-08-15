@@ -72,6 +72,35 @@ class Repository < ApplicationRecord
     test_runs.where(branch: branch).order(created_at: :desc, id: :desc).first
   end
 
+  # The newest run ON ONE NAMED COMMIT — the anchor for a run the reader asked for by sha, where
+  # `latest_test_run` is the anchor for the one the repository happens to have pushed last and
+  # `latest_test_run_on_branch` for the one a named branch pushed last.
+  #
+  # NEWEST rather than THE run, and the distinction is a fact about the table rather than caution.
+  # `test_runs` has no uniqueness constraint on `commit_sha` — the only unique index is
+  # `(repository_id, ci_run_id) WHERE ci_run_id IS NOT NULL` — so a CI re-run of the same commit is
+  # a second row, and a sharded suite reporting under one sha is several. "The run for this sha" is
+  # therefore a question with more than one answer, and this picks the same one every other
+  # newest-run reader on this model picks.
+  #
+  # Same ordering as `latest_test_run` and `latest_test_run_on_branch`, tie-break included, so "the
+  # newest run" means the same row here as it does everywhere else. Two runs ingested in the same
+  # instant on one sha resolve by id, which is the ingest sequence.
+  #
+  # `nil` — and no query at all — for a blank sha, so a caller holding an empty parameter falls back
+  # rather than issuing `WHERE commit_sha = ''`: the column is NOT NULL and `TestRun` validates its
+  # presence, so a blank matches nothing and the query is a guaranteed-empty read.
+  #
+  # `nil` too for a sha that simply has no runs, on the reasoning `latest_test_run_on_branch` gives
+  # for an unrecognised branch: a stale bookmark, a pruned run and a commit whose CI never reported
+  # are ordinary ways for a reader to arrive, and it is the caller's job to fall back to what it
+  # would have shown anyway — and to disclose that it did.
+  def latest_test_run_for_commit(sha)
+    return nil if sha.blank?
+
+    test_runs.where(commit_sha: sha).order(created_at: :desc, id: :desc).first
+  end
+
   # The run `run`'s suite figures can honestly be compared against: the newest run on the **same
   # branch**, strictly older than `run` itself. `nil` — never a fallback row — when there is no
   # honest comparison to make.
