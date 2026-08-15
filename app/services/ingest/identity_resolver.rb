@@ -1551,10 +1551,43 @@ module Ingest
     # per-tenant index, and a raised `ef_search` is a measurement against the 20k design point, and
     # that is **SPGD-72's**, alongside the batching, caching and re-embed skipping it already owns.
     # Handed to it by name rather than guessed at here.
+    #
+    # == The projection is narrowed, and it is the four columns the callers actually read
+    #
+    # `neighbor` decides its select list as `select_values.any? ? [] : column_names` — so a scope
+    # carrying no `select` gets EVERY column, `embedding` among them, and each hit ships a 1536
+    # element pgvector back to materialise 1536 Ruby `Float`s that nothing reads. This is the
+    # per-row path: an unchanged re-ingest never reaches it (the digest shortcut returns first), but
+    # a first run or a changed suite at the 20,000-example design point pays it 20,000 times, inside
+    # a job holding a run-scoped semaphore. It is the same prohibition {#digest_index},
+    # {#resight_all} and {#refresh} each state in their own words for their own batch or by-id path,
+    # and this was the one place that broke it.
+    #
+    # The four are what the callers read and no more: `id` for {#resight}, and `text`,
+    # `text_digest`, `signal_source` for {#note_drift}'s three guards. {Drift} carries the QUERY
+    # embedding it is handed, never `match.embedding` — which is why dropping the column costs
+    # nothing here. A fifth reader would raise `ActiveModel::MissingAttributeError` on the row
+    # rather than fail quietly, so this list stays honest by being too narrow and not too wide.
+    #
+    # == `order(:id)`: exact ties are the NORMAL case under the shipped provider
+    #
+    # `neighbor` calls `reorder`, which replaces the order with distance alone, and `first` on an
+    # already-ordered relation adds no key of its own. {EmbeddingGenerator::LocalProvider} embeds a
+    # normalised form, so two spellings differing only in punctuation or whitespace embed to the
+    # same array of floats — not approximately, byte-identically — and this class already asserts
+    # such rows can coexist in one repository ({#refresh}'s rescue). Once two do, a third equivalent
+    # observation matches BOTH at distance 0 and Postgres is free to emit either first: one test's
+    # durations split across two identities, and {#note_drift} converges on a different row each
+    # pass. Rails appends to the gem's `reorder`, so this is the second key that ranking never had —
+    # the same explicit tiebreak {#failed_embed_backlog} and {#unattempted_embed_backlog} carry, for
+    # the same reason. Inert under a provider that publishes no normalisation, where the two vectors
+    # really are different.
     def nearest(embedding)
       @repository.spec_identities
+                 .select(:id, :text, :text_digest, :signal_source)
                  .nearest_neighbors(:embedding, embedding, distance: "cosine",
                                     threshold: SpecIdentity::MATCH_DISTANCE)
+                 .order(:id)
                  .first
     end
 

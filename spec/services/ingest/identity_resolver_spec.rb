@@ -331,9 +331,15 @@ RSpec.describe Ingest::IdentityResolver do
 
     # Matched on the PROJECTION `#digest_index` plucks, and not on "a SELECT naming `text_digest`"
     # the way the round-trip group's helper is. That group's pages never fall through to similarity,
-    # so nothing there can be miscounted; every row of THIS page does, and `#nearest` selects every
-    # column — `text_digest` among them — so the looser instrument would count five similarity
-    # lookups as digest lookups and the claim would be untestable.
+    # so nothing there can be miscounted; every row of THIS page does, and `#nearest` projects
+    # `text_digest` among the four columns its callers read — so the looser instrument would count
+    # five similarity lookups as digest lookups and the claim would be untestable.
+    #
+    # Narrowing that projection off the embedding (SPGD-493) did NOT retire the hazard, which is
+    # why this form stays: `text_digest` is one of the four columns that survived the narrowing.
+    # What keeps the two apart is the anchor — this matches only a select list BEGINNING with
+    # `text_digest`, as `#digest_index`'s pluck does and as `#nearest`'s id-first projection does
+    # not.
     def digest_lookups(&) = executed_sql(&).grep(/\ASELECT "spec_identities"\."text_digest"/)
 
     def annotated_page
@@ -773,6 +779,117 @@ RSpec.describe Ingest::IdentityResolver do
     end
   end
 
+  describe "what the similarity lookup loads, and which row it settles on when two are tied" do
+    # The one ANN statement the resolver issues, found by pgvector's operator rather than by a
+    # column list — the thing being asserted here IS the column list, so an instrument that named
+    # it would move with the code it is supposed to bound.
+    def ann_lookups(&) = executed_sql(&).grep(/<=>/)
+
+    # The projected columns alone: everything between `SELECT` and the distance expression the gem
+    # appends. Cutting at `<=>` and not at ` FROM ` is what keeps `embedding` legible here — the
+    # distance expression names the column too, so a select list read as far as `FROM` says
+    # "embedding" whether or not the column is being fetched, and the assertion would pass on both
+    # scopes.
+    def projection(sql) = sql[/\ASELECT (.*?),\s*"spec_identities"\."embedding" <=>/m, 1].to_s
+
+    def original = "Order#checkout rejects an expired card"
+
+    def one(name, line: 1)
+      unannotated_spec(file_path: "spec/a_spec.rb", line_number: line, name: name)
+    end
+
+    it "fetches the four columns its callers read and leaves the 1536-float vector in the database" do
+      # **The file's own rule, on the path that runs per row.** `#digest_index`, `#resight_all` and
+      # `#refresh` each state in their own words that a vector must not be loaded to be worked
+      # around; this is the method that used to load one on every similarity hit, because
+      # `neighbor` falls back to `column_names` for any scope carrying no `select` of its own.
+      #
+      # Asserted on the emitted select list rather than on a duration, and stated as an equality
+      # rather than as "does not include `embedding`": a projection that grew a fifth column back is
+      # then a failure here too, which is the only way this stays a bound on what gets loaded rather
+      # than a bound on one column name.
+      ingest([one(original)], ci_run_id: "run-1")
+      second = record([one("Order#checkout rejects an expired cards", line: 2)], ci_run_id: "run-2")
+
+      lookups = ann_lookups { described_class.resolve(second) }
+
+      expect(lookups.size).to eq(1)
+      expect(projection(lookups.sole)).to eq(
+        %("spec_identities"."id", "spec_identities"."text", ) +
+        %("spec_identities"."text_digest", "spec_identities"."signal_source")
+      )
+    end
+
+    it "carries every column the match's readers ask for, on the path that reads all four" do
+      # The other half of the narrowing, and the reason it cannot simply be `select(:id)`. A drift
+      # is the path that reads the most off a match: `#note_drift` compares `text_digest`, then
+      # `signal_source`, then hands `text` to `EmbeddingGenerator.equivalent?`, and `#resight` takes
+      # `id`. A projection missing any one of them raises `ActiveModel::MissingAttributeError` here
+      # rather than going quietly wrong — which is what makes "too narrow" a loud failure and lets
+      # the example above be an equality.
+      ingest([one(original)], ci_run_id: "run-1")
+      identity = repository.spec_identities.sole
+
+      ingest([one("Order  checkout   rejects an expired card!", line: 2)], ci_run_id: "run-2")
+
+      expect(repository.spec_identities.count).to eq(1)
+      expect(identity.reload.text).to eq("Order  checkout   rejects an expired card!")
+      expect(identity.spec_observations.count).to eq(2)
+    end
+
+    # == The tie is the provider's normal output, not a hand-made distance
+    #
+    # `LocalProvider` embeds a normalised form and says so as a guarantee: two texts with the same
+    # normalised form embed *"to the same array of floats"*. So these three spellings are one
+    # vector, and the two rows below sit at cosine distance 0.0 from the third — a real tie, built
+    # from the documented property rather than from a fixture vector that approximates one.
+    #
+    # Two equivalent rows coexisting in one repository is a state production reaches, which is why
+    # it is worth pinning: `#refresh`'s own rescue exists for it — *"another identity in this
+    # repository may already hold the presented spelling"* — and two shards resolving the same new
+    # test concurrently insert exactly this pair.
+    def equivalent_spellings = ["Cart#checkout applies the loyalty discount",
+                                "Cart  checkout applies the loyalty discount!",
+                                "CART CHECKOUT: applies the loyalty discount.",
+                                "cart checkout — applies the loyalty discount"]
+
+    def two_tied_identities
+      first, second = equivalent_spellings.first(2)
+      [create_spec_identity(repository: repository, text: first, file_path: "spec/cart_spec.rb"),
+       create_spec_identity(repository: repository, text: second, file_path: "spec/cart_spec.rb",
+                            line_number: 40)]
+    end
+
+    it "settles every tied observation on the same identity, run after run" do
+      # A THIRD and a FOURTH spelling, one per run, because a run presenting text a row already
+      # holds takes `#identical_text` and never reaches the lookup this example is about — the
+      # refresh that run 3 performs would otherwise make run 4 trivially stable for a reason that
+      # has nothing to do with the ordering.
+      kept, = two_tied_identities
+
+      ingest([one(equivalent_spellings.third, line: 3)], ci_run_id: "run-3")
+      ingest([one(equivalent_spellings.fourth, line: 4)], ci_run_id: "run-4")
+
+      expect(repository.spec_identities.count).to eq(2)
+      expect(repository.spec_observations.pluck(:spec_identity_id).uniq).to eq([kept.id])
+    end
+
+    it "asks the database for that stability rather than hoping for it" do
+      # The falsifier's backstop, and the reason it is a separate example. The one above is a
+      # statement about an OUTCOME, and an outcome can be accidentally right: with a fixture this
+      # small Postgres may well emit the heap in insertion order and answer the same row twice on
+      # its own. What cannot be accidentally right is whether the ordering ASKED for a second key —
+      # `neighbor` calls `reorder`, which drops any order already on the scope, so the key has to be
+      # appended after it and this pins that it was.
+      two_tied_identities
+      third = record([one(equivalent_spellings.third, line: 3)], ci_run_id: "run-3")
+
+      lookups = ann_lookups { described_class.resolve(third) }
+
+      expect(lookups.sole).to match(/ORDER BY.*<=>.*,\s*"spec_identities"\."id" ASC\s*LIMIT/m)
+    end
+  end
+
   describe "re-ingesting text that has not changed" do
     # The optimisation itself, asserted as work NOT DONE rather than as a duration. A byte-identical
     # re-ingest is the ordinary case and not a corner — run 2 of an unchanged suite is every row of
@@ -1044,9 +1161,11 @@ RSpec.describe Ingest::IdentityResolver do
 
       # Run 3 carries text this repository already holds, which keeps the instrument honest in a way
       # the fixture has to arrange: `digest_lookups` matches any SELECT naming `text_digest`, and
-      # `#nearest` selects EVERY column. A row that fell through to similarity would therefore be
-      # counted here as though it were a lookup. With nothing to embed anywhere, the only statements
-      # that can match are the two this example is about.
+      # `#nearest` projects `text_digest` among the four columns it selects — still true after that
+      # projection was narrowed off the embedding (SPGD-493), since `text_digest` is one of the four
+      # that survived. A row that fell through to similarity would therefore be counted here as
+      # though it were a lookup. With nothing to embed anywhere, the only statements that can match
+      # are the two this example is about.
       third = record([unannotated_spec(file_path: "spec/models/subject_0_spec.rb", line_number: 900,
                                        name: subjects.first)], ci_run_id: "run-3")
 
