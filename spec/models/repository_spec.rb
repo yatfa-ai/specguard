@@ -457,6 +457,46 @@ RSpec.describe Repository do
           .to eq([4, 1])
       end
 
+      # The SECOND count, and a genuinely different question from the first. `SuiteTrajectory`'s
+      # runtime line plots `duration_seconds`, which is the MAX over the shards that REPORTED — so
+      # its denominator is this number and never `shard_count`, and a run whose two slowest shards
+      # were cancelled is not a faster build. `test_run_shards.duration_seconds` is nullable and
+      # `Ingest::Payload` accepts nil explicitly, so the gap below is an ordinary live state.
+      #
+      # `COUNT(duration_seconds)` and not `COUNT(*)`: the whole point is that the two disagree on
+      # exactly the rows this guard exists for, and a subquery that counted rows would prime `4`
+      # here and leave the chart drawing the speed-up it draws today.
+      it "primes how many of each run's shards reported a duration, which is not how many it has" do
+        repository = create_repository
+        full = run(repository, "fulltmd", at: 2.days.ago)
+        partial = run(repository, "partial", at: 1.day.ago)
+        4.times { |i| full.test_run_shards.create!(shard_id: i.to_s, total_specs_count: 10, duration_seconds: 60.0) }
+        4.times do |i|
+          partial.test_run_shards.create!(shard_id: i.to_s, total_specs_count: 10,
+                                          duration_seconds: (i < 2 ? 30.0 : nil))
+        end
+
+        series = repository.suite_size_trajectory(repository.latest_test_run)
+
+        # Same shard count on both — which is every question `assembled_like?` is able to ask.
+        expect(count_queries { expect(series.map(&:shard_count)).to eq([4, 4]) }).to eq(0)
+        # And a different timing denominator, which is the one it cannot.
+        expect(count_queries { expect(series.map(&:timed_shard_count)).to eq([4, 2]) }).to eq(0)
+      end
+
+      # The unsharded corpus reaches the timing seam too, and its answer there is a really-counted
+      # `0` rather than a nil — `TestRun#preload_timed_shard_count` documents the `.to_i` for
+      # exactly this. `SuiteTrajectory`'s guard is `0 == 0` on those rows, so a nil leaking through
+      # would turn a no-op into a comparison against nothing.
+      it "primes a really-counted zero for a run that recorded no shards" do
+        repository = create_repository
+        run(repository, "plain0")
+
+        series = repository.suite_size_trajectory(repository.latest_test_run)
+
+        expect(count_queries { expect(series.map(&:timed_shard_count)).to eq([0]) }).to eq(0)
+      end
+
       # The shard count rides along as a correlated scalar subquery, which returns 0 for a run that
       # recorded no shard rows — so the entire unsharded corpus stays in its own history. The
       # `LEFT JOIN … GROUP BY` this was NOT written as would preserve them too; an INNER join would
@@ -510,6 +550,12 @@ RSpec.describe Repository do
         # ...and reading the primed counts afterwards asks nothing either, which is the half a bare
         # query count around the loader would miss.
         expect(count_queries { series.each(&:shard_count) }).to eq(0)
+        # BOTH counts, and this is the assertion that pins "zero ADDED queries" for the timing
+        # denominator specifically. `timed_shard_count` routes through the same per-instance `pick`
+        # `shard_count` does, so a runtime guard that added the predicate without the second column
+        # in the SELECT would leave the number above at 1 and turn this one into 10 — the N+1 that
+        # ships green, since a fixture of one run cannot see it.
+        expect(count_queries { series.each(&:timed_shard_count) }).to eq(0)
       end
     end
   end

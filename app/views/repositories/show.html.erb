@@ -1324,9 +1324,16 @@
                 Drawn here rather than in a panel of its own because a wall clock is comparable only
                 within one shard layout. `duration_seconds` is the MAX over a run's shards, so a CI
                 config moving from four shards to eight halves it while nothing gets faster; the
-                cohort rule that makes the size line honest is exactly the rule this line needs, and
+                cohort rule that makes the size line honest is half the rule this line needs, and
                 sharing the cohort is what guarantees the two lines are drawn through the same runs
-                rather than through two sets that drifted apart. %>
+                rather than through two sets that drifted apart.
+
+                Only half, because equal `shard_count` is the denominator a SUM needs and a MAX has
+                a different one: `duration_seconds` counts over the shards that REPORTED, and
+                `SuiteTrajectory#timed` asks for a shared `timed_shard_count` on top of the cohort
+                for exactly the reason the Overview's `runtime_comparable` guard does, ~950 lines
+                up. Four shards whose two slowest were cancelled is not a speed-up, and until that
+                guard the two surfaces disagreed about the same pair of runs on one page load. %>
             <% if @suite_trajectory.runtime_plottable? %>
               <% runtime_formatter = trajectory_runtime_formatter %>
               <% runtime_points = @suite_trajectory.timed.map do |run|
@@ -1368,8 +1375,10 @@
                 the suite-size line is drawn through, on <%= @suite_trajectory.branch %><%= ", #{@suite_trajectory.cohort_description}" if @suite_trajectory.cohort_description %>.
                 Each point is that run's wall clock — how long the build waited, which on a sharded
                 run is its slowest single shard and not the machine time every shard spent. Only
-                runs assembled the same way are plotted, because a config that splits four shards
-                into eight halves the wall clock without anything having got faster.
+                runs assembled the same way and timed over the same number of shards are plotted:
+                a config that splits four shards into eight halves the wall clock without anything
+                having got faster, and so does a run whose two slowest shards were cancelled before
+                they reported.
                 <% if @suite_trajectory.runtime_flat? %>
                   Every one of them waited
                   <%= runtime_formatter.call(@suite_trajectory.runtime_minimum) %>: this suite's
@@ -1389,6 +1398,29 @@
                   on the suite-size line above: a missing wall clock is something the client did not
                   send, not a build that took no time.
                 <% end %>
+                <% if @suite_trajectory.withheld_timing_mismatch.any? %>
+                  <%# The other way off this line, and a different sentence because it has a
+                      different cause. These runs DID report a wall clock — they are not a gap in
+                      what the client sent — but over a different number of shards than the line's
+                      points, and `duration_seconds` is the MAX over the shards that reported. Four
+                      timed shards against four whose two slowest were cancelled is a 70% drop that
+                      no commit made, which is the comparison the Overview panel above already
+                      refuses for its scalar delta.
+
+                      Worded without a direction. The line's denominator is the dominant one, not
+                      the full one, so on a branch that reliably loses one shard's telemetry the
+                      withheld run is the one that timed MORE. %>
+                  <%= @suite_trajectory.withheld_timing_mismatch.size %>
+                  <%= "run".pluralize(@suite_trajectory.withheld_timing_mismatch.size) %>
+                  reported a wall clock over a different number of shards than the runs on this
+                  line, so
+                  <%= @suite_trajectory.withheld_timing_mismatch.size == 1 ? "it is" : "they are" %>
+                  withheld from it and
+                  <%= @suite_trajectory.withheld_timing_mismatch.size == 1 ? "remains" : "remain" %>
+                  on the suite-size line above: a wall clock is the slowest shard that reported, so
+                  two runs whose shards reported in different numbers cannot be differenced without
+                  reading telemetry loss as a change in speed.
+                <% end %>
               </p>
             <% else %>
               <%# Not an empty state, because the panel is not empty — the size line above is drawn.
@@ -1404,11 +1436,24 @@
                       one timed run TODAY, because the threshold happens to be two — so a literal
                       "1" would read correctly and lie the moment the threshold moved, in the one
                       sentence whose whole job is explaining a shortfall. The threshold itself comes
-                      off the rule for the same reason. %>
+                      off the rule for the same reason.
+
+                      And the VERB is read off the data for the same reason the number is. `timed`
+                      now withholds on two grounds, so "reported one" is false about a shortfall
+                      caused by mismatched timing denominators — those runs all reported a clock.
+                      That is this sentence's own subject matter aimed at itself: the sentence
+                      explaining why a reader is being shown less than they expected is the last
+                      place allowed to misname the cause. %>
                   <%= @suite_trajectory.timed.size %> of the
                   <%= @suite_trajectory.plotted.size %> plotted
-                  <%= "run".pluralize(@suite_trajectory.plotted.size) %> reported one, and a
-                  trajectory needs
+                  <%= "run".pluralize(@suite_trajectory.plotted.size) %>
+                  <% if @suite_trajectory.withheld_timing_mismatch.any? %>
+                    timed the same number of shards — a wall clock is the slowest shard that
+                    reported, so runs whose shards reported in different numbers are not one line —
+                    and a trajectory needs
+                  <% else %>
+                    reported one, and a trajectory needs
+                  <% end %>
                   <%= SuiteTrajectory::MINIMUM_POINTS %>.
                 <% end %>
                 A single wall clock drawn as a line is a flat one, which says this suite takes as

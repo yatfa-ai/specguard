@@ -56,19 +56,25 @@ RSpec.describe "Repository suite-size trajectory", type: :request do
   end
 
   # One shard of one run, through the producer — the same seam the suite-growth file uses.
-  def ingest_shard(repository, ci_run_id:, shard_id:, total:, commit_sha:, branch: "main")
+  #
+  # `seconds` is a parameter and nil is a real value for it: `Ingest::Payload#validate_duration_seconds`
+  # accepts nil explicitly, so a shard that was cancelled before it reported its clock is an ordinary
+  # live state, and it is the state `duration_seconds` — a MAX over the shards that REPORTED —
+  # silently reads as a faster build.
+  def ingest_shard(repository, ci_run_id:, shard_id:, total:, commit_sha:, branch: "main", seconds: 60.0)
     Ingest::RunRecorder.record(
       repository,
       { commit_sha: commit_sha, branch: branch, ci_run_id: ci_run_id,
-        total_specs_count: total, annotated_specs_count: total / 4, duration_seconds: 60.0 },
+        total_specs_count: total, annotated_specs_count: total / 4, duration_seconds: seconds },
       shard_id: shard_id
     )
   end
 
-  def sharded_run(repository, commit_sha:, per_shard: 5_000, shards: 4)
+  def sharded_run(repository, commit_sha:, per_shard: 5_000, shards: 4, seconds: 60.0, timed_shards: shards)
     shards.times do |i|
       ingest_shard(repository, ci_run_id: "gha-#{commit_sha}", shard_id: i.to_s,
-                   total: per_shard, commit_sha: commit_sha)
+                   total: per_shard, commit_sha: commit_sha,
+                   seconds: (i < timed_shards ? seconds : nil))
     end
     repository.test_runs.find_by!(ci_run_id: "gha-#{commit_sha}")
   end
@@ -1327,6 +1333,47 @@ RSpec.describe "Repository suite-size trajectory", type: :request do
         .to have_text("1 run is withheld from this line for having reported no timing at all",
                       normalize_ws: true)
       expect(runtime_basis).to have_text("remains on the suite-size line above", normalize_ws: true)
+    end
+
+    # THE DEFECT, driven end to end through the recorder rather than hand-primed — the whole reason
+    # the sharded examples in this file go through `Ingest::RunRecorder`: `duration_seconds` being a
+    # MAX over the shards that REPORTED is a shape the RECORDER produces, and a fixture that wrote
+    # the run row by hand would be agreeing with itself about the number under test.
+    #
+    # Three runs of four shards each. Two timed all four at 60s; the newest had its two slowest
+    # cancelled before they reported, so its MAX is 18s. Identical `shard_count`, identical
+    # `suite_size_measured?` — so `assembled_like?` is true and the run is on the SIZE line — and
+    # before the timing guard the wall-clock chart drew a 70% speed-up produced entirely by
+    # telemetry loss, on the same page load where the Overview panel above it withheld its scalar
+    # delta over the same pair.
+    it "withholds a run whose shards did not all report a clock, at equal shard count" do
+      repository = create_repository(user: @user)
+      sharded_run(repository, commit_sha: "aaaafull1111", per_shard: 5_000, seconds: 60.0)
+      sharded_run(repository, commit_sha: "bbbbfull2222", per_shard: 5_010, seconds: 61.0)
+      partial = sharded_run(repository, commit_sha: "ccccpart3333", per_shard: 5_020,
+                            seconds: 18.0, timed_shards: 2)
+
+      # The state under test, asserted before the page is read: the recorder really did produce a
+      # run whose clock is a maximum over half its shards. Without this the example could pass on a
+      # fixture that never built the shape.
+      expect(partial.shard_count).to eq(4)
+      expect(partial.timed_shard_count).to eq(2)
+      expect(partial.duration_seconds).to eq(18.0)
+
+      get repository_path(repository)
+
+      # Off the wall-clock line...
+      expect(runtime_rows.map(&:first)).to eq(%w[aaaaful bbbbful])
+      # ...and still on the size line above, which is the shape of the whole fix.
+      expect(plotted_labels).to eq(%w[aaaaful bbbbful ccccpar])
+      expect(runtime_chart).to have_text("2 of 3 plotted runs timed the same number of shards")
+      expect(runtime_basis)
+        .to have_text("1 run reported a wall clock over a different number of shards than the " \
+                      "runs on this line", normalize_ws: true)
+      # Named by its own cause, and NOT as the other one. A run that timed two of its four shards
+      # did time; filing it under "reported no timing at all" would name the wrong cause on a page
+      # whose entire job is naming causes.
+      expect(runtime_basis).to have_no_text("reported no timing at all")
     end
 
     # The line's own basis, in this panel's register. A wall clock on a sharded run is its SLOWEST
