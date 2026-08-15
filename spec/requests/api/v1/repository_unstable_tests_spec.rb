@@ -334,9 +334,43 @@ RSpec.describe "GET /api/v1/repository — unstable_tests", type: :request do
       expect(block["recorded"]).to be(true)
       expect(block["runs_with_rows"]).to eq(3)
       expect(block["runs_reporting_outcomes"]).to eq(0)
-      # And every count behind the gate is a real zero of a population nothing was read from —
+      # The OUTCOME counts behind the gate are real zeros of a population nothing was read from —
       # served, so a client cannot mistake the silence for an examined-and-clean window.
-      expect(block).to include("candidate_count" => 0, "examined_count" => 0, "unnamed_count" => 0,
+      expect(block).to include("candidate_count" => 0, "examined_count" => 0,
+                               "truncated" => false, "unexamined_count" => 0)
+      # `unnamed_count` is NOT one of them. It counts ROWS with no outcome predicate anywhere in
+      # it, so its population was never counted here rather than never read from — null, because a
+      # zero would be an exclusion figure nothing measured. This fixture has no unnamed rows, so
+      # this line alone cannot tell a fabricated zero from a true one; the example below can.
+      expect(block).to include("unnamed_count" => nil)
+    end
+
+    # THE example for `unnamed_count`, and the only one in this file that can fail if the gate
+    # fabricates the zero: the window holds unnamed rows and reported no outcome over any of them,
+    # so `0` and `null` are two different claims about it rather than the same number twice.
+    it "declines to count the exclusion it never counted, over a window that holds unnamed rows" do
+      3.times do |index|
+        ingest(repository,
+               [example_spec(name: FLIPPING_TEST, outcome: nil),
+                example_spec(name: nil, outcome: nil, line_number: 9,
+                             file_path: "spec/models/ledger_spec.rb"),
+                example_spec(name: nil, outcome: nil, line_number: 14,
+                             file_path: "spec/models/ledger_spec.rb")],
+               commit_sha: "run#{format("%010d", index)}", at: (30 - index).days.ago)
+      end
+
+      _window, block = blocks(query: { branch: "main" })
+
+      # Six unnamed rows are really there — the same window served as comparable would count them.
+      expect(SpecObservation.where(repository_id: repository.id, name: nil).count).to eq(6)
+      expect(block["comparable"]).to be(false)
+      expect(block["runs_reporting_outcomes"]).to eq(0)
+      # And the key states absence rather than reporting six real exclusions as none. Asserted
+      # through `include` rather than on the fetched value, so this pins the key PRESENT-and-null:
+      # a payload that dropped the key entirely would satisfy `be_nil` and is a different bug.
+      expect(block).to include("unnamed_count" => nil)
+      # The outcome counts beside it are untouched by this: their zeros are true here.
+      expect(block).to include("candidate_count" => 0, "examined_count" => 0,
                                "truncated" => false, "unexamined_count" => 0)
     end
 
