@@ -1271,9 +1271,9 @@ RSpec.describe "Repository suite-size trajectory", type: :request do
 
     # Criterion 3 again, at the seam rather than at the output. `TestRun#duration_label` is the one
     # place this column is worded — "the same float cannot render two ways on one page" — and the
-    # chart is the third reader. `74.25` reaching the page as `74.25s` or `74.3 s` would be a fourth
-    # spelling; it renders as `1m 14s` because it went through the same method the Recent-runs cell
-    # does.
+    # chart words it through there like every other surface that shows it. `74.25` reaching the page
+    # as `74.25s` or `74.3 s` would be a spelling this column does not have; it renders as `1m 14s`
+    # because it went through the same method the Recent-runs cell does.
     it "words its figures through the one formatter this column has" do
       repository = create_repository(user: @user)
       timed_run(repository, "aaaaaaa1111", seconds: 40.2, at: 2.days.ago)
