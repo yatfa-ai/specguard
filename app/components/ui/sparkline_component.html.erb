@@ -56,7 +56,14 @@
       Show the <%= points.size %> plotted <%= "figure".pluralize(points.size) %>
     </summary>
     <div class="mt-2">
-      <%= render UI::TableComponent.new(columns: columns) do %>
+      <%# Pointed at the same summary the plot is described by, and for a stronger reason. The
+          summary states which branch, how many runs, that the axis does not start at zero, and —
+          on the runtime chart — that a point is the slowest single shard rather than machine time.
+          A sighted reader meets that paragraph on the way down to this disclosure; a reader who
+          arrives at the table by navigation gets "Run / Wall clock / Ingested" and bare numbers
+          with none of it. This table is not a caption for the chart, it IS the chart for that
+          reader, so it needs the preconditions for reading it at least as much as the SVG does. %>
+      <%= render UI::TableComponent.new(columns: columns, describedby: summary_id) do %>
         <% points.each do |point| %>
           <tr>
             <td class="px-3 py-1.5 font-mono text-xs text-app-content"><%= point.label %></td>

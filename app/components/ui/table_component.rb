@@ -29,8 +29,15 @@ class UI::TableComponent < ApplicationComponent
 
   # Built as one attribute hash rather than by appending a conditional string, so an unset
   # `describedby` emits NO attribute — not `aria-describedby=""`, which points at an element that
-  # does not exist and is its own defect. The two call sites that pass nothing render exactly the
-  # bytes they rendered before.
+  # does not exist and is its own defect.
+  #
+  # A call site passes nothing WHEN AND ONLY WHEN its table has no caption element to point at. If
+  # the page already renders a paragraph stating what the rows ARE, that paragraph carries an `id`
+  # and this seam takes it — "there is a caption but the table does not name it" is the defect this
+  # keyword exists to prevent, not a third option. Stated as the rule rather than as a tally of the
+  # sites that pass nothing, because a count goes stale silently the moment a table is added: the
+  # un-ruled site never mentions `describedby`, so grepping for it returns only the already-correct
+  # sites and reads clean.
   def table_attributes
     attributes = { class: "w-full text-sm" }
     attributes["aria-describedby"] = @describedby if @describedby.present?
