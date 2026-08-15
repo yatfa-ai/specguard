@@ -1765,6 +1765,23 @@ class SpecObservation < ApplicationRecord
     format("%.2fs", seconds)
   end
 
+  # How much of a population a figure was measured over, rendered — the one seam every coverage
+  # fraction on these pages is spelled through, whether the population is one file's examples, one
+  # area's files or one run's repeated descriptions, so no two grains can state the same coverage
+  # in two prose inventions that agree today.
+  #
+  # Always the fraction and never the bare numerator. "12" in a column of "12 of 40" reads as
+  # twelve of something unstated: the denominator is the point of the column, and a fully timed
+  # population has to be visibly complete rather than merely unremarked.
+  #
+  # Both operands are PASSED rather than read off the receiver, and that is the load-bearing part
+  # of this signature. The callers do not agree on what to count — a row supplies its own window,
+  # while `RepeatedDescriptions` supplies the repeated subset's totals, which are a different
+  # population from the `#recorded_count` that same object exposes to decide whether an empty
+  # ranking means anything. A seam that reached for those names itself would render one of these
+  # captions off the wrong pair of figures, silently and in the correct format.
+  def self.coverage_fraction(timed, recorded) = "#{timed} of #{recorded}"
+
   # What CI said happened to this example, rendered — and NOTHING this application decided.
   # SpecGuard does not run tests; it reports what a client sent, which makes this a stability
   # observation and never a verdict on whether the example is correct.

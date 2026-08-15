@@ -164,10 +164,10 @@ class SpecDirectoryDurations
     # and an unmeasured area says "not reported" rather than "0.00s".
     def duration_label = SpecObservation.humanized_duration(total_seconds)
 
-    # How much of the area this total covers, always as a fraction and never as a bare count. "40"
-    # in a column of "12 of 40" reads as forty of something unstated; the denominator is the point
-    # of the column, and a complete area has to be visibly complete rather than merely unannotated.
-    def coverage_label = "#{timed_count} of #{recorded_count}"
+    # How much of the area this total covers — through the same seam every coverage fraction on this
+    # page is spelled through, so a complete area is visibly complete rather than merely unannotated,
+    # and no two grains can disagree about how the fraction is worded.
+    def coverage_label = SpecObservation.coverage_fraction(timed_count, recorded_count)
 
     # At least one of this area's examples carried a description, so `COUNT(DISTINCT name)` had
     # something to count. The predicate the distinct column is stated BEHIND, never a fact folded

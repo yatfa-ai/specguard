@@ -153,10 +153,17 @@ class RepeatedDescriptions
   # compare two figures to reach.
   def complete? = any? && repeated_timed_count == repeated_recorded_count
 
-  # What the summed wall clock on this panel was measured over, always as a fraction and never as a
-  # bare count — the denominator is the point, for the reason every coverage column on this page
-  # gives.
-  def coverage_label = "#{repeated_timed_count} of #{repeated_recorded_count}"
+  # What the summed wall clock on this panel was measured over — through the same seam every
+  # coverage fraction on this page is spelled through, so the panel caption and the rows beneath it
+  # cannot disagree about how a fraction is worded.
+  #
+  # Its operands are named explicitly, and they are the REPEATED subset's totals rather than the
+  # figures a row would supply. `#recorded_count` on this same object is a different population
+  # entirely — the run's whole row count, which exists to decide whether an empty ranking means
+  # anything (see its reader above) — so a seam that read its operands off the receiver would spell
+  # this one caption from the wrong pair of figures, in the right format and without a word of
+  # warning. Passing them makes that unreachable rather than merely unwritten.
+  def coverage_label = SpecObservation.coverage_fraction(repeated_timed_count, repeated_recorded_count)
 
   # One description, the examples of one run that share it, and what they cost between them.
   Row = Struct.new(:name, :total_seconds, :recorded_count, :timed_count, :file_paths,
@@ -177,10 +184,10 @@ class RepeatedDescriptions
     # and a group nobody timed says "not reported" rather than "0.00s".
     def duration_label = SpecObservation.humanized_duration(total_seconds)
 
-    # How much of the group this total covers. Always the fraction: "8" in a column of "6 of 8"
-    # reads as eight of something unstated, and a fully timed group has to be visibly complete
-    # rather than merely unremarked.
-    def coverage_label = "#{timed_count} of #{recorded_count}"
+    # How much of the group this total covers — through the same seam every coverage fraction on
+    # this page is spelled through, so a fully timed group is visibly complete rather than merely
+    # unremarked, and no two grains can disagree about how the fraction is worded.
+    def coverage_label = SpecObservation.coverage_fraction(timed_count, recorded_count)
 
     # The spec files these examples ran in. `Array()` because the aggregate is `ARRAY_AGG(…)
     # FILTER (…)`, which is SQL NULL rather than an empty array for a group with nothing to collect
