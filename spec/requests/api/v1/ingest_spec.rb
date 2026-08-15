@@ -450,11 +450,31 @@ RSpec.describe "POST /api/v1/ingest", type: :request do
       expect(TestRun.last.annotated_specs_count).to eq(0)
     end
 
+    # `null`, not `0.0`: nothing was counted, so there was no share to measure. The counts stay in
+    # the body so a client can still see the suite was empty. `GET /api/v1/repository` answers the
+    # same run the same way — pinned directly in repository_latest_run_spec.rb, since two request
+    # specs that cannot see each other is what let these two endpoints disagree in the first place.
     it "accepts a run that reported no specs at all" do
       ingest(ingest_payload(specs: []))
 
       expect(response).to have_http_status(:accepted)
-      expect(response.parsed_body).to include("total_specs" => 0, "annotated_ratio" => 0.0)
+      expect(response.parsed_body).to include("total_specs" => 0, "annotated_specs" => 0,
+                                              "annotated_ratio" => nil)
+    end
+
+    # The two endpoints serving this field lived in two request specs that cannot see each other,
+    # and they answered the same run `0.0` and `null` respectively for as long as that was true.
+    # A single `TestRun#annotated_fraction` is what makes them agree; this reads BOTH bodies in one
+    # example so the agreement is asserted rather than inferred from two files independently.
+    it "agrees with GET /api/v1/repository about the same run" do
+      ingest(ingest_payload(specs: []))
+      ingested = response.parsed_body
+
+      get "/api/v1/repository", headers: { "Authorization" => "Bearer #{api_key.raw_token}" }
+      latest_run = response.parsed_body["latest_run"]
+
+      expect(latest_run["annotated_ratio"]).to eq(ingested["annotated_ratio"])
+      expect(latest_run["annotated_ratio"]).to be_nil
     end
   end
 

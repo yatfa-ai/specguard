@@ -220,7 +220,12 @@ class Api::V1::RepositoriesController < Api::BaseController
       branch: test_run.branch,
       total_specs: test_run.total_specs_count,
       annotated_specs: test_run.annotated_specs_count,
-      annotated_ratio: annotated_ratio_for(test_run),
+      # The 0–1 FRACTION, the same `TestRun#annotated_fraction` call `/ingest` answers this run
+      # with — never the 0–100 percentage `TestRun#annotated_ratio` renders for the dashboard. The
+      # 100× gap between the two is invisible in a JSON body, so two endpoints disagreeing about it
+      # would be a silent two-orders-of-magnitude error for any client that read both. `null` for a
+      # run that reported no tests; the model carries why.
+      annotated_ratio: test_run.annotated_fraction,
       # Nullable by schema. Serializing `0.0` for an unreported duration would assert the run took
       # no time — the same "not reported" vs `0.0s` distinction the Recent runs table draws.
       #
@@ -1140,7 +1145,7 @@ class Api::V1::RepositoriesController < Api::BaseController
   # visible notice beside the chart saying so. A JSON client has no notice. One that asked for
   # `main` and silently received `feature/x` rows would compute a growth series for the wrong
   # branch and have nothing in the body to detect it with — a two-branch error exactly as invisible
-  # as the 0–1/0–100 ratio confusion `annotated_ratio_for` guards against below. So the ask is
+  # as the 0–1/0–100 ratio confusion `TestRun#annotated_fraction` guards against. So the ask is
   # restated in `history_window.branch`, `returned` says `0`, and the client can tell "that branch
   # has no runs" from "here is some other branch" because the second never happens.
   def serialized_history
@@ -1199,7 +1204,8 @@ class Api::V1::RepositoriesController < Api::BaseController
       branch: run.branch,
       total_specs: run.total_specs_count,
       annotated_specs: run.annotated_specs_count,
-      annotated_ratio: annotated_ratio_for(run),
+      # The 0–1 fraction, same call and same units as `latest_run` above and as `/ingest`.
+      annotated_ratio: run.annotated_fraction,
       duration_seconds: run.duration_seconds,
       shard_count: run.shard_count,
       # A really-counted `0`, never absent and never null, on a run whose shards all went silent —
@@ -2483,20 +2489,5 @@ class Api::V1::RepositoriesController < Api::BaseController
   # model makes the unfiltered case (`[nil]`) the same call as passing nothing.
   def branch_histories
     @branch_histories ||= current_repository.branch_histories(pinned: [requested_branch])
-  end
-
-  # The 0–1 FRACTION, matching what `/ingest` answered for this same run — never the 0–100
-  # percentage `TestRun#annotated_ratio` renders for the dashboard. The 100× gap between the two is
-  # invisible in a JSON body, so two endpoints disagreeing about it would be a silent
-  # two-orders-of-magnitude error for any client that read both.
-  #
-  # `null` when the run reported no tests at all: `annotated_fraction` floors at `0.0` by
-  # zero-denominator guard, and a `0.0` sitting beside real fractions reads as a *measured* zero
-  # share rather than "there was nothing to take a share of". The counts stay present either way,
-  # so a client that wants to compute its own ratio still can.
-  def annotated_ratio_for(test_run)
-    return nil if test_run.total_specs_count.to_i.zero?
-
-    test_run.annotated_fraction
   end
 end

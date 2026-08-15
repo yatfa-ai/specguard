@@ -281,8 +281,9 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
     end
   end
 
-  # AC5. `TestRun#annotated_fraction` floors at 0.0 by zero-denominator guard; emitting that here
-  # would read as a *measured* zero share beside real fractions.
+  # AC5. `TestRun#annotated_fraction` returns nil for a zero denominator; emitting a `0.0` here
+  # would read as a *measured* zero share beside real fractions. `/ingest` reads the same method
+  # and answers the same run identically — pinned across both bodies in ingest_spec.rb.
   describe "a run that reported zero tests" do
     before { create_test_run(repository: repository, commit_sha: "emptysuite", total_specs_count: 0) }
 
