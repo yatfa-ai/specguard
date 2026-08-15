@@ -615,6 +615,78 @@ RSpec.describe Repository do
     end
   end
 
+  describe "#latest_test_run_for_commit" do
+    def run(repository, commit, branch: "main", total: 100, at: 1.hour.ago)
+      repository.test_runs.create!(commit_sha: commit, branch: branch, total_specs_count: total,
+                                   created_at: at)
+    end
+
+    it "answers with the run on that sha, not the newest run in the repository" do
+      repository = create_repository
+      run(repository, "older0", at: 2.days.ago)
+      run(repository, "middle", at: 1.day.ago)
+      run(repository, "newest", at: 1.minute.ago)
+
+      expect(repository.latest_test_run_for_commit("older0").commit_sha).to eq("older0")
+      expect(repository.latest_test_run.commit_sha).to eq("newest")
+    end
+
+    # A sha is NOT unique in `test_runs` — the only unique index is
+    # `(repository_id, ci_run_id) WHERE ci_run_id IS NOT NULL` — so a CI re-run of one commit is a
+    # second row and "the run for this sha" has more than one answer. The NEWEST is the answer, on
+    # the ordering every other reader of this history sorts by.
+    it "answers with the newest of several runs on one sha" do
+      repository = create_repository
+      run(repository, "rerun0", at: 2.days.ago, total: 10)
+      run(repository, "rerun0", at: 1.minute.ago, total: 20)
+
+      expect(repository.latest_test_run_for_commit("rerun0").total_specs_count).to eq(20)
+    end
+
+    # The same tie-break the two siblings use, and the half a `created_at`-only ordering would leave
+    # to the database's discretion: two runs of one sha ingested in the same instant are exactly what
+    # a re-run under a parallel CI matrix produces.
+    it "breaks a same-instant tie by id, the way the rest of this history is ordered" do
+      repository = create_repository
+      at = 1.hour.ago
+      first = run(repository, "tied00", at: at, total: 10)
+      second = run(repository, "tied00", at: at, total: 20)
+
+      expect(second.id).to be > first.id
+      expect(repository.latest_test_run_for_commit("tied00").total_specs_count).to eq(20)
+    end
+
+    it "ignores another repository's run on the same sha" do
+      repository = create_repository
+      other = create_repository(user: create_user(github_uid: "2003", github_handle: "octo"),
+                                github_full_name: "acme/ledger")
+      run(other, "shared")
+
+      expect(repository.latest_test_run_for_commit("shared")).to be_nil
+    end
+
+    # An unrecognised sha is an ordinary thing for a reader to arrive with — a stale bookmark, a
+    # pruned run, a commit whose CI never reported — and it is the caller's job to fall back, which
+    # `Api::V1::RepositoriesController#latest_test_run` does while disclosing it on `run_anchor`.
+    it "has no run for a sha it has never seen" do
+      repository = create_repository
+      run(repository, "trunk0")
+
+      expect(repository.latest_test_run_for_commit("deadbe")).to be_nil
+    end
+
+    # A blank sha is not a sha. `commit_sha` is NOT NULL and `TestRun` validates its presence, so
+    # `WHERE commit_sha = ''` is a guaranteed-empty read — answered without a query at all, so a
+    # caller holding an empty `?commit_sha=` pays nothing for the fallback.
+    it "refuses a blank sha outright, and asks the database nothing" do
+      repository = create_repository
+      run(repository, "trunk0")
+
+      expect(count_queries { expect(repository.latest_test_run_for_commit(nil)).to be_nil }).to eq(0)
+      expect(count_queries { expect(repository.latest_test_run_for_commit("")).to be_nil }).to eq(0)
+    end
+  end
+
   describe "#branch_histories" do
     def run(repository, commit, branch: "main", total: 100, at: 1.hour.ago)
       repository.test_runs.create!(commit_sha: commit, branch: branch, total_specs_count: total,
