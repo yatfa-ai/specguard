@@ -210,7 +210,10 @@ module ObservationGrainReads
   #
   # NEITHER IS THE MAXIMUM, ON EITHER MEASURE — and no counted leaderboard is given here on purpose:
   # every figure this paragraph has quoted for another fixture, and every denominator it has quoted
-  # for the partition, went stale the next time a grain was appended. The SINGLE-ASK blocks in
+  # for the partition, went stale the first time a read was added here — whether that read opened a
+  # NEW grain or landed in an EXISTING one. Both halves rot, and they rot on different commits: the
+  # growth grain's second reader (see "TWO READERS" above) moved every total-reads figure quoted
+  # here while leaving the grain count untouched. The SINGLE-ASK blocks in
   # `repository_unstable_tests_spec.rb`, `repository_directory_growth_spec.rb` and
   # `repository_directory_runtime_file_growth_spec.rb` each leave at least as many grains live as
   # either example — the last of them more than either — and each issues MORE total reads than either,
@@ -309,15 +312,19 @@ module ObservationGrainReads
   # `directory_files` at index 6 for the callers already naming it there.
   #
   # ⭐ APPENDING IS FREE FOR CALLERS AND IS NOT FREE FOR PROSE, AND THAT IS THE PART THAT KEEPS BEING
-  # MISSED. The comparison paragraphs in `repository_spec_file_examples_spec.rb` and
+  # MISSED — AND IT IS NOT ONLY APPENDING. The comparison paragraphs in
+  # `repository_spec_file_examples_spec.rb` and
   # `repository_repeated_description_examples_spec.rb` — and the one beside
   # `classified_observation_reads` above — rank their fixture AGAINST THIS PARTITION: how much of it
-  # the fixture leaves live, and how it places against other fixtures. A grain appended here can
-  # falsify all three without touching a line either of those files owns, and every grain added so far
-  # has corrected the counts in THIS file and left them stale. So when you append a grain, RE-READ
-  # THOSE TWO REQUEST SPECS, and keep their prose free of any suite-wide total or counted ranking —
-  # the claim they need is "this fixture leaves several grains live", which no later grain can
-  # falsify.
+  # the fixture leaves live, and how it places against other fixtures on grains live and on total
+  # reads. A read added here can falsify all three without touching a line either of those files
+  # owns, and it does not have to be a NEW grain to do it: every grain added so far has corrected the
+  # counts in THIS file and left those paragraphs stale, and the growth grain's SECOND READER —
+  # `directory_run_growth`, see "The growth grain has TWO READERS" above — moved their total-reads
+  # figures without changing the grain count at all. So when you add a read here, whether it opens a
+  # new grain or joins an existing one, RE-READ THOSE TWO REQUEST SPECS, and keep their prose free of
+  # any suite-wide total or counted ranking — the claim they need is "this fixture leaves several
+  # grains live", which no later read can falsify.
   #
   # `growth` (5), `directory_files` (6) and `runtime_growth` (10) each carry an EXCLUSION rather than
   # only their own pattern, and the exclusions are not decoration. `directory_file_growth` (9) is the
