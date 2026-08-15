@@ -828,14 +828,23 @@ class Api::V1::RepositoriesController < Api::BaseController
   end
 
   # WHICH DESCRIPTIONS ONE RUN RECORDED MORE THAN ONCE, ranked by the wall clock those examples cost
-  # between them — the ⭐overcoverage reading `repositories#show` has rendered since SPGD-344, and
-  # the last of the five run-grain panels to reach a client that cannot read a panel.
+  # between them — the ⭐overcoverage reading `repositories#show` has rendered since SPGD-344,
+  # carried here so it reaches a client that cannot read a panel.
   #
   # INSIDE `latest_run` rather than beside it, on the membership test the comment on
   # `unstable_tests` states in full: every key that block serves is a statement about ONE run's
   # rows, and "this test is unstable" is a statement about one test across several.
   # `RepeatedDescriptions.for` narrows both of its reads to a single `test_run_id`, so this is a
-  # statement about one run's rows and belongs where the other four are.
+  # statement about one run's rows and belongs inside `latest_run` with every other block that
+  # meets it.
+  #
+  # STATED AS A RULE, NOT AS A TALLY, on purpose. The claims above used to carry a count of the
+  # run-grain blocks — accurate when written, falsified as each later block was added below them.
+  # The paragraph directly below carries a count as well, and it stays accurate: it counts the
+  # blocks positioned ABOVE this point, which nothing added below can change. That is the
+  # discriminator, and the reason the rewrite stopped where it did — a count of set membership rots
+  # when a member joins it, and a count of position above a fixed point does not. Every run-grain
+  # block added after this one has landed below it.
   #
   # THE GRAIN IS THE DESCRIPTION, which is a grain none of the four blocks above can reach. They
   # roll a run's rows up by where the code LIVES — the example, its file, its area — and no
