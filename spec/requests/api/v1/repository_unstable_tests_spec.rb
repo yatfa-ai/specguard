@@ -134,8 +134,29 @@ RSpec.describe "GET /api/v1/repository — unstable_tests", type: :request do
       expect(block.keys).to contain_exactly(
         "rows", "shared_description_rows", "run_count", "runs_with_rows",
         "runs_reporting_outcomes", "recorded", "comparable", "candidate_count", "examined_count",
-        "truncated", "unexamined_count", "unnamed_count", "limit"
+        "truncated", "unexamined_count", "unnamed_count", "limit",
+        # The drill-in below this block, nested inside it exactly as the three sibling drill-ins are
+        # nested inside the rankings they open. Present on EVERY request and `null` unless
+        # `?unstable_test=` named a test — the key-always-present rule this endpoint states in full
+        # on `serialized_unstable_tests_window`, so a client tests one thing rather than
+        # distinguishing an absent key from a null one. Its own contract is
+        # `spec/requests/api/v1/repository_unstable_test_runs_spec.rb`; what is pinned HERE is that
+        # it did not displace or rename anything above it.
+        "unstable_test_runs"
       )
+    end
+
+    # The other half of that pin, and the half a `contain_exactly` cannot make: the twelve keys
+    # above are the SAME VALUES whether or not the drill-in was asked for. A drill-in that reached
+    # back into the block it sits in — re-querying the window, re-sorting the rows, spending the
+    # candidate cap — would go red here rather than in a client.
+    it "serves those keys identically whether or not the drill-in was asked for" do
+      _window, asked = blocks(query: { branch: "main", unstable_test: FLIPPING_TEST })
+      _window, unasked = blocks(query: { branch: "main" })
+
+      expect(asked.except("unstable_test_runs")).to eq(unasked.except("unstable_test_runs"))
+      expect(unasked["unstable_test_runs"]).to be_nil
+      expect(asked["unstable_test_runs"]).not_to be_nil
     end
 
     it "states the window it was drawn over, as counts and booleans and no prose" do

@@ -23,7 +23,8 @@
 # for growth-by-area, which are not the only grains here whose count depends on state rather than
 # only on shape: the DRILL-INS are ONE MORE EACH, and they are the grains whose count depends
 # on what the CLIENT ASKED rather than on what the window holds — no `?spec_file=`, no read of that
-# file's examples; no `?repeated_description=`, no read of that group's members; and no
+# file's examples; no `?repeated_description=`, no read of that group's members; no
+# `?unstable_test=`, no read of that test's run-by-run sequence; and no
 # `?spec_directory=`, no read of that area at any of the THREE grains one ask now opens — its files
 # by wall clock, their example-count movement, and their runtime movement. Every gate is decided
 # before any read, so an unasked
@@ -127,6 +128,26 @@
 # because it needs `NULLS LAST`, exactly as `.in_file` does. That makes the by-duration reads THREE
 # statements separated by an accident of quoting rather than two, and resting a third grain on it
 # would be resting it on the same accident twice.
+# == The SEVENTH arrival, which is the fifth one's argument reused a second time
+#
+# The drill-in into ONE unstable test's runs is matched on `AS unstable_test_recorded_count`, the
+# third member of the alias family above, and it inherits their guarantee for the third time rather
+# than needing one of its own: `SpecObservation::UNSTABLE_TEST_RUN_POPULATION_COUNTS` is its own
+# constant PRECISELY so it cannot share an alias with `DESCRIPTION_POPULATION_COUNTS`, and that
+# constant's comment says why in the sharpest form the rule has taken yet — the two pairs count the
+# SAME COLUMN over DIFFERENT POPULATIONS, one run's rows against a thirty-run window's, so a shared
+# alias would not be ill-fitting, it would report a window count under a run count's name on a block
+# whose entire purpose is that those two are different.
+#
+# NOTHING ELSE HERE WAS A CANDIDATE, and unlike the arrivals above the alternatives are not merely
+# worse, they are unavailable. This read GROUPS BY NOTHING — it is the ungrouped rows the flakiness
+# composition sums over — so every grouping pattern in this file excludes it by construction. Its
+# predicate (`repository_id` + `name` + a window of runs) is the composition's own predicate, and its
+# ORDER BY is `array_position(…)`, which would in fact be unique but rests on the ordering strategy
+# rather than on the projection — the accident this file has twice declined to rest a partition on.
+# The alias is the only match here whose uniqueness is guaranteed BY A RULE WRITTEN BESIDE THE SQL,
+# and it is now the guarantee three of the thirteen grains stand on.
+#
 # == The growth grain has TWO READERS, and no pattern can separate them
 #
 # `growth_grain_reads` is the one accessor here that does not answer "did block X read". Both growth
@@ -227,14 +248,14 @@ module ObservationGrainReads
 
   # `[area, file, example, description, flakiness, growth, directory_files, file_examples,
   # repeated_description_examples, directory_file_growth, runtime_growth,
-  # directory_file_runtime_growth]` — the twelve grains, each an array of the statements matched. The
-  # single-run grains come first, in the order `serialized_latest_run` serves them, and the two
-  # CROSS-RUN grains after them in the order `show` serves them — so a destructuring caller reads
-  # the endpoint's own shape, and a caller written before a grain was appended keeps naming the same
-  # lists it always did. The DRILL-INS are last rather than beside the rollups they sit
-  # between, for exactly that reason: each was added after the grains before it, and every existing
-  # caller destructures a prefix of this array. Appending is what keeps `directory_files` at index 6
-  # for the callers already naming it there.
+  # directory_file_runtime_growth, unstable_test_runs]` — the thirteen grains, each an array of the
+  # statements matched. The single-run grains come first, in the order `serialized_latest_run` serves
+  # them, and the two CROSS-RUN grains after them in the order `show` serves them — so a
+  # destructuring caller reads the endpoint's own shape, and a caller written before a grain was
+  # appended keeps naming the same lists it always did. The DRILL-INS are last rather than beside the
+  # rollups they sit between, for exactly that reason: each was added after the grains before it, and
+  # every existing caller destructures a prefix of this array. Appending is what keeps
+  # `directory_files` at index 6 for the callers already naming it there.
   #
   # `growth` (5), `directory_files` (6) and `runtime_growth` (10) each carry an EXCLUSION rather than
   # only their own pattern, and the exclusions are not decoration. `directory_file_growth` (9) is the
@@ -258,7 +279,8 @@ module ObservationGrainReads
      reads.grep(/AS description_recorded_count/),
      reads.grep(GROWTH_ORDER).grep(AREA_PREDICATE),
      reads.grep(RUNTIME_GROWTH_ORDER).grep_v(AREA_PREDICATE),
-     reads.grep(RUNTIME_GROWTH_ORDER).grep(AREA_PREDICATE)]
+     reads.grep(RUNTIME_GROWTH_ORDER).grep(AREA_PREDICATE),
+     reads.grep(/AS unstable_test_recorded_count/)]
   end
 
   # `UnstableTests.for`'s four reads, in the order it issues them: the gating outcome-reporting
@@ -287,6 +309,7 @@ module ObservationGrainReads
   def directory_file_growth_grain_reads(&) = observation_reads_by_grain(&)[9]
   def runtime_growth_grain_reads(&) = observation_reads_by_grain(&)[10]
   def directory_file_runtime_growth_grain_reads(&) = observation_reads_by_grain(&)[11]
+  def unstable_test_runs_grain_reads(&) = observation_reads_by_grain(&)[12]
 end
 
 RSpec.configure do |config|

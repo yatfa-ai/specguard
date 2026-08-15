@@ -61,6 +61,23 @@ class Api::V1::RepositoriesController < Api::BaseController
   # reasoning in full.
   include RequestedRepeatedDescriptionParam
 
+  # `?unstable_test=` read as a test description, to open ONE ROW of the cross-run flakiness ranking
+  # below — the fifth `Requested*Param` this controller reads, and the first that opens a WINDOW
+  # rather than a run.
+  #
+  # NOT included by `RepositoriesController`, unlike the four above, and that is a fact about the
+  # surfaces rather than an omission here: the HTML panel serves no per-run sequence, so there is no
+  # second reader to share a guard with yet. When one arrives it includes this module rather than
+  # re-deriving the guard, which is the whole reason the guard lives in a module at all.
+  #
+  # It reaches `where(name: …)` on a plain text column, which is the same silent hazard
+  # `?repeated_description=` documents rather than a restatement of it — an Array does not raise, it
+  # becomes an `IN` list — and at THIS grain the wrong answer is the hardest of the five to see: two
+  # tests' outcome sequences interleaved under one name look exactly like the alternation the block
+  # exists to show, so a stable test merged with a broken one reads as a flaky one. See
+  # `RequestedUnstableTestParam`, which holds that reasoning in full.
+  include RequestedUnstableTestParam
+
   # The bound on `history` below. Ten rows is ten rows whether the suite holds three tests or
   # twenty thousand — `Repository#recent_test_runs` argues that in its own comment — so this is a
   # bound and not the first page of a pagination contract there is no cursor to continue.
@@ -1430,6 +1447,19 @@ class Api::V1::RepositoriesController < Api::BaseController
   # `UnstableTests.for` asks the gating question FIRST and on its own, so an incomparable window
   # costs ONE read and stops, and an unfiltered request costs NONE because the object is never
   # constructed.
+  #
+  # A FIFTH READ EXISTS AND IS THE CLIENT'S TO ASK FOR: `unstable_test_runs` below issues one more,
+  # and only when `?unstable_test=` was sent. It is counted here rather than left for a reader to
+  # discover, and it does not disturb the property above — it is bounded by ONE DESCRIPTION'S rows
+  # over the same window, so it is constant in the size of the suite exactly as the four are.
+  #
+  # It does put ONE exception on the "incomparable window costs ONE read and stops" clause above:
+  # the drill-in fires on the parameter alone, not on `comparable?`, so an incomparable window that
+  # was ASKED a description costs that read too. That is deliberate rather than an oversight. A
+  # window the ranking has nothing to say about is precisely the one where the raw per-run grain is
+  # worth having — "no candidates" and "here is what this test actually did" are answers to
+  # different questions, and gating the second on the first would withhold the grain exactly when
+  # the aggregate above it went silent.
   def serialized_unstable_tests
     unstable = unstable_tests
 
@@ -1448,7 +1478,99 @@ class Api::V1::RepositoriesController < Api::BaseController
       truncated: unstable.truncated?,
       unexamined_count: unstable.unexamined_count,
       unnamed_count: unstable.unnamed_count,
-      limit: SpecObservation::UNSTABLE_CANDIDATE_LIMIT
+      limit: SpecObservation::UNSTABLE_CANDIDATE_LIMIT,
+      unstable_test_runs: serialized_unstable_test_runs
+    }
+  end
+
+  # ONE of the rows above, opened: that description's rows across the SAME window, run by run and in
+  # window order — the fourth drill-in on this endpoint, on the ladder the three before it set
+  # (`?spec_directory=` → `spec_directory_files`, `?spec_file=` → `spec_file_examples`,
+  # `?repeated_description=` → `repeated_description_examples`).
+  #
+  # WHAT THE RANKING ABOVE CANNOT SAY, and the whole reason this exists. A row up there says
+  # `run_count: 30`, `failed_run_count: 4`, `outcome_words: ["failed", "passed"]`. Those three
+  # figures are IDENTICAL for two windows that call for opposite work: four failures in runs 27–30 is
+  # a REGRESSION — find the commit between run 26 and run 27 — and four failures in runs 3, 11, 19
+  # and 26 is FLAKINESS, where there is no culprit commit to find and the work is quarantine or
+  # shared state. An agent told to "fix the flaky tests" treats every row as the second, and on the
+  # first it hunts nondeterminism in a test that fails deterministically. `UNSTABLE_COMPOSITION` is
+  # `COUNT`s and `ARRAY_AGG(DISTINCT …)` under `GROUP BY name` and is RIGHT to be — that is what
+  # keeps the ranking constant in the size of the suite — so the axis is not recovered by changing
+  # it. It is recovered by a rung below it.
+  #
+  # NOT DERIVABLE FROM ANY OTHER KEY HERE, which is what makes it a key rather than a convenience.
+  # `history` rows carry `commit_sha`, `branch` and `ingested_at` and have no per-test grain;
+  # `latest_run.spec_file_examples` and `latest_run.repeated_description_examples` carry an `outcome`
+  # for the LATEST RUN only. A client holds at most one run's outcome per test beside thirty-run
+  # aggregates, and no arithmetic over those produces a sequence.
+  #
+  # WHAT IT MAKES POSSIBLE, in one join the client already holds both sides of: `history` rows carry
+  # `commit_sha` and these rows carry `commit_sha`, so the run this test started failing at is the
+  # commit on the earliest row of the failing tail. That is the answer this endpoint could not give.
+  #
+  # `test_run_id` is served BESIDE `commit_sha` because a commit is not a key: the same commit is
+  # legitimately ingested more than once — a re-run, a retry, a second workflow — and a reader
+  # following a sequence has to be able to tell two runs of one commit apart before deciding a
+  # failure moved.
+  #
+  # `outcome` GOES OUT VERBATIM and `null` STAYS `null`. Nothing platform-side validates that string
+  # (`SpecObservation#outcome_label`), so quoting what arrived is the only reading that cannot be
+  # wrong, and a run that recorded the test while reporting no outcome serializes as `null` rather
+  # than as a pass — the separation `UnstableTests::Row#changed?` maintains one rung up by comparing
+  # against `reported_outcome_count` rather than `recorded_count`, kept here so a client that stopped
+  # sending outcomes cannot manufacture a flip that looks like a DATE.
+  #
+  # NESTED INSIDE `unstable_tests` rather than served beside it, on the shape the three sibling
+  # drill-ins already set: each sits inside the block whose row it opens. It is gated by the ASK and
+  # by the same `?branch=` the block itself is gated behind — an unfiltered window is interleaved
+  # across branches (`serialized_history_window` warns about this at length), and an outcome sequence
+  # read down an interleaved window is the outcomes of different code in run order, which is the one
+  # reading of these rows that would be worse than not serving them.
+  #
+  # `null` — with the key present — MEANS "YOU DID NOT ASK", on the spelling the three drill-ins
+  # fixed. An ask that matched nothing gets the block with `rows: []` and its `name` restated, HTTP
+  # 200 and never a 404: the project's identity rule is semantic, so a RENAMED test starts a new
+  # history and every bookmark to the old name goes stale by design.
+  #
+  # `run_count` and `limit` are the WINDOW and the CAP, disclosed on this block rather than left to
+  # be read off the parent: this is a list, and a list that does not say how deep it was allowed to
+  # go is read as the whole story. `recorded_count` beside them is the operand a client compares
+  # against `rows.length` to see the cap bite — the operands, never the predicate, on
+  # `serialized_repeated_description_examples`' standing rule for this endpoint.
+  #
+  # EXACTLY ONE ADDITIONAL QUERY WHEN ASKED, AND NONE WHEN NOT, on every drill-in's rule: the gate is
+  # the ask and it is decided before any read is issued. The read is bounded by ONE DESCRIPTION'S
+  # rows over at most thirty runs — constant in the size of the suite, not merely sublinear in it —
+  # and rides `index_spec_observations_on_repository_id_and_name`, EXPLAIN-certified for exactly this
+  # narrow in `spec/models/spec_observation_spec.rb`.
+  def serialized_unstable_test_runs
+    return nil if requested_unstable_test.nil?
+
+    sequence = UnstableTestRuns.for(current_repository, history_runs, requested_unstable_test)
+
+    {
+      # The ask, restated as the server read it — never echoed from the raw parameter, on the rule
+      # every sibling drill-in follows: a malformed shape is no ask at all and reaches no block, so
+      # what is served here is always the description the rows were actually gathered under.
+      name: sequence.name,
+      rows: sequence.rows.map do |row|
+        {
+          test_run_id: row.test_run_id,
+          commit_sha: row.commit_sha,
+          branch: row.branch,
+          ingested_at: row.ingested_at.iso8601,
+          outcome: row.outcome,
+          duration_seconds: row.duration_seconds,
+          spec_file_path: row.spec_file_path,
+          line_number: row.line_number
+        }
+      end,
+      recorded_count: sequence.recorded_count,
+      reported_outcome_count: sequence.reported_outcome_count,
+      unreported_outcome_count: sequence.unreported_outcome_count,
+      run_count: sequence.run_count,
+      limit: SpecObservation::UNSTABLE_TEST_RUNS_LIMIT
     }
   end
 
