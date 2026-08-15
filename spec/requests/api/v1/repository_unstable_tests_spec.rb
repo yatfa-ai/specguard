@@ -365,8 +365,10 @@ RSpec.describe "GET /api/v1/repository — unstable_tests", type: :request do
       expect(SpecObservation.where(repository_id: repository.id, name: nil).count).to eq(6)
       expect(block["comparable"]).to be(false)
       expect(block["runs_reporting_outcomes"]).to eq(0)
-      # And the key states absence rather than reporting six real exclusions as none.
-      expect(block["unnamed_count"]).to be_nil
+      # And the key states absence rather than reporting six real exclusions as none. Asserted
+      # through `include` rather than on the fetched value, so this pins the key PRESENT-and-null:
+      # a payload that dropped the key entirely would satisfy `be_nil` and is a different bug.
+      expect(block).to include("unnamed_count" => nil)
       # The outcome counts beside it are untouched by this: their zeros are true here.
       expect(block).to include("candidate_count" => 0, "examined_count" => 0,
                                "truncated" => false, "unexamined_count" => 0)

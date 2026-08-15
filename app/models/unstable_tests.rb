@@ -144,8 +144,11 @@ class UnstableTests
   #
   # `nil` — never `0` — wherever `#comparable?` is false, because that branch returns before the
   # count is read and a zero there would be an exclusion figure nothing measured. Every reader of
-  # this must therefore be behind a `comparable?` guard or handle the nil; `#unnamed_clause` on the
-  # HTML side is the former (`show.html.erb` renders it only inside that guard).
+  # this must therefore sit behind a `comparable?` guard or handle the nil.
+  # `RepositoriesHelper#unstable_tests_unnamed_clause` is the former, and the guard is over its
+  # CALLER rather than over it: it is reached only through `#unstable_tests_exclusion_sentence`,
+  # which `show.html.erb:3680` renders inside `if @unstable_tests.comparable?`. The API serializer
+  # (`repositories_controller.rb:1376`) is the latter — it serves the nil through as `null`.
   attr_reader :unnamed_count
 
   # Whether this window has any per-example grain AT ALL — the question that decides whether the
