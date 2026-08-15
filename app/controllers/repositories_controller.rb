@@ -162,10 +162,10 @@ class RepositoriesController < ApplicationController
     # quarter of the suite and back. The view renders the object's own counts, so the caption's
     # plotted/withheld figures cannot drift from the line.
     #
-    # Held in a local because every panel below reads the SAME window. Each panel that fetched "the
-    # last thirty runs on this branch" for itself would be its own window, with no structural reason
-    # to keep agreeing, on a page where they caption each other's branch — and each would be another
-    # copy of a query that is already the page's most carefully bounded read.
+    # Held in a local because every panel below that draws on this window reads the SAME rows. Each
+    # panel that fetched "the last thirty runs on this branch" for itself would be its own window, with
+    # no structural reason to keep agreeing, on a page where they caption each other's branch — and
+    # each would be another copy of a query that is already the page's most carefully bounded read.
     trajectory_runs = @repository.suite_size_trajectory(@trajectory_run)
     @suite_trajectory = SuiteTrajectory.new(runs: trajectory_runs, branch: @trajectory_run&.branch)
     # The slowest examples of the run every panel above names, with the coverage the panel states
