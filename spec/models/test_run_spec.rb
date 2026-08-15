@@ -89,18 +89,36 @@ RSpec.describe TestRun do
       expect(run.annotated_fraction).to eq(1.0)
     end
 
-    it "is 0.0 for a run that counted no specs" do
+    # The zero-denominator honesty rule, and the reason it is written on the DENOMINATOR. A guard
+    # placed on the numerator or on the result would pass both examples below and still turn a
+    # genuinely measured zero share into `nil` — so the `0` of `5` case is pinned right beside them.
+    it "is nil, not 0.0, for a run that counted no specs" do
       run = repository.test_runs.create!(commit_sha: "abc123")
+
+      expect(run.annotated_fraction).to be_nil
+    end
+
+    it "is nil when the counters were never written at all" do
+      run = repository.test_runs.create!(commit_sha: "abc123", annotated_specs_count: nil,
+                                         total_specs_count: nil)
+
+      expect(run.annotated_fraction).to be_nil
+    end
+
+    it "is a measured 0.0 when specs were counted and none of them were annotated" do
+      run = repository.test_runs.create!(commit_sha: "abc123", annotated_specs_count: 0,
+                                         total_specs_count: 5)
 
       expect(run.annotated_fraction).to eq(0.0)
       expect(run.annotated_fraction).to be_a(Float)
     end
 
-    it "is 0.0 when the counters were never written at all" do
-      run = repository.test_runs.create!(commit_sha: "abc123", annotated_specs_count: nil,
-                                         total_specs_count: nil)
+    # The percentage keeps its own `0.0` floor deliberately — it feeds a rendered meter, not a JSON
+    # contract. Pinned here so the two are not "fixed" into agreement by a later reader.
+    it "leaves #annotated_ratio's 0.0 floor alone" do
+      run = repository.test_runs.create!(commit_sha: "abc123")
 
-      expect(run.annotated_fraction).to eq(0.0)
+      expect(run.annotated_ratio).to eq(0.0)
     end
   end
 

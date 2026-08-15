@@ -53,8 +53,19 @@ class TestRun < ApplicationRecord
   # (see the SpecGuard API Reference). `annotated_ratio` above is the percentage the dashboard renders.
   # Two names rather than one number and a convention: the 100× gap between them is invisible in
   # a JSON body, and a client that guesses wrong is wrong by two orders of magnitude.
+  #
+  # `nil` when the run reported no tests at all, rather than `annotated_ratio`'s `0.0` floor: a
+  # `0.0` sitting beside real fractions reads as a *measured* zero share rather than "there was
+  # nothing to take a share of". The counts stay present either way, so a client that wants to
+  # compute its own ratio still can. This is a property of the measurement, not of one endpoint —
+  # it lives here so every serializer of this field answers the same way. The guard is on the
+  # DENOMINATOR, never on the numerator or the result: `0` of `5` is a genuinely measured zero
+  # share and must keep returning `0.0`.
+  #
+  # `annotated_ratio` above deliberately keeps its `0.0` floor — it feeds a rendered meter, not a
+  # JSON contract, and the view draws the "no tests" distinction itself.
   def annotated_fraction
-    return 0.0 if total_specs_count.to_i.zero?
+    return nil if total_specs_count.to_i.zero?
 
     (annotated_specs_count.to_f / total_specs_count).round(3)
   end
