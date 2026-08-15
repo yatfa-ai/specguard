@@ -1779,6 +1779,18 @@ class SpecObservation < ApplicationRecord
   # twice, so it is built where it is read and is deliberately not spelled through this seam. A seam
   # that claimed it anyway would be the thing this one exists to retire: a promise kept by hand.
   #
+  # The CAPTION sentences stop here too, and for a reason of their own: `TestRun#machine_seconds_coverage`,
+  # `SuiteTrajectory#coverage` and `SuiteTrajectory#runtime_coverage` are single-sided and are coverage
+  # fractions, but each renders its fraction with a trailing noun phrase naming what was counted — "3 of 4
+  # added up", "12 of 15 runs plotted" — and, load-bearingly, each has a COMPLETE case that is not a
+  # fraction at all: "all 4 added up", "every one of the last 15 runs plotted". That completeness rule is
+  # the whole point of those labels — a label is the most prominent claim a number wears, so only the
+  # complete case is allowed to say "all" — and it is a rule this seam has no way to state, because it
+  # cannot see which of two operands being equal means "every" and which means a coincidence. Two of them
+  # render on the same page as the areas panel that does come through here, so the adjacency is the same
+  # one the paragraph above answers for; the answer is the same. They are a different sentence, not this
+  # one with a noun on the end.
+  #
   # Always the fraction and never the bare numerator. "12" in a column of "12 of 40" reads as
   # twelve of something unstated: the denominator is the point of the column, and a fully timed
   # population has to be visibly complete rather than merely unremarked.

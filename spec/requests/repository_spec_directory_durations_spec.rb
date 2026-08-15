@@ -468,7 +468,7 @@ RSpec.describe "Repository heaviest spec directories", type: :request do
     # they are one sentence: delimiting only the second half prints "2 of 1010 (1,010 unnamed)" —
     # a cell disagreeing with itself about what a number looks like. The fraction is spelled by
     # `Row#distinct_description_label`, which resolves through `SpecObservation.coverage_fraction`,
-    # the seam every single-sided coverage fraction on this page is spelled through, so the
+    # the seam every bare coverage fraction in this panel is spelled through, so the
     # exclusion follows it rather than the caption prose beside it. Pinned rather than left to a
     # comment, because the accident this replaced was invisible until a four-digit run.
     it "spells both halves of the cell the same way at four digits" do
