@@ -225,12 +225,69 @@ RSpec.describe "Ownership-verified repository registration", type: :request do
       expect(response.body).to include("1 repository you do not administer is not listed")
     end
 
+    # The plural arm of the same sentence. Asserted as the whole sentence rather than as the count,
+    # because two independent things decide how it reads — Rails' `pluralize` (overridden, because
+    # the default plural of "repository" is not the one English uses) and a hand-rolled `is`/`are`
+    # ternary — and a partial match would hold only one of them. The singular is pinned above.
+    it "says how many were withheld in the plural when more than one was" do
+      stub_github(repos: [github_repo("acme/billing-service"),
+                          github_repo("rails/rails", admin: false),
+                          github_repo("sinatra/sinatra", admin: false)])
+
+      get new_repository_path
+
+      expect(response.body).to include("2 repositories you do not administer are not listed.")
+    end
+
     it "marks a private repository as private in the list" do
       stub_github(repos: [github_repo("acme/secrets", private: true)])
 
       get new_repository_path
 
       expect(response.body).to include("acme/secrets · private")
+    end
+
+    # The other half of the note. `archived` changes what registering means as much as `private`
+    # does — an archived repository will never push another CI run — so it has to be readable on
+    # the option rather than discoverable after registering.
+    it "marks an archived repository as archived in the list" do
+      stub_github(repos: [github_repo("acme/legacy-tracker", archived: true)])
+
+      get new_repository_path
+
+      expect(response.body).to include("acme/legacy-tracker · archived")
+    end
+
+    # Both notes at once, asserted with the join intact: the label is one `·` and then a
+    # comma-joined list, not two separate `·` groups, and the order is private-then-archived.
+    it "marks a repository that is both private and archived with both notes" do
+      stub_github(repos: [github_repo("acme/vault", private: true, archived: true)])
+
+      get new_repository_path
+
+      expect(response.body).to include("acme/vault · private, archived")
+    end
+
+    # The third sentence of the hint, which only appears when GitHub's listing hit the page walk's
+    # ceiling. The figure is re-derived from the two constants that produce it rather than written
+    # as `1000`: a literal here would keep reading green after a change to either constant while
+    # the page told the user a capacity the client no longer has.
+    it "says the listing was capped, at the capacity the client actually walks" do
+      stub_github(truncated: true)
+
+      get new_repository_path
+
+      expect(response.body).to include(
+        "Showing the first #{GithubApi::MAX_PAGES * GithubApi::PER_PAGE} repositories GitHub returned."
+      )
+    end
+
+    it "does not claim the listing was capped when it was not" do
+      stub_github
+
+      get new_repository_path
+
+      expect(response.body).not_to include("Showing the first")
     end
 
     it "asks for authorization instead of a picker when GitHub is not connected yet" do
@@ -282,6 +339,63 @@ RSpec.describe "Ownership-verified repository registration", type: :request do
 
       expect(response.body).to include("Connect your GitHub repositories")
       expect(response.body).not_to include("<select")
+    end
+  end
+
+  # The rename form's own case. The picker offers what GitHub says you administer *now*, but the
+  # record being renamed already has a name — and the whole reason to open this form is that the
+  # name is stale. A repository registered before verification existed, renamed on GitHub since, or
+  # sitting past the listing cap is absent from that list, and the control that is supposed to show
+  # its current value would show someone else's instead.
+  describe "GET /repositories/:id/edit" do
+    it "offers the current name even when GitHub's listing does not contain it" do
+      repository = create_repository(user: @user, github_full_name: "acme/legacy-tracker")
+      stub_github(repos: [github_repo("acme/billing-service")])
+
+      get edit_repository_path(repository)
+
+      expect(response).to have_http_status(:ok)
+      # The option, not merely the string: the page's title and breadcrumb both render the
+      # persisted name from `github_full_name_was` regardless, so a bare text match would stay
+      # green with the picker's concession removed.
+      expect(response.body).to include('value="acme/legacy-tracker"')
+      expect(response.body).to include('value="acme/billing-service"')
+    end
+
+    it "selects that prepended name, so the control opens showing the value it describes" do
+      repository = create_repository(user: @user, github_full_name: "acme/legacy-tracker")
+      stub_github(repos: [github_repo("acme/billing-service")])
+
+      get edit_repository_path(repository)
+
+      expect(response.body).to match(/<option selected[^>]*value="acme\/legacy-tracker"/)
+    end
+
+    # The guard above the concession. When the current name *is* in the listing — the ordinary
+    # case, and the one every other spec that renders this form is in — prepending it again would
+    # offer the same repository twice.
+    it "does not offer the current name twice when GitHub's listing already contains it" do
+      repository = create_repository(user: @user, github_full_name: "acme/billing-service")
+      stub_github(repos: [github_repo("acme/billing-service"), github_repo("acme/checkout")])
+
+      get edit_repository_path(repository)
+
+      expect(response.body.scan('value="acme/billing-service"').length).to eq(1)
+    end
+
+    # Why the concession reads `github_full_name_was` and not `github_full_name`. On a 422
+    # re-render the rejected input is already assigned onto the record, so the plain attribute is
+    # the name GitHub just refused. Prepending *that* would offer the user the very value the
+    # server would reject again, and would drop the real one they are trying to rename away from.
+    it "prepends the persisted name, not the rejected input, when a rename comes back refused" do
+      repository = create_repository(user: @user, github_full_name: "acme/legacy-tracker")
+      stub_github(repos: [github_repo("acme/billing-service")], strict: true)
+
+      patch repository_path(repository), params: { repository: { github_full_name: "ghost/repo" } }
+
+      expect(response).to have_http_status(:unprocessable_content)
+      expect(response.body).to include('value="acme/legacy-tracker"')
+      expect(response.body).not_to include('value="ghost/repo"')
     end
   end
 end
