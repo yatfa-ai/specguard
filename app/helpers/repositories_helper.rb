@@ -854,6 +854,8 @@ module RepositoriesHelper
       "keeps the ones missing here."
   end
 
+  # Rows this window recorded under the description that said NOTHING about how it ended, counted
+  # and stated — the silence the sequence would otherwise read as a gap in the story.
   #
   # `outcome` is nullable and nothing platform-side validates it, so a client that stopped sending
   # outcomes writes rows that are present and silent. Those are not passes and are counted as one
