@@ -203,16 +203,20 @@ module ObservationGrainReads
   # The classified total: the sum of EVERY grain's reads. Defined here rather than at the call sites
   # for the reason the partition itself is — a sum written by hand is free to name a SUBSET, and the
   # omitted term is silently correct only while its fixture holds it at zero. That is not a tidiness
-  # complaint: the two compose-several-drill-ins-at-once examples run SIX and SEVEN of the nine grains
-  # non-zero at once, among the most any fixture here runs, so they are where a cross-grain
-  # misclassification is likeliest to be observable — and they were the two that shipped with no sum
-  # at all, because when a sum is hand-written the richest fixture is the most tedious one to write it
-  # for. SIX is a TIE rather than a maximum, and the two available measures disagree about which
-  # fixture is richest: the SINGLE-ASK blocks in `repository_unstable_tests_spec.rb` and
-  # `repository_directory_growth_spec.rb` also run six grains non-zero, and both issue MORE total
-  # reads — 11 and 10, against these two examples' 8 and 9 — because a cross-run grain can read four
-  # times where a drill-in reads once. So a block needs this sum whenever its own fixture leaves
-  # SEVERAL GRAINS LIVE, which is not the same as composing drill-ins and does not stop at five.
+  # complaint: the two compose-several-drill-ins-at-once examples run SIX and SEVEN grains non-zero at
+  # once, so they are among the places a cross-grain misclassification is likeliest to be observable —
+  # and they were the two that shipped with no sum at all, because when a sum is hand-written the
+  # fixture leaving the most grains live is the most tedious one to write it for.
+  #
+  # NEITHER IS THE MAXIMUM, ON EITHER MEASURE — and no counted leaderboard is given here on purpose:
+  # every figure this paragraph has quoted for another fixture, and every denominator it has quoted
+  # for the partition, went stale the next time a grain was appended. The SINGLE-ASK blocks in
+  # `repository_unstable_tests_spec.rb`, `repository_directory_growth_spec.rb` and
+  # `repository_directory_runtime_file_growth_spec.rb` each leave at least as many grains live as
+  # either example — the last of them more than either — and each issues MORE total reads than either,
+  # because a cross-run grain can read several times where a drill-in reads once. So a block needs
+  # this sum whenever its own fixture leaves SEVERAL GRAINS LIVE, which is not the same as composing
+  # drill-ins and does not stop at five.
   # Appending a grain to `observation_reads_by_grain` extends this automatically; nothing downstream
   # has to be edited.
   #
@@ -303,6 +307,17 @@ module ObservationGrainReads
   # rollups they sit between, for exactly that reason: each was added after the grains before it, and
   # every existing caller destructures a prefix of this array. Appending is what keeps
   # `directory_files` at index 6 for the callers already naming it there.
+  #
+  # ⭐ APPENDING IS FREE FOR CALLERS AND IS NOT FREE FOR PROSE, AND THAT IS THE PART THAT KEEPS BEING
+  # MISSED. The comparison paragraphs in `repository_spec_file_examples_spec.rb` and
+  # `repository_repeated_description_examples_spec.rb` — and the one beside
+  # `classified_observation_reads` above — rank their fixture AGAINST THIS PARTITION: how much of it
+  # the fixture leaves live, and how it places against other fixtures. A grain appended here can
+  # falsify all three without touching a line either of those files owns, and twice now a
+  # grain-adding commit has corrected the counts in THIS file and left them stale. So when you append
+  # a grain, RE-READ THOSE TWO REQUEST SPECS, and keep their prose free of any suite-wide total or
+  # counted ranking — the claim they need is "this fixture leaves several grains live", which no
+  # later grain can falsify.
   #
   # `growth` (5), `directory_files` (6) and `runtime_growth` (10) each carry an EXCLUSION rather than
   # only their own pattern, and the exclusions are not decoration. `directory_file_growth` (9) is the
