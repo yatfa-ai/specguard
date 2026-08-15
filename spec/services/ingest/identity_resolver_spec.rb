@@ -1877,6 +1877,93 @@ RSpec.describe Ingest::IdentityResolver do
       expect(run.spec_observations.embed_failed.pluck(:name)).to match_array(uncached.pluck(:name))
     end
 
+    it "asks nothing for a sibling the page's own upgrade evicted from its map" do
+      # **The hole a tripped page's own return shape does not cover.** `#embed_page` answers a
+      # tripped page with nil-VALUED keys and never `{}`, precisely so that no text OF THAT PAGE
+      # falls through `#embedding_for`'s `fetch` block to a per-row ask. That containment is complete
+      # only while an OMITTED key is unreachable inside `#resolve_page` — and `#upgrade_from_name`
+      # mints one mid-page, by design: it DELETES the name entry from `@digest_index` so a sibling
+      # cannot re-sight a row that has moved out from under it, while `@embeddings` never held that
+      # name at all, because `#unheld_texts` skipped it as already-held when the page was built. The
+      # coupling between the two is `#identical_text`, which reads the very map the delete mutates.
+      #
+      # **The two states co-occur only ACROSS pages, and the cache is what carries them there** —
+      # the same property the example above pins from the other side. Page 1 is uncached and trips
+      # the breaker; page 2 is a page this DEPLOYMENT already owns, so its annotated row is answered
+      # from the cache, upgrades, and evicts the name its sibling was going to read. The sibling then
+      # reaches a provider this pass has already declared dark, once per row, with no page-level warn
+      # line to see it by and `#report` still saying `provider_breaker=tripped`.
+      #
+      # Driven through the ORDINARY `:upgraded` branch. The suite's other same-page sibling example
+      # ("gives the sibling a row of its own…") reaches the same `@digest_index.delete` through
+      # `:lost_race`; both delete, and this is the common production path of the two.
+      shared_name = "Invoice#finalize locks the line items"
+      triple = "Invoice finalize locks the line items once the invoice is finalized"
+      annotated = annotated_spec(file_path: "spec/models/invoice_spec.rb", line_number: 12,
+                                 name: shared_name)
+      sibling = unannotated_spec(file_path: "spec/models/other_spec.rb", line_number: 3,
+                                 name: shared_name)
+
+      EmbeddingGenerator.provider = caching_provider
+      ingest([unannotated_spec(file_path: "spec/models/invoice_spec.rb", line_number: 12,
+                               name: shared_name), sibling], ci_run_id: "run-1")
+      # The premise the eviction needs: run 1 leaves ONE row, held under the shared name. That entry
+      # is what `#upgrade_from_name` deletes and what the sibling was going to read.
+      expect(repository.spec_identities.sole).to be_from_name
+
+      # A DIFFERENT tenant buys the triple, so page 2 below is cache-served without this repository
+      # ever having presented the annotated text — which is what leaves the upgrade still to do.
+      ingest_into(other_repository, [annotated], ci_run_id: "run-0")
+
+      stub_const("#{described_class}::BATCH_SIZE", 2)
+      provider = caching_provider
+      # Every text that went ON THE WIRE this pass, by either entry point, in order. A count alone
+      # could not say WHICH text a request was for, and the claim here is about one named text.
+      asked = []
+      provider.define_singleton_method(:embed_many) do |texts|
+        @batches = batches + 1
+        asked.concat(texts)
+        raise EmbeddingGenerator::Error, "provider down"
+      end
+      provider.define_singleton_method(:call) do |text|
+        @calls = calls + 1
+        asked << text
+        raise EmbeddingGenerator::Error, "provider down"
+      end
+
+      uncached = ["Webhook#deliver retries on a 500", "Export#zip compresses the archive"]
+        .each_with_index.map do |name, index|
+          unannotated_spec(file_path: "spec/models/c#{index}_spec.rb", line_number: index + 1, name: name)
+        end
+      run = record(uncached + [annotated, sibling], ci_run_id: "run-2")
+
+      described_class.resolve(run)
+
+      # **The premise, pinned rather than trusted**, and this example is worth nothing without it:
+      # the cached page really did resolve through the outage and really did upgrade, so the name
+      # entry really was deleted mid-page. Had the annotated row failed instead, the sibling would
+      # have re-sighted the still-held name for free and every figure below would be green about a
+      # path nothing walked.
+      upgraded = repository.spec_identities.sole
+      expect(upgraded).to be_from_intent
+      expect(upgraded.text).to eq(triple)
+
+      # **The figure.** Page 1's batch and its two per-signal retries are the whole of what this pass
+      # put on the wire. The sibling's name is not on it — under an unguarded `#embedding_for` it is,
+      # exactly once, which is the amplification the breaker exists to have already stopped.
+      expect(asked).to eq(uncached.pluck(:name) * 2)
+      expect(asked).not_to include(shared_name)
+      expect(provider.batches).to eq(3) # two fills in the setup, then page 1's refused batch.
+      expect(provider.calls).to eq(2)
+
+      # And the sibling is left exactly as every other text this pass skipped is left — stamped,
+      # retryable by the cross-run sweep, and never stranded in the population that sweep cannot see.
+      stranded = run.spec_observations.find_by(file_path: "spec/models/other_spec.rb")
+      expect(run.spec_observations.embed_retryable).to include(stranded)
+      expect(run.spec_observations.embed_unattempted).not_to include(stranded)
+      expect(stranded.spec_identity_id).to be_nil
+    end
+
     it "buys nothing at all when the provider publishes no fingerprint" do
       # **The conservative default, which is what the whole existing suite runs on.** A provider
       # that will not say what it is gets no caching rather than a guessed key — the alternative
