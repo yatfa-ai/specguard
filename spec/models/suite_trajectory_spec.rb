@@ -399,10 +399,16 @@ RSpec.describe SuiteTrajectory do
   # window already loaded, and the series rides on `plotted` rather than on `runs` because a wall
   # clock is comparable only within one shard layout.
   describe "the wall-clock series" do
-    def timed_point(repository, commit, total:, seconds:, shards: 0, at: 1.hour.ago)
+    # `timed_shards` defaults to `shards` — every shard reported — which is the ordinary case and
+    # the one every example written before the timing guard assumed. Primed explicitly rather than
+    # left to fall through to `TestRun#shard_totals`, so an example that means "four shards, two of
+    # them silent" says so in the fixture instead of relying on a `pick` over rows the helper never
+    # created.
+    def timed_point(repository, commit, total:, seconds:, shards: 0, timed_shards: shards, at: 1.hour.ago)
       repository.test_runs.create!(commit_sha: commit, branch: "main", total_specs_count: total,
                                    duration_seconds: seconds, created_at: at)
                           .preload_shard_count(shards)
+                          .preload_timed_shard_count(timed_shards)
     end
 
     it "plots the wall clock of every plotted run that reported one" do
@@ -475,6 +481,133 @@ RSpec.describe SuiteTrajectory do
       expect(series.withheld_other_composition.map(&:commit_sha)).to eq(%w[eightwd])
     end
 
+    # THE DEFECT this guard was written for, and the one `plotted` cannot catch. `assembled_like?`
+    # compares `shard_count` and nothing else, which is the right question for a SUM and the wrong
+    # one for a MAX: `duration_seconds` is the maximum over the shards that REPORTED, so its
+    # denominator is `timed_shard_count`. Four shards whose two slowest were cancelled report a
+    # lower maximum than four that all finished, at an identical `shard_count` on both sides — so
+    # before this guard the chart drew a 70% speed-up produced entirely by telemetry loss, on the
+    # same page load where the Overview panel's `runtime_comparable` guard withheld its delta over
+    # the same pair.
+    it "withholds a run that timed fewer shards than the line, at equal shard_count" do
+      repository = create_repository
+      runs = [timed_point(repository, "fulltm1", total: 20_000, seconds: 600.0, shards: 4, at: 3.days.ago),
+              timed_point(repository, "fulltm2", total: 20_010, seconds: 610.0, shards: 4, at: 2.days.ago),
+              timed_point(repository, "halfrep", total: 20_020, seconds: 180.0, shards: 4,
+                          timed_shards: 2, at: 1.day.ago)]
+
+      series = trajectory(runs)
+
+      # All three are on the SIZE line: they measured a suite and were assembled alike. The
+      # withholding is this line's alone, which is the whole shape of the fix.
+      expect(series.plotted.map(&:commit_sha)).to eq(%w[fulltm1 fulltm2 halfrep])
+      expect(series.timed.map(&:commit_sha)).to eq(%w[fulltm1 fulltm2])
+      expect(series.runtime_values).to eq([600.0, 610.0])
+      # 180.0 is nowhere near the axis whose floor it would otherwise have set.
+      expect(series.runtime_minimum).to eq(600.0)
+      expect(series.withheld_timing_mismatch.map(&:commit_sha)).to eq(%w[halfrep])
+      # Named by its own cause. It reported a clock, so filing it as untimed would name the wrong
+      # one — the same split `withheld_part_way` and `withheld_other_composition` keep above.
+      expect(series.withheld_untimed).to be_empty
+    end
+
+    # Two ways off this line, so two sentences — the discipline `withheld_part_way` and
+    # `withheld_other_composition` are split under: a figure that merges two causes describes
+    # neither. "2 of 3 plotted runs timed" said about a run that timed two of its four shards is
+    # false in its own verb; that run timed.
+    it "words a timing-denominator shortfall differently from a missing clock" do
+      repository = create_repository
+      silent = trajectory([
+        timed_point(repository, "aaaaaaa", total: 1_000, seconds: 40.2, shards: 4, at: 3.days.ago),
+        timed_point(repository, "bbbbbbb", total: 1_020, seconds: 41.0, shards: 4, at: 2.days.ago),
+        timed_point(repository, "noclock", total: 1_047, seconds: nil, shards: 4, at: 1.day.ago)
+      ])
+      partial = trajectory([
+        timed_point(repository, "ccccccc", total: 1_000, seconds: 40.2, shards: 4, at: 3.days.ago),
+        timed_point(repository, "ddddddd", total: 1_020, seconds: 41.0, shards: 4, at: 2.days.ago),
+        timed_point(repository, "twoofor", total: 1_047, seconds: 12.0, shards: 4,
+                    timed_shards: 2, at: 1.day.ago)
+      ])
+
+      expect(silent.runtime_coverage).to eq("2 of 3 plotted runs timed")
+      expect(partial.runtime_coverage).to eq("2 of 3 plotted runs timed the same number of shards")
+      # The arithmetic is identical in both, which is exactly why the wording has to differ: a
+      # caption that read the same over both would be describing one of them wrongly.
+      expect(partial.runtime_coverage).not_to eq(silent.runtime_coverage)
+    end
+
+    # The MIXED state, and the one where the qualifier is load-bearing rather than merely correct.
+    # Either pure case can be told by its own bucket alone, so a caption keyed off the wrong one of
+    # the two still reads right; here both buckets are occupied and only the qualified sentence is
+    # true of the whole cohort. An unqualified "2 of 4 plotted runs timed" said over a run that
+    # timed two of its four shards is false in its verb — the mismatch does not stop being a
+    # mismatch because a silent run is standing next to it.
+    it "keeps the qualifier when a missing clock and a denominator mismatch are both on the line" do
+      repository = create_repository
+      series = trajectory([
+        timed_point(repository, "eeeeeee", total: 1_000, seconds: 40.2, shards: 4, at: 4.days.ago),
+        timed_point(repository, "fffffff", total: 1_020, seconds: 41.0, shards: 4, at: 3.days.ago),
+        timed_point(repository, "noclock", total: 1_030, seconds: nil, shards: 4,
+                    timed_shards: 0, at: 2.days.ago),
+        timed_point(repository, "twoofor", total: 1_047, seconds: 12.0, shards: 4,
+                    timed_shards: 2, at: 1.day.ago)
+      ])
+
+      # Both causes are live at once, each named by its own bucket — the precondition the caption is
+      # being asked about, asserted rather than assumed.
+      expect(series.plotted.map(&:commit_sha)).to eq(%w[eeeeeee fffffff noclock twoofor])
+      expect(series.timed.map(&:commit_sha)).to eq(%w[eeeeeee fffffff])
+      expect(series.withheld_untimed.map(&:commit_sha)).to eq(%w[noclock])
+      expect(series.withheld_timing_mismatch.map(&:commit_sha)).to eq(%w[twoofor])
+
+      expect(series.runtime_coverage).to eq("2 of 4 plotted runs timed the same number of shards")
+      # The falsifying half: the sentence the untimed-only case earns, which a caption that keys off
+      # `withheld_untimed` first would print here about a run that timed.
+      expect(series.runtime_coverage).not_to eq("2 of 4 plotted runs timed")
+    end
+
+    # The guard must be a no-op across the entire unsharded corpus — every run that named no
+    # `ci_run_id`. Both counts are a really-counted `0` there (`TestRun#preload_timed_shard_count`
+    # documents its `.to_i` for precisely that), so the equality holds trivially and nothing about
+    # these rows changes.
+    it "leaves an unsharded cohort exactly as it was" do
+      repository = create_repository
+      runs = [timed_point(repository, "whole01", total: 1_000, seconds: 40.2, at: 3.days.ago),
+              timed_point(repository, "whole02", total: 1_020, seconds: 61.5, at: 2.days.ago),
+              timed_point(repository, "whole03", total: 1_047, seconds: 74.25, at: 1.day.ago)]
+
+      series = trajectory(runs)
+
+      expect(series.timed.map(&:commit_sha)).to eq(%w[whole01 whole02 whole03])
+      expect(series.runtime_values).to eq([40.2, 61.5, 74.25])
+      expect(series.withheld_timing_mismatch).to be_empty
+      expect(series.runtime_coverage).to eq("every one of the 3 plotted runs timed")
+    end
+
+    # Why the rule is MIRRORED off the cohort rule rather than hard-coded to
+    # `timed_shard_count == shard_count`. A branch whose CI reliably loses one shard's telemetry
+    # reports three of four on every run — and those runs are perfectly comparable WITH EACH OTHER.
+    # The strict spelling would withhold the entire line, which is the failure the cohort rule above
+    # was written to invert, arriving through a second door. The dominant denominator wins, so here
+    # the odd run out is the FULLY timed one — which is also why nothing in this bucket's name or
+    # caption says "fewer".
+    it "plots a branch that consistently times three of its four shards" do
+      repository = create_repository
+      runs = [timed_point(repository, "three01", total: 20_000, seconds: 300.0, shards: 4,
+                          timed_shards: 3, at: 3.days.ago),
+              timed_point(repository, "three02", total: 20_010, seconds: 310.0, shards: 4,
+                          timed_shards: 3, at: 2.days.ago),
+              timed_point(repository, "allfour", total: 20_020, seconds: 600.0, shards: 4,
+                          timed_shards: 4, at: 1.day.ago)]
+
+      series = trajectory(runs)
+
+      expect(series).to be_runtime_plottable
+      expect(series.timed.map(&:commit_sha)).to eq(%w[three01 three02])
+      expect(series.runtime_values).to eq([300.0, 310.0])
+      expect(series.withheld_timing_mismatch.map(&:commit_sha)).to eq(%w[allfour])
+    end
+
     # `plottable?` does not imply this one. Thirty comparable runs of which one reported a clock is
     # a plottable suite size and a trajectory of nothing else.
     it "refuses a line through a single timed run even when the size line is plottable" do
@@ -532,6 +665,7 @@ RSpec.describe SuiteTrajectory do
         series.runtime_maximum
         series.runtime_flat?
         series.withheld_untimed
+        series.withheld_timing_mismatch
         series.first_timed_run
         series.last_timed_run
       end

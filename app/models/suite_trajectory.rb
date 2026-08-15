@@ -187,20 +187,45 @@ class SuiteTrajectory
   # shard layout. `duration_seconds` on a run is the MAX over its shards (see `TestRun`), so a CI
   # config moving from four shards to eight halves the wall clock while nothing gets faster —
   # plotted naively that is a 2× speed-up wearing a real SHA. `plotted` has already withheld every
-  # run not `assembled_like?` the cohort, which is exactly the precondition a runtime line needs;
-  # inheriting it is the argument for putting this series here rather than anywhere else on the
-  # page.
+  # run not `assembled_like?` the cohort, and inheriting that is the argument for putting this
+  # series here rather than anywhere else on the page.
   #
-  # What it does NOT inherit is timing coverage. `duration_seconds` is nullable and
-  # `Ingest::Payload#validate_duration_seconds` accepts nil explicitly, so a run that reported a
-  # suite and no clock is an ordinary state rather than a fault — and `TestRun#duration_reported?`
-  # is deliberately `nil?` and not `present?`, because a measured `0.0` is a measurement. Those runs
-  # are withheld from this line and stay on the size line, and the count is carried rather than
-  # quietly dropped, the way `withheld_unmeasured` carries its own.
+  # But it is only HALF the precondition a runtime line needs, and the half it is not was this
+  # line's own defect. `assembled_like?` compares `shard_count` and nothing else, which is exactly
+  # the question a SUM needs — `total_specs_count` is the sum over the shards recorded, so equal
+  # counts is equal denominators. A MAX has a different denominator: `duration_seconds` is the
+  # maximum over the shards that REPORTED, counted by `timed_shard_count`, and `assembled_like?`
+  # never looks at it. Four timed shards (MAX 600s) against four shards whose two slowest were
+  # cancelled (MAX 180s) is identical `shard_count`, identical `suite_size_measured?` — and a 70%
+  # speed-up produced entirely by telemetry loss. The Overview panel on this same page refuses that
+  # comparison for the scalar delta (`repositories/show.html.erb`, the `runtime_comparable` guard);
+  # until the guard below, the chart drew it.
+  #
+  # What it does NOT inherit is timing coverage, in two separate shapes. `duration_seconds` is
+  # nullable and `Ingest::Payload#validate_duration_seconds` accepts nil explicitly, so a run that
+  # reported a suite and no clock is an ordinary state rather than a fault — and
+  # `TestRun#duration_reported?` is deliberately `nil?` and not `present?`, because a measured `0.0`
+  # is a measurement. Separately, a run that reported a clock may have reported it over fewer — or
+  # more — shards than the rest of the line. Both come off this line and stay on the size line, and
+  # both are carried rather than quietly dropped, in buckets of their own, the way
+  # `withheld_part_way` and `withheld_other_composition` are carried above: a figure that merges two
+  # causes describes neither.
 
-  # The plotted runs that also reported a wall clock — the points of the runtime line, oldest first.
+  # The plotted runs that reported a wall clock at all — the candidates for the runtime line, before
+  # the timing denominator is asked about. Not public: on its own it is the selection this class had
+  # before the guard below, and nothing outside should be able to reach for it.
+  private def clocked
+    @clocked ||= plotted.select(&:duration_reported?)
+  end
+
+  # The plotted runs that reported a wall clock over the line's own timing denominator — the points
+  # of the runtime line, oldest first.
   def timed
-    @timed ||= plotted.select(&:duration_reported?)
+    @timed ||= if timing_reference
+                 clocked.select { |run| run.timed_shard_count == timing_reference.timed_shard_count }
+               else
+                 []
+               end
   end
 
   # Two points, for the reason `plottable?` wants two — and asked separately, because `plottable?`
@@ -214,14 +239,36 @@ class SuiteTrajectory
     @withheld_untimed ||= plotted.reject(&:duration_reported?)
   end
 
+  # On the line for size, off it for time for the OTHER reason: it reported a clock, over a
+  # different number of shards than the line's points did. A distinct sentence from the one above,
+  # because the causes are distinct — this run's client sent everything it was asked for, and some
+  # of its shards did not report.
+  #
+  # Deliberately NOT worded "fewer", in either the name or the caption. The mismatch is symmetric:
+  # a branch that consistently loses one shard's telemetry puts the timing cohort at three of four,
+  # and it is then the fully-timed run that is withheld. Naming the bucket for one direction is the
+  # overclaim `withheld_part_way`/`withheld_other_composition` were split apart to avoid, made in
+  # the sentence that explains a withholding rather than in the figure.
+  def withheld_timing_mismatch
+    @withheld_timing_mismatch ||= clocked - timed
+  end
+
   # The runtime series' own denominator, and its denominator is the PLOTTED cohort rather than the
   # window: the runs this line could have drawn through are the ones the size line drew through,
   # never the thirty the window held. Stating it against the window would count a shard-layout
   # mismatch as a timing gap, which is a different withholding with a different cause.
+  #
+  # Three sentences and not two, because there are now two ways to be off this line and a label that
+  # said "3 of 4 plotted runs timed" over a run that DID time would be false in its own verb. The
+  # arithmetic is the same in both shortfalls — the numerator is what got drawn — so the mismatch
+  # case keeps it and qualifies what "timed" is being counted.
   def runtime_coverage
-    return "#{timed.size} of #{plotted.size} plotted runs timed" if withheld_untimed.any?
+    return "every one of the #{plotted.size} plotted runs timed" if withheld_untimed.empty? &&
+                                                                    withheld_timing_mismatch.empty?
 
-    "every one of the #{plotted.size} plotted runs timed"
+    return "#{timed.size} of #{plotted.size} plotted runs timed" if withheld_timing_mismatch.empty?
+
+    "#{timed.size} of #{plotted.size} plotted runs timed the same number of shards"
   end
 
   # Floats, unrounded and uncoerced. The chart scales to this series' own range, so the difference
@@ -262,5 +309,33 @@ class SuiteTrajectory
                          .values
                          .max_by { |cohort| [cohort.size, measured.index(cohort.last)] }
                          &.last
+  end
+
+  # The same rule again, on the other axis: a member of the largest cohort of runs that timed the
+  # same number of shards, ties to the cohort holding the most recent one. `nil` when nothing on the
+  # line reported a clock at all.
+  #
+  # Mirrored rather than hard-coded as `timed_shard_count == shard_count`, and the difference is the
+  # whole point. A branch whose CI reliably loses one shard's telemetry reports three of four on
+  # every run: those runs are perfectly comparable WITH EACH OTHER, and the strict rule would
+  # withhold the entire line — which is precisely the failure the cohort rule above was written to
+  # invert, arriving through a second door. What the line needs is one shared denominator, not a
+  # full one.
+  #
+  # Safe on the unsharded corpus without a carve-out. A run with no shard rows has `shard_count` 0
+  # and `timed_shard_count` 0 — `TestRun#preload_timed_shard_count` documents its `.to_i` for
+  # exactly that, a really-counted zero and never a nil — so the equality holds trivially across
+  # every run that named no `ci_run_id`, and the guard is a no-op there.
+  #
+  # Asked of `clocked` and not of `plotted`, because a run that sent no clock has a
+  # `timed_shard_count` describing shards whose durations were never going to be plotted; letting it
+  # vote would let runs that are not on this line pick this line's denominator.
+  def timing_reference
+    return @timing_reference if defined?(@timing_reference)
+
+    @timing_reference = clocked.group_by(&:timed_shard_count)
+                               .values
+                               .max_by { |cohort| [cohort.size, clocked.index(cohort.last)] }
+                               &.last
   end
 end

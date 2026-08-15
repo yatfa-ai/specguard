@@ -181,7 +181,7 @@ class Repository < ApplicationRecord
   # DESC + LIMIT then reversed, so the bound keeps the *newest* thirty runs and the caller receives
   # them oldest-first, which is the order a trajectory is read in.
   #
-  # == Why the shard count rides along
+  # == Why the shard counts ride along
   #
   # Every point has to answer `TestRun#assembled_like?` before it may be plotted — a run's
   # `total_specs_count` is the SUM over the shards recorded so far, so an in-flight or cancelled
@@ -193,6 +193,18 @@ class Repository < ApplicationRecord
   # So the count is taken in THIS query and each row is primed from it. The whole series costs one
   # query, and it stays one as the history grows and as its runs become sharded.
   #
+  # `COUNT(duration_seconds)` rides in the same statement for the same reason, and it is a SECOND
+  # question rather than a restatement of the first. `SuiteTrajectory`'s runtime line plots
+  # `test_runs.duration_seconds`, which `Ingest::RunRecorder` maintains as the MAX over the shards
+  # that REPORTED — so its denominator is `timed_shard_count` and never `shard_count`, and two runs
+  # of four shards whose two slowest were cancelled on one side are not a speed-up. That predicate
+  # routes through the SAME per-instance `pick`, so a runtime guard added without this column would
+  # trade a wrong chart for thirty queries.
+  #
+  # Primed through `TestRun#preload_timed_shard_count` — a separate call from `preload_shard_count`
+  # rather than one taking both, which is the narrowness that seam documents deliberately: a caller
+  # must not be able to prime a timing number out of a count that measured no timing.
+  #
   # A correlated scalar subquery rather than the `LEFT JOIN … GROUP BY` that first suggests itself,
   # and the difference is not stylistic — it is the difference between O(window) and O(history).
   # Grouping forces Postgres to aggregate EVERY row on the branch before the LIMIT can pick thirty,
@@ -200,11 +212,19 @@ class Repository < ApplicationRecord
   # scan and top-N sort at ~12ms and does not improve when the index below is added. The subquery
   # leaves the ORDER BY/LIMIT alone, so the index walk stops after thirty rows and the count is
   # evaluated for those thirty only (`loops=30` in the plan) — ~0.05ms, and flat as the history
-  # grows. `COUNT(*)` on `index_test_run_shards_on_test_run_id` is an index-only scan per point.
+  # grows. `COUNT(*)` on `index_test_run_shards_on_test_run_id` is an index-only scan per point, and
+  # the timing count is a second scan of the same index over the same thirty rows in the same
+  # statement — a wider SELECT list, never a second round trip.
   #
   # Returns an Array rather than a relation, and that is the point: the rows have been primed, and
   # a relation would invite a caller to chain onto it and quietly re-issue the query without the
-  # count — handing back runs whose `shard_count` costs one query each.
+  # counts — handing back runs whose `shard_count` costs one query each.
+  # `duration_seconds` is qualified and `COUNT(*)` is not, and the asymmetry is deliberate: the
+  # column name exists on BOTH `test_runs` and `test_run_shards`, so an unqualified spelling inside
+  # this correlated subquery is bound to the inner table by scope precedence rather than by what is
+  # written. That binding is correct, and `Repository`'s trajectory spec fails loudly if it ever
+  # stops being — but a rule that holds by precedence holds silently, and this one is the
+  # denominator of every wall clock the chart draws.
   def suite_size_trajectory(run, limit: TRAJECTORY_LIMIT)
     return [] if run.nil? || run.branch.blank?
 
@@ -213,10 +233,15 @@ class Repository < ApplicationRecord
              .order(created_at: :desc, id: :desc)
              .limit(limit)
              .select("test_runs.*, (SELECT COUNT(*) FROM test_run_shards " \
-                     "WHERE test_run_shards.test_run_id = test_runs.id) AS shards_recorded")
+                     "WHERE test_run_shards.test_run_id = test_runs.id) AS shards_recorded, " \
+                     "(SELECT COUNT(test_run_shards.duration_seconds) FROM test_run_shards " \
+                     "WHERE test_run_shards.test_run_id = test_runs.id) AS shards_timed")
              .to_a
              .reverse
-             .each { |point| point.preload_shard_count(point["shards_recorded"]) }
+             .each do |point|
+               point.preload_shard_count(point["shards_recorded"])
+                    .preload_timed_shard_count(point["shards_timed"])
+             end
   end
 
   # A loose index scan ("skip scan") over `index_test_runs_on_repository_id_and_branch_and_created_at`
