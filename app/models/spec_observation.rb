@@ -938,6 +938,100 @@ class SpecObservation < ApplicationRecord
     where(repository_id: repository_id, test_run_id: run_ids, name: nil).count
   end
 
+  # How many ROWS one description's run sequence returns — the drill-in below the composition above.
+  #
+  # A catastrophe valve rather than a display limit, which is what makes it 200 and not 30. The
+  # sequence is one row per run of a window bounded by `Repository::TRAJECTORY_LIMIT`, so the shape
+  # this exists to serve — a test carried by ONE example per run — produces at most thirty rows and
+  # never reaches the cap at all. What can exceed it is the shape `UnstableTests::Row#shared_description?`
+  # names: a description carried by several examples in a single run, where a table-driven loop over
+  # fifty cases is fifty rows per run and the window is fifteen hundred. Those rows are the honest
+  # answer to what was asked and are not filtered out — the drill-in exists to SHOW that a
+  # description is not a key for its run — but a listing bounded only by how many times somebody
+  # looped is not bounded at all.
+  #
+  # Named rather than inlined, on the rule every `_LIMIT` above obeys: the block reports the figure
+  # back to the client, and a number explaining a list's length must not be able to disagree with it.
+  UNSTABLE_TEST_RUNS_LIMIT = 200
+
+  # What that drill-in has to say ABOUT the rows under it, counted in the SAME read that returns
+  # them — `COUNT(*) OVER ()` and `COUNT(outcome) OVER ()`, which counts non-nulls.
+  #
+  # Its OWN constant rather than a reuse of `DESCRIPTION_POPULATION_COUNTS`, and for that constant's
+  # own reason one rung up rather than for a style preference: the aliases are read back as record
+  # ATTRIBUTES by name, and these two windows count a DESCRIPTION'S ROWS ACROSS A WINDOW OF RUNS
+  # where that pair counts one run's. Sharing the alias would have this object reading
+  # `description_recorded_count` off a row whose population is thirty runs deep — a name that is not
+  # merely ill-fitting but false, and false in the one direction that matters here, since the whole
+  # point of this drill-in is that the window and the run are different populations.
+  #
+  # The SECOND figure is `COUNT(outcome)` and deliberately not `COUNT(duration_seconds)`, which is
+  # what both sibling pairs count. The sibling drill-ins rank by time and their captions are about
+  # timing coverage; this one is read for OUTCOMES, and the coverage that has to be disclosed here is
+  # how many of the window's rows said how the test ended at all. A run that recorded the test and
+  # reported no outcome is not a pass — `UnstableTests::Row#changed?` refuses that reading one rung
+  # up by comparing against `reported_outcome_count` rather than `recorded_count` — and a truncated
+  # list whose silence a client could not count would put that separation back out of reach.
+  #
+  # Windows are evaluated after the WHERE and before the LIMIT, so both figures cover the whole
+  # WINDOW however few rows come back: the cap is disclosed against the sequence's real population
+  # rather than against itself.
+  UNSTABLE_TEST_RUN_POPULATION_COUNTS =
+    "COUNT(*) OVER () AS unstable_test_recorded_count, " \
+    "COUNT(outcome) OVER () AS unstable_test_reported_outcome_count"
+
+  # ONE description's rows across a window of runs, IN WINDOW ORDER — the rung below
+  # `.outcome_composition_in`, and the axis that read has to destroy to do its own job.
+  #
+  # The composition is `COUNT`s and `ARRAY_AGG(DISTINCT …)` under `GROUP BY name`: one row per
+  # description for the whole window, which is exactly right for a RANKING and is why nothing here
+  # changes it. What it cannot say is WHEN. "Failed in 4 of 30 runs" is the same pair of integers
+  # whether those four were the last four — a regression, whose fix is to find the commit — or runs
+  # 3, 11, 19 and 26 — flakiness, whose fix is somewhere else entirely. This read is the same rows
+  # ungrouped, so the sequence the aggregate summed over is legible again.
+  #
+  # ORDERED BY THE WINDOW'S OWN ORDER, not by `created_at` and not by `id`. `array_position` over the
+  # ids AS THEY WERE HANDED IN makes this list index-for-index with the `history` rows the same
+  # window produced, so the run a row belongs to can be read off the position as well as off the
+  # `commit_sha` on it. Ordering by `id` would be ordering by INGEST order, which is the same series
+  # only while nothing is backfilled and no run is ingested out of order; ordering by `created_at`
+  # would need a join to a table the caller has already loaded.
+  #
+  # The window's order is newest-first (`Repository#recent_test_runs`), and that decides which end
+  # the cap takes off: a truncated sequence keeps the RECENT runs and drops the old ones, which is
+  # the survivable direction. "It has failed since some point before this list starts" still names a
+  # regression; a list truncated the other way would answer "how is it doing lately" with the state
+  # of a month ago. `id ASC` breaks ties WITHIN a run, so a description carried by several examples
+  # in one run has one stable order rather than one the planner picks afresh per request.
+  #
+  # Scoped by `repository_id` as well as by the window's runs, for the reason `.outcome_composition_in`
+  # gives verbatim: it is the leading column of `index_spec_observations_on_repository_id_and_name`,
+  # and without it there is no index on `name` to walk.
+  #
+  # == Query cost
+  #
+  # One statement, and CONSTANT IN THE SIZE OF THE SUITE — it reads one description's rows over at
+  # most `Repository::TRAJECTORY_LIMIT` runs, never the window's rows and never the suite's. That is
+  # the property that lets it sit under a ranking of 20,000 examples at all. Issued ONLY when the
+  # parameter was sent. EXPLAIN-certified in `spec/models/spec_observation_spec.rb` beside the
+  # composition's own certification, on the same seed.
+  #
+  # The ordering INLINES the ids rather than binding them, which is what `array_position` over a
+  # literal array costs and is worth naming: the SQL text then varies per window, so each distinct
+  # window is its own entry in the connection's prepared-statement cache rather than a re-bind of
+  # one. That cache is bounded and LRU-evicting, and this read is issued only on an explicit ask, so
+  # the price is an occasional re-prepare and not growth — but it is a price, and it is the reason
+  # this ordering is not reached for by the reads that run on every request.
+  def self.outcome_sequence_in(repository_id:, run_ids:, name:, limit: UNSTABLE_TEST_RUNS_LIMIT)
+    return none if run_ids.empty?
+
+    where(repository_id: repository_id, test_run_id: run_ids, name: name)
+      .select(Arel.sql("spec_observations.*, #{UNSTABLE_TEST_RUN_POPULATION_COUNTS}"))
+      .order(Arel.sql(sanitize_sql_array(["array_position(ARRAY[?]::bigint[], test_run_id)", run_ids])),
+             id: :asc)
+      .limit(limit)
+  end
+
   # Where ONE run's wall clock went, rolled up by DIRECTORY — the rung directly above the rollup
   # above, and the grain the question is usually asked in. "Which area of this suite carries the
   # time" is not answerable from a ranked list of files any more than it was from a ranked list of

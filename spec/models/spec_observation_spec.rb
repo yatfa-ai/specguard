@@ -787,6 +787,86 @@ RSpec.describe SpecObservation do
         expect(described_class.unnamed_row_count_in(repository_id: repository.id, run_ids: window_ids))
           .to eq(18)
       end
+
+      # The fifth read, and the one the four above cannot stand in for: they are the composition's
+      # steps, and every one of them destroys the run axis on purpose. This is the same rows
+      # UNGROUPED, so the sequence the aggregate summed over is legible again — a window whose
+      # failures are the last four runs and one whose failures are scattered produce the same
+      # `outcome_composition_in` tuple and different sequences here.
+      it "returns one description's rows across the window, in the order the window was given" do
+        sequence = described_class.outcome_sequence_in(
+          repository_id: repository.id, run_ids: window_ids, name: "example 7"
+        )
+
+        expect(sequence.map(&:test_run_id)).to eq(window_ids)
+        expect(sequence.map(&:outcome)).to eq(%w[failed passed failed passed failed passed])
+      end
+
+      # ORDERED BY THE WINDOW'S OWN ORDER and not by `id` or `created_at` — the property the whole
+      # block rests on, asserted against a window handed in BACKWARDS. Ordering by either column
+      # would answer this identically to the example above, which is what makes the reversal the
+      # only assertion that separates them.
+      it "follows the order it was handed rather than the table's own" do
+        sequence = described_class.outcome_sequence_in(
+          repository_id: repository.id, run_ids: window_ids.reverse, name: "example 7"
+        )
+
+        expect(sequence.map(&:test_run_id)).to eq(window_ids.reverse)
+      end
+
+      # The population counts ride back on every row, counted after the WHERE and before the LIMIT,
+      # so the cap is disclosed against the sequence's real population rather than against itself.
+      # `COUNT(outcome)` and not `COUNT(*)`: a run that recorded the test and reported nothing is
+      # not a pass, and a truncated list whose silence a client could not count would put that
+      # separation out of reach.
+      it "rides the window's own counts back on the rows, before the cap" do
+        SpecObservation.where(test_run_id: window_ids.first, name: "example 7").update_all(outcome: nil)
+
+        sequence = described_class.outcome_sequence_in(
+          repository_id: repository.id, run_ids: window_ids, name: "example 7", limit: 2
+        )
+
+        expect(sequence.length).to eq(2)
+        expect(sequence.first["unstable_test_recorded_count"]).to eq(6)
+        expect(sequence.first["unstable_test_reported_outcome_count"]).to eq(5)
+      end
+
+      # The cap takes the OLD end, because the window is handed in newest-first: "it has failed
+      # since before this list starts" still names a regression, where a list cut the other way
+      # answers "how is it doing lately" with the state of a month ago.
+      it "keeps the head of the window when the cap bites" do
+        sequence = described_class.outcome_sequence_in(
+          repository_id: repository.id, run_ids: window_ids, name: "example 7", limit: 2
+        )
+
+        expect(sequence.map(&:test_run_id)).to eq(window_ids.first(2))
+      end
+
+      # Bounded to the window it was given, not to the repository's whole history — the fourteen
+      # runs outside it hold the same description and must not appear in the sequence.
+      it "reads only the runs of the window it was given" do
+        sequence = described_class.outcome_sequence_in(
+          repository_id: repository.id, run_ids: window_ids.first(2), name: "example 7"
+        )
+
+        expect(sequence.map(&:test_run_id)).to eq(window_ids.first(2))
+      end
+
+      # A description the window recorded nothing under is an ordinary answer and not an error — a
+      # renamed test, an edited description, a stale bookmark.
+      it "answers for a description the window never recorded, with no rows" do
+        expect(described_class.outcome_sequence_in(
+          repository_id: repository.id, run_ids: window_ids, name: "example 7 "
+        )).to be_empty
+      end
+
+      it "answers for a window of no runs without asking the database anything" do
+        expect(count_queries do
+          expect(described_class.outcome_sequence_in(
+            repository_id: repository.id, run_ids: [], name: "example 7"
+          )).to be_empty
+        end).to eq(0)
+      end
     end
 
     # One index scan per step, and never a walk of every run's rows. Which index Postgres reaches
@@ -859,6 +939,23 @@ RSpec.describe SpecObservation do
       it "counts the unnamed rows off the by-name index too" do
         plan = plan_for_actual_sql do
           described_class.unnamed_row_count_in(repository_id: repository.id, run_ids: window_ids)
+        end
+
+        expect(plan).to include("index_spec_observations_on_repository_id_and_name")
+        expect(plan).to match(SCAN)
+        expect(plan).not_to match(/Seq Scan on spec_observations/)
+      end
+
+      # The drill-in below the composition, on the same index and for the same reason: it narrows on
+      # `repository_id` AND `name`, which is what that index leads on, and without the first column
+      # there would be no index on `name` to walk. The `array_position` ORDER BY sorts the rows
+      # AFTERWARDS and is bounded by ONE DESCRIPTION over at most thirty runs — thirty rows here,
+      # against the 6,000 the window holds — which is what makes this read constant in the size of
+      # the suite rather than merely cheaper than the window.
+      it "reads one description's run sequence off the by-name index rather than scanning" do
+        plan = plan_for_actual_sql do
+          described_class.outcome_sequence_in(repository_id: repository.id, run_ids: window_ids,
+                                              name: "example 7").to_a
         end
 
         expect(plan).to include("index_spec_observations_on_repository_id_and_name")
