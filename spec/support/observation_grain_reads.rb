@@ -193,9 +193,34 @@ module ObservationGrainReads
   # exclude it explicitly and it gets a grain of its own at the end.
   GROWTH_ORDER = /ORDER BY ABS\(COUNT\(\*\) FILTER \(WHERE test_run_id = /
 
+  # The run-over-run RUNTIME ranking, and the ONE read that produces it —
+  # `SpecObservation.directory_runtime_growth_between`, which orders by the absolute difference of
+  # two per-run `FILTER` SUMS where every other growth read subtracts two `COUNT`s.
+  #
+  # ⭐ IT GETS ITS OWN GRAIN, AND THE ALTERNATIVE WAS NOT "WIDEN `GROWTH_ORDER`". This read shares
+  # the AREA GROUPING with `.directory_durations_in` and `.directory_growth_between` — the one
+  # expression that cannot be un-shared, because the two surfaces must agree on what a directory is —
+  # so the grain is separated on its ORDER BY, exactly as the area/growth split already is. Folding
+  # it into `growth` (5) would put a read of a DIFFERENT QUANTITY into a list whose accessor callers
+  # read as "the count-growth reads", turning every `growth.length == 1` pin into a `2` that
+  # attributes nothing: `directory_run_growth` and `directory_runtime_growth` are constructed under
+  # the SAME gate (every request, no parameter), so unlike the two readers already sharing grain 5,
+  # no difference-of-fixtures could ever separate them again.
+  #
+  # `SUM(duration_seconds) FILTER (WHERE test_run_id = ` is issued nowhere else on this table: the
+  # by-area and by-file duration rollups sum ONE run's rows and carry no `FILTER`, and every other
+  # `FILTER (WHERE test_run_id = ` aggregate counts rather than sums. Matched POSITIVELY, on SQL only
+  # this read produces, on the rule stated at the top of this file.
+  #
+  # APPENDED AT THE END rather than inserted beside the growth grain it is a sibling of, for the
+  # reason the drill-ins are: every existing caller destructures a PREFIX of this array, and
+  # appending is what keeps `growth` at index 5 and `directory_file_growth` at index 9 for the blocks
+  # already naming them there.
+  RUNTIME_GROWTH_ORDER = /ORDER BY ABS\(SUM\(duration_seconds\) FILTER \(WHERE test_run_id = /
+
   # `[area, file, example, description, flakiness, growth, directory_files, file_examples,
-  # repeated_description_examples, directory_file_growth]` — the ten grains, each an array of the
-  # statements matched. The
+  # repeated_description_examples, directory_file_growth, runtime_growth]` — the eleven grains, each
+  # an array of the statements matched. The
   # single-run grains come first, in the order `serialized_latest_run` serves them, and the two
   # CROSS-RUN grains after them in the order `show` serves them — so a destructuring caller reads
   # the endpoint's own shape, and a caller written before a grain was appended keeps naming the same
@@ -221,7 +246,8 @@ module ObservationGrainReads
      reads.grep(/GROUP BY "spec_observations"\."spec_file_path"/).grep(AREA_PREDICATE).grep_v(GROWTH_ORDER),
      reads.grep(/AS file_recorded_count/),
      reads.grep(/AS description_recorded_count/),
-     reads.grep(GROWTH_ORDER).grep(AREA_PREDICATE)]
+     reads.grep(GROWTH_ORDER).grep(AREA_PREDICATE),
+     reads.grep(RUNTIME_GROWTH_ORDER)]
   end
 
   # `UnstableTests.for`'s four reads, in the order it issues them: the gating outcome-reporting
@@ -248,6 +274,7 @@ module ObservationGrainReads
   def file_examples_grain_reads(&) = observation_reads_by_grain(&)[7]
   def repeated_description_examples_grain_reads(&) = observation_reads_by_grain(&)[8]
   def directory_file_growth_grain_reads(&) = observation_reads_by_grain(&)[9]
+  def runtime_growth_grain_reads(&) = observation_reads_by_grain(&)[10]
 end
 
 RSpec.configure do |config|

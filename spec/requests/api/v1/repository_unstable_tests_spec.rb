@@ -659,13 +659,13 @@ RSpec.describe "GET /api/v1/repository — unstable_tests", type: :request do
 
       expect(flakiness_grain_reads { get_repository(key: api_key) }).to be_empty
       # And the endpoint's other grains are untouched at their own established count, so the zero
-      # above is this grain declining to read rather than the table going quiet. SEVEN and not six:
-      # the six single-run reads, plus the ONE `directory_run_growth` adds — that pair compares the
-      # latest run against the previous one on its branch and is served UNCONDITIONALLY, so it reads
-      # on an unfiltered window where both branch-gated blocks decline. It is counted here rather
-      # than excluded, because the point of this line is that a read belonging to another grain
-      # cannot disappear into this one's zero.
-      expect(observation_reads { get_repository(key: api_key) }.length).to eq(7)
+      # above is this grain declining to read rather than the table going quiet. EIGHT and not six:
+      # the six single-run reads, plus the ONE `directory_run_growth` adds and the ONE
+      # `directory_runtime_growth` adds — both pairs compare the latest run against the previous one
+      # on its branch and are served UNCONDITIONALLY, so they read on an unfiltered window where both
+      # branch-gated blocks decline. They are counted here rather than excluded, because the point of
+      # this line is that a read belonging to another grain cannot disappear into this one's zero.
+      expect(observation_reads { get_repository(key: api_key) }.length).to eq(8)
       expect(get_repository(key: api_key)["unstable_tests"]).to be_nil
     end
 
@@ -703,28 +703,33 @@ RSpec.describe "GET /api/v1/repository — unstable_tests", type: :request do
     end
 
     # And the four are ALL of the reads this window adds — the assertion the per-grain count cannot
-    # make, because a read matching no grain's pattern is invisible to every one of them. Twelve is
+    # make, because a read matching no grain's pattern is invisible to every one of them. Thirteen is
     # the endpoint's six single-run reads, plus these four, plus the TWO the growth-by-area grain
-    # adds on the same branch-scoped window: one for `directory_growth` (the branch window's two
+    # adds on the same branch-scoped window — one for `directory_growth` (the branch window's two
     # endpoints) and one for `directory_run_growth` (the latest run against the previous one on its
-    # branch). Those two are counted here rather than folded into the four, because the whole point
-    # of this example is that a read belonging to no grain is caught by the total:
-    # `spec/requests/api/v1/repository_directory_growth_spec.rb` and its run-over-run sibling bound
-    # them, this line only refuses to let them disappear.
+    # branch) — plus the ONE the RUNTIME grain adds, which is `directory_runtime_growth` ranking the
+    # same two runs' areas by summed duration rather than by example count. Those three are counted
+    # here rather than folded into the four, because the whole point of this example is that a read
+    # belonging to no grain is caught by the total:
+    # `spec/requests/api/v1/repository_directory_growth_spec.rb` and its two run-over-run siblings
+    # bound them, this line only refuses to let them disappear.
     it "adds exactly those four to the table's total, and no fifth" do
       repository_with(%w[passed failed passed])
       get_repository(key: api_key)
 
       area, file, example, description, flakiness, growth =
         observation_reads_by_grain { get_repository(key: api_key, query: { branch: "main" }) }
+      runtime_growth =
+        runtime_growth_grain_reads { get_repository(key: api_key, query: { branch: "main" }) }
 
       expect([area.length, file.length, example.length, description.length, flakiness.length])
         .to eq([1, 1, 2, 2, 4])
       expect(growth.length).to eq(2)
+      expect(runtime_growth.length).to eq(1)
       expect(observation_reads { get_repository(key: api_key, query: { branch: "main" }) }.length)
         .to eq(classified_observation_reads { get_repository(key: api_key, query: { branch: "main" }) })
       expect(observation_reads { get_repository(key: api_key, query: { branch: "main" }) }.length)
-        .to eq(12)
+        .to eq(13)
     end
 
     # NO RUN-WINDOW QUERY. The block is drawn on `history_runs`, which is materialized once and
