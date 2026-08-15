@@ -203,7 +203,8 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
                             "directory_growth", "directory_run_growth_window",
                             "directory_run_growth", "directory_runtime_growth_window",
                             "directory_runtime_growth", "directory_run_file_growth_window",
-                            "directory_run_file_growth", "branches_window", "branches")
+                            "directory_run_file_growth", "directory_runtime_file_growth_window",
+                            "directory_runtime_file_growth", "branches_window", "branches")
     end
 
     it "scopes latest_run to the key's own repository" do
@@ -2518,7 +2519,8 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
                             "directory_growth", "directory_run_growth_window",
                             "directory_run_growth", "directory_runtime_growth_window",
                             "directory_runtime_growth", "directory_run_file_growth_window",
-                            "directory_run_file_growth", "branches_window", "branches")
+                            "directory_run_file_growth", "directory_runtime_file_growth_window",
+                            "directory_runtime_file_growth", "branches_window", "branches")
       expect(body["history"].first.keys).to contain_exactly(
         "commit_sha", "branch", "total_specs", "annotated_specs", "annotated_ratio",
         "duration_seconds", "shard_count", "timed_shard_count", "suite_size_measured", "ingested_at"

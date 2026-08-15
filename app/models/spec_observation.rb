@@ -354,6 +354,29 @@ class SpecObservation < ApplicationRecord
   # a sentence explaining a list's length must not be able to disagree with it.
   SPEC_DIRECTORY_FILE_GROWTH_LIMIT = 30
 
+  # How many spec FILES a single directory's RUNTIME drill-down returns — the constant above's
+  # sibling, and the same call `RETIMED_DIRECTORIES_LIMIT` is one grain up.
+  #
+  # Its own constant, and here the coincidence is total rather than merely tempting: this ranks the
+  # IDENTICAL population the constant above ranks — the union of two runs' files in one area — so
+  # the argument that separates them cannot be about the population at all. It is the one
+  # `RETIMED_DIRECTORIES_LIMIT` makes: the two rank that population by INDEPENDENT quantities.
+  # Splitting one slow spec file into four fast ones is `+3` examples and *less* time; adding a
+  # `sleep` to a shared `before` is `0` examples and minutes. The thirty files whose example count
+  # moved most and the thirty whose summed time moved most are two different lists over the same
+  # files, and an area that wants thirty of one has no reason to want thirty of the other.
+  #
+  # So one number standing for both would make that a single edit nobody meant to make — the rule
+  # the constants above obey, at the one grain where BOTH the population and the number coincide and
+  # sharing would therefore look not merely harmless but obvious.
+  #
+  # Thirty rather than the ten of the RANKINGS at the top of this list, on the reason its sibling
+  # gives: the union of two runs' files inflates precisely where the movement is, because a file
+  # renamed within the area occupies TWO rows — its old path at `n → 0` and its new one at `0 → n`.
+  # Named, like all of them, because the panel's caption reports the figure back to the reader and a
+  # sentence explaining a list's length must not be able to disagree with it.
+  SPEC_DIRECTORY_FILE_RUNTIME_GROWTH_LIMIT = 30
+
   # How many repeated-DESCRIPTION groups the redundancy ranking returns. Its own constant, by the
   # rule the seven above it obey, and the population it ranks is unlike any of theirs: not files,
   # not areas, not examples, but the DESCRIPTIONS that more than one example of one run recorded.
@@ -1471,6 +1494,118 @@ class SpecObservation < ApplicationRecord
              Arel.sql("#{DIRECTORY_EXPRESSION} ASC"))
       .limit(limit)
       .pluck(Arel.sql(DIRECTORY_EXPRESSION), Arel.sql(previous_seconds), Arel.sql(latest_seconds),
+             Arel.sql(previous_recorded), Arel.sql(latest_recorded),
+             Arel.sql(previous_timed), Arel.sql(latest_timed),
+             Arel.sql("COUNT(*) OVER ()"),
+             Arel.sql("SUM(#{previous_recorded}) OVER ()"), Arel.sql("SUM(#{latest_recorded}) OVER ()"),
+             Arel.sql("SUM(#{previous_timed}) OVER ()"), Arel.sql("SUM(#{latest_timed}) OVER ()"))
+  end
+
+  # How each spec FILE of ONE area's summed example DURATION moved between two runs — the read above
+  # at one grain down, and the last of the four {area,file} × {count,runtime} comparisons this model
+  # serves.
+  #
+  # It is exactly `.directory_runtime_growth_between`'s SELECT LIST over `.file_growth_between`'s
+  # GROUPING AND NARROW, and it is written out rather than parameterised for the reason those two
+  # are separate methods in the first place: the grain decides the grouping, the ordering expression
+  # and the window totals' meaning all at once, and a method taking "group by this or that" would be
+  # one read with a branch in it standing where two reads are.
+  #
+  # == What this answers that no other read can
+  #
+  # `.directory_runtime_growth_between` names the ten AREAS whose time moved most and then dead-ends
+  # on the only question a row like `spec/models 120s → 210s` provokes — WHICH FILE DID THAT. The
+  # count-grain drill-in beside it cannot answer it: `.file_growth_between` measures no durations at
+  # all, and a file where somebody made an existing example slow adds zero examples, so its
+  # `ABS(latest_count - previous_count)` is `0` and it sorts last there and falls off the cap. The
+  # two rankings are independent in both directions at this grain exactly as they are one grain up.
+  #
+  # `.files_in_directory` is the other neighbour and it stops one RUN short: it carries per-file
+  # `SUM(duration_seconds)` for ONE run, so it holds this run's per-file seconds and never the
+  # previous run's. The subtraction exists nowhere else.
+  #
+  # == It compares populations; it matches no tests
+  #
+  # The premise every read in this family stands on, unchanged by the grain: this sums each file's
+  # rows in each run and subtracts two numbers. No `example_id` crosses the run boundary and no
+  # example is paired with another example — an edit that joins these runs on `example_id` in order
+  # to say "this test got slower" has left what this method is allowed to say, whatever the numbers
+  # come out as.
+  #
+  # == The narrow is an EQUALITY, and it is the SAME narrow the count drill-in takes
+  #
+  # Through `DIRECTORY_EXPRESSION` and `= ?`, never a prefix `LIKE` — `.file_growth_between` carries
+  # that argument in full, including why the two reads must share the expression rather than
+  # hand-copy it. It matters once more here than it does there, because one `?spec_directory=` now
+  # opens THREE blocks: two reads answering one ask through two definitions of what an area IS would
+  # list a file's growth beside a panel calling the area empty, on one click.
+  #
+  # == A NULL sum is not a zero, and that decides the ranking
+  #
+  # `.directory_runtime_growth_between`'s rule at one grain finer, and the finer grain is where it
+  # bites hardest: `duration_seconds` is nullable by design, so `SUM` over a file none of whose
+  # examples were timed is SQL NULL, and so is the subtraction — the whole ordering key for such a
+  # file is NULL. `DESC` alone is NULLS FIRST, which would name the file nobody MEASURED the biggest
+  # mover in the area and put it at the head of a list about slowdowns. Hence `NULLS LAST`, and
+  # hence the caller renders both sums through `.humanized_duration` rather than formatting them.
+  #
+  # == Four counts per row, so every sum states what it was summed over
+  #
+  # Verbatim the parent read's reason, and the population it is stated over is this AREA's rather
+  # than the run's. `SUM` skips NULLs silently, so a file half of whose examples were untimed
+  # reports a total covering half of it — and at this grain that has to hold on both sides at once,
+  # because a file that "got faster" may only have stopped reporting timings. So each side carries
+  # both its recorded count and its TIMED count.
+  #
+  # == Why the totals are the AREA's and not the run's
+  #
+  # The five `... OVER ()` windows are narrowed by the same predicate the rows are, so they count
+  # what each run recorded and timed IN THIS AREA. Deliberately NOT the figures the parent read
+  # returns under the same names, which are whole-run totals — `.file_growth_between` states the
+  # hazard in full, and it is sharper here because there are twice as many of them: a caller that
+  # needs "did this run report timings AT ALL" must ask the parent, since an area only the latest
+  # run timed would otherwise report the previous run as having timed nothing anywhere, which is a
+  # true statement about the area and a false one about the run. `SpecDirectoryFileRuntimeGrowth`
+  # asks the parent, and reads none of its nine refusals off these figures.
+  #
+  # Counted BEFORE the `LIMIT` (`... OVER ()` runs after `GROUP BY` and before `LIMIT`), so a
+  # caption built on them cannot describe a different row set from the table under it.
+  #
+  # == Why this needs no index of its own
+  #
+  # The argument `.file_growth_between` and `.directory_runtime_growth_between` both make, and this
+  # read inherits both halves: it narrows on `test_run_id` — an `IN` list of two, served by
+  # `index_spec_observations_on_test_run_id` — and the area predicate is an EXPRESSION no index can
+  # serve, which therefore decides nothing about the access path and only ever removes rows from a
+  # scan that was already happening. The grouping is on a plain column. As with every read that sums
+  # durations, `SUM(duration_seconds)` projects a column outside
+  # `index_spec_observations_on_test_run_id_and_spec_file_path`, so this can never be an
+  # `Index Only Scan`; spec/models/spec_observation_spec.rb records that tradeoff here as it does
+  # for its two parents.
+  #
+  # @return [Array<Array>] `[spec_file_path, previous_seconds, latest_seconds, previous_recorded,
+  #   latest_recorded, previous_timed, latest_timed, file_count, previous_recorded_total,
+  #   latest_recorded_total, previous_timed_total, latest_timed_total]` per file, ranked by absolute
+  #   movement in seconds with a path tiebreak. Either `_seconds` is nil where that side timed
+  #   nothing in that file. The last five are the same figures on every row — this AREA's — all
+  #   counted before the `LIMIT`.
+  def self.file_runtime_growth_between(test_run, previous_test_run, directory,
+                                       limit: SPEC_DIRECTORY_FILE_RUNTIME_GROWTH_LIMIT)
+    latest_seconds = sanitize_sql_array(["SUM(duration_seconds) FILTER (WHERE test_run_id = ?)", test_run.id])
+    previous_seconds = sanitize_sql_array(["SUM(duration_seconds) FILTER (WHERE test_run_id = ?)",
+                                           previous_test_run.id])
+    latest_recorded = sanitize_sql_array(["COUNT(*) FILTER (WHERE test_run_id = ?)", test_run.id])
+    previous_recorded = sanitize_sql_array(["COUNT(*) FILTER (WHERE test_run_id = ?)", previous_test_run.id])
+    latest_timed = sanitize_sql_array(["COUNT(duration_seconds) FILTER (WHERE test_run_id = ?)", test_run.id])
+    previous_timed = sanitize_sql_array(["COUNT(duration_seconds) FILTER (WHERE test_run_id = ?)",
+                                         previous_test_run.id])
+
+    where(test_run_id: [test_run.id, previous_test_run.id])
+      .where(sanitize_sql_array(["#{DIRECTORY_EXPRESSION} = ?", directory]))
+      .group(:spec_file_path)
+      .order(Arel.sql("ABS(#{latest_seconds} - #{previous_seconds}) DESC NULLS LAST"), spec_file_path: :asc)
+      .limit(limit)
+      .pluck(Arel.sql("spec_file_path"), Arel.sql(previous_seconds), Arel.sql(latest_seconds),
              Arel.sql(previous_recorded), Arel.sql(latest_recorded),
              Arel.sql(previous_timed), Arel.sql(latest_timed),
              Arel.sql("COUNT(*) OVER ()"),
