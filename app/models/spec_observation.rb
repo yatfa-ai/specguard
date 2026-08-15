@@ -1779,17 +1779,24 @@ class SpecObservation < ApplicationRecord
   # twice, so it is built where it is read and is deliberately not spelled through this seam. A seam
   # that claimed it anyway would be the thing this one exists to retire: a promise kept by hand.
   #
-  # The CAPTION sentences stop here too, and for a reason of their own: `TestRun#machine_seconds_coverage`,
-  # `SuiteTrajectory#coverage` and `SuiteTrajectory#runtime_coverage` are single-sided and are coverage
-  # fractions, but each renders its fraction with a trailing noun phrase naming what was counted — "3 of 4
-  # added up", "12 of 15 runs plotted" — and, load-bearingly, each has a COMPLETE case that is not a
-  # fraction at all: "all 4 added up", "every one of the last 15 runs plotted". That completeness rule is
-  # the whole point of those labels — a label is the most prominent claim a number wears, so only the
-  # complete case is allowed to say "all" — and it is a rule this seam has no way to state, because it
-  # cannot see which of two operands being equal means "every" and which means a coincidence. Two of them
-  # render on the same page as the areas panel that does come through here, so the adjacency is the same
-  # one the paragraph above answers for; the answer is the same. They are a different sentence, not this
-  # one with a noun on the end.
+  # The CAPTION sentences stop here too, and for a reason of their own — one worth stating as a TEST
+  # rather than as a roster, because the family is larger than a list kept here would stay correct.
+  # A caption pairs its fraction with a trailing noun phrase naming what was counted — "3 of 4 added
+  # up", "12 of 15 runs plotted", "12 of the 40 examples reported an outcome" — and, load-bearingly,
+  # each has a COMPLETE case that is not a fraction at all: "all 4 added up", "every one of the last
+  # 15 runs plotted", "none of them can be plotted". That completeness rule is the whole point of
+  # those labels — a label is the most prominent claim a number wears, so only the complete case is
+  # allowed to say "all" — and it is a rule this seam has no way to state, because it cannot see
+  # which of two operands being equal means "every" and which means a coincidence. Anything
+  # answering that description is a different sentence rather than this one with a noun on the end:
+  # `TestRun#machine_seconds_coverage` and `TestRun#wall_clock_coverage`, `SuiteTrajectory#coverage`
+  # and `SuiteTrajectory#runtime_coverage`, and several in `RepositoriesHelper` that a grep for two
+  # interpolated operands never reaches — their numerator can be a literal ("0 of 4 reported") and
+  # their denominator can sit behind an article ("of the 40 examples"), so the census that looks
+  # complete is the one to distrust. Adjacency is not the discriminator either: several of these
+  # render on the same page as the areas panel that does come through here — `#wall_clock_coverage`
+  # and `#machine_seconds_coverage` print side by side out of one helper — so the question the
+  # paragraph above answers arises here too, and the answer is the same.
   #
   # Always the fraction and never the bare numerator. "12" in a column of "12 of 40" reads as
   # twelve of something unstated: the denominator is the point of the column, and a fully timed
