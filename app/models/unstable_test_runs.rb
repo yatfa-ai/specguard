@@ -48,11 +48,12 @@
 # == The window is HANDED IN, never re-queried
 #
 # `UnstableTests.for`'s own parameter documentation makes this argument and it binds harder here, not
-# less: two panels that separately fetched "the last thirty runs on this branch" are two windows that
-# agree today, and this one's rows are read for their POSITION in a window whose other half — the
-# `commit_sha` a reader joins against — was serialized from the first fetch. A second fetch would put
-# an off-by-one between the sequence and the commits it is read against, which is the one error this
-# drill-in cannot survive: naming the wrong culprit commit is worse than naming none.
+# less: every panel that separately fetched "the last thirty runs on this branch" would be its own
+# window, agreeing today with no structural reason to keep agreeing, and this one's rows are read
+# for their POSITION in a window whose other half — the `commit_sha` a reader joins against — was
+# serialized from the first fetch. A second fetch would put an off-by-one between the sequence and
+# the commits it is read against, which is the one error this drill-in cannot survive: naming the
+# wrong culprit commit is worse than naming none.
 #
 # == A test the window recorded nothing for is not an error
 #

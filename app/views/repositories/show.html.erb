@@ -1338,8 +1338,8 @@
 
         Drawn on the SAME loaded window as the "Suite growth" chart and the outcome panel below —
         same `?branch=` anchor, same `Repository::TRAJECTORY_LIMIT`, literally the same rows (see
-        `RepositoriesController#show`), because three panels that each fetched "the last thirty runs
-        on this branch" would be three windows with no structural reason to keep agreeing.
+        `RepositoriesController#show`), because every panel that fetched "the last thirty runs on
+        this branch" for itself would be its own window, with no structural reason to keep agreeing.
 
         TWO ENDPOINTS, and the caption says so. What happened between them is not read and cannot
         be: an area that added three hundred examples in run 12 and deleted them in run 25 reads
@@ -1538,9 +1538,9 @@
         Drawn on the SAME window as the "Suite growth" panel above — same `?branch=` anchor, same
         `Repository::TRAJECTORY_LIMIT`, and literally the same loaded runs (see
         `RepositoriesController#show`). Branch-anchored because outcomes compared across branches
-        are outcomes of different code; sharing the window because two panels that each fetched
-        "the last thirty runs on this branch" would be two windows with no structural reason to
-        keep agreeing.
+        are outcomes of different code; sharing the window because every panel that fetched
+        "the last thirty runs on this branch" for itself would be its own window, with no
+        structural reason to keep agreeing.
 
         Rendered when the window has per-example rows AT ALL. A repository whose CI has never sent
         per-example detail has no cross-run test history to discuss, and this panel explaining that

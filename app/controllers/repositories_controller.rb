@@ -162,10 +162,10 @@ class RepositoriesController < ApplicationController
     # quarter of the suite and back. The view renders the object's own counts, so the caption's
     # plotted/withheld figures cannot drift from the line.
     #
-    # Held in a local because the panel below reads the SAME window. Two panels that each fetched
-    # "the last thirty runs on this branch" would be two windows with no structural reason to keep
-    # agreeing, on a page where one of them captions the other one's branch — and it would be a
-    # second copy of a query that is already the page's most carefully bounded read.
+    # Held in a local because every panel below that draws on this window reads the SAME rows. Each
+    # panel that fetched "the last thirty runs on this branch" for itself would be its own window, with
+    # no structural reason to keep agreeing, on a page where they caption each other's branch — and
+    # each would be another copy of a query that is already the page's most carefully bounded read.
     trajectory_runs = @repository.suite_size_trajectory(@trajectory_run)
     @suite_trajectory = SuiteTrajectory.new(runs: trajectory_runs, branch: @trajectory_run&.branch)
     # The slowest examples of the run every panel above names, with the coverage the panel states
@@ -402,8 +402,8 @@ class RepositoriesController < ApplicationController
       # intersection — an area gaining four examples a run is nobody's biggest mover on that panel
       # and sorts below its cap thirty times running.
       #
-      # The THIRD reader of this same local, for the reason stated where it is taken: three panels
-      # each fetching "the last thirty runs on this branch" would be three windows with no
+      # Another reader of this same local, for the reason stated where it is taken: every panel that
+      # fetched "the last thirty runs on this branch" for itself would be its own window, with no
       # structural reason to keep agreeing, on a page where each captions the others' branch. So the
       # window costs nothing here — it is handed over, not re-fetched.
       #
