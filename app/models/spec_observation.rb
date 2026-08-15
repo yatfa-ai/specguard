@@ -1765,10 +1765,18 @@ class SpecObservation < ApplicationRecord
     format("%.2fs", seconds)
   end
 
-  # How much of a population a figure was measured over, rendered — the one seam every coverage
-  # fraction on these pages is spelled through, whether the population is one file's examples, one
-  # area's files or one run's repeated descriptions, so no two grains can state the same coverage
+  # How much of a population a figure was measured over, rendered — the one seam every single-sided
+  # `#coverage_label` is spelled through, whether the population is one file's examples, one area's
+  # files or one run's repeated descriptions, so no two of those grains can state the same coverage
   # in two prose inventions that agree today.
+  #
+  # Single-sided is the boundary, and it is worth saying where it stops rather than leaving the next
+  # reader to find the edge with a grep. `SpecDirectoryRuntimeGrowth::Row#coverage_label` states two
+  # populations in one string — "12 of 40 → 14 of 41" — because a comparison between two runs is only
+  # readable when BOTH sides say what they were summed over, and it renders on the same page as the
+  # areas panel that does come through here. That is a different sentence rather than this one said
+  # twice, so it is built where it is read and is deliberately not spelled through this seam. A seam
+  # that claimed it anyway would be the thing this one exists to retire: a promise kept by hand.
   #
   # Always the fraction and never the bare numerator. "12" in a column of "12 of 40" reads as
   # twelve of something unstated: the denominator is the point of the column, and a fully timed

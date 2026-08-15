@@ -115,9 +115,9 @@ class SpecDirectoryFiles
   # population is areas and here is files.
   def truncated? = file_count > rows.size
 
-  # How much of the AREA the listed durations cover — through the same seam every coverage fraction
-  # on these pages is spelled through, so this caption and the `SpecDirectoryDurations::Row` for the
-  # panel it drills out of make the same claim about the same area in one spelling rather than in
+  # How much of the AREA the listed durations cover — through the same seam the other single-sided
+  # coverage fractions are spelled through, so this caption and the `SpecDirectoryDurations::Row` for
+  # the panel it drills out of make the same claim about the same area in one spelling rather than in
   # two prose inventions that agree today.
   def coverage_label = SpecObservation.coverage_fraction(timed_count, recorded_count)
 
@@ -142,9 +142,10 @@ class SpecDirectoryFiles
     # the cell, and is spelled by this seam rather than tested for here.
     def duration_label = SpecObservation.humanized_duration(total_seconds)
 
-    # How much of the file this total covers — through the same seam every coverage fraction on this
-    # page is spelled through, so a complete file is visibly complete rather than merely unannotated,
-    # and no two grains can disagree about how the fraction is worded.
+    # How much of the file this total covers — through the same seam the other single-sided coverage
+    # fractions are spelled through, so a complete file is visibly complete rather than merely
+    # unannotated, and this row cannot disagree with the area caption above it about how the
+    # fraction is worded.
     def coverage_label = SpecObservation.coverage_fraction(timed_count, recorded_count)
   end
 end

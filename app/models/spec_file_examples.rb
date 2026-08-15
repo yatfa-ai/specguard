@@ -132,8 +132,8 @@ class SpecFileExamples
   # and here is examples.
   def truncated? = recorded_count > rows.size
 
-  # How much of the file the listed durations cover — through the same seam every coverage fraction
-  # on these pages is spelled through, so this caption and the `SpecFileDurations::Row` for the
+  # How much of the file the listed durations cover — through the same seam the other single-sided
+  # coverage fractions are spelled through, so this caption and the `SpecFileDurations::Row` for the
   # panel it drills out of make the same claim about the same file in one spelling rather than in
   # two prose inventions that agree today.
   def coverage_label = SpecObservation.coverage_fraction(timed_count, recorded_count)

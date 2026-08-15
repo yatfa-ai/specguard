@@ -153,8 +153,8 @@ class RepeatedDescriptions
   # compare two figures to reach.
   def complete? = any? && repeated_timed_count == repeated_recorded_count
 
-  # What the summed wall clock on this panel was measured over — through the same seam every
-  # coverage fraction on this page is spelled through, so the panel caption and the rows beneath it
+  # What the summed wall clock on this panel was measured over — through the same seam the other
+  # single-sided coverage fractions are spelled through, so the panel caption and the rows beneath it
   # cannot disagree about how a fraction is worded.
   #
   # Its operands are named explicitly, and they are the REPEATED subset's totals rather than the
@@ -184,9 +184,10 @@ class RepeatedDescriptions
     # and a group nobody timed says "not reported" rather than "0.00s".
     def duration_label = SpecObservation.humanized_duration(total_seconds)
 
-    # How much of the group this total covers — through the same seam every coverage fraction on
-    # this page is spelled through, so a fully timed group is visibly complete rather than merely
-    # unremarked, and no two grains can disagree about how the fraction is worded.
+    # How much of the group this total covers — through the same seam the other single-sided
+    # coverage fractions are spelled through, so a fully timed group is visibly complete rather than
+    # merely unremarked, and this row cannot disagree with the panel caption above it about how the
+    # fraction is worded.
     def coverage_label = SpecObservation.coverage_fraction(timed_count, recorded_count)
 
     # The spec files these examples ran in. `Array()` because the aggregate is `ARRAY_AGG(…)
