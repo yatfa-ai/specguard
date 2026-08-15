@@ -1551,10 +1551,78 @@ module Ingest
     # per-tenant index, and a raised `ef_search` is a measurement against the 20k design point, and
     # that is **SPGD-72's**, alongside the batching, caching and re-embed skipping it already owns.
     # Handed to it by name rather than guessed at here.
+    #
+    # == The projection is narrowed, and it is the four columns the callers actually read
+    #
+    # `neighbor` decides its select list as `select_values.any? ? [] : column_names` — so a scope
+    # carrying no `select` gets EVERY column, `embedding` among them, and each hit ships a 1536
+    # element pgvector back to materialise 1536 Ruby `Float`s that nothing reads. This is the
+    # per-row path: an unchanged re-ingest never reaches it (the digest shortcut returns first), but
+    # a first run or a changed suite at the 20,000-example design point pays it 20,000 times, inside
+    # a job holding a run-scoped semaphore. It is the same prohibition {#digest_index},
+    # {#resight_all} and {#refresh} each state in their own words for their own batch or by-id path,
+    # and this was the one place that broke it.
+    #
+    # The four are what the callers read and no more: `id` for {#resight}, and `text`,
+    # `text_digest`, `signal_source` for {#note_drift}'s three guards. {Drift} carries the QUERY
+    # embedding it is handed, never `match.embedding` — which is why dropping the column costs
+    # nothing here. A fifth reader would raise `ActiveModel::MissingAttributeError` on the row
+    # rather than fail quietly, so this list stays honest by being too narrow and not too wide.
+    #
+    # == `order(:id)`: exact ties are the NORMAL case under the shipped provider
+    #
+    # `neighbor` calls `reorder`, which replaces the order with distance alone, and `first` on an
+    # already-ordered relation adds no key of its own. {EmbeddingGenerator::LocalProvider} embeds a
+    # normalised form, so two spellings differing only in punctuation or whitespace embed to the
+    # same array of floats — not approximately, byte-identically — and this class already asserts
+    # such rows can coexist in one repository ({#refresh}'s rescue). Once two do, a third equivalent
+    # observation matches BOTH at distance 0 and Postgres is free to emit either first: one test's
+    # durations split across two identities, and {#note_drift} converges on a different row each
+    # pass. Rails appends to the gem's `reorder`, so this is the second key that ranking never had.
+    # {#failed_embed_backlog} and {#unattempted_embed_backlog} carry an explicit tiebreak for the
+    # same REASON — cite them for that and not for the shape, because their cost is nothing like
+    # this one's. Inert under a provider that publishes no normalisation, where the two vectors
+    # really are different.
+    #
+    # **What the second key costs, and the condition attached to it.** Those two are ordinary B-tree
+    # orderings over `spec_observations` backed by partial indexes, where appending `id` is free.
+    # Appending it to an ANN-ORDERED scan is not. Measured here on a 20,000-row single-repository
+    # fixture built with the real {EmbeddingGenerator}, with the ANN plan forced (`enable_sort=off`)
+    # at `ef_search` 40 and `iterative_scan` off:
+    #
+    #   without `id`:  Limit -> Index Scan using index_spec_identities_on_embedding  (0.6-1.1 ms)
+    #   with `id`:     Limit -> Incremental Sort (Presorted Key: distance)
+    #                             -> Index Scan using index_spec_identities_on_embedding
+    #
+    # Postgres can no longer take the ordering straight off the HNSW scan, so it sorts over the
+    # candidates the scan drains rather than stopping at the first row that clears the threshold.
+    # The cost is bounded, does not grow with the table, and is far smaller than the 20,000 x 1536
+    # `Float` materialisations the narrowing above removes — it is **accepted deliberately**. What
+    # it scales with is `ef_search`, which is **SPGD-72's** to set: this key makes that ticket's
+    # likeliest move — raising `ef_search` — dearer than it was before, because the incremental sort
+    # drains the candidate list on every hit. SPGD-72 is measuring this plan, not the one that was
+    # here before.
+    #
+    # **But that plan is not currently the one this query gets, and that is the bigger finding.**
+    # On PG 17.10 / pgvector 0.8.0 at stock `random_page_cost` 4, the planner did not choose
+    # `index_spec_identities_on_embedding` for ANY shape of this query — not with both filters, not
+    # with one, not for a bare `ORDER BY embedding <=> $1 LIMIT 1`; `pg_stat_user_indexes.idx_scan`
+    # for that 156 MB index stayed at **0**. The reason is TOAST: a 1536-float vector lives out of
+    # line, so the heap for 20,000 rows is ~5 MB against ~160 MB of TOAST, and a Seq Scan costs out
+    # at ~900 while the HNSW scan starts at ~2341. The planner takes the "cheap" seq scan and then
+    # pays a detoast per row — 145 ms/query actual, against 0.6-1.1 ms for the forced ANN plan.
+    # So on this configuration the tiebreak is free (146.95 vs 146.60 ms/query, inside noise)
+    # because the ANN plan it burdens never runs. Do not read that as permission to relax the key:
+    # planner settings, PG version and data shape all move this, the cost above lands the moment the
+    # ANN plan IS chosen, and correctness does not depend on which plan wins. The index going unused
+    # is **squarely SPGD-72's**, and a larger prize than anything this ticket touches; it is recorded
+    # here and handed over rather than acted on, because ANN-index tuning is out of scope above.
     def nearest(embedding)
       @repository.spec_identities
+                 .select(:id, :text, :text_digest, :signal_source)
                  .nearest_neighbors(:embedding, embedding, distance: "cosine",
                                     threshold: SpecIdentity::MATCH_DISTANCE)
+                 .order(:id)
                  .first
     end
 
