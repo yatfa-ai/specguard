@@ -131,6 +131,34 @@ class Api::V1::RepositoriesController < Api::BaseController
       # See `serialized_directory_run_growth_window`.
       directory_run_growth_window: serialized_directory_run_growth_window,
       directory_run_growth: serialized_directory_run_growth,
+      # BESIDE `directory_run_growth` AND NOT DERIVABLE FROM IT — the same two runs and the same area
+      # grain, measuring a different quantity. That pair answers "which areas changed SIZE" and this
+      # one answers "which areas changed TIME", and `SpecDirectoryRuntimeGrowth`'s class comment
+      # carries the argument in full: an area where somebody made an existing spec slow adds ZERO
+      # examples, so its `ABS(latest_count - previous_count)` is `0`, it sorts last on that pair and
+      # falls off the cap. It is not a row there missing a column — it is not on that list at all.
+      # The independence runs both ways: splitting one slow spec into four fast ones is `+3` examples
+      # and LESS time, and a `sleep` in a shared `before` is `0` examples and minutes.
+      #
+      # It is the grain `history` stops one short of, which is what makes it unreachable rather than
+      # merely absent. `latest_run.spec_directories` serves per-area `total_seconds` for the LATEST
+      # RUN ONLY, and the previous run is dereferenced on this endpoint for `baseline_commit_sha` and
+      # the two COUNT-grain blocks alone — so there is no previous-run per-area duration anywhere in
+      # this body and the subtraction is impossible client-side. The only runtime delta an agent can
+      # compute is `test_runs.duration_seconds`, one figure for the whole run: it can be told the run
+      # got ninety seconds slower and can never ask WHERE.
+      #
+      # NO NEW PARAMETER, for the reason the pair above gives: `Repository#previous_test_run_on_branch`
+      # scopes to the latest run's own branch by construction, so a plain unparameterised `GET`
+      # carries this.
+      #
+      # Out here rather than inside `latest_run` on that block's own membership rule: it is
+      # single-run facts by construction, and "this area got forty seconds slower" is a statement
+      # about one run measured against another.
+      #
+      # See `serialized_directory_runtime_growth_window`.
+      directory_runtime_growth_window: serialized_directory_runtime_growth_window,
+      directory_runtime_growth: serialized_directory_runtime_growth,
       # ONE GRAIN BELOW THE PAIR ABOVE, for the ONE area a caller asked about — not which areas
       # moved but which FILES of the picked area moved. The pair above answers
       # `spec/models 412 → 459 (+47)` and dead-ends on the only question that provokes: WHICH FILES
@@ -1823,6 +1851,195 @@ class Api::V1::RepositoriesController < Api::BaseController
     }
   end
 
+  # One area's RUNTIME movement between two runs, its two operands, and the three different absences
+  # that all render as an empty Change cell.
+  #
+  # A NEW METHOD AND NOT `serialized_directory_growth_row`, WHICH CANNOT BE REUSED HERE. That method
+  # is written entirely against `SpecDirectoryGrowth::Row` — `previous_count`/`latest_count`,
+  # `moved?`, `new_area?`, `removed_area?` — and `SpecDirectoryWindowGrowth::Row` INHERITS that
+  # Struct, which is the whole reason those two blocks share it. `SpecDirectoryRuntimeGrowth::Row` is
+  # an INDEPENDENT Struct with seconds operands and a predicate the count Struct does not have, so a
+  # shared serializer would be a method branching on which Struct it was handed.
+  #
+  # `previous_seconds`/`latest_seconds` are the aggregate's own two sides and are the model's names;
+  # they go out as `baseline_seconds`/`anchor_seconds`, this endpoint's wire convention for the two
+  # ends of a comparison and the names `anchor_commit_sha`/`baseline_commit_sha` one key up give
+  # them. The same translation `serialized_directory_growth_row` makes for the counts, made once here
+  # rather than in every client's head.
+  #
+  # ⭐ THREE PREDICATES, BECAUSE THERE ARE THREE DIFFERENT ABSENCES AND THE MODEL KEEPS THEM APART.
+  # `change` is `null` when an area is NEW, when it was REMOVED, and when both runs ran it and one of
+  # them reported no timing for it — and those are three different things to go and fix. `comparable`
+  # says only that there is nothing to subtract; `new_area`/`removed_area` say the area is on one side
+  # only; `timing_gap` says both runs HAVE this area and the telemetry, not the code, is what is
+  # missing. Collapsing them re-creates exactly the confusion `SpecDirectoryRuntimeGrowth::Row` spends
+  # paragraphs refusing.
+  #
+  # `change`, `baseline_seconds` and `anchor_seconds` ARE LEGITIMATELY `null` and are served as the
+  # nils they are — never coerced to `0`. `SUM` skips NULLs silently and `duration_seconds` is
+  # nullable by design, so a zero here would be "this side was never timed" made byte-identical to
+  # "this area took no time", which is the one reading the whole panel exists to refuse.
+  #
+  # NO VIEW STRINGS. `previous_label`, `latest_label`, `coverage_label`, `change_label` and
+  # `change_reading` are typographic and screen-reader spellings of these same numbers — a U+2212 for
+  # a negative, `"±0"`, `"not reported"`, `"New area"` — and a client served those would be splitting
+  # strings and stripping glyphs to compare two rows. The rule `serialized_directory_growth_row`
+  # states, held at the grain where the labels are richest.
+  def serialized_directory_runtime_growth_row(row)
+    {
+      path: row.path,
+      baseline_seconds: row.previous_seconds,
+      anchor_seconds: row.latest_seconds,
+      change: row.change,
+      comparable: row.comparable?,
+      moved: row.moved?,
+      new_area: row.new_area?,
+      removed_area: row.removed_area?,
+      timing_gap: row.timing_gap?
+    }
+  end
+
+  # The contract the RUN-OVER-RUN RUNTIME growth rows below are served under — and, when they are
+  # `null`, the reason they are. Served UNCONDITIONALLY, on the key-always-present rule every window
+  # block on this endpoint holds: a block that explains a `null` is worthless if it is itself absent
+  # whenever the `null` happens.
+  #
+  # `_window` NAMES THE CONTRACT BLOCK, NOT A RUN WINDOW — the suffix this endpoint has now used four
+  # times for "the facts that decide how the array beside it may be read". This comparison spans
+  # exactly TWO runs and `basis` says so in a token.
+  #
+  # ⭐ TWELVE STATES, AND THE ENUMERATION IS THE POINT. `SpecDirectoryRuntimeGrowth` has TEN of its
+  # own — three MORE than its count sibling, because this grain has a second kind of absence:
+  #
+  # * `no_latest_run` — CI has never reported. ADDED AT THIS CALL SITE; see the accessor.
+  # * `no_previous_run` — there is a latest run and no earlier run on its branch. ADDED HERE too, and
+  #   it covers the same two shapes `branch` separates for the count sibling: a `null` branch is a
+  #   latest run whose client sent none, a named branch is a genuine first run on it.
+  # * `latest_unmeasured`, `previous_unmeasured`, `assembled_differently` — the three pre-query
+  #   states, decided from the two runs alone and short-circuiting the read.
+  # * `neither_recorded`, `previous_unrecorded`, `latest_unrecorded` — a side wrote no per-example
+  #   ROWS at all (a client that posts only totals).
+  # * `neither_timed`, `previous_untimed`, `latest_untimed` — THE GRAIN THE COUNT SIBLING HAS NO
+  #   EQUIVALENT OF. A side recorded rows and none of them carried a duration. "The previous run
+  #   recorded no per-example detail" and "the previous run reported no timings" are the same blank
+  #   panel and two entirely different things to go and fix, which is why the model asks the RECORDED
+  #   questions first and the TIMED ones only of a side that has rows.
+  # * `comparable` — the rows block below is non-null.
+  #
+  # `comparable` RIDES BESIDE `state` as the single boolean a client that only wants the rows can
+  # branch on, read off the object's own predicate rather than re-derived from the symbol — and it is
+  # exactly `directory_runtime_growth != null`, so there is one boolean here and not two.
+  #
+  # ⭐ `order` IS THE COUNT SIBLING'S STRING PLUS `_nulls_last`, AND THE DIFFERENCE IS NOT COSMETIC.
+  # `SpecObservation.directory_runtime_growth_between` orders by `ABS(...) DESC NULLS LAST`, and the
+  # count read has no such clause because a `COUNT` is never NULL. Here the ordering key IS nil for
+  # every area a side did not time, and those rows therefore sort LAST rather than first — which is
+  # the whole reason a listed row can be untimed at all (the movement ran out before the cap did).
+  # Copying `abs_change_desc,path_asc` across would be a token a client could not reproduce this
+  # order from, so the token states what the query actually asked.
+  #
+  # NO `?branch=` GATE, AND THAT IS THE FEATURE — `branch_scope` is the constant `single_branch`
+  # because `Repository#previous_test_run_on_branch` scopes to the latest run's OWN branch and
+  # refuses a blank one, so this is branch-correct by construction rather than by a parameter. Like
+  # `latest_run` and the count pair, this block is NOT re-anchored by `?branch=`: `branch` names the
+  # branch the comparison WAS MADE ON, read off the latest run and never off `requested_branch`.
+  #
+  # `basis` is `previous_run_on_branch`, the count pair's token and for its reason: the baseline is
+  # one specific run, named by `baseline_commit_sha`, so the comparison has no gap in it — an area
+  # that gained a minute and gave it back cannot hide inside a two-run comparison.
+  #
+  # `anchor_commit_sha`/`baseline_commit_sha` NAME THE TWO RUNS under the sibling's names, because
+  # the ROWS below are served as `anchor_seconds`/`baseline_seconds` and a client must be able to
+  # tell which sha each operand was summed on. ANCHOR IS THE LATEST RUN and BASELINE IS THE PREVIOUS
+  # ONE, which is the direction every `change` is signed in. Both are nullable and independently so.
+  def serialized_directory_runtime_growth_window
+    growth = spec_directory_runtime_growth
+
+    {
+      order: "abs_change_desc_nulls_last,path_asc",
+      tie_break_served: true,
+      basis: "previous_run_on_branch",
+      branch_scope: "single_branch",
+      branch: latest_test_run&.branch,
+      state: growth&.state || (latest_test_run.nil? ? :no_latest_run : :no_previous_run),
+      comparable: growth&.comparable? || false,
+      anchor_commit_sha: latest_test_run&.commit_sha,
+      baseline_commit_sha: previous_test_run&.commit_sha
+    }
+  end
+
+  # WHICH AREAS OF THE SUITE GOT SLOWER OR FASTER IN THE LATEST PUSH — the agent-readable half of the
+  # panel `repositories#show` renders from the same object, off the same two runs, in the same order.
+  #
+  # ⭐ NOT A RESTATEMENT OF `directory_run_growth`, AND NEITHER IS DERIVABLE FROM THE OTHER. That
+  # block ranks areas by how their example COUNT moved; this one ranks them by how their summed
+  # example TIME moved. `SpecDirectoryRuntimeGrowth`'s class comment carries the argument in full:
+  # an area where somebody made an existing spec slow adds ZERO examples, so its
+  # `ABS(latest_count - previous_count)` is `0`, it sorts last on that block and falls off the cap —
+  # it is not a row there missing a column, it is not on that list at all. The independence runs both
+  # ways: splitting one slow spec into four fast ones is `+3` examples and LESS time.
+  #
+  # It is also the grain `history` stops one short of. `test_runs.duration_seconds` is one figure per
+  # run, so an agent holding every other key here can be told the run got ninety seconds slower and
+  # can never ask WHERE. The per-area grain exists only in `spec_observations`.
+  #
+  # THE SAME OBJECT THE PANEL READS, never a hand-written query — this file's governing rule, stated
+  # in full on `serialized_spec_files`. `SpecDirectoryRuntimeGrowth` is view-free, so the API and the
+  # panel cannot name different areas or different operands for the same repository.
+  #
+  # ⭐ `null` IN EVERY NON-COMPARABLE STATE, AND THE COUNT SIBLING'S ARGUMENT FOR THAT DOES NOT
+  # TRANSFER VERBATIM — so here is the one that does. There, `SpecDirectoryGrowth.from_tuples`
+  # returns its row-decided states WITHOUT the counts it just read, so serving them raw would print
+  # `anchor_recorded_count: 0` for a run that recorded four hundred rows. `SpecDirectoryRuntimeGrowth`
+  # does the opposite deliberately: `from_tuples` passes `**totals` into EVERY state it constructs,
+  # so in its six row-derived absence states the four denominators are real. Only the three gate
+  # states, which never ran a query, carry the `0` defaults.
+  #
+  # It goes `null` anyway, for three reasons in order. (1) A key whose presence rule is "populated in
+  # six of nine model states and zeroed in three" is a contract a client cannot hold in its head;
+  # "non-null exactly when `directory_runtime_growth_window.comparable` is true" is one sentence and
+  # is the rule the two shipped growth blocks already teach. (2) A per-key gate would not actually
+  # eliminate the fabricated-denominator failure — the three gate states would still carry zeros —
+  # it would only narrow it, at the cost of that rule. (3) The actionable half of every
+  # non-comparable state is the `state` token, served unconditionally one key up.
+  #
+  # Serving the honest totals in the six row-derived states is a well-formed enhancement to the
+  # window block and deliberately NOT smuggled in here.
+  #
+  # ⭐ ALL FOUR DENOMINATORS, NOT THE TWO THE COUNT SIBLING SERVES. This block has two grains of
+  # absence and therefore two grains of denominator: how many rows each run RECORDED, and how many of
+  # those carried a TIMING. The model's own rule — "1,204 examples reported a timing" is 1,204 of
+  # something unstated — and the whole reading this block turns on is whether an area got faster or
+  # merely went quiet. The count sibling has only the recorded pair because it has no timing grain.
+  #
+  # `truncated` DISCLOSES THE CAP with both operands beside it: `directory_count` is counted BEFORE
+  # the `LIMIT` applies (a window function, so it runs first), and `limit` is read off
+  # `SpecObservation::RETIMED_DIRECTORIES_LIMIT` rather than restated — this call site passes no
+  # `limit:`, so the constant IS the bound the query applied. A DIFFERENT constant from the count
+  # sibling's `MOVED_DIRECTORIES_LIMIT`, which happens to hold the same number today and is not the
+  # same bound.
+  #
+  # ONE READ OF `spec_observations` AT MOST, and none at all in five of the twelve states: the two
+  # serializer states never construct the object, and its own gate short-circuits three more before
+  # any query. `SpecObservation.directory_runtime_growth_between` is already plan-certified in
+  # `spec/models/spec_observation_spec.rb`, so that certification transfers.
+  def serialized_directory_runtime_growth
+    growth = spec_directory_runtime_growth
+
+    return nil unless growth&.comparable?
+
+    {
+      rows: growth.rows.map { |row| serialized_directory_runtime_growth_row(row) },
+      directory_count: growth.directory_count,
+      truncated: growth.truncated?,
+      baseline_recorded_count: growth.previous_recorded_count,
+      anchor_recorded_count: growth.latest_recorded_count,
+      baseline_timed_count: growth.previous_timed_count,
+      anchor_timed_count: growth.latest_timed_count,
+      limit: SpecObservation::RETIMED_DIRECTORIES_LIMIT
+    }
+  end
+
   # The contract the PER-FILE growth rows below are served under — and, when they are `null`, which
   # of the two reasons applies. Served UNCONDITIONALLY, on the key-always-present rule the two
   # blocks above it argue for: a block that explains a `null` is worthless if it is itself absent
@@ -2038,6 +2255,41 @@ class Api::V1::RepositoriesController < Api::BaseController
 
     @spec_directory_growth =
       latest_test_run && previous_test_run && SpecDirectoryGrowth.for(latest_test_run, previous_test_run)
+  end
+
+  # The run-over-run RUNTIME presenter, or `nil` when there are not two runs to hand it — memoized
+  # across the nil with `defined?` rather than `||=`, on this file's idiom for every nullable
+  # accessor and under the same double read its count sibling has: `show` asks the window block for
+  # `state` and then this block for the rows, so a `||=` would re-issue the previous-run lookup on
+  # every repository that has none, which is the case this most needs to be cheap in.
+  #
+  # ⭐ THE GUARD IS THIS METHOD'S WHOLE SUBTLETY AND IT IS NOT OPTIONAL, exactly as one method up.
+  # `SpecDirectoryRuntimeGrowth.for` dereferences `previous_test_run` on its SECOND LINE
+  # (`unless previous_test_run.suite_size_measured?`) and has no nil state of its own — there are
+  # nine non-comparable states and "there is no previous run" is none of them. `previous_test_run` is
+  # nil for three ordinary live shapes: a repository CI has never reported on, a latest run whose
+  # client sent no branch, and the first run on a branch. Handed straight in, every one of those is a
+  # `NoMethodError` on a plain unparameterised `GET /api/v1/repository`.
+  #
+  # GUARDED HERE AND NOT BY WIDENING THE MODEL — the same shape `RepositoriesController#show` already
+  # uses (`if @latest_test_run && @previous_test_run`), and the reason `spec_directory_growth` states
+  # for its own guard: teaching `.for` to accept a nil would give the object an eleventh absence
+  # state that the dashboard — its other caller, which guards for itself — can never reach, and would
+  # move a decision the two call sites make identically into a contract only one of them relies on.
+  #
+  # The two guarded cases are told apart one key up, by `latest_test_run.nil?`, off this same
+  # memoized accessor — so the state token and the object it stands in for cannot come apart.
+  #
+  # A SECOND OBJECT OVER THE SAME TWO RUNS, and that is one more read rather than a doubling: this
+  # asks a question `SpecDirectoryGrowth` structurally cannot answer (see
+  # `serialized_directory_runtime_growth`), and its own gate short-circuits before any query in the
+  # three states decidable from the two runs alone.
+  def spec_directory_runtime_growth
+    return @spec_directory_runtime_growth if defined?(@spec_directory_runtime_growth)
+
+    @spec_directory_runtime_growth =
+      latest_test_run && previous_test_run &&
+      SpecDirectoryRuntimeGrowth.for(latest_test_run, previous_test_run)
   end
 
   # The per-file drill-in for the ONE area a caller asked about, or `nil` when nobody asked or there

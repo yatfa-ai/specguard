@@ -362,8 +362,11 @@ RSpec.describe "GET /api/v1/repository — directory_growth", type: :request do
       expect(named - unfiltered).to eq(1)
       expect(unfiltered).to eq(1)
       # The endpoint's single-run grains are untouched at their established count, so the figure
-      # above is this grain's readers being counted rather than the table going quiet.
-      expect(observation_reads { get_repository(key: api_key) }.length).to eq(7)
+      # above is this grain's readers being counted rather than the table going quiet. EIGHT rather
+      # than seven since `directory_runtime_growth` was added: that pair is served unconditionally
+      # too, but it issues `directory_runtime_growth_between` and lands in its OWN grain, so it moves
+      # this total without touching the `growth` figures above.
+      expect(observation_reads { get_repository(key: api_key) }.length).to eq(8)
       expect(get_repository(key: api_key)["directory_growth"]).to be_nil
       # And the read that IS issued unfiltered belongs to the pair that answers unconditionally.
       expect(get_repository(key: api_key)["directory_run_growth"]).not_to be_nil
@@ -726,12 +729,13 @@ RSpec.describe "GET /api/v1/repository — directory_growth", type: :request do
     end
 
     # And that one read is ALL this block adds — the assertion a per-grain count cannot make,
-    # because a read matching no grain's pattern is invisible to every one of them. Eleven here is
+    # because a read matching no grain's pattern is invisible to every one of them. Twelve here is
     # the endpoint's six single-run reads, plus THREE for flakiness, plus this block's one and the
-    # run-over-run pair's one: nothing failed in this fixture, so `UnstableTests` finds no candidate
-    # and never issues its composition read. That is a fact about this window rather than about the
-    # block, which is exactly why the total is also asserted as the SUM OF THE PARTS — a read that
-    # stopped being issued and a different one that started cannot cancel out into a passing number.
+    # run-over-run pair's one, plus the RUNTIME pair's one: nothing failed in this fixture, so
+    # `UnstableTests` finds no candidate and never issues its composition read. That is a fact about
+    # this window rather than about the block, which is exactly why the total is also asserted as the
+    # SUM OF THE PARTS — a read that stopped being issued and a different one that started cannot
+    # cancel out into a passing number.
     it "adds exactly that one to the table's total, and no second" do
       asymmetric_window
       get_repository(key: api_key)
@@ -740,13 +744,15 @@ RSpec.describe "GET /api/v1/repository — directory_growth", type: :request do
         observation_reads_by_grain { get_repository(key: api_key, query: { branch: "main" }) }
 
       # TWO in the growth grain, and they are this block's and the run-over-run pair's — the split
-      # is pinned by the difference example above, which this one cannot make.
+      # is pinned by the difference example above, which this one cannot make. STILL TWO after
+      # `directory_runtime_growth` was added: that block ranks by a SUM of durations rather than a
+      # COUNT, so it is matched by its own pattern and adopted into no grain here.
       expect([area.length, file.length, example.length, description.length, flakiness.length,
               growth.length]).to eq([1, 1, 2, 2, 3, 2])
       expect(observation_reads { get_repository(key: api_key, query: { branch: "main" }) }.length)
         .to eq(classified_observation_reads { get_repository(key: api_key, query: { branch: "main" }) })
       expect(observation_reads { get_repository(key: api_key, query: { branch: "main" }) }.length)
-        .to eq(11)
+        .to eq(12)
     end
 
     # NO RUN-WINDOW QUERY. The block is drawn on `history_runs`, which is materialized once and
