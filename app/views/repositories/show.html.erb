@@ -3730,7 +3730,38 @@
               <% @unstable_tests.rows.each do |test| %>
                 <tr>
                   <td class="px-3 py-2 text-app-content">
-                    <%= test.name %>
+                    <%# The way INTO the row, and until it existed this ranking dead-ended at the
+                        one question it is read to answer. The row states that a test failed in 4 of
+                        30 runs and shows the words those runs used; WHICH 4 decides whether the
+                        reader hunts a commit or quarantines a test, and nothing anywhere said. The
+                        aggregate above cannot say — it is `COUNT`s and `ARRAY_AGG(DISTINCT …)` under
+                        `GROUP BY name`, which is what keeps it constant in the size of the suite —
+                        so the axis comes back from a rung below rather than from changing it.
+
+                        `?unstable_test=`, following the `?spec_file=` / `?spec_directory=` /
+                        `?repeated_description=` precedent on this same page rather than a nested
+                        route: a description contains anything a person can type and makes a poor
+                        route segment.
+
+                        The name is the link TEXT rather than a separate control, exactly as the
+                        description is one panel over and the file path two — the thing a reader
+                        wants to open is the thing they are already looking at.
+
+                        Every other ask is CARRIED THROUGH by `drill_down_path`: `?branch=` anchors
+                        the "Suite growth" panel this window is drawn on and the three above anchor
+                        drill-downs of their own, so dropping any of them here would close a panel
+                        the reader did not touch as the side effect of opening a test.
+
+                        `aria-current` on the open test, because this is a list of choices with one
+                        of them taken and the panel below is a long way down the page — a reader
+                        arriving back at this table by keyboard needs to be told which row they are
+                        already looking at. %>
+                    <%= link_to test.name,
+                                drill_down_path(@repository, unstable_test: test.name,
+                                                anchor: "unstable-test-runs"),
+                                class: "underline underline-offset-2 decoration-app-border-light " \
+                                       "text-app-content hover:decoration-app-content",
+                                aria: { current: test.name == @unstable_test_request ? "true" : nil } %>
                     <%# A group spanning more than one spec file. Per the project's identity rule a
                         test that MOVED is the same test and keeps its history, so this is not an
                         error to flag — but a reader hunting a flaky test in one file needs to know
@@ -3828,6 +3859,148 @@
             <%= render UI::EmptyStateComponent.new(
                   title: "Not enough runs reported outcomes to compare",
                   description: unstable_tests_incomparable_description(@unstable_tests)
+                ) %>
+          </div>
+        <% end %>
+      <% end %>
+    <% end %>
+
+    <%# == One unstable test, opened
+        The rung BELOW the panel above, and the last one on this page. Every ranking here is a
+        capped ten and this one is an AGGREGATE besides — `SpecObservation::UNSTABLE_COMPOSITION` is
+        every column a `COUNT` or an `ARRAY_AGG(DISTINCT …)` under `GROUP BY name`, which is what
+        keeps it constant in the size of the suite and is exactly what discards the run axis. A
+        reader who found their flakiest test up there had found the end of the road.
+
+        WHAT THE PANEL ABOVE CANNOT SAY, and the whole reason this exists. A row up there reads
+        `30 runs, 4 failed, [failed, passed]`, and those three figures are IDENTICAL for two windows
+        that call for opposite work: four failures at runs 27–30 is a REGRESSION — find the commit
+        between run 26 and run 27 — and four failures at runs 3, 11, 19 and 26 is FLAKINESS, where
+        there is no culprit commit and the work is quarantine or shared state. Nor is the sequence
+        derivable from anything else this page serves: the Recent runs panel has no per-test grain
+        at all, and every per-example list above it carries an outcome for ONE run.
+
+        THE SAME WINDOW as the panel above and the chart above that — literally the same loaded runs
+        (see `RepositoriesController#show`), which here is not merely economy. These rows are read
+        for their POSITION against commits the panels above already printed, so a separately fetched
+        window would put an off-by-one between the sequence and the commits it is read against, and
+        naming the wrong culprit commit is worse than naming none.
+
+        Rendered only when a test was ASKED for, and the read is taken only then: a page nobody
+        asked a test of costs exactly what it cost before this existed. NOT gated on the ranking
+        above being comparable — a window that ranking has nothing to say about is precisely where
+        the raw per-run grain is worth having, and gating this on that would withhold the grain
+        exactly when the aggregate went silent.
+
+        Same visibility rule and same gate as the panels above: read-only suite telemetry on
+        `current_repository(:view)`, outside `manage_keys`, and nothing here widens that. %>
+    <% if @unstable_test_runs %>
+      <%= render UI::PanelComponent.new(title: "This test, run by run", id: "unstable-test-runs",
+                                        class: "lg:col-span-3") do |panel| %>
+        <% panel.with_actions do %>
+          <%# The way back OUT, for the reason the three "Close" controls above exist: this panel is
+              reached by a link and there is no other control that removes the parameter, so without
+              this the only exit is editing the URL — and the reader who most needs the drill-in is
+              the one least likely to want to do that. It anchors back at the ranking the test was
+              picked from, so closing a test returns the reader where they opened it rather than at
+              the top of a long page.
+
+              Through `drill_down_path`, with `unstable_test: nil` naming the one ask it clears —
+              the fourth of the four clearing controls, and explicit for the same reason they are.
+              Carry is the default, so an omission here would mean "keep the test open" and this
+              button would navigate to the page it is already on. Every OTHER ask rides through, so
+              closing a test does not close a file, an area or a description the reader opened
+              separately. %>
+          <%= render UI::ButtonComponent.new(
+                variant: :ghost,
+                href: drill_down_path(@repository, unstable_test: nil, anchor: "unstable-tests")
+              ) { "Close test" } %>
+        <% end %>
+        <% if @unstable_test_runs.rows.any? %>
+          <%# What the list IS and HOW TO READ IT, before the list — the second half being this
+              panel's own and not a discipline it inherits. Its siblings' captions size a list; this
+              one also states the reading, because the shape of the column IS the finding and a
+              reader who has the sequence without the rule reads it and guesses.
+
+              Every figure is counted off THIS DESCRIPTION'S ROWS in the same read that returned the
+              list — `SpecObservation::UNSTABLE_TEST_RUN_POPULATION_COUNTS` is two windows on that
+              one query — so the caption cannot end up describing a different population from the
+              rows under it. %>
+          <p class="text-xs text-app-muted mb-3" id="unstable-test-runs-basis">
+            <span class="text-app-content-secondary"><%= @unstable_test_runs.name %></span>
+            — <%= unstable_test_runs_scope_sentence(@unstable_test_runs) %>
+            <%= unstable_test_runs_reading_sentence %>
+            <%# The silence, rendered only when the window holds any: rows that recorded the test and
+                reported no outcome are not passes, and a sequence that let them read as one would
+                manufacture a flip that looks like a date. %>
+            <%= unstable_test_runs_silence_clause(@unstable_test_runs) %>
+            <%# One row per run is what the data USUALLY is rather than what this list promises, and
+                it comes apart in both directions. Said here rather than left to a reader counting
+                rows against the window length in the sentence above them — which is exactly the
+                subtraction that would invent a run that "went missing". %>
+            A run that recorded nothing under this description contributes no row, and a description
+            carried by more than one example in a run contributes one row per example — so the
+            length of this list is not the length of the window, and which run a row belongs to is
+            read off its commit rather than off its position.
+          </p>
+          <%= render UI::TableComponent.new(columns: ["Commit", "Branch", "Ingested", "Outcome"],
+                                            describedby: "unstable-test-runs-basis") do %>
+            <% @unstable_test_runs.rows.each do |row| %>
+              <tr>
+                <td class="px-3 py-2 font-mono text-xs text-app-content">
+                  <%# The join a reader takes this panel for: the commit is what they open next, and
+                      on a regression the one to look at is the commit of the first failing row.
+                      Seven characters, the same abbreviation the Recent runs panel below uses, so
+                      one page renders one sha one way. %>
+                  <%= row.commit_sha.first(7) %>
+                </td>
+                <td class="px-3 py-2 text-app-content-secondary">
+                  <%# Per-row rather than borrowed from the window, on the rule
+                      `Api::V1::RepositoriesController#serialized_history_row` states for the same
+                      field: a row should carry its own branch so it is readable on its own. Every
+                      row here carries the same value — the window is branch-scoped by construction
+                      — and `branch` is nullable in the schema besides, so a blank cell would be a
+                      client omission dressed up as a fact. %>
+                  <%= row.branch.presence || tag.span("not reported", class: "text-app-muted") %>
+                </td>
+                <td class="px-3 py-2 text-app-content-secondary tabular-nums">
+                  <%# WHEN, which is also what separates two rows of ONE commit. A commit is not a
+                      key — the same commit is legitimately ingested more than once, as a re-run, a
+                      retry or a second workflow — so a reader deciding that a failure MOVED needs
+                      to be able to tell two runs of one sha apart before they go looking at it. %>
+                  <%= time_ago_in_words(row.ingested_at) %> ago
+                </td>
+                <td class="px-3 py-2">
+                  <%# What that run said happened, through `#outcome_label` and `#outcome_tone` — the
+                      same pair every outcome on this page renders through, so a word cannot be
+                      coloured one way in a run's list and another way down a window. Echoed verbatim
+                      and never reworded into a verdict: nothing platform-side validates this string,
+                      so quoting what arrived is the only reading that cannot be wrong, and a run
+                      that reported none reads "not reported" rather than wearing the spelling of a
+                      pass.
+
+                      Read off the row's OBSERVATION rather than re-spelled from `Row#outcome` here:
+                      `#outcome_label` and `#outcome_tone` are the model's own seam and a second
+                      `outcome.presence || "not reported"` in this file would be a second place for
+                      one rendering to drift. %>
+                  <%= render UI::BadgeComponent.new(tone: row.observation.outcome_tone) do %>
+                    <%= row.observation.outcome_label %>
+                  <% end %>
+                </td>
+              </tr>
+            <% end %>
+          <% end %>
+        <% else %>
+          <%# The window recorded nothing under the description that was asked for. An ordinary
+              answer and not an error, on the spelling the sibling drill-ins fixed: `?unstable_test=`
+              is a URL a reader types, edits and bookmarks, and the commonest way to arrive here is
+              the identity rule working as designed — a renamed test starts a new history and its old
+              one stops at the rename. No 404, and the description is named back, because an empty
+              state without a subject is a sentence about nothing. %>
+          <div id="unstable-test-runs-none">
+            <%= render UI::EmptyStateComponent.new(
+                  title: "No runs recorded this description",
+                  description: unstable_test_runs_none_description(@unstable_test_runs)
                 ) %>
           </div>
         <% end %>

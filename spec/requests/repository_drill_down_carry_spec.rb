@@ -5,13 +5,13 @@ require "rails_helper"
 # The carry-through rule the drill-down links on repositories#show all obey, pinned ACROSS the
 # panels rather than inside any one of them.
 #
-# Four asks (`?branch=`, `?spec_file=`, `?spec_directory=`, `?repeated_description=`) each anchor a
-# panel of their own, and ten links open or close one of them. The rule is that a gesture aimed at
-# ONE ask leaves the other three alone: opening a file is not a request to close the area, closing an
-# area is not a request to close the file, and so on in every direction. That is forty
-# decisions — ten links × four asks — and every one of them used to be re-made by hand at the link
-# site, because the READ side of these asks was abstracted into four controller concerns while the
-# EMIT side was copied.
+# Five asks (`?branch=`, `?spec_file=`, `?spec_directory=`, `?repeated_description=`,
+# `?unstable_test=`) each anchor a panel of their own, and every link on the page opens or closes one
+# of them. The rule is that a gesture aimed at ONE ask leaves the others alone: opening a file is not
+# a request to close the area, closing an area is not a request to close the file, and so on in every
+# direction. That is one decision per ask per link — the whole matrix below — and every one of them
+# used to be re-made by hand at the link site, because the READ side of these asks was abstracted
+# into a controller concern each while the EMIT side was copied.
 #
 # It failed the way a hand-maintained matrix fails: ONE cell was wrong. The area-open link was
 # written after `?spec_file=` shipped, did not carry it, and was later edited to ADD a different ask
@@ -21,9 +21,9 @@ require "rails_helper"
 #
 # So this file is deliberately not a section of any panel's spec. It owns the invariant, not the
 # panel — the panels' own files keep asserting what their rows say, their captions, their empty
-# states and their queries, and this one asserts only which asks survive which gesture. When an
-# ELEVENTH link is added it gets a row in `gestures` below and its four cells are checked by
-# construction, which is the entire point of `RepositoriesHelper#drill_down_path` existing.
+# states and their queries, and this one asserts only which asks survive which gesture. When the NEXT
+# link is added it gets a row in `gestures` below and its cells are checked by construction, which is
+# the entire point of `RepositoriesHelper#drill_down_path` existing.
 #
 # The rows are written by `Ingest::ObservationRecorder` through `Ingest::RunRecorder` rather than
 # inserted by hand, for the reason every sibling spec states: a hand-built fixture would assert
@@ -31,12 +31,14 @@ require "rails_helper"
 #
 # TWO runs rather than one, since the two growth panels compare the latest run against the previous
 # run ON THE SAME BRANCH and render nothing without it. The single-run panels read the latest run
-# and are untouched by the earlier one — their gestures below are the same gestures they were.
+# and are untouched by the earlier one — their gestures below are the same gestures they were. The
+# two runs are also what makes the cross-run ranking comparable at all, which is what gives the
+# `?unstable_test=` gestures a row to open.
 RSpec.describe "Repository drill-down carry-through", type: :request do
   before { @user = sign_in_via_github }
 
-  # THE ask set: all four open at once. Every panel renders, so all ten links exist on one page
-  # and each one can be asked what it did with the three asks it does not own. Anything less and the
+  # THE ask set: all five open at once. Every panel renders, so every link exists on one page and
+  # each one can be asked what it did with the four asks it does not own. Anything less and the
   # matrix has holes exactly where the defect lived — a link cannot be caught dropping an ask that
   # was never in the request.
   def branch_ask = "main"
@@ -48,6 +50,13 @@ RSpec.describe "Repository drill-down carry-through", type: :request do
   def description_ask = "settles the balance"
 
   def other_description = "refuses a negative quantity"
+
+  # The cross-run ranking's ask, and a second unstable test to be wrong about. Both are carried by
+  # exactly ONE example per run — a description carried by two examples in one run is classified as a
+  # shared description and listed BELOW that panel's table as plain text, where it has no link at all.
+  def unstable_ask = "reconciles the ledger"
+
+  def other_unstable = "expires the session"
 
   # Shaped so every panel has rows AND so no link's target is its own subject: the file the
   # by-file panel links to is NOT the open file, the area the by-area panels link to is NOT the open
@@ -72,6 +81,12 @@ RSpec.describe "Repository drill-down carry-through", type: :request do
   #     all, so a fixture whose only moved file was a deleted one would leave that gesture with no
   #     link to find.
   #
+  # TWO tests change their outcome across the two runs, each carried by exactly one example per run,
+  # in a file of their own. One example per run is what keeps them in the cross-run RANKING rather
+  # than in the shared-description list beneath it, where a description carried twice in one run goes
+  # and where there is no link at all. They sit in a file that is the same size in both runs, so the
+  # per-file growth panel's row is still `refund_spec.rb` and no gesture above moved.
+  #
   # Both runs are ingested in one piece and both report tests, so the panels' comparability gate
   # passes; the earlier run is backdated so `previous_test_run_on_branch` finds it.
   def drill_down_run
@@ -87,7 +102,11 @@ RSpec.describe "Repository drill-down carry-through", type: :request do
                         example_spec(file_path: "spec/requests/checkout_spec.rb", duration: 9.0, line_number: 5,
                                      name: other_description),
                         example_spec(file_path: "spec/requests/checkout_spec.rb", duration: 9.0, line_number: 6,
-                                     name: other_description)],
+                                     name: other_description),
+                        example_spec(file_path: "spec/models/ledger_spec.rb", duration: 0.5, line_number: 7,
+                                     name: unstable_ask, outcome: "failed"),
+                        example_spec(file_path: "spec/models/ledger_spec.rb", duration: 0.5, line_number: 8,
+                                     name: other_unstable, outcome: "failed")],
            commit_sha: "feedfacecafe0000")
     repository.test_runs.last.update!(created_at: 2.hours.ago)
     ingest(repository, [example_spec(file_path: "spec/models/order_spec.rb", duration: 3.5, line_number: 11,
@@ -97,7 +116,11 @@ RSpec.describe "Repository drill-down carry-through", type: :request do
                         example_spec(file_path: "spec/models/user_spec.rb", duration: 1.0, line_number: 13,
                                      name: other_description),
                         example_spec(file_path: "spec/requests/checkout_spec.rb", duration: 9.0, line_number: 14,
-                                     name: other_description)])
+                                     name: other_description),
+                        example_spec(file_path: "spec/models/ledger_spec.rb", duration: 0.5, line_number: 15,
+                                     name: unstable_ask, outcome: "passed"),
+                        example_spec(file_path: "spec/models/ledger_spec.rb", duration: 0.5, line_number: 16,
+                                     name: other_unstable, outcome: "passed")])
     repository
   end
 
@@ -116,9 +139,10 @@ RSpec.describe "Repository drill-down carry-through", type: :request do
 
   def page = Capybara.string(response.body)
 
-  def open_all_four
+  def open_every_ask
     get repository_path(drill_down_run, branch: branch_ask, spec_file: file_ask,
-                        spec_directory: area_ask, repeated_description: description_ask)
+                        spec_directory: area_ask, repeated_description: description_ask,
+                        unstable_test: unstable_ask)
   end
 
   # The ten links, as the page offers them.
@@ -169,7 +193,13 @@ RSpec.describe "Repository drill-down carry-through", type: :request do
       sets: { spec_directory: "spec/requests" } },
     { name: "open a file from Files that grew or shrank in this directory",
       panel: "#spec-directory-file-growth", link: "spec/models/refund_spec.rb",
-      sets: { spec_file: "spec/models/refund_spec.rb" } }
+      sets: { spec_file: "spec/models/refund_spec.rb" } },
+    { name: "open a test from Tests whose outcome changed",
+      panel: "#unstable-tests", link: "expires the session",
+      sets: { unstable_test: "expires the session" } },
+    { name: "Close test",
+      panel: "#unstable-test-runs", link: "Close test",
+      clears: :unstable_test }
   ]
 
   def href_for(gesture)
@@ -193,17 +223,17 @@ RSpec.describe "Repository drill-down carry-through", type: :request do
     query.split("&").any? { |pair| pair.start_with?("#{key}=") }
   end
 
-  describe "the whole matrix, one page with all four drill-downs open" do
-    # THE spec the missing cell would have failed. Eight links × four asks, and every cell is
+  describe "the whole matrix, one page with every drill-down open" do
+    # THE spec the missing cell would have failed. Every link × every ask, and every cell is
     # decided by the gesture's own definition rather than by a list of expected hrefs maintained
     # beside the one in the view — a matrix pinned by a second hand-written matrix is two places to
     # make the same mistake.
     gestures.each do |gesture|
       it "#{gesture[:name]} keeps every ask it does not own" do
-        open_all_four
+        open_every_ask
         href = href_for(gesture)
-        asks = { branch: branch_ask, spec_file: file_ask,
-                 spec_directory: area_ask, repeated_description: description_ask }
+        asks = { branch: branch_ask, spec_file: file_ask, spec_directory: area_ask,
+                 repeated_description: description_ask, unstable_test: unstable_ask }
 
         asks.each do |key, requested|
           if gesture[:clears] == key
@@ -223,13 +253,13 @@ RSpec.describe "Repository drill-down carry-through", type: :request do
     end
 
     # The guard on the trap that a "tidier" helper walks straight into. Carry is the default, so an
-    # omitted ask means KEEP — which makes the three Close buttons the only things on the page that
-    # must pass an explicit `nil`. Compacting the OVERRIDES in `drill_down_path`
+    # omitted ask means KEEP — which makes the Close buttons the only things on the page that must
+    # pass an explicit `nil`. Compacting the OVERRIDES in `drill_down_path`
     # (`asks.merge(overrides.compact)`) drops that nil before it can override anything, the reader's
-    # current ask survives, and all three buttons become no-ops that navigate to the page they are
+    # current ask survives, and every one of them becomes a no-op that navigates to the page it is
     # already on — the exact inversion of the defect the abstraction was built to kill.
     #
-    # These three are asserted separately from the matrix above rather than trusted to it, because
+    # These are asserted separately from the matrix above rather than trusted to it, because
     # they are the cells whose CORRECT value is an absence, and an absence is what a green suite
     # looks like when the assertion is missing. Both halves are checked deliberately: the matrix
     # examples above catch this mutation too (a cleared ask reappearing), and these catch it from the
@@ -237,10 +267,11 @@ RSpec.describe "Repository drill-down carry-through", type: :request do
     {
       "Close file" => [:spec_file, "#spec-file-examples"],
       "Close directory" => [:spec_directory, "#spec-directory-files"],
-      "Close description" => [:repeated_description, "#repeated-description-examples"]
+      "Close description" => [:repeated_description, "#repeated-description-examples"],
+      "Close test" => [:unstable_test, "#unstable-test-runs"]
     }.each do |label, (ask, panel_id)|
       it "#{label} still drops its own ask" do
-        open_all_four
+        open_every_ask
 
         href = page.find(panel_id).find("a", text: label, match: :prefer_exact)[:href]
 
@@ -262,6 +293,7 @@ RSpec.describe "Repository drill-down carry-through", type: :request do
       expect(mentions?(href, :branch)).to be(false)
       expect(mentions?(href, :spec_file)).to be(false)
       expect(mentions?(href, :repeated_description)).to be(false)
+      expect(mentions?(href, :unstable_test)).to be(false)
       expect(href).to include("spec_directory=#{CGI.escape('spec/models')}")
     end
   end

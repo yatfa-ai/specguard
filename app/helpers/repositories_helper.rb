@@ -20,15 +20,15 @@ module RepositoriesHelper
   # opens or closes one of them.
   #
   # The rule itself is old and is argued at each panel: `?branch=` anchors the "Suite growth" chart,
-  # and `?spec_file=` / `?spec_directory=` / `?repeated_description=` each anchor a drill-down panel
-  # of their own, so a gesture aimed at ONE of them must not close the others as a side effect.
-  # Opening a file is not a request to close the area; closing an area is not a request to close the
-  # file; and so on in every direction.
+  # and `?spec_file=` / `?spec_directory=` / `?repeated_description=` / `?unstable_test=` each anchor
+  # a drill-down panel of their own, so a gesture aimed at ONE of them must not close the others as a
+  # side effect. Opening a file is not a request to close the area; closing an area is not a request
+  # to close the file; and so on in every direction.
   #
-  # What was missing was a place to SAY it once. The READ side of these four asks has been abstracted
+  # What was missing was a place to SAY it once. The READ side of these asks has been abstracted
   # since they were built — `app/controllers/concerns/requested_*_param.rb`, one concern each — but
-  # the EMIT side was hand-enumerated at every link site — ten of them today, forty independent
-  # argument decisions — re-made by hand every time a rung was added. That is not a rule, it is a
+  # the EMIT side was hand-enumerated at every link site, one independent argument decision per ask
+  # per link, re-made by hand every time a rung was added. That is not a rule, it is a
   # matrix maintained by remembering, and it failed exactly the way such a matrix fails: the
   # area-open link was written after `?spec_file=` already shipped, did not carry it, and was later
   # edited to ADD another ask without anyone noticing the missing one. Every new drill-down cost a
@@ -40,11 +40,12 @@ module RepositoriesHelper
   #   set   — pass a value (`spec_file: file.path`)
   #   clear — pass an explicit `nil` (`spec_file: nil`); `repository_path` drops nil params
   #
-  # `asks.merge(overrides)` and specifically NOT `asks.merge(overrides.compact)`. The three "Close"
-  # buttons clear their own ask by passing nil, and compacting the OVERRIDES drops that nil before it
-  # can override anything — the reader's current ask survives the merge and all three buttons become
-  # no-ops that navigate to the page they are already on. That is the precise inversion of the defect
-  # this exists to make impossible. A nil in `overrides` is a decision, not an absence.
+  # `asks.merge(overrides)` and specifically NOT `asks.merge(overrides.compact)`. Every "Close"
+  # button clears its own ask by passing nil, and compacting the OVERRIDES drops that nil before it
+  # can override anything — the reader's current ask survives the merge and every one of those
+  # buttons becomes a no-op that navigates to the page it is already on. That is the precise
+  # inversion of the defect this exists to make impossible. A nil in `overrides` is a decision, not
+  # an absence.
   #
   # Compacting the merged RESULT is merely pointless rather than harmful (`repository_path` already
   # omits nil params), but it reads as though nils were unwanted here, which is the belief that leads
@@ -62,7 +63,8 @@ module RepositoriesHelper
     asks = { branch: @trajectory_branch_request,
              spec_file: @spec_file_request,
              spec_directory: @spec_directory_request,
-             repeated_description: @repeated_description_request }
+             repeated_description: @repeated_description_request,
+             unstable_test: @unstable_test_request }
 
     repository_path(repository, **asks.merge(overrides), anchor: anchor)
   end
@@ -661,6 +663,124 @@ module RepositoriesHelper
       "of those examples was which rather than a test that changed. Listed here rather than " \
       "counted above, because calling them flaky would be a false positive manufactured by the " \
       "matching rule."
+  end
+
+  # == The opened unstable test's sentences
+
+  # What the sequence IS — how much of this description's history the window holds, and how much of
+  # THAT is on the page.
+  #
+  # Its own method rather than a widening of `#spec_file_examples_scope_sentence` or
+  # `#repeated_description_examples_scope_sentence`, for the reason the second of those states about
+  # the first: those two count a RUN's examples and this counts a WINDOW's rows, so parameterising a
+  # noun would make one sentence stand for claims about two populations that are free to diverge.
+  #
+  # Counted in ROWS and never in runs, and that is the sentence's one hard rule. One row per run is
+  # what the data usually is rather than a promise this list makes, and it comes apart in BOTH
+  # directions: a run that recorded nothing under this description contributes no row — a test added
+  # halfway through a window of thirty has fifteen — and a description carried by more than one
+  # example in a run contributes one row per example. So `rows.length` is neither the window's length
+  # nor bounded below by it, and a sentence saying "12 of the last 30 runs" off this list would be
+  # reporting a coverage nobody counted. The window's own length is stated beside the count as what
+  # it is: the span these rows were drawn from, not their denominator.
+  #
+  # The cap is disclosed only when it BIT, and it is derived here rather than asked of the object:
+  # `UnstableTestRuns` serves `recorded_count` as an operand — counted before the cap — and no
+  # `truncated?` predicate, on the standing rule that this ladder serves operands and the surface
+  # states the reading.
+  #
+  # WHICH END the cap keeps is a property of the WINDOW and not of the read, and this sentence is
+  # the only place that difference is visible. `SpecObservation.outcome_sequence_in` orders by
+  # `array_position` over the run ids it was handed, so the rows come back in the order of the
+  # window itself — and this page's window (`Repository#suite_size_trajectory`) is OLDEST FIRST,
+  # because it is the window the "Suite growth" chart above is plotted along. So the cap keeps the
+  # OLDEST rows here, where the same method under `GET /api/v1/repository` keeps the newest ones off
+  # a newest-first window. Reading the direction off the object would be reading it off a promise
+  # nothing makes; it is stated here, for this window, in this caller's words.
+  def unstable_test_runs_scope_sentence(sequence)
+    recorded = number_with_delimiter(sequence.recorded_count)
+    shown = number_with_delimiter(sequence.rows.size)
+    plural = "row".pluralize(sequence.recorded_count)
+    runs = "#{number_with_delimiter(sequence.run_count)} #{"run".pluralize(sequence.run_count)}"
+
+    if sequence.recorded_count > sequence.rows.size
+      "The #{shown} oldest of the #{recorded} #{plural} the last #{runs} of this window recorded " \
+        "under it, in the window's own order — oldest run first, the direction the \u201CSuite growth\u201D " \
+        "chart above is plotted in."
+    else
+      "All #{recorded} #{plural} the last #{runs} of this window recorded under it, in the " \
+        "window's own order — oldest run first, the direction the \u201CSuite growth\u201D chart above is " \
+        "plotted in."
+    end
+  end
+
+  # HOW TO READ THE COLUMN, said on the panel because it is the entire reason the panel exists.
+  #
+  # The ranking above cannot make this distinction and is right not to try: its row says `30 runs,
+  # 4 failed, [failed, passed]`, and those three figures are IDENTICAL for two windows that call for
+  # opposite work. Four failures at the newest four runs is a regression with a commit to find; four
+  # failures scattered through thirty is flakiness with none. A reader who has the sequence but not
+  # the rule reads a shape and guesses, and the guess that costs most is hunting nondeterminism in a
+  # test that fails deterministically on code that changed.
+  #
+  # Worded by POSITION IN THIS LIST rather than by "recent" or "latest", because the two are not the
+  # same word here: this window runs oldest first, so the newest run is the LAST row and a sentence
+  # about "the failures at the top" would point a reader at the opposite end of the evidence from
+  # the one it means. The scope sentence beside it states the direction; this one names the end.
+  #
+  # Static, and deliberately so: it is a rule for reading the list rather than a claim about this
+  # one, so it has nothing to be counted off and nothing to drift from.
+  def unstable_test_runs_reading_sentence
+    "Read down the sequence rather than across the counts. Failures bunched at the END of this " \
+      "list — its newest runs — are a regression, and the commit to look at is the one on the " \
+      "first failing row after the last row that passed; failures scattered through the list are " \
+      "flakiness, where there is no culprit commit to find and the work is quarantine or shared " \
+      "state."
+  end
+
+  # Rows this window recorded under the description that said NOTHING about how it ended, counted
+  # and stated — the silence the sequence would otherwise read as a gap in the story.
+  #
+  # `outcome` is nullable and nothing platform-side validates it, so a client that stopped sending
+  # outcomes writes rows that are present and silent. Those are not passes and are counted as one
+  # nowhere: `UnstableTests::Row#changed?` compares against `reported_outcome_count` rather than
+  # `recorded_count` one rung up precisely so such a client cannot manufacture a flip, and a sequence
+  # that let them read as passes would manufacture the same flip HERE — where it would look like a
+  # date, which is the one wrong answer this panel is read to produce.
+  #
+  # Counted over the WINDOW rather than over the listed rows, so a truncated list's silence is still
+  # countable, and rendered only when there is any: a clause reading "0 of them said nothing" is a
+  # sentence about arithmetic rather than about this test.
+  def unstable_test_runs_silence_clause(sequence)
+    silent = sequence.unreported_outcome_count
+    return "" unless silent.positive?
+
+    " #{number_with_delimiter(silent)} of the #{number_with_delimiter(sequence.recorded_count)} " \
+      "said nothing about how it ended. Silence is not a pass and is not counted as one here, so a " \
+      "gap in the column is a run that recorded the test and reported no outcome for it."
+  end
+
+  # The window recorded nothing under the description that was asked for. An ordinary answer and not
+  # an error, on the spelling `RepeatedDescriptionExamples`' empty state fixed one ladder over:
+  # `?unstable_test=` is a URL a reader types, edits and bookmarks, so a typo, a reworded description
+  # and a stale bookmark all arrive here.
+  #
+  # It NAMES THE DESCRIPTION BACK, because an empty state without a subject is a sentence about
+  # nothing — and here the subject is a sentence somebody wrote, which is the one thing a reader can
+  # check against their own suite.
+  #
+  # And it names the RULE that makes the commonest cause of this state ordinary rather than broken:
+  # the project matches tests by description alone, so a renamed test STARTS A NEW HISTORY and its
+  # old one stops at the rename. A reader who does not know that reads an empty panel as a lost
+  # history rather than as two.
+  def unstable_test_runs_none_description(sequence)
+    runs = "#{number_with_delimiter(sequence.run_count)} #{"run".pluralize(sequence.run_count)}"
+
+    "None of the last #{runs} of this window recorded an example described " \
+      "\u201C#{sequence.name}\u201D. Tests are matched here by their description alone, so a test renamed or " \
+      "reworded since starts a new history under its new description and this one stops at the " \
+      "rename — a bookmark to the old wording goes stale by design. The \u201CTests whose outcome " \
+      "changed\u201D panel above lists the descriptions this window did record."
   end
 
   # == The "Areas that grew or shrank over the window" panel's sentences
