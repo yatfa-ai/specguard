@@ -1,0 +1,399 @@
+    <%# == Suite growth over time
+        The Overview above answers "+47 since the last run" — one subtraction across two rows. This
+        answers what the suite has done over the last thirty runs, which `test_runs` has been able
+        to say since Phase 2 and nothing has ever asked.
+
+        Built on the BRANCH history (`Repository#suite_size_trajectory`), never on the "Recent runs"
+        panel below, which is one interleaved history across every branch and disclaims being a
+        series in those exact words. A line drawn through that panel's rows would connect a trunk
+        run to a feature branch's and call the gap growth.
+
+        Outside the `manage_keys` gate for the same reason the Overview and Recent runs are: read-
+        only suite telemetry, nothing credential, nothing actionable.
+
+        Not rendered at all when CI has never reported. The Overview's "No CI run has reported yet"
+        is the page's one never-ingested empty state, and a second dashed box saying a quieter
+        version of it would read as a different, milder fact. %>
+    <% if @latest_test_run.present? %>
+      <%= render UI::PanelComponent.new(title: "Suite growth", id: "suite-trajectory", class: "lg:col-span-3") do %>
+        <div class="space-y-3">
+          <%# == Which branch this is drawn on
+              The page has no branch of record: the run every panel above names is whichever branch
+              pushed most recently. On a repository whose CI reports on every PR that is routinely a
+              feature branch's FIRST run — one point, nothing to draw — and this panel goes dark
+              while the trunk holds a month of comparable history in the same table.
+
+              So the branches are named here, with how much history each holds, and the reader can
+              pick one (`?branch=`, RepositoriesController#show). Named even when the panel IS
+              drawing a line, because a reader cannot ask for a branch they were never told exists.
+
+              Only this panel moves. The Overview above and Recent runs below go on naming the
+              repository's latest run whichever branch it came from, so a selected branch can never
+              put a headline figure about one run above a chart about another. %>
+          <% if @trajectory_branches.any? %>
+            <div id="suite-trajectory-branches" class="space-y-2">
+              <%= render UI::PageNavComponent.new(
+                    items: trajectory_branch_choices(@repository, @trajectory_branches, @suite_trajectory.branch),
+                    class: "flex-wrap"
+                  ) %>
+              <%# == The branches the row could not carry
+                  The row above is cut to eight; the controller already holds up to five hundred, out
+                  of the same one query. Without this the page counts the rest at the reader in a
+                  sentence and hands them no way to name one — and `?branch=` is a mechanism nothing
+                  rendered on this page mentions, so the only route to a hidden branch was to write
+                  the URL by hand. The rule two comments up is exactly the one that breaks: a reader
+                  cannot ask for a branch they were never told exists, and being told a COUNT is not
+                  being told a name.
+
+                  Deliberately OUTSIDE the <nav> above rather than appended to it. That row is the
+                  eight-item primary control and its size is a promise about what a row of links can
+                  carry; five hundred links inside it would keep the markup tidy and destroy the
+                  thing the cut was for.
+
+                  `UI::DropdownComponent` is details/summary — keyboard-reachable and Escape-closable
+                  with no JS, and no new component. It costs no query: `@trajectory_branches` is
+                  already loaded, already ordered, and every field these links need is on the rows. %>
+              <% if (branch_menu = trajectory_branch_menu_choices(@repository, @trajectory_branches, @suite_trajectory.branch)) %>
+                <div id="suite-trajectory-branch-menu">
+                  <%= render UI::DropdownComponent.new(
+                        label: trajectory_branch_menu_label(@trajectory_branches),
+                        align: :left
+                      ) do %>
+                    <%# Bounded in HEIGHT, never in CONTENT: past the trunk's neighbours this scrolls
+                        rather than dropping entries, because an overflow menu that overflows is the
+                        defect one level down. %>
+                    <ul class="max-h-64 overflow-y-auto">
+                      <% branch_menu.each do |choice| %>
+                        <li>
+                          <%# `aria-current` is carried here as well as in the row. The drawn branch
+                              is pulled into the row by `trajectory_shown_branches`, so it is named
+                              twice on this page, and a menu that marked none of its entries current
+                              would tell a screen reader the opposite of what the row says.
+
+                              NOT truncated, unlike the row. This menu is the only place a hidden
+                              branch is named at all, and this slice exists because a branch you
+                              cannot name is a branch you cannot ask for — `feature/some-long-desc…`
+                              in the one control meant to end that problem gives back part of what
+                              the menu bought. The box above is `absolute` and `min-w-48` is a floor,
+                              not a ceiling, so it grows to fit at no cost to the layout; `max-w-sm`
+                              plus `break-all` keeps a pathological name wrapping inside the panel
+                              instead of running off the viewport. A `title` tooltip was the other
+                              way and is worse: it is hover-only, so the keyboard reader this
+                              control is built for never receives it. %>
+                          <%= link_to choice[:label], choice[:href],
+                                      class: "block max-w-sm break-all rounded px-2 py-1 " \
+                                             "text-app-h4 text-app-content-secondary " \
+                                             "hover:bg-app-neutral-surface hover:text-app-content " \
+                                             "aria-[current=page]:text-app-content",
+                                      aria: { current: choice[:current] ? "page" : nil } %>
+                        </li>
+                      <% end %>
+                    </ul>
+                  <% end %>
+                </div>
+              <% end %>
+              <p class="text-xs text-app-muted" id="suite-trajectory-branches-basis">
+                Only this panel follows the branch you pick — it is anchored on that branch's newest
+                run and reads back <%= Repository::TRAJECTORY_LIMIT %> runs from there.
+                <% if @trajectory_branches.any?(&:capped?) %>
+                  <%# The counts stop at the window the chart itself reaches, so a trunk with forty
+                      thousand runs is not counted to answer a question this panel never asks. The
+                      notation is explained rather than left to be read as an exact figure. %>
+                  A run count stops at that window, so
+                  “<%= Repository::TRAJECTORY_LIMIT %>+” means the branch holds more history than
+                  the chart reaches.
+                <% end %>
+                <%= trajectory_hidden_branches_sentence(@trajectory_branches, @suite_trajectory.branch) %>
+              </p>
+            </div>
+          <% end %>
+          <%# The ask was not honoured, and the panel says so. Every figure below is correctly
+              labelled with the branch that WAS drawn, but a reader who followed a stale bookmark
+              would otherwise read the trunk's history as their branch's.
+
+              Deliberately OUTSIDE the selector above, and the two conditions are independent: that
+              one is about whether there are CHOICES to offer, this one about whether an ASK was
+              substituted. They come apart on a repository where every run named no branch — there
+              is nothing to select, and `?branch=feature/gone` is still an ask that went unanswered.
+              Nested inside the selector, the one page state that says nothing else about the ask
+              was the one state where this could not speak. %>
+          <% if (fallback_notice = trajectory_branch_fallback_notice(@trajectory_branch_request, @suite_trajectory)) %>
+            <p class="text-xs text-app-muted" id="suite-trajectory-branch-fallback">
+              <%= fallback_notice %>
+            </p>
+          <% end %>
+          <% if @suite_trajectory.branch.blank? %>
+            <%# The same state the basis line above names, and it must not be answered here with the
+                thin-history wording below: "not enough comparable runs yet" describes a young
+                branch that will fill in on its own, and this is a CI client that is not sending a
+                branch and never will until someone changes it. %>
+            <%= render UI::EmptyStateComponent.new(
+                  title: "No branch to plot a history on",
+                  description: "The latest run named no branch, so SpecGuard cannot place it in one. " \
+                               "Runs that name no branch are not pooled together — they may come from " \
+                               "anywhere, and a line drawn through them would be a history of nothing " \
+                               "in particular."
+                ) %>
+          <% elsif @suite_trajectory.plottable? %>
+            <% trajectory_points = @suite_trajectory.plotted.map do |run|
+                 UI::SparklineComponent::Point.new(
+                   label: run.commit_sha.first(7),
+                   value: run.total_specs_count.to_i,
+                   detail: "#{time_ago_in_words(run.created_at)} ago"
+                 )
+               end %>
+            <%# Every figure the caption states is counted off the same object the line is drawn
+                from, so the two cannot disagree — the count of points, the count withheld, and the
+                axis bounds all come from `SuiteTrajectory`. %>
+            <%= render UI::SparklineComponent.new(
+                  id: "suite-trajectory-chart",
+                  points: trajectory_points,
+                  label: "Tests in suite on #{@suite_trajectory.branch}",
+                  coverage: @suite_trajectory.coverage,
+                  summary: "The suite measured between #{number_with_delimiter(@suite_trajectory.minimum)} " \
+                           "and #{number_with_delimiter(@suite_trajectory.maximum)} tests across " \
+                           "#{@suite_trajectory.plotted.size} runs on #{@suite_trajectory.branch}, " \
+                           "the oldest #{time_ago_in_words(@suite_trajectory.first_run.created_at)} ago " \
+                           "and the newest #{time_ago_in_words(@suite_trajectory.last_run.created_at)} ago. " \
+                           "The vertical axis spans that range and does not start at zero, so the " \
+                           "slope is the size of the change and not its share of the suite.",
+                  columns: ["Run", "Tests in suite", "Ingested"],
+                  formatter: trajectory_size_formatter,
+                  point_formatter: trajectory_size_point_formatter
+                ) %>
+
+            <%# What the line covers, in the register the Overview's basis line uses: a series is a
+                stronger claim than a level, and it is worth only as much as the rows it declined to
+                draw. Which rows those were, and why, said here rather than left to the reader to
+                notice that the count under the label is smaller than the history. %>
+            <p class="text-xs text-app-muted" id="suite-trajectory-basis">
+              Drawn through <%= @suite_trajectory.plotted.size %>
+              of the last <%= @suite_trajectory.considered_count %>
+              <%= "run".pluralize(@suite_trajectory.considered_count) %>
+              on <%= @suite_trajectory.branch %><%= ", #{@suite_trajectory.cohort_description}" if @suite_trajectory.cohort_description %>,
+              covering <%= distance_of_time_in_words(@suite_trajectory.first_run.created_at,
+                                                     @suite_trajectory.last_run.created_at) %>.
+              Only runs on the same branch are plotted — a suite size from somewhere else is not a
+              change this branch made.
+              <% if @suite_trajectory.flat? %>
+                Every one of them measured
+                <%= number_with_delimiter(@suite_trajectory.minimum) %> tests: this suite has not
+                moved over that window, which is a measurement and not an absence of one.
+              <% end %>
+              <% if @suite_trajectory.withheld_unmeasured.any? %>
+                <%# The same fact the Overview withholds its delta on, one row per occurrence
+                    instead of one. %>
+                <%= @suite_trajectory.withheld_unmeasured.size %>
+                <%= "run".pluralize(@suite_trajectory.withheld_unmeasured.size) %>
+                <%= @suite_trajectory.withheld_unmeasured.size == 1 ? "is" : "are" %> withheld for
+                having reported no tests at all — a zero there describes the report, not the suite.
+              <% end %>
+              <% if @suite_trajectory.withheld_part_way.any? %>
+                <%# The state that would otherwise produce a wrong PICTURE rather than an honest
+                    gap, and the reason this panel needed a rule at all: a four-shard suite reads at
+                    a quarter of itself for most of its own build, and a job cancelled after two of
+                    four shards leaves that half-sized row in the history permanently. Plotted, each
+                    one is a cliff and a recovery — a mass deletion and a mass restoration, neither
+                    of which any commit made.
+
+                    Said ONLY of the runs holding fewer parts than the line's, because it is true
+                    only of those. See `SuiteTrajectory#withheld_part_way`. %>
+                <%= @suite_trajectory.withheld_part_way.size %>
+                <%= "run".pluralize(@suite_trajectory.withheld_part_way.size) %>
+                <%= @suite_trajectory.withheld_part_way.size == 1 ? "is" : "are" %> withheld for
+                having reported only some of the parts the plotted runs reported: a run's test
+                count is the sum of the shards it has reported so far, so a build still arriving —
+                or one cancelled part-way — sits at a fraction of its own suite, and plotting it
+                beside a complete run would draw a drop no commit made.
+              <% end %>
+              <% if @suite_trajectory.withheld_other_composition.any? %>
+                <%# The other direction of the same mismatch: assembled from MORE parts than the
+                    cohort, or delivered whole where the cohort was sharded. The sentence above is
+                    false about every one of these — they are not fragments of themselves, and
+                    during a shard-layout migration they are the newer, more completely assembled
+                    runs. So this one claims only what the rule actually establishes: the totals
+                    count different amounts of delivered work and cannot be differenced. Both sides
+                    are named through `TestRun#delivery_description` when the withheld runs share a
+                    composition, and neither is named when they do not. %>
+                <% others = @suite_trajectory.withheld_other_composition %>
+                <% others_delivery = @suite_trajectory.shared_delivery_description(others) %>
+                <%= others.size %>
+                <%= "run".pluralize(others.size) %>
+                <%= others.size == 1 ? "is" : "are" %> withheld for having arrived differently from
+                the runs the line is drawn through<%= " — #{others_delivery}, where the line is drawn through runs #{@suite_trajectory.cohort_delivery}" if others_delivery %>.
+                A total counts the work that was delivered, so two runs assembled from different
+                numbers of parts cannot be differenced in either direction. That is not a claim
+                that these ones measured less than they should have.
+              <% end %>
+              <% unless @suite_trajectory.plots_newest? %>
+                <%# The one thing a reader infers from a growth chart without being told. During a
+                    shard-layout migration the cohort is the older, larger group, so the newest runs
+                    are the withheld ones and the line stops short of the SHA the Overview names
+                    directly above. The counts disclose it arithmetically; this says it. It
+                    self-heals as the new layout accumulates and the cohort flips. %>
+                The most recent run on <%= @suite_trajectory.branch %> is not on this line:
+                <span class="font-mono"><%= @suite_trajectory.newest_run.commit_sha.first(7) %></span>
+                is one of the withheld runs, so the line ends at
+                <span class="font-mono"><%= @suite_trajectory.last_run.commit_sha.first(7) %></span>,
+                <%= time_ago_in_words(@suite_trajectory.last_run.created_at) %> ago.
+              <% end %>
+            </p>
+
+            <%# == The same cohort, read for what it COST
+                A suite-size line answers "is this suite growing?" and cannot answer "is it getting
+                slower?" — which is the question a reader of a growth chart asks next, and the one
+                the page could already almost answer: every row plotted above carries its own
+                `duration_seconds`, and until now nothing read it.
+
+                Drawn here rather than in a panel of its own because a wall clock is comparable only
+                within one shard layout. `duration_seconds` is the MAX over a run's shards, so a CI
+                config moving from four shards to eight halves it while nothing gets faster; the
+                cohort rule that makes the size line honest is half the rule this line needs, and
+                sharing the cohort is what guarantees the two lines are drawn through the same runs
+                rather than through two sets that drifted apart.
+
+                Only half, because equal `shard_count` is the denominator a SUM needs and a MAX has
+                a different one: `duration_seconds` counts over the shards that REPORTED, and
+                `SuiteTrajectory#timed` asks for a shared `timed_shard_count` on top of the cohort
+                for exactly the reason the Overview's `runtime_comparable` guard does, ~950 lines
+                up. Four shards whose two slowest were cancelled is not a speed-up, and until that
+                guard the two surfaces disagreed about the same pair of runs on one page load. %>
+            <% if @suite_trajectory.runtime_plottable? %>
+              <% runtime_formatter = trajectory_runtime_formatter %>
+              <% runtime_points = @suite_trajectory.timed.map do |run|
+                   UI::SparklineComponent::Point.new(
+                     label: run.commit_sha.first(7),
+                     value: run.duration_seconds.to_f,
+                     detail: "#{time_ago_in_words(run.created_at)} ago"
+                   )
+                 end %>
+              <%# One formatter and no `point_formatter`: `1m 14s` names its own unit, so a marker
+                  needs no second spelling. The suite-size chart above passes both precisely because
+                  `20,013` does not. %>
+              <%= render UI::SparklineComponent.new(
+                    id: "suite-trajectory-runtime-chart",
+                    points: runtime_points,
+                    label: "Wall clock on #{@suite_trajectory.branch}",
+                    coverage: @suite_trajectory.runtime_coverage,
+                    summary: "These runs waited between #{runtime_formatter.call(@suite_trajectory.runtime_minimum)} " \
+                             "and #{runtime_formatter.call(@suite_trajectory.runtime_maximum)} across " \
+                             "#{@suite_trajectory.timed.size} runs on #{@suite_trajectory.branch}, " \
+                             "the oldest #{time_ago_in_words(@suite_trajectory.first_timed_run.created_at)} ago " \
+                             "and the newest #{time_ago_in_words(@suite_trajectory.last_timed_run.created_at)} ago. " \
+                             "Each point is the run's wall clock — the slowest single shard, not the " \
+                             "machine time the suite cost. The vertical axis spans that range and does " \
+                             "not start at zero, so the slope is the size of the change and not its " \
+                             "share of the wait.",
+                    columns: ["Run", "Wall clock", "Ingested"],
+                    formatter: runtime_formatter
+                  ) %>
+
+              <%# The runtime line's own basis, stated separately from the size line's above. The two
+                  are drawn through the same cohort but not necessarily through the same runs — a
+                  run that reported a suite and no clock is on one line and off the other — so one
+                  shared caption would be true of neither. %>
+              <p class="text-xs text-app-muted" id="suite-trajectory-runtime-basis">
+                Drawn through <%= @suite_trajectory.timed.size %>
+                of the <%= @suite_trajectory.plotted.size %>
+                <%= "run".pluralize(@suite_trajectory.plotted.size) %>
+                the suite-size line is drawn through, on <%= @suite_trajectory.branch %><%= ", #{@suite_trajectory.cohort_description}" if @suite_trajectory.cohort_description %>.
+                Each point is that run's wall clock — how long the build waited, which on a sharded
+                run is its slowest single shard and not the machine time every shard spent. Only
+                runs assembled the same way and timed over the same number of shards are plotted:
+                a config that splits four shards into eight halves the wall clock without anything
+                having got faster, and so does a run whose two slowest shards were cancelled before
+                they reported.
+                <% if @suite_trajectory.runtime_flat? %>
+                  Every one of them waited
+                  <%= runtime_formatter.call(@suite_trajectory.runtime_minimum) %>: this suite's
+                  wall clock has not moved over that window, which is a measurement and not an
+                  absence of one.
+                <% end %>
+                <% if @suite_trajectory.withheld_untimed.any? %>
+                  <%# Withheld from THIS line only, and still plotted above. A run may measure a
+                      suite perfectly and send no timing — `duration_seconds` is nullable and
+                      `Ingest::Payload` accepts nil explicitly — so this is a gap in what was
+                      reported and never a build that took no time. %>
+                  <%= @suite_trajectory.withheld_untimed.size %>
+                  <%= "run".pluralize(@suite_trajectory.withheld_untimed.size) %>
+                  <%= @suite_trajectory.withheld_untimed.size == 1 ? "is" : "are" %> withheld from
+                  this line for having reported no timing at all, and
+                  <%= @suite_trajectory.withheld_untimed.size == 1 ? "remains" : "remain" %>
+                  on the suite-size line above: a missing wall clock is something the client did not
+                  send, not a build that took no time.
+                <% end %>
+                <% if @suite_trajectory.withheld_timing_mismatch.any? %>
+                  <%# The other way off this line, and a different sentence because it has a
+                      different cause. These runs DID report a wall clock — they are not a gap in
+                      what the client sent — but over a different number of shards than the line's
+                      points, and `duration_seconds` is the MAX over the shards that reported. Four
+                      timed shards against four whose two slowest were cancelled is a 70% drop that
+                      no commit made, which is the comparison the Overview panel above already
+                      refuses for its scalar delta.
+
+                      Worded without a direction. The line's denominator is the dominant one, not
+                      the full one, so on a branch that reliably loses one shard's telemetry the
+                      withheld run is the one that timed MORE. %>
+                  <%= @suite_trajectory.withheld_timing_mismatch.size %>
+                  <%= "run".pluralize(@suite_trajectory.withheld_timing_mismatch.size) %>
+                  reported a wall clock over a different number of shards than the runs on this
+                  line, so
+                  <%= @suite_trajectory.withheld_timing_mismatch.size == 1 ? "it is" : "they are" %>
+                  withheld from it and
+                  <%= @suite_trajectory.withheld_timing_mismatch.size == 1 ? "remains" : "remain" %>
+                  on the suite-size line above: a wall clock is the slowest shard that reported, so
+                  two runs whose shards reported in different numbers cannot be differenced without
+                  reading telemetry loss as a change in speed.
+                <% end %>
+              </p>
+            <% else %>
+              <%# Not an empty state, because the panel is not empty — the size line above is drawn.
+                  A missing runtime line is one sentence about what was reported, in the same
+                  register as the withholding sentences beside it. %>
+              <p class="text-xs text-app-muted" id="suite-trajectory-runtime-basis">
+                No wall-clock line yet on <%= @suite_trajectory.branch %>:
+                <% if @suite_trajectory.timed.empty? %>
+                  none of the <%= @suite_trajectory.plotted.size %> plotted
+                  <%= "run".pluralize(@suite_trajectory.plotted.size) %> reported one.
+                <% else %>
+                  <%# Counted off `timed`, not typed in. The `else` can only be reached with exactly
+                      one timed run TODAY, because the threshold happens to be two — so a literal
+                      "1" would read correctly and lie the moment the threshold moved, in the one
+                      sentence whose whole job is explaining a shortfall. The threshold itself comes
+                      off the rule for the same reason.
+
+                      And the VERB is read off the data for the same reason the number is. `timed`
+                      now withholds on two grounds, so "reported one" is false about a shortfall
+                      caused by mismatched timing denominators — those runs all reported a clock.
+                      That is this sentence's own subject matter aimed at itself: the sentence
+                      explaining why a reader is being shown less than they expected is the last
+                      place allowed to misname the cause. %>
+                  <%= @suite_trajectory.timed.size %> of the
+                  <%= @suite_trajectory.plotted.size %> plotted
+                  <%= "run".pluralize(@suite_trajectory.plotted.size) %>
+                  <% if @suite_trajectory.withheld_timing_mismatch.any? %>
+                    timed the same number of shards — a wall clock is the slowest shard that
+                    reported, so runs whose shards reported in different numbers are not one line —
+                    and a trajectory needs
+                  <% else %>
+                    reported one, and a trajectory needs
+                  <% end %>
+                  <%= SuiteTrajectory::MINIMUM_POINTS %>.
+                <% end %>
+                A single wall clock drawn as a line is a flat one, which says this suite takes as
+                long as it always did — a claim one measurement cannot support.
+              </p>
+            <% end %>
+          <% else %>
+            <%# Never a flat line, and never a single point drawn as one. Both would assert a stable
+                suite, which is precisely what a history too thin to compare cannot say. The counts
+                are stated anyway, because "nothing to show" and "three runs, none of them
+                comparable to each other" are different things to go and look at. %>
+            <%= render UI::EmptyStateComponent.new(
+                  title: "Not enough comparable runs yet",
+                  description: trajectory_thin_description(@suite_trajectory)
+                ) %>
+          <% end %>
+        </div>
+      <% end %>
+    <% end %>

@@ -1,0 +1,63 @@
+  <%# Deliberately OUTSIDE the @revealed_token gate above: the instructions have to outlive the
+      one-shot flash, or a user who reloads the page has no way to learn what the key is for. %>
+  <%= render UI::PanelComponent.new(title: "Connect this repository", id: "connect") do %>
+    <div class="grid gap-4 lg:grid-cols-3">
+      <div class="space-y-4 lg:col-span-2" data-controller="copy-text">
+        <div class="space-y-1">
+          <p class="section-label text-app-content-secondary">Endpoint</p>
+          <p class="font-mono text-sm break-all text-app-content">GET <%= api_v1_repository_url %></p>
+        </div>
+
+        <div class="space-y-2">
+          <p class="section-label text-app-content-secondary">Try it</p>
+          <%# Gated on the repository actually having a key. `<token>` has no value to stand for
+              until one exists, so before that this rendered a command whose only possible outcome
+              was a 401 — and told the reader to substitute a key they had never minted. %>
+          <% if has_api_keys %>
+            <%= render UI::CopyableCodeComponent.new do %>curl -H "Authorization: Bearer &lt;token&gt;" <%= api_v1_repository_url %><% end %>
+            <p class="text-xs text-app-muted">
+              <code>&lt;token&gt;</code> is a placeholder — substitute the key you copied when you minted
+              it. SpecGuard cannot show an existing key again; regenerate it to mint a replacement.
+            </p>
+          <% elsif repository_policy.can?(:keys_manage) %>
+            <p class="text-xs text-app-muted">
+              This repository has no API key yet, and the endpoint answers
+              <code>401 {"error":"unauthorized"}</code> without one. Mint a key in
+              <a href="#api-keys" class="underline">API keys</a> below — the command to run is shown
+              with the key already in it, once.
+            </p>
+          <% else %>
+            <p class="text-xs text-app-muted">
+              This repository has no API key yet, and the endpoint answers
+              <code>401 {"error":"unauthorized"}</code> without one. Ask
+              <%= @repository.user.display_name %> to mint one.
+            </p>
+          <% end %>
+        </div>
+      </div>
+
+      <div class="space-y-4 lg:col-span-1">
+        <% if @last_api_request_at.present? %>
+          <%= render UI::StatComponent.new(
+                label: "Connection",
+                value: "Connected",
+                hint: "Last request #{time_ago_in_words(@last_api_request_at)} ago.",
+                tone: :success
+              ) %>
+        <% else %>
+          <%= render UI::StatComponent.new(
+                label: "Connection",
+                value: "Not connected yet",
+                hint: "No API key has been used.",
+                tone: :warning
+              ) %>
+        <% end %>
+
+        <%= render UI::AlertComponent.new(tone: :neutral) do %>
+          A wrong or revoked key gets <code>401 {"error":"unauthorized"}</code>, and a rejected request
+          never records a use — so a key stuck at "never" means the request never authenticated, or was
+          never sent at all.
+        <% end %>
+      </div>
+    </div>
+  <% end %>
