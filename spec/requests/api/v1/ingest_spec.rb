@@ -668,6 +668,32 @@ RSpec.describe "POST /api/v1/ingest", type: :request do
       expect(response).to have_http_status(:bad_request)
     end
 
+    # Distinct from both neighbours: the body *is* an object and `specs` *is* an array — it is one
+    # entry inside it that is not an object, which is what a client whose serializer emits
+    # positional tuples instead of objects puts on the wire. The label assertion is the point of
+    # the example: an entry this malformed has no `file_path`/`line_number` to be named by, so the
+    # diagnostic falls back to the bare index, and that is the only handle a client gets on it.
+    #
+    # The entry's *type* is load-bearing, and two candidates do not work here:
+    #
+    #   - `nil` never reaches `Payload` at all. The controller reads `request.request_parameters`,
+    #     and Rails' `deep_munge` compacts nils out of arrays first — so a nil entry is silently
+    #     dropped and the run is *accepted*, which is a property of the parsing stack rather than
+    #     of this validator and is not what this example is about.
+    #   - a bare string reaches it but cannot tell `label`'s two arms apart: `String#[]("file_path")`
+    #     answers nil rather than raising, so the example would still pass against a `label` whose
+    #     `spec.is_a?(Hash)` guard had been deleted.
+    #
+    # An array entry survives munging *and* makes the guard observable.
+    it "rejects a specs entry that is not a JSON object" do
+      ingest(ingest_payload(specs: [annotated_spec, ["spec/models/invoice_spec.rb", 12]]))
+
+      expect(response).to have_http_status(:bad_request)
+      expect(response.parsed_body["message"]).to include("specs[1]")
+      expect(response.parsed_body["message"]).to include("must be a JSON object")
+      expect(TestRun.count).to eq(0)
+    end
+
     it "rejects a spec with no file_path" do
       ingest(ingest_payload(specs: [annotated_spec.except(:file_path)]))
 
@@ -702,6 +728,30 @@ RSpec.describe "POST /api/v1/ingest", type: :request do
 
       expect(response).to have_http_status(:bad_request)
       expect(response.parsed_body["message"]).to include("duration_seconds")
+    end
+
+    # The same rule as `ci_run_id` and `shard_id` below, and the coercion costs more here, not
+    # less: `branch` is the axis every windowed surface narrows on — `unstable_tests` is served
+    # only for a branch-narrowed window, and the history and growth panels are all branch-scoped.
+    # A branch arriving as a non-string would split one branch's window in two, and the drill-ins
+    # read position *within* a window against a commit_sha serialized from that same fetch.
+    it "rejects a branch that is not a string" do
+      ingest(ingest_payload(branch: 42))
+
+      expect(response).to have_http_status(:bad_request)
+      expect(response.parsed_body["message"]).to include("branch")
+      expect(TestRun.count).to eq(0)
+    end
+
+    # The counterweight, as `ci_run_id` and `shard_id` each have below: absence is ordinary — an
+    # unrecognised CI provider POSTs a null branch and the formatter's git fallback is built for
+    # exactly that — so a validator that rejected absence would satisfy the example above while
+    # breaking the shape the platform designed an affordance for.
+    it "accepts a run that omits branch entirely" do
+      ingest(ingest_payload)
+
+      expect(response).to have_http_status(:accepted)
+      expect(TestRun.last.branch).to be_nil
     end
 
     # A run id sent as a JSON number would key its shards on `12345` while a client that sent the
