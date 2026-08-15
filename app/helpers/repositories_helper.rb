@@ -705,11 +705,11 @@ module RepositoriesHelper
 
     if sequence.recorded_count > sequence.rows.size
       "The #{shown} oldest of the #{recorded} #{plural} the last #{runs} of this window recorded " \
-        "under it, in the window's own order — oldest run first, the direction the \u201CSuite growth\u201D " \
+        "under it, in the window's own order — oldest run first, the direction the “Suite growth” " \
         "chart above is plotted in."
     else
       "All #{recorded} #{plural} the last #{runs} of this window recorded under it, in the " \
-        "window's own order — oldest run first, the direction the \u201CSuite growth\u201D chart above is " \
+        "window's own order — oldest run first, the direction the “Suite growth” chart above is " \
         "plotted in."
     end
   end
@@ -777,10 +777,10 @@ module RepositoriesHelper
     runs = "#{number_with_delimiter(sequence.run_count)} #{"run".pluralize(sequence.run_count)}"
 
     "None of the last #{runs} of this window recorded an example described " \
-      "\u201C#{sequence.name}\u201D. Tests are matched here by their description alone, so a test renamed or " \
+      "“#{sequence.name}”. Tests are matched here by their description alone, so a test renamed or " \
       "reworded since starts a new history under its new description and this one stops at the " \
-      "rename — a bookmark to the old wording goes stale by design. The \u201CTests whose outcome " \
-      "changed\u201D panel above lists the descriptions this window did record."
+      "rename — a bookmark to the old wording goes stale by design. The “Tests whose outcome " \
+      "changed” panel above lists the descriptions this window did record."
   end
 
   # == The "Areas that grew or shrank over the window" panel's sentences

@@ -291,6 +291,32 @@ RSpec.describe "Repository unstable test runs", type: :request do
       expect(basis_line).to have_text("contributes one row per example", normalize_ws: true)
     end
 
+    # The cap, disclosed only when it BIT — and disclosed as WHICH END it kept, which is a property
+    # of the WINDOW rather than of the read. `SpecObservation.outcome_sequence_in` orders by
+    # `array_position` over the run ids it is handed, so on this page's oldest-first window the
+    # `LIMIT` sheds the NEWEST rows, where the same method under `GET /api/v1/repository` sheds the
+    # oldest ones off a newest-first window. A caption that said "the most recent N" here would name
+    # the rows that are not on the page.
+    it "says which end of the sequence the cap kept when it bit" do
+      repository = create_repository(user: @user, github_full_name: "acme/looped")
+      %w[passed failed].each_with_index do |outcome, index|
+        specs = (1..101).map do |i|
+          example_spec(name: flaky, outcome: i == 1 ? outcome : "passed", line_number: i)
+        end
+        ingest(repository, specs, commit_sha: sha_for(index), at: (30 - index).days.ago)
+      end
+
+      get repository_path(repository, unstable_test: flaky)
+
+      expect(rows.size).to eq(SpecObservation::UNSTABLE_TEST_RUNS_LIMIT)
+      expect(basis_line).to have_text("The 200 oldest of the 202 rows the last 2 runs of this " \
+                                      "window recorded under it", normalize_ws: true)
+      # The cap kept the OLDEST end: the older run's 101 rows are all here and the NEWEST run is the
+      # one two of its rows fell off, which is the claim the sentence makes and the one a "most
+      # recent" wording would invert.
+      expect(commit_sequence.tally).to eq("00c0ffe" => 101, "01c0ffe" => 99)
+    end
+
     # Silence is not a pass. `outcome` is nullable and nothing validates it, so a client that stopped
     # sending outcomes writes rows that are present and quiet — and a sequence that rendered those as
     # passes would manufacture a flip that looks like a DATE, which is the one wrong answer this
@@ -489,6 +515,49 @@ RSpec.describe "Repository unstable test runs", type: :request do
         ingest(repository, specs, commit_sha: sha_for(index), at: (30 - index).days.ago)
       end
       repository
+    end
+
+    # NAMED BY GRAIN rather than only counted. `unstable_test_runs_grain_reads` classifies a read of
+    # `spec_observations` by the SQL only that read can produce (spec/support/observation_grain_reads.rb
+    # — written for the API specs, and reusable here because the partition is over statements rather
+    # than over endpoints). A bare total cannot tell "this drill-in read once" from "some other panel
+    # read twice while this one read none", which is exactly the false accept a count is prone to.
+    it "issues exactly one read of its own grain when asked, and none when not" do
+      repository = repository_with(%w[passed failed passed])
+
+      expect(unstable_test_runs_grain_reads { get repository_path(repository) }).to be_empty
+      expect(unstable_test_runs_grain_reads do
+        get repository_path(repository, unstable_test: flaky)
+      end.length).to eq(1)
+      # And it fires on an ask that matched nothing too — the gate is the ASK, decided before any
+      # read, so an empty answer costs the read that established it was empty rather than being
+      # skipped by a predicate the page cannot evaluate without asking.
+      expect(unstable_test_runs_grain_reads do
+        get repository_path(repository, unstable_test: "renamed since")
+      end.length).to eq(1)
+    end
+
+    # The panel ABOVE is not re-read, and neither is the WINDOW. `UnstableTestRuns` is handed the
+    # same `trajectory_runs` local the chart and the ranking are drawn on, and its own invariant
+    # says why that matters beyond economy: these rows are read for their POSITION against commits
+    # the panels above already printed, so a second fetch would put an off-by-one between the
+    # sequence and the commits it is read against — and naming the wrong culprit commit is worse
+    # than naming none. Pinned on `test_runs`, the table a re-fetched window would have to touch.
+    it "re-reads neither the window nor the ranking it drills out of" do
+      repository = repository_with(%w[passed failed passed])
+
+      unopened_runs = queries_against("test_runs") { get repository_path(repository) }
+      unopened_flakiness = flakiness_grain_reads { get repository_path(repository) }
+      opened_runs = queries_against("test_runs") do
+        get repository_path(repository, unstable_test: flaky)
+      end
+      opened_flakiness = flakiness_grain_reads do
+        get repository_path(repository, unstable_test: flaky)
+      end
+
+      expect(unopened_flakiness).not_to be_empty
+      expect(opened_runs.size).to eq(unopened_runs.size)
+      expect(opened_flakiness.length).to eq(unopened_flakiness.length)
     end
 
     # The whole drill-in is off the default page's budget: a reader who never opens a test pays
