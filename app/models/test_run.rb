@@ -78,19 +78,22 @@ class TestRun < ApplicationRecord
   # omission.
   def duration_reported? = !duration_seconds.nil?
 
-  # The run's wall clock, formatted once for every surface that shows it. All three readers of this
-  # column — the Overview panel's header figure, the Recent-runs table cell, and the suite-trajectory
-  # runtime line, which holds bare floats rather than rows and so reaches this through
-  # `RepositoriesHelper#trajectory_runtime_formatter`'s unsaved `TestRun` — go through here, so the
-  # same float cannot render two ways on one page.
+  # The run's wall clock, formatted once for every surface that shows it. Every surface that words
+  # this column goes through this method — that is the rule the next reader has to satisfy, and it
+  # is stated as a rule rather than as a list of today's callers for the reason given on
+  # `#shard_durations` below. So the same float cannot render two ways on one page, nor the same run
+  # two ways across pages. A caller holding bare floats rather than rows satisfies it the awkward
+  # way round and still satisfies it: `RepositoriesHelper#trajectory_runtime_formatter` wraps the
+  # value in an unsaved `TestRun` rather than reaching for the private formatter.
   #
-  # The third reader is the one that pays for the rounding. `humanized_seconds` drops the tenth at a
-  # minute and above, so a line plotting 74.25s and 74.30s draws a slope whose text alternative words
-  # both points `1m 14s`. That is resolved where the information is lost — `UI::SparklineComponent`
-  # discloses the plotted float on the rows this wording cannot separate — and deliberately NOT by
-  # widening the wording here. Widening here widens all three readers plus the trajectory's axis
-  # bounds and summary sentence, and `#wall_clock_excess_material?` below thresholds on precisely the
-  # precision this method renders at.
+  # The trajectory runtime line is the reader that pays for the rounding. `humanized_seconds` drops
+  # the tenth at a minute and above, so a line plotting 74.25s and 74.30s draws a slope whose text
+  # alternative words both points `1m 14s`. That is resolved where the information is lost —
+  # `UI::SparklineComponent` discloses the plotted float on the rows this wording cannot separate —
+  # and deliberately NOT by widening the wording here. Widening here widens every surface that words
+  # this column, on more than one page, plus the trajectory's axis bounds and summary sentence, and
+  # `#wall_clock_excess_material?` below thresholds on precisely the precision this method renders
+  # at.
   def duration_label
     return "not reported" unless duration_reported?
 

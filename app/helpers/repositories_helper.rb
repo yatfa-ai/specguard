@@ -1062,9 +1062,9 @@ module RepositoriesHelper
   # the thing it words is a column, and the chart holds the floats rather than the rows, so the
   # value is wrapped in an unsaved run to ask it. That is deliberately the awkward half: the
   # alternative is calling `humanized_seconds`, which is private and STAYS private (see the comment
-  # on `TestRun#shard_distribution_labels`, which states the rule), and a fourth spelling of seconds
-  # on a page that already prints three is precisely the drift `duration_label`'s own comment exists
-  # to prevent.
+  # on `TestRun#shard_distribution_labels`, which states the rule), and a spelling of seconds that
+  # bypassed the seam, on a page that already words this column through it, is precisely the drift
+  # `duration_label`'s own comment exists to prevent.
   #
   # Two things about that `TestRun.new` that are not visible from here:
   #
