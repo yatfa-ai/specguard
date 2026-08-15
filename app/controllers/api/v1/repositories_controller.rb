@@ -835,7 +835,8 @@ class Api::V1::RepositoriesController < Api::BaseController
   # `unstable_tests` states in full: every key that block serves is a statement about ONE run's
   # rows, and "this test is unstable" is a statement about one test across several.
   # `RepeatedDescriptions.for` narrows both of its reads to a single `test_run_id`, so this is a
-  # statement about one run's rows and belongs where every block meeting that test belongs.
+  # statement about one run's rows and belongs inside `latest_run` with every other block that
+  # meets it.
   #
   # STATED AS A RULE, NOT AS A TALLY, on purpose. The claims above used to carry a count of the
   # run-grain blocks — accurate when written, falsified as each later block was added below them.
@@ -843,7 +844,7 @@ class Api::V1::RepositoriesController < Api::BaseController
   # blocks positioned ABOVE this point, which nothing added below can change. That is the
   # discriminator, and the reason the rewrite stopped where it did — a count of set membership rots
   # when a member joins it, and a count of position above a fixed point does not. Every run-grain
-  # block added so far has landed below this point.
+  # block added after this one has landed below it.
   #
   # THE GRAIN IS THE DESCRIPTION, which is a grain none of the four blocks above can reach. They
   # roll a run's rows up by where the code LIVES — the example, its file, its area — and no
