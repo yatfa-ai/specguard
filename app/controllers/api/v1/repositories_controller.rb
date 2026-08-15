@@ -169,7 +169,8 @@ class Api::V1::RepositoriesController < Api::BaseController
   # `nil` — not a zeroed block — when CI has never reported. A repository whose CI has never run
   # must not serialize byte-identically to one that ran and genuinely found an empty suite; that is
   # the conflation the Overview panel refuses too (see RepositoriesController#show).
-  # `Repository#annotated_ratio` cannot express the difference, which is why this reads the run.
+  # A repository-wide ratio floored at 0.0 cannot express the difference, which is why this reads
+  # the run.
   #
   # NOT RE-ANCHORED BY `?branch=`. This names the repository's newest run and keeps naming it under
   # every request; only `history` narrows. A client filtering the history has asked a question about

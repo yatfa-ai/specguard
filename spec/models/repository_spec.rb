@@ -32,42 +32,19 @@ RSpec.describe Repository do
     expect(duplicate).not_to be_valid
   end
 
-  describe "#annotated_ratio" do
-    # Sourced from the latest TestRun's counters, not from `spec_intents`, and a row count could
-    # not stand in for either half of the ratio. Ingestion writes no `spec_intents` row at all
-    # today (pinned by spec/requests/api/v1/ingest_spec.rb), so counting rows would report 0%; and
-    # once something does write them, the four intent columns are NOT NULL, so an unannotated spec
-    # is not a row that can exist and the count could only ever return 100%.
-    it "reports the annotated share of the most recent run" do
-      repository = create_repository
-      repository.test_runs.create!(commit_sha: "abc123", total_specs_count: 3,
-                                   annotated_specs_count: 2)
-
-      expect(repository.annotated_ratio).to eq(66.7)
-    end
-
-    it "is not pinned to 100% by the intent rows sitting beside the run" do
-      repository = create_repository
-      repository.test_runs.create!(commit_sha: "abc123", total_specs_count: 3,
-                                   annotated_specs_count: 2)
-      # Written here by the factory, not by ingestion — /ingest persists no `spec_intents`. This is
-      # the shape a write path would leave once one exists: a row for each of the two annotated
-      # specs, and nothing at all for the third.
-      create_spec_intent(repository: repository, line_number: 1)
-      create_spec_intent(repository: repository, line_number: 2)
-
-      expect(repository.spec_intents.count).to eq(2)
-      expect(repository.annotated_ratio).to eq(66.7)
-    end
-
-    it "supersedes an older run rather than averaging over history" do
+  describe "#latest_test_run" do
+    # The anchor every suite figure on the Overview panel and the API's `latest_run` block is read
+    # off, so what "latest" means is pinned here directly rather than inferred through a figure
+    # derived from it. `nil` — no run at all — is load-bearing and means *never ingested*; the
+    # callers draw the "never reported" vs "reported and found nothing" distinction on it.
+    it "returns the newest run rather than an earlier one" do
       repository = create_repository
       repository.test_runs.create!(commit_sha: "old", total_specs_count: 10,
                                    annotated_specs_count: 1, created_at: 1.day.ago)
-      repository.test_runs.create!(commit_sha: "new", total_specs_count: 4,
-                                   annotated_specs_count: 3)
+      newest = repository.test_runs.create!(commit_sha: "new", total_specs_count: 4,
+                                            annotated_specs_count: 3)
 
-      expect(repository.annotated_ratio).to eq(75.0)
+      expect(repository.latest_test_run).to eq(newest)
     end
 
     it "breaks a same-instant tie on id so the reading is deterministic" do
@@ -75,10 +52,10 @@ RSpec.describe Repository do
       at = 1.hour.ago
       repository.test_runs.create!(commit_sha: "first", total_specs_count: 4,
                                    annotated_specs_count: 1, created_at: at)
-      repository.test_runs.create!(commit_sha: "second", total_specs_count: 4,
-                                   annotated_specs_count: 3, created_at: at)
+      second = repository.test_runs.create!(commit_sha: "second", total_specs_count: 4,
+                                            annotated_specs_count: 3, created_at: at)
 
-      expect(repository.annotated_ratio).to eq(75.0)
+      expect(repository.latest_test_run).to eq(second)
     end
 
     it "ignores another repository's runs" do
@@ -87,14 +64,7 @@ RSpec.describe Repository do
                                 github_full_name: "acme/ledger")
       other.test_runs.create!(commit_sha: "abc123", total_specs_count: 4, annotated_specs_count: 4)
 
-      expect(repository.annotated_ratio).to eq(0.0)
-    end
-
-    it "is 0.0 for a repository that has never ingested a run" do
-      repository = create_repository
-
-      expect(repository.annotated_ratio).to eq(0.0)
-      expect(repository.annotated_ratio).to be_a(Float)
+      expect(repository.latest_test_run).to be_nil
     end
 
     # The sharded case, read from this end. A sharded run used to land as one row per shard, so
@@ -109,7 +79,7 @@ RSpec.describe Repository do
 
       expect(repository.latest_test_run).to eq(run)
       expect(repository.latest_test_run.total_specs_count).to eq(20_000)
-      expect(repository.annotated_ratio).to eq(25.0)
+      expect(repository.latest_test_run.annotated_specs_count).to eq(5000)
     end
   end
 

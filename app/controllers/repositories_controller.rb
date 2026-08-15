@@ -72,8 +72,8 @@ class RepositoriesController < ApplicationController
     # count, and the difference between them. `nil` is load-bearing and means *never ingested*,
     # which the panel renders as an empty state rather than as `0%`; a repository whose CI has
     # never reported must not look identical to one that reported and genuinely found no
-    # annotations. Deliberately not `Repository#annotated_ratio`, which cannot express that
-    # difference (it floors at 0.0 by contract — see spec/models/repository_spec.rb).
+    # annotations. Deliberately the run row itself and not a repository-wide ratio floored at 0.0,
+    # which cannot express that difference — a floored figure reads the same either way.
     @latest_test_run = @repository.latest_test_run
     # The one figure on that panel read off *two* rows: the run the suite size is compared against,
     # so a size can be reported as a change and not only as a level. Passed the already-loaded
@@ -567,8 +567,8 @@ class RepositoriesController < ApplicationController
   # `nil` is load-bearing and means *never ingested*, which the card renders as its own state
   # rather than as `0 tests` — a repository CI has never posted a run for must not read identically
   # to one whose suite is genuinely empty. Same distinction the Overview panel on `show` draws on
-  # `@latest_test_run` presence, and the reason this is not `Repository#annotated_ratio`, which
-  # floors at 0.0 by contract and cannot express it.
+  # `@latest_test_run` presence, and the reason this hands back the run rather than a
+  # repository-wide ratio floored at 0.0, which cannot express it.
   #
   # The whole ROW, deliberately, where this used to hand the view `total_specs_count.to_i` and
   # nothing else. A suite size is not self-describing: `Repository#latest_test_run` returns the

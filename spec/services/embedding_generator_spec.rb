@@ -413,7 +413,7 @@ RSpec.describe EmbeddingGenerator do
       end
 
       it "is unit-normalised, so pgvector's cosine operator ranks it against any other vector" do
-        vector = described_class.call("Repository#annotated_ratio counts only annotated intents")
+        vector = described_class.call("A sharded CI run accumulates into a single TestRun row")
 
         expect(magnitude(vector)).to be_within(1e-12).of(1.0)
       end
