@@ -939,8 +939,13 @@ class Api::V1::RepositoriesController < Api::BaseController
   # `unstable_tests` states in full: every key this block serves is a statement about ONE run's
   # rows. `SpecDirectoryFiles.for` narrows to a single `test_run_id`, so it belongs with the other
   # five. And `latest_run` is not re-anchored by `?branch=`, so an area ask composes with a branch
-  # ask without either touching the other: the drill-in always describes the newest run, exactly as
-  # the panel does.
+  # ask without either touching the other. It IS re-anchored by `?commit_sha=`, and this drill-in
+  # follows it there WITHOUT READING THE PARAMETER: both hang off the one `latest_test_run` memo, so
+  # the rows here and the `latest_run` they are an area OF can never come from two different runs.
+  # Which run that is, `run_anchor` says. The panel is the surface that now diverges: on a default
+  # call this list is the panel's, but `RepositoriesController` deliberately does not include
+  # `RequestedCommitShaParam` (see that module's own comment), so under `?commit_sha=` the API
+  # describes the named run and the human page stays on the newest.
   #
   # THE SAME OBJECT THE PANEL READS, never a hand-written query — this file's governing rule, stated
   # in full on `serialized_spec_files` above. `SpecDirectoryFiles` is view-free, so the API and the
@@ -1019,8 +1024,12 @@ class Api::V1::RepositoriesController < Api::BaseController
   # states in full: every key this block serves is a statement about ONE run's rows.
   # `SpecObservation.in_file` narrows to a single `test_run_id`, so it belongs with the others. And
   # `latest_run` is not re-anchored by `?branch=`, so a file ask composes with a branch ask and with
-  # an area ask without any of the three touching another: the drill-in always describes the newest
-  # run, exactly as the panel does.
+  # an area ask without any of the three touching another. `?commit_sha=` is the one ask that DOES
+  # move the anchor, and this drill-in moves with it unread — the file is always a file OF the run
+  # `latest_run` named, because both read the single `latest_test_run` memo, and `run_anchor` names
+  # that run. It is the repository's newest one only on a default call, which is also the only call
+  # on which this list is the panel's: `RepositoriesController` has no run selector and does not
+  # include `RequestedCommitShaParam`, so under an explicit ask the two surfaces genuinely diverge.
   #
   # THE SAME OBJECT THE PANEL READS, never a hand-written query — this file's governing rule, stated
   # in full on `serialized_spec_files` above. `SpecFileExamples` is view-free apart from
@@ -1125,7 +1134,12 @@ class Api::V1::RepositoriesController < Api::BaseController
   # states in full: `SpecObservation.with_description` narrows to a single `test_run_id`, so this is
   # a statement about ONE run's rows. And `latest_run` is not re-anchored by `?branch=`, so a
   # description ask composes with all three of the other asks without any of the four touching
-  # another: the drill-in always describes the newest run, exactly as the panel does.
+  # another. The fifth ask is the exception and is meant to be: `?commit_sha=` re-anchors
+  # `latest_run`, and this drill-in re-anchors with it without reading the parameter, because the
+  # group is always a group WITHIN the run that one `latest_test_run` memo picked. `run_anchor` is
+  # what names it. Only on a default call is that the repository's newest run and these rows the
+  # panel's — `RepositoriesController` does not include `RequestedCommitShaParam`, so under an
+  # explicit ask the panel stays on the newest run and this list does not.
   #
   # THE SAME OBJECT THE PANEL READS, never a hand-written query — this file's governing rule, stated
   # in full on `serialized_spec_files` above. `RepeatedDescriptionExamples` is view-free apart from
@@ -2001,7 +2015,13 @@ class Api::V1::RepositoriesController < Api::BaseController
   # never off `requested_branch`, which narrows `history` and must not be read as having narrowed
   # this. Like `latest_run`, this block is NOT re-anchored by `?branch=`: under `?branch=main` on a
   # repository whose newest run is on `feature/x`, this still compares the two newest `feature/x`
-  # runs, and `branch` says `feature/x` so the two cannot be confused.
+  # runs, and `branch` says `feature/x` so the two cannot be confused. And like `latest_run` again,
+  # it IS re-anchored by `?commit_sha=` — the one parameter that moves the anchor. Under an explicit
+  # ask `anchor_commit_sha` and `branch` are the NAMED run's, and the baseline is the run before THAT
+  # one on ITS branch, because `previous_test_run_on_branch` is handed the very `latest_test_run`
+  # memo `latest_run` was built from. Both halves are stated here deliberately: this block is one of
+  # the few that enumerates what does and does not move it, and an enumeration that named only the
+  # parameter with no effect would be the more misleading half to leave standing alone.
   #
   # `basis` IS WHAT SEPARATES THIS PAIR FROM THE ONE ABOVE IT, and it is the key a client reads to
   # know which of the two growth measurements it is holding. `two_endpoints` there says the figures
@@ -2193,7 +2213,11 @@ class Api::V1::RepositoriesController < Api::BaseController
   # because `Repository#previous_test_run_on_branch` scopes to the latest run's OWN branch and
   # refuses a blank one, so this is branch-correct by construction rather than by a parameter. Like
   # `latest_run` and the count pair, this block is NOT re-anchored by `?branch=`: `branch` names the
-  # branch the comparison WAS MADE ON, read off the latest run and never off `requested_branch`.
+  # branch the comparison WAS MADE ON, read off the latest run and never off `requested_branch`. And
+  # like both of them it IS re-anchored by `?commit_sha=`, the one parameter that moves the anchor:
+  # `anchor_commit_sha` and `branch` become the NAMED run's and the baseline the run before THAT one
+  # on ITS branch, off the same `latest_test_run` memo. That is what keeps the two growth windows
+  # under one request from sitting on two different runs — neither chooses, both follow.
   #
   # `basis` is `previous_run_on_branch`, the count pair's token and for its reason: the baseline is
   # one specific run, named by `baseline_commit_sha`, so the comparison has no gap in it — an area

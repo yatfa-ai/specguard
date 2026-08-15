@@ -2960,6 +2960,8 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
     end
   end
 
+  # The half of `?branch=` that makes the other half reachable. Everything above assumes the client
+  # already knows a branch name; nothing in the response told it one.
   describe "the branches catalogue" do
     # The fixture the whole slice turns on, and its shape is the assertion. Twelve `main` runs
     # FIRST, then ten `feature/*` runs, so the ten newest runs repository-wide are ALL non-`main`
