@@ -37,7 +37,7 @@ RSpec.describe Repository do
     # off, so what "latest" means is pinned here directly rather than inferred through a figure
     # derived from it. `nil` — no run at all — is load-bearing and means *never ingested*; the
     # callers draw the "never reported" vs "reported and found nothing" distinction on it.
-    it "supersedes an older run rather than averaging over history" do
+    it "returns the newest run rather than an earlier one" do
       repository = create_repository
       repository.test_runs.create!(commit_sha: "old", total_specs_count: 10,
                                    annotated_specs_count: 1, created_at: 1.day.ago)

@@ -309,8 +309,8 @@
           <%# "Never ingested" is not "measured zero". Rendering `0%` here — which is what
               flooring a repository-wide figure at 0.0 amounts to — makes a repository whose CI has
               never reported byte-identical to one that reported and found no annotations. The
-              distinction is drawn here, on `@latest_test_run` presence, and NOT by loosening the
-              model to return nil. %>
+              distinction is drawn here, on `@latest_test_run` presence, and NOT by having the
+              model hand back a zeroed stand-in run for a repository that has never reported. %>
           <%= render UI::EmptyStateComponent.new(
                 title: "No CI run has reported yet",
                 description: "SpecGuard cannot say how much of this suite it can see until CI posts a run to /ingest. " \

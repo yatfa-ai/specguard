@@ -50,9 +50,10 @@ RSpec.describe TestRun do
       expect(run.annotated_ratio).to eq(100.0)
     end
 
-    # Read off this run's own counters, which is why intent rows sitting beside the run cannot
-    # move it: the figure used to hold only because a factory fabricated a `status: "unannotated"`
-    # spec_intent, which the four NOT NULL intent columns make impossible for ingestion to write.
+    # Read off this run's own counters — `annotated_specs_count` over `total_specs_count` — so the
+    # `spec_intents` rows sitting beside the run are not an input and cannot move the figure. Worth
+    # pinning because those rows are written here by the factory and never by ingestion: the four
+    # intent columns are NOT NULL, so an unannotated spec is not a row that can exist.
     it "is unmoved by the intent rows sitting beside the run" do
       run = repository.test_runs.create!(commit_sha: "abc123", annotated_specs_count: 2,
                                          total_specs_count: 3)
