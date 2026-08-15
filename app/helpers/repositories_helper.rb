@@ -667,6 +667,22 @@ module RepositoriesHelper
 
   # == The opened unstable test's sentences
 
+  # DID THE CAP BITE — asked once here and never recomputed, because three sentences on this panel
+  # branch on it and the failure mode of the panel is those sentences DISAGREEING inside one
+  # paragraph. The scope sentence says "the 200 oldest of the 250 rows", the alert above the table
+  # says the newest rows are missing, and the reading rule says which readings survive that; two of
+  # those spelling the comparison out by hand is two places for one of them to keep the old
+  # unconditional wording after the other is fixed. That is not hypothetical — it is exactly how
+  # this panel shipped the first time, with a scope sentence that disclosed the truncation and a
+  # reading rule two clauses later that contradicted it.
+  #
+  # `recorded_count` is counted over the WINDOW and before the cap, and `rows` is what survived it,
+  # so their difference is the number of rows the cap dropped and nothing else. Neither is a count
+  # of runs, and this predicate deliberately says nothing about runs: whether whole RUNS fell off
+  # depends on how many rows each run carries, and the surface's claims are worded so they do not
+  # need to know.
+  def unstable_test_runs_capped?(sequence) = sequence.recorded_count > sequence.rows.size
+
   # What the sequence IS — how much of this description's history the window holds, and how much of
   # THAT is on the page.
   #
@@ -684,10 +700,11 @@ module RepositoriesHelper
   # reporting a coverage nobody counted. The window's own length is stated beside the count as what
   # it is: the span these rows were drawn from, not their denominator.
   #
-  # The cap is disclosed only when it BIT, and it is derived here rather than asked of the object:
-  # `UnstableTestRuns` serves `recorded_count` as an operand — counted before the cap — and no
-  # `truncated?` predicate, on the standing rule that this ladder serves operands and the surface
-  # states the reading.
+  # The cap is disclosed only when it BIT, and whether it bit is asked of
+  # `#unstable_test_runs_capped?` rather than recomputed here — see that predicate for why the
+  # comparison is written down once. The object is not asked: `UnstableTestRuns` serves
+  # `recorded_count` as an operand — counted before the cap — and no `truncated?` predicate, on the
+  # standing rule that this ladder serves operands and the surface states the reading.
   #
   # WHICH END the cap keeps is a property of the WINDOW and not of the read, and this sentence is
   # the only place that difference is visible. `SpecObservation.outcome_sequence_in` orders by
@@ -703,7 +720,7 @@ module RepositoriesHelper
     plural = "row".pluralize(sequence.recorded_count)
     runs = "#{number_with_delimiter(sequence.run_count)} #{"run".pluralize(sequence.run_count)}"
 
-    if sequence.recorded_count > sequence.rows.size
+    if unstable_test_runs_capped?(sequence)
       "The #{shown} oldest of the #{recorded} #{plural} the last #{runs} of this window recorded " \
         "under it, in the window's own order — oldest run first, the direction the “Suite growth” " \
         "chart above is plotted in."
@@ -728,9 +745,37 @@ module RepositoriesHelper
   # about "the failures at the top" would point a reader at the opposite end of the evidence from
   # the one it means. The scope sentence beside it states the direction; this one names the end.
   #
-  # Static, and deliberately so: it is a rule for reading the list rather than a claim about this
-  # one, so it has nothing to be counted off and nothing to drift from.
-  def unstable_test_runs_reading_sentence
+  # == Why this is CONDITIONED on the cap and not static
+  #
+  # It was static once, on the argument that it is "a rule for reading the list rather than a claim
+  # about this one, so it has nothing to drift from". That argument was wrong on its own premise.
+  # "Failures bunched at the END of this list — ITS NEWEST RUNS" is a claim about this list: it
+  # asserts that the end of the rendered rows is the newest end of the window. On a newest-first
+  # window that would hold whatever the cap did, but this window is OLDEST FIRST, so the `LIMIT`
+  # sheds the NEWEST rows — and the moment it bites, the sentence is false in the one direction the
+  # panel cannot survive being false in.
+  #
+  # The geometry is ordinary rather than exotic. Truncation needs more than 200 rows over at most 30
+  # runs, i.e. more than ~6.7 rows per run — one description carried by ten examples in a run is a
+  # table-driven loop. At 25 runs × 10 rows the newest FIVE RUNS are not on the page at all, so a
+  # test that started failing at run 21 renders as 200 consecutive passes under a rule instructing
+  # the reader that failures at the end mean regression and no failures scattered means no
+  # flakiness. Neither branch applies, nothing on the page says the answer is missing rather than
+  # negative, and the available conclusions are "this test is fine" or "this panel is broken". Both
+  # are the wrong-culprit-commit failure `UnstableTestRuns`' "window is HANDED IN" section calls the
+  # one error this drill-in cannot survive, reached from the other side.
+  #
+  # So the regression branch is WITHHELD when the cap bit, rather than reworded. The flakiness
+  # branch survives untouched and is stated: scattered failures among the rows that ARE here are
+  # still scattered failures. What cannot be done is read a regression off an end that is not the
+  # end — and, just as importantly, read the ABSENCE of failures there as health, which is the
+  # reading a reader falls into by default and the one that lets a live regression off the page.
+  #
+  # Both branches are counted off `#unstable_test_runs_capped?`, the same predicate the scope
+  # sentence and the alert use, so the three cannot disagree about whether the cap bit.
+  def unstable_test_runs_reading_sentence(sequence)
+    return unstable_test_runs_capped_reading_sentence if unstable_test_runs_capped?(sequence)
+
     "Read down the sequence rather than across the counts. Failures bunched at the END of this " \
       "list — its newest runs — are a regression, and the commit to look at is the one on the " \
       "first failing row after the last row that passed; failures scattered through the list are " \
@@ -738,8 +783,77 @@ module RepositoriesHelper
       "state."
   end
 
-  # Rows this window recorded under the description that said NOTHING about how it ended, counted
-  # and stated — the silence the sequence would otherwise read as a gap in the story.
+  # The reading rule with the regression branch withheld, for a list the cap stopped short of the
+  # window's newest rows. Its own method rather than a second string inside the branch above, so the
+  # two readings are side by side in the file where a later edit to one is read against the other.
+  #
+  # It states what is NOT available before what is, which is the opposite of the usual ordering and
+  # deliberate: the failure mode here is a reader applying the regression rule to a truncated end,
+  # so the withdrawal has to arrive before the rule that survives it. And it names the absence of
+  # failures explicitly, because "no failures at the end" is not a neutral observation on a list
+  # whose end was cut off — it is the reading that turns a missing answer into a clean bill of
+  # health.
+  def unstable_test_runs_capped_reading_sentence
+    "Read down the sequence rather than across the counts — but not off the end of it here. The " \
+      "regression reading is taken off the window's newest runs, and the newest rows are the ones " \
+      "the cap dropped, so the end of this list is not the end of this window's evidence: " \
+      "failures sitting there need not be where the trouble started, and no failures sitting " \
+      "there is not evidence that the test is passing now. Failures scattered through the rows " \
+      "that ARE here are still flakiness, where there is no culprit commit to find and the work " \
+      "is quarantine or shared state."
+  end
+
+  # THE CAP, SAID LOUDLY — the heading of the alert that sits above the table when the list stopped
+  # short of the window's newest rows.
+  #
+  # A clause in the basis paragraph is not enough here, and that is a judgement about this panel
+  # rather than a general preference for alerts. On its siblings a truncated list is a footnote: the
+  # by-file and by-description drill-ins are read for WHAT IS IN THEM, and a reader who sees the top
+  # 200 of 250 rows has the answer they came for. This panel is read for WHERE IN THE SEQUENCE the
+  # failures sit, and the cap removes the end the reading is taken from — so truncation does not
+  # shorten the answer here, it removes it, and does so while leaving a full-looking table of 200
+  # rows on the page. A missing answer that looks exactly like a negative one is the thing a reader
+  # cannot detect for themselves, which is the standing test for whether a disclosure belongs in the
+  # prose or in front of it.
+  def unstable_test_runs_cap_alert_title = "This list stops short of the window's newest rows"
+
+  # WHAT the cap took and WHERE the list therefore ends, with the way to see the missing end.
+  #
+  # Three facts, and each one is checkable against something else on this page rather than taken on
+  # trust: how many rows are missing (against the scope sentence's two figures), which commit the
+  # list ends at (against the "Recent runs" panel below, where the window's actual newest commit is
+  # printed — that comparison is the whole point of naming the sha, and on a window whose newest
+  # runs fell off entirely the two shas differ, visibly), and how long ago that was (because "the
+  # list ends four commits back" is a different size of gap on a busy branch than on a quiet one).
+  #
+  # It claims the rows are the newest and NOT that whole runs are missing, which is the precise
+  # thing that is true in both truncation geometries. The read is ordered by window position and
+  # capped, so what it sheds is always a suffix in window order — the newest rows recorded under
+  # this description, full stop. Whether that suffix is two rows off the newest run or five entire
+  # runs depends on how many examples carry the description per run, and a sentence asserting either
+  # shape would be false in the other one. "The end of this list is not the end of this window's
+  # evidence" is true whenever the cap bit and is the claim the reading rule needs; nothing here
+  # says more than that.
+  #
+  # The escape hatch is real and is the same sequence over the OTHER window: `GET
+  # /api/v1/repository`'s `unstable_test` block reads `recent_test_runs`, which is ordered
+  # newest-first, so its cap sheds the OLDEST rows and keeps exactly the end this page drops. That
+  # is a property of the two windows rather than of the read — `SpecObservation.outcome_sequence_in`
+  # orders by `array_position` over the run ids it is handed and imposes no direction of its own —
+  # which is why the pointer can be given as a fact rather than as a hope.
+  def unstable_test_runs_cap_alert_body(sequence)
+    dropped = sequence.recorded_count - sequence.rows.size
+    last = sequence.rows.last
+
+    "The cap keeps this window's OLDEST rows, so the #{number_with_delimiter(dropped)} " \
+      "#{"row".pluralize(dropped)} it dropped are the newest ones recorded under this description. " \
+      "The list ends at #{last.commit_sha.first(7)}, ingested #{time_ago_in_words(last.ingested_at)} " \
+      "ago — compare that against the newest commit in “Recent runs” below to see how far short of " \
+      "the window it stops. For the other end of the same sequence, read `unstable_test` over " \
+      "`GET /api/v1/repository`: its window runs newest first, so its cap sheds the oldest rows and " \
+      "keeps the ones missing here."
+  end
+
   #
   # `outcome` is nullable and nothing platform-side validates it, so a client that stopped sending
   # outcomes writes rows that are present and silent. Those are not passes and are counted as one
@@ -751,13 +865,22 @@ module RepositoriesHelper
   # Counted over the WINDOW rather than over the listed rows, so a truncated list's silence is still
   # countable, and rendered only when there is any: a clause reading "0 of them said nothing" is a
   # sentence about arithmetic rather than about this test.
+  #
+  # The NOUN is carried on the denominator — "1 of the 3 rows" and not "1 of the 3". This clause
+  # renders after the reading rule, which is several sentences of its own, so the "3 rows" it is
+  # counting against is no longer in the reader's ear by the time the bare number arrives; and the
+  # paragraph it sits in is one that also counts RUNS, which is the other noun a reader would supply
+  # for it. One word removes the choice.
   def unstable_test_runs_silence_clause(sequence)
     silent = sequence.unreported_outcome_count
     return "" unless silent.positive?
 
-    " #{number_with_delimiter(silent)} of the #{number_with_delimiter(sequence.recorded_count)} " \
-      "said nothing about how it ended. Silence is not a pass and is not counted as one here, so a " \
-      "gap in the column is a run that recorded the test and reported no outcome for it."
+    recorded = sequence.recorded_count
+
+    " #{number_with_delimiter(silent)} of the #{number_with_delimiter(recorded)} " \
+      "#{"row".pluralize(recorded)} said nothing about how it ended. Silence is not a pass and is " \
+      "not counted as one here, so a gap in the column is a run that recorded the test and " \
+      "reported no outcome for it."
   end
 
   # The window recorded nothing under the description that was asked for. An ordinary answer and not

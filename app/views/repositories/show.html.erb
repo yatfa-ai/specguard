@@ -3917,6 +3917,29 @@
               ) { "Close test" } %>
         <% end %>
         <% if @unstable_test_runs.rows.any? %>
+          <%# THE CAP, IN FRONT OF THE TABLE RATHER THAN INSIDE THE PARAGRAPH BELOW IT — the one
+              disclosure on this panel that is not a footnote.
+
+              Every sibling drill-in discloses its cap in its scope sentence and is right to: those
+              lists are read for WHAT IS IN THEM, so a reader holding the top 200 of 250 rows holds
+              the answer they came for. This list is read for WHERE IN THE SEQUENCE the failures
+              sit, and this window runs oldest first, so the cap removes the newest end — which is
+              the end the regression reading is taken from. Truncation here does not shorten the
+              answer, it removes it, and it does so while leaving a full-looking 200-row table
+              behind. A missing answer that renders identically to a negative one is precisely what
+              a reader cannot detect for themselves, so it goes in front of the prose rather than
+              inside it.
+
+              Rendered only when the cap BIT, through the same `#unstable_test_runs_capped?` the
+              scope sentence and the reading rule branch on, so the page cannot show this alert over
+              a sentence saying the list is complete or hide it over one saying it is not. %>
+          <% if unstable_test_runs_capped?(@unstable_test_runs) %>
+            <%= render UI::AlertComponent.new(tone: :warning, class: "mb-3",
+                                              id: "unstable-test-runs-cap",
+                                              title: unstable_test_runs_cap_alert_title) do %>
+              <p class="mt-1"><%= unstable_test_runs_cap_alert_body(@unstable_test_runs) %></p>
+            <% end %>
+          <% end %>
           <%# What the list IS and HOW TO READ IT, before the list — the second half being this
               panel's own and not a discipline it inherits. Its siblings' captions size a list; this
               one also states the reading, because the shape of the column IS the finding and a
@@ -3929,7 +3952,10 @@
           <p class="text-xs text-app-muted mb-3" id="unstable-test-runs-basis">
             <span class="text-app-content-secondary"><%= @unstable_test_runs.name %></span>
             — <%= unstable_test_runs_scope_sentence(@unstable_test_runs) %>
-            <%= unstable_test_runs_reading_sentence %>
+            <%# The rule for reading the column, HANDED THE SEQUENCE because which readings are
+                available depends on whether the cap took the end they are read from. It withholds
+                the regression branch when it did — see `RepositoriesHelper`. %>
+            <%= unstable_test_runs_reading_sentence(@unstable_test_runs) %>
             <%# The silence, rendered only when the window holds any: rows that recorded the test and
                 reported no outcome are not passes, and a sequence that let them read as one would
                 manufacture a flip that looks like a date. %>

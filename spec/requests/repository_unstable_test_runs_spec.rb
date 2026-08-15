@@ -46,6 +46,14 @@ RSpec.describe "Repository unstable test runs", type: :request do
 
   def none_state = panel.find("#unstable-test-runs-none")
 
+  # The cap's own disclosure, ELEMENT-scoped like the basis line and for a sharper version of the
+  # same reason: this alert exists precisely because a truncated list renders identically to a
+  # complete one, so an assertion that could pass off the basis paragraph beside it would be
+  # asserting the thing it is here to distinguish from.
+  def cap_alert = panel.find("#unstable-test-runs-cap")
+
+  def cap_alert? = panel.has_css?("#unstable-test-runs-cap")
+
   def ranking_panel = page.find("#unstable-tests")
 
   # One row as a reader meets it: which run, on which branch, when it landed, and what that run said
@@ -317,6 +325,111 @@ RSpec.describe "Repository unstable test runs", type: :request do
       expect(commit_sequence.tally).to eq("00c0ffe" => 101, "01c0ffe" => 99)
     end
 
+    # THE GEOMETRY THE EXAMPLE ABOVE CANNOT REACH, and the one that made this panel ship a false
+    # sentence the first time.
+    #
+    # 2 runs × 101 rows sheds two rows off the newest run and KEEPS that run, so the end of the list
+    # is still the newest run and a sentence claiming so stays true. It is the one truncation shape
+    # under which the old unconditional reading rule could not fail. Truncation needs >200 rows over
+    # ≤30 runs — more than ~6.7 rows per run — and at 10 rows per run over 25 runs the newest FIVE
+    # RUNS are off the page entirely.
+    #
+    # Ten examples sharing one description in a run is a table-driven loop, not a pathology, and the
+    # window here is a textbook regression: passing until run 21, failing from there to the end. The
+    # 200 rows that survive the cap are runs 1–20 — every one of them green. Without the disclosure
+    # the reader is handed a full-looking table of 200 passes for a test the ranking above lists as
+    # unstable, under a rule saying failures at the end mean regression and scattered failures mean
+    # flakiness. Neither branch applies, and both available conclusions ("it is fine", "the panel is
+    # broken") are wrong.
+    def repository_with_loop_regression
+      repository = create_repository(user: @user, github_full_name: "acme/looped-regression")
+      25.times do |index|
+        specs = (1..10).map do |i|
+          example_spec(name: flaky, outcome: index >= 20 ? "failed" : "passed", line_number: i)
+        end
+        ingest(repository, specs, commit_sha: sha_for(index), at: (30 - index).days.ago)
+      end
+      repository
+    end
+
+    it "drops whole runs off the newest end when the description is carried many times per run" do
+      get repository_path(repository_with_loop_regression, unstable_test: flaky)
+
+      expect(rows.size).to eq(SpecObservation::UNSTABLE_TEST_RUNS_LIMIT)
+      # Runs 21-25 — every failing run in the window — are not on the page in any form. Asserted as
+      # the absence of their commits rather than as an outcome tally, because the commit column is
+      # what a reader would join against and it is the column that proves WHICH runs went missing.
+      expect(commit_sequence.uniq).to eq((0..19).map { |index| sha_for(index).first(7) })
+      expect(commit_sequence).not_to include("20c0ffe", "24c0ffe")
+      # And the consequence, stated as the reader meets it: a live regression rendering as an
+      # unbroken column of passes.
+      expect(outcome_sequence.uniq).to eq(["passed"])
+    end
+
+    # The disclosure, in front of the table rather than inside the paragraph under it. On this panel
+    # a truncated list is not a shorter answer, it is a missing one that renders like a negative
+    # one — so it is asserted as its own element, with the figure, the commit the list stops at, and
+    # the pointer to the window that keeps the other end.
+    it "says loudly, above the table, that the newest rows are the ones missing" do
+      get repository_path(repository_with_loop_regression, unstable_test: flaky)
+
+      expect(cap_alert).to have_text("This list stops short of the window's newest rows",
+                                     normalize_ws: true)
+      expect(cap_alert).to have_text("the 50 rows it dropped are the newest ones recorded under " \
+                                     "this description", normalize_ws: true)
+      # WHERE it stops — the last row's commit and not the window's, which is the comparison that
+      # makes the gap visible against the "Recent runs" panel below.
+      expect(cap_alert).to have_text("The list ends at 19c0ffe", normalize_ws: true)
+      expect(cap_alert).to have_text("its window runs newest first", normalize_ws: true)
+    end
+
+    # THE BLOCKING CLAIM: the reading rule withholds the regression branch when the cap took the end
+    # it is read from. Pinned from BOTH sides — the same sentence is asserted PRESENT on an
+    # untruncated window by "states which end of the list is the newest run" above, so its absence
+    # here is a branch that fired rather than a string that never renders.
+    it "withholds the regression reading when the cap took the end it is read from" do
+      get repository_path(repository_with_loop_regression, unstable_test: flaky)
+
+      expect(basis_line).not_to have_text("Failures bunched at the END of this list — its newest " \
+                                          "runs — are a regression", normalize_ws: true)
+      expect(basis_line).to have_text("the end of this list is not the end of this window's " \
+                                      "evidence", normalize_ws: true)
+      # The reading that lets a live regression off the page is named explicitly, because it is the
+      # one a reader arrives at by default in front of 200 green rows.
+      expect(basis_line).to have_text("no failures sitting there is not evidence that the test is " \
+                                      "passing now", normalize_ws: true)
+      # The flakiness branch survives the cap and is still stated: scattered failures among the rows
+      # that ARE here are still scattered failures.
+      expect(basis_line).to have_text("Failures scattered through the rows that ARE here are " \
+                                      "still flakiness", normalize_ws: true)
+    end
+
+    # The scope sentence, the alert and the reading rule all branch on one predicate, so the panel
+    # cannot disclose the truncation in one sentence and deny it two clauses later — which is
+    # exactly how it shipped the first time. Asserted as the three agreeing on one page.
+    it "does not contradict itself about whether the cap bit" do
+      get repository_path(repository_with_loop_regression, unstable_test: flaky)
+
+      expect(basis_line).to have_text("The 200 oldest of the 250 rows the last 25 runs of this " \
+                                      "window recorded under it", normalize_ws: true)
+      expect(cap_alert?).to be(true)
+      expect(basis_line).to have_text("not the end of this window's evidence", normalize_ws: true)
+    end
+
+    # And the other side of the branch: an uncapped window gets no alert and keeps the regression
+    # reading. Without this the two examples above would pass over a panel that showed the warning
+    # unconditionally, which would be the same defect wearing the opposite sign.
+    it "shows no cap warning and keeps the regression reading when the list is complete" do
+      repository = repository_with(%w[passed passed failed failed])
+
+      get repository_path(repository, unstable_test: flaky)
+
+      expect(cap_alert?).to be(false)
+      expect(basis_line).to have_text("Failures bunched at the END of this list — its newest runs " \
+                                      "— are a regression", normalize_ws: true)
+      expect(basis_line).not_to have_text("not the end of this window's evidence", normalize_ws: true)
+    end
+
     # Silence is not a pass. `outcome` is nullable and nothing validates it, so a client that stopped
     # sending outcomes writes rows that are present and quiet — and a sequence that rendered those as
     # passes would manufacture a flip that looks like a DATE, which is the one wrong answer this
@@ -327,7 +440,7 @@ RSpec.describe "Repository unstable test runs", type: :request do
       get repository_path(repository, unstable_test: flaky)
 
       expect(outcome_sequence).to eq(["failed", "not reported", "passed"])
-      expect(basis_line).to have_text("1 of the 3 said nothing about how it ended",
+      expect(basis_line).to have_text("1 of the 3 rows said nothing about how it ended",
                                       normalize_ws: true)
       expect(basis_line).to have_text("Silence is not a pass", normalize_ws: true)
     end
