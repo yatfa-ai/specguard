@@ -1187,6 +1187,8 @@ RSpec.describe "Repository suite-size trajectory", type: :request do
     # most of their vocabulary, and a panel-level matcher would read one for the other.
     def runtime_basis = trajectory_panel.find("#suite-trajectory-runtime-basis")
 
+    def runtime_summary = trajectory_panel.find("#suite-trajectory-runtime-chart-summary")
+
     def runtime_rows
       runtime_chart.all("details table tbody tr", visible: :all).map do |row|
         row.all("td", visible: :all).map { |cell| cell.text(:all).strip }
@@ -1216,6 +1218,37 @@ RSpec.describe "Repository suite-size trajectory", type: :request do
       # The same three runs the size line drew through, so the two lines cannot describe different
       # cohorts on the same page.
       expect(plotted_labels).to eq(%w[aaaaaaa bbbbbbb ccccccc])
+    end
+
+    # The text alternative IS the chart for a reader who cannot see the line, so it needs the same
+    # preconditions the plot is given. The summary paragraph above the disclosure states which
+    # branch, how many runs, that the axis does not start at zero, and — here — that a point is the
+    # slowest single shard rather than machine time. A sighted reader passes that paragraph on the
+    # way down to the rows; a reader landing on the table by navigation gets the header row and
+    # bare numbers with none of it unless the table names it.
+    #
+    # Asserted on BOTH charts of one page, because the association is derived from the caller's
+    # `id:`: two instances resolving to one summary would describe each chart with the other's
+    # sentence, and a single-chart assertion cannot see that.
+    it "points each chart's table at that chart's own summary" do
+      repository = create_repository(user: @user)
+      timed_run(repository, "aaaaaaa1111", seconds: 40.2, total: 1_000, at: 2.days.ago)
+      timed_run(repository, "ccccccc3333", seconds: 74.25, total: 1_047, at: 1.hour.ago)
+
+      get repository_path(repository)
+
+      # `visible: :all` because both tables sit in a collapsed `<details>`.
+      size_table = chart.find("details table", visible: :all)
+      runtime_table = runtime_chart.find("details table", visible: :all)
+      expect(size_table[:"aria-describedby"]).to eq("suite-trajectory-chart-summary")
+      expect(runtime_table[:"aria-describedby"]).to eq("suite-trajectory-runtime-chart-summary")
+      # Each id has to resolve, or the attribute is a reference to nothing — which announces exactly
+      # as much as having no attribute while looking, in the markup, like the defect is fixed.
+      expect(chart_summary[:id]).to eq(size_table[:"aria-describedby"])
+      expect(runtime_summary[:id]).to eq(runtime_table[:"aria-describedby"])
+      # And they resolve to two DIFFERENT sentences, which is the whole reason the seam is
+      # per-instance rather than a constant.
+      expect(chart_summary.text).not_to eq(runtime_summary.text)
     end
 
     # Criterion 3: markers are durations and never "74 tests" — which is exactly what the component
