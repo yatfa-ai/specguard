@@ -219,6 +219,12 @@ class Repository < ApplicationRecord
   # Returns an Array rather than a relation, and that is the point: the rows have been primed, and
   # a relation would invite a caller to chain onto it and quietly re-issue the query without the
   # counts — handing back runs whose `shard_count` costs one query each.
+  # `duration_seconds` is qualified and `COUNT(*)` is not, and the asymmetry is deliberate: the
+  # column name exists on BOTH `test_runs` and `test_run_shards`, so an unqualified spelling inside
+  # this correlated subquery is bound to the inner table by scope precedence rather than by what is
+  # written. That binding is correct, and `Repository`'s trajectory spec fails loudly if it ever
+  # stops being — but a rule that holds by precedence holds silently, and this one is the
+  # denominator of every wall clock the chart draws.
   def suite_size_trajectory(run, limit: TRAJECTORY_LIMIT)
     return [] if run.nil? || run.branch.blank?
 
@@ -228,7 +234,7 @@ class Repository < ApplicationRecord
              .limit(limit)
              .select("test_runs.*, (SELECT COUNT(*) FROM test_run_shards " \
                      "WHERE test_run_shards.test_run_id = test_runs.id) AS shards_recorded, " \
-                     "(SELECT COUNT(duration_seconds) FROM test_run_shards " \
+                     "(SELECT COUNT(test_run_shards.duration_seconds) FROM test_run_shards " \
                      "WHERE test_run_shards.test_run_id = test_runs.id) AS shards_timed")
              .to_a
              .reverse

@@ -1429,6 +1429,45 @@ RSpec.describe "Repository suite-size trajectory", type: :request do
       expect(runtime_basis).to have_text("a trajectory needs 3", normalize_ws: true)
     end
 
+    # The same shortfall sentence, reached by the OTHER cause — and the case where its verb is the
+    # half that can lie. `timed` withholds on two grounds now, so a shortfall can be produced by
+    # runs that every one of them reported a clock; "N of the M plotted runs reported one" is then
+    # false about its own subject, in the one sentence whose whole job is explaining why the reader
+    # is being shown less than they asked for.
+    #
+    # The ticket's scenario at two runs, which is the shortest way in: two 4-shard runs whose timed
+    # counts are 4 and 2. Both cohorts are size one, the tie goes to the most recent, so exactly one
+    # run is on the line and the other is held by `withheld_timing_mismatch`. Driven through the
+    # recorder rather than hand-primed, for the reason the sharded examples above are: the partial
+    # MAX is a shape the RECORDER produces.
+    it "names a denominator mismatch as the cause when it is why there is no line" do
+      repository = create_repository(user: @user)
+      full = sharded_run(repository, commit_sha: "aaaafull1111", per_shard: 5_000, seconds: 60.0)
+      partial = sharded_run(repository, commit_sha: "bbbbpart2222", per_shard: 5_010,
+                            seconds: 18.0, timed_shards: 2)
+
+      # The state under test, asserted before the page is read: both runs reported a clock, over
+      # different denominators, at an identical shard count. Without this the example could pass on
+      # a fixture that built the ordinary untimed shortfall instead.
+      expect([full.shard_count, partial.shard_count]).to eq([4, 4])
+      expect([full.timed_shard_count, partial.timed_shard_count]).to eq([4, 2])
+      expect([full.duration_reported?, partial.duration_reported?]).to eq([true, true])
+
+      get repository_path(repository)
+
+      # The size line above is drawn — this is a shortfall on one axis, not an empty panel.
+      expect(trajectory_panel).to have_css("#suite-trajectory-chart")
+      expect(trajectory_panel).to have_no_css("#suite-trajectory-runtime-chart")
+      expect(plotted_labels).to eq(%w[aaaaful bbbbpar])
+      expect(runtime_basis).to have_text("1 of the 2 plotted runs timed the same number of shards",
+                                         normalize_ws: true)
+      expect(runtime_basis).to have_text("a trajectory needs 2", normalize_ws: true)
+      # The falsifying half. Both of these runs reported a clock, so the unqualified verb this
+      # sentence carries in the untimed case is a false sentence here — and it is the sentence the
+      # page prints the moment the cause branch is removed.
+      expect(runtime_basis).to have_no_text("reported one")
+    end
+
     it "says so plainly when no plotted run reported a clock at all" do
       repository = create_repository(user: @user)
       run(repository, "aaaaaaa1111", total: 1_000, at: 2.days.ago)

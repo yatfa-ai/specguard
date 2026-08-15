@@ -536,6 +536,36 @@ RSpec.describe SuiteTrajectory do
       expect(partial.runtime_coverage).not_to eq(silent.runtime_coverage)
     end
 
+    # The MIXED state, and the one where the qualifier is load-bearing rather than merely correct.
+    # Either pure case can be told by its own bucket alone, so a caption keyed off the wrong one of
+    # the two still reads right; here both buckets are occupied and only the qualified sentence is
+    # true of the whole cohort. An unqualified "2 of 4 plotted runs timed" said over a run that
+    # timed two of its four shards is false in its verb — the mismatch does not stop being a
+    # mismatch because a silent run is standing next to it.
+    it "keeps the qualifier when a missing clock and a denominator mismatch are both on the line" do
+      repository = create_repository
+      series = trajectory([
+        timed_point(repository, "eeeeeee", total: 1_000, seconds: 40.2, shards: 4, at: 4.days.ago),
+        timed_point(repository, "fffffff", total: 1_020, seconds: 41.0, shards: 4, at: 3.days.ago),
+        timed_point(repository, "noclock", total: 1_030, seconds: nil, shards: 4,
+                    timed_shards: 0, at: 2.days.ago),
+        timed_point(repository, "twoofor", total: 1_047, seconds: 12.0, shards: 4,
+                    timed_shards: 2, at: 1.day.ago)
+      ])
+
+      # Both causes are live at once, each named by its own bucket — the precondition the caption is
+      # being asked about, asserted rather than assumed.
+      expect(series.plotted.map(&:commit_sha)).to eq(%w[eeeeeee fffffff noclock twoofor])
+      expect(series.timed.map(&:commit_sha)).to eq(%w[eeeeeee fffffff])
+      expect(series.withheld_untimed.map(&:commit_sha)).to eq(%w[noclock])
+      expect(series.withheld_timing_mismatch.map(&:commit_sha)).to eq(%w[twoofor])
+
+      expect(series.runtime_coverage).to eq("2 of 4 plotted runs timed the same number of shards")
+      # The falsifying half: the sentence the untimed-only case earns, which a caption that keys off
+      # `withheld_untimed` first would print here about a run that timed.
+      expect(series.runtime_coverage).not_to eq("2 of 4 plotted runs timed")
+    end
+
     # The guard must be a no-op across the entire unsharded corpus — every run that named no
     # `ci_run_id`. Both counts are a really-counted `0` there (`TestRun#preload_timed_shard_count`
     # documents its `.to_i` for precisely that), so the equality holds trivially and nothing about
