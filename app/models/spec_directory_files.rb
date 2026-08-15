@@ -115,10 +115,11 @@ class SpecDirectoryFiles
   # population is areas and here is files.
   def truncated? = file_count > rows.size
 
-  # How much of the AREA the listed durations cover, always as a fraction and never as a bare count
-  # — the spelling `SpecDirectoryDurations::Row#coverage_label` fixed for the panel this drills out
-  # of, so the same claim about the same area reads the same way on both.
-  def coverage_label = "#{timed_count} of #{recorded_count}"
+  # How much of the AREA the listed durations cover — through the same seam the other single-sided
+  # coverage fractions are spelled through, so this caption and the `SpecDirectoryDurations::Row` for
+  # the panel it drills out of make the same claim about the same area in one spelling rather than in
+  # two prose inventions that agree today.
+  def coverage_label = SpecObservation.coverage_fraction(timed_count, recorded_count)
 
   # One spec file's share of one area's wall clock, and what that share was measured over. The same
   # four fields `SpecFileDurations::Row` carries, because it is the same claim about the same grain
@@ -141,9 +142,10 @@ class SpecDirectoryFiles
     # the cell, and is spelled by this seam rather than tested for here.
     def duration_label = SpecObservation.humanized_duration(total_seconds)
 
-    # How much of the file this total covers, always as a fraction and never as a bare count. "40"
-    # in a column of "12 of 40" reads as forty of something unstated; the denominator is the point
-    # of the column, and a complete file has to be visibly complete rather than merely unannotated.
-    def coverage_label = "#{timed_count} of #{recorded_count}"
+    # How much of the file this total covers — through the same seam the other single-sided coverage
+    # fractions are spelled through, so a complete file is visibly complete rather than merely
+    # unannotated, and this row cannot disagree with the area caption above it about how the
+    # fraction is worded.
+    def coverage_label = SpecObservation.coverage_fraction(timed_count, recorded_count)
   end
 end
