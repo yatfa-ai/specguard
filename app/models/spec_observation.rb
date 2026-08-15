@@ -991,11 +991,20 @@ class SpecObservation < ApplicationRecord
   # ungrouped, so the sequence the aggregate summed over is legible again.
   #
   # ORDERED BY THE WINDOW'S OWN ORDER, not by `created_at` and not by `id`. `array_position` over the
-  # ids AS THEY WERE HANDED IN makes this list index-for-index with the `history` rows the same
-  # window produced, so the run a row belongs to can be read off the position as well as off the
-  # `commit_sha` on it. Ordering by `id` would be ordering by INGEST order, which is the same series
-  # only while nothing is backfilled and no run is ingested out of order; ordering by `created_at`
-  # would need a join to a table the caller has already loaded.
+  # ids AS THEY WERE HANDED IN makes this sequence FOLLOW the window the caller already holds, so it
+  # reads in the same direction as the `history` rows that same window produced and a reader walking
+  # the two is walking them the same way. Ordering by `id` would be ordering by INGEST order, which
+  # is the same series only while nothing is backfilled and no run is ingested out of order; ordering
+  # by `created_at` would need a join to a table the caller has already loaded.
+  #
+  # SAME DIRECTION IS NOT SAME INDEX. The join key is the `test_run_id` / `commit_sha` ON THE ROW,
+  # never its position: `history` holds one row per RUN and this holds one row per matching
+  # OBSERVATION, and three ordinary shapes pull the two out of alignment. A run that recorded nothing
+  # under this description contributes NO row — a test added mid-window, renamed, quarantined, or
+  # living in a file one shard did not run — a description carried by two examples in one run
+  # contributes TWO, and the cap takes rows off the old end. Reading the run off the index is
+  # precisely the manoeuvre that names the WRONG culprit commit, which is the one error this drill-in
+  # cannot survive.
   #
   # The window's order is newest-first (`Repository#recent_test_runs`), and that decides which end
   # the cap takes off: a truncated sequence keeps the RECENT runs and drops the old ones, which is

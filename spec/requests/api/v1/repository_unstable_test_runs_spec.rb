@@ -141,14 +141,20 @@ RSpec.describe "GET /api/v1/repository — unstable_tests.unstable_test_runs", t
 
     # THE JOIN THIS BLOCK EXISTS TO MAKE POSSIBLE, asserted rather than described. `history` rows
     # carry `commit_sha` and these rows carry `commit_sha`, so an agent holding both can name the
-    # commit a test started failing at — and here the two lists are index-for-index, because both
-    # are served from the same already-loaded window rather than from two fetches of "the last thirty
-    # runs" that agree today.
-    it "lines up index-for-index with the history rows it is meant to be joined against" do
+    # commit a test started failing at — and both are served from the same already-loaded window
+    # rather than from two fetches of "the last thirty runs" that agree today, so the two lists share
+    # that window and read in the same direction.
+    #
+    # THE INDICES MATCHING HERE IS A PROPERTY OF THIS FIXTURE, NOT OF THE BLOCK. `repository_with`
+    # puts the test in every run exactly once, which is the one shape where a row count equals a run
+    # count; the join key is the `commit_sha` on the row, and the example below headed "a window the
+    # description is absent from some runs of" is the same query with a hole in it, where these two
+    # lists are different lengths and the positions no longer correspond.
+    it "shares the window and its ordering with the history rows it is meant to be joined against" do
       body = get_repository(query: { branch: "main", unstable_test: flipping_test })
+      shas = body.dig("unstable_tests", "unstable_test_runs", "rows").map { it["commit_sha"] }
 
-      expect(body.dig("unstable_tests", "unstable_test_runs", "rows").map { it["commit_sha"] })
-        .to eq(body["history"].map { it["commit_sha"] })
+      expect(shas).to eq(body["history"].map { it["commit_sha"] })
     end
 
     # AC3, said as the sentence the reader acts on: the run a failure began at is reachable by
@@ -255,6 +261,76 @@ RSpec.describe "GET /api/v1/repository — unstable_tests.unstable_test_runs", t
       expect(served["run_count"]).to eq(2)
       expect(served["rows"].length).to eq(4)
       expect(served["recorded_count"]).to eq(4)
+    end
+  end
+
+  # THE SHAPE A POSITIONAL READ GETS WRONG, and the most ordinary one a sequence reader meets: the
+  # description is present in SOME runs of the window and absent from others. A test added halfway
+  # through the window, renamed into this name, quarantined for a fortnight, or living in a file one
+  # shard did not run — every one of those leaves a HOLE in the sequence, and not one of them is an
+  # error.
+  #
+  # The runs that recorded nothing contribute no row, so this list is SHORTER than the window and its
+  # indices stop corresponding to `history`'s. With the hole in the MIDDLE — where it moves every row
+  # under it, rather than at an end where it only shortens the list — an agent reading the run off
+  # the POSITION names the wrong commit, and naming the wrong culprit commit is the one error this
+  # drill-in cannot survive. That is what the `test_run_id` and `commit_sha` on every row are for.
+  describe "a window the description is absent from some runs of" do
+    # A `nil` here means the run did not record the description AT ALL — deliberately absent rather
+    # than recorded with a nil outcome, which is a DIFFERENT state asserted separately above: silence
+    # about a test that ran is not the same fact as no record that it ran, and this file keeps the
+    # two apart everywhere else.
+    def ingest_window(outcomes)
+      outcomes.each_with_index do |outcome, index|
+        specs = [example_spec(name: "User signs in", outcome: "passed", line_number: 2,
+                              file_path: "spec/models/user_spec.rb")]
+        specs.unshift(example_spec(name: flipping_test, outcome: outcome, line_number: 1)) if outcome
+        ingest(repository, specs, commit_sha: sha_for(index), branch: "main",
+                                  at: (30 - index).days.ago)
+      end
+    end
+
+    # Chronologically: passed, ABSENT, failed, failed.
+    before { ingest_window(["passed", nil, "failed", "failed"]) }
+
+    it "contributes no row for the runs that recorded nothing, keeping the rest newest-first" do
+      served = rows(query: { branch: "main", unstable_test: flipping_test })
+
+      expect(served.map { [it["commit_sha"], it["outcome"]] }).to eq(
+        [[sha_for(3), "failed"], [sha_for(2), "failed"], [sha_for(0), "passed"]]
+      )
+      expect(served.map { it["commit_sha"] }).not_to include(sha_for(1))
+    end
+
+    # `rows.length < run_count`, with both figures served, so the hole is countable rather than
+    # merely survivable. And it is NOT a truncation: the cap did not bite, so `recorded_count` agrees
+    # with the listed rows and the gap shows up as `run_count > recorded_count` instead.
+    it "is shorter than the window it was drawn from, and serves both figures" do
+      served = block(query: { branch: "main", unstable_test: flipping_test })
+
+      expect(served["rows"].length).to eq(3)
+      expect(served["run_count"]).to eq(4)
+      expect(served["rows"].length).to be < served["run_count"]
+      expect(served["recorded_count"]).to eq(3)
+      expect(served["limit"]).to eq(SpecObservation::UNSTABLE_TEST_RUNS_LIMIT)
+    end
+
+    # The property the docs above now state, pinned: the two lists share a window and a direction but
+    # NOT an index, and the run each row belongs to is still recoverable — off its `commit_sha`, off
+    # its `test_run_id`, never off its position. The third assertion is the damage itself: at the
+    # last index of this list, a positional read answers `sha_for(1)` — the run that never recorded
+    # the test — when the row's own run is `sha_for(0)`.
+    it "no longer lines up index-for-index with history, so the run is read off the commit_sha" do
+      body = get_repository(query: { branch: "main", unstable_test: flipping_test })
+      served = body.dig("unstable_tests", "unstable_test_runs", "rows")
+      history = body["history"].map { it["commit_sha"] }
+
+      expect(served.length).not_to eq(history.length)
+      expect(served.last["commit_sha"]).to eq(sha_for(0))
+      expect(history[served.length - 1]).to eq(sha_for(1))
+
+      expect(history).to include(*served.map { it["commit_sha"] })
+      expect(served.map { it["test_run_id"] }).to eq([run_for(3).id, run_for(2).id, run_for(0).id])
     end
   end
 

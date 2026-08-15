@@ -1452,6 +1452,14 @@ class Api::V1::RepositoriesController < Api::BaseController
   # and only when `?unstable_test=` was sent. It is counted here rather than left for a reader to
   # discover, and it does not disturb the property above — it is bounded by ONE DESCRIPTION'S rows
   # over the same window, so it is constant in the size of the suite exactly as the four are.
+  #
+  # It does put ONE exception on the "incomparable window costs ONE read and stops" clause above:
+  # the drill-in fires on the parameter alone, not on `comparable?`, so an incomparable window that
+  # was ASKED a description costs that read too. That is deliberate rather than an oversight. A
+  # window the ranking has nothing to say about is precisely the one where the raw per-run grain is
+  # worth having — "no candidates" and "here is what this test actually did" are answers to
+  # different questions, and gating the second on the first would withhold the grain exactly when
+  # the aggregate above it went silent.
   def serialized_unstable_tests
     unstable = unstable_tests
 
