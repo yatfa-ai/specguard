@@ -58,9 +58,9 @@
 # first rather than a shape to be tidied away.
 class UnstableTests
   # @param runs [Array<TestRun>] the window, ALREADY LOADED — the same rows the "Suite growth"
-  #   panel is drawn on, handed in rather than re-queried. Two panels that fetched "the last thirty
-  #   runs on this branch" separately would be two windows that agree today, and this one's
-  #   captions name the other one's branch.
+  #   panel is drawn on, handed in rather than re-queried. Every panel that fetched "the last thirty
+  #   runs on this branch" separately would be its own window, agreeing today with no structural
+  #   reason to keep agreeing, and this one's captions name the others' branch.
   def self.for(repository, runs, branch: nil)
     run_ids = runs.map(&:id)
     reporting = SpecObservation.window_outcome_reporting(run_ids)

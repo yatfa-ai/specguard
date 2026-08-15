@@ -104,9 +104,9 @@ class SpecDirectoryWindowGrowth
   #
   # @param runs [Array<TestRun>] the window, ALREADY LOADED and OLDEST FIRST — the same rows the
   #   "Suite growth" chart and the "Tests whose outcome changed" panel were loaded for, handed in
-  #   rather than re-queried. Three panels that each fetched "the last thirty runs on this branch"
-  #   would be three windows with no structural reason to keep agreeing, on a page where each of
-  #   them captions the others' branch.
+  #   rather than re-queried. Every panel that fetched "the last thirty runs on this branch" for
+  #   itself would be its own window, with no structural reason to keep agreeing, on a page where
+  #   each of them captions the others' branch.
   # @param branch [String, nil] the branch every figure is drawn on, for the caption.
   def self.for(runs, branch: nil, limit: SpecObservation::MOVED_DIRECTORIES_LIMIT)
     anchor = runs.last
