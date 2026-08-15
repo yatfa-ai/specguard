@@ -1578,10 +1578,45 @@ module Ingest
     # such rows can coexist in one repository ({#refresh}'s rescue). Once two do, a third equivalent
     # observation matches BOTH at distance 0 and Postgres is free to emit either first: one test's
     # durations split across two identities, and {#note_drift} converges on a different row each
-    # pass. Rails appends to the gem's `reorder`, so this is the second key that ranking never had —
-    # the same explicit tiebreak {#failed_embed_backlog} and {#unattempted_embed_backlog} carry, for
-    # the same reason. Inert under a provider that publishes no normalisation, where the two vectors
+    # pass. Rails appends to the gem's `reorder`, so this is the second key that ranking never had.
+    # {#failed_embed_backlog} and {#unattempted_embed_backlog} carry an explicit tiebreak for the
+    # same REASON — cite them for that and not for the shape, because their cost is nothing like
+    # this one's. Inert under a provider that publishes no normalisation, where the two vectors
     # really are different.
+    #
+    # **What the second key costs, and the condition attached to it.** Those two are ordinary B-tree
+    # orderings over `spec_observations` backed by partial indexes, where appending `id` is free.
+    # Appending it to an ANN-ORDERED scan is not. Measured here on a 20,000-row single-repository
+    # fixture built with the real {EmbeddingGenerator}, with the ANN plan forced (`enable_sort=off`)
+    # at `ef_search` 40 and `iterative_scan` off:
+    #
+    #   without `id`:  Limit -> Index Scan using index_spec_identities_on_embedding  (0.6-1.1 ms)
+    #   with `id`:     Limit -> Incremental Sort (Presorted Key: distance)
+    #                             -> Index Scan using index_spec_identities_on_embedding
+    #
+    # Postgres can no longer take the ordering straight off the HNSW scan, so it sorts over the
+    # candidates the scan drains rather than stopping at the first row that clears the threshold.
+    # The cost is bounded, does not grow with the table, and is far smaller than the 20,000 x 1536
+    # `Float` materialisations the narrowing above removes — it is **accepted deliberately**. What
+    # it scales with is `ef_search`, which is **SPGD-72's** to set: this key makes that ticket's
+    # likeliest move — raising `ef_search` — dearer than it was before, because the incremental sort
+    # drains the candidate list on every hit. SPGD-72 is measuring this plan, not the one that was
+    # here before.
+    #
+    # **But that plan is not currently the one this query gets, and that is the bigger finding.**
+    # On PG 17.10 / pgvector 0.8.0 at stock `random_page_cost` 4, the planner did not choose
+    # `index_spec_identities_on_embedding` for ANY shape of this query — not with both filters, not
+    # with one, not for a bare `ORDER BY embedding <=> $1 LIMIT 1`; `pg_stat_user_indexes.idx_scan`
+    # for that 156 MB index stayed at **0**. The reason is TOAST: a 1536-float vector lives out of
+    # line, so the heap for 20,000 rows is ~5 MB against ~160 MB of TOAST, and a Seq Scan costs out
+    # at ~900 while the HNSW scan starts at ~2341. The planner takes the "cheap" seq scan and then
+    # pays a detoast per row — 145 ms/query actual, against 0.6-1.1 ms for the forced ANN plan.
+    # So on this configuration the tiebreak is free (146.95 vs 146.60 ms/query, inside noise)
+    # because the ANN plan it burdens never runs. Do not read that as permission to relax the key:
+    # planner settings, PG version and data shape all move this, the cost above lands the moment the
+    # ANN plan IS chosen, and correctness does not depend on which plan wins. The index going unused
+    # is **squarely SPGD-72's**, and a larger prize than anything this ticket touches; it is recorded
+    # here and handed over rather than acted on, because ANN-index tuning is out of scope above.
     def nearest(embedding)
       @repository.spec_identities
                  .select(:id, :text, :text_digest, :signal_source)

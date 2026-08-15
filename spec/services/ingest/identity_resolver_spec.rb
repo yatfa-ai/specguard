@@ -807,7 +807,11 @@ RSpec.describe Ingest::IdentityResolver do
       # Asserted on the emitted select list rather than on a duration, and stated as an equality
       # rather than as "does not include `embedding`": a projection that grew a fifth column back is
       # then a failure here too, which is the only way this stays a bound on what gets loaded rather
-      # than a bound on one column name.
+      # than a bound on one column name. The equality is also sensitive to the ORDER of the
+      # `.select` arguments, so a harmless reshuffle of those four fails here — that is a side
+      # effect of comparing the rendered select list, not a constraint anyone chose. Re-order the
+      # expectation to match; do not loosen it to a set comparison, which would give the fifth
+      # column somewhere to hide.
       ingest([one(original)], ci_run_id: "run-1")
       second = record([one("Order#checkout rejects an expired cards", line: 2)], ci_run_id: "run-2")
 
