@@ -689,15 +689,18 @@ RSpec.describe "GET /api/v1/repository — directory_run_file_growth", type: :re
       expect(directory_file_growth_grain_reads do
         get_repository(key: api_key, query: { spec_directory: "spec/models" })
       end.length).to eq(1)
-      # One more query in total than the unasked request — and exactly one, so the ask did not also
-      # re-issue something the endpoint had already paid for.
+      # One more query for THIS grain than the unasked request — and the ask's total cost is
+      # exactly the number of grains it opens, so it did not also re-issue something the endpoint
+      # had already paid for. `?spec_directory=` opens THREE reads of `spec_observations`: this
+      # block's, the durations drill-in's, and the runtime drill-in's.
       expect(count_queries { get_repository(key: api_key, query: { spec_directory: "spec/models" }) })
-        .to eq(baseline + 2)
+        .to eq(baseline + 3)
     end
 
     # The same bound CLASSIFIED rather than counted, so "one more query" cannot be satisfied by a
-    # different grain reading twice while this one reads none. The two `+1`s under one ask are this
-    # block's and the durations drill-in's, which is why the total above is `+2`.
+    # different grain reading twice while this one reads none. The three `+1`s under one ask are
+    # this block's, the durations drill-in's and the runtime drill-in's, which is why the total
+    # above is `+3`.
     it "reads once for its own grain and leaves every other grain alone" do
       adjacent_runs
       query = { spec_directory: "spec/models" }
