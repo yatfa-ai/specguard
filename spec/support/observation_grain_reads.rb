@@ -313,11 +313,11 @@ module ObservationGrainReads
   # `repository_repeated_description_examples_spec.rb` — and the one beside
   # `classified_observation_reads` above — rank their fixture AGAINST THIS PARTITION: how much of it
   # the fixture leaves live, and how it places against other fixtures. A grain appended here can
-  # falsify all three without touching a line either of those files owns, and twice now a
-  # grain-adding commit has corrected the counts in THIS file and left them stale. So when you append
-  # a grain, RE-READ THOSE TWO REQUEST SPECS, and keep their prose free of any suite-wide total or
-  # counted ranking — the claim they need is "this fixture leaves several grains live", which no
-  # later grain can falsify.
+  # falsify all three without touching a line either of those files owns, and every grain added so far
+  # has corrected the counts in THIS file and left them stale. So when you append a grain, RE-READ
+  # THOSE TWO REQUEST SPECS, and keep their prose free of any suite-wide total or counted ranking —
+  # the claim they need is "this fixture leaves several grains live", which no later grain can
+  # falsify.
   #
   # `growth` (5), `directory_files` (6) and `runtime_growth` (10) each carry an EXCLUSION rather than
   # only their own pattern, and the exclusions are not decoration. `directory_file_growth` (9) is the
