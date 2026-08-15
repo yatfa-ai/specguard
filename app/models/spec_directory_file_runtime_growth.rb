@@ -106,13 +106,17 @@
 # rows. `SUM` skips NULLs silently and `duration_seconds` is nullable by design, so this object has
 # to keep apart three things that all render as an empty cell: a file with no ROWS on a side, a file
 # with rows none of which were TIMED on that side, and a file that genuinely took no time. The first
-# two are not measurements and must never be spelled `0.00s` — `SpecObservation.humanized_duration`
-# is the one seam that decides that, at every grain.
+# two are not measurements, and this object keeps them apart by carrying the nils AS nils and by
+# spelling the difference in `#new_file?` / `#removed_file?` / `#timing_gap?` — three predicates
+# because there are three different things to go and fix. The API serves all four verbatim, which is
+# what lets a client tell them apart; the panel follow-up renders them through
+# `SpecObservation.humanized_duration`, the one seam that keeps an untimed side from reading as
+# `0.00s`, at every grain.
 #
 # What is deliberately NOT done with them is promote either into a state. The nine states are the
 # parent's and are about the RUNS; an area or a file with no rows is a fact about the AREA, and it
-# is `#recorded?` and the row predicates respectively — the same separation `SpecDirectoryFileGrowth`
-# keeps.
+# is an empty `#rows` and the row predicates respectively — the same separation
+# `SpecDirectoryFileGrowth` keeps.
 #
 # == One object, so the caption cannot drift from the table
 #
@@ -125,8 +129,29 @@
 #
 # `?spec_directory=` is a URL a reader types, edits and bookmarks, and two runs that touched nothing
 # in the area they ask for is an ordinary answer rather than a malformed request: a stale bookmark,
-# a directory deleted since, a typo. That is `#recorded?` being false — distinct from every one of
-# the nine non-comparable states, which are about the RUNS and would be wrong to spell here.
+# a directory deleted since, a typo. That is `:comparable` with an EMPTY `#rows` — distinct from
+# every one of the nine non-comparable states, which are about the RUNS and would be wrong to spell
+# here, and the reason an empty read still returns a built object rather than nothing.
+#
+# == No display layer, deliberately, and this is where the next one goes
+#
+# This object serves `GET /api/v1/repository` and NOTHING ELSE — there is no `repositories#show`
+# panel for this cell, which the ticket that built it fenced out on purpose. So every member here is
+# one the API reads, save `#path` (see its own note), and the typographic and screen-reader
+# spellings its three siblings carry — `#change_label`'s U+2212 and `"±0"`, `#change_reading`'s
+# spoken direction, `#coverage_label`'s `"12 of 40 → 14 of 40"`, and the caption predicates
+# `#any_movement?` / `#any_unmoved?` / `#any_untimed?` / `#any_timing_gap?` / `#anything_to_show?` —
+# are ABSENT rather than written ahead of a reader.
+#
+# That is a decision about WHEN, not about whether. Both siblings were created in the same commit as
+# the 200-line panel that rendered them (`SpecDirectoryFileGrowth` in SPGD-456,
+# `SpecDirectoryRuntimeGrowth` in SPGD-317) and their API cells came afterwards, reusing labels a
+# view had already exercised. Copy frozen by green specs before any page shows it is copy nobody can
+# judge and everybody must then treat as a contract, so the panel follow-up writes these WITH the
+# markup they render into — where a glyph choice, a caption clause and an `aria-label` phrasing can
+# be read against a render instead of against a test. The row predicates below (`#comparable?`,
+# `#moved?`, `#new_file?`, `#removed_file?`, `#timing_gap?`) are what those labels will be built
+# FROM, and they are here because the API serves each of them as its own key.
 class SpecDirectoryFileRuntimeGrowth
   # Builds the comparison for one area, or nothing at all.
   #
@@ -146,7 +171,7 @@ class SpecDirectoryFileRuntimeGrowth
   # the first; `to_i` over the nil of an empty read, where zero files and zero rows on both sides is
   # the honest count. An empty read is exactly the "neither run recorded anything in this area"
   # state — a group exists here if and only if a row exists — so it needs no separate count to
-  # detect, and it is `#recorded?` rather than a state of its own.
+  # detect, and it is an empty `#rows` rather than a state of its own.
   #
   # ⭐ NO STATE IS DERIVED HERE, which is the difference from the parent's `from_tuples` and the
   # whole of this object's gate discipline. That method reads its window totals and returns one of
@@ -154,10 +179,9 @@ class SpecDirectoryFileRuntimeGrowth
   # regardless, because at this grain those totals are one AREA's and the six states they would spell
   # are claims about the RUNS. See the class comment.
   def self.from_tuples(path, tuples)
-    rows = tuples.map do |file_path, prev_seconds, latest_seconds, prev_rec, latest_rec, prev_t, latest_t, *|
+    rows = tuples.map do |file_path, prev_seconds, latest_seconds, prev_rec, latest_rec, *|
       Row.new(path: file_path, previous_seconds: prev_seconds, latest_seconds: latest_seconds,
-              previous_recorded_count: prev_rec.to_i, latest_recorded_count: latest_rec.to_i,
-              previous_timed_count: prev_t.to_i, latest_timed_count: latest_t.to_i)
+              previous_recorded_count: prev_rec.to_i, latest_recorded_count: latest_rec.to_i)
     end
 
     _path, _prev_s, _latest_s, _prev_rec, _latest_rec, _prev_t, _latest_t,
@@ -181,8 +205,14 @@ class SpecDirectoryFileRuntimeGrowth
     @latest_timed_count = latest_timed_count
   end
 
-  # The area that was asked for, as it was asked for. Held even when nothing came back, because the
-  # empty state has to name it — "no spec files" without a subject is a sentence about nothing.
+  # The area that was asked for, as it was asked for.
+  #
+  # THE ONE MEMBER THE API DOES NOT READ, kept deliberately. The window block serves the ask back as
+  # `requested_spec_directory` — the controller's own copy — so nothing calls this today. It stays
+  # because the object is otherwise anonymous: `.for` holds the path on every path through the gate
+  # including the refusals, and an object carrying one area's rows that cannot say WHICH area is a
+  # trap for the next caller, which at this cell is the panel follow-up that must name the subject it
+  # declined to compare. A write-only ivar would be the worse half of both options.
   attr_reader :path
 
   # The parent panel's verdict on the two runs, carried verbatim. `:comparable` or one of its nine
@@ -214,66 +244,28 @@ class SpecDirectoryFileRuntimeGrowth
 
   def comparable? = state == :comparable
 
-  # Either run recorded at least one example in this area. False for an area that is a typo, a stale
-  # bookmark, or a directory both runs are innocent of — distinct from every one of the nine
-  # non-comparable states, which are about the RUNS and would be wrong to spell here.
-  def recorded? = rows.any?
-
   # There are files the comparison covered that the list does not show.
   def truncated? = file_count > rows.size
 
-  # At least one listed file's summed duration actually moved. False for an area whose every file
-  # took the same time in both runs — a real and unremarkable answer ("nothing here got slower"),
-  # worth saying in words rather than showing as a table of `±0`.
-  #
-  # Asked of the LISTED rows, which is sound in exactly one direction and that is the direction this
-  # needs: the ranking is by absolute movement descending, so if any file moved at all the top row is
-  # one that did. A false here is therefore a claim about every file the comparison covered.
-  def any_movement? = rows.any?(&:moved?)
-
-  # At least one LISTED file has both sides timed and did not move. Unmoved files can only appear in
-  # the tail of a ranking by absolute movement, and they appear exactly when fewer files moved than
-  # the cap has room for — so a list headed "the files that moved most" can contain files that did
-  # not move. Not a defect (the reader is seeing where the movement ran out) but the caption has a
-  # clause for it.
-  def any_unmoved? = rows.any? { |row| row.comparable? && !row.moved? }
-
-  # At least one LISTED file has no movement to state because a side of it was never timed. Those
-  # rows sort LAST (the ordering key is NULL and the read asks for `NULLS LAST`), so they appear for
-  # the same reason unmoved rows do, and they need their own clause: "not reported" in a Change
-  # column is a different sentence from `±0`.
-  def any_untimed? = rows.any? { |row| !row.comparable? }
-
-  # At least one LISTED file is a TIMING GAP specifically: both runs ran it, and one of them reported
-  # no duration for it. Narrower than `any_untimed?` on purpose — a file only one run HAS is also
-  # uncomparable, but its cell already says "New file" or "File removed", and a sentence about runs
-  # that "reported no timing" would be describing a different row from the one the reader is looking
-  # at. Two absences, two cells, two sentences.
-  def any_timing_gap? = rows.any?(&:timing_gap?)
-
-  # There is a table worth rendering: some listed file either moved or has an absence to disclose.
-  #
-  # `any_movement?` alone is NOT that question, and the difference is the one this panel exists for.
-  # A file that stopped reporting timings, a file only one run has — those rows moved by nothing
-  # because there is nothing to subtract, and they are exactly the rows a reader must see rather than
-  # have folded into "no file changed pace". That sentence is a claim that this area took the same
-  # time in both runs, and it is false of an area half of which went unmeasured.
-  def anything_to_show? = any_movement? || any_untimed?
-
-  # One spec file's movement in seconds between two runs, both operands it was taken across, and what
-  # each operand was summed over.
+  # One spec file's movement in seconds between two runs, and both operands it was taken across.
   #
   # Deliberately NOT `SpecDirectoryRuntimeGrowth::Row` reused or subclassed, though the arithmetic is
-  # identical. Every string it renders names the grain — "New area" against "New file", "an area the
-  # previous run did not record" against a file — and those readings are the whole product of the
-  # struct: a shared Row would have to take its own nouns as arguments, which is a parameterised
-  # sentence template standing where two plain sentences were, and the next grain to want a third
-  # noun makes it three. The two structs are the same shape and not the same claim, which is the
-  # disposition `SpecDirectoryFileGrowth::Row` takes on exactly this question against exactly this
-  # parent.
+  # identical, and the reason survives this struct carrying no strings YET. What each predicate MEANS
+  # names the grain even where nothing renders it: `new_file?` is a file the previous run did not
+  # record and `new_area?` is an area, and the labels the panel follow-up hangs on them — "New area"
+  # against "New file" — differ in the noun and in nothing else. A shared Row would have to take that
+  # noun as an argument, which is a parameterised sentence template standing where two plain
+  # sentences were, and the next grain to want a third noun makes it three. The two structs are the
+  # same shape and not the same claim, which is the disposition `SpecDirectoryFileGrowth::Row` takes
+  # on exactly this question against exactly this parent.
+  #
+  # The per-side TIMED counts are absent for the same reason the labels are: they had one consumer,
+  # `#coverage_label`, and it renders with the panel. The per-side RECORDED counts stay because
+  # `new_file?`/`removed_file?` are computed off them — the whole point of asking the ROWS rather
+  # than the seconds. The area's four denominators live on the object above, where the API serves
+  # them.
   Row = Struct.new(:path, :previous_seconds, :latest_seconds, :previous_recorded_count,
-                   :latest_recorded_count, :previous_timed_count, :latest_timed_count,
-                   keyword_init: true) do
+                   :latest_recorded_count, keyword_init: true) do
     # This file has a movement at all: both sides summed a real number of seconds. False whenever
     # either side timed nothing here, which is SQL NULL out of the aggregate and stays nil all the
     # way to the cell — a subtraction against it would be arithmetic on a zero that was never a
@@ -301,93 +293,5 @@ class SpecDirectoryFileRuntimeGrowth
     # nil sums come from a side having no rows here at all, and which the Change cell names in their
     # own words.
     def timing_gap? = !comparable? && !new_file? && !removed_file?
-
-    # Each operand, rendered — through the same seam one example's duration, one file's total and one
-    # area's total are rendered through, so no two grains on this page can disagree about how a
-    # duration is spelled, and a side that timed nothing says "not reported" rather than "0.00s".
-    def previous_label = SpecObservation.humanized_duration(previous_seconds)
-
-    def latest_label = SpecObservation.humanized_duration(latest_seconds)
-
-    # How much of this file each side actually timed, always as a fraction and never as a bare count
-    # — `SpecDirectoryDurations#coverage_label`'s rule, doubled because there are two sides: "12" in
-    # a column of "12 of 40" reads as twelve of something unstated, and a total summed over a third
-    # of a file is exactly the reading this column exists to qualify.
-    def coverage_label
-      "#{previous_timed_count} of #{previous_recorded_count} → " \
-        "#{latest_timed_count} of #{latest_recorded_count}"
-    end
-
-    # What moved, rendered.
-    #
-    # A file present on only one side says so instead of printing a delta, for the reason the area
-    # grain gives and which is sharper here: `+47s` against an absent side is arithmetic on a zero
-    # that was never a measurement of this file, and it reads identically to an existing file that
-    # got forty-seven seconds slower. At THIS grain that distinction is the panel's entire subject —
-    # a file at "New file" beside one at "File removed" is the shape of a rename, and two files at
-    # `+47s` and `−47s` is not. A file present on both sides but timed on only one gets its own
-    # reading for the same reason and a different cause: nothing regressed, the telemetry did.
-    #
-    # `±0` for a file whose time did not move, on the rule `ApplicationHelper#suite_size_change`
-    # sets: "compared, and it did not move" is a real answer and `+0` claims a direction it does not
-    # have. A true minus (U+2212) and not a hyphen-minus, for that helper's typographic reason — this
-    # renders in a `tabular-nums` column under and over other signed figures, and a hyphen is drawn
-    # narrower and lower than the `+` it has to align with.
-    #
-    # A movement too small for the two decimals `humanized_duration` prints comes back "+< 0.01s"
-    # rather than "+0.00s", which is that method's own rule and the reason it is reused here: a
-    # measurement wearing the spelling of a zero is the one reading it exists to refuse.
-    def change_label
-      return "New file" if new_file?
-      return "File removed" if removed_file?
-      return "Not timed" unless comparable?
-      return "±0" unless moved?
-
-      "#{change.negative? ? "−" : "+"}#{SpecObservation.humanized_duration(change.abs)}"
-    end
-
-    # The same fact in words, for the `aria-label` on that cell.
-    #
-    # Both halves of the visible rendering fail when read aloud, exactly as they do one panel up: the
-    # row announces as a path and several unattached numbers, and U+2212 — chosen above precisely
-    # because it is not a hyphen — is announced inconsistently across screen readers, from "minus" to
-    # nothing at all. So the direction and what it was measured against are spelled out rather than
-    # left to the glyph.
-    def change_reading
-      return new_file_reading if new_file?
-      return removed_file_reading if removed_file?
-      return untimed_reading unless comparable?
-      return "took the same time as it did in the previous run on this branch" unless moved?
-
-      "#{SpecObservation.humanized_duration(change.abs)} " \
-        "#{change.negative? ? "faster" : "slower"} than the previous run on this branch"
-    end
-
-    private
-
-    # A new file normally announces its own total, which is the magnitude a reader wants. But a file
-    # can be BOTH new and untimed, and "not reported of examples" is not a sentence — so the two
-    # facts are said as two facts rather than run through one template.
-    def new_file_reading
-      return "a file the previous run did not record, and this run reported no timing for it" if latest_seconds.nil?
-
-      "#{latest_label} of examples, a file the previous run did not record"
-    end
-
-    def removed_file_reading
-      return "a file this run does not have, and the previous run reported no timing for it" if previous_seconds.nil?
-
-      "#{previous_label} of examples in the previous run and none now"
-    end
-
-    # Which side went quiet, said as a fact about the REPORTING and never about the code. This is the
-    # row whose visible cell reads "Not timed", and the one place a reader could otherwise infer a
-    # speedup from an absence.
-    def untimed_reading
-      return "neither run reported a timing for this file" if previous_seconds.nil? && latest_seconds.nil?
-      return "this run reported no timing for this file, so there is nothing to compare" if latest_seconds.nil?
-
-      "the previous run on this branch reported no timing for this file, so there is nothing to compare"
-    end
   end
 end

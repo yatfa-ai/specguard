@@ -2403,10 +2403,15 @@ class Api::V1::RepositoriesController < Api::BaseController
   # nullable by design, so a zero here would be "this side was never timed" made byte-identical to
   # "this file took no time", which is the one reading the whole block exists to refuse.
   #
-  # NO VIEW STRINGS. `previous_label`, `latest_label`, `coverage_label`, `change_label` and
-  # `change_reading` are typographic and screen-reader spellings of these same numbers — a U+2212 for
-  # a negative, `"±0"`, `"not reported"`, `"New file"` — and a client served those would be splitting
-  # strings and stripping glyphs to compare two rows.
+  # NO VIEW STRINGS, and at this cell there are none to omit — `SpecDirectoryFileRuntimeGrowth`
+  # carries no labels at all, unlike the three siblings above whose `previous_label`, `latest_label`,
+  # `coverage_label`, `change_label` and `change_reading` this method would have had to step around.
+  # Those are typographic and screen-reader spellings of these same numbers — a U+2212 for a
+  # negative, `"±0"`, `"not reported"`, `"New file"` — and a client served those would be splitting
+  # strings and stripping glyphs to compare two rows. They land on that model WITH the
+  # `repositories#show` panel that renders them, so the rule this comment states stays true by
+  # construction here rather than by restraint: there is nothing on the object this method could
+  # wrongly serve.
   def serialized_directory_file_runtime_growth_row(row)
     {
       path: row.path,

@@ -62,8 +62,11 @@ RSpec.describe SpecDirectoryFileRuntimeGrowth do
     described_class.for(latest_run, previous_run, path, growth: growth, **options)
   end
 
+  # The four figures the API serves off each row, in the model's own names. The signed `change` and
+  # not a rendering of it: this object carries no labels — they land with the `repositories#show`
+  # panel — so the operands ARE the assertion, which is also exactly what a client is handed.
   def rows_as_read(drill_in)
-    drill_in.rows.map { |row| [row.path, row.previous_seconds, row.latest_seconds, row.change_label] }
+    drill_in.rows.map { |row| [row.path, row.previous_seconds, row.latest_seconds, row.change] }
   end
 
   describe "two comparable runs" do
@@ -85,9 +88,9 @@ RSpec.describe SpecDirectoryFileRuntimeGrowth do
 
     it "carries each file's seconds then, its seconds now, and the movement between them" do
       expect(rows_as_read(retimed_area)).to eq(
-        [["spec/models/legacy_spec.rb", 12.0, 2.0, "−10.00s"],
-         ["spec/models/order_spec.rb", 2.0, 8.0, "+6.00s"],
-         ["spec/models/user_spec.rb", 3.0, 3.0, "±0"]]
+        [["spec/models/legacy_spec.rb", 12.0, 2.0, -10.0],
+         ["spec/models/order_spec.rb", 2.0, 8.0, 6.0],
+         ["spec/models/user_spec.rb", 3.0, 3.0, 0.0]]
       )
     end
 
@@ -101,18 +104,15 @@ RSpec.describe SpecDirectoryFileRuntimeGrowth do
       counts = SpecDirectoryFileGrowth.for(latest_run, previous_run, "spec/models",
                                            growth: SpecDirectoryGrowth.for(latest_run, previous_run))
 
-      expect(drill_in).to be_any_movement
-      expect(counts.rows.map(&:change_label)).to eq(["±0", "±0", "±0"])
+      expect(drill_in.rows.map(&:moved?)).to eq([true, true, false])
+      expect(counts.rows.map(&:change)).to eq([0, 0, 0])
       expect(counts).not_to be_any_movement
     end
 
-    it "is comparable, has recorded rows, and says the area's movement is real" do
+    it "is comparable, and carries the parent panel's verdict verbatim" do
       drill_in = retimed_area
 
       expect(drill_in).to be_comparable
-      expect(drill_in).to be_recorded
-      expect(drill_in).to be_any_movement
-      expect(drill_in).to be_anything_to_show
       expect(drill_in.state).to eq(:comparable)
     end
 
@@ -141,9 +141,11 @@ RSpec.describe SpecDirectoryFileRuntimeGrowth do
     # cannot produce: one file appears carrying the seconds another lost. One rung up this is a
     # single `±0` row and the reader is told the panel cannot tell a relocation from a coincidence.
     #
-    # Asserted through the LABELS as well as the operands, because "New file" against "+12.00s" is
-    # the distinction the whole cell turns on: a delta against an absent side is arithmetic on a zero
-    # that was never a measurement of this file.
+    # Asserted through the PREDICATES as well as the operands, because "on one side only" against a
+    # `+12.00s` delta is the distinction the whole cell turns on: a delta against an absent side is
+    # arithmetic on a zero that was never a measurement of this file. `change` is nil on both rows
+    # and the two predicates are what say WHICH absence each one is — the pair the API serves for
+    # exactly this reason, since neither is derivable from a null `change`.
     it "shows a relocation as a new file beside a removed one, and never as two deltas" do
       drill_in = build(
         previous_specs: file_specs("spec/models/legacy_user_spec.rb", 2, each: 6.0),
@@ -151,15 +153,14 @@ RSpec.describe SpecDirectoryFileRuntimeGrowth do
       )
 
       expect(rows_as_read(drill_in)).to eq(
-        [["spec/models/legacy_user_spec.rb", 12.0, nil, "File removed"],
-         ["spec/models/user_spec.rb", nil, 12.0, "New file"]]
+        [["spec/models/legacy_user_spec.rb", 12.0, nil, nil],
+         ["spec/models/user_spec.rb", nil, 12.0, nil]]
       )
       expect(drill_in.rows.map(&:new_file?)).to eq([false, true])
       expect(drill_in.rows.map(&:removed_file?)).to eq([true, false])
       # Neither is a TIMING gap: both files were timed by the run that has them. Three absences,
       # three predicates, and this is what keeps them from collapsing into one.
       expect(drill_in.rows.map(&:timing_gap?)).to eq([false, false])
-      expect(drill_in).not_to be_any_timing_gap
     end
 
     # ⭐ A FILE TIMED ON ONE SIDE ONLY — the absence this quantity adds and the count grain has no
@@ -182,45 +183,31 @@ RSpec.describe SpecDirectoryFileRuntimeGrowth do
 
       row = drill_in.rows.sole
 
-      expect(row.change_label).to eq("Not timed")
-      expect(row.latest_label).to eq("not reported")
+      # The latest side is nil and STAYS nil all the way out — a `0.0` here is "the telemetry went
+      # quiet" made byte-identical to "this file now takes no time".
+      expect(row.previous_seconds).to eq(8.0)
+      expect(row.latest_seconds).to be_nil
       expect(row.change).to be_nil
       expect(row).not_to be_comparable
+      expect(row).not_to be_moved
+      # A gap in the REPORTING, not in the file: both runs ran it, so it is neither side's absence.
       expect(row).to be_timing_gap
       expect(row).not_to be_new_file
       expect(row).not_to be_removed_file
-      expect(drill_in).to be_any_timing_gap
-      expect(drill_in).to be_any_untimed
-      # It is still a table worth rendering, which `any_movement?` alone would deny — and denying it
-      # would fold "this file stopped reporting" into "no file changed pace".
-      expect(drill_in).not_to be_any_movement
-      expect(drill_in).to be_anything_to_show
-      # And the coverage the two sums were taken over, always as a fraction and never a bare count.
-      expect(row.coverage_label).to eq("2 of 2 → 0 of 2")
+      # And the area's own timed denominators disclose which side went quiet, counted over this area
+      # and never over the run — the figures that keep a summed side from being read as complete.
+      expect(drill_in.previous_timed_count).to eq(2)
+      expect(drill_in.latest_timed_count).to be_zero
+      expect(drill_in.previous_recorded_count).to eq(2)
+      expect(drill_in.latest_recorded_count).to eq(2)
     end
 
-    # The reading each absence gets when read aloud, where the visible cell's glyphs fail. Three
-    # different sentences for three different facts — a screen reader announcing U+2212
-    # inconsistently is the reason the direction is spelled out rather than left to the character.
-    it "says each absence in words, and says which side went quiet" do
-      drill_in = build(
-        previous_specs: file_specs("spec/models/gone_spec.rb", 1, each: 2.0) +
-                        file_specs("spec/models/quiet_spec.rb", 1, each: 5.0, offset: 50),
-        latest_specs: file_specs("spec/models/new_spec.rb", 1, each: 9.0, offset: 100) +
-                      file_specs("spec/models/quiet_spec.rb", 1, each: nil, offset: 150)
-      )
-      readings = drill_in.rows.to_h { |row| [row.path, row.change_reading] }
-
-      expect(readings["spec/models/new_spec.rb"])
-        .to eq("9.00s of examples, a file the previous run did not record")
-      expect(readings["spec/models/gone_spec.rb"])
-        .to eq("2.00s of examples in the previous run and none now")
-      expect(readings["spec/models/quiet_spec.rb"])
-        .to eq("this run reported no timing for this file, so there is nothing to compare")
-    end
-
-    # A file that is BOTH new and untimed says the two facts as two facts rather than running them
-    # through one template — "not reported of examples" is not a sentence.
+    # ⭐ A FILE THAT IS BOTH NEW AND UNTIMED — the intersection of two of the three absences, and the
+    # one a single nullable `change` cannot express. `new_file?` is asked of the ROWS and
+    # `comparable?` of the SECONDS, so they answer independently here: this file is on one side only
+    # AND that side reported no duration for it. A client is owed both facts, because "a file we
+    # just added" and "a file nothing timed" are different things to go and fix, and folding them
+    # would let the panel announce a magnitude it never measured.
     it "keeps a new file's absence apart from its missing timing" do
       drill_in = build(
         previous_specs: file_specs("spec/models/order_spec.rb", 1, each: 1.0),
@@ -229,27 +216,23 @@ RSpec.describe SpecDirectoryFileRuntimeGrowth do
       )
       row = drill_in.rows.find { |candidate| candidate.path == "spec/models/new_spec.rb" }
 
-      expect(row.change_label).to eq("New file")
-      expect(row.change_reading)
-        .to eq("a file the previous run did not record, and this run reported no timing for it")
-    end
-
-    # A movement too small for two decimals says it is below the resolution rather than printing a
-    # zero it did not measure — `SpecObservation.humanized_duration`'s own rule, reused rather than
-    # respelled, which is what keeps this grain from disagreeing with the three above it.
-    it "renders a sub-hundredth movement as below the resolution and not as zero" do
-      drill_in = build(
-        previous_specs: file_specs("spec/models/order_spec.rb", 1, each: 1.0),
-        latest_specs: file_specs("spec/models/order_spec.rb", 1, each: 1.001, offset: 100)
-      )
-
-      expect(drill_in.rows.sole.change_label).to eq("+< 0.01s")
+      expect(row).to be_new_file
+      expect(row).not_to be_comparable
+      expect(row.latest_seconds).to be_nil
+      expect(row.previous_seconds).to be_nil
+      expect(row.change).to be_nil
+      # NOT a timing gap, which is the narrower fact: that predicate is for a file BOTH runs ran.
+      # A row that answered true to both would be two different sentences about one cell.
+      expect(row).not_to be_timing_gap
+      expect(row).not_to be_removed_file
     end
 
     # An area neither run recorded is an ordinary answer — a stale bookmark, a typo, a directory
-    # deleted since — and it is `recorded?` being false, DISTINCT from every one of the nine
-    # non-comparable states, which are about the RUNS and would be wrong to spell here.
-    it "reports an area neither run touched as unrecorded, not as a refusal to compare" do
+    # deleted since — and it is `:comparable` with NO ROWS, DISTINCT from every one of the nine
+    # non-comparable states, which are about the RUNS and would be wrong to spell here. An object
+    # that refused instead would tell a reader their two runs cannot be compared because they
+    # mistyped a path.
+    it "reports an area neither run touched as an empty comparison, not as a refusal to compare" do
       drill_in = build(
         previous_specs: file_specs("spec/models/order_spec.rb", 2, each: 1.0),
         latest_specs: file_specs("spec/models/order_spec.rb", 2, each: 2.0, offset: 100),
@@ -257,7 +240,8 @@ RSpec.describe SpecDirectoryFileRuntimeGrowth do
       )
 
       expect(drill_in).to be_comparable
-      expect(drill_in).not_to be_recorded
+      expect(drill_in.rows).to be_empty
+      expect(drill_in.file_count).to be_zero
       expect(drill_in.state).to eq(:comparable)
       expect(drill_in.path).to eq("spec/ghosts")
     end
@@ -286,30 +270,40 @@ RSpec.describe SpecDirectoryFileRuntimeGrowth do
       expect(drill_in.file_count).to eq(drill_in.rows.size)
     end
 
-    # ⭐ `any_unmoved?` IS ASKED OF COMPARABLE ROWS ONLY, which is what separates it from
-    # `any_untimed?`. A file with a nil side did not "fail to move" — there was nothing to subtract —
-    # and folding it in would make one clause true whenever the other is, describing nothing.
-    # Asserted in BOTH directions, because a clause that is always true is a description of nothing.
-    it "knows whether the movement ran out before the list did, ignoring rows it cannot compare" do
+    # ⭐ AN UNMOVED ROW AND AN UNCOMPARABLE ONE ARE DIFFERENT ROWS, which is the distinction the two
+    # nil-valued sides make easy to lose. A file whose seconds did not move was COMPARED and came out
+    # at zero; a file with a nil side was never compared at all — there was nothing to subtract. Both
+    # ride in the tail of a ranking by absolute movement, so a reader meets them side by side, and a
+    # `moved?` that answered false for both would make the two indistinguishable in the one place
+    # they sit together. Asserted in BOTH directions on BOTH predicates.
+    it "tells a file that did not move apart from one it could not compare" do
       ran_out = build(
         previous_specs: file_specs("spec/models/order_spec.rb", 1, each: 1.0) +
                         file_specs("spec/models/user_spec.rb", 1, each: 3.0, offset: 100),
         latest_specs: file_specs("spec/models/order_spec.rb", 1, each: 5.0, offset: 200) +
                       file_specs("spec/models/user_spec.rb", 1, each: 3.0, offset: 300)
       )
+      unmoved = ran_out.rows.find { |row| row.path == "spec/models/user_spec.rb" }
 
-      expect(ran_out).to be_any_unmoved
+      expect(unmoved).to be_comparable
+      expect(unmoved).not_to be_moved
+      expect(unmoved.change).to eq(0.0)
 
       repository.test_runs.destroy_all
+      # A file NEITHER run timed — the third absence, and the one whose nil sums come from the
+      # timings rather than from the rows. It is not comparable, so it did not "fail to move".
       only_untimed = build(
         previous_specs: file_specs("spec/models/order_spec.rb", 1, each: 1.0) +
                         file_specs("spec/models/quiet_spec.rb", 1, each: nil, offset: 100),
         latest_specs: file_specs("spec/models/order_spec.rb", 1, each: 5.0, offset: 200) +
                       file_specs("spec/models/quiet_spec.rb", 1, each: nil, offset: 300)
       )
+      quiet = only_untimed.rows.find { |row| row.path == "spec/models/quiet_spec.rb" }
 
-      expect(only_untimed).to be_any_untimed
-      expect(only_untimed).not_to be_any_unmoved
+      expect(quiet).not_to be_comparable
+      expect(quiet).not_to be_moved
+      expect(quiet.change).to be_nil
+      expect(quiet).to be_timing_gap
     end
 
     # The default limit is this cell's OWN constant, and the assertion has to pin WHICH constant
@@ -396,7 +390,7 @@ RSpec.describe SpecDirectoryFileRuntimeGrowth do
     # verdict from this area's own rows would find zero previous-side rows and spell it
     # `previous_unrecorded`: "the earlier run recorded nothing ANYWHERE", printed directly beneath a
     # panel listing that run's areas. The inherited answer is `:comparable`, and the area's emptiness
-    # is `recorded?`.
+    # on the previous side is the ROW's `new_file?`.
     it "does not re-derive a run-level absence from one area's missing rows" do
       drill_in = build(
         previous_specs: file_specs("spec/requests/checkout_spec.rb", 4, each: 1.0),
@@ -406,7 +400,8 @@ RSpec.describe SpecDirectoryFileRuntimeGrowth do
 
       expect(drill_in.state).to eq(:comparable)
       expect(drill_in).to be_comparable
-      expect(drill_in.rows.sole.change_label).to eq("New file")
+      expect(drill_in.rows.sole).to be_new_file
+      expect(drill_in.rows.sole.previous_seconds).to be_nil
     end
 
     # ⭐ THE SAME MISTAKE ONE ABSENCE OVER, and this one is available ONLY at the runtime grain — it
@@ -425,7 +420,8 @@ RSpec.describe SpecDirectoryFileRuntimeGrowth do
 
       expect(drill_in.state).to eq(:comparable)
       expect(drill_in.previous_timed_count).to be_zero
-      expect(drill_in.rows.sole.change_label).to eq("Not timed")
+      expect(drill_in.rows.sole.previous_seconds).to be_nil
+      expect(drill_in.rows.sole).not_to be_comparable
       expect(drill_in.rows.sole).to be_timing_gap
     end
 
@@ -460,10 +456,7 @@ RSpec.describe SpecDirectoryFileRuntimeGrowth do
       expect(drill_in.latest_recorded_count).to be_zero
       expect(drill_in.previous_timed_count).to be_zero
       expect(drill_in.latest_timed_count).to be_zero
-      expect(drill_in).not_to be_recorded
-      expect(drill_in).not_to be_any_movement
-      expect(drill_in).not_to be_any_timing_gap
-      expect(drill_in).not_to be_anything_to_show
+      expect(drill_in.rows).to be_empty
       expect(drill_in).not_to be_truncated
     end
 

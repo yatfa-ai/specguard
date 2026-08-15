@@ -268,11 +268,15 @@ RSpec.describe "GET /api/v1/repository — directory_runtime_file_growth", type:
       expect(body["directory_runtime_growth"]["rows"].first["path"]).to eq("spec/services")
     end
 
-    # ⭐ OPERANDS, NEVER THE PRESENTER'S LABELS. `change_label`, `change_reading`, `previous_label`,
-    # `latest_label` and `coverage_label` are typographic and screen-reader spellings — a U+2212, an
-    # `"±0"`, a `"not reported"`, a `"New file"` — and a client served those would be splitting
-    # strings and stripping glyphs to compare two rows. Walked over every string at any depth, so a
-    # label added later is caught here rather than by nobody.
+    # ⭐ OPERANDS, NEVER THE PRESENTER'S LABELS — and this example's job is mostly in the FUTURE.
+    # `SpecDirectoryFileRuntimeGrowth` carries no labels today: the typographic and screen-reader
+    # spellings its three siblings have — a U+2212, an `"±0"`, a `"not reported"`, a `"New file"` —
+    # land on it with the `repositories#show` panel that renders them, deliberately not before, so
+    # they can be judged against a render rather than frozen by a green spec. That is exactly when
+    # this endpoint is at risk of quietly acquiring them, and a client served a label would be
+    # splitting strings and stripping glyphs to compare two rows. Walked over every string at any
+    # depth rather than over today's key list, so a label added later is caught HERE rather than by
+    # nobody.
     it "serves no view string anywhere in either block" do
       window, rows = blocks
 
