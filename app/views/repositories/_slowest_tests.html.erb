@@ -88,6 +88,44 @@
                       <%= observation.location_label %>
                     </span>
                   <% end %>
+                  <%# The file that RAN the example, and the link that stops these rows dead-ending.
+                      This panel is the page's entry point to per-test data, every row on it is an
+                      outlier, and the reader's next question — is this ONE test slow or is the whole
+                      file — already has a panel one rung down. It was reachable from every other
+                      per-example listing on this page and not from this one.
+
+                      The coordinate above is not a substitute for this link and cannot be used as a
+                      manual one. `#location_label` is `file_path` + `line_number` — the DEFINITION
+                      site — while the `?spec_file=` drill-in is keyed on `spec_file_path` through
+                      `SpecObservation.in_file`. For a shared example group those are two different
+                      files, so such a row prints a `spec/support/` path while the file that would
+                      open is one this cell never named. That is also why the two are never printed
+                      as one pair.
+
+                      Its OWN `.present?` guard rather than riding the `name` condition above: that
+                      one asks whether the label already IS the location, which is a question about
+                      a different coordinate. For an ordinary example the two lines read similarly,
+                      and that is accepted for the reason the sibling panel accepts it — they are
+                      two facts, and the case where they differ is the case that matters.
+
+                      `spec_file_path` is NULLABLE in the schema — `Ingest::ObservationRecorder`
+                      populates it by falling back to `file_path`, but the column does not promise it
+                      — so a row that has none says so rather than rendering a link to nowhere.
+
+                      Through `drill_down_path`, so opening a file from here does not close a branch,
+                      an area or a description the reader opened separately. %>
+                  <% if observation.spec_file_path.present? %>
+                    <span class="block font-mono text-xs text-app-muted">
+                      <%= link_to observation.spec_file_path,
+                                  drill_down_path(@repository, spec_file: observation.spec_file_path,
+                                                  anchor: "spec-file-examples"),
+                                  class: "underline underline-offset-2 decoration-app-border-light " \
+                                         "text-app-content hover:decoration-app-content",
+                                  aria: { current: observation.spec_file_path == @spec_file_request ? "true" : nil } %>
+                    </span>
+                  <% else %>
+                    <span class="block font-mono text-xs text-app-muted">not reported</span>
+                  <% end %>
                 </td>
                 <td class="px-3 py-2 text-app-content tabular-nums">
                   <%# Through `SpecObservation#duration_label`, which is this column's one

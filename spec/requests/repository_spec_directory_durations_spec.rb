@@ -673,7 +673,7 @@ RSpec.describe "Repository heaviest spec directories", type: :request do
       # was written (`?spec_file=` had shipped the day before, in SPGD-309) while the page's own
       # prose, in two places, said it must not, and this example is the pin that was missing. See
       # `RepositoriesHelper#drill_down_path`, where the rule is stated once instead of re-argued at
-      # each of the ten links that obey it.
+      # each of the links that obey it.
       it "carries an open file through the link rather than dropping it" do
         get repository_path(area_run, spec_file: "spec/models/order_spec.rb")
 
