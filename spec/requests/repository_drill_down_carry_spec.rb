@@ -6,12 +6,16 @@ require "rails_helper"
 # panels rather than inside any one of them.
 #
 # Four asks (`?branch=`, `?spec_file=`, `?spec_directory=`, `?repeated_description=`) each anchor a
-# panel of their own, and ten links open or close one of them. The rule is that a gesture aimed at
-# ONE ask leaves the other three alone: opening a file is not a request to close the area, closing an
-# area is not a request to close the file, and so on in every direction. That is forty
-# decisions — ten links × four asks — and every one of them used to be re-made by hand at the link
+# panel of their own, and every drill-down link opens or closes one of them. The rule is that a
+# gesture aimed at ONE ask leaves the other three alone: opening a file is not a request to close
+# the area, closing an area is not a request to close the file, and so on in every direction. That
+# is four decisions at every link, and every one of them used to be re-made by hand at the link
 # site, because the READ side of these asks was abstracted into four controller concerns while the
 # EMIT side was copied.
+#
+# The number of links is deliberately not stated here, in this file or in the helper: it is a count
+# sizing a table, it went stale twice before anyone noticed, and `gestures` below is the only place
+# that knows it.
 #
 # It failed the way a hand-maintained matrix fails: ONE cell was wrong. The area-open link was
 # written after `?spec_file=` shipped, did not carry it, and was later edited to ADD a different ask
@@ -21,9 +25,9 @@ require "rails_helper"
 #
 # So this file is deliberately not a section of any panel's spec. It owns the invariant, not the
 # panel — the panels' own files keep asserting what their rows say, their captions, their empty
-# states and their queries, and this one asserts only which asks survive which gesture. When an
-# ELEVENTH link is added it gets a row in `gestures` below and its four cells are checked by
-# construction, which is the entire point of `RepositoriesHelper#drill_down_path` existing.
+# states and their queries, and this one asserts only which asks survive which gesture. When a link
+# is ADDED it gets a row in `gestures` below and its four cells are checked by construction, which is
+# the entire point of `RepositoriesHelper#drill_down_path` existing.
 #
 # The rows are written by `Ingest::ObservationRecorder` through `Ingest::RunRecorder` rather than
 # inserted by hand, for the reason every sibling spec states: a hand-built fixture would assert
@@ -35,7 +39,7 @@ require "rails_helper"
 RSpec.describe "Repository drill-down carry-through", type: :request do
   before { @user = sign_in_via_github }
 
-  # THE ask set: all four open at once. Every panel renders, so all ten links exist on one page
+  # THE ask set: all four open at once. Every panel renders, so every link exists on one page
   # and each one can be asked what it did with the three asks it does not own. Anything less and the
   # matrix has holes exactly where the defect lived — a link cannot be caught dropping an ask that
   # was never in the request.
@@ -121,7 +125,7 @@ RSpec.describe "Repository drill-down carry-through", type: :request do
                         spec_directory: area_ask, repeated_description: description_ask)
   end
 
-  # The ten links, as the page offers them.
+  # The links, as the page offers them.
   #
   # `find` is scoped to the panel that OWNS each gesture, never to the page: three of these panels
   # carry a link with the same text as a link in another panel (a file path appears in three of
@@ -169,7 +173,10 @@ RSpec.describe "Repository drill-down carry-through", type: :request do
       sets: { spec_directory: "spec/requests" } },
     { name: "open a file from Files that grew or shrank in this directory",
       panel: "#spec-directory-file-growth", link: "spec/models/refund_spec.rb",
-      sets: { spec_file: "spec/models/refund_spec.rb" } }
+      sets: { spec_file: "spec/models/refund_spec.rb" } },
+    { name: "open a file from Slowest tests",
+      panel: "#slowest-examples", link: "spec/requests/checkout_spec.rb",
+      sets: { spec_file: "spec/requests/checkout_spec.rb" } }
   ]
 
   def href_for(gesture)
@@ -194,7 +201,7 @@ RSpec.describe "Repository drill-down carry-through", type: :request do
   end
 
   describe "the whole matrix, one page with all four drill-downs open" do
-    # THE spec the missing cell would have failed. Eight links × four asks, and every cell is
+    # THE spec the missing cell would have failed. Every link against every ask, and every cell is
     # decided by the gesture's own definition rather than by a list of expected hrefs maintained
     # beside the one in the view — a matrix pinned by a second hand-written matrix is two places to
     # make the same mistake.
