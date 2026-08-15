@@ -1766,9 +1766,10 @@ class SpecObservation < ApplicationRecord
   end
 
   # How much of a population a figure was measured over, rendered — the one seam every single-sided
-  # `#coverage_label` is spelled through, whether the population is one file's examples, one area's
-  # files or one run's repeated descriptions, so no two of those grains can state the same coverage
-  # in two prose inventions that agree today.
+  # coverage fraction is spelled through, whatever the method spelling it happens to be called,
+  # whether the population is one file's examples, one area's files, one area's NAMED rows, one
+  # run's repeated descriptions, or the window a description was seen in and the runs it failed in,
+  # so no two of those grains can state the same coverage in two prose inventions that agree today.
   #
   # Single-sided is the boundary, and it is worth saying where it stops rather than leaving the next
   # reader to find the edge with a grep. `SpecDirectoryRuntimeGrowth::Row#coverage_label` states two

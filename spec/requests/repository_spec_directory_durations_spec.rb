@@ -467,10 +467,10 @@ RSpec.describe "Repository heaviest spec directories", type: :request do
     # ONE CELL, ONE SPELLING. The cell is a fraction plus the rows that fraction could not see, and
     # they are one sentence: delimiting only the second half prints "2 of 1010 (1,010 unnamed)" —
     # a cell disagreeing with itself about what a number looks like. The fraction is spelled by
-    # `Row#distinct_description_label`, which is `#coverage_label`'s spelling and the spelling of
-    # every coverage fraction on this page, so the exclusion follows it rather than the caption
-    # prose beside it. Pinned rather than left to a comment, because the accident this replaced was
-    # invisible until a four-digit run.
+    # `Row#distinct_description_label`, which resolves through `SpecObservation.coverage_fraction`,
+    # the seam every single-sided coverage fraction on this page is spelled through, so the
+    # exclusion follows it rather than the caption prose beside it. Pinned rather than left to a
+    # comment, because the accident this replaced was invisible until a four-digit run.
     it "spells both halves of the cell the same way at four digits" do
       repository = create_repository(user: @user)
       named = (1..1010).map do |i|
