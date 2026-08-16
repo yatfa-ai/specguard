@@ -644,6 +644,12 @@ class Api::V1::RepositoriesController < Api::BaseController
       # see the other N tests"* and cannot name one of them either. See
       # `serialized_unannotated_examples` below.
       unannotated_examples: serialized_unannotated_examples(test_run),
+      # THE RANKING ABOVE THE KEY DIRECTLY ABOVE IT, and the fifth `null`-is-a-fact-about-the-request
+      # key on this block — served from the SAME `?unannotated_examples=` ask rather than from a new
+      # parameter, so a client that never asks still pays nothing. See
+      # `serialized_unannotated_directories` below, where the scope difference between the two keys
+      # is stated in full.
+      unannotated_directories: serialized_unannotated_directories(test_run),
       # `TestRun#suite_size_measured?`, the same predicate `serialized_history_row` serves below and
       # for the same reason: a run that reported zero tests has a `total_specs` but not a
       # measurement, and a difference taken against it describes the report rather than the suite.
@@ -1617,6 +1623,85 @@ class Api::V1::RepositoriesController < Api::BaseController
       end,
       recorded_count: examples.recorded_count,
       limit: SpecObservation::UNANNOTATED_EXAMPLES_LIMIT
+    }
+  end
+
+  # WHERE THE ANNOTATION DEBT IS, by code area — the ranking the block above is a worklist under, and
+  # the answer to the question that block could not be asked. `unannotated_examples` is ordered
+  # file-navigably and says so; `?spec_file=` / `?spec_directory=` narrow it, and both only help a
+  # client that already knows which area to name. Nothing in this response body said. This key does.
+  #
+  # NO NEW REQUEST PARAMETER. It rides `requested_unannotated_examples?` — the same gate, decided
+  # before any read is issued — on this file's rule that THE GATE IS THE ASK: a client that never
+  # sends the flag pays nothing for the key's existence, and one that does gets the ranking and the
+  # worklist off one request rather than having to learn a second parameter to make the first usable.
+  # EXACTLY ONE ADDITIONAL QUERY FOR THIS KEY WHEN ASKED, AND NONE WHEN NOT — so the ask now costs
+  # TWO reads in total, one per block, which is what the cost examples in
+  # `repository_unannotated_examples_spec.rb` pin.
+  #
+  # ⭐ THIS MAP IS WHOLE-RUN EVEN UNDER `?spec_file=` / `?spec_directory=`, AND ITS SIBLING IS NOT.
+  # This is the one place on this endpoint where two keys of ONE block are deliberately scoped
+  # differently, so it is disclosed here rather than left for a client to discover by arithmetic.
+  #
+  # `unannotated_examples.recorded_count` NARROWS with the narrowing — SPGD-608 made it so on purpose,
+  # because the window rides the WHERE and a count beside a narrowed list has to describe the
+  # population that list was cut from. This map does the opposite BY DESIGN: it is the thing a client
+  # picks a narrowing FROM, and a map that narrowed to the area you had already picked would answer
+  # nothing — one row, echoing the parameter back. So it stays whole-run and remains a way to choose
+  # the NEXT area to go and work on, which is the whole reason the rung exists.
+  #
+  # The consequence a client must be able to explain: under a narrowing, `unannotated_examples.recorded_count`
+  # is NOT the sum of `unannotated_directories[].unannotated_count`, and neither figure is wrong. The
+  # first counts one area (or one file); the second ranks the whole run and is capped besides — so the
+  # sum is short of the run's total whenever `directory_count > rows.size`, narrowing or no narrowing.
+  # `spec_file` / `spec_directory` are echoed on the sibling block for exactly this reconciliation, and
+  # `directory_count` beside these rows is the other half of it.
+  #
+  # `limit` is READ OFF `SpecObservation::UNANNOTATED_DIRECTORIES_LIMIT` rather than restated, on the
+  # precedent every capped block here sets — it is its own constant and is neither
+  # `HEAVIEST_DIRECTORIES_LIMIT` nor `UNANNOTATED_EXAMPLES_LIMIT`.
+  #
+  # OPERANDS, NEVER A FRACTION — this file's governing rule for every rollup it serves. The rows carry
+  # `unannotated_count` and the `recorded_count` it was counted against, so a client divides by the
+  # same figure the ranking was built on. A single percentage here would be a number a client cannot
+  # take apart, and the sibling rollups' `coverage_label` is TIMING coverage and would be mistaken for
+  # this one the moment either shipped a bare ratio.
+  #
+  # `null` WHEN THE FLAG WAS NOT SENT, and `null` — not an empty block — for a run that recorded no
+  # per-example rows at all, which is `UnannotatedDirectories#recorded?` and the same absence
+  # `serialized_spec_directories` answers that run with.
+  #
+  # ⭐ THAT SECOND NULL IS THE OTHER PLACE THESE TWO KEYS OF ONE BLOCK DISAGREE, and it is disclosed
+  # here for the same reason the scope disagreement above is. On a run that recorded no per-example
+  # rows, with the flag sent:
+  #
+  #     unannotated_examples    -> a present block, `rows: []`, `recorded_count: 0`
+  #     unannotated_directories -> `null`
+  #
+  # A client reconciling those is doing exactly the arithmetic the paragraph above was written to
+  # protect, so the difference has to be readable rather than inferred from two absent things looking
+  # alike. It is NOT an inconsistency to iron out. The sibling's zero is ambiguous by construction —
+  # "fully annotated" and "recorded nothing at all" are the same `recorded_count: 0` there, and that
+  # block's own comment sends a client to neighbouring keys to tell such pairs apart. This key IS one
+  # of those neighbours: a PRESENT map beside that zero means the run has a per-area grain and the
+  # zero is the success state; a `null` map means the run recorded nothing and the zero is an absence
+  # of data. Serving `rows: []` here instead would spend a distinction a client has no other way to
+  # make in order to make two keys look the same. Both halves are pinned together in
+  # `repository_unannotated_examples_spec.rb`, beside the fully-annotated run that reaches the same
+  # zero with the map present.
+  def serialized_unannotated_directories(test_run)
+    return nil unless requested_unannotated_examples?
+
+    directories = UnannotatedDirectories.for(test_run)
+
+    return nil unless directories.recorded?
+
+    {
+      rows: directories.rows.map do |row|
+        { path: row.path, unannotated_count: row.unannotated_count, recorded_count: row.recorded_count }
+      end,
+      directory_count: directories.directory_count,
+      limit: SpecObservation::UNANNOTATED_DIRECTORIES_LIMIT
     }
   end
 

@@ -671,6 +671,37 @@ RSpec.describe SpecObservation do
         expect(plan).not_to match(/Seq Scan on spec_observations/)
       end
 
+      # The SAME certification for the annotation-debt ranking, and the reason no migration came with
+      # IT either. It groups on the same expression and narrows on the same column, and only the
+      # second decides the access path — so the claim that had to be MEASURED rather than inherited is
+      # that adding a `FILTER`ed aggregate over `status` does not change it.
+      #
+      # THE INDEX THIS READ DOES NOT WANT IS THE ONE IT LOOKS LIKE IT WANTS. A `(test_run_id, status)`
+      # index is the obvious response to a new predicate on `status`, and it would buy this nothing:
+      # `status` is two values over the whole table — the shape an index serves worst — and the
+      # predicate here is applied to rows the GROUP BY has already had to touch. `where(test_run_id:)`
+      # is served by `index_spec_observations_on_test_run_id` and the aggregation sits on top of that
+      # scan either way. This is the example that would have sent the slice to a migration had that
+      # been wrong, so it runs against a real planner with real statistics at the 20-run seed.
+      it "reads the annotation-debt ranking off an index rather than scanning the table" do
+        plan = plan_for_actual_sql { described_class.unannotated_directories_in(run) }
+
+        expect(plan).to match(INDEXED_BY_RUN)
+        expect(plan).not_to match(/Seq Scan on spec_observations/)
+      end
+
+      # And it HASH-aggregates, where its by-duration sibling is forced into a sort by the
+      # `COUNT(DISTINCT name)` beside it. A plain `COUNT(*) FILTER (...)` does not disqualify hashed
+      # aggregation, so this read does NOT pay the sibling's price — the measured difference that
+      # makes "one grouped aggregate, no new index" a claim about this read rather than a hope
+      # borrowed from the one above it. An edit that adds a `DISTINCT` aggregate here reddens this.
+      it "hash-aggregates the debt ranking, paying none of the sibling's sort" do
+        plan = plan_for_actual_sql { described_class.unannotated_directories_in(run) }
+
+        expect(plan).to include("HashAggregate")
+        expect(plan).not_to include("GroupAggregate")
+      end
+
       # The AGGREGATION STRATEGY, which is a different fact from the access path and was being
       # smuggled in under it. The example above cannot see this: `INDEXED_BY_RUN` matches the scan
       # at the bottom of the plan and stayed green when `COUNT(DISTINCT name)` was added, while the
@@ -1702,6 +1733,187 @@ RSpec.describe SpecObservation do
 
       it "reads no directories for a run that recorded nothing" do
         expect(described_class.directory_durations_in(run)).to eq([])
+      end
+    end
+
+    # The SAME grouping as the read above, ranked by a different quantity — one run's areas by how
+    # many of their examples carry no annotation. The rung `.unannotated_in`'s worklist never had:
+    # that read is ordered file-navigably and says so, and `?spec_directory=` narrows it for a caller
+    # who already knows which area to name. This is the read that tells them.
+    describe ".unannotated_directories_in" do
+      # The whole claim, and the assertion that separates this from `.directory_durations_in`
+      # relabelled: the two rank the same areas in DIFFERENT ORDERS on the same rows. `spec/system`
+      # is the heaviest area by wall clock here and carries no debt at all; `spec/models` is the
+      # lightest and leads this ranking. A read that had ordered by `SUM(duration_seconds)`, or by
+      # `COUNT(*)`, produces a different first row.
+      it "ranks areas by unannotated count, against each area's whole population" do
+        observe(run, duration: 0.1, line_number: 1, status: "unannotated",
+                     spec_file_path: "spec/models/order_spec.rb")
+        observe(run, duration: 0.1, line_number: 2, status: "unannotated",
+                     spec_file_path: "spec/models/refund_spec.rb")
+        observe(run, duration: 0.1, line_number: 3, status: "annotated",
+                     spec_file_path: "spec/models/invoice_spec.rb")
+        observe(run, duration: 0.1, line_number: 4, status: "unannotated",
+                     spec_file_path: "spec/requests/checkout_spec.rb")
+        observe(run, duration: 90.0, line_number: 5, status: "annotated",
+                     spec_file_path: "spec/system/smoke_spec.rb")
+
+        expect(described_class.unannotated_directories_in(run)).to eq(
+          [["spec/models", 2, 3, 3],
+           ["spec/requests", 1, 1, 3],
+           ["spec/system", 0, 1, 3]]
+        )
+        # The by-wall-clock rollup over the SAME rows leads with the area this one ranks last, which
+        # is the difference that makes this its own read rather than a column on that one.
+        expect(described_class.directory_durations_in(run).first.first).to eq("spec/system")
+      end
+
+      # The third element is the AREA'S WHOLE POPULATION, not its unannotated rows again. The
+      # predicate rides the AGGREGATE and the WHERE stays open at the run — a read that had narrowed
+      # `where(status: "unannotated")` instead returns `[..., 2, 2, ...]` here, a denominator equal to
+      # its numerator on every row and no operand at all. This is the example that fails it.
+      it "counts each area's whole population as the denominator, not its unannotated rows twice" do
+        observe(run, duration: 0.1, line_number: 1, status: "unannotated",
+                     spec_file_path: "spec/models/order_spec.rb")
+        observe(run, duration: 0.1, line_number: 2, status: "annotated",
+                     spec_file_path: "spec/models/order_spec.rb")
+        observe(run, duration: 0.1, line_number: 3, status: "annotated",
+                     spec_file_path: "spec/models/refund_spec.rb")
+
+        expect(described_class.unannotated_directories_in(run)).to eq([["spec/models", 1, 3, 1]])
+      end
+
+      # A fully-annotated area is a ROW carrying a zero and sorted last, never an omission. It is the
+      # state the metric exists to reach, and dropping it would make `COUNT(*) OVER ()` describe a
+      # different population from the one `.directory_durations_in` discloses under the same name.
+      it "keeps a fully-annotated area in the ranking, at the bottom, with a zero" do
+        observe(run, duration: 0.1, line_number: 1, status: "annotated",
+                     spec_file_path: "spec/models/order_spec.rb")
+        observe(run, duration: 0.1, line_number: 2, status: "unannotated",
+                     spec_file_path: "spec/requests/checkout_spec.rb")
+
+        expect(described_class.unannotated_directories_in(run)).to eq(
+          [["spec/requests", 1, 1, 2], ["spec/models", 0, 1, 2]]
+        )
+      end
+
+      # `status` is compared to the literal `'unannotated'`, never `!= 'annotated'`. The negated form
+      # selects the same rows today and would silently ADOPT a third status into a ranking captioned
+      # "unannotated" rather than going red — the rule `.unannotated_in` argues one grain down, pinned
+      # here because the predicate sits inside an aggregate where a reader scans for it last.
+      #
+      # The column is NOT NULL and `Ingest::Payload::STATUSES` is the two words, so a third status
+      # cannot be written through the app. It is written straight to the row here for exactly that
+      # reason: this example is a guard against a FUTURE vocabulary, and the only way to state it is
+      # to build the row the app cannot yet produce.
+      it "counts the literal 'unannotated' rather than everything that is not 'annotated'" do
+        observe(run, duration: 0.1, line_number: 1, status: "unannotated",
+                     spec_file_path: "spec/models/order_spec.rb")
+        observe(run, duration: 0.1, line_number: 2, status: "skipped",
+                     spec_file_path: "spec/models/refund_spec.rb")
+
+        # The skipped row is in the DENOMINATOR — it is one of the area's examples — and is not
+        # counted as debt. `where.not(status: "annotated")` reports `2` for the numerator here.
+        expect(described_class.unannotated_directories_in(run)).to eq([["spec/models", 1, 2, 1]])
+      end
+
+      # The tiebreak is TOTAL, so two identical asks return the same order. `unannotated_count DESC`
+      # alone leaves ties to the planner, and the cap makes that load-bearing rather than tidy — a
+      # client comparing this ranking across two requests must not read a re-shuffle as a change in
+      # the suite.
+      it "breaks a tie on the directory expression, ascending" do
+        observe(run, duration: 0.1, line_number: 1, status: "unannotated",
+                     spec_file_path: "spec/zebra/z_spec.rb")
+        observe(run, duration: 0.1, line_number: 2, status: "unannotated",
+                     spec_file_path: "spec/alpha/a_spec.rb")
+        observe(run, duration: 0.1, line_number: 3, status: "unannotated",
+                     spec_file_path: "spec/middle/m_spec.rb")
+
+        expect(described_class.unannotated_directories_in(run).map(&:first))
+          .to eq(["spec/alpha", "spec/middle", "spec/zebra"])
+      end
+
+      # The IMMEDIATE parent compared for EQUALITY, never a prefix: `spec/models/orders` is its own
+      # area and its debt does not roll into `spec/models`. Inherited by construction from
+      # `DIRECTORY_EXPRESSION` rather than by a predicate — which is why it is pinned. Nobody can
+      # break this with a bad `LIKE`; they would break it by "fixing" the map into a subtree rollup,
+      # which reads as the tidier answer and is a fifth directory semantics on this table.
+      it "groups on the immediate parent, so a nested area's debt does not roll into its ancestor" do
+        observe(run, duration: 0.1, line_number: 1, status: "unannotated",
+                     spec_file_path: "spec/models/order_spec.rb")
+        observe(run, duration: 0.1, line_number: 2, status: "unannotated",
+                     spec_file_path: "spec/models/orders/refund_spec.rb")
+        observe(run, duration: 0.1, line_number: 3, status: "unannotated",
+                     spec_file_path: "spec/models/orders/discount_spec.rb")
+
+        expect(described_class.unannotated_directories_in(run)).to eq(
+          [["spec/models/orders", 2, 2, 2], ["spec/models", 1, 1, 2]]
+        )
+      end
+
+      # A spec file at the repository root has no parent segment to capture and the expression comes
+      # back SQL NULL for it. `DIRECTORY_EXPRESSION` coalesces it to `.` — what `Pathname#dirname`
+      # calls that directory — so the row is a named area a client can hand straight back to
+      # `?spec_directory=`, rather than an unnamed key it can only look at.
+      it "names the repository root `.` rather than grouping the run's root specs under a null" do
+        observe(run, duration: 0.1, line_number: 1, status: "unannotated",
+                     spec_file_path: "smoke_spec.rb")
+        observe(run, duration: 0.1, line_number: 2, status: "unannotated",
+                     spec_file_path: "spec/models/order_spec.rb")
+
+        expect(described_class.unannotated_directories_in(run))
+          .to eq([[".", 1, 1, 2], ["spec/models", 1, 1, 2]])
+      end
+
+      # Grouped by the area that RAN the example, so a shared example group's debt lands on each
+      # including area rather than on `spec/support` — the rule `Ingest::ObservationRecorder` writes
+      # `spec_file_path` for. Getting this backwards sends a reader to a `spec/support/` helper to
+      # annotate tests that are not in it, which is the same failure the worklist's own row shape
+      # guards against one grain down.
+      it "attributes a shared example group's debt to the area that included it" do
+        observe(run, duration: 0.1, line_number: 4, status: "unannotated",
+                     file_path: "spec/support/shared_examples.rb",
+                     spec_file_path: "spec/models/order_spec.rb",
+                     example_id: "./spec/models/order_spec.rb[1:1:1]")
+
+        directories = described_class.unannotated_directories_in(run)
+
+        expect(directories).to eq([["spec/models", 1, 1, 1]])
+        expect(directories.map(&:first)).not_to include("spec/support")
+      end
+
+      # The window discloses the population the CAP cut, counted after the WHERE and before the
+      # LIMIT — so it counts the areas the RUN touched rather than the rows that fit on the page. The
+      # figure a caption is built from, and the reason a truncated list cannot wear the shape of a
+      # complete one.
+      it "discloses how many areas the run touched, on every row, past the cap" do
+        6.times do |index|
+          observe(run, duration: 0.1, line_number: index + 1, status: "unannotated",
+                       spec_file_path: "spec/area_#{index}/thing_spec.rb")
+        end
+
+        directories = described_class.unannotated_directories_in(run, limit: 2)
+
+        expect(directories.length).to eq(2)
+        expect(directories.map(&:last)).to eq([6, 6])
+      end
+
+      # One run, never the repository's history — the same narrow every read on this endpoint takes,
+      # and the one that makes the aggregate affordable.
+      it "counts one run's areas rather than every run's" do
+        other = create_test_run(repository: repository, commit_sha: "b" * 40)
+        observe(run, duration: 0.1, line_number: 1, status: "unannotated",
+                     spec_file_path: "spec/models/order_spec.rb")
+        observe(other, duration: 0.1, line_number: 2, status: "unannotated",
+                      spec_file_path: "spec/requests/checkout_spec.rb")
+
+        expect(described_class.unannotated_directories_in(run)).to eq([["spec/models", 1, 1, 1]])
+        expect(described_class.unannotated_directories_in(other))
+          .to eq([["spec/requests", 1, 1, 1]])
+      end
+
+      it "reads no directories for a run that recorded nothing" do
+        expect(described_class.unannotated_directories_in(run)).to eq([])
       end
     end
 

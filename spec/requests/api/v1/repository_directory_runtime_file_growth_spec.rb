@@ -545,11 +545,11 @@ RSpec.describe "GET /api/v1/repository — directory_runtime_file_growth", type:
 
       grains = observation_reads_by_grain { get_repository(key: api_key, query: query) }
 
-      # The two trailing zeros are the drill-in grains this fixture never opens: the flakiness one —
-      # it sends no `?unstable_test=`, and no `?branch=` either — and the annotation one, which takes
-      # no `?unannotated_examples=`. Each reads nothing, which is exactly the claim its own file makes
-      # about it from the other side.
-      expect(grains.map(&:length)).to eq([1, 1, 2, 2, 0, 1, 1, 0, 0, 1, 1, 1, 0, 0])
+      # The three trailing zeros are the drill-in grains this fixture never opens: the flakiness one —
+      # it sends no `?unstable_test=`, and no `?branch=` either — and the annotation WORKLIST and the
+      # annotation RANKING, which share one gate and take no `?unannotated_examples=`. Each reads
+      # nothing, which is exactly the claim its own file makes about it from the other side.
+      expect(grains.map(&:length)).to eq([1, 1, 2, 2, 0, 1, 1, 0, 0, 1, 1, 1, 0, 0, 0])
       expect(observation_reads { get_repository(key: api_key, query: query) }.length)
         .to eq(classified_observation_reads { get_repository(key: api_key, query: query) })
       # And the three neighbouring growth grains are each a different statement from this one.

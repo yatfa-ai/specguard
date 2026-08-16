@@ -45,6 +45,10 @@ RSpec.describe "GET /api/v1/repository — latest_run.unannotated_examples", typ
 
   def block(**) = get_repository(**).dig("latest_run", "unannotated_examples")
 
+  # The RANKING above the worklist, served from the same ask. `debt_map` rather than `map`, which
+  # would shadow `Enumerable#map` on the example instance for every later reader of this file.
+  def debt_map(**) = get_repository(**).dig("latest_run", "unannotated_directories")
+
   # The ask, spelled the way the endpoint documents it. Every example that opens the block goes
   # through this rather than restating the string, so the parameter's NAME has one owner here.
   #
@@ -475,17 +479,24 @@ RSpec.describe "GET /api/v1/repository — latest_run.unannotated_examples", typ
       expect(block(key: key, query: ask)["recorded_count"]).to eq(over + 1)
     end
 
-    # The narrowed read is still ONE query, and still this block's own grain: the narrowing is a
+    # The narrowed WORKLIST is still ONE query and still this block's own grain: the narrowing is a
     # predicate on the read the flag already pays for, not a second read — and it must not be
     # classified as the file drill-in whose predicate it now shares.
-    it "adds exactly one query when narrowed, in its own grain" do
+    #
+    # The ASK costs TWO, and the second one is the map. It is a constant of the ask rather than of the
+    # narrowing — `unannotated_directories` is whole-run and is built the same way under every shape of
+    # this parameter — which is what this example pins by taking the SAME `+2` the un-narrowed cost
+    # block takes: a map that had grown a second read under a narrowing, or that had been skipped when
+    # one arrived, is a different number here.
+    it "adds exactly two queries when narrowed — one per block — each in its own grain" do
       query = ask.merge(spec_file: other_file, spec_directory: services_area)
 
       get_repository(query: { spec_file: other_file, spec_directory: services_area })
       baseline = count_queries { get_repository(query: { spec_file: other_file, spec_directory: services_area }) }
 
-      expect(count_queries { get_repository(query: query) }).to eq(baseline + 1)
+      expect(count_queries { get_repository(query: query) }).to eq(baseline + 2)
       expect(unannotated_examples_grain_reads { get_repository(query: query) }.length).to eq(1)
+      expect(unannotated_directories_grain_reads { get_repository(query: query) }.length).to eq(1)
       expect(observation_reads { get_repository(query: query) }.length)
         .to eq(classified_observation_reads { get_repository(query: query) })
     end
@@ -503,6 +514,276 @@ RSpec.describe "GET /api/v1/repository — latest_run.unannotated_examples", typ
       expect(block(query: query)["recorded_count"]).to eq(2)
       expect(block(query: ask.merge(spec_file: other_file))["recorded_count"]).to eq(1)
       expect(get_repository(query: query).dig("run_anchor", "commit_sha")).to eq("feedfacecafe0001")
+    end
+  end
+
+  # ⭐ THE RANKING ABOVE THE WORKLIST — `latest_run.unannotated_directories`, served from the SAME
+  # `?unannotated_examples=` ask and the rung `UnannotatedExamples` concedes in its own header it
+  # never had ("There is no ranking here and nothing to pick").
+  #
+  # The block above narrows on `?spec_file=` / `?spec_directory=`, which helps exactly the client that
+  # already knows which area to name. The three area/file rollups this endpoint serves rank by
+  # DURATION and their coverage is TIMING coverage, so none of them could tell it. These examples pin
+  # the four things that make this key an answer rather than a second list: the ORDER, the CAP and its
+  # disclosure, the whole-run SCOPE under a narrowing, and the area semantics it inherits.
+  describe "the ranking that says WHERE the annotation debt is" do
+    # The fixture's two areas carry different debt and are not in alphabetical agreement with it:
+    # `spec/services` holds two unannotated of two recorded, `spec/models` one of three. So the
+    # ranking is by `unannotated_count DESC` and NOT by path, not by `recorded_count`, and not by the
+    # insertion order — every one of those alternatives produces a different first row here.
+    it "ranks areas by unannotated count, and ships the operands rather than a fraction" do
+      expect(debt_map(query: ask)).to eq(
+        "rows" => [
+          { "path" => "spec/services", "unannotated_count" => 2, "recorded_count" => 2 },
+          { "path" => "spec/models", "unannotated_count" => 1, "recorded_count" => 3 }
+        ],
+        "directory_count" => 2,
+        "limit" => SpecObservation::UNANNOTATED_DIRECTORIES_LIMIT
+      )
+    end
+
+    # The sub-block's own key set as its stated subject, on the pattern every contract example in this
+    # file follows. `recorded_count` is the AREA's whole population and never its unannotated rows
+    # again under a second name — a read that had narrowed on `status` instead of FILTERing inside the
+    # aggregate returns `2, 2` and `1, 1` here, a fraction that is 100% on every row and no operand
+    # at all. That is the discriminating half of this example.
+    it "serves exactly the unannotated_directories keys this contract pins" do
+      served = debt_map(query: ask)
+
+      expect(served.keys).to contain_exactly("rows", "directory_count", "limit")
+      expect(served["rows"].first.keys)
+        .to contain_exactly("path", "unannotated_count", "recorded_count")
+      # The denominators are the areas' OWN populations, taken off the same response: the two
+      # `recorded_count`s sum to the run's `total_specs`, which they cannot do if the aggregate was
+      # counting unannotated rows twice.
+      expect(served["rows"].sum { it["recorded_count"] }).to eq(latest_run(query: ask)["total_specs"])
+      # No fraction, no label, no verdict — the rule every rollup on this endpoint is served under.
+      expect(served["rows"].first).not_to have_key("coverage_label")
+    end
+
+    # The tiebreak, which the cap makes load-bearing rather than tidy: two areas carrying the same
+    # debt must come back in the same order on two identical asks, or a client comparing the ranking
+    # across requests reads a re-shuffle as a change in the suite. `unannotated_count DESC` alone is
+    # not a total order and Postgres is under no obligation to be stable.
+    it "breaks a tie on path ASC, so two identical asks return the same order" do
+      tied = separate_repository("acme/tied-areas")
+      ingest(tied,
+             [unannotated_spec(file_path: "spec/zebra/z_spec.rb", line_number: 1, name: "Zebra one"),
+              unannotated_spec(file_path: "spec/alpha/a_spec.rb", line_number: 1, name: "Alpha one"),
+              unannotated_spec(file_path: "spec/middle/m_spec.rb", line_number: 1, name: "Middle one")])
+      key = tied.api_keys.create!
+
+      paths = debt_map(key: key, query: ask)["rows"].map { it["path"] }
+
+      expect(paths).to eq(["spec/alpha", "spec/middle", "spec/zebra"])
+      expect(debt_map(key: key, query: ask)["rows"].map { it["path"] }).to eq(paths)
+    end
+
+    # The cap and its disclosure, which are one fact: a capped list whose own length is the only thing
+    # describing it is a truncated list silently wearing the shape of a complete one. `directory_count`
+    # is a `COUNT(*) OVER ()` evaluated after the WHERE and before the LIMIT, so it counts the areas
+    # the RUN touched rather than the rows that fit on the page.
+    #
+    # Its own constant, asserted as such: a serializer reusing `HEAVIEST_DIRECTORIES_LIMIT` would pass
+    # a bare `10` here and go red on the day either constant moved, which is the coupling the model's
+    # constants block exists to refuse.
+    it "caps the ranking at its own limit and discloses how many areas the run touched" do
+      wide = separate_repository("acme/many-areas")
+      areas = SpecObservation::UNANNOTATED_DIRECTORIES_LIMIT + 3
+      ingest(wide, Array.new(areas) do |index|
+        # Debt DESCENDS with the index, so the areas that survive the cap are a genuine head of the
+        # ranking rather than whichever ten the scan happened to reach first.
+        Array.new(areas - index) do |row|
+          unannotated_spec(file_path: "spec/area_#{format('%02d', index)}/thing_spec.rb",
+                           line_number: row + 1, name: "Area #{index} row #{row}")
+        end
+      end.flatten)
+      key = wide.api_keys.create!
+      served = debt_map(key: key, query: ask)
+
+      expect(served["rows"].length).to eq(SpecObservation::UNANNOTATED_DIRECTORIES_LIMIT)
+      expect(served["directory_count"]).to eq(areas)
+      expect(served["limit"]).to eq(SpecObservation::UNANNOTATED_DIRECTORIES_LIMIT)
+      # The head of the ranking, not an arbitrary ten: the heaviest-debt area leads and the three
+      # lightest are the ones the cap cut.
+      expect(served["rows"].first["path"]).to eq("spec/area_00")
+      expect(served["rows"].map { it["path"] }).not_to include("spec/area_12")
+      # And the disclosure is what says so — the sentence a client writes instead of comparing the
+      # list's length against a limit it cannot see.
+      expect(served["directory_count"]).to be > served["rows"].length
+    end
+
+    # ⭐⭐ THE LOAD-BEARING SCOPE DECISION, and the assertion the whole rung stands on. The map is
+    # WHOLE-RUN even under a narrowing, where its sibling `recorded_count` is NOT — the one place on
+    # this endpoint where two keys of ONE block are deliberately scoped differently.
+    #
+    # A map that narrowed to the area the client had already picked would answer nothing: one row,
+    # echoing the parameter back. The map is the thing a client picks a narrowing FROM, so it has to
+    # keep describing the run the client is choosing within — which is what makes "annotate the worst
+    # area, re-ask, annotate the next" a loop rather than a dead end.
+    #
+    # Both halves are asserted in one example on purpose. A serializer that narrowed the map passes an
+    # assertion about the worklist alone; a serializer that stopped narrowing the WORKLIST — undoing
+    # SPGD-608 — passes an assertion about the map alone. Only the two together pin the disagreement,
+    # which is the thing `serialized_unannotated_directories` carries a comment about.
+    it "stays whole-run under a narrowing, while the worklist's own count narrows" do
+      narrowed = ask.merge(spec_directory: "spec/services")
+      run = latest_run(query: narrowed)
+
+      # The worklist narrowed: two of the run's three unannotated examples, and it says what by.
+      expect(run.dig("unannotated_examples", "recorded_count")).to eq(2)
+      expect(run.dig("unannotated_examples", "spec_directory")).to eq("spec/services")
+      # The map did NOT: both areas are still ranked, including the one the client narrowed AWAY from.
+      expect(run.dig("unannotated_directories", "rows").map { it["path"] })
+        .to eq(["spec/services", "spec/models"])
+      expect(run.dig("unannotated_directories", "directory_count")).to eq(2)
+      # Byte-identical to the un-narrowed ask, which is the strongest form of "the narrowing does not
+      # reach it" — stronger than counting its rows, since a map that narrowed and then re-widened by
+      # some other route would still differ somewhere in here.
+      expect(run["unannotated_directories"]).to eq(debt_map(query: ask))
+      # The same under `?spec_file=`, which is the narrower of the two rungs and the likelier one to
+      # leak into a read that shares its request.
+      expect(debt_map(query: ask.merge(spec_file: other_file))).to eq(debt_map(query: ask))
+    end
+
+    # The consequence of the paragraph above, stated as the arithmetic a client actually performs:
+    # under a narrowing the two keys DO NOT sum to each other, and neither is wrong. This is pinned
+    # rather than left to a comment because it is the reading a client is most likely to get backwards
+    # — and because a future edit that "fixed" the disagreement would break this example rather than
+    # silently making one of the two figures mean something else.
+    it "does not reconcile the narrowed worklist count against the whole-run map, and should not" do
+      run = latest_run(query: ask.merge(spec_directory: "spec/services"))
+      map_total = run.dig("unannotated_directories", "rows").sum { it["unannotated_count"] }
+
+      expect(run.dig("unannotated_examples", "recorded_count")).to eq(2)
+      expect(map_total).to eq(3)
+      # Un-narrowed, on an untruncated map, they DO agree — which is what makes the disagreement above
+      # a property of the narrowing rather than of the map being wrong.
+      expect(latest_run(query: ask).dig("unannotated_examples", "recorded_count")).to eq(map_total)
+    end
+
+    # `DIRECTORY_EXPRESSION` COALESCEs a top-level file's directory to `.` — what `Pathname#dirname`
+    # calls it and what a reader recognises. Without the COALESCE the GROUP BY key is SQL NULL, which
+    # reaches the client as an unnamed area it cannot pass back to `?spec_directory=`.
+    it "names a root-level spec's area `.` rather than serving a null key" do
+      rooted = separate_repository("acme/root-level-specs")
+      ingest(rooted,
+             [unannotated_spec(file_path: "smoke_spec.rb", line_number: 1, name: "Smoke boots"),
+              unannotated_spec(file_path: "spec/models/order_spec.rb", line_number: 3,
+                               name: "Order totals")])
+      key = rooted.api_keys.create!
+
+      expect(debt_map(key: key, query: ask)["rows"])
+        .to eq([{ "path" => ".", "unannotated_count" => 1, "recorded_count" => 1 },
+                { "path" => "spec/models", "unannotated_count" => 1, "recorded_count" => 1 }])
+      # And it is a real path the client can hand straight back to the narrowing rung, which a null
+      # key would not be — the round trip is the reason the COALESCE is there.
+      expect(block(key: key, query: ask.merge(spec_directory: "."))["recorded_count"]).to eq(1)
+    end
+
+    # ⭐ THE PREFIX TRAP, at the grain that inherits it BY CONSTRUCTION rather than by a predicate —
+    # which is exactly why it is pinned here. `spec/models/orders` is its OWN area, not part of
+    # `spec/models`: the grouping is on the immediate parent, so a subtree is a separate row and its
+    # rows are not rolled up into its parent's counts. Nothing in this read compares paths, so nobody
+    # could break this with a bad `LIKE` — they would break it by "fixing" the map into a subtree
+    # rollup, which reads as a tidier answer and is a fifth directory semantics on this table.
+    it "gives a subdirectory its own row rather than rolling it into its parent" do
+      nested = separate_repository("acme/nested-debt")
+      ingest(nested,
+             [unannotated_spec(file_path: "spec/models/order_spec.rb", line_number: 3,
+                               name: "Order totals the line items"),
+              unannotated_spec(file_path: "spec/models/orders/refund_spec.rb", line_number: 5,
+                               name: "Refund reverses the charge"),
+              unannotated_spec(file_path: "spec/models/orders/discount_spec.rb", line_number: 5,
+                               name: "Discount applies once")])
+      key = nested.api_keys.create!
+      served = debt_map(key: key, query: ask)
+
+      expect(served["rows"])
+        .to eq([{ "path" => "spec/models/orders", "unannotated_count" => 2, "recorded_count" => 2 },
+                { "path" => "spec/models", "unannotated_count" => 1, "recorded_count" => 1 }])
+      # Two areas, not one — the disclosure agrees with the rows, so a subtree rollup could not hide
+      # in the count either.
+      expect(served["directory_count"]).to eq(2)
+      # And the ranking's own semantics match the narrowing rung's, which is what lets a client take a
+      # path off this list and hand it straight to `?spec_directory=` and get that area's rows.
+      expect(block(key: key, query: ask.merge(spec_directory: "spec/models"))["recorded_count"])
+        .to eq(1)
+    end
+
+    # A fully-annotated area is a ROW carrying a zero, never an omission — the state the metric exists
+    # to reach, and the same argument `UnannotatedExamples` makes for its own empty read. It sorts
+    # last by construction, so on any run with more areas than the cap it is cut and never seen; on a
+    # small run it is listed, and listed is correct. `directory_count` counts it either way, which is
+    # what keeps this key's disclosure describing the same population `spec_directories` does.
+    it "lists a fully-annotated area with a zero rather than dropping it from the run's areas" do
+      mixed = separate_repository("acme/one-area-done")
+      ingest(mixed,
+             [annotated_spec(file_path: "spec/models/invoice_spec.rb", line_number: 4),
+              unannotated_spec(file_path: "spec/services/pricing_spec.rb", line_number: 9,
+                               name: "Pricing rounds")])
+      key = mixed.api_keys.create!
+      served = debt_map(key: key, query: ask)
+
+      expect(served["rows"])
+        .to eq([{ "path" => "spec/services", "unannotated_count" => 1, "recorded_count" => 1 },
+                { "path" => "spec/models", "unannotated_count" => 0, "recorded_count" => 1 }])
+      expect(served["directory_count"]).to eq(2)
+    end
+
+    # The no-ask spelling, and the rule it pins: THE GATE IS THE ASK. This key rides
+    # `?unannotated_examples=` rather than a parameter of its own, so a client that never asks gets
+    # the key present and `null` — never an empty block, and never a row it did not pay for. The
+    # cost block above asserts the other half, that the absent key is also an absent query.
+    it "is null — with the key present — when the flag was not sent" do
+      body = get_repository
+
+      expect(body["latest_run"]).to have_key("unannotated_directories")
+      expect(body.dig("latest_run", "unannotated_directories")).to be_nil
+      # And a malformed flag is no ask at all, the same answer the worklist gives it.
+      expect(debt_map(query: { unannotated_examples: ["true"] })).to be_nil
+      # The sibling rollup that is NOT behind this gate is unaffected, which is what says the gate is
+      # this key's rather than the endpoint's.
+      expect(body.dig("latest_run", "spec_directories", "rows")).to be_present
+    end
+
+    # THE OTHER WAY THIS KEY IS NULL, and the one the flag cannot explain: a run that recorded no
+    # per-example rows AT ALL has no per-area grain to rank, which is `UnannotatedDirectories#recorded?`
+    # rather than the gate the example above pins. The whole pre-SPGD-255 corpus is that run, plus
+    # every client that sends no per-example detail.
+    #
+    # BOTH HALVES IN ONE EXAMPLE, on the same reasoning as the scope-disagreement pin further up: this
+    # is the second place these two keys of one block answer differently, and only the pair says which
+    # difference is being asserted. The sibling's `recorded_count: 0` is ambiguous by construction, and
+    # this `null` is what discriminates it — so the second half below reaches the SAME zero from a run
+    # that did record rows and gets the map PRESENT. That is the discrimination the null buys, and it
+    # is why a serializer "fixing" this disagreement into `rows: []` would be taking something away.
+    it "is null for a run with no per-example rows, while the worklist answers with a block" do
+      bare = separate_repository("acme/no-observations")
+      create_test_run(repository: bare, commit_sha: "norows000623", duration_seconds: 42.5)
+      run = latest_run(key: bare.api_keys.create!, query: ask)
+
+      # Asserted as the REASON rather than the null alone — the rule the sibling blocks' own bare-run
+      # examples state: a hard-coded `be_nil` here keeps passing if the guard stops being `#recorded?`
+      # and becomes something else that happens to be false on this fixture.
+      expect(bare.latest_test_run.spec_observations).to be_empty
+      expect(run).to have_key("unannotated_directories")
+      expect(run["unannotated_directories"]).to be_nil
+      # The disagreement itself: the worklist answered the SAME run, under the SAME ask, with a block.
+      expect(run["unannotated_examples"]).not_to be_nil
+      expect(run.dig("unannotated_examples", "recorded_count")).to eq(0)
+
+      # And the same zero from a run that recorded rows and has nothing left to annotate — map
+      # present. The two keys read TOGETHER separate "nothing left to do" from "nothing was recorded";
+      # neither key separates them alone, which is the whole of why the two nulls are spelled apart.
+      done = separate_repository("acme/annotated-not-bare")
+      ingest(done, [annotated_spec(file_path: annotated_file, line_number: 4)])
+      done_run = latest_run(key: done.api_keys.create!, query: ask)
+
+      expect(done_run.dig("unannotated_examples", "recorded_count")).to eq(0)
+      expect(done_run["unannotated_directories"]).not_to be_nil
+      expect(done_run.dig("unannotated_directories", "rows"))
+        .to eq([{ "path" => "spec/models", "unannotated_count" => 0, "recorded_count" => 1 }])
     end
   end
 
@@ -651,43 +932,56 @@ RSpec.describe "GET /api/v1/repository — latest_run.unannotated_examples", typ
   # the gate is the ask and it is decided before any query is issued, so a client that never sends the
   # parameter pays nothing at all for the key's existence.
   describe "what the drill-in costs the endpoint" do
-    it "adds exactly one query when asked, and none when not" do
+    it "adds exactly two queries when asked — the worklist and the map — and none when not" do
       # Warmed first, on the precedent every sibling cost block sets: the very first request of an
       # example pays for state a second one does not — an API key's first use is recorded — and a
       # baseline taken over it would be measuring the warm-up rather than the block.
       get_repository
       baseline = count_queries { get_repository }
 
-      expect(count_queries { get_repository(query: ask) }).to eq(baseline + 1)
+      # TWO, not one, and the second is the RANKING the worklist sits under — served from this same
+      # flag rather than from a parameter of its own, which is the whole reason the number moved. The
+      # rule the figure pins is unchanged and is the one that matters: the gate is the ASK, decided
+      # before any read, so a client that never sends the flag pays for NEITHER block.
+      expect(count_queries { get_repository(query: ask) }).to eq(baseline + 2)
       # And a malformed shape is no ask, which means it is also no query — the guard sits in front of
-      # the read rather than inside it.
+      # both reads rather than inside either.
       expect(count_queries { get_repository(query: { unannotated_examples: ["true"] }) })
         .to eq(baseline)
     end
 
-    # The same bound classified rather than counted, so "one more query" cannot be satisfied by a
-    # different grain reading twice while this one reads none. `unannotated_examples_grain_reads` and
-    # the partition it belongs to come from spec/support/observation_grain_reads.rb, which is also
-    # where the argument for matching every grain POSITIVELY is made — and where this grain's alias
-    # match is separated from the three window pairs it shares a family with.
-    it "reads spec_observations once for its own grain, and leaves every other grain alone" do
+    # The same bound classified rather than counted, so "two more queries" cannot be satisfied by a
+    # different grain reading twice while these two read none. `unannotated_examples_grain_reads`,
+    # `unannotated_directories_grain_reads` and the partition they belong to come from
+    # spec/support/observation_grain_reads.rb, which is also where the argument for matching every
+    # grain POSITIVELY is made — and where the debt ranking's separation from the two OTHER reads
+    # that group by the same directory expression is argued.
+    it "reads spec_observations once per block it serves, and leaves every other grain alone" do
       area, file, example, description, flakiness, growth, directory_files, file_examples,
-        description_examples, _dfg, _rtg, _dfrtg, unstable_test_runs, unannotated =
+        description_examples, _dfg, _rtg, _dfrtg, unstable_test_runs, unannotated, debt =
         observation_reads_by_grain { get_repository(query: ask) }
 
       expect([area.length, file.length, example.length, description.length, flakiness.length,
               growth.length, directory_files.length, file_examples.length,
-              description_examples.length, unstable_test_runs.length, unannotated.length])
-        .to eq([1, 1, 2, 2, 0, 0, 0, 0, 0, 0, 1])
+              description_examples.length, unstable_test_runs.length, unannotated.length,
+              debt.length])
+        .to eq([1, 1, 2, 2, 0, 0, 0, 0, 0, 0, 1, 1])
+      # ⭐ THE AREA GRAIN IS STILL ONE. The debt ranking GROUPS BY the same `DIRECTORY_EXPRESSION`
+      # the by-wall-clock area rollup does — the one expression on this table that cannot be
+      # un-shared — so a partition that told them apart by their grouping would count this read
+      # twice and the by-duration rollup's own pin would read `2`. They are separated on what they
+      # RANK BY, and this is the assertion that says the separation held.
+      expect(area.length).to eq(1)
       # And the classified reads are ALL of them — the assertion no per-grain count can make, because
       # a read matching no grain's pattern is invisible to every one of them.
       expect(observation_reads { get_repository(query: ask) }.length)
         .to eq(classified_observation_reads { get_repository(query: ask) })
-      expect(observation_reads { get_repository(query: ask) }.length).to eq(7)
+      expect(observation_reads { get_repository(query: ask) }.length).to eq(8)
       # Six without the ask — the total `repository_latest_run_spec.rb` pins for this endpoint,
       # restated here as the thing this slice did NOT change.
       expect(observation_reads { get_repository }.length).to eq(6)
       expect(unannotated_examples_grain_reads { get_repository }).to be_empty
+      expect(unannotated_directories_grain_reads { get_repository }).to be_empty
     end
 
     # The drill-ins compose without either being classified as the other — this one against the
@@ -698,18 +992,20 @@ RSpec.describe "GET /api/v1/repository — latest_run.unannotated_examples", typ
 
       grains = observation_reads_by_grain { get_repository(query: query) }
 
-      expect([grains[7].length, grains[13].length]).to eq([1, 1])
+      expect([grains[7].length, grains[13].length, grains[14].length]).to eq([1, 1, 1])
       expect(observation_reads { get_repository(query: query) }.length)
         .to eq(classified_observation_reads { get_repository(query: query) })
-      expect(observation_reads { get_repository(query: query) }.length).to eq(8)
+      expect(observation_reads { get_repository(query: query) }.length).to eq(9)
     end
 
     # The suite-size axis, and the one that decides whether this key is affordable at the roadmap's
-    # 20,000-example design point: the read is bounded by the size of the RUN and capped, so the
-    # just-installed repository whose every example is unannotated costs the same single query as this
+    # 20,000-example design point: BOTH reads are bounded by the size of the RUN and capped, so the
+    # just-installed repository whose every example is unannotated costs the same two queries as this
     # file's five-row fixture. A serializer that fetched the rows and counted them in Ruby, or that
-    # took a second pass for the population, reads as more here and as more again as the suite grows.
-    it "reads it once however many unannotated examples the run holds" do
+    # took a second pass for either population, reads as more here and as more again as the suite
+    # grows. The map is the one to watch: it is a GROUPED AGGREGATE over the whole run rather than a
+    # capped scan, and its cap cuts the GROUPS rather than the rows it aggregates.
+    it "reads each block once however many unannotated examples the run holds" do
       big = separate_repository("acme/wide-run")
       ingest(big, Array.new(400) do |index|
         unannotated_spec(file_path: "spec/models/thing_#{format('%03d', index)}_spec.rb",
@@ -721,10 +1017,14 @@ RSpec.describe "GET /api/v1/repository — latest_run.unannotated_examples", typ
       get_repository(key: key)
       baseline = count_queries { get_repository(key: key) }
 
-      expect(count_queries { get_repository(key: key, query: ask) }).to eq(baseline + 1)
+      expect(count_queries { get_repository(key: key, query: ask) }).to eq(baseline + 2)
       expect(block(key: key, query: ask)["recorded_count"]).to eq(400)
       expect(block(key: key, query: ask)["rows"].length)
         .to eq(SpecObservation::UNANNOTATED_EXAMPLES_LIMIT)
+      # The 400 examples sit in ONE area, so the map is one row carrying all of them — the grouped
+      # read is bounded by the run's DIRECTORIES where the worklist is bounded by its rows.
+      expect(debt_map(key: key, query: ask)["rows"])
+        .to eq([{ "path" => "spec/models", "unannotated_count" => 400, "recorded_count" => 400 }])
     end
   end
 end

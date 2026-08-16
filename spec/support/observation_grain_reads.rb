@@ -271,9 +271,30 @@ module ObservationGrainReads
   # than the total, which is exactly the defect `classified_observation_reads` exists to catch.
   RUNTIME_GROWTH_ORDER = /ORDER BY ABS\(SUM\(duration_seconds\) FILTER \(WHERE test_run_id = /
 
+  # The area-grain ANNOTATION-DEBT ranking — `SpecObservation.unannotated_directories_in`, the ONE
+  # read on this table that ranks a run's areas by how many of their examples carry no annotation.
+  #
+  # ⭐ AN ORDER BY, AND FOR THE REASON `GROWTH_ORDER` AND `RUNTIME_GROWTH_ORDER` ARE ONES rather than
+  # in spite of the three paragraphs above that reject an ORDER BY match. Those three reject an
+  # ordering that separates two reads BY ACCIDENT — Arel's quoting, or which of two reads happened to
+  # need a `NULLS LAST` literal. This one separates them by the QUANTITY THEY RANK, which is the
+  # difference the two reads actually have and the only one they can have: this read shares the AREA
+  # GROUPING with `.directory_durations_in` and `.directory_growth_between`, and that expression is
+  # `DIRECTORY_EXPRESSION`, deliberately one definition, because the API and the panel must not
+  # disagree about what a directory is. It cannot be un-shared, so — exactly as the area/growth split
+  # already is — the grain is separated on what it orders by.
+  #
+  # `COUNT(*) FILTER (WHERE status = 'unannotated')` is issued by no other read of this table. The
+  # near neighbour is `.unannotated_in`, which spells the same predicate in a WHERE and emits
+  # `AS unannotated_recorded_count` besides, so the two cannot meet: a WHERE clause is not an ORDER BY
+  # and grain 13 matches on an alias this read does not select. Nothing here is a residual definition
+  # — an unclassified read still belongs to no list and is caught by the total, on this file's rule.
+  UNANNOTATED_DEBT_ORDER = /ORDER BY COUNT\(\*\) FILTER \(WHERE status = 'unannotated'\) DESC/
+
   # `[area, file, example, description, flakiness, growth, directory_files, file_examples,
   # repeated_description_examples, directory_file_growth, runtime_growth,
-  # directory_file_runtime_growth, unstable_test_runs, unannotated_examples]` — the fourteen grains,
+  # directory_file_runtime_growth, unstable_test_runs, unannotated_examples,
+  # unannotated_directories]` — the fifteen grains,
   # each an array of the
   # statements matched. The single-run grains come first, in the order `serialized_latest_run` serves
   # them, and the two CROSS-RUN grains after them in the order `show` serves them — so a
@@ -307,7 +328,8 @@ module ObservationGrainReads
      reads.grep(RUNTIME_GROWTH_ORDER).grep_v(AREA_PREDICATE),
      reads.grep(RUNTIME_GROWTH_ORDER).grep(AREA_PREDICATE),
      reads.grep(/AS unstable_test_recorded_count/),
-     reads.grep(/AS unannotated_recorded_count/)]
+     reads.grep(/AS unannotated_recorded_count/),
+     reads.grep(UNANNOTATED_DEBT_ORDER)]
   end
 
   # `UnstableTests.for`'s four reads, in the order it issues them: the gating outcome-reporting
@@ -338,6 +360,7 @@ module ObservationGrainReads
   def directory_file_runtime_growth_grain_reads(&) = observation_reads_by_grain(&)[11]
   def unstable_test_runs_grain_reads(&) = observation_reads_by_grain(&)[12]
   def unannotated_examples_grain_reads(&) = observation_reads_by_grain(&)[13]
+  def unannotated_directories_grain_reads(&) = observation_reads_by_grain(&)[14]
 end
 
 RSpec.configure do |config|

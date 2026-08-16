@@ -440,6 +440,28 @@ class SpecObservation < ApplicationRecord
   # explaining a list's length must not be able to disagree with it.
   UNANNOTATED_EXAMPLES_LIMIT = 100
 
+  # How many code AREAS the annotation-debt ranking returns. Its own constant, by the rule every
+  # `_LIMIT` above obeys and NOT a reuse of `HEAVIEST_DIRECTORIES_LIMIT`, which is the tempting one:
+  # that constant caps a list of the same population — one run's directories — which is exactly why
+  # sharing it would look harmless and would not be.
+  #
+  # The two rank that population by INDEPENDENT quantities, the way `MOVED_DIRECTORIES_LIMIT` and
+  # `RETIMED_DIRECTORIES_LIMIT` do one comparison over. `HEAVIEST_DIRECTORIES_LIMIT` ranks areas by
+  # WALL CLOCK; this ranks them by how many of their examples nobody has annotated. An area of four
+  # hundred fast unannotated examples is the top of this list and nowhere near the top of that one,
+  # and a slow, fully-annotated area is the reverse — so a suite that wants ten areas by cost has no
+  # reason to want ten areas by annotation debt, and one number standing for both would make that a
+  # single edit nobody meant to make.
+  #
+  # TEN rather than `UNANNOTATED_EXAMPLES_LIMIT`'s hundred, and the difference is the KIND of list
+  # rather than the grain. That constant caps a WORKLIST — rows to be opened, annotated and
+  # re-delivered, sized for a batch somebody works through in one sitting. This is a RANKING: it
+  # exists to name where the debt is concentrated so a reader can pick an area and re-ask under
+  # `?spec_directory=`, and a reader who cannot pick from ten areas is not helped by eighty. It sits
+  # with the rankings at ten for that reason, and `directory_count` beside the rows is what states
+  # the real population — the same division of labour every capped ranking here ships.
+  UNANNOTATED_DIRECTORIES_LIMIT = 10
+
   # What the drill-down's caption has to say ABOUT the rows under it, counted in the SAME read that
   # returns them — `COUNT(*) OVER ()` and `COUNT(duration_seconds) OVER ()`, which count non-nulls.
   #
@@ -926,6 +948,75 @@ class SpecObservation < ApplicationRecord
       .select(Arel.sql("spec_observations.*, #{UNANNOTATED_POPULATION_COUNTS}"))
       .order(:spec_file_path, :line_number, :id)
       .limit(limit)
+  end
+
+  # WHERE ONE RUN'S ANNOTATION DEBT IS, rolled up by code AREA — the ranking the worklist above never
+  # had, and the rung that makes `.unannotated_in`'s narrowing reachable.
+  #
+  # `.unannotated_in` orders FILE-NAVIGABLY and says so: it is a worklist, not a ranking, and its own
+  # comment states that nobody arrives at it to find what something COSTS. `?spec_file=` and
+  # `?spec_directory=` then let a caller start where the work is — but only a caller who ALREADY KNOWS
+  # which area to name. Nothing in the response said. The three area/file rollups this endpoint serves
+  # rank by DURATION and their `coverage_label` is `coverage_fraction(timed_count, recorded_count)`,
+  # which is TIMING coverage — so an agent told to raise a repository's annotation coverage had a
+  # headline integer, a hundred alphabetical rows, and no way to choose. This read is the missing rung:
+  # it names the areas the debt is concentrated in, and each one is a `?spec_directory=` away.
+  #
+  # == It is `.directory_durations_in` with a different ranked quantity, deliberately
+  #
+  # Same GROUP BY on `DIRECTORY_EXPRESSION`, same `where(test_run_id:)` narrow, same `COUNT(*) OVER ()`
+  # riding back to disclose the population the cap cut. What differs is what it ranks by, which is why
+  # it is a sibling rather than a parameter on that read: an area's wall clock and an area's unannotated
+  # count are independent quantities, and folding a second ranking into one method would make every
+  # caller of the first pay for a column it does not read.
+  #
+  # == `COUNT(*) FILTER (WHERE status = 'unannotated')`, and the predicate is spelled VERBATIM
+  #
+  # NEVER `where.not(status: 'annotated')`, for the reason `.unannotated_in` argues in full above: the
+  # negated form selects the same rows today and would stop doing so the moment a third status existed
+  # — and would stop by silently ADOPTING it into a ranking captioned "unannotated" rather than by
+  # going red. The rule is the same one grain up, and it is easier to break here, where the predicate
+  # sits inside an aggregate rather than in a WHERE a reader scans first.
+  #
+  # A FILTERed aggregate rather than a `where(status:)` narrow on the whole read, and that is the
+  # load-bearing shape of this method rather than a spelling preference. Narrowing the read would give
+  # each group a `recorded_count` of its own UNANNOTATED rows — which is `unannotated_count` again
+  # under a second name, a fraction that is 100% on every row. The denominator a reader needs is the
+  # area's WHOLE population, so the WHERE stays open at the run and the predicate rides the aggregate.
+  # It also keeps a fully-annotated area OUT of the ranking without dropping it from the count of areas
+  # the run touched: a zero-debt area sorts last by construction and the cap removes it, while
+  # `directory_count` still describes every area — the ranking is of debt, the disclosure is of the run.
+  #
+  # == The ordering, and why both terms are needed
+  #
+  # `unannotated_count DESC` is the ranking; `#{DIRECTORY_EXPRESSION} ASC` is a TOTAL tiebreak, so two
+  # areas carrying the same debt come back in the same order on two identical asks. The cap makes that
+  # load-bearing rather than tidy — a reader comparing this ranking across two requests must not be
+  # handed a re-shuffled tail, which is the same argument `.unannotated_in` makes for its third sort
+  # term. No `NULLS LAST` clause and none wanted: `COUNT` returns 0 where `SUM` returns NULL, so unlike
+  # `.directory_durations_in` this read has no null-ranked rows to keep off the head.
+  #
+  # == Query cost
+  #
+  # One grouped aggregate over ONE RUN, issued only when the parameter was sent. NO NEW INDEX, for the
+  # reason `.directory_durations_in` states at length: it groups on an EXPRESSION and narrows on a
+  # COLUMN, and only the second decides the access path — `where(test_run_id:)` is served by
+  # `index_spec_observations_on_test_run_id` and the aggregation sits on top of that scan either way.
+  # There is deliberately no `(test_run_id, status)` index and this read does not want one; `status` is
+  # two values over a whole table, which is the shape an index serves worst, and the FILTER is applied
+  # to rows the group has already touched. Certified in `spec/models/spec_observation_spec.rb` on the
+  # one thing that has to stay true — one run reached through an index rather than every run's rows
+  # walked.
+  def self.unannotated_directories_in(test_run, limit: UNANNOTATED_DIRECTORIES_LIMIT)
+    where(test_run_id: test_run.id)
+      .group(Arel.sql(DIRECTORY_EXPRESSION))
+      .order(Arel.sql("COUNT(*) FILTER (WHERE status = 'unannotated') DESC"),
+             Arel.sql("#{DIRECTORY_EXPRESSION} ASC"))
+      .limit(limit)
+      .pluck(Arel.sql(DIRECTORY_EXPRESSION),
+             Arel.sql("COUNT(*) FILTER (WHERE status = 'unannotated')"),
+             Arel.sql("COUNT(*)"),
+             Arel.sql("COUNT(*) OVER ()"))
   end
 
   # How many distinct descriptions one narrowing may hand the composition step below.

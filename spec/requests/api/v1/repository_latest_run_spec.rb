@@ -166,6 +166,16 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
         # state the metric exists to REACH; see `repository_unannotated_examples_spec.rb`, where
         # that pair is asserted side by side.
         "unannotated_examples" => nil,
+        # And the RANKING above that worklist, null for the same reason and from the SAME ask —
+        # `unannotated_directories` rides `?unannotated_examples=` rather than a parameter of its
+        # own, so the two keys are absent and present together. It is the rung that makes the
+        # narrowing usable: the worklist is ordered file-navigably, and every other area rollup on
+        # this block ranks by DURATION with a `coverage_label` that is TIMING coverage, so nothing
+        # here could tell a client WHICH area to go and ask about. Unlike its sibling it stays
+        # WHOLE-RUN under `?spec_file=` / `?spec_directory=` — the one deliberate scope disagreement
+        # inside a single block on this endpoint; see `repository_unannotated_examples_spec.rb`,
+        # where both halves are asserted together.
+        "unannotated_directories" => nil,
         "suite_size_measured" => true,
         "ingested_at" => test_run.created_at.iso8601
       )
@@ -488,6 +498,7 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
                             "spec_directories", "slowest_examples", "repeated_descriptions",
                             "spec_directory_files", "spec_file_examples",
                             "repeated_description_examples", "unannotated_examples",
+                            "unannotated_directories",
                             "suite_size_measured",
                             "ingested_at")
     end
@@ -2265,6 +2276,9 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
         # and the empty answer it must never be confused with — a fully-annotated run — is a present
         # block with `recorded_count: 0`.
         "unannotated_examples" => nil,
+        # And the ranking above it, null from the SAME ask rather than one of its own — the two
+        # annotation keys share `?unannotated_examples=` and are therefore absent together.
+        "unannotated_directories" => nil,
         "suite_size_measured" => true,
         "ingested_at" => third.created_at.iso8601
       )
