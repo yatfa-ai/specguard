@@ -203,7 +203,7 @@ RSpec.describe "POST /api/v1/ingest — the record a refused delivery leaves", t
     # measured over the WHOLE ROW rather than over `details` alone, because `user_agent` sits on the
     # same row and is equally the client's to choose. Measuring one column would let a ~100 KB
     # header pass a fence whose name is a claim about the row.
-    it "keeps the row under a stated size ceiling however large the payload is" do
+    it "keeps the row under a stated size ceiling however large the payload or the client's header" do
       ingest({ commit_sha: "a" * 40,
                specs: Array.new(200) { { file_path: "x" * 5_000, line_number: 0 } } },
              headers: { "User-Agent" => "u" * 100_000 })

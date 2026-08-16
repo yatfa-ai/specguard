@@ -278,7 +278,6 @@ RSpec.describe "Repository rejected deliveries", type: :request do
       visit_repository
 
       expect(IngestRejection.last.details).to all(satisfy { |r| r.length <= IngestRejection::MAX_REASON_LENGTH })
-      expect(IngestRejection.last.user_agent.length).to be <= IngestRejection::MAX_USER_AGENT_LENGTH
       expect(panel.all("tbody tr").size).to eq(IngestRejection::PANEL_LIMIT)
       expect(panel.all("li").size)
         .to eq(IngestRejection::PANEL_LIMIT * IngestRejection::RETAINED_REASONS_PER_ROW)
