@@ -1579,8 +1579,8 @@ class Api::V1::RepositoriesController < Api::BaseController
   # finding it: a surface reporting a clean result for work it did not do. The `null` cannot be
   # misread, and this block says which of the two states produced it.
   #
-  # `order` NAMES ALL THREE KEYS, and `tie_break_served` is `true` here — one of the two places on
-  # this endpoint where it is, the other being `serialized_directory_growth_window`.
+  # `order` NAMES ALL THREE KEYS, and `tie_break_served` is `true` here — one of the blocks on
+  # this endpoint where it is, as is `serialized_directory_growth_window`.
   # `UnstableTests#initialize` sorts by `(-failed_run_count, -run_count,
   # name)` and every one of those three is served on the row below, so unlike `history` and
   # `branches` — whose tie-breaks are an ingest sequence and a last-run timestamp that no row
@@ -1906,10 +1906,10 @@ class Api::V1::RepositoriesController < Api::BaseController
   # block's own business. Its `state` is what separates the eight answers.
   #
   # `order` names both keys and `tie_break_served` is TRUE, which is the honest reading here and
-  # only the second place on this endpoint it is. `SpecObservation.directory_growth_between` orders
-  # by `ABS(anchor_count - baseline_count) DESC` then `path ASC`, and both operands and the path go
-  # out on every row — so a client CAN reproduce this order from what it holds, unlike `history`
-  # (whose tie-break is an ingest sequence no row carries) and `branches`.
+  # not the only block on this endpoint where it is. `SpecObservation.directory_growth_between`
+  # orders by `ABS(anchor_count - baseline_count) DESC` then `path ASC`, and both operands and the
+  # path go out on every row — so a client CAN reproduce this order from what it holds, unlike
+  # `history` (whose tie-break is an ingest sequence no row carries) and `branches`.
   #
   # `basis` IS THE OBJECT'S OWN LOAD-BEARING LIMITATION, served as a token because a client cannot
   # act on the paragraph `spec_directory_window_growth.rb` spends on it. The figures compare TWO

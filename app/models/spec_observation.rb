@@ -378,7 +378,7 @@ class SpecObservation < ApplicationRecord
   SPEC_DIRECTORY_FILE_RUNTIME_GROWTH_LIMIT = 30
 
   # How many repeated-DESCRIPTION groups the redundancy ranking returns. Its own constant, by the
-  # rule the seven above it obey, and the population it ranks is unlike any of theirs: not files,
+  # rule the constants above obey, and the population it ranks is unlike any of theirs: not files,
   # not areas, not examples, but the DESCRIPTIONS that more than one example of one run recorded.
   # That population is a small and lumpy fraction of a suite — one built without table-driven loops
   # or shared example groups has none at all, and one built around them can have hundreds — so it
@@ -394,7 +394,7 @@ class SpecObservation < ApplicationRecord
   REPEATED_DESCRIPTIONS_LIMIT = 10
 
   # How many EXAMPLES a single repeated description's drill-down returns. Its own constant, by the
-  # rule the eight above it obey, and it caps the same KIND of thing `FILE_EXAMPLES_LIMIT` and
+  # rule the constants above obey, and it caps the same KIND of thing `FILE_EXAMPLES_LIMIT` and
   # `SPEC_DIRECTORY_FILES_LIMIT` cap — a LISTING of one already-picked row's contents, not a ranking
   # of a whole run — which is exactly why sharing either would look harmless and would not be.
   #
@@ -472,7 +472,7 @@ class SpecObservation < ApplicationRecord
   # So the retention is a MULTIPLE of the floor and not the floor — twice it, which leaves a
   # whole window of slack between the deepest read and the first deletion.
   #
-  # And it is its own constant rather than a reference at every call site, by the rule the six
+  # And it is its own constant rather than a reference at every call site, by the rule the
   # `_LIMIT`s above already obey: `TRAJECTORY_LIMIT` bounds how far a CHART is DRAWN, this bounds
   # how far the DATA is KEPT. They move for different reasons — a panel showing fifty points is a
   # display decision, keeping fifty runs of 20,000 rows per branch is a storage one — and one
