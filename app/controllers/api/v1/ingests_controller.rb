@@ -11,7 +11,26 @@ class Api::V1::IngestsController < Api::BaseController
   def create
     payload = Ingest::Payload.new(request.request_parameters)
 
-    return render_bad_request(payload.errors) unless payload.valid?
+    # The refusal, and the one record it leaves behind.
+    #
+    # Recorded BEFORE the render and never after it: `render_bad_request` returns, so anything
+    # placed below this line would not run. The row is written for the authenticated family only,
+    # which is exactly what reaching this line means — `authenticate_api_key!` has already resolved
+    # `current_repository`, and a request that failed to authenticate returned a 401 from the
+    # `before_action` without ever arriving here. A 401 therefore writes nothing, because there is
+    # no repository to attribute it to (see `IngestRejection`).
+    #
+    # The response is untouched by this: `render_bad_request` is handed the same `payload.errors`
+    # it always was, and the recorder cannot change the status or the body — it reports its own
+    # failures to `Rails.error.report` and returns, on the reasoning in
+    # `Ingest::RejectionRecorder`. A request that is being refused for its payload must not start
+    # 500ing because of bookkeeping the client never asked for.
+    unless payload.valid?
+      Ingest::RejectionRecorder.record(current_repository, payload.errors,
+                                       user_agent: request.user_agent)
+
+      return render_bad_request(payload.errors)
+    end
 
     test_run = Ingest::RunRecorder.record(current_repository, payload.test_run_attributes,
                                           shard_id: payload.shard_id, specs: payload.specs)
