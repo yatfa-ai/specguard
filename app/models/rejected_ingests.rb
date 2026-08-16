@@ -34,24 +34,38 @@
 #   that every accepted byte is accounted for.
 # * **A refusal ages out.** `IngestRejection::REPOSITORY_RETENTION_ROWS` bounds the table, so a
 #   repository that was refused and then went silent forever eventually loses the row and the stat
-#   returns to `Connected`. It is reporting what it can still see, and the panel says the list is
-#   bounded for that reason.
+#   returns to `Connected`. It is reporting what it can still see. {#bounded?} discloses the OTHER
+#   bound — the panel's own `limit`, which bites five times sooner — and it says so only when that
+#   limit actually left a refusal off the list.
 #
 # It says nothing about failed AUTHENTICATION. A 401 resolves no repository and writes no row (see
 # `IngestRejection`), so neither this object nor the panel may imply it can see one.
 class RejectedIngests
+  # Reads one row PAST the bound and throws it away. That extra row is the only thing that can tell
+  # {#bounded?} apart from "the list came back full", and it is what every sibling disclosure object
+  # on this page spends a pre-cap population count to learn — `SpecFileExamples#truncated?`,
+  # `SpecDirectoryFiles#truncated?`, `RepeatedDescriptions#truncated?` and the rest all compare a
+  # figure counted BEFORE the cap against `rows.size`. Here the peek is cheaper than a count and
+  # says the same thing: `IngestRejection::REPOSITORY_RETENTION_ROWS` bounds the table at five
+  # pages, so the eleventh row is one indexed row off an index this query already walks, in the
+  # same round trip. Still one query for the panel.
+  #
   # @param last_accepted_run_at [Time, nil] `Repository#latest_test_run`'s `created_at`, passed in
   #   rather than looked up: the page has already loaded that run for the Overview panel, and a
   #   second read here would be a second answer to "when did CI last succeed" with no structural
   #   reason to keep agreeing with the first. `nil` means no run has ever been accepted.
   def self.for(repository, last_accepted_run_at:, limit: IngestRejection::PANEL_LIMIT)
-    new(rows: repository.ingest_rejections.most_recent_first.limit(limit).to_a,
+    peeked = repository.ingest_rejections.most_recent_first.limit(limit + 1).to_a
+
+    new(rows: peeked.first(limit),
+        bounded: peeked.size > limit,
         last_accepted_run_at: last_accepted_run_at)
   end
 
-  def initialize(rows:, last_accepted_run_at:)
+  def initialize(rows:, last_accepted_run_at:, bounded:)
     @rows = rows
     @last_accepted_run_at = last_accepted_run_at
+    @bounded = bounded
   end
 
   # The refusals, newest first, never longer than the limit this was built with. One query.
@@ -75,10 +89,23 @@ class RejectedIngests
     last_rejection_at > @last_accepted_run_at
   end
 
-  # Whether the retained list is at its bound, which is what the panel needs in order to say that
-  # what it is showing is a window rather than the whole history. `>=` rather than `==` so a list
-  # built with a larger limit than the panel's still reports honestly.
-  def bounded? = rows.size >= IngestRejection::PANEL_LIMIT
+  # Whether this repository has refusals the list does not show — a fact about the POPULATION, read
+  # off the row `.for` fetched past the bound, not about how long `rows` happens to be.
+  #
+  # It used to be `rows.size >= IngestRejection::PANEL_LIMIT`, and that is the one instrument this
+  # codebase has already ruled out for exactly this job. `RepeatedDescriptions` states it at
+  # `:85-89`: a capped list's own length "answers 'how many rows am I looking at' and nothing else",
+  # so a list that is merely FULL is indistinguishable from one that was CUT. Read forwards that
+  # mistake makes a truncated list wear the shape of a complete one; read backwards — which is what
+  # it did here — it made a COMPLETE list wear the shape of a truncated one, and a repository with
+  # exactly `PANEL_LIMIT` lifetime refusals was told its whole history was "a recent window". That
+  # is the same quiet falsehood one grain in from the stat this panel was built to correct, so it
+  # does not get to live at this grain either.
+  #
+  # Comparing against the CONSTANT was wrong in the other direction as well, and the peek fixes both
+  # at once by never mentioning it: a list built with `limit:` below `PANEL_LIMIT` over a larger
+  # population used to report `false` — "complete" — over a genuinely cut list.
+  def bounded? = @bounded
 
   # Whether any listed row is showing only PART of what the endpoint said about that one delivery.
   #
