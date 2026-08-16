@@ -81,8 +81,11 @@ RSpec.describe "The signed-out landing page", type: :request do
     #
     # So what is pinned here is the CONTRACT rather than the copy. The panel is free to describe
     # what is still unbuilt however it likes; what it may not do is go on telling visitors that
-    # per-test data is unstored, because it is stored and three panels and three API keys are
-    # served from it. Non-vacuous per the rule at :17-20 — `find` raises if `#roadmap` is missing
+    # per-test data is unstored, because it is stored, and both the JSON API and the repository
+    # page read those rows. Deliberately uncounted, for the reason given at :50: a numeral here
+    # would size a roster this spec never observes, so it would have to be revised the day another
+    # key or panel is added — re-arming, one line below its own description of it, exactly the trap
+    # :77-80 describes. Non-vacuous per the rule at :17-20 — `find` raises if `#roadmap` is missing
     # and the positive assertion above proves the panel rendered with its own content, so this
     # negative cannot pass on a blank page, a 500, or a deleted panel.
     expect(panel).not_to have_text("stores nothing about individual tests")
