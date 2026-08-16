@@ -75,6 +75,26 @@ class RepositoriesController < ApplicationController
     # annotations. Deliberately the run row itself and not a repository-wide ratio floored at 0.0,
     # which cannot express that difference — a floored figure reads the same either way.
     @latest_test_run = @repository.latest_test_run
+    # The refused half of the same delivery stream the run above is the accepted half of, and the
+    # verdict the Connect panel's "Connection" stat needs in order to stop being wrong.
+    #
+    # `@last_api_request_at` above is stamped by `Api::BaseController#authenticate_api_key!` on the
+    # way IN, so it moves for a delivery that is then refused for its payload — which is how a
+    # repository whose every run was being thrown away rendered `Connected` in success tone with a
+    # hint saying the last request was two minutes ago. That column answers "did anything
+    # authenticate", and it is the only question it can answer; whether what authenticated was then
+    # ACCEPTED is this object's, and the panel now asks both.
+    #
+    # Handed the latest run's `created_at` rather than looking one up: that run is already loaded
+    # directly above for the Overview, and a second read here would be a second answer to "when did
+    # CI last succeed" sitting one line from the first. `RejectedIngests` carries the comparison
+    # rule and both of its bounds.
+    #
+    # Loaded unconditionally and NOT gated on `@latest_test_run`, unlike the per-example panels
+    # below: a repository that has never had a run accepted is not the empty case here, it is the
+    # worst case — every delivery it ever made was refused, and that is precisely when the reader
+    # needs the list. One bounded query, capped at `IngestRejection::PANEL_LIMIT`.
+    @rejected_ingests = RejectedIngests.for(@repository, last_accepted_run_at: @latest_test_run&.created_at)
     # The one figure on that panel read off *two* rows: the run the suite size is compared against,
     # so a size can be reported as a change and not only as a level. Passed the already-loaded
     # latest run rather than looking it up again, so this costs exactly one query — and none at all

@@ -1589,6 +1589,23 @@ RSpec.describe "Repository registration and API keys", type: :request do
       # addition when you count the diff instead of the readers. A rule cannot rot on the next
       # widening. Counting the hits makes this a count of READS rather than of round trips, which
       # is the property that degrades when a widened tuple acquires callers.
+      # RECOUNTED AT 20 by SPGD-563, which added the "Rejected deliveries" panel: ONE further read,
+      # and the first on this page that is not of `spec_observations` — the newest
+      # `ingest_rejections` rows of this repository, capped at `IngestRejection::PANEL_LIMIT`.
+      #
+      # Unlike the six reads above, this one is NOT issued because an empty aggregate comes back
+      # empty on this fixture. It is issued because the panel is deliberately ungated: a repository
+      # that has never had a run accepted is the case where every delivery it made was refused,
+      # which is exactly when the list matters, so it cannot be hidden behind `@latest_test_run`
+      # the way the per-example panels are. The query runs on every render of this page and is
+      # meant to.
+      #
+      # It needs no companion N+1 guard of the kind the panels above point at, and the reason is
+      # structural rather than a measurement: the rows are materialised with `.to_a` under a LIMIT,
+      # and every cell the panel renders (`occurred_at`, `reasons`, `reported_client`) is a column
+      # on the row. The view touches no association, so there is no per-row question for a second
+      # round trip to answer — which is also why this stays one query whether the repository has
+      # one refusal or the fifty the retention rule bounds it to.
       it "issues exactly the queries the page issued before the shard counts were read" do
         repository = create_repository(user: @user)
         sharded_run(repository, [61.0, 58.5, 74.25, 60.0], commit_sha: "feedfacecafe0068")
@@ -1597,7 +1614,7 @@ RSpec.describe "Repository registration and API keys", type: :request do
         # first-request-only work cannot land in it.
         get repository_path(repository)
 
-        expect(count_all_queries { get repository_path(repository) }).to eq(19)
+        expect(count_all_queries { get repository_path(repository) }).to eq(20)
         # And the page really did render the thing being counted — an absolute count is satisfied
         # by a page that renders nothing at all.
         expect(distribution.all("li").size).to eq(4)

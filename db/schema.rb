@@ -10,7 +10,7 @@
 #
 # It's strongly recommended that you check this file into your version control system.
 
-ActiveRecord::Schema[8.1].define(version: 2026_08_15_120000) do
+ActiveRecord::Schema[8.1].define(version: 2026_08_16_120000) do
   # These are extensions that must be enabled in order to support this database
   enable_extension "pg_catalog.plpgsql"
   enable_extension "vector"
@@ -36,6 +36,15 @@ ActiveRecord::Schema[8.1].define(version: 2026_08_15_120000) do
     t.datetime "updated_at", null: false
     t.index ["provider_fingerprint", "text_digest"], name: "index_embedding_cache_entries_on_key", unique: true
     t.index ["updated_at"], name: "index_embedding_cache_entries_on_updated_at"
+  end
+
+  create_table "ingest_rejections", force: :cascade do |t|
+    t.jsonb "details", default: [], null: false
+    t.datetime "occurred_at", null: false
+    t.bigint "repository_id", null: false
+    t.integer "total_reasons_count", default: 0, null: false
+    t.string "user_agent"
+    t.index ["repository_id", "occurred_at", "id"], name: "index_ingest_rejections_on_repository_and_recency", order: { occurred_at: :desc, id: :desc }
   end
 
   create_table "repositories", force: :cascade do |t|
@@ -298,6 +307,7 @@ ActiveRecord::Schema[8.1].define(version: 2026_08_15_120000) do
 
   add_foreign_key "api_keys", "repositories"
   add_foreign_key "api_keys", "users", column: "created_by_user_id"
+  add_foreign_key "ingest_rejections", "repositories"
   add_foreign_key "repositories", "users"
   add_foreign_key "repository_memberships", "repositories"
   add_foreign_key "repository_memberships", "users"

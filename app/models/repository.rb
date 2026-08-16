@@ -33,6 +33,10 @@ class Repository < ApplicationRecord
   has_many :spec_identities, dependent: :delete_all
   has_many :test_runs, dependent: :destroy
   has_many :spec_intents, dependent: :destroy
+  # The refused half of the same delivery stream `test_runs` holds the accepted half of. Bounded by
+  # `IngestRejection::REPOSITORY_RETENTION_ROWS` at the write path, so this is at most fifty rows —
+  # `delete_all` is one statement and the model carries no callback a destroy would run.
+  has_many :ingest_rejections, dependent: :delete_all
   has_many :repository_memberships, dependent: :destroy
   # Everyone granted access who is *not* the owner. The owner is `user` and holds every permission
   # implicitly, so they never appear here.
