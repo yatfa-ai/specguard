@@ -78,6 +78,31 @@ class Api::V1::RepositoriesController < Api::BaseController
   # `RequestedUnstableTestParam`, which holds that reasoning in full.
   include RequestedUnstableTestParam
 
+  # `?unannotated_examples=` read as a request for the run's unannotated examples — the seventh
+  # `Requested*Param` this controller reads, and the first that carries NO VALUE.
+  #
+  # The six above all name a WHICH — which branch, which commit, which area, which file, which
+  # description, which test — because each opens the rows behind a LINE of a ranking the client had
+  # already read. This one opens a POPULATION: the figure it drills out of is a subtraction on the run
+  # itself (`total_specs_count - annotated_specs_count`), which has no rows and therefore no keys, so
+  # there is exactly one answer the client can be asking for and nothing for the parameter to carry.
+  # The predicate spelling — `requested_unannotated_examples?` rather than a `requested_*` reader — is
+  # what says that at the call site.
+  #
+  # NOT included by `RepositoriesController`, like `?unstable_test=` and `?commit_sha=` and unlike the
+  # four before them, and that is a fact about the surfaces rather than an omission: the dashboard
+  # prints the subtraction and offers no way to open it, which is the gap this parameter exists to
+  # close on the agent surface first. When the panel arrives it includes this module rather than
+  # re-deriving the guard, which is the whole reason the guard lives in a module at all.
+  #
+  # It reaches no SQL comparison at all, which makes the hazard the MIRROR of the six above rather
+  # than a weaker version of it. Theirs is a silent wrong answer — an Array becomes an `IN` list under
+  # a caption naming one thing; this one's is a silent EXTRA answer, because all three malformed
+  # shapes are truthy in Ruby and an unguarded `.present?` would open a hundred-row block on a query
+  # string nobody meant to send. See `RequestedUnannotatedExamplesParam`, which holds that reasoning in
+  # full, including why `?unannotated_examples=false` is an ask like any other.
+  include RequestedUnannotatedExamplesParam
+
   # `?commit_sha=` read as a commit sha, to name WHICH RUN this endpoint describes — the sixth
   # `Requested*Param` here and the only one that re-anchors rather than narrows. The five above take
   # the anchor as given: `?branch=` narrows a history and the three drill-in parameters open one
@@ -536,6 +561,18 @@ class Api::V1::RepositoriesController < Api::BaseController
       # it drills out of is the only one here that is not a rollup of where the code lives. See
       # `serialized_repeated_description_examples` below.
       repeated_description_examples: serialized_repeated_description_examples(test_run),
+      # THE FOURTH KEY ON THIS BLOCK WHOSE `null` IS A FACT ABOUT THE REQUEST, and the only drill-in
+      # here that opens a POPULATION rather than a pick. The three above it open one area, one file
+      # and one sentence — each the rows behind a LINE of a ranking served just above it. This one
+      # opens the rows behind `total_specs` MINUS `annotated_specs`, two keys at the top of this very
+      # block, which is a subtraction and names nothing.
+      #
+      # It is the rung `annotated_ratio` never had. Every other figure on this endpoint that reports a
+      # population can be walked down to the examples it counts; the product's stated primary adoption
+      # metric was the sole exception, on both surfaces — `repositories#show` prints *"SpecGuard cannot
+      # see the other N tests"* and cannot name one of them either. See
+      # `serialized_unannotated_examples` below.
+      unannotated_examples: serialized_unannotated_examples(test_run),
       # `TestRun#suite_size_measured?`, the same predicate `serialized_history_row` serves below and
       # for the same reason: a run that reported zero tests has a `total_specs` but not a
       # measurement, and a difference taken against it describes the report rather than the suite.
@@ -1351,6 +1388,110 @@ class Api::V1::RepositoriesController < Api::BaseController
       recorded_count: examples.recorded_count,
       timed_count: examples.timed_count,
       limit: SpecObservation::REPEATED_DESCRIPTION_EXAMPLES_LIMIT
+    }
+  end
+
+  # WHICH TESTS SPECGUARD CANNOT SEE — the rows behind the product's stated primary adoption metric,
+  # and until now the one figure on either surface that could be reported and not opened.
+  #
+  # `latest_run.total_specs` and `latest_run.annotated_specs` sit twenty lines above this key, and
+  # `annotated_ratio` beside them. Their difference is what `repositories#show` renders under "Not
+  # visible to SpecGuard" as *"SpecGuard cannot see the other N tests"*, and a subtraction is the whole
+  # answer a reader has ever been given: an agent told to raise annotation coverage receives
+  # `annotated_ratio: 0.43` and cannot name ONE of the tests that number is about. Every other ranking
+  # on this endpoint has a drill-down rung — `spec_directory` → files, `spec_file` → examples,
+  # `repeated_description` → examples, `unstable_test` → runs — and this was the sole exception.
+  #
+  # THE COUNT AND THE LIST ARE ONE PREDICATE, WHICH IS WHY THE ROWS COME OFF `spec_observations.status`
+  # AND NOT FROM ANYWHERE ELSE. `Ingest::Payload#annotated_specs` rejects `status == "unannotated"` and
+  # its size becomes `annotated_specs_count`; `Ingest::ObservationRecorder#attributes` writes that same
+  # string onto every row of the same delivery. So `recorded_count` here and `total_specs -
+  # annotated_specs` above are one derivation evaluated twice rather than two figures that agree today
+  # — the property this file demands of a count and its list everywhere else, and the reason this rung
+  # needed no migration and no new data. `SpecObservation.unannotated_in` argues it in full, and the
+  # reconciliation is pinned in `spec/requests/api/v1/repository_unannotated_examples_spec.rb` for an
+  # UNSHARDED run: on a sharded one those counters are re-derived by SUM over `test_run_shards` while
+  # these rows are what was actually stored, which is the same separation `serialized_spec_files`
+  # states for its own denominator.
+  #
+  # INSIDE `latest_run` rather than beside it, on the membership test the comment on `unstable_tests`
+  # states in full: `SpecObservation.unannotated_in` narrows to a single `test_run_id`, so this is a
+  # statement about ONE run's rows. And `latest_run` is not re-anchored by `?branch=`, so this ask
+  # composes with all four of the others without any of the five touching another. `?commit_sha=` is
+  # the exception and is meant to be: it re-anchors `latest_run`, and this drill-in re-anchors with it
+  # WITHOUT READING THE PARAMETER, because both hang off the one `latest_test_run` memo and
+  # `run_anchor` names the run they landed on. That matters more here than on its siblings — "what is
+  # still unannotated" is the question an adopting repository asks after every push, so asking it of an
+  # older commit is the ordinary use rather than the exotic one.
+  #
+  # THE ROW SHAPE IS FOUR FIELDS AND DELIBERATELY NOT THE OTHER BLOCKS' SIX. The three per-example
+  # blocks above agree field for field on purpose — `serialized_spec_file_examples` states why, and a
+  # `contain_exactly` in each of their request specs enforces it — and this block is not a fourth
+  # member of that set. Those three list examples a reader has come to MEASURE, so they carry
+  # `duration_seconds` and `outcome`; this one lists examples a reader has come to OPEN AND EDIT, so it
+  # carries exactly what opens a file and nothing else. `outcome` would be worse than surplus here: an
+  # unannotated example's outcome is a fact about the last run, and a worklist sorted for editing that
+  # also whispers "this one failed" invites the reader to do the other job. The four are `name`,
+  # `spec_file_path`, `file_path` and `line_number` — and the last three are the pair
+  # `serialized_spec_file_examples` keeps apart plus the line: `file_path` is where the example is
+  # DEFINED and `spec_file_path` is the file that RAN it, which differ for a shared example group, and
+  # a reader opening the wrong one of the two finds nothing to annotate.
+  #
+  # `null` — WITH THE KEY PRESENT — MEANS "YOU DID NOT ASK", on the spelling the three drill-ins above
+  # fixed, and the distinction it protects is the sharpest on this block. A fully-annotated run is not
+  # an empty file or a stale bookmark: it is the STATE THE METRIC EXISTS TO REACH, so it arrives as the
+  # block with `rows: []` and `recorded_count: 0` — HTTP 200, never a 404 and never a `null`. Collapsing
+  # it into the no-ask spelling would answer the best possible outcome with the one word reserved for
+  # "you did not ask", and a client walking a repository to completion would watch the block vanish at
+  # the moment it succeeded and be unable to tell that from its own parameter having been dropped.
+  #
+  # `recorded_count` IS THE RUN'S UNANNOTATED POPULATION, off the `COUNT(*) OVER ()` window of
+  # `SpecObservation::UNANNOTATED_POPULATION_COUNTS` — evaluated after the WHERE and before the LIMIT,
+  # so it describes what the run holds rather than what fit on the page. Re-deriving it by folding
+  # `rows` is wrong here far more often than on the siblings: this population is routinely the WHOLE
+  # RUN — a repository that has just installed the gem has `recorded_count == total_specs` on day one —
+  # so the cap fires as the normal case rather than the exotic one, and `recorded_count > rows.length`
+  # is `UnannotatedExamples#truncated?` without this block shipping the comparison instead of the two
+  # numbers it is drawn from.
+  #
+  # NO SECOND COUNT, where all three siblings serve one. Each of theirs discloses COVERAGE of the
+  # column its rows are ranked by, and this block ranks by nothing and serves neither nullable column
+  # — see `SpecObservation::UNANNOTATED_POPULATION_COUNTS`, where the omission is argued as a choice
+  # rather than left as an absence. `limit` is READ OFF `SpecObservation::UNANNOTATED_EXAMPLES_LIMIT`
+  # rather than restated, on the precedent every capped block here sets — it is its own constant and is
+  # neither `FILE_EXAMPLES_LIMIT` nor `REPEATED_DESCRIPTION_EXAMPLES_LIMIT`.
+  #
+  # EXACTLY ONE ADDITIONAL QUERY WHEN ASKED, AND NONE WHEN NOT, on the three drill-ins' rule: the gate
+  # is the ASK and it is decided before any read is issued, so a client that never sends the parameter
+  # pays nothing for the key's existence. The read is bounded by the RUN rather than by the suite and
+  # rides `index_spec_observations_on_test_run_id`, EXPLAIN-certified for exactly this narrow in
+  # `spec/models/spec_observation_spec.rb`.
+  def serialized_unannotated_examples(test_run)
+    return nil unless requested_unannotated_examples?
+
+    examples = UnannotatedExamples.for(test_run)
+
+    {
+      # NO ASK RESTATED, where all three sibling drill-ins open with one. `path`, `name` and `name`
+      # echo back the key the client picked out of a ranking; this parameter carries no value to echo,
+      # because the population is the run's and the run is named by `run_anchor`. See
+      # `RequestedUnannotatedExamplesParam` for why this parameter is the flag-style one.
+      #
+      # FOUR FIELDS, NOT THE OTHER PER-EXAMPLE BLOCKS' SIX, and the difference is asserted rather than
+      # structural on purpose — the same way their agreement is. A `contain_exactly` over these names
+      # in this block's request spec goes red if `duration_seconds` or `outcome` is added here, and the
+      # siblings' own `contain_exactly`s go red if one of theirs is dropped to match, so neither set
+      # can drift into the other unnoticed.
+      rows: examples.rows.map do |observation|
+        {
+          name: observation.name,
+          file_path: observation.file_path,
+          line_number: observation.line_number,
+          spec_file_path: observation.spec_file_path
+        }
+      end,
+      recorded_count: examples.recorded_count,
+      limit: SpecObservation::UNANNOTATED_EXAMPLES_LIMIT
     }
   end
 

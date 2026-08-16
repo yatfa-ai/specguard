@@ -254,6 +254,80 @@ RSpec.describe SpecObservation do
       end
     end
 
+    # The read whose grain is the run's ANNOTATION STATUS — the slice behind the dashboard's
+    # *"SpecGuard cannot see the other N tests"*, and the only read on this model that looks at
+    # `status` at all.
+    #
+    # `seed` above writes every row `unannotated`, which is the faithful default (a suite mid-adoption
+    # is mostly unannotated, and the ingest fixtures say so) and is exactly the fixture that would
+    # certify nothing here: a predicate that had been dropped altogether returns the same 500 rows.
+    # So these examples ANNOTATE part of the seeded run explicitly, and every assertion is about what
+    # the predicate leaves behind.
+    describe "the examples one run recorded without an annotation" do
+      before { seed(run) }
+
+      # Flips seeded rows to `annotated`, which is the only status `Ingest::Payload::STATUSES` admits
+      # beside the one this read selects — the fact that makes "not unannotated" the same set as
+      # "annotated" and lets the API reconcile this list against `total_specs - annotated_specs`.
+      def annotate(count)
+        run.spec_observations.order(:id).limit(count).update_all(status: "annotated")
+      end
+
+      it "returns the run's unannotated rows and no annotated one" do
+        annotate(3)
+        rows = described_class.unannotated_in(run, limit: rows_per_run).to_a
+
+        expect(rows.size).to eq(rows_per_run - 3)
+        expect(rows.map(&:status).uniq).to eq(["unannotated"])
+        expect(rows.map(&:test_run_id).uniq).to eq([run.id])
+      end
+
+      # The window is counted after the WHERE and before the LIMIT, so it describes the run's whole
+      # unannotated population rather than the page — which is the figure the API serves as
+      # `recorded_count` and invites a client to reconcile against the run's counters.
+      it "counts the whole unannotated population on every row of a capped page" do
+        annotate(100)
+        rows = described_class.unannotated_in(run, limit: 10).to_a
+
+        expect(rows.size).to eq(10)
+        expect(rows.map { it["unannotated_recorded_count"] }.uniq).to eq([rows_per_run - 100])
+      end
+
+      # File-navigable, and a total order at every term — which the cap makes load-bearing rather
+      # than tidy: a reader annotating one page and asking again must be walking a list, not
+      # re-rolling one. `seed` writes `line_number` ascending across 25 files, so a read that had
+      # kept insertion order would come back in `id` order and disagree here.
+      it "orders by file, then line, then id, the same way twice" do
+        first = described_class.unannotated_in(run, limit: 40).to_a
+        second = described_class.unannotated_in(run, limit: 40).to_a
+
+        expect(first.map { [it.spec_file_path, it.line_number, it.id] })
+          .to eq(first.map { [it.spec_file_path, it.line_number, it.id] }.sort)
+        expect(first.map(&:id)).to eq(second.map(&:id))
+        expect(first.map(&:spec_file_path).uniq.size).to be > 1
+      end
+
+      # A fully-annotated run is the state the metric exists to REACH, so it is an ordinary empty
+      # read rather than an error — and the window has no row to ride on, which is why the caller's
+      # count is a `to_i` over nil rather than an assumption that one row came back.
+      it "returns nothing for a run whose every example is annotated" do
+        annotate(rows_per_run)
+
+        expect(described_class.unannotated_in(run).to_a).to be_empty
+      end
+
+      # Scoped to ONE run, asserted rather than assumed: the whole point of the API block is that it
+      # describes the run `run_anchor` names, and a read that had narrowed on `status` alone would
+      # return the other run's rows too and still look right on a single-run fixture.
+      it "narrows to the run it was handed and not to the repository" do
+        other = create_test_run(repository: repository, commit_sha: "feedfacecafebabf")
+        seed(other)
+
+        expect(described_class.unannotated_in(other, limit: rows_per_run).map(&:test_run_id).uniq)
+          .to eq([other.id])
+      end
+    end
+
     # The only examples that need a populated table: a planner given three rows sequentially scans
     # everything, and an EXPLAIN assertion over that would say nothing about the indexes at all. At
     # twenty runs a single run is ~5% of the table, so "use the index" is a decision rather than a
@@ -398,6 +472,31 @@ RSpec.describe SpecObservation do
         plan = plan_for_actual_sql { described_class.with_description(run, "example 3").to_a }
 
         expect(plan).to match(INDEXED_BY_RUN)
+        expect(plan).not_to match(/Seq Scan on spec_observations/)
+      end
+
+      # The same certification for the ANNOTATION drill-in, and the assertion is deliberately the
+      # SHARED `INDEXED_BY_RUN` matcher rather than a named index — which is the finding this example
+      # carries.
+      #
+      # There is no `(test_run_id, status)` index and this read does not want one: `status` is two
+      # values over the whole table, which is the shape an index serves worst, and it is the RUN
+      # narrow that makes the read affordable. What has to stay true at the design point is what this
+      # asserts — one run reached through an index rather than every run's rows walked — and the
+      # `status` predicate then filters the rows already read.
+      #
+      # The ORDER BY leads on `spec_file_path`, which `index_spec_observations_on_test_run_id_and_spec_file_path`
+      # DOES lead on after the run, so the planner is free to take the sort from that index or to read
+      # the narrower one and sort afterwards; both are bounded by the RUN. The matcher tolerates
+      # either for that reason, exactly as it tolerates the two access methods its own comment names.
+      #
+      # Captured off the wire rather than EXPLAINed from a hand-written copy, for the reason the two
+      # examples above give: the predicate alone is not the read the block makes, which adds a
+      # projection, an ordering and a cap on top of it.
+      it "reads the run's unannotated examples off an index rather than scanning the table" do
+        plan = plan_for_actual_sql { described_class.unannotated_in(run).to_a }
+
+        expect(plan).to match(/#{INDEXED_BY_RUN.source}|index_spec_observations_on_test_run_id_and_spec_file_path/)
         expect(plan).not_to match(/Seq Scan on spec_observations/)
       end
 

@@ -413,6 +413,33 @@ class SpecObservation < ApplicationRecord
   # to disagree with it.
   REPEATED_DESCRIPTION_EXAMPLES_LIMIT = 25
 
+  # How many of one run's UNANNOTATED examples the annotation drill-in returns. Its own constant, by
+  # the rule every `_LIMIT` above obeys, and it is the one on this list whose population is not a
+  # slice of a run at all.
+  #
+  # ⭐ IT IS THE FIRST CAP HERE WHOSE POPULATION IS ROUTINELY THE WHOLE RUN, which is why it is
+  # neither `FILE_EXAMPLES_LIMIT` nor `REPEATED_DESCRIPTION_EXAMPLES_LIMIT` under another name. Those
+  # two cap a LISTING of one already-picked row's contents — one file's examples, one description's
+  # members — and both populations are bounded by something a person wrote out. This one is every
+  # example of the run that carries no annotation, and on the repository this block exists for — one
+  # that has just installed the gem and been told to raise its annotation coverage — that is EVERY
+  # ROW OF THE RUN: 20,000 at the roadmap's design point, on day one, by definition. The cap is
+  # therefore not disclosing the tail of a small population, it is cutting a large one, and the two
+  # constants above were sized against the opposite case.
+  #
+  # ONE HUNDRED, and the number is chosen for what the reader DOES with the list rather than for how
+  # long it is. This is a worklist — the rows are opened, annotated and re-delivered, after which the
+  # ask returns the next hundred — so the figure that matters is a batch somebody can actually work
+  # through in one sitting, not a fraction that would let the page be mistaken for the whole answer.
+  # It sits ABOVE `FILE_EXAMPLES_LIMIT` because a file's fifty are usually that file's WHOLE story
+  # and these hundred essentially never are, and well BELOW "send them all", because
+  # `recorded_count` beside the rows is what states the real size and a 20,000-row JSON body states
+  # it far worse.
+  #
+  # Named, like all of them, because the block reports the figure back to the client and a number
+  # explaining a list's length must not be able to disagree with it.
+  UNANNOTATED_EXAMPLES_LIMIT = 100
+
   # What the drill-down's caption has to say ABOUT the rows under it, counted in the SAME read that
   # returns them — `COUNT(*) OVER ()` and `COUNT(duration_seconds) OVER ()`, which count non-nulls.
   #
@@ -450,6 +477,32 @@ class SpecObservation < ApplicationRecord
   # describes is exactly the population the window sees.
   DESCRIPTION_POPULATION_COUNTS = "COUNT(*) OVER () AS description_recorded_count, " \
                                   "COUNT(duration_seconds) OVER () AS description_timed_count"
+
+  # What the ANNOTATION drill-in has to say about the rows under it, counted in the same read that
+  # returns them — and its OWN constant, on the rule the two pairs above state and
+  # `UNSTABLE_TEST_RUN_POPULATION_COUNTS` states again: the aliases are read back as record
+  # ATTRIBUTES by name, so a shared alias would have one block reading another block's population
+  # under its own name. Here that would be worse than ill-fitting, it would be the one falsehood this
+  # block cannot ship: `file_recorded_count` on these rows would report the run's UNANNOTATED
+  # population under a name claiming a file's, on the only block whose count a client is invited to
+  # reconcile against `total_specs - annotated_specs`.
+  #
+  # ⭐ ONE FIGURE, NOT TWO, and the omission is the point rather than an economy. Every sibling pair
+  # carries a second window disclosing COVERAGE of the column its rows are ranked by —
+  # `COUNT(duration_seconds)` for the two that rank by time, `COUNT(outcome)` for the one read for
+  # outcomes. This block ranks by nothing and serves neither column: its rows are `name`,
+  # `spec_file_path`, `file_path` and `line_number`, which is a file-navigable worklist, and
+  # `line_number` is `null: false` while `file_path` is too — so there is no nullable served column
+  # for a coverage figure to be ABOUT. A `COUNT(duration_seconds)` here would disclose the coverage of
+  # a column the block does not serve, which is a number a client could only misuse.
+  #
+  # Windows are evaluated after the WHERE and before the LIMIT, so the figure covers the whole
+  # UNANNOTATED population however few rows come back: the cap is disclosed against what the run
+  # actually holds rather than against itself. Riding on the listed rows rather than taken as a second
+  # aggregate, for the reason `FILE_POPULATION_COUNTS` gives — this list excludes nothing WITHIN the
+  # population it selects, so the population the count describes is exactly the population the window
+  # sees.
+  UNANNOTATED_POPULATION_COUNTS = "COUNT(*) OVER () AS unannotated_recorded_count"
 
   # **The retention rule.** How many runs OF ONE BRANCH keep their rows; everything older than the
   # Nth most recent run on that branch is deleted by {Ingest::ObservationPruner} after the ingest
@@ -759,6 +812,76 @@ class SpecObservation < ApplicationRecord
     where(test_run_id: test_run.id, name: name)
       .select(Arel.sql("spec_observations.*, #{DESCRIPTION_POPULATION_COUNTS}"))
       .order(Arel.sql("duration_seconds DESC NULLS LAST"), id: :asc)
+      .limit(limit)
+  end
+
+  # ONE run's UNANNOTATED examples — the rows behind the subtraction the dashboard prints as *"SpecGuard
+  # cannot see the other N tests"*, and the one ranking on this endpoint that had no rung under it.
+  #
+  # The third sibling of `.in_file` and `.with_description` and deliberately shaped like them, because
+  # it is the same kind of read one axis over: those narrow a run to the rows of a FILE and to the rows
+  # carrying one NAME, and this narrows it to the rows carrying one STATUS. What makes it different is
+  # what it drills out of — not a ranking of the run's rows but a COUNT PAIR on the run itself,
+  # `total_specs_count` and `annotated_specs_count`, which is a subtraction and names nothing.
+  #
+  # == It agrees with the headline BY CONSTRUCTION, which is the whole reason it reads this column
+  #
+  # `Ingest::Payload#annotated_specs` is `@specs.reject { |spec| spec["status"] == "unannotated" }` and
+  # its size is `annotated_specs_count`; `Ingest::ObservationRecorder#attributes` writes that same
+  # `spec["status"]` onto every row it inserts. So `total_specs_count - annotated_specs_count` and a
+  # `WHERE status = 'unannotated'` over the run's rows are the SAME PREDICATE evaluated twice — one
+  # derivation, not two that agree today. That is the property this file demands of a count and its
+  # list everywhere else, and it is why no new column, no counter and no migration came with this read.
+  #
+  # ⚠️ THE WORD IS `Ingest::Payload`'S, NOT THIS MODEL'S, and it is safe to compare against literally
+  # only because that class validates it: `Ingest::Payload::STATUSES` is `%w[annotated unannotated]`,
+  # which is what makes "not unannotated" the same set as "annotated" — the payload's own comment says
+  # so at `#annotated_specs`. A third status added there would need this read revisited in the same
+  # commit; nothing here can detect one, and `spec/requests/api/v1/repository_unannotated_examples_spec.rb`
+  # reconciles this count against the run's two counters so the pair cannot drift silently.
+  #
+  # It is deliberately NOT spelled as `where.not(status: "annotated")`, which selects the same rows
+  # today and would stop doing so the moment a third status existed — and would stop by silently
+  # ADOPTING it into a list captioned "unannotated" rather than by going red.
+  #
+  # == The ordering is FILE-NAVIGABLE, not a ranking
+  #
+  # The two siblings sort by `duration_seconds DESC NULLS LAST`, because a reader arriving at them has
+  # come to find what a file or a description COSTS. Nobody arrives here for that: this is a worklist of
+  # tests to go and annotate, and duration is not merely a different axis but a misleading one — an
+  # unannotated example is disproportionately likely to be untimed (a test that never ran is one way an
+  # example goes unannotated), so a by-duration order would put the rows a reader can act on LEAST at
+  # the head under a `NULLS LAST` tail nobody reaches.
+  #
+  # `spec_file_path`, then `line_number`, then `id`: the order somebody would open the files in, so the
+  # rows of one file arrive together and in the order they sit in it. Every one of the three is total
+  # where the two before it tie, so the same run returns the same page twice — which the cap makes
+  # load-bearing rather than tidy, since a reader annotating the first hundred and asking again must
+  # not be handed a re-shuffled hundred. `line_number` is `null: false`, so nothing in the middle term
+  # can be NULL; `spec_file_path` is nullable BY SCHEMA and cannot be in practice, because
+  # `Ingest::ObservationRecorder#attributes` falls back to the `null: false` `file_path` — and where
+  # Postgres sorts a NULL under a plain `ASC` (last) is the survivable direction either way.
+  #
+  # == Query cost
+  #
+  # One statement, bounded by the size of ONE RUN and issued only when the parameter was sent. Rides
+  # `index_spec_observations_on_test_run_id`: there is no `(test_run_id, status)` index and this read
+  # does not want one — `status` is two values over a whole table, which is the shape an index serves
+  # worst, and the run narrow is what makes the read affordable. The ORDER BY leads on
+  # `spec_file_path`, which `index_spec_observations_on_test_run_id_and_spec_file_path` DOES lead on
+  # after the run, so the planner may take the sort from that index or read the narrow one and sort the
+  # rows; both are bounded by the run rather than by the suite, and the certification in
+  # `spec/models/spec_observation_spec.rb` asserts what actually matters — one run reached through an
+  # index rather than every run's rows walked.
+  #
+  # The projection carries `UNANNOTATED_POPULATION_COUNTS`, so a caller gets the run's unannotated
+  # population off the same read as the rows. That figure is an ATTRIBUTE of the returned records
+  # rather than a separate value, which makes this relation one to load and read — `UnannotatedExamples`
+  # is its one caller — rather than one to count or paginate further.
+  def self.unannotated_in(test_run, limit: UNANNOTATED_EXAMPLES_LIMIT)
+    where(test_run_id: test_run.id, status: "unannotated")
+      .select(Arel.sql("spec_observations.*, #{UNANNOTATED_POPULATION_COUNTS}"))
+      .order(:spec_file_path, :line_number, :id)
       .limit(limit)
   end
 
