@@ -3288,7 +3288,7 @@ class Api::V1::RepositoriesController < Api::BaseController
   #
   # GUARDED HERE AND NOT BY WIDENING THE MODEL — the same shape `RepositoriesController#show` already
   # uses (`if @latest_test_run && @previous_test_run`), and the reason `spec_directory_growth` states
-  # for its own guard: teaching `.for` to accept a nil would give the object an eleventh absence
+  # for its own guard: teaching `.for` to accept a nil would give the object a further absence
   # state that the dashboard — its other caller, which guards for itself — can never reach, and would
   # move a decision the two call sites make identically into a contract only one of them relies on.
   #
