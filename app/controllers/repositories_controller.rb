@@ -42,20 +42,16 @@ class RepositoriesController < ApplicationController
   # list. The fifth is a per-row question asked by repositories/show, once per API key.
   helper_method :owns_repository?, :key_count_visible?, :api_key_count, :latest_run, :former_member?
 
-  # Everything the viewer can open: what they own, plus what has been shared with them. Kept as one
-  # relation rather than `owned + shared`, because concatenating two Arrays orders them
-  # owned-then-shared and silently loses the alphabetical order the page is sorted by.
-  #
-  # No `.distinct`: RepositoryMembership rejects a row for the owner outright
-  # (`user_is_not_the_owner`), so the two sides cannot overlap. A defensive uniq here would mask
-  # that invariant breaking rather than let it fail loudly.
+  # Everything the viewer can open, through the one seam that defines that set — see
+  # `Repository.accessible_by`, which carries the union rule and the reason it stays a relation
+  # rather than becoming `owned + shared`.
   #
   # `includes(:user)` because every shared card names its owner. Without it that is one user query
   # per shared card — the same footing `shared_permissions` puts its own per-card question on, so
-  # the page costs the same whether the list has one shared card or fifty.
+  # the page costs the same whether the list has one shared card or fifty. It stays HERE and not on
+  # the seam: it is this page's per-card concern, and the other reader of that set has no use for it.
   def index
-    @repositories = Repository.where(user_id: current_user.id)
-                              .or(Repository.where(id: current_user.repository_memberships.select(:repository_id)))
+    @repositories = Repository.accessible_by(current_user)
                               .includes(:user)
                               .order(:github_full_name)
   end

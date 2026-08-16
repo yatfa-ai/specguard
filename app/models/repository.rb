@@ -49,6 +49,31 @@ class Repository < ApplicationRecord
                                format: { with: FULL_NAME_FORMAT, message: "must look like org/repo" }
   validates :name, presence: true
 
+  # Everything `user` may open: what they own, UNION what has been shared with them through a
+  # membership. That union is this application's read-side authorization boundary for a repository,
+  # and it lives here — on the set — so that every surface asking "which repositories may this
+  # person see" asks the same question of the same place. Written out at a call site it is an
+  # agreement between files with nothing enforcing it, and the two ways it can drift are a link to a
+  # 403 and a repository the owner cannot find.
+  #
+  # ONE relation, never `owned + shared`. Concatenating the two sides produces an Array, at which
+  # point a caller's `.order` no longer applies and its list silently becomes owned-then-shared
+  # (pinned by spec/requests/repository_sharing_spec.rb). Returning a relation is also what lets
+  # each caller keep chaining its own concerns — an index page's `includes(:user)`, a batch lookup's
+  # `LOWER(...) IN (...)` — without any of them landing here.
+  #
+  # No `.distinct`: RepositoryMembership rejects a row for the owner outright
+  # (`user_is_not_the_owner`), so the two sides cannot overlap. A defensive uniq here would mask
+  # that invariant breaking rather than let it fail loudly.
+  #
+  # Bare `where(...)` on both sides rather than `Repository.where(...)`: inside a scope body the
+  # implicit receiver is the current relation, and `.or` requires both of its operands to be
+  # structurally compatible — building the right-hand side off the model instead would discard
+  # whatever the caller had already chained on.
+  scope :accessible_by, ->(user) {
+    where(user_id: user.id).or(where(id: user.repository_memberships.select(:repository_id)))
+  }
+
   def github_url = "https://github.com/#{github_full_name}"
 
   # Ties broken by id so two runs ingested in the same instant still order deterministically.
