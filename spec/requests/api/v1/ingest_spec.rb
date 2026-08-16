@@ -723,6 +723,111 @@ RSpec.describe "POST /api/v1/ingest", type: :request do
       expect(response.parsed_body["message"]).to include("must be null")
     end
 
+    # Per-example `duration`, the envelope's `duration_seconds` one grain down. It reaches a
+    # `t.float` column through `upsert_all`, whose cast is a bare `to_f` — so before this validator
+    # a Hash raised `NoMethodError` inside `Ingest::RunRecorder`'s transaction (a 500 from an
+    # endpoint whose whole contract is a collected 400), and `"abc"`/`true`/`"-3"` became `0.0`,
+    # `1.0` and `-3.0`: not nil, therefore `timed`, therefore counted and summed and ranked as
+    # genuine measurements. `outcome` is deliberately left unvalidated beside it because it is
+    # echoed verbatim; `duration` is arithmetic.
+    #
+    # Not reachable from the shipped RSpec formatter, which always sends a Float. The population is
+    # the one the envelope validators already exist for: third-party and non-Ruby producers.
+    describe "a spec's own duration" do
+      # The branch that used to 500. Asserted as a *status* rather than as "no exception", because
+      # `NoMethodError` escaping the transaction is exactly what produced the 500.
+      it "answers 400, not 500, for a Hash duration, and persists nothing" do
+        ingest(ingest_payload(specs: [unannotated_spec(file_path: "spec/models/user_spec.rb",
+                                                       line_number: 40,
+                                                       duration: { seconds: 1, nanos: 5 })]))
+
+        expect(response).to have_http_status(:bad_request)
+        expect(response.parsed_body["message"]).to include("spec/models/user_spec.rb:40",
+                                                          "duration must be a non-negative number")
+        expect(TestRun.count).to eq(0)
+        expect(SpecObservation.count).to eq(0)
+      end
+
+      it "rejects an Array duration" do
+        ingest(ingest_payload(specs: [unannotated_spec(duration: [1.5])]))
+
+        expect(response).to have_http_status(:bad_request)
+        expect(response.parsed_body["message"]).to include("duration must be a non-negative number")
+        expect(TestRun.count).to eq(0)
+      end
+
+      # `"1.5"` is the plausible one — a producer that stringified its numbers — and `to_f` would
+      # have accepted it silently. `"abc"` and `true` are the ones that fabricate 0.0 and 1.0.
+      it "rejects a String duration even when it looks like a number" do
+        ["1.5", "abc", "-3"].each do |value|
+          ingest(ingest_payload(specs: [unannotated_spec(duration: value)]))
+
+          expect(response).to have_http_status(:bad_request)
+          expect(response.parsed_body["message"]).to include("duration must be a non-negative number")
+        end
+
+        expect(SpecObservation.count).to eq(0)
+      end
+
+      it "rejects a boolean duration, which would otherwise be recorded as 1.0" do
+        ingest(ingest_payload(specs: [unannotated_spec(duration: true)]))
+
+        expect(response).to have_http_status(:bad_request)
+        expect(response.parsed_body["message"]).to include("duration must be a non-negative number")
+        expect(SpecObservation.count).to eq(0)
+      end
+
+      # The same rule the envelope applies at the run grain, applied at the grain the run is
+      # composed of — a negative timing is not a measurement at either.
+      it "rejects a negative duration, matching duration_seconds' rule one level up" do
+        ingest(ingest_payload(specs: [unannotated_spec(duration: -0.5)]))
+
+        expect(response).to have_http_status(:bad_request)
+        expect(response.parsed_body["message"]).to include("duration must be a non-negative number")
+        expect(SpecObservation.count).to eq(0)
+      end
+
+      # The refusal now runs through `payload.valid? == false`, so it takes the whole 400 path —
+      # including the rejection row SPGD-563 writes there. Before this change the request 500'd and
+      # left no record at all, so the refusal was invisible to the observability built for it.
+      it "leaves an IngestRejection row behind, as every other refusal does" do
+        expect { ingest(ingest_payload(specs: [unannotated_spec(duration: { seconds: 1 })])) }
+          .to change(IngestRejection, :count).by(1)
+
+        expect(IngestRejection.last.details).to eq(response.parsed_body["details"])
+      end
+
+      # "Collected rather than raised" has to hold for this field too, or a client with one bad
+      # duration fixes it and discovers the next error on the following round trip.
+      it "does not suppress the other specs' errors" do
+        ingest(ingest_payload(specs: [unannotated_spec(line_number: 1, duration: "abc"),
+                                      unannotated_spec(line_number: 2, name: ""),
+                                      unannotated_spec(line_number: 3).merge(line_number: 0)]))
+
+        details = response.parsed_body["details"]
+
+        expect(response).to have_http_status(:bad_request)
+        expect(details.size).to eq(3)
+        expect(details.grep(/duration/).size).to eq(1)
+        expect(details.grep(/name/).size).to eq(1)
+        expect(details.grep(/line_number/).size).to eq(1)
+      end
+
+      # The accepted shapes, unchanged from `main`: the formatter's Float, an Integer, a zero, and
+      # the nil the client sends for an example that never ran.
+      it "still accepts nil and any non-negative Integer or Float" do
+        ingest(ingest_payload(specs: [unannotated_spec(file_path: "spec/a_spec.rb", line_number: 1, duration: 0.42),
+                                      unannotated_spec(file_path: "spec/b_spec.rb", line_number: 2, duration: 0),
+                                      unannotated_spec(file_path: "spec/c_spec.rb", line_number: 3, duration: 7),
+                                      unannotated_spec(file_path: "spec/d_spec.rb", line_number: 4, duration: nil)]))
+
+        expect(response).to have_http_status(:accepted)
+        expect(TestRun.sole.spec_observations.pluck(:file_path, :duration_seconds)).to match_array(
+          [["spec/a_spec.rb", 0.42], ["spec/b_spec.rb", 0.0], ["spec/c_spec.rb", 7.0], ["spec/d_spec.rb", nil]]
+        )
+      end
+    end
+
     it "rejects a negative duration_seconds" do
       ingest(ingest_payload(duration_seconds: -1))
 

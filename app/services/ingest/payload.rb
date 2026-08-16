@@ -153,6 +153,7 @@ module Ingest
       validate_status(spec, index)
       validate_intent(spec, index)
       validate_name(spec, index)
+      validate_duration(spec, index)
     end
 
     def validate_file_path(spec, index)
@@ -226,6 +227,28 @@ module Ingest
       return if value.is_a?(String) && value.strip.present?
 
       @errors << "#{label(spec, index)}: name must be a non-empty string when present"
+    end
+
+    # The per-example sibling of {#validate_duration_seconds}, and deliberately the same rule: a
+    # negative duration is refused at this grain for exactly the reason it is refused at the run
+    # grain, and nil stays ordinary — the client sends `result&.run_time`, so an example that never
+    # ran has no timing and `Ingest::ObservationRecorder` records that nil as a faithful gap.
+    #
+    # Typed at all — unlike `outcome`, which `SpecObservation` states is deliberately unvalidated —
+    # because the two fields are consumed differently. `outcome` is free text echoed back verbatim;
+    # `duration` is summed, counted and ranked (`scope :timed`, `file_durations_in`, `slowest_in`),
+    # so anything that is not a real measurement enters those aggregates as though it were one.
+    # `upsert_all` serializes through `ActiveModel::Type::Float`, whose cast is a bare `to_f`: it
+    # turns `"abc"` into `0.0` and `true` into `1.0` — fabricated timings, indistinguishable
+    # afterwards from measured ones — and raises `NoMethodError` on a Hash or Array, which would
+    # answer 500 from inside `Ingest::RunRecorder`'s transaction where this endpoint promises a
+    # per-spec 400. This validator is the only gate: the model declares no `validates`, the schema
+    # carries no check constraint, and `upsert_all` runs no validations regardless.
+    def validate_duration(spec, index)
+      value = spec["duration"]
+      return if value.nil? || (value.is_a?(Numeric) && !value.negative?)
+
+      @errors << "#{label(spec, index)}: duration must be a non-negative number when present"
     end
 
     # Names the offending spec by its own coordinates, falling back to the index alone when the
