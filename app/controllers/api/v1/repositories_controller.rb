@@ -1670,6 +1670,25 @@ class Api::V1::RepositoriesController < Api::BaseController
   # `null` WHEN THE FLAG WAS NOT SENT, and `null` — not an empty block — for a run that recorded no
   # per-example rows at all, which is `UnannotatedDirectories#recorded?` and the same absence
   # `serialized_spec_directories` answers that run with.
+  #
+  # ⭐ THAT SECOND NULL IS THE OTHER PLACE THESE TWO KEYS OF ONE BLOCK DISAGREE, and it is disclosed
+  # here for the same reason the scope disagreement above is. On a run that recorded no per-example
+  # rows, with the flag sent:
+  #
+  #     unannotated_examples    -> a present block, `rows: []`, `recorded_count: 0`
+  #     unannotated_directories -> `null`
+  #
+  # A client reconciling those is doing exactly the arithmetic the paragraph above was written to
+  # protect, so the difference has to be readable rather than inferred from two absent things looking
+  # alike. It is NOT an inconsistency to iron out. The sibling's zero is ambiguous by construction —
+  # "fully annotated" and "recorded nothing at all" are the same `recorded_count: 0` there, and that
+  # block's own comment sends a client to neighbouring keys to tell such pairs apart. This key IS one
+  # of those neighbours: a PRESENT map beside that zero means the run has a per-area grain and the
+  # zero is the success state; a `null` map means the run recorded nothing and the zero is an absence
+  # of data. Serving `rows: []` here instead would spend a distinction a client has no other way to
+  # make in order to make two keys look the same. Both halves are pinned together in
+  # `repository_unannotated_examples_spec.rb`, beside the fully-annotated run that reaches the same
+  # zero with the map present.
   def serialized_unannotated_directories(test_run)
     return nil unless requested_unannotated_examples?
 

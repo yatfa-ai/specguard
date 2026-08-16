@@ -746,6 +746,45 @@ RSpec.describe "GET /api/v1/repository — latest_run.unannotated_examples", typ
       # this key's rather than the endpoint's.
       expect(body.dig("latest_run", "spec_directories", "rows")).to be_present
     end
+
+    # THE OTHER WAY THIS KEY IS NULL, and the one the flag cannot explain: a run that recorded no
+    # per-example rows AT ALL has no per-area grain to rank, which is `UnannotatedDirectories#recorded?`
+    # rather than the gate the example above pins. The whole pre-SPGD-255 corpus is that run, plus
+    # every client that sends no per-example detail.
+    #
+    # BOTH HALVES IN ONE EXAMPLE, on the same reasoning as the scope-disagreement pin further up: this
+    # is the second place these two keys of one block answer differently, and only the pair says which
+    # difference is being asserted. The sibling's `recorded_count: 0` is ambiguous by construction, and
+    # this `null` is what discriminates it — so the second half below reaches the SAME zero from a run
+    # that did record rows and gets the map PRESENT. That is the discrimination the null buys, and it
+    # is why a serializer "fixing" this disagreement into `rows: []` would be taking something away.
+    it "is null for a run with no per-example rows, while the worklist answers with a block" do
+      bare = separate_repository("acme/no-observations")
+      create_test_run(repository: bare, commit_sha: "norows000623", duration_seconds: 42.5)
+      run = latest_run(key: bare.api_keys.create!, query: ask)
+
+      # Asserted as the REASON rather than the null alone — the rule the sibling blocks' own bare-run
+      # examples state: a hard-coded `be_nil` here keeps passing if the guard stops being `#recorded?`
+      # and becomes something else that happens to be false on this fixture.
+      expect(bare.latest_test_run.spec_observations).to be_empty
+      expect(run).to have_key("unannotated_directories")
+      expect(run["unannotated_directories"]).to be_nil
+      # The disagreement itself: the worklist answered the SAME run, under the SAME ask, with a block.
+      expect(run["unannotated_examples"]).not_to be_nil
+      expect(run.dig("unannotated_examples", "recorded_count")).to eq(0)
+
+      # And the same zero from a run that recorded rows and has nothing left to annotate — map
+      # present. The two keys read TOGETHER separate "nothing left to do" from "nothing was recorded";
+      # neither key separates them alone, which is the whole of why the two nulls are spelled apart.
+      done = separate_repository("acme/annotated-not-bare")
+      ingest(done, [annotated_spec(file_path: annotated_file, line_number: 4)])
+      done_run = latest_run(key: done.api_keys.create!, query: ask)
+
+      expect(done_run.dig("unannotated_examples", "recorded_count")).to eq(0)
+      expect(done_run["unannotated_directories"]).not_to be_nil
+      expect(done_run.dig("unannotated_directories", "rows"))
+        .to eq([{ "path" => "spec/models", "unannotated_count" => 0, "recorded_count" => 1 }])
+    end
   end
 
   # AC3. The distinction this key must not collapse — and the sharpest instance of it on the block,

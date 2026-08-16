@@ -86,10 +86,6 @@ class UnannotatedDirectories
   # `SpecDirectoryDurations` discloses. See the class comment on why a zero-debt area is a row here.
   attr_reader :directory_count
 
-  # There are areas this run touched that the list does not show. The state a caption has to SAY rather
-  # than leave a reader to infer from a list whose length happens to equal a limit they cannot see.
-  def truncated? = directory_count > rows.size
-
   # Whether this run recorded per-example rows AT ALL — the question that decides whether the surface
   # has anything to say. A group exists here if and only if a row exists, so this is `rows` being
   # non-empty and needs no separate count: the aggregate cannot return an area the run wrote nothing
@@ -101,11 +97,16 @@ class UnannotatedDirectories
 
   # One area's annotation debt, and the population it was counted against.
   #
-  # No `#coverage_label`, no `#fraction`, no `#complete?`. Two of those would be one line and all three
-  # would be plausible, which is the argument against shipping them — `UnannotatedExamples` refuses
-  # `recorded?` and `truncated?` on exactly this reasoning: a predicate no surface calls is a claim this
-  # object makes that nothing has ever checked. This rollup is API-only; the serializer ships the two
-  # integers and nothing derived from them. Whoever builds the dashboard panel should add what it calls,
-  # with the spec that runs it.
+  # No `#coverage_label`, no `#fraction`, no `#complete?`, AND NO `#truncated?` — the last of those was
+  # written here and taken back off, which is this rule applied to this class rather than merely
+  # restated by it. `UnannotatedExamples` refuses `recorded?` and `truncated?` on exactly this
+  # reasoning: a predicate no surface calls is a claim this object makes that nothing has ever checked.
+  # `#recorded?` stays because `serialized_unannotated_directories` calls it and request examples run
+  # BOTH of its answers; `directory_count > rows.size` had no caller and no spec, and the truncation it
+  # would have phrased is already shipped as the two operands a client compares themselves — which is
+  # what the comment on `directory_count` says the disclosure is. `SpecDirectoryDurations#truncated?`
+  # is not a counter-precedent: its panel partials call it. This rollup is API-only; the serializer
+  # ships the integers and nothing derived from them. Whoever builds the dashboard panel should add
+  # what it calls, with the spec that runs it.
   Row = Struct.new(:path, :unannotated_count, :recorded_count, keyword_init: true)
 end
