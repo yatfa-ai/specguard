@@ -201,6 +201,33 @@ RSpec.describe "Repository rejected deliveries", type: :request do
     end
   end
 
+  # Whether the panel's basis line calls what it is showing "a recent window rather than the whole
+  # history" — a claim about the POPULATION, and one it may only make when the panel's limit really
+  # did leave a refusal off the page.
+  #
+  # The absent-sentence example is the defect. `RejectedIngests#bounded?` read
+  # `rows.size >= PANEL_LIMIT`, and a full page is not evidence of a cut one: a repository refused
+  # exactly ten times — its whole history, five times inside `REPOSITORY_RETENTION_ROWS` — was told
+  # it was looking at a window. The present-sentence example is here because an absence assertion
+  # alone is satisfied by a matcher that never matches anything.
+  describe "the disclosure that the list is a window" do
+    it "says so when the panel's limit really did leave a refusal off the page" do
+      (IngestRejection::PANEL_LIMIT + 1).times { refuse_a_delivery }
+      visit_repository
+
+      expect(panel.all("tbody tr").size).to eq(IngestRejection::PANEL_LIMIT)
+      expect(panel_text).to match(/recent window rather than the whole history/i)
+    end
+
+    it "does not call a complete history a window when it fills the page exactly" do
+      IngestRejection::PANEL_LIMIT.times { refuse_a_delivery }
+      visit_repository
+
+      expect(panel.all("tbody tr").size).to eq(IngestRejection::PANEL_LIMIT)
+      expect(panel_text).not_to match(/recent window rather than the whole history/i)
+    end
+  end
+
   # The DOM this panel puts on the page is bounded by the RULE, not by what the client sent.
   #
   # This is the fence the first round did not have, and its absence is instructive: every example

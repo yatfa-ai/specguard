@@ -1591,7 +1591,10 @@ RSpec.describe "Repository registration and API keys", type: :request do
       # is the property that degrades when a widened tuple acquires callers.
       # RECOUNTED AT 20 by SPGD-563, which added the "Rejected deliveries" panel: ONE further read,
       # and the first on this page that is not of `spec_observations` — the newest
-      # `ingest_rejections` rows of this repository, capped at `IngestRejection::PANEL_LIMIT`.
+      # `ingest_rejections` rows of this repository, bounded by the panel's limit. SPGD-601 made
+      # that query ask for ONE row more than the panel renders, so the extra row can answer
+      # "is there more history than this page shows" without a second count; the LIMIT value moved
+      # and the number of round trips did not, which is the property this budget pins.
       #
       # Unlike the six reads above, this one is NOT issued because an empty aggregate comes back
       # empty on this fixture. It is issued because the panel is deliberately ungated: a repository

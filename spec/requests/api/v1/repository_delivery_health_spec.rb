@@ -190,6 +190,20 @@ RSpec.describe "GET /api/v1/repository — delivery_health", type: :request do
       expect(health["rejections"].size).to eq(IngestRejection::PANEL_LIMIT)
       expect(health["rejections_window"]["bounded"]).to be(true)
     end
+
+    # The boundary the example above cannot reach, and the one the old predicate got wrong: it read
+    # `rows.size >= PANEL_LIMIT`, so a repository refused EXACTLY ten times — its complete lifetime
+    # history, sitting well inside `REPOSITORY_RETENTION_ROWS` — served `bounded: true` and told an
+    # agent it had not been shown everything. It had. `bounded` is a fact about the population, so
+    # the two examples differ by ONE refusal and disagree.
+    it "reports an unbounded window when a full page is the whole history" do
+      IngestRejection::PANEL_LIMIT.times { |i| refuse(at: i.hours.ago) }
+
+      health = delivery_health
+
+      expect(health["rejections"].size).to eq(IngestRejection::PANEL_LIMIT)
+      expect(health["rejections_window"]["bounded"]).to be(false)
+    end
   end
 
   # ── The two truncation bounds are independent ─────────────────────────────────────────────────
