@@ -167,7 +167,26 @@ class Api::V1::RepositoriesController < Api::BaseController
         # `acceptance_reported_by` names the key that answers what this one cannot, rather than
         # leaving a client to discover the distinction by being misled by it once.
         last_used_at: current_api_key.last_used_at&.iso8601,
-        acceptance_reported_by: "delivery_health"
+        acceptance_reported_by: "delivery_health",
+        # WHEN THIS KEY WAS LAST REGENERATED, or `null` if it never has been. `regenerate!` retires
+        # the previous token with no grace window and deliberately leaves `last_used_at` standing
+        # (it is the key's history), so a rotation is the one event that can make the timestamp
+        # above describe a credential that no longer exists.
+        #
+        # ⚠️ IT CANNOT TELL YOU THAT *THIS* KEY IS THE UNUSED ONE, and no field on this block could.
+        # `Api::BaseController#authenticate_api_key!` stamps `last_used_at` on the way in, so by the
+        # time this body is built the key that requested it has authenticated BY DEFINITION —
+        # "rotated and not used since" is false for the requester on every response this endpoint
+        # will ever serve. A field for it here would be a constant dressed as a finding.
+        #
+        # The state is real and it is REPOSITORY-scoped: it is a sibling key, holding a token some
+        # other pipeline has not picked up, that a client reaching this endpoint can still learn
+        # about — because reaching it at all proves the client's own key works.
+        # `credential_health` answers it, on the same convention `acceptance_reported_by` follows
+        # above: name the key that answers what this one cannot, rather than leaving a client to
+        # discover the distinction by being misled by it once.
+        rotated_at: current_api_key.rotated_at&.iso8601,
+        rotation_reported_by: "credential_health"
       },
       # WHETHER THIS REPOSITORY'S DELIVERIES ARE BEING ACCEPTED — the verdict `api_key.last_used_at`
       # above cannot give, and the one every run-grain figure below silently depends on.
@@ -185,6 +204,23 @@ class Api::V1::RepositoriesController < Api::BaseController
       #
       # See `serialized_delivery_health`.
       delivery_health: serialized_delivery_health,
+      # WHETHER ANY KEY ON THIS REPOSITORY IS CARRYING A TOKEN NOTHING HAS USED — rotated, with no
+      # authentication since. The other half of "is this repository reachable", and the half
+      # `delivery_health` structurally cannot cover: a 401 resolves no repository and writes no row
+      # (`IngestRejection`), so a pipeline failing on authentication is invisible to every rejection
+      # figure above. This is the one 401-shaped failure the platform can report anyway, because it
+      # need not observe the 401 — it owns the row and stamped the instant the token was retired.
+      #
+      # Beside `delivery_health` and NOT inside `api_key`, on that block's own membership rule: it
+      # is single-key facts about the REQUESTING key, and this is a statement about the
+      # repository's keys as a set — necessarily including keys that are not the one asking, since
+      # the asking one has just authenticated and can never be in this state. See
+      # `serialized_credential_health`.
+      #
+      # SERVED ON EVERY RESPONSE, including when nothing is rotated, for the reason `delivery_health`
+      # states: "no key is stranded" is a POSITIVE FINDING an agent cannot otherwise tell apart from
+      # "SpecGuard does not track that".
+      credential_health: serialized_credential_health,
       # WHICH RUN THE RUN-GRAIN HALF OF THIS BODY DESCRIBES, and why that run. Placed before
       # `latest_run` on the `*_window` blocks' own convention — the disclosure precedes what it
       # discloses about — and it is the window-shaped block for the anchor rather than for a series.
@@ -385,6 +421,41 @@ class Api::V1::RepositoriesController < Api::BaseController
         any_reasons_truncated: rejected_ingests.truncated_rows?
       },
       rejections: rejected_ingests.rows.map { |rejection| serialized_ingest_rejection_row(rejection) }
+    }
+  end
+
+  # The keys whose `last_used_at` was stamped by a token that no longer exists, and the verdict the
+  # UI's "Connection" stat is built on. `ApiKey#rotated_and_unused?` carries the rule — an ordering
+  # comparison between the rotation and the last use, with both nil cases decided — and it is the
+  # same object the two web surfaces read, so the agent and the page cannot disagree about a key.
+  #
+  # `rotated_and_unused` is the whole-repository answer; `keys` names WHICH, because the remedy is
+  # per-key (a secret to update in whichever store that pipeline reads) and a bare boolean would
+  # leave an agent unable to act on it. Key NAMES only — no digest, no hint, nothing that
+  # identifies a token — and the caller already holds a key on this repository, so the set of key
+  # names is not something this discloses to anyone who could not list them anyway.
+  #
+  # Unbounded on purpose: this is a list of things that are WRONG, and a repository has a handful
+  # of keys rather than a stream of them, so there is no window to bound and no truncation to
+  # disclose. ONE query, and the predicate is applied in Ruby rather than as SQL deliberately: a
+  # WHERE clause here would be a second expression of `rotated_and_unused?`'s rule, free to drift
+  # from the one the two web surfaces read, and this block exists to stop the agent and the page
+  # disagreeing about a key.
+  def serialized_credential_health
+    stranded = current_repository.api_keys.select(&:rotated_and_unused?)
+
+    {
+      rotated_and_unused: stranded.any?,
+      keys: stranded.map do |api_key|
+        {
+          name: api_key.name,
+          rotated_at: api_key.rotated_at.iso8601,
+          # The stamp the rotation stranded, served rather than hidden: it is the key's history and
+          # it is exactly the figure a client must not read as a live reachability signal. `null`
+          # when the key was rotated before it ever authenticated.
+          last_used_at: api_key.last_used_at&.iso8601
+        }
+      end
     }
   end
 

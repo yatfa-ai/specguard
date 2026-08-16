@@ -150,6 +150,124 @@ RSpec.describe "Repository registration and API keys", type: :request do
     expect(response.body).not_to include("Not connected yet")
   end
 
+  # A rotation retires a token with no grace window and deliberately leaves `last_used_at` standing
+  # (SPGD-352 — it is the key's history). Until the replacement reaches the CI secrets store every
+  # delivery 401s, and a 401 resolves no repository and writes no row, so nothing in the rejection
+  # figures can see it. This stat can, because it need not observe the 401: it owns the row and
+  # stamped the instant the token was retired.
+  describe "the Connection stat after a rotation" do
+    def connect_panel = Capybara.string(response.body).find("#connect")
+
+    # Collapsed for the reason the rejected-deliveries spec states: these sentences are assembled
+    # across several ERB lines, so an assertion against a literal space would pin the indentation.
+    def connect_text = connect_panel.text.squish
+
+    let(:repository) { create_repository(user: @user) }
+
+    it "stops reading Connected while the replacement has not authenticated" do
+      key = repository.api_keys.create!(name: "CI")
+      key.touch_last_used!
+
+      key.regenerate!
+      get repository_path(repository)
+
+      # The defect verbatim: before this, exactly here, the page said "Connected" in success tone
+      # with a hint dating a token that had stopped existing.
+      expect(key.reload).to be_rotated_and_unused
+      expect(connect_text).not_to include("Connected")
+      expect(connect_panel).to have_no_css(".text-app-success")
+    end
+
+    it "names the rotation and the remedy, rather than only withholding the good news" do
+      repository.api_keys.create!(name: "CI").tap(&:touch_last_used!).regenerate!
+
+      get repository_path(repository)
+
+      # A stat that went quiet would leave the reader with a pipeline failing for a reason nothing
+      # on the page names. The remedy is off this page — a secret in another system — so the copy
+      # has to say which one.
+      expect(connect_text).to include("Key rotated, not yet in use")
+      expect(connect_text).to match(/replacement token has not reached CI/i)
+    end
+
+    it "reads Connected again on the first request that authenticates with the replacement" do
+      key = repository.api_keys.create!(name: "CI")
+      key.touch_last_used!
+      key.regenerate!
+
+      key.touch_last_used!
+      get repository_path(repository)
+
+      # One request, no window to expire and no threshold to cross — the same recovery rule
+      # `RejectedIngests#refusing?` follows.
+      expect(key.reload).not_to be_rotated_and_unused
+      expect(connect_text).to include("Connected")
+      expect(connect_text).not_to include("Key rotated")
+      expect(connect_panel).to have_css(".text-app-success")
+    end
+
+    it "leaves a repository whose keys have never been rotated exactly as it was" do
+      # The control for all three examples above. Same page, same success tone, and it is what
+      # catches an implementation that reports the rotated state over keys nobody has touched.
+      repository.api_keys.create!(name: "CI").touch_last_used!
+
+      get repository_path(repository)
+
+      expect(connect_text).to include("Connected")
+      expect(connect_text).not_to include("Key rotated")
+      expect(connect_panel).to have_css(".text-app-success")
+    end
+
+    it "reports an age belonging to a key that still exists, not the newest age on the table" do
+      # The mixed table, and the case a whole-repository maximum gets wrong on its own: the FRESHEST
+      # `last_used_at` here belongs to the stranded key. A stat reading the maximum would render
+      # "Connected" — correctly, since one key does work — over a hint dating the retired token.
+      live = repository.api_keys.create!(name: "Live")
+      live.update_columns(last_used_at: 3.days.ago)
+      stranded = repository.api_keys.create!(name: "Stranded")
+      stranded.touch_last_used!
+      stranded.regenerate!
+
+      get repository_path(repository)
+
+      expect(connect_text).to include("Connected")
+      # Asserted as the age of the live key rather than as a literal, so this pins the SOURCE of the
+      # figure and not a phrasing.
+      expect(connect_text).to include(
+        "Last request #{ActionController::Base.helpers.time_ago_in_words(live.reload.last_used_at)} ago"
+      )
+      expect(connect_text).not_to include("Last request less than a minute ago")
+    end
+
+    it "keeps a refused delivery ahead of the rotation, being the more specific state" do
+      key = repository.api_keys.create!(name: "CI")
+      post "/api/v1/ingest",
+           params: { specs: [] }.to_json,
+           headers: { "Content-Type" => "application/json",
+                      "Authorization" => "Bearer #{key.raw_token}" }
+      key.regenerate!
+
+      get repository_path(repository)
+
+      # Both are true of this repository, and the branch order decides which is reported. A refusal
+      # is a pipeline doing work and having it thrown away; a rotation is work not started yet.
+      expect(key.reload).to be_rotated_and_unused
+      expect(connect_text).to include("Deliveries refused")
+      expect(connect_text).not_to include("Key rotated")
+    end
+
+    it "still reads 'not connected yet' when the only key was rotated before ever being used" do
+      # Rotated-and-unused is true of this key, and the stat must NOT borrow the rotation branch for
+      # it: nothing has ever authenticated here, which is a different sentence and the honest one.
+      repository.api_keys.create!(name: "CI").regenerate!
+
+      get repository_path(repository)
+
+      expect(connect_text).to include("Not connected yet")
+      expect(connect_text).not_to include("Key rotated")
+    end
+  end
+
   it "offers a name field when minting a key, and shows when each key was created" do
     repository = register_repository
     repository.api_keys.create!(name: "Staging")
@@ -1609,6 +1727,16 @@ RSpec.describe "Repository registration and API keys", type: :request do
       # on the row. The view touches no association, so there is no per-row question for a second
       # round trip to answer — which is also why this stays one query whether the repository has
       # one refusal or the fifty the retention rule bounds it to.
+      #
+      # RECOUNTED AT 19 by SPGD-614, and DOWNWARDS, which is the direction that needs the louder
+      # note: a budget that falls silently is how a page loses a query it was supposed to issue.
+      # This one was `api_keys.maximum(:last_used_at)`, the aggregate the Connection stat read for
+      # "when did this repository last reach the API". That stat now needs a SECOND figure — the
+      # same maximum restricted to keys still carrying the token that stamped them, since a rotated
+      # key's use belongs to a credential that no longer exists — and both are derived from the key
+      # collection `show` already loads for the list. The aggregate was the round trip that could
+      # be dropped, not the one that was added: two claims about one set of rows now cannot
+      # disagree, and they cost one query between them instead of one each.
       it "issues exactly the queries the page issued before the shard counts were read" do
         repository = create_repository(user: @user)
         sharded_run(repository, [61.0, 58.5, 74.25, 60.0], commit_sha: "feedfacecafe0068")
@@ -1617,7 +1745,7 @@ RSpec.describe "Repository registration and API keys", type: :request do
         # first-request-only work cannot land in it.
         get repository_path(repository)
 
-        expect(count_all_queries { get repository_path(repository) }).to eq(20)
+        expect(count_all_queries { get repository_path(repository) }).to eq(19)
         # And the page really did render the thing being counted — an absolute count is satisfied
         # by a page that renders nothing at all.
         expect(distribution.all("li").size).to eq(4)

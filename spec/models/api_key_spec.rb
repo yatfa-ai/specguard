@@ -110,5 +110,99 @@ RSpec.describe ApiKey do
       expect(api_key.token_hint).not_to eq(retired_hint)
       expect(api_key.token_hint).to end_with(api_key.token_digest.last(6))
     end
+
+    it "dates the rotation on the same row, in the same save as the new digest" do
+      api_key = repository.api_keys.create!
+
+      expect(api_key.rotated_at).to be_nil
+
+      before = Time.current
+      api_key.regenerate!
+      after = Time.current
+
+      # Read off a RELOADED row, and paired with the digest: an in-memory-only assignment, or a
+      # stamp written in a second save, would let the row exist carrying a token whose
+      # predecessor's `last_used_at` nothing explains. That window is the whole defect.
+      reloaded = described_class.find(api_key.id)
+      expect(reloaded.rotated_at).to be_between(before, after)
+      expect(reloaded.token_digest).to eq(described_class.digest(api_key.raw_token))
+    end
+
+    it "leaves last_used_at exactly as it found it" do
+      api_key = repository.api_keys.create!
+      api_key.touch_last_used!
+      stamped = described_class.find(api_key.id).last_used_at
+
+      api_key.regenerate!
+
+      # SPGD-352 settled this and it is under guard here rather than merely unmentioned: the use is
+      # the key's history, and nulling or backdating it is not how the surfaces stop misreporting.
+      # `rotated_at` is what lets them stop, without touching this.
+      expect(described_class.find(api_key.id).last_used_at).to eq(stamped)
+    end
+
+    it "moves the rotation date on every rotation, rather than recording only the first" do
+      api_key = repository.api_keys.create!
+      earlier = 2.days.ago
+      api_key.update_columns(rotated_at: earlier)
+
+      api_key.regenerate!
+
+      # A stamp written only when `rotated_at` was nil would leave the second rotation dated by the
+      # first — a key rotated a minute ago reading as stranded for two days, and the age in the
+      # "not used since rotation" cell belonging to the wrong event.
+      expect(api_key.reload.rotated_at).to be > earlier
+    end
+  end
+
+  describe "#rotated_and_unused?" do
+    # The predicate is an ordering comparison between two recorded facts. These examples are the
+    # four corners of that comparison plus its boundary, and each rotated case is paired with the
+    # un-rotated key carrying the SAME `last_used_at` — so an implementation that ignored
+    # `rotated_at` and answered on the use alone fails here rather than passing on half the table.
+    #
+    # Times are stated on the rows with `update_columns` rather than travelled to, on the
+    # convention `repository_latest_run_spec` states: the fixture asserts the fact it needs.
+    let(:rotated_at) { 1.hour.ago }
+
+    def key(last_used_at:, rotated_at: nil)
+      repository.api_keys.create!.tap do |api_key|
+        api_key.update_columns(last_used_at: last_used_at, rotated_at: rotated_at)
+      end
+    end
+
+    it "is false for a key that has never been rotated, used or not" do
+      expect(key(last_used_at: nil)).not_to be_rotated_and_unused
+      expect(key(last_used_at: rotated_at)).not_to be_rotated_and_unused
+    end
+
+    it "is true for a key rotated after its last use" do
+      expect(key(last_used_at: rotated_at - 1.hour, rotated_at: rotated_at))
+        .to be_rotated_and_unused
+
+      # The pair: same use, no rotation. Without it the example above also passes on a predicate
+      # that answers "was this key used more than an hour ago".
+      expect(key(last_used_at: rotated_at - 1.hour)).not_to be_rotated_and_unused
+    end
+
+    it "is true for a key rotated before it ever authenticated" do
+      # Not "no comparison" — the state at its purest, with not even an inherited timestamp.
+      expect(key(last_used_at: nil, rotated_at: rotated_at)).to be_rotated_and_unused
+    end
+
+    it "is false again as soon as one request authenticates with the replacement" do
+      api_key = key(last_used_at: rotated_at - 1.hour, rotated_at: rotated_at)
+
+      api_key.touch_last_used!
+
+      # No window to expire and no threshold to cross: one use, and the key reads normally.
+      expect(api_key).not_to be_rotated_and_unused
+    end
+
+    it "treats a use simultaneous with the rotation as not having cleared it" do
+      # The boundary is stated rather than inherited from an operator: the question is whether the
+      # use is NEWER than the rotation, and a tie is not newer.
+      expect(key(last_used_at: rotated_at, rotated_at: rotated_at)).to be_rotated_and_unused
+    end
   end
 end

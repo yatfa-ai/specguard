@@ -41,24 +41,63 @@ class ApiKey < ApplicationRecord
     find_by(token_digest: digest(token))
   end
 
-  # Rotate this key in place: fresh token, same row. Name, `created_by_user` and `created_at`
-  # survive, because a rotation is an event on this key rather than a new key plus a revocation.
+  # Rotate this key in place: fresh token, same row. Name, `created_by_user`, `created_at` and
+  # `last_used_at` survive, because a rotation is an event on this key rather than a new key plus a
+  # revocation.
   #
   # The old digest is OVERWRITTEN, not kept alongside the new one, and `authenticate` resolves a
   # token only by looking its digest up — so the previous token stops authenticating the moment
   # this saves. There is no grace window and no way back to it. Storage stays digest-only: the new
   # plaintext lives in `raw_token`, in memory, for the rest of this request and nowhere else.
+  #
+  # `rotated_at` is written in the SAME `save!` that swaps the digest, and that is the point of it
+  # rather than a detail of it: the row can then never carry a new token beside a `last_used_at`
+  # stamped by the old one without also carrying the timestamp that says so. See
+  # {#rotated_and_unused?}, which is the only thing that reads it.
   def regenerate!
     # `assign_token` is idempotent by design, and that is exactly what has to be defeated here:
     # this row is already carrying the token it was minted with.
     @raw_token = nil
     assign_token
+    self.rotated_at = Time.current
     save!
     self
   end
 
   def touch_last_used!
     update_column(:last_used_at, Time.current)
+  end
+
+  # WHETHER THIS KEY'S `last_used_at` WAS STAMPED BY A TOKEN THAT NO LONGER EXISTS — the key has
+  # been rotated, and nothing has authenticated with the replacement since.
+  #
+  # This is an ordering comparison between two recorded facts, not a window and not a staleness
+  # threshold: `rotated_at` is the instant the old token stopped working, `last_used_at` is the
+  # last instant something authenticated, and the only question is which of them is newer. A key
+  # whose replacement has reached CI has a use on top and reads normally again immediately — no
+  # window to expire, no threshold to cross. Deliberately the same shape as
+  # `RejectedIngests#refusing?`, so this page carries ONE rule for "is the newest thing that
+  # happened to this pipeline a good thing" rather than one per surface.
+  #
+  # Both `nil` cases are decided rather than left to a comparison, and they go opposite ways:
+  #
+  # * `rotated_at` nil is *never rotated*, which is every key that has not been regenerated. There
+  #   is no retired token, so no timestamp can be misattributed to one — `false`, and the key reads
+  #   exactly as it did before this existed.
+  # * `last_used_at` nil is *rotated before it ever authenticated*, and that is not "no comparison"
+  #   — it is the state at its purest: a key carrying a replacement token that has never been used,
+  #   with not even an inherited timestamp to soften it. `true`, on `refusing?`'s own rule that a
+  #   nil counterpart is the worst case.
+  #
+  # `<=` and not `<`: the question is whether the use is NEWER than the rotation, so a use that is
+  # merely simultaneous with it has not cleared it. Nothing hangs on the tie in practice —
+  # `authenticate_api_key!` stamps a use strictly after the request that rotated the key committed
+  # — but the boundary is stated rather than inherited from an operator.
+  def rotated_and_unused?
+    return false if rotated_at.nil?
+    return true if last_used_at.nil?
+
+    last_used_at <= rotated_at
   end
 
   # Safe to show anywhere: identifies the key without revealing it. Derived from the digest, so it

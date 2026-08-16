@@ -170,6 +170,19 @@ RSpec.describe "Repository rejected deliveries", type: :request do
       expect(connect_text).to match(/does.*record a use/im)
       expect(connect_text).to include("400")
     end
+
+    # SPGD-614. The "never" rule was the only heuristic this panel handed the reader, and it is the
+    # one that cannot fire on the failure it is most needed for: a rotated key is never at "never",
+    # because it inherits its predecessor's timestamp. A reader applying the rule as written
+    # concludes that a pipeline 401ing on every delivery is healthy.
+    it "names the rotated state, so the rule it teaches covers the case the panel now detects" do
+      expect(connect_text).to match(/not used since\s*rotation/i)
+      expect(connect_text).to match(/regenerat\w+ a key retires its token/i)
+
+      # And it must still be a rule about 401s rather than a second sentence about payloads — the
+      # distinction the two examples above exist to protect.
+      expect(connect_text).to match(/401/)
+    end
   end
 
   # The claim the page's query budget in spec/requests/repositories_spec.rb makes on this panel's

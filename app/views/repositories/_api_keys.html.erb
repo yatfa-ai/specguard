@@ -43,7 +43,20 @@
                   <%= time_ago_in_words(api_key.created_at) %> ago
                 </td>
                 <td class="px-3 py-2 text-app-content-secondary tabular-nums">
-                  <%= api_key.last_used_at ? "#{time_ago_in_words(api_key.last_used_at)} ago" : "never" %>
+                  <%# `last_used_at` survives a rotation on purpose (SPGD-352: it is the key's
+                      history), so on a rotated key this cell was printing an age stamped by the
+                      token the rotation retired — a "last used 2 minutes ago" beside a credential
+                      that stopped existing 2 minutes ago, on the one row that is supposed to say
+                      whether this key is working. The history is not destroyed here either; it
+                      stops being misattributed, and the cell reports the rotation instead, which
+                      is the newest thing that actually happened to this key. Covers the never-used
+                      case too — a key rotated before it ever authenticated is rotated-and-unused,
+                      and reading "never" would say nothing about why. %>
+                  <% if api_key.rotated_and_unused? %>
+                    not used since rotation, <%= time_ago_in_words(api_key.rotated_at) %> ago
+                  <% else %>
+                    <%= api_key.last_used_at ? "#{time_ago_in_words(api_key.last_used_at)} ago" : "never" %>
+                  <% end %>
                 </td>
                 <td class="px-3 py-2 text-right">
                   <div class="flex items-center justify-end gap-2">

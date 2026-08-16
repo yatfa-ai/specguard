@@ -59,11 +59,33 @@ class RepositoriesController < ApplicationController
   def show
     @repository = current_repository(:view)
     # `includes` because the table names the creator of every row — without it, listing keys is
-    # one user query per key.
-    @api_keys = @repository.api_keys.includes(:created_by_user).order(created_at: :desc)
-    # The only signal that the repo ever reached the API: the newest use across every key.
-    # `nil` means no key has ever authenticated — see the "Connect this repository" panel.
-    @last_api_request_at = @repository.api_keys.maximum(:last_used_at)
+    # one user query per key. Loaded with `to_a` because the two figures below are read off it:
+    # they are claims about the same set of rows, and deriving them from one loaded collection is
+    # what stops them being two answers to "when did this repository last reach the API" that can
+    # disagree. It also costs one query fewer than the `maximum` this used to run beside it.
+    @api_keys = @repository.api_keys.includes(:created_by_user).order(created_at: :desc).to_a
+    # The keys whose `last_used_at` was stamped by a token that no longer exists: rotated, with
+    # nothing having authenticated since. `ApiKey#rotated_and_unused?` carries the rule and both of
+    # its nil cases. Read by the key list, which must not print an inherited "last used" age, and
+    # by the Connection stat below.
+    @rotated_unused_api_keys = @api_keys.select(&:rotated_and_unused?)
+    # DID ANYTHING EVER AUTHENTICATE — the newest use across every key, whichever token stamped it.
+    # `nil` means no key has ever been used at all, which is the only question this can answer and
+    # the one the "Not connected yet" branch asks. It must NOT be read as "the repository is
+    # reachable now": a rotation retires a token without touching its use, so this figure outlives
+    # the credential that produced it.
+    @last_api_request_at = @api_keys.filter_map(&:last_used_at).max
+    # THE SAME FIGURE, RESTRICTED TO KEYS WHOSE `last_used_at` STILL DESCRIBES THE TOKEN THEY ARE
+    # CARRYING NOW — the one the "Connected" stat may report, because it is the only one whose age
+    # belongs to a credential that still exists. `nil` while every key that has ever authenticated
+    # has since been rotated and not used, which is exactly the window between a rotation and the
+    # replacement reaching CI, and precisely when the stat used to read `Connected` in success tone
+    # over a pipeline that had been 401ing since the rotation.
+    #
+    # Separate from `@last_api_request_at` rather than replacing it, because the panel needs both:
+    # the difference between the two is what tells "nothing has ever connected" apart from
+    # "something did, with a token that is gone".
+    @last_live_api_request_at = (@api_keys - @rotated_unused_api_keys).filter_map(&:last_used_at).max
     # Every suite figure on the Overview panel is read off this one row — suite size, annotated
     # count, and the difference between them. `nil` is load-bearing and means *never ingested*,
     # which the panel renders as an empty state rather than as `0%`; a repository whose CI has

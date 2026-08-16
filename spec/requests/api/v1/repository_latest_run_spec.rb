@@ -208,7 +208,8 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
     # `contain_exactly` is what makes it bidirectional; `have_key` per block would catch neither.
     it "serves exactly the top-level keys this contract pins" do
       expect(get_repository.keys)
-        .to contain_exactly("repository", "api_key", "delivery_health", "run_anchor", "latest_run",
+        .to contain_exactly("repository", "api_key", "delivery_health", "credential_health", "run_anchor",
+                            "latest_run",
                             "history_window",
                             "history", "unstable_tests_window", "unstable_tests",
                             "directory_growth_window",
@@ -2532,7 +2533,8 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
       body = get_repository(query: { branch: "main" })
 
       expect(body.keys)
-        .to contain_exactly("repository", "api_key", "delivery_health", "run_anchor", "latest_run",
+        .to contain_exactly("repository", "api_key", "delivery_health", "credential_health", "run_anchor",
+                            "latest_run",
                             "history_window",
                             "history", "unstable_tests_window", "unstable_tests",
                             "directory_growth_window",
