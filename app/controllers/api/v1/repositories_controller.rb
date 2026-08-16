@@ -1428,19 +1428,23 @@ class Api::V1::RepositoriesController < Api::BaseController
   # predicates, the AND-ing of the pair and the absence of a precedence rule between them.
   #
   # THE TWO PARAMETERS DO NOT STOP OPENING THEIR OWN BLOCKS. They are read once, by the guards this
-  # controller already includes, and reach three blocks apiece — which is what makes the empty answer
-  # here reconcilable rather than ambiguous, and it is stated in full at the keys below.
+  # controller already includes, and each reaches its own drill-in beside this one — `?spec_file=` →
+  # `spec_file_examples`, `?spec_directory=` → `spec_directory_files`. They do not reach equally far,
+  # and the asymmetry is the point rather than a rounding: `?spec_directory=` alone carries on to the
+  # two directory file-growth pairs as well, six served keys against `?spec_file=`'s two. It is that
+  # ONE DRILL-IN EACH, not the growth pairs and not this block, that makes the empty answer here
+  # reconcilable rather than ambiguous, and it is stated in full at the keys below.
   #
   # INSIDE `latest_run` rather than beside it, on the membership test the comment on `unstable_tests`
   # states in full: `SpecObservation.unannotated_in` narrows to a single `test_run_id`, so this is a
   # statement about ONE run's rows. And `latest_run` is not re-anchored by `?branch=`, so this ask
   # composes with the other four — narrowing on two of them and leaving the other two untouched, none
-  # of the five re-anchoring another. `?commit_sha=` is
-  # the exception and is meant to be: it re-anchors `latest_run`, and this drill-in re-anchors with it
-  # WITHOUT READING THE PARAMETER, because both hang off the one `latest_test_run` memo and
-  # `run_anchor` names the run they landed on. That matters more here than on its siblings — "what is
-  # still unannotated" is the question an adopting repository asks after every push, so asking it of an
-  # older commit is the ordinary use rather than the exotic one.
+  # of the five re-anchoring another. `?commit_sha=` is the exception and is meant to be: it
+  # re-anchors `latest_run`, and this drill-in re-anchors with it WITHOUT READING THE PARAMETER,
+  # because both hang off the one `latest_test_run` memo and `run_anchor` names the run they landed
+  # on. That matters more here than on its siblings — "what is still unannotated" is the question an
+  # adopting repository asks after every push, so asking it of an older commit is the ordinary use
+  # rather than the exotic one.
   #
   # THE ROW SHAPE IS FOUR FIELDS AND DELIBERATELY NOT THE OTHER BLOCKS' SIX. The three per-example
   # blocks above agree field for field on purpose — `serialized_spec_file_examples` states why, and a

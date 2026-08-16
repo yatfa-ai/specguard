@@ -862,7 +862,7 @@ class SpecObservation < ApplicationRecord
   # `Ingest::ObservationRecorder#attributes` falls back to the `null: false` `file_path` — and where
   # Postgres sorts a NULL under a plain `ASC` (last) is the survivable direction either way.
   #
-  # == The population may be NARROWED to one file or one area, and the narrowing is the ladder's
+  # == The population may be NARROWED to one file or one area, on the ladder's own two parameters
   #
   # Whole-run is the ask's default and not its only shape. A worklist with exactly one order and no
   # way to choose a place in it hands a team adopting SpecGuard the alphabetically-first hundred of
