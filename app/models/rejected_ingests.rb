@@ -79,4 +79,15 @@ class RejectedIngests
   # what it is showing is a window rather than the whole history. `>=` rather than `==` so a list
   # built with a larger limit than the panel's still reports honestly.
   def bounded? = rows.size >= IngestRejection::PANEL_LIMIT
+
+  # Whether any listed row is showing only PART of what the endpoint said about that one delivery.
+  #
+  # The bound above is on the number of deliveries; this one is on the number of reasons inside one,
+  # and they are independent — a single refusal of a 20,000-example suite is one row, so a list that
+  # is nowhere near its window bound can still be hiding almost everything. Both are disclosed for
+  # the same reason, one level apart: the panel replaced a stat that read healthy over a pipeline it
+  # could not see, and it does not get to inherit that habit at a smaller grain.
+  #
+  # Reads the rows already in memory — at most `IngestRejection::PANEL_LIMIT` of them, no query.
+  def truncated_rows? = rows.any?(&:reasons_truncated?)
 end

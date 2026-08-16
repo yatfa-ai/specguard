@@ -1,8 +1,9 @@
 # frozen_string_literal: true
 
 module Ingest
-  # Writes the one row a refused delivery leaves behind, and enforces
-  # `IngestRejection::REPOSITORY_RETENTION_ROWS` on the way past.
+  # Writes the one row a refused delivery leaves behind, bounded on both axes it can grow along —
+  # `IngestRejection::RETAINED_REASONS_PER_ROW` and `MAX_REASON_LENGTH` cap what one row holds, and
+  # `REPOSITORY_RETENTION_ROWS` caps how many a repository keeps, enforced on the way past.
   #
   # Called from `Api::V1::IngestsController#create` on the 400 path, BEFORE `render_bad_request`
   # returns. Everything about which requests are recordable — authenticated-but-refused only, never
@@ -58,40 +59,94 @@ module Ingest
       @occurred_at = occurred_at
     end
 
-    # @return [IngestRejection, nil] the row written, or nil when the write failed and was
-    #   reported. The caller does not branch on it — the response is the same either way — and it
-    #   is returned rather than swallowed so tests can assert the difference.
+    # @return [IngestRejection, nil] the row written, or nil when the WRITE failed and was reported.
+    #   A prune that fails after a successful write still returns the row, because the row is
+    #   committed and saying otherwise would make the return value the opposite of what happened.
+    #   The caller does not branch on it — the response is the same either way — and it is returned
+    #   rather than swallowed so tests can assert the difference.
     def record
-      rejection = write
-      prune
+      rejection = begin
+        write
+      rescue StandardError => e
+        report(e, stage: "write")
+        nil
+      end
+
+      # Skipped when the write failed: prune enforces a bound that nothing just pushed against, so
+      # running it would only be a second chance to raise.
+      return nil if rejection.nil?
+
+      begin
+        prune
+      rescue StandardError => e
+        # A prune failure is strictly milder than a write failure and is reported as its own stage
+        # rather than sharing one. The row it should have made room for is committed, so nothing is
+        # lost — the repository is temporarily over its retention bound, and the next refusal prunes
+        # again from the same statement. The bound is self-healing precisely because every write
+        # prunes; what is NOT self-healing is a failed write, which loses the refusal for good.
+        report(e, stage: "prune")
+      end
+
       rejection
-    rescue StandardError => e
-      # `handled: true` because the request continues and answers normally: this is a reported
-      # degradation, not an unhandled crash. The context names the repository so a burst of these
-      # is attributable without re-reading the request log.
-      Rails.error.report(e, handled: true, severity: :warning,
-                            context: { repository_id: @repository.id,
-                                       component: "Ingest::RejectionRecorder" })
-      nil
     end
 
     private
 
-    # `details` is `Ingest::Payload#errors` verbatim. `Array()` normalises the same way
-    # `Api::BaseController#render_bad_request` does, so the row and the response body carry
-    # identically-shaped lists rather than two shapes that happen to agree.
+    # `handled: true` because the request continues and answers normally: this is a reported
+    # degradation, not an unhandled crash. The context names the repository so a burst of these is
+    # attributable without re-reading the request log, and the stage so the two failures above are
+    # distinguishable in the reporter — they mean different things and one of them loses data.
+    def report(error, stage:)
+      Rails.error.report(error, handled: true, severity: :warning,
+                                context: { repository_id: @repository.id, stage: stage,
+                                           component: "Ingest::RejectionRecorder" })
+    end
+
+    # `details` is `Ingest::Payload#errors` in the endpoint's own words, bounded but never re-worded
+    # — see {#bounded_details}. `total_reasons_count` is the size of the list BEFORE that bound, so
+    # the row can disclose what it dropped instead of passing a capped list off as the whole
+    # objection.
     #
     # `IngestRejection.create!` rather than `@repository.ingest_rejections.create!`: the two are
     # equivalent here — the row is built and saved either way — and going through the class gives
-    # the write a single named seam. That matters because the whole point of the rescue below is a
+    # the write a single named seam. That matters because the whole point of the rescue above is a
     # failure path, and a failure path with no way to provoke it is a failure path nobody has run.
     def write
+      reasons = Array(@errors).map(&:to_s)
+
       IngestRejection.create!(
         repository: @repository,
         occurred_at: @occurred_at,
-        details: Array(@errors).map(&:to_s),
+        details: bounded_details(reasons),
+        total_reasons_count: reasons.size,
         user_agent: @user_agent.presence
       )
+    end
+
+    # The two-axis bound argued in `IngestRejection::RETAINED_REASONS_PER_ROW` and
+    # `MAX_REASON_LENGTH`, applied here because this is the only thing that writes the column.
+    #
+    # == Why bounding is not the paraphrasing the ticket forbids
+    #
+    # The standing rule is that nothing platform-side re-words the endpoint's errors into a verdict.
+    # This does not: every reason it keeps is the endpoint's own sentence, and what it drops is
+    # dropped whole and COUNTED, not summarised. The alternative to a bound is not a more faithful
+    # row — it is a row nobody can render, on the one failure this table was built for. Discarding
+    # the tail and saying how long it was is the honest form of a surface that cannot show
+    # everything, which is the same thing `RejectedIngests#bounded?` already says one level up.
+    #
+    # `first` rather than `last`: `Ingest::Payload` validates the envelope before it fans out over
+    # `specs[]`, so the head of the list holds the envelope errors — the ones that describe the
+    # whole delivery — while the tail is the per-spec repetition. A version floor is legible from
+    # the first twenty and from a count; it is not more legible from the last twenty.
+    #
+    # `truncate` returns a new String and never mutates, which matters more than it looks: these
+    # strings are the SAME objects `render_bad_request` is about to send, and success criterion 2
+    # says the 400 body is byte-identical to `origin/main`. Truncating in place here would edit the
+    # client's response from inside a bookkeeping path.
+    def bounded_details(reasons)
+      reasons.first(IngestRejection::RETAINED_REASONS_PER_ROW)
+             .map { |reason| reason.truncate(IngestRejection::MAX_REASON_LENGTH) }
     end
 
     # Enforces the retention rule for THIS repository, in one statement.

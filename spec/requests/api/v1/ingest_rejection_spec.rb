@@ -145,6 +145,84 @@ RSpec.describe "POST /api/v1/ingest — the record a refused delivery leaves", t
     end
   end
 
+  # Success criterion 4's other axis. `REPOSITORY_RETENTION_ROWS` bounds how many refusals a
+  # repository keeps and says nothing about how big one of them is — and `Ingest::Payload` emits one
+  # error PER INVALID SPEC, so the size of a row is a function of the SUITE, not of how wrong the
+  # payload is. That is not the tail case here: this table exists for a pipeline refusing every run,
+  # and a version floor or an envelope skew refuses every spec at once.
+  #
+  # These examples are the fence the first round of this work did not have. Every other example in
+  # this file refuses with `{ specs: [] }`, which produces exactly ONE error, so nothing here had
+  # ever written a multi-reason row.
+  describe "a refusal with more reasons than one row may hold" do
+    # 30 malformed specs × 4 objections each (file_path, line_number, status, name) = 120 reasons,
+    # which is six times the per-row bound and the same SHAPE as a 20,000-example suite refused for
+    # its envelope — one reason per example — at a size an example can run.
+    def many_reasons_body = { commit_sha: "a" * 40, specs: Array.new(30) { {} } }
+
+    it "produces the shape these examples rest on — many more reasons than the bound" do
+      ingest(many_reasons_body)
+
+      expect(response.parsed_body["details"].size).to eq(120)
+      expect(120).to be > IngestRejection::RETAINED_REASONS_PER_ROW
+    end
+
+    it "stores at most RETAINED_REASONS_PER_ROW of them" do
+      ingest(many_reasons_body)
+
+      expect(IngestRejection.last.details.size).to eq(IngestRejection::RETAINED_REASONS_PER_ROW)
+    end
+
+    # What was dropped is COUNTED, not discarded silently — this is what lets the panel say "and
+    # 100 more", which is itself the diagnosis: every spec was refused, not one.
+    it "records how many reasons the endpoint actually gave" do
+      ingest(many_reasons_body)
+
+      rejection = IngestRejection.last
+      expect(rejection.total_reasons_count).to eq(120)
+      expect(rejection.omitted_reasons_count).to eq(120 - IngestRejection::RETAINED_REASONS_PER_ROW)
+      expect(rejection).to be_reasons_truncated
+    end
+
+    # The count bound alone does not bound the row: every per-spec message interpolates the client's
+    # own `file_path`, and a client free to send a malformed path is free to send a huge one. Twenty
+    # unbounded strings is still a multi-megabyte row, so both halves are needed for the ceiling to
+    # be arithmetic rather than a hope about well-behaved clients.
+    it "shortens a single pathological reason rather than storing it whole" do
+      long_path = "x" * 5_000
+      ingest({ commit_sha: "a" * 40,
+               specs: [{ file_path: long_path, line_number: 0, status: "unannotated", name: "a" }] })
+
+      stored = IngestRejection.last.details.first
+      expect(response.parsed_body["details"].first.length).to be > 5_000
+      expect(stored.length).to be <= IngestRejection::MAX_REASON_LENGTH
+    end
+
+    # The bound expressed as the thing it is actually protecting. Both axes pushed at once — many
+    # reasons AND each one pathological — and the row still lands under the stated ceiling.
+    it "keeps the row under a stated size ceiling however large the payload is" do
+      ingest({ commit_sha: "a" * 40,
+               specs: Array.new(200) { { file_path: "x" * 5_000, line_number: 0 } } })
+
+      expect(IngestRejection.last.details.to_json.bytesize).to be < 10_000
+    end
+
+    # Success criterion 2, restated for the case that made bounding necessary. The bound is a
+    # STORAGE rule and must not reach the client: the response still carries every reason, in full,
+    # exactly as `origin/main` sent it. `truncate` returning a new String is what guarantees it —
+    # these are the same String objects `render_bad_request` is about to serialise.
+    it "leaves the client's 400 carrying every reason at full length" do
+      long_path = "y" * 4_000
+      ingest({ commit_sha: "a" * 40,
+               specs: Array.new(30) { { file_path: long_path, line_number: 0 } } })
+
+      details = response.parsed_body["details"]
+      expect(details.size).to eq(90)
+      expect(details).to all(satisfy { |reason| reason.length > 4_000 })
+      expect(response).to have_http_status(:bad_request)
+    end
+  end
+
   # The decision stated in `Ingest::RejectionRecorder`: a write that fails must not turn a clean
   # 400 into a 500, and must not fail silently either.
   describe "when the rejection cannot be written" do
@@ -166,6 +244,36 @@ RSpec.describe "POST /api/v1/ingest — the record a refused delivery leaves", t
         .with(instance_of(ActiveRecord::StatementInvalid), hash_including(handled: true))
 
       ingest(refused_body)
+    end
+  end
+
+  # The two failures are reported as separate stages because they mean different things: a failed
+  # write loses the refusal, while a failed prune leaves a committed row and a repository briefly
+  # over its bound. The return value has to say which happened, or it says the opposite of the truth.
+  describe "when the retention prune fails after the row is written" do
+    before { allow(IngestRejection).to receive(:where).and_raise(ActiveRecord::StatementInvalid, "boom") }
+
+    it "keeps the committed row and still answers the 400" do
+      expect { ingest(refused_body) }.to change(IngestRejection, :count).by(1)
+
+      expect(response).to have_http_status(:bad_request)
+    end
+
+    it "reports the prune failure under its own stage" do
+      expect(Rails.error).to receive(:report)
+        .with(instance_of(ActiveRecord::StatementInvalid), hash_including(context: hash_including(stage: "prune")))
+
+      ingest(refused_body)
+    end
+
+    # The row is committed, so returning nil — "the write failed" — would be a lie about the one
+    # thing the caller could observe.
+    it "returns the row that was written" do
+      repository_record = repository
+      result = Ingest::RejectionRecorder.record(repository_record, ["boom"], user_agent: nil)
+
+      expect(result).to be_a(IngestRejection)
+      expect(result).to be_persisted
     end
   end
 end

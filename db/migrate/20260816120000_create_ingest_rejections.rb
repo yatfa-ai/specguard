@@ -29,9 +29,11 @@
 # holds the FACT of the refusal and the reason given, so the owner learns it happened and why. It
 # is not a retry queue and nothing re-delivers from it.
 #
-# `details` is `Ingest::Payload`'s own error array, stored verbatim as jsonb. Nothing platform-side
-# re-words it into a verdict, on the standing rule the endpoint already applies to `outcome`: the
-# client is told exactly what the client was told.
+# `details` is `Ingest::Payload`'s own error array, stored in the endpoint's own words as jsonb.
+# Nothing platform-side re-words it into a verdict, on the standing rule the endpoint already
+# applies to `outcome`: the client is told exactly what the client was told. It is BOUNDED but never
+# paraphrased — see the column comment below and `IngestRejection::RETAINED_REASONS_PER_ROW` for why
+# a row has a size ceiling and how the row states what the ceiling cost it.
 #
 # `user_agent` is the request header, and it is here for one concrete reason rather than for
 # completeness. `specguard-rspec` sends `specguard-rspec/<version>` (`Transport::USER_AGENT`), and
@@ -58,12 +60,36 @@ class CreateIngestRejections < ActiveRecord::Migration[8.1]
       # When the endpoint refused the delivery. Not null: a rejection with no time is a row that
       # can neither be listed in order nor aged out by the retention rule.
       t.datetime :occurred_at, null: false
-      # `Ingest::Payload#errors` verbatim — an array of strings. jsonb rather than a text column
-      # holding a joined string, because the client is handed a LIST (`render_bad_request` sends
-      # `details:` as an array) and the panel re-renders that list one reason per line. Joining on
-      # the way in and splitting on the way out would invent a delimiter that any error message is
-      # free to contain.
+      # `Ingest::Payload#errors` — an array of strings, each stored in the endpoint's own words.
+      # jsonb rather than a text column holding a joined string, because the client is handed a
+      # LIST (`render_bad_request` sends `details:` as an array) and the panel re-renders that list
+      # one reason per line. Joining on the way in and splitting on the way out would invent a
+      # delimiter that any error message is free to contain.
+      #
+      # ⚠️ **Bounded on the way in, and the bound is load-bearing rather than tidiness.**
+      # `Ingest::Payload` emits one error PER INVALID SPEC (up to five), each embedding the
+      # client's own `file_path`, and nothing caps that array — it was only ever handed to a
+      # response and thrown away. Persisting it changes the arithmetic: the design point of this
+      # table is a pipeline refusing EVERY run, and an envelope or intent-schema skew refuses every
+      # spec in the suite, so the row a 20,000-example suite writes is the ordinary case here and
+      # not the exotic one. Unbounded, that is a multi-megabyte row, fifty of them per repository,
+      # every element of every one rendered as an `<li>` on a dashboard panel that loads on every
+      # page view. `Ingest::RejectionRecorder` therefore applies both halves of
+      # `IngestRejection`'s per-row bound before this column is written, which is what makes the
+      # row's size a stated ceiling rather than a function of what the client sent.
       t.jsonb :details, null: false, default: []
+      # How many reasons the endpoint actually produced, before the per-row bound above dropped any
+      # — so a truncated row can say what it is missing instead of silently looking complete.
+      #
+      # This is the number `Ingest::Payload#errors.size` returned and the number the CLIENT was
+      # handed in its 400, which is the point: the reader can tell "one spec is malformed" from
+      # "every spec in the suite is", and those two need entirely different fixes. Without it, the
+      # panel could show its capped list and no reader could distinguish a suite with twenty
+      # problems from one with twenty thousand.
+      #
+      # `null: false, default: 0` — every row this table has comes from the recorder, which always
+      # writes the real count; the default exists so the column can be read without a nil guard.
+      t.integer :total_reasons_count, null: false, default: 0
       # Nullable by construction: a `User-Agent` is a header a client may simply not send, and a
       # request without one is still a refusal worth recording. The panel says "not reported"
       # rather than pretending to a version it was never told.

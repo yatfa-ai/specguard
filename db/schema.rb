@@ -42,6 +42,7 @@ ActiveRecord::Schema[8.1].define(version: 2026_08_16_120000) do
     t.jsonb "details", default: [], null: false
     t.datetime "occurred_at", null: false
     t.bigint "repository_id", null: false
+    t.integer "total_reasons_count", default: 0, null: false
     t.string "user_agent"
     t.index ["repository_id", "occurred_at", "id"], name: "index_ingest_rejections_on_repository_and_recency", order: { occurred_at: :desc, id: :desc }
   end

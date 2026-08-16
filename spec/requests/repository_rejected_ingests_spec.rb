@@ -201,6 +201,83 @@ RSpec.describe "Repository rejected deliveries", type: :request do
     end
   end
 
+  # The DOM this panel puts on the page is bounded by the RULE, not by what the client sent.
+  #
+  # This is the fence the first round did not have, and its absence is instructive: every example
+  # in this file refused with `{ specs: [] }`, which produces exactly one reason, so `reasons.each`
+  # had never rendered more than a single `<li>`. `Ingest::Payload` emits one error per invalid
+  # spec, and the refusal this panel exists for — a version floor, an envelope skew — refuses EVERY
+  # spec in the suite. The panel rendered fine on the fixture and would have collapsed on the case
+  # it was designed for.
+  #
+  # Note what is measured. The query-count guard below is true and blind here: one query can return
+  # twenty-five megabytes, so a count is the wrong instrument for a volume claim and these examples
+  # count ELEMENTS and BYTES instead.
+  describe "the size of what the panel renders" do
+    # 30 malformed specs × 4 objections = 120 reasons in one delivery — the shape of a whole suite
+    # refused at once, at a size an example can run. `file_path` is interpolated into every message,
+    # so passing a long one is how an example reaches the OTHER axis of the bound.
+    def refuse_a_large_delivery(specs: 30, file_path: nil)
+      spec = file_path ? { file_path: file_path } : {}
+
+      post "/api/v1/ingest",
+           params: { commit_sha: "a" * 40, specs: Array.new(specs) { spec } }.to_json,
+           headers: { "Content-Type" => "application/json",
+                      "User-Agent" => "specguard-rspec/0.3.1",
+                      "Authorization" => "Bearer #{api_key.raw_token}" }
+    end
+
+    it "caps the reasons listed for one delivery" do
+      refuse_a_large_delivery
+      visit_repository
+
+      expect(IngestRejection.last.total_reasons_count).to eq(120)
+      expect(panel.all("li").size).to eq(IngestRejection::RETAINED_REASONS_PER_ROW)
+    end
+
+    # The cap is disclosed rather than quietly applied, and the number it discloses IS the
+    # diagnosis: "and 100 more" says the whole suite was refused, which is a different fix from one
+    # malformed spec.
+    it "says how many reasons it is not showing" do
+      refuse_a_large_delivery
+      visit_repository
+
+      expect(panel_text).to include("and 100 more")
+    end
+
+    it "explains the per-delivery cap in the panel's basis line" do
+      refuse_a_large_delivery
+      visit_repository
+
+      expect(panel_text).to match(/at most #{IngestRejection::RETAINED_REASONS_PER_ROW} are kept per delivery/i)
+    end
+
+    # The invariance that makes this a bound rather than a smaller number: a suite seven times the
+    # size renders exactly the same DOM. Without it, "20 `<li>`" could just be what this fixture
+    # happens to produce.
+    it "renders the same DOM for a much larger suite" do
+      refuse_a_large_delivery(specs: 200)
+      visit_repository
+
+      expect(IngestRejection.last.total_reasons_count).to eq(800)
+      expect(panel.all("li").size).to eq(IngestRejection::RETAINED_REASONS_PER_ROW)
+    end
+
+    # Both bounds at once — a full retained window, every row a whole suite refused, and every
+    # reason long enough to be cut by the length half — asserted in BYTES, because element counts do
+    # not catch a single enormous reason and the length bound exists for exactly that.
+    it "keeps the whole panel under a stated ceiling in the worst case it exists for" do
+      (IngestRejection::PANEL_LIMIT + 2).times { refuse_a_large_delivery(file_path: "x" * 5_000) }
+      visit_repository
+
+      expect(IngestRejection.last.details).to all(satisfy { |r| r.length <= IngestRejection::MAX_REASON_LENGTH })
+      expect(panel.all("tbody tr").size).to eq(IngestRejection::PANEL_LIMIT)
+      expect(panel.all("li").size)
+        .to eq(IngestRejection::PANEL_LIMIT * IngestRejection::RETAINED_REASONS_PER_ROW)
+      expect(panel.native.to_html.bytesize).to be < 200_000
+    end
+  end
+
   # A repository the viewer can see but does not own reads the same panel — it is delivery
   # telemetry, not a credential surface, and it names no key.
   describe "a member who does not own the repository" do

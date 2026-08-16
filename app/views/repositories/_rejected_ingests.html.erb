@@ -43,7 +43,10 @@
             2. Nothing here is recoverable. The payload was refused and is not stored, so this is
                a record that it happened and what the endpoint said — not a retry queue, and
                nothing re-delivers from it.
-            3. The list is bounded, so an absent old refusal is not evidence it did not happen. %>
+            3. The list is bounded, so an absent old refusal is not evidence it did not happen —
+               and so is each ROW, so a short reason list is not evidence the endpoint said little.
+               The two bounds are independent: one refusal of a large suite is a single row
+               carrying thousands of reasons. %>
         <p class="text-xs text-app-muted mb-3" id="rejected-ingests-basis">
           Deliveries that authenticated successfully and were then refused for their
           <strong>payload</strong> — <code>400 {"error":"bad_request"}</code>. A wrong or revoked
@@ -55,6 +58,11 @@
             Only the most recent <%= IngestRejection::PANEL_LIMIT %> are shown, and SpecGuard
             retains at most <%= IngestRejection::REPOSITORY_RETENTION_ROWS %> per repository, so
             this is a recent window rather than the whole history.
+          <% end %>
+          <% if @rejected_ingests.truncated_rows? %>
+            A delivery refused for every spec in a suite produces one reason per example, so at
+            most <%= IngestRejection::RETAINED_REASONS_PER_ROW %> are kept per delivery and each
+            row below says how many it is not showing.
           <% end %>
         </p>
 
@@ -97,6 +105,25 @@
                       <li class="font-mono text-xs break-words"><%= reason %></li>
                     <% end %>
                   </ul>
+                  <%# What the row could not keep, said with the row rather than in a footnote.
+                      `Ingest::Payload` emits one error per invalid spec, so the refusal this panel
+                      exists for — a version floor, which refuses EVERY spec in the suite — produces
+                      one reason per example. `IngestRejection::RETAINED_REASONS_PER_ROW` is what
+                      stops that row and this cell being megabytes; this line is what stops the cap
+                      being a quiet one.
+
+                      And the number is not an apology, it is the diagnosis. "…and 19,990 more"
+                      says the whole suite was refused, which is the difference between one
+                      malformed spec and a gem the installation will not accept — a distinction the
+                      full list would have buried rather than shown. %>
+                  <% if rejection.reasons_truncated? %>
+                    <p class="text-xs text-app-muted mt-1">
+                      … and <%= number_with_delimiter(rejection.omitted_reasons_count) %> more
+                      <%= "reason".pluralize(rejection.omitted_reasons_count) %> not kept
+                      (<%= number_with_delimiter(rejection.total_reasons_count) %> in total) —
+                      the client was sent all of them at the time.
+                    </p>
+                  <% end %>
                 <% else %>
                   <%# A refusal with no reason recorded. Not synthesised into one: the row says the
                       delivery was refused, and inventing a cause it never carried would be the
