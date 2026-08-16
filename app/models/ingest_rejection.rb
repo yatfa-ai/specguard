@@ -73,6 +73,25 @@ class IngestRejection < ApplicationRecord
   # rather than passing as the endpoint's whole sentence.
   MAX_REASON_LENGTH = 300
 
+  # How long the client's reported `User-Agent` may be.
+  #
+  # `details` is not the only client-controlled field on this row. `user_agent` is the request
+  # header, stored as the client sent it, and the arithmetic above counts only its neighbour — so
+  # without this the "~6 KB per row, ~300 KB per retained window" ceiling is a claim about one
+  # column standing in for the row. Puma admits roughly 112 KiB of headers, so a single refusal can
+  # carry a ~100 KB `user_agent` past a bound that only ever looked at `details`; fifty of them is
+  # ~5 MB for one repository, and `PANEL_LIMIT` rows of it is ~1 MB rendered verbatim into a panel
+  # that loads on every repository page view. That is the same failure `RETAINED_REASONS_PER_ROW`
+  # describes one column over, and it arrives at CI frequency for exactly the pipeline this table
+  # exists for.
+  #
+  # 300 characters, matching `MAX_REASON_LENGTH`, because the bound is set where it cannot cut a
+  # genuine client string: `specguard-rspec` reports `Transport::USER_AGENT` — `specguard-rspec/`
+  # plus a version, an order of magnitude under this — so like its neighbour it only ever fires on
+  # a pathological value. `String#truncate`'s ellipsis is what keeps that honest: a shortened
+  # `user_agent` reads as visibly shortened rather than as the version the client claimed.
+  MAX_USER_AGENT_LENGTH = 300
+
   # How many rows the repository page lists. The panel is a disclosure that this is happening and
   # what the endpoint said, not a browsable archive — the same bounded-panel shape every sibling on
   # that page uses.

@@ -216,14 +216,16 @@ RSpec.describe "Repository rejected deliveries", type: :request do
   describe "the size of what the panel renders" do
     # 30 malformed specs × 4 objections = 120 reasons in one delivery — the shape of a whole suite
     # refused at once, at a size an example can run. `file_path` is interpolated into every message,
-    # so passing a long one is how an example reaches the OTHER axis of the bound.
-    def refuse_a_large_delivery(specs: 30, file_path: nil)
+    # so passing a long one is how an example reaches the OTHER axis of the bound. `user_agent`
+    # defaults to the value every other example here relies on, and is a parameter so the worst-case
+    # example can drive the row's second client-controlled column too.
+    def refuse_a_large_delivery(specs: 30, file_path: nil, user_agent: "specguard-rspec/0.3.1")
       spec = file_path ? { file_path: file_path } : {}
 
       post "/api/v1/ingest",
            params: { commit_sha: "a" * 40, specs: Array.new(specs) { spec } }.to_json,
            headers: { "Content-Type" => "application/json",
-                      "User-Agent" => "specguard-rspec/0.3.1",
+                      "User-Agent" => user_agent,
                       "Authorization" => "Bearer #{api_key.raw_token}" }
     end
 
@@ -263,14 +265,20 @@ RSpec.describe "Repository rejected deliveries", type: :request do
       expect(panel.all("li").size).to eq(IngestRejection::RETAINED_REASONS_PER_ROW)
     end
 
-    # Both bounds at once — a full retained window, every row a whole suite refused, and every
-    # reason long enough to be cut by the length half — asserted in BYTES, because element counts do
-    # not catch a single enormous reason and the length bound exists for exactly that.
+    # Every bound at once — a full retained window, every row a whole suite refused, every reason
+    # long enough to be cut by the length half, and every row's `user_agent` pathological too —
+    # asserted in BYTES, because element counts do not catch a single enormous reason and the length
+    # bound exists for exactly that. The header is driven here because the panel renders
+    # `reported_client` verbatim once per row: without it this ceiling holds only because the
+    # fixture happens to send a well-behaved client string.
     it "keeps the whole panel under a stated ceiling in the worst case it exists for" do
-      (IngestRejection::PANEL_LIMIT + 2).times { refuse_a_large_delivery(file_path: "x" * 5_000) }
+      (IngestRejection::PANEL_LIMIT + 2).times do
+        refuse_a_large_delivery(file_path: "x" * 5_000, user_agent: "u" * 100_000)
+      end
       visit_repository
 
       expect(IngestRejection.last.details).to all(satisfy { |r| r.length <= IngestRejection::MAX_REASON_LENGTH })
+      expect(IngestRejection.last.user_agent.length).to be <= IngestRejection::MAX_USER_AGENT_LENGTH
       expect(panel.all("tbody tr").size).to eq(IngestRejection::PANEL_LIMIT)
       expect(panel.all("li").size)
         .to eq(IngestRejection::PANEL_LIMIT * IngestRejection::RETAINED_REASONS_PER_ROW)
