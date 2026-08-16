@@ -1,9 +1,10 @@
 # frozen_string_literal: true
 
 module Ingest
-  # Writes the one row a refused delivery leaves behind, bounded on both axes it can grow along —
-  # `IngestRejection::RETAINED_REASONS_PER_ROW` and `MAX_REASON_LENGTH` cap what one row holds, and
-  # `REPOSITORY_RETENTION_ROWS` caps how many a repository keeps, enforced on the way past.
+  # Writes the one row a refused delivery leaves behind, bounded on every axis it can grow along —
+  # `IngestRejection::RETAINED_REASONS_PER_ROW` and `MAX_REASON_LENGTH` cap what one row's `details`
+  # holds, `MAX_USER_AGENT_LENGTH` caps the other client-controlled column beside it, and
+  # `REPOSITORY_RETENTION_ROWS` caps how many rows a repository keeps, enforced on the way past.
   #
   # Called from `Api::V1::IngestsController#create` on the 400 path, BEFORE `render_bad_request`
   # returns. Everything about which requests are recordable — authenticated-but-refused only, never
@@ -107,6 +108,15 @@ module Ingest
     # the row can disclose what it dropped instead of passing a capped list off as the whole
     # objection.
     #
+    # `user_agent` is bounded here for the same reason and by the same rule. It is the SECOND
+    # client-controlled field on this row — the raw request header, handed over unmodified by
+    # `Api::V1::IngestsController#create` — and the ceiling `IngestRejection::MAX_REASON_LENGTH`
+    # states is a claim about the whole row, not about `details` alone. A ~100 KB header fits
+    # comfortably inside Puma's allowance and would otherwise walk straight past a bound that only
+    # ever measured its neighbour. `truncate` is non-mutating, exactly as in {#bounded_details}, and
+    # `&.` after `.presence` preserves the nil-when-absent rule `#reported_client` reads: a client
+    # that sent no header still stores NULL rather than an ellipsis or an empty string.
+    #
     # `IngestRejection.create!` rather than `@repository.ingest_rejections.create!`: the two are
     # equivalent here — the row is built and saved either way — and going through the class gives
     # the write a single named seam. That matters because the whole point of the rescue above is a
@@ -119,7 +129,7 @@ module Ingest
         occurred_at: @occurred_at,
         details: bounded_details(reasons),
         total_reasons_count: reasons.size,
-        user_agent: @user_agent.presence
+        user_agent: @user_agent.presence&.truncate(IngestRejection::MAX_USER_AGENT_LENGTH)
       )
     end
 

@@ -198,13 +198,27 @@ RSpec.describe "POST /api/v1/ingest — the record a refused delivery leaves", t
       expect(stored.length).to be <= IngestRejection::MAX_REASON_LENGTH
     end
 
-    # The bound expressed as the thing it is actually protecting. Both axes pushed at once — many
-    # reasons AND each one pathological — and the row still lands under the stated ceiling.
-    it "keeps the row under a stated size ceiling however large the payload is" do
+    # The bound expressed as the thing it is actually protecting. Every client-controlled axis
+    # pushed at once — many reasons, each one pathological, AND a pathological `User-Agent` — and
+    # measured over the WHOLE ROW rather than over `details` alone, because `user_agent` sits on the
+    # same row and is equally the client's to choose. Measuring one column would let a ~100 KB
+    # header pass a fence whose name is a claim about the row.
+    it "keeps the row under a stated size ceiling however large the payload or the client's header" do
       ingest({ commit_sha: "a" * 40,
-               specs: Array.new(200) { { file_path: "x" * 5_000, line_number: 0 } } })
+               specs: Array.new(200) { { file_path: "x" * 5_000, line_number: 0 } } },
+             headers: { "User-Agent" => "u" * 100_000 })
 
-      expect(IngestRejection.last.details.to_json.bytesize).to be < 10_000
+      expect(IngestRejection.last.attributes.to_json.bytesize).to be < 10_000
+    end
+
+    # The other client-controlled column on the row, on its own, so a regression in the header half
+    # names itself instead of surfacing as a byte count drifting up.
+    it "shortens a pathological User-Agent rather than storing it whole" do
+      ingest(refused_body, headers: { "User-Agent" => "u" * 100_000 })
+
+      stored = IngestRejection.last.user_agent
+      expect(stored.length).to be <= IngestRejection::MAX_USER_AGENT_LENGTH
+      expect(stored).to end_with("...")
     end
 
     # Success criterion 2, restated for the case that made bounding necessary. The bound is a
