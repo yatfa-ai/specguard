@@ -183,4 +183,59 @@ RSpec.describe GzipRequestBody do
 
     expect(call(env_for(Zlib.gzip(original))).last.body).to eq(original)
   end
+
+  # The sibling of the example above, at the boundary it does *not* cover. That one pins "no bytes
+  # lost across a **chunk** boundary"; these pin the opposite answer at the **member** boundary —
+  # bytes *are* dropped there, silently, with a success status.
+  #
+  # Every example in this group pins a permissiveness the class comment declares DELIBERATE
+  # (`lib/middleware/gzip_request_body.rb:53-57`: "if one ever appears, this is the line to
+  # revisit"). They are not asserting that today's answer is the right one. If one of them fails,
+  # that comment is the thing to revisit — the decision has changed and the comment now lies.
+  describe "the deliberate first-member-only read" do
+    let(:first) { JSON.generate("specs" => [{ "file_path" => "spec/first_spec.rb" }]) }
+    let(:second) { JSON.generate("specs" => [{ "file_path" => "spec/second_spec.rb" }]) }
+
+    # `Zlib::GzipReader#read` returns nil at the end of the first member, so the read loop in
+    # `#inflate` stops there and every later member is never read. Both directions are asserted
+    # separately and on purpose: the body equality is what catches an implementation that started
+    # reading *every* member, and the explicit status check is what catches one that started
+    # *refusing* them — without it that direction still fails, but as a NoMethodError on a nil
+    # `seen`, which reads like a broken spec rather than a changed decision.
+    it "delivers only the first member of a two-member body, and answers success" do
+      response, seen = call(env_for(Zlib.gzip(first) + Zlib.gzip(second)))
+
+      expect(response.first).to eq(200)
+      expect(seen.body).to eq(first)
+      expect(seen.body).not_to include("second_spec")
+    end
+
+    # The lost bytes are invisible downstream: CONTENT_LENGTH is rewritten to the *short* body, so
+    # the request is internally consistent and nothing further down the stack has a way to notice
+    # that half of what the client sent is gone.
+    it "rewrites CONTENT_LENGTH to the truncated body, leaving no trace of the dropped member" do
+      _, seen = call(env_for(Zlib.gzip(first) + Zlib.gzip(second)))
+
+      expect(seen.env["CONTENT_LENGTH"]).to eq(first.bytesize.to_s)
+    end
+
+    # The second half of the comment's claim: trailing garbage after a valid member is accepted
+    # too, and is not confused with the corrupt-body 400 that garbage *alone* earns.
+    it "accepts a valid member followed by trailing garbage rather than answering 400" do
+      response, seen = call(env_for(Zlib.gzip(first) + "this is not gzip"))
+
+      expect(response.first).to eq(200)
+      expect(seen.body).to eq(first)
+    end
+
+    # The third unpinned accept-path, and the most extreme reading of the same rule: when the
+    # *first* member is empty the whole body is delivered empty, no matter what follows it. A
+    # zero-byte body is a 400; a zero-byte *member* is a 200.
+    it "delivers an empty body for an empty first member, whatever follows it" do
+      response, seen = call(env_for(Zlib.gzip("") + Zlib.gzip(first)))
+
+      expect(response.first).to eq(200)
+      expect(seen.body).to eq("")
+    end
+  end
 end

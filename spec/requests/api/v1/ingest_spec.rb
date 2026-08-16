@@ -994,6 +994,37 @@ RSpec.describe "POST /api/v1/ingest", type: :request do
       expect(response.parsed_body["message"]).to include("duration_seconds")
     end
 
+    # The hazard the middleware's own comment declares deliberate, made legible at the level a
+    # reader cares about it: `lib/middleware/gzip_request_body.rb:53-57` — "`Zlib.gzip(a) +
+    # Zlib.gzip(b)` inflates to `a` alone and the request succeeds… if one ever appears, this is
+    # the line to revisit". This example is that line appearing. It pins today's answer, it does
+    # not endorse it; if it fails, that comment is what to revisit.
+    #
+    # The two members carry *different* spec counts so the recorded run says which one landed. A
+    # status-only assertion would be vacuous here — 202 is also what a correct implementation that
+    # read both members would answer — so the count is the whole claim: a client that concatenated
+    # two gzip streams has half its run recorded as a complete run, and nothing anywhere says so.
+    # `delivery_health` is structurally blind to it because the request *succeeded*: there is no
+    # rejection row to find.
+    it "records only the first member of a concatenated gzip body, and still answers 202" do
+      first = ingest_payload(
+        commit_sha: "0000000f1a",
+        specs: Array.new(2) { |i| annotated_spec(file_path: "spec/models/first#{i}_spec.rb", line_number: i + 1) }
+      )
+      second = ingest_payload(
+        commit_sha: "0000000f1b",
+        specs: Array.new(5) { |i| annotated_spec(file_path: "spec/models/second#{i}_spec.rb", line_number: i + 1) }
+      )
+
+      ingest(Zlib.gzip(first.to_json) + Zlib.gzip(second.to_json),
+             headers: { "Content-Encoding" => "gzip" })
+
+      expect(response).to have_http_status(:accepted)
+      expect(TestRun.sole.total_specs_count).to eq(2)
+      expect(TestRun.sole.commit_sha).to eq("0000000f1a")
+      expect(response.parsed_body["total_specs"]).to eq(2)
+    end
+
     describe "when the body is not the gzip it claims to be" do
       it "answers 400 in the API's own error shape, not a 500" do
         ingest_raw_gzip("this is not gzip at all")
