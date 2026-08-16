@@ -1414,15 +1414,37 @@ class Api::V1::RepositoriesController < Api::BaseController
   # these rows are what was actually stored, which is the same separation `serialized_spec_files`
   # states for its own denominator.
   #
+  # THE WORKLIST CAN BE POINTED AT WHERE THE WORK IS, WITH THE TWO PARAMETERS THAT ALREADY NARROW
+  # EVERY OTHER PER-EXAMPLE QUESTION HERE. Sent alone the flag answers the WHOLE RUN in one order,
+  # capped, and a team adopting SpecGuard on the module they are actually touching could not ask for
+  # its unannotated tests: they got a hundred rows from wherever `spec/` sorts first, and the only
+  # route to `spec/services/` was to annotate every alphabetically-earlier example first — a hundred
+  # at a time, each batch costing a CI run and a re-ingest. Sent WITH `?spec_file=` or
+  # `?spec_directory=`, the population narrows to it — rows and `recorded_count` both — on the
+  # `area → file → example` ladder those two parameters already are, and on the predicates this
+  # application already owns: `where(spec_file_path: …)` and `DIRECTORY_EXPRESSION` compared for
+  # EQUALITY, which is the IMMEDIATE PARENT and never a prefix, so `spec/models/orders` is its own
+  # area rather than part of `spec/models`. See `SpecObservation.unannotated_in`, which argues the
+  # predicates, the AND-ing of the pair and the absence of a precedence rule between them.
+  #
+  # THE TWO PARAMETERS DO NOT STOP OPENING THEIR OWN BLOCKS. They are read once, by the guards this
+  # controller already includes, and each reaches its own drill-in beside this one — `?spec_file=` →
+  # `spec_file_examples`, `?spec_directory=` → `spec_directory_files`. They do not reach equally far,
+  # and the asymmetry is the point rather than a rounding: `?spec_directory=` alone carries on to the
+  # two directory file-growth pairs as well, six served keys against `?spec_file=`'s two. It is that
+  # ONE DRILL-IN EACH, not the growth pairs and not this block, that makes the empty answer here
+  # reconcilable rather than ambiguous, and it is stated in full at the keys below.
+  #
   # INSIDE `latest_run` rather than beside it, on the membership test the comment on `unstable_tests`
   # states in full: `SpecObservation.unannotated_in` narrows to a single `test_run_id`, so this is a
   # statement about ONE run's rows. And `latest_run` is not re-anchored by `?branch=`, so this ask
-  # composes with all four of the others without any of the five touching another. `?commit_sha=` is
-  # the exception and is meant to be: it re-anchors `latest_run`, and this drill-in re-anchors with it
-  # WITHOUT READING THE PARAMETER, because both hang off the one `latest_test_run` memo and
-  # `run_anchor` names the run they landed on. That matters more here than on its siblings — "what is
-  # still unannotated" is the question an adopting repository asks after every push, so asking it of an
-  # older commit is the ordinary use rather than the exotic one.
+  # composes with the other four — narrowing on two of them and leaving the other two untouched, none
+  # of the five re-anchoring another. `?commit_sha=` is the exception and is meant to be: it
+  # re-anchors `latest_run`, and this drill-in re-anchors with it WITHOUT READING THE PARAMETER,
+  # because both hang off the one `latest_test_run` memo and `run_anchor` names the run they landed
+  # on. That matters more here than on its siblings — "what is still unannotated" is the question an
+  # adopting repository asks after every push, so asking it of an older commit is the ordinary use
+  # rather than the exotic one.
   #
   # THE ROW SHAPE IS FOUR FIELDS AND DELIBERATELY NOT THE OTHER BLOCKS' SIX. The three per-example
   # blocks above agree field for field on purpose — `serialized_spec_file_examples` states why, and a
@@ -1445,15 +1467,23 @@ class Api::V1::RepositoriesController < Api::BaseController
   # "you did not ask", and a client walking a repository to completion would watch the block vanish at
   # the moment it succeeded and be unable to tell that from its own parameter having been dropped.
   #
-  # `recorded_count` IS THE RUN'S UNANNOTATED POPULATION, off the `COUNT(*) OVER ()` window of
-  # `SpecObservation::UNANNOTATED_POPULATION_COUNTS` — evaluated after the WHERE and before the LIMIT,
-  # so it describes what the run holds rather than what fit on the page. Re-deriving it by folding
-  # `rows` is wrong here far more often than on the siblings: this population is routinely the WHOLE
-  # RUN — a repository that has just installed the gem has `recorded_count == total_specs` on day one —
-  # so the cap fires as the normal case rather than the exotic one, and `recorded_count > rows.length`
-  # is a comparison this block ships the two OPERANDS of rather than the answer to — the same
-  # ships-the-numbers rule the siblings follow, and the reason `UnannotatedExamples` defines no
-  # `truncated?` for a caller that does not exist yet.
+  # `recorded_count` IS THE UNANNOTATED POPULATION OF WHATEVER WAS ASKED FOR — the whole run by
+  # default, and the narrowed slice when `?spec_file=` or `?spec_directory=` came with the flag. It is
+  # the `COUNT(*) OVER ()` window of `SpecObservation::UNANNOTATED_POPULATION_COUNTS`, evaluated after
+  # the WHERE and before the LIMIT, so it describes what the ask holds rather than what fit on the
+  # page — and it narrows with the rows for free rather than through a second aggregate. Re-deriving
+  # it by folding `rows` is wrong here far more often than on the siblings: this population is
+  # routinely the WHOLE RUN — a repository that has just installed the gem has `recorded_count ==
+  # total_specs` on day one — so the cap fires as the normal case rather than the exotic one, and
+  # `recorded_count > rows.length` is a comparison this block ships the two OPERANDS of rather than the
+  # answer to — the same ships-the-numbers rule the siblings follow, and the reason
+  # `UnannotatedExamples` defines no `truncated?` for a caller that does not exist yet.
+  #
+  # ⚠️ WHICH IS WHY THE NARROWING IS ECHOED. `recorded_count` is the one figure on this endpoint a
+  # client is invited to reconcile against a headline — `total_specs - annotated_specs`, one predicate
+  # evaluated twice — and a narrowed count silently breaks that reconciliation. So the two keys below
+  # say which population the count is of, and a client that sent neither sees `null` twice and can
+  # reconcile exactly as before.
   #
   # NO SECOND COUNT, where all three siblings serve one. Each of theirs discloses COVERAGE of the
   # column its rows are ranked by, and this block ranks by nothing and serves neither nullable column
@@ -1464,25 +1494,48 @@ class Api::V1::RepositoriesController < Api::BaseController
   #
   # EXACTLY ONE ADDITIONAL QUERY WHEN ASKED, AND NONE WHEN NOT, on the three drill-ins' rule: the gate
   # is the ASK and it is decided before any read is issued, so a client that never sends the parameter
-  # pays nothing for the key's existence. The read is bounded by the RUN rather than by the suite and
-  # rides `index_spec_observations_on_test_run_id`, EXPLAIN-certified for exactly this narrow in
-  # `spec/models/spec_observation_spec.rb`.
+  # pays nothing for the key's existence. The narrowing does not change that — it is a predicate on the
+  # one read, not a second one, and it is read off guards this controller already includes for their
+  # own blocks. The read is bounded by the RUN rather than by the suite and rides
+  # `index_spec_observations_on_test_run_id`, EXPLAIN-certified for exactly this narrow — and for both
+  # narrowed shapes — in `spec/models/spec_observation_spec.rb`.
   def serialized_unannotated_examples(test_run)
     return nil unless requested_unannotated_examples?
 
-    examples = UnannotatedExamples.for(test_run)
+    examples = UnannotatedExamples.for(test_run, spec_file: requested_spec_file,
+                                                 spec_directory: requested_spec_directory)
 
     {
-      # NO ASK RESTATED, where all three sibling drill-ins open with one. `path`, `name` and `name`
-      # echo back the key the client picked out of a ranking; this parameter carries no value to echo,
-      # because the population is the run's and the run is named by `run_anchor`. See
-      # `RequestedUnannotatedExamplesParam` for why this parameter is the flag-style one.
+      # THE ASK RESTATED IS THE NARROWING, AND `null` WHEN THERE WAS NONE. The flag itself carries no
+      # value to echo — the sibling drill-ins echo the key the client picked out of a ranking, and
+      # this parameter is a presence rather than a pick; see `RequestedUnannotatedExamplesParam` for
+      # why it is the flag-style one. What CAN be restated is where in the run the client asked to
+      # start, and it has to be: `recorded_count` moves with it.
       #
-      # FOUR FIELDS, NOT THE OTHER PER-EXAMPLE BLOCKS' SIX, and the difference is asserted rather than
-      # structural on purpose — the same way their agreement is. A `contain_exactly` over these names
-      # in this block's request spec goes red if `duration_seconds` or `outcome` is added here, and the
-      # siblings' own `contain_exactly`s go red if one of theirs is dropped to match, so neither set
-      # can drift into the other unnoticed.
+      # As the server READ them, never echoed from the raw parameter, on `history_window.branch`'s
+      # rule and `spec_file_examples.path`'s: a malformed shape is no ask at all and reaches no
+      # narrowing, so what is served here is always the value the rows were actually gathered under.
+      #
+      # BOTH ARE AND-ED WHEN BOTH ARRIVE, and a contradictory pair — an area and a file outside it —
+      # is answered with `rows: []` and both narrowings echoed, which reads as an empty intersection
+      # rather than as one parameter having been dropped. `SpecObservation.unannotated_in` argues why
+      # there is no precedence rule.
+      #
+      # AN UNKNOWN PATH IS THE SAME EMPTY BLOCK, never a 404 and never a prefix match onto a
+      # neighbouring file or a sibling subdirectory — `serialized_spec_file_examples` fixed that
+      # answer and this inherits it. Unknown-vs-fully-annotated is not distinguished here, and a
+      # client that needs the two apart already has them in the SAME RESPONSE BODY for free: with
+      # `?spec_file=`, `spec_file_examples.recorded_count > 0` beside a zero here means the file
+      # exists and is fully annotated, and both zero means the run recorded nothing at that path.
+      # `?spec_directory=` reconciles against `spec_directory_files` the same way. No new field, no
+      # new query.
+      spec_file: examples.spec_file,
+      spec_directory: examples.spec_directory,
+      # FOUR ROW FIELDS, NOT THE OTHER PER-EXAMPLE BLOCKS' SIX, and the difference is asserted rather
+      # than structural on purpose — the same way their agreement is. A `contain_exactly` over these
+      # names in this block's request spec goes red if `duration_seconds` or `outcome` is added here,
+      # and the siblings' own `contain_exactly`s go red if one of theirs is dropped to match, so
+      # neither set can drift into the other unnoticed.
       rows: examples.rows.map do |observation|
         {
           name: observation.name,

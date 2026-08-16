@@ -326,6 +326,111 @@ RSpec.describe SpecObservation do
         expect(described_class.unannotated_in(other, limit: rows_per_run).map(&:test_run_id).uniq)
           .to eq([other.id])
       end
+
+      # == Where in the run the worklist STARTS
+      #
+      # The read's default is the whole run in one order, capped — which is a worklist nobody can
+      # choose a place in. These examples are about the two narrowings that let a reader start where
+      # the work is, and each is asserted against the seeded run's OTHER rows rather than only against
+      # its own: a predicate that had been dropped returns a superset that still looks like a list of
+      # unannotated examples.
+      describe "narrowed to one file or one area" do
+        # `seed` writes `spec/d#{i % 5}/f#{i % 25}_spec.rb`, so a file number and its directory number
+        # are congruent mod 5 — `f3` lives in `d3`, alongside `f8`, `f13`, `f18` and `f23`.
+        let(:one_file) { "spec/d3/f3_spec.rb" }
+        let(:one_area) { "spec/d3" }
+
+        it "returns one file's unannotated rows and no other file's" do
+          annotate(3)
+          rows = described_class.unannotated_in(run, limit: rows_per_run, spec_file: one_file).to_a
+
+          expect(rows).to be_present
+          expect(rows.map(&:spec_file_path).uniq).to eq([one_file])
+          expect(rows.map(&:status).uniq).to eq(["unannotated"])
+          # And the run holds more unannotated rows than that, so the narrow is a predicate doing
+          # work rather than a fixture that has only one file in it.
+          expect(described_class.unannotated_in(run, limit: rows_per_run).size).to be > rows.size
+        end
+
+        it "counts the FILE's unannotated population rather than the run's" do
+          in_file = run.spec_observations.where(spec_file_path: one_file).count
+          rows = described_class.unannotated_in(run, limit: 5, spec_file: one_file).to_a
+
+          expect(rows.size).to eq(5)
+          expect(rows.map { it["unannotated_recorded_count"] }.uniq).to eq([in_file])
+          expect(in_file).to be < rows_per_run
+        end
+
+        it "returns one area's unannotated rows and no other area's" do
+          rows = described_class.unannotated_in(run, limit: rows_per_run, spec_directory: one_area).to_a
+
+          expect(rows.map(&:spec_file_path).uniq.sort)
+            .to eq(["spec/d3/f13_spec.rb", "spec/d3/f18_spec.rb", "spec/d3/f23_spec.rb",
+                    "spec/d3/f3_spec.rb", "spec/d3/f8_spec.rb"])
+          expect(rows.map { it["unannotated_recorded_count"] }.uniq).to eq([rows.size])
+        end
+
+        # ⭐ THE PREFIX TRAP, and the reason this example inserts its own rows. `DIRECTORY_EXPRESSION`
+        # is the IMMEDIATE PARENT of the including file compared for EQUALITY — `spec/d3/nested` is
+        # its own area, not part of `spec/d3` — and a `LIKE 'spec/d3%'` written to make "the whole
+        # subtree" work would be a fifth directory semantics on this table. The seeded run is flat, so
+        # nothing in it could tell an equality from a prefix; a subdirectory has to exist for the
+        # assertion to mean anything.
+        it "excludes a SUBDIRECTORY's rows, because an area is the immediate parent and not a prefix" do
+          nested = "spec/d3/nested/deep_spec.rb"
+          now = Time.current
+          described_class.insert_all([{ test_run_id: run.id, repository_id: run.repository_id,
+                                        example_id: "./#{nested}[1:1]", spec_file_path: nested,
+                                        file_path: nested, line_number: 1, name: "nested example",
+                                        duration_seconds: 0.1, outcome: "passed",
+                                        status: "unannotated", created_at: now, updated_at: now }])
+
+          paths = described_class.unannotated_in(run, limit: rows_per_run, spec_directory: one_area)
+                                 .map(&:spec_file_path)
+
+          expect(paths).not_to include(nested)
+          # And the row IS in the run and IS unannotated, so its absence above is the equality doing
+          # work rather than the insert having failed.
+          expect(described_class.unannotated_in(run, limit: rows_per_run, spec_directory: "spec/d3/nested")
+                                .map(&:spec_file_path)).to eq([nested])
+        end
+
+        # Both narrowings AND, with no precedence rule between them: a coherent pair is the
+        # intersection, which for a file inside the area it names is the file.
+        it "intersects the two when both are given" do
+          rows = described_class.unannotated_in(run, limit: rows_per_run, spec_file: one_file,
+                                                     spec_directory: one_area).to_a
+
+          expect(rows.map(&:spec_file_path).uniq).to eq([one_file])
+          expect(rows.size)
+            .to eq(described_class.unannotated_in(run, limit: rows_per_run, spec_file: one_file).size)
+        end
+
+        # And a contradictory pair is an honest empty intersection rather than one of the two being
+        # silently dropped — which is what a precedence rule would have made it.
+        it "returns nothing when the file named is not in the area named" do
+          rows = described_class.unannotated_in(run, limit: rows_per_run, spec_file: one_file,
+                                                     spec_directory: "spec/d1").to_a
+
+          expect(rows).to be_empty
+        end
+
+        # An unknown path is an ordinary empty read at this grain, exactly as it is one rung up: no
+        # error, and specifically no prefix match onto the neighbour it was nearly spelled as.
+        it "answers a path this run recorded nothing for with no rows" do
+          expect(described_class.unannotated_in(run, spec_file: "spec/d3/f3_spec.rbx").to_a).to be_empty
+          expect(described_class.unannotated_in(run, spec_directory: "spec/d").to_a).to be_empty
+        end
+
+        # The narrow does not loosen the run bound: a second run's rows at the same path stay out.
+        it "still narrows to the run it was handed" do
+          other = create_test_run(repository: repository, commit_sha: "feedfacecafebabf")
+          seed(other)
+
+          expect(described_class.unannotated_in(other, limit: rows_per_run, spec_file: one_file)
+                                .map(&:test_run_id).uniq).to eq([other.id])
+        end
+      end
     end
 
     # The only examples that need a populated table: a planner given three rows sequentially scans
@@ -495,6 +600,37 @@ RSpec.describe SpecObservation do
       # projection, an ordering and a cap on top of it.
       it "reads the run's unannotated examples off an index rather than scanning the table" do
         plan = plan_for_actual_sql { described_class.unannotated_in(run).to_a }
+
+        expect(plan).to match(/#{INDEXED_BY_RUN.source}|index_spec_observations_on_test_run_id_and_spec_file_path/)
+        expect(plan).not_to match(/Seq Scan on spec_observations/)
+      end
+
+      # THE SAME CERTIFICATION FOR THE TWO NARROWED SHAPES OF THAT READ, and they are two examples
+      # rather than one because they buy different things and could fail apart.
+      #
+      # `spec_file` narrows on the SECOND COLUMN of
+      # `index_spec_observations_on_test_run_id_and_spec_file_path`, so it is strictly cheaper than the
+      # un-narrowed read above and the planner has a composite index to reach for. `spec_directory` is
+      # an EXPRESSION predicate over a column no index expresses that way, so it buys nothing and is
+      # the run-bounded scan `.files_in_directory` already ships — which is the point: the bound that
+      # has to hold at the 20,000-example design point is the RUN, and it is the run narrow that
+      # supplies it in both cases. The assertion is therefore the same one, and it is the shared
+      # matcher rather than a named index for the reason the example above gives.
+      #
+      # Captured off the wire rather than EXPLAINed from a hand-written copy, on this section's rule:
+      # a narrowing added to the model and not to the certification would leave the certification
+      # measuring a statement the endpoint no longer makes.
+      it "reads ONE FILE's unannotated examples off an index rather than scanning the table" do
+        plan = plan_for_actual_sql do
+          described_class.unannotated_in(run, spec_file: "spec/d3/f3_spec.rb").to_a
+        end
+
+        expect(plan).to match(/#{INDEXED_BY_RUN.source}|index_spec_observations_on_test_run_id_and_spec_file_path/)
+        expect(plan).not_to match(/Seq Scan on spec_observations/)
+      end
+
+      it "reads ONE AREA's unannotated examples off an index rather than scanning the table" do
+        plan = plan_for_actual_sql { described_class.unannotated_in(run, spec_directory: "spec/d3").to_a }
 
         expect(plan).to match(/#{INDEXED_BY_RUN.source}|index_spec_observations_on_test_run_id_and_spec_file_path/)
         expect(plan).not_to match(/Seq Scan on spec_observations/)

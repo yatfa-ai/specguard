@@ -120,6 +120,8 @@ RSpec.describe "GET /api/v1/repository — latest_run.unannotated_examples", typ
     # hundred and asking again must not be handed a re-shuffled hundred.
     it "lists the run's unannotated examples in file order, with enough to open each one" do
       expect(block(query: ask)).to eq(
+        "spec_file" => nil,
+        "spec_directory" => nil,
         "rows" => [
           { "name" => "behaves like a billable charges once",
             "file_path" => "spec/support/shared_examples/billable.rb",
@@ -144,10 +146,16 @@ RSpec.describe "GET /api/v1/repository — latest_run.unannotated_examples", typ
     # exactly as their agreement is. Their own `contain_exactly`s go red if one of theirs is dropped
     # to match this; this one goes red if `duration_seconds` or `outcome` is added here to match them.
     # Both directions are pinned, in the two places that own them.
+    #
+    # `spec_file` and `spec_directory` are in the key set on EVERY call, `null` when they were not
+    # sent — the no-ask spelling the whole endpoint uses, and the reason a client can reconcile
+    # `recorded_count` against `total_specs - annotated_specs` without knowing what it sent: the two
+    # keys say whether the count is the run's.
     it "serves exactly the unannotated_examples keys this contract pins, and not the six-field shape" do
       served = block(query: ask)
 
-      expect(served.keys).to contain_exactly("rows", "recorded_count", "limit")
+      expect(served.keys)
+        .to contain_exactly("spec_file", "spec_directory", "rows", "recorded_count", "limit")
       expect(served["rows"].first.keys)
         .to contain_exactly("name", "file_path", "line_number", "spec_file_path")
       # Not the six-field per-example shape, and specifically not by accident: the endpoint's other
@@ -264,6 +272,240 @@ RSpec.describe "GET /api/v1/repository — latest_run.unannotated_examples", typ
     end
   end
 
+  # ⭐ THE WORKLIST POINTED AT WHERE THE WORK IS. The flag alone answers the whole run in one order,
+  # capped — a list with no way to choose a place in it, which for a team adopting SpecGuard on the
+  # module they are actually touching means annotating every alphabetically-earlier example first, a
+  # hundred at a time, each batch costing a CI run and a re-ingest. `?spec_file=` and
+  # `?spec_directory=` are the two parameters that already narrow every other per-example question on
+  # this endpoint, and sending either alongside the flag narrows this population to it.
+  #
+  # THE POPULATION, NOT ONLY THE ROWS, which is what every example here asserts BOTH halves of: the
+  # window rides the WHERE, so `recorded_count` narrows for free — and a serializer that had narrowed
+  # the rows and left the count at the run's would pass any rows-only assertion while telling a client
+  # its file holds three times the work it does.
+  describe "a worklist narrowed to one file or one area" do
+    let(:models_area) { "spec/models" }
+    let(:services_area) { "spec/services" }
+
+    # AC2. The file rung. `other_file` holds TWO of the run's three unannotated examples, so a block
+    # that had ignored the narrowing returns a superset that still looks like a list of unannotated
+    # examples — and the count is what separates the two beyond doubt.
+    it "narrows the rows AND the count to one file, and echoes the file it narrowed by" do
+      served = block(query: ask.merge(spec_file: other_file))
+
+      expect(served["rows"].map { it["name"] })
+        .to eq(["Pricing rounds to the currency unit", "Pricing applies the volume tier"])
+      expect(served["recorded_count"]).to eq(2)
+      expect(served["spec_file"]).to eq(other_file)
+      expect(served["spec_directory"]).to be_nil
+      # The whole-run answer on the same fixture is strictly larger, so the narrow is a predicate
+      # doing work rather than a fixture with one file in it.
+      expect(block(query: ask)["recorded_count"]).to eq(3)
+    end
+
+    # The narrowing is by the file that RAN the example, not the file it is DEFINED in — the same
+    # `spec_file_path` the rows are ordered by and that `?spec_file=` means everywhere else here. The
+    # shared example group is the row that can tell those apart: asking for `order_spec.rb` finds it,
+    # and asking for the `spec/support/` helper it is written in does not.
+    it "narrows by the file that RAN the example, not the file it is defined in" do
+      by_running_file = block(query: ask.merge(spec_file: target_file))
+
+      expect(by_running_file["rows"].map { it["name"] }).to eq(["behaves like a billable charges once"])
+      expect(by_running_file["recorded_count"]).to eq(1)
+      expect(by_running_file["rows"].first["file_path"])
+        .to eq("spec/support/shared_examples/billable.rb")
+      # And the definition site is not the ask that finds it, which is the half a serializer narrowing
+      # on `file_path` would get backwards.
+      expect(block(query: ask.merge(spec_file: "spec/support/shared_examples/billable.rb"))["rows"])
+        .to be_empty
+    end
+
+    # AC3. The area rung, by `DIRECTORY_EXPRESSION` equality. `spec/models` and `spec/services` each
+    # hold part of this run's unannotated population, so each ask excludes the other's rows.
+    it "narrows the rows AND the count to one area, and echoes the area it narrowed by" do
+      models = block(query: ask.merge(spec_directory: models_area))
+      services = block(query: ask.merge(spec_directory: services_area))
+
+      expect(models["rows"].map { it["spec_file_path"] }).to eq([target_file])
+      expect(models["recorded_count"]).to eq(1)
+      expect(models["spec_directory"]).to eq(models_area)
+      expect(models["spec_file"]).to be_nil
+
+      expect(services["rows"].map { it["spec_file_path"] }).to eq([other_file, other_file])
+      expect(services["recorded_count"]).to eq(2)
+      # The two partition the run's population between them, which no single-area assertion can say.
+      expect(models["recorded_count"] + services["recorded_count"])
+        .to eq(block(query: ask)["recorded_count"])
+    end
+
+    # ⭐ AC3, THE PREFIX TRAP — the one assertion a flat fixture cannot make, which is why this
+    # example builds a repository with a SUBDIRECTORY in it. `DIRECTORY_EXPRESSION` is the IMMEDIATE
+    # PARENT of the including file compared for EQUALITY: `spec/models/orders` is its own area, not
+    # part of `spec/models`. A `LIKE 'spec/models%'` written to make "the whole subtree" work returns
+    # both rows here and would be a fifth directory semantics on this table.
+    it "excludes a SUBDIRECTORY's rows, because an area is the immediate parent and not a prefix" do
+      nested = separate_repository("acme/nested-areas")
+      ingest(nested,
+             [unannotated_spec(file_path: "spec/models/order_spec.rb", line_number: 3,
+                               name: "Order totals the line items"),
+              unannotated_spec(file_path: "spec/models/orders/refund_spec.rb", line_number: 5,
+                               name: "Refund reverses the charge")])
+      key = nested.api_keys.create!
+
+      parent = block(key: key, query: ask.merge(spec_directory: "spec/models"))
+      child = block(key: key, query: ask.merge(spec_directory: "spec/models/orders"))
+
+      expect(parent["rows"].map { it["spec_file_path"] }).to eq(["spec/models/order_spec.rb"])
+      expect(parent["recorded_count"]).to eq(1)
+      # The subtree row EXISTS, is unannotated, and is reachable under its OWN area — so its absence
+      # above is the equality doing work rather than an empty fixture.
+      expect(child["rows"].map { it["spec_file_path"] }).to eq(["spec/models/orders/refund_spec.rb"])
+      expect(child["recorded_count"]).to eq(1)
+      expect(block(key: key, query: ask)["recorded_count"]).to eq(2)
+    end
+
+    # AC4. Both together AND, with no precedence rule: a coherent pair is the intersection.
+    it "intersects the two when both are sent, and echoes both" do
+      served = block(query: ask.merge(spec_file: other_file, spec_directory: services_area))
+
+      expect(served["rows"].map { it["name"] })
+        .to eq(["Pricing rounds to the currency unit", "Pricing applies the volume tier"])
+      expect(served["recorded_count"]).to eq(2)
+      expect(served["spec_file"]).to eq(other_file)
+      expect(served["spec_directory"]).to eq(services_area)
+    end
+
+    # AC4, the half a precedence rule would have broken. A file outside the area named is an empty
+    # INTERSECTION — 200, both narrowings echoed — rather than one parameter silently winning and the
+    # other being dropped, which is the failure a client could not see from the body.
+    it "answers a contradictory pair with no rows, both narrowings restated, and a 200" do
+      served = block(query: ask.merge(spec_file: other_file, spec_directory: models_area))
+
+      expect(response).to have_http_status(:ok)
+      expect(served["rows"]).to eq([])
+      expect(served["recorded_count"]).to eq(0)
+      expect(served["spec_file"]).to eq(other_file)
+      expect(served["spec_directory"]).to eq(models_area)
+      # Each half of the pair is non-empty on its own, so the emptiness is the AND rather than either
+      # parameter being wrong.
+      expect(block(query: ask.merge(spec_file: other_file))["recorded_count"]).to eq(2)
+      expect(block(query: ask.merge(spec_directory: models_area))["recorded_count"]).to eq(1)
+    end
+
+    # AC5. A path this run recorded nothing for is an ordinary answer, not a malformed request — the
+    # answer `repository_spec_file_examples_spec.rb` fixed for the rung below and this inherits
+    # verbatim: 200, the ask restated, `rows: []`, honest zeroes. Never a 404, and specifically never
+    # a prefix match onto the neighbour the typo was nearly spelled as.
+    it "answers a typo with the empty block rather than an error or a prefix match" do
+      typo_file = block(query: ask.merge(spec_file: "spec/services/pricing_spec.rbx"))
+      typo_area = block(query: ask.merge(spec_directory: "spec/serv"))
+
+      expect(response).to have_http_status(:ok)
+      expect(typo_file).to eq("spec_file" => "spec/services/pricing_spec.rbx", "spec_directory" => nil,
+                              "rows" => [], "recorded_count" => 0,
+                              "limit" => SpecObservation::UNANNOTATED_EXAMPLES_LIMIT)
+      expect(typo_area["rows"]).to eq([])
+      expect(typo_area["recorded_count"]).to eq(0)
+      expect(typo_area["spec_directory"]).to eq("spec/serv")
+    end
+
+    # AC5, the reason the block needs no field to separate "no such path" from "fully annotated": the
+    # SAME RESPONSE BODY already carries the sibling block both parameters open. `spec_file` is the
+    # ANNOTATED file here — it has rows, and none of them unannotated — so a client reads "the file
+    # exists and there is nothing left to do" off two counts it already has. The typo reads zero on
+    # both, which is the other sentence.
+    it "lets a client separate an unknown path from a fully-annotated one, with no new field" do
+      done = latest_run(query: ask.merge(spec_file: annotated_file))
+      missing = latest_run(query: ask.merge(spec_file: "spec/models/nope_spec.rb"))
+
+      expect(done.dig("spec_file_examples", "recorded_count")).to eq(2)
+      expect(done.dig("unannotated_examples", "recorded_count")).to eq(0)
+
+      expect(missing.dig("spec_file_examples", "recorded_count")).to eq(0)
+      expect(missing.dig("unannotated_examples", "recorded_count")).to eq(0)
+    end
+
+    # AC6. The narrowing parameters are the flag's modifiers, never its trigger. Sent WITHOUT it the
+    # block stays `null` — and they still open their own blocks, which is the half that proves the
+    # parameters were read at all rather than the request having been ignored.
+    it "leaves the block null when a narrowing arrives without the flag" do
+      run = latest_run(query: { spec_file: other_file, spec_directory: services_area })
+
+      expect(run).to have_key("unannotated_examples")
+      expect(run["unannotated_examples"]).to be_nil
+      expect(run.dig("spec_file_examples", "path")).to eq(other_file)
+      expect(run.dig("spec_directory_files", "path")).to eq(services_area)
+    end
+
+    # AC7. The echo is the value AS THE SERVER READ IT, which for a shape that is not a String is no
+    # value at all — the guards these two parameters already ship reject an Array, a nested hash and a
+    # blank before any of them reaches SQL. So a malformed narrowing is not a narrowing: the block is
+    # the WHOLE RUN with both keys `null`, never the raw parameter echoed back and never an `IN` list
+    # under a key naming one file.
+    it "treats a malformed or blank narrowing as no narrowing, and echoes null rather than the raw parameter" do
+      [{ spec_file: [other_file] }, { spec_file: { path: other_file } }, { spec_file: "" },
+       { spec_directory: [services_area] }, { spec_directory: "" }].each do |malformed|
+        served = block(query: ask.merge(malformed))
+
+        expect(response).to have_http_status(:ok)
+        expect(served["recorded_count"]).to eq(3)
+        expect(served["rows"].length).to eq(3)
+        expect([served["spec_file"], served["spec_directory"]]).to eq([nil, nil])
+      end
+    end
+
+    # AC8. The cap fires WITHIN the narrowed population, and `recorded_count` is that population's —
+    # the same window/limit separation the whole-run block pins, asserted again one narrowing down,
+    # because a serializer could have narrowed the rows and counted the page.
+    it "caps the narrowed page and still counts the narrowed population behind it" do
+      big = separate_repository("acme/one-heavy-area")
+      over = SpecObservation::UNANNOTATED_EXAMPLES_LIMIT + 25
+      ingest(big, Array.new(over) do |index|
+        unannotated_spec(file_path: "spec/models/thing_spec.rb", line_number: index + 1,
+                         name: "Thing #{index} does its job")
+      end + [unannotated_spec(file_path: "spec/services/elsewhere_spec.rb", line_number: 1,
+                              name: "Elsewhere is not in that file")])
+      key = big.api_keys.create!
+      served = block(key: key, query: ask.merge(spec_file: "spec/models/thing_spec.rb"))
+
+      expect(served["rows"].length).to eq(SpecObservation::UNANNOTATED_EXAMPLES_LIMIT)
+      expect(served["recorded_count"]).to eq(over)
+      expect(served["limit"]).to eq(SpecObservation::UNANNOTATED_EXAMPLES_LIMIT)
+      # The narrowed count is the FILE's rather than the run's, which the extra row makes visible.
+      expect(block(key: key, query: ask)["recorded_count"]).to eq(over + 1)
+    end
+
+    # The narrowed read is still ONE query, and still this block's own grain: the narrowing is a
+    # predicate on the read the flag already pays for, not a second read — and it must not be
+    # classified as the file drill-in whose predicate it now shares.
+    it "adds exactly one query when narrowed, in its own grain" do
+      query = ask.merge(spec_file: other_file, spec_directory: services_area)
+
+      get_repository(query: { spec_file: other_file, spec_directory: services_area })
+      baseline = count_queries { get_repository(query: { spec_file: other_file, spec_directory: services_area }) }
+
+      expect(count_queries { get_repository(query: query) }).to eq(baseline + 1)
+      expect(unannotated_examples_grain_reads { get_repository(query: query) }.length).to eq(1)
+      expect(observation_reads { get_repository(query: query) }.length)
+        .to eq(classified_observation_reads { get_repository(query: query) })
+    end
+
+    # And the narrowing composes with the parameter that re-anchors the run, which is the ordinary
+    # use rather than the exotic one: "what is still unannotated in the module I am touching, as of
+    # the commit I pushed".
+    it "composes with ?commit_sha=, which names the run it narrowed within" do
+      ingest(repository,
+             [unannotated_spec(file_path: other_file, line_number: 9,
+                               name: "Pricing rounds to the currency unit")],
+             commit_sha: "feedfacecafe0002")
+      query = ask.merge(spec_file: other_file, commit_sha: "feedfacecafe0001")
+
+      expect(block(query: query)["recorded_count"]).to eq(2)
+      expect(block(query: ask.merge(spec_file: other_file))["recorded_count"]).to eq(1)
+      expect(get_repository(query: query).dig("run_anchor", "commit_sha")).to eq("feedfacecafe0001")
+    end
+  end
+
   # AC3. The distinction this key must not collapse — and the sharpest instance of it on the block,
   # because the empty answer here is not a stale bookmark or a deleted file but the STATE THE METRIC
   # EXISTS TO REACH.
@@ -292,7 +534,7 @@ RSpec.describe "GET /api/v1/repository — latest_run.unannotated_examples", typ
       key = done.api_keys.create!
 
       expect(block(key: key, query: ask))
-        .to eq("rows" => [], "recorded_count" => 0,
+        .to eq("spec_file" => nil, "spec_directory" => nil, "rows" => [], "recorded_count" => 0,
                "limit" => SpecObservation::UNANNOTATED_EXAMPLES_LIMIT)
       expect(response).to have_http_status(:ok)
       # And the run really is fully annotated, so the zero is the success state rather than an empty

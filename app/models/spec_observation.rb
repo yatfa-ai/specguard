@@ -862,6 +862,34 @@ class SpecObservation < ApplicationRecord
   # `Ingest::ObservationRecorder#attributes` falls back to the `null: false` `file_path` — and where
   # Postgres sorts a NULL under a plain `ASC` (last) is the survivable direction either way.
   #
+  # == The population may be NARROWED to one file or one area, on the ladder's own two parameters
+  #
+  # Whole-run is the ask's default and not its only shape. A worklist with exactly one order and no
+  # way to choose a place in it hands a team adopting SpecGuard the alphabetically-first hundred of
+  # the WHOLE suite, and the only route to the module they are actually touching is to annotate every
+  # alphabetically-earlier example first — a hundred at a time, each batch costing a CI run and a
+  # re-ingest. Nothing was lost that way; the reader simply could not start where the work is, which
+  # is the one thing a worklist is for.
+  #
+  # So `spec_file` and `spec_directory` narrow it, and they are THE PREDICATES THIS FILE ALREADY
+  # OWNS rather than two new ones. `spec_file` is `.in_file`'s `where(spec_file_path: …)` verbatim;
+  # `spec_directory` is `.files_in_directory`'s `DIRECTORY_EXPRESSION = ?` verbatim, which is the
+  # IMMEDIATE PARENT of the including file compared for EQUALITY and NEVER a prefix `LIKE` — the rule
+  # `.file_growth_between` and `.file_runtime_growth_between` each state in full, and the one a reader
+  # widening this to "the whole subtree" would be inventing a fifth directory semantics to break.
+  # `spec/models/orders` is its own area, not part of `spec/models`.
+  #
+  # BOTH TOGETHER ARE AND-ED, AND THERE IS NO PRECEDENCE RULE. The two parameters are read
+  # independently everywhere else on the endpoint that sends them and open two independent blocks, so
+  # a "narrower rung wins" rule would be a concept invented for this one read and remembered nowhere
+  # else. AND-ing needs no rule at all: a contradictory pair returns no rows, which is an honest
+  # empty intersection rather than one parameter having been silently dropped.
+  #
+  # Neither narrowing distinguishes "that path does not exist" from "that path is fully annotated",
+  # and neither should — `SpecFileExamples` answers an unknown path with the empty block rather than
+  # an error or a prefix match, and a caller that needs the two apart has them for free in the
+  # sibling block the same request opens. See `serialized_unannotated_examples`, which says so.
+  #
   # == Query cost
   #
   # One statement, bounded by the size of ONE RUN and issued only when the parameter was sent. Rides
@@ -874,12 +902,27 @@ class SpecObservation < ApplicationRecord
   # `spec/models/spec_observation_spec.rb` asserts what actually matters — one run reached through an
   # index rather than every run's rows walked.
   #
-  # The projection carries `UNANNOTATED_POPULATION_COUNTS`, so a caller gets the run's unannotated
-  # population off the same read as the rows. That figure is an ATTRIBUTE of the returned records
-  # rather than a separate value, which makes this relation one to load and read — `UnannotatedExamples`
-  # is its one caller — rather than one to count or paginate further.
-  def self.unannotated_in(test_run, limit: UNANNOTATED_EXAMPLES_LIMIT)
-    where(test_run_id: test_run.id, status: "unannotated")
+  # NEITHER NARROWING COSTS THE READ ANYTHING, and they do not cost it the same way. `spec_file`
+  # narrows on the second column of `index_spec_observations_on_test_run_id_and_spec_file_path`, so
+  # it is strictly CHEAPER than the whole-run read above. `spec_directory` is an expression
+  # predicate and buys no index — it is the run-bounded scan `.files_in_directory` already ships,
+  # bounded by the run rather than by the suite, which is the same bound the un-narrowed read has.
+  # So the certification covers all three reads and asserts the one thing that has to stay true of
+  # each: one run reached through an index rather than every run's rows walked.
+  #
+  # The projection carries `UNANNOTATED_POPULATION_COUNTS`, so a caller gets the unannotated
+  # population off the same read as the rows — and the window rides the WHERE, so a narrowed read
+  # counts the narrowed population for free rather than needing a second aggregate to describe what
+  # it returned. That figure is an ATTRIBUTE of the returned records rather than a separate value,
+  # which makes this relation one to load and read — `UnannotatedExamples` is its one caller —
+  # rather than one to count or paginate further.
+  def self.unannotated_in(test_run, limit: UNANNOTATED_EXAMPLES_LIMIT, spec_file: nil,
+                          spec_directory: nil)
+    scope = where(test_run_id: test_run.id, status: "unannotated")
+    scope = scope.where(spec_file_path: spec_file) if spec_file
+    scope = scope.where(sanitize_sql_array(["#{DIRECTORY_EXPRESSION} = ?", spec_directory])) if spec_directory
+
+    scope
       .select(Arel.sql("spec_observations.*, #{UNANNOTATED_POPULATION_COUNTS}"))
       .order(:spec_file_path, :line_number, :id)
       .limit(limit)
