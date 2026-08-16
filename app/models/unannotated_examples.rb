@@ -74,16 +74,20 @@ class UnannotatedExamples
   # than the exotic one, since a fully-annotated run is what the metric exists to reach.
   def recorded_count = rows.first&.[]("unannotated_recorded_count").to_i
 
-  # Whether this run recorded any unannotated rows AT ALL. Deliberately NOT used as a gate by anything
-  # serving this object, which is the difference between it and `SpecFileExamples#recorded?` one ladder
-  # over: there, `false` means the file asked about is empty; here it means the suite is fully
-  # annotated, and collapsing that into a `null` would answer the best possible state with the spelling
-  # reserved for "you did not ask".
-  def recorded? = rows.any?
-
-  # There are unannotated examples this run holds that the list does not show — the state a surface has
-  # to SAY rather than leave a reader to infer from a list whose length happens to equal a limit they
-  # cannot see. The argument `SpecFileExamples#truncated?` makes, and it fires far more often here:
-  # this population is routinely the whole run, where a file's is one file's.
-  def truncated? = recorded_count > rows.size
+  # == No `recorded?` and no `truncated?`, on the API-only sibling's precedent
+  #
+  # `SpecFileExamples` and `RepeatedDescriptionExamples` define those two because a PANEL calls them —
+  # `_examples_under_this_description.html.erb` and `RepositoriesHelper` gate and caption on them. This
+  # object has no panel: the dashboard drill-in is out of scope, `?unannotated_examples=` is read by the
+  # JSON endpoint alone, and the one serializer that builds this ships `rows` and `recorded_count` and
+  # nothing derived from them. `UnstableTestRuns` is API-only for the same reason and defines neither,
+  # which is the precedent this follows.
+  #
+  # Both would be one line and both would be plausible, which is exactly the argument against shipping
+  # them: a predicate no surface calls is a claim this object makes that nothing has ever checked —
+  # `UNANNOTATED_POPULATION_COUNTS` carries one window rather than two on that same reasoning. The
+  # dashboard panel is a known follow-up; whoever builds it should add what it calls, with the spec that
+  # runs it, rather than inherit a comparison that has never been executed against an empty or a capped
+  # read. Until then `recorded_count > rows.size` is a client's sentence to write, which is what
+  # `serialized_unannotated_examples` says when it ships the two numbers instead of the comparison.
 end

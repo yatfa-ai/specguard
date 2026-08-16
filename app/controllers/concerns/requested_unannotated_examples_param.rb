@@ -1,6 +1,12 @@
 # frozen_string_literal: true
 
-# `?unannotated_examples=` read as a REQUEST FOR THE BLOCK, or `false` for "no ask".
+# `?unannotated_examples=` read as a REQUEST FOR THE BLOCK — the predicate answers `false` when there
+# is no ask. NOT a boolean cast of the value: `?unannotated_examples=false` opens the block like any
+# other non-blank string. See the ⭐ section below, which exists to prevent exactly that misreading.
+#
+# The siblings' summary lines each name their reader's no-ask return (`nil`) and this one names its
+# own, but `false` is the one such token a client can also SEND here, so naming it alone would hand a
+# reader the wrong inference in the file's most-read position.
 #
 # Deliberately its own module rather than a widening of any sibling `Requested*Param`, and one module
 # per parameter is the point of the split — the argument `RequestedSpecFileParam` makes for itself and

@@ -1451,8 +1451,9 @@ class Api::V1::RepositoriesController < Api::BaseController
   # `rows` is wrong here far more often than on the siblings: this population is routinely the WHOLE
   # RUN — a repository that has just installed the gem has `recorded_count == total_specs` on day one —
   # so the cap fires as the normal case rather than the exotic one, and `recorded_count > rows.length`
-  # is `UnannotatedExamples#truncated?` without this block shipping the comparison instead of the two
-  # numbers it is drawn from.
+  # is a comparison this block ships the two OPERANDS of rather than the answer to — the same
+  # ships-the-numbers rule the siblings follow, and the reason `UnannotatedExamples` defines no
+  # `truncated?` for a caller that does not exist yet.
   #
   # NO SECOND COUNT, where all three siblings serve one. Each of theirs discloses COVERAGE of the
   # column its rows are ranked by, and this block ranks by nothing and serves neither nullable column

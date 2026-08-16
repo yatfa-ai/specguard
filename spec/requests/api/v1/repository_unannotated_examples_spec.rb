@@ -197,8 +197,8 @@ RSpec.describe "GET /api/v1/repository — latest_run.unannotated_examples", typ
 
       expect(served["rows"].length).to eq(SpecObservation::UNANNOTATED_EXAMPLES_LIMIT)
       expect(served["recorded_count"]).to eq(over)
-      # `recorded_count > rows.length` is `UnannotatedExamples#truncated?` without this block
-      # shipping the comparison instead of the two numbers it is drawn from.
+      # The block ships the two numbers a "showing 100 of N" sentence is drawn from, never the
+      # comparison between them.
       expect(served["recorded_count"]).to be > served["rows"].length
       # And on the repository this block exists for, the count IS the suite: nothing is annotated yet.
       expect(latest_run(key: key, query: ask)["total_specs"]).to eq(over)
@@ -232,8 +232,8 @@ RSpec.describe "GET /api/v1/repository — latest_run.unannotated_examples", typ
 
     # The block's standing rule, asserted over the whole serialized sub-block rather than per key:
     # `SpecObservation#duration_label` and `#outcome_label` are each one call away in the rows this
-    # reads, and `UnannotatedExamples#truncated?` is one call away in the object it reads from. This
-    # endpoint ships the operands and lets a client word it.
+    # reads, and `recorded_count > rows.length` is one comparison away in the object it reads from.
+    # This endpoint ships the operands and lets a client word it.
     it "serves numbers and words, never the panel's labels or its comparisons" do
       served = block(query: ask)
 
