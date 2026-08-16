@@ -156,6 +156,16 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
         # `repository_repeated_description_examples_spec.rb`, where that pair is asserted side by
         # side.
         "repeated_description_examples" => nil,
+        # And the drill-in into the run's UNANNOTATED examples, null for the same request-shaped
+        # reason as the three keys above it: this request sent no `?unannotated_examples=`. It is
+        # the fourth of the client's asks and the only one that opens a POPULATION rather than a
+        # pick — the three above open one area, one file and one sentence, each the rows behind a
+        # LINE of a ranking, and this opens the rows behind `total_specs` MINUS `annotated_specs`,
+        # two keys at the top of this very block. Its empty ANSWER is the sharpest on the block: a
+        # present block with `rows: []` and `recorded_count: 0`, which is not an absence but the
+        # state the metric exists to REACH; see `repository_unannotated_examples_spec.rb`, where
+        # that pair is asserted side by side.
+        "unannotated_examples" => nil,
         "suite_size_measured" => true,
         "ingested_at" => test_run.created_at.iso8601
       )
@@ -476,7 +486,8 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
                             "annotated_ratio", "duration_seconds", "shards", "spec_files",
                             "spec_directories", "slowest_examples", "repeated_descriptions",
                             "spec_directory_files", "spec_file_examples",
-                            "repeated_description_examples", "suite_size_measured",
+                            "repeated_description_examples", "unannotated_examples",
+                            "suite_size_measured",
                             "ingested_at")
     end
 
@@ -2248,6 +2259,11 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
         # And null because it asked for no description either, on the same rule and for the same
         # reason as the two above it.
         "repeated_description_examples" => nil,
+        # And null because it asked for no unannotated listing either. The same rule as the three
+        # above it, arrived at from the other side: this key's `null` is a fact about the REQUEST,
+        # and the empty answer it must never be confused with — a fully-annotated run — is a present
+        # block with `recorded_count: 0`.
+        "unannotated_examples" => nil,
         "suite_size_measured" => true,
         "ingested_at" => third.created_at.iso8601
       )
