@@ -802,7 +802,7 @@ RSpec.describe "POST /api/v1/ingest", type: :request do
       it "does not suppress the other specs' errors" do
         ingest(ingest_payload(specs: [unannotated_spec(line_number: 1, duration: "abc"),
                                       unannotated_spec(line_number: 2, name: ""),
-                                      unannotated_spec(line_number: 3).merge(line_number: 0)]))
+                                      unannotated_spec(line_number: 0)]))
 
         details = response.parsed_body["details"]
 
