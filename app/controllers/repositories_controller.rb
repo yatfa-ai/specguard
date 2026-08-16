@@ -58,12 +58,60 @@ class RepositoriesController < ApplicationController
 
   def show
     @repository = current_repository(:view)
-    # `includes` because the table names the creator of every row — without it, listing keys is
-    # one user query per key.
-    @api_keys = @repository.api_keys.includes(:created_by_user).order(created_at: :desc)
-    # The only signal that the repo ever reached the API: the newest use across every key.
-    # `nil` means no key has ever authenticated — see the "Connect this repository" panel.
-    @last_api_request_at = @repository.api_keys.maximum(:last_used_at)
+    # Loaded with `to_a` because the three figures below are read off it: they are claims about the
+    # same set of rows, and deriving them from one loaded collection is what stops them being
+    # separate answers to "when did this repository last reach the API" that can disagree.
+    #
+    # The `created_by_user` preload is bought only by a viewer who will actually render the keys
+    # table. That table is the only thing that names the creator of a row
+    # (`_api_keys.html.erb:23`), and it is a `keys.manage` surface end to end — for a view-only
+    # member it does not render at all, so preloading unconditionally would issue a join and
+    # discard it, on the very page whose stated rule (`show.html.erb:60-66`) is that credential
+    # metadata is gated. Inside the gate the preload is still required: without it, listing keys is
+    # one user query per key. Asking costs nothing — `repository_policy` is memoized and already
+    # populated by `current_repository` above — and the view asks that same memoized question for
+    # `manage_keys`, so the query shape here and the render that consumes it cannot disagree about
+    # which viewer this is.
+    #
+    # PRICED, on one fixture (two keys, two distinct creators), because this load replaces two
+    # round trips rather than adding one, and the two viewer classes are owed separate figures:
+    #
+    #   keys.manage viewer  14 -> 12   drops `maximum(:last_used_at)` AND the `SELECT 1` that
+    #                                  `has_api_keys` used to cost on an unloaded relation; the
+    #                                  table's own SELECT and its preload are what remain.
+    #   view-only member    12 -> 11   drops the same two and adds only the keys SELECT, which it
+    #                                  now needs for the Connection stat. The preload is the one
+    #                                  it does NOT buy, and skipping it is the whole difference
+    #                                  between this and 12 -> 12, i.e. a join fetched and thrown
+    #                                  away.
+    #
+    # Both are pinned: the owner by the absolute page budget in `repositories_spec.rb`, the member
+    # by the paired preload guard beside it. Separate guards because from here the paths differ.
+    keys = @repository.api_keys.order(created_at: :desc)
+    keys = keys.includes(:created_by_user) if repository_policy.can?(:keys_manage)
+    @api_keys = keys.to_a
+    # The keys whose `last_used_at` was stamped by a token that no longer exists: rotated, with
+    # nothing having authenticated since. `ApiKey#rotated_and_unused?` carries the rule and both of
+    # its nil cases. Read by the key list, which must not print an inherited "last used" age, and
+    # by the Connection stat below.
+    @rotated_unused_api_keys = @api_keys.select(&:rotated_and_unused?)
+    # DID ANYTHING EVER AUTHENTICATE — the newest use across every key, whichever token stamped it.
+    # `nil` means no key has ever been used at all, which is the only question this can answer and
+    # the one the "Not connected yet" branch asks. It must NOT be read as "the repository is
+    # reachable now": a rotation retires a token without touching its use, so this figure outlives
+    # the credential that produced it.
+    @last_api_request_at = @api_keys.filter_map(&:last_used_at).max
+    # THE SAME FIGURE, RESTRICTED TO KEYS WHOSE `last_used_at` STILL DESCRIBES THE TOKEN THEY ARE
+    # CARRYING NOW — the one the "Connected" stat may report, because it is the only one whose age
+    # belongs to a credential that still exists. `nil` while every key that has ever authenticated
+    # has since been rotated and not used, which is exactly the window between a rotation and the
+    # replacement reaching CI, and precisely when the stat used to read `Connected` in success tone
+    # over a pipeline that had been 401ing since the rotation.
+    #
+    # Separate from `@last_api_request_at` rather than replacing it, because the panel needs both:
+    # the difference between the two is what tells "nothing has ever connected" apart from
+    # "something did, with a token that is gone".
+    @last_live_api_request_at = (@api_keys - @rotated_unused_api_keys).filter_map(&:last_used_at).max
     # Every suite figure on the Overview panel is read off this one row — suite size, annotated
     # count, and the difference between them. `nil` is load-bearing and means *never ingested*,
     # which the panel renders as an empty state rather than as `0%`; a repository whose CI has

@@ -37,7 +37,8 @@
       </div>
 
       <div class="space-y-4 lg:col-span-1">
-        <%# == Three states, because "a request arrived" and "a run was accepted" are two questions
+        <%# == Four states, because "a request arrived", "a run was accepted" and "the token that
+            arrived still exists" are three questions
             `@last_api_request_at` is `api_keys.last_used_at`, and `authenticate_api_key!` stamps
             that on the way IN — before the payload is looked at. So it answers "did anything
             authenticate", and that is the only question it can answer.
@@ -54,7 +55,23 @@
             a repository that has never connected has nothing broken, while this one has a CI
             pipeline doing work and throwing all of it away. `RejectedIngests#refusing?` carries
             the rule — the newest refusal is newer than the newest accepted run — and both of its
-            stated bounds. %>
+            stated bounds.
+
+            The THIRD question is the one a rotation opens. `regenerate!` retires a token with no
+            grace window and deliberately does not touch `last_used_at` (SPGD-352: it is the key's
+            history), so between the rotation and the replacement reaching CI this stat was
+            reporting an age stamped by a credential that no longer exists — success tone over a
+            pipeline 401ing on every delivery. `@last_live_api_request_at` is the same figure
+            restricted to keys still carrying the token that stamped them, so "Connected" now
+            reports an age that belongs to something that exists, and the case where every such key
+            has been rotated gets its own branch instead of borrowing that one's tone.
+
+            Between `refusing?` and "Not connected yet" on both their reasonings: a delivery that is
+            being refused has authenticated, so it is the more specific state and stays first; and
+            this repository HAS connected, so it must not fall through to the branch for one that
+            never has. `:warning` and not `:error` because nothing is being thrown away and nothing
+            is provably broken — the replacement may have been minted a minute ago — but something
+            has to happen off this page before CI works again, and the hint names it. %>
         <% if @rejected_ingests.refusing? %>
           <%= render UI::StatComponent.new(
                 label: "Connection",
@@ -64,12 +81,50 @@
                       "see Rejected deliveries below.",
                 tone: :error
               ) %>
-        <% elsif @last_api_request_at.present? %>
+        <% elsif @last_live_api_request_at.present? %>
           <%= render UI::StatComponent.new(
                 label: "Connection",
                 value: "Connected",
-                hint: "Last request #{time_ago_in_words(@last_api_request_at)} ago.",
+                hint: "Last request #{time_ago_in_words(@last_live_api_request_at)} ago.",
                 tone: :success
+              ) %>
+        <% elsif @last_api_request_at.present? %>
+          <%# WHICH ROTATION TO DATE, once this is a SET rather than a key. Every stranded key
+              satisfies the rule against ITS OWN rotation — its use is not newer than its own
+              `rotated_at` — so the only claim true of all of them at once is that none has
+              authenticated since it was regenerated. No single date carries that:
+
+              * the NEWEST rotation makes "nothing has authenticated since <date>" true, and it is
+                the most REASSURING true reading available, on the one stat this whole change
+                exists to stop reading reassuringly. A nightly rotated five days ago and never
+                updated, beside a main rotated a minute ago, would date the reader's five-day-dead
+                pipeline at one minute.
+              * the OLDEST rotation in that same sentence is plainly FALSE whenever a second key
+                authenticated after the first key's rotation — which is the ordinary mixed case.
+
+              So the SENTENCE changes shape with the set instead of one date quietly changing
+              meaning: one key names its own rotation; several report how many and date the OLDEST,
+              which is how long something here has been stranded and points at the pipeline that
+              has been down longest. Both readings are true of every key in the set.
+
+              `rotations` cannot be empty on this branch: `@last_api_request_at` is present and
+              `@last_live_api_request_at` is not, so the key holding that use is stranded, and a
+              stranded key has a `rotated_at` by `rotated_and_unused?`'s first clause. %>
+          <% rotations = @rotated_unused_api_keys.filter_map(&:rotated_at).sort %>
+          <%= render UI::StatComponent.new(
+                label: "Connection",
+                value: "Key rotated, not yet in use",
+                hint: if rotations.one?
+                        "Nothing has authenticated since the key was regenerated " \
+                        "#{time_ago_in_words(rotations.first)} ago — the replacement token has " \
+                        "not reached CI. Update it wherever the old one was stored."
+                      else
+                        "#{rotations.size} keys have been regenerated with nothing authenticating " \
+                        "since; the oldest was regenerated #{time_ago_in_words(rotations.first)} " \
+                        "ago — the replacement tokens have not reached CI. Update them wherever " \
+                        "the old ones were stored."
+                      end,
+                tone: :warning
               ) %>
         <% else %>
           <%= render UI::StatComponent.new(
@@ -86,15 +141,23 @@
             already succeeded and the stamp had already fired. The sentence taught the reader to
             treat a recorded use as proof the pipeline works, which is precisely the inference a
             refused payload defeats. It now names which family does which rather than dropping the
-            distinction. %>
+            distinction.
+
+            The "never" rule was also the one heuristic this panel handed the reader, and it is the
+            one that cannot fire on the failure it is most needed for: a rotated key is never at
+            "never" — it inherits its predecessor's timestamp — so a reader applying the rule as
+            written concludes a 401ing pipeline is healthy. The rotation sentence is what makes the
+            rule cover the state the panel now detects. %>
         <%= render UI::AlertComponent.new(tone: :neutral) do %>
           A wrong or revoked key gets <code>401 {"error":"unauthorized"}</code> and records no use at
           all — authenticating is what stamps the key — so a key stuck at "never" means the request
-          never authenticated, or was never sent at all. A request that authenticates and is then
-          refused for its <em>payload</em> (<code>400 {"error":"bad_request"}</code>) <em>does</em>
-          record a use, so a recent use is not on its own proof that a run was stored. Those
-          refusals are listed in <a href="#rejected-ingests" class="underline">Rejected
-          deliveries</a> below.
+          never authenticated, or was never sent at all. Regenerating a key retires its token
+          immediately and leaves that stamp standing, so a rotated key reads "not used since
+          rotation" rather than "never" until the replacement reaches CI — until then every delivery
+          gets the same 401. A request that authenticates and is then refused for its
+          <em>payload</em> (<code>400 {"error":"bad_request"}</code>) <em>does</em> record a use, so
+          a recent use is not on its own proof that a run was stored. Those refusals are listed in
+          <a href="#rejected-ingests" class="underline">Rejected deliveries</a> below.
         <% end %>
       </div>
     </div>

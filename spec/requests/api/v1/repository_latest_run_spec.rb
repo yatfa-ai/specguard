@@ -208,15 +208,16 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
     # `contain_exactly` is what makes it bidirectional; `have_key` per block would catch neither.
     it "serves exactly the top-level keys this contract pins" do
       expect(get_repository.keys)
-        .to contain_exactly("repository", "api_key", "delivery_health", "run_anchor", "latest_run",
-                            "history_window",
-                            "history", "unstable_tests_window", "unstable_tests",
-                            "directory_growth_window",
-                            "directory_growth", "directory_run_growth_window",
-                            "directory_run_growth", "directory_runtime_growth_window",
-                            "directory_runtime_growth", "directory_run_file_growth_window",
-                            "directory_run_file_growth", "directory_runtime_file_growth_window",
-                            "directory_runtime_file_growth", "branches_window", "branches")
+        .to contain_exactly("repository", "api_key", "delivery_health", "credential_health",
+                            "run_anchor", "latest_run",
+                            "history_window", "history",
+                            "unstable_tests_window", "unstable_tests",
+                            "directory_growth_window", "directory_growth",
+                            "directory_run_growth_window", "directory_run_growth",
+                            "directory_runtime_growth_window", "directory_runtime_growth",
+                            "directory_run_file_growth_window", "directory_run_file_growth",
+                            "directory_runtime_file_growth_window", "directory_runtime_file_growth",
+                            "branches_window", "branches")
     end
 
     it "scopes latest_run to the key's own repository" do
@@ -2532,15 +2533,16 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
       body = get_repository(query: { branch: "main" })
 
       expect(body.keys)
-        .to contain_exactly("repository", "api_key", "delivery_health", "run_anchor", "latest_run",
-                            "history_window",
-                            "history", "unstable_tests_window", "unstable_tests",
-                            "directory_growth_window",
-                            "directory_growth", "directory_run_growth_window",
-                            "directory_run_growth", "directory_runtime_growth_window",
-                            "directory_runtime_growth", "directory_run_file_growth_window",
-                            "directory_run_file_growth", "directory_runtime_file_growth_window",
-                            "directory_runtime_file_growth", "branches_window", "branches")
+        .to contain_exactly("repository", "api_key", "delivery_health", "credential_health",
+                            "run_anchor", "latest_run",
+                            "history_window", "history",
+                            "unstable_tests_window", "unstable_tests",
+                            "directory_growth_window", "directory_growth",
+                            "directory_run_growth_window", "directory_run_growth",
+                            "directory_runtime_growth_window", "directory_runtime_growth",
+                            "directory_run_file_growth_window", "directory_run_file_growth",
+                            "directory_runtime_file_growth_window", "directory_runtime_file_growth",
+                            "branches_window", "branches")
       expect(body["history"].first.keys).to contain_exactly(
         "commit_sha", "branch", "total_specs", "annotated_specs", "annotated_ratio",
         "duration_seconds", "shard_count", "timed_shard_count", "suite_size_measured", "ingested_at"
