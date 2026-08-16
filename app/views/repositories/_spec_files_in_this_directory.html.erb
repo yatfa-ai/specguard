@@ -58,7 +58,34 @@
               <%# "Heaviest first" is only sayable where something was measured. The cap is
                   disclosed against the AREA's file count rather than against the list's own
                   length, which equals a limit the reader cannot see. %>
-              <% if @spec_directory_files.truncated? %>
+              <% if @spec_directory_files.lists_untimed? %>
+                <%# Where the two axes MEET, and the sentence the other four cannot cover. The
+                    timed axis is the AREA's — one timed example anywhere makes `any_timed?` true —
+                    and the ranking is the PAGE's: every file whose examples all went untimed has a
+                    NULL total and sits at the tail, spelled "not reported" in its own duration
+                    cell. Saying "heaviest first" over that list ranks rows nothing measured.
+
+                    So it names both populations, the way the file→examples rung names its own one
+                    grain down (`spec_file_examples_mixed_tail_sentence`): how many of the area's
+                    files were ranked, how many reported no duration and sit in path order after
+                    them, and — only where the cap bit — how many of that second population never
+                    reached the page at all. One number cannot say those three things, and said as
+                    one it states the first of them backwards. %>
+                the <%= number_with_delimiter(@spec_directory_files.shown_timed_count) %> of this
+                area's <%= number_with_delimiter(@spec_directory_files.file_count) %>
+                <%= "spec file".pluralize(@spec_directory_files.file_count) %> this run timed,
+                heaviest first, then
+                <% if @spec_directory_files.truncated? %>
+                  <%= number_with_delimiter(@spec_directory_files.shown_untimed_count) %> of the
+                  <%= number_with_delimiter(@spec_directory_files.untimed_file_count) %> that
+                  reported no duration and nothing ranked, in path order — the remaining
+                  <%= number_with_delimiter(@spec_directory_files.untimed_omitted_count) %> are not
+                  shown.
+                <% else %>
+                  the <%= number_with_delimiter(@spec_directory_files.shown_untimed_count) %> that
+                  reported no duration and nothing ranked, in path order.
+                <% end %>
+              <% elsif @spec_directory_files.truncated? %>
                 the <%= number_with_delimiter(@spec_directory_files.rows.size) %> heaviest of the
                 <%= number_with_delimiter(@spec_directory_files.file_count) %> spec files this run
                 recorded in this area, heaviest first.

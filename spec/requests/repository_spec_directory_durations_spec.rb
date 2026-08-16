@@ -1005,6 +1005,56 @@ RSpec.describe "Repository heaviest spec directories", type: :request do
         expect(files_panel).to have_no_text("4,000")
         expect(files_panel).to have_no_text("4000")
       end
+
+      # The ORDER axis on the very fixture above, which is where it was going unobserved. The three
+      # examples before this one assert on row contents, on the coverage sentence and on the
+      # denominator; not one of them looks at what the caption claims about the ORDER of the list —
+      # and the two poles either side of this state are both pinned on that axis. "Heaviest first"
+      # is a claim about the PAGE, `#any_timed?` is a figure about the AREA, and one timed example
+      # anywhere in the area is enough to license the claim over a list whose last row this same
+      # page spells "not reported".
+      it "does not claim the whole list is ranked when it ends in a file nothing timed" do
+        get repository_path(mixed_area_run, spec_directory: "spec/models")
+
+        expect(files_basis).to have_text(
+          "the 1 of this area's 2 spec files this run timed, heaviest first, then the 1 that " \
+          "reported no duration and nothing ranked, in path order", normalize_ws: true
+        )
+        expect(files_basis).to have_no_text("all 2 spec files this run recorded in this area, heaviest first")
+      end
+
+      # The truncated half of the same meeting, and the shape the sibling one rung down grew its
+      # fifth sentence for: a ranked head, an unranked tail, and a third population the cap kept off
+      # the page ENTIRELY. Three files timed and twenty-seven not, so the page holds all three
+      # ranked files, twenty-two of the twenty-seven unranked ones, and five that never arrived —
+      # said as one number ("the 25 heaviest of 30") every one of those facts is lost.
+      def truncated_mixed_area_run
+        repository = create_repository(user: @user, github_full_name: "acme/truncated-mixed-area")
+        timed = (1..3).map do |i|
+          example_spec(file_path: "spec/models/a#{format('%03d', i)}_spec.rb", duration: i.to_f,
+                       line_number: i)
+        end
+        untimed = (1..27).map do |i|
+          example_spec(file_path: "spec/models/z#{format('%03d', i)}_spec.rb", duration: nil,
+                       line_number: 100 + i)
+        end
+        ingest(repository, timed + untimed, commit_sha: "feedfacecafe0004")
+        repository
+      end
+
+      it "counts the ranked head, the unranked tail and what the cap left off separately" do
+        get repository_path(truncated_mixed_area_run, spec_directory: "spec/models")
+
+        expect(file_rows.size).to eq(SpecObservation::SPEC_DIRECTORY_FILES_LIMIT)
+        expect(file_row_paths.first).to eq("spec/models/a003_spec.rb")
+        expect(file_rows.last[:duration]).to eq("not reported")
+        expect(files_basis).to have_text(
+          "the 3 of this area's 30 spec files this run timed, heaviest first, then 22 of the 27 " \
+          "that reported no duration and nothing ranked, in path order — the remaining 5 are not " \
+          "shown", normalize_ws: true
+        )
+        expect(files_basis).to have_no_text("the 25 heaviest of the 30 spec files")
+      end
     end
 
     # An area with rows and no timings is a LIST with no ranking — every file ties. It still
