@@ -46,13 +46,23 @@
 <%= render "repositories/revealed_token" -%>
 
   <%# Asked ONCE for the whole page and passed down, not re-asked per panel: two panels branch on
-      it (the connect panel's "Try it" below, and the API keys table), and `@api_keys.any?` on an
-      unloaded relation is a real SELECT each time.
+      it (the connect panel's "Try it" below, and the API keys table).
 
-      Cost, precisely: for a `keys.manage` viewer this is free — the keys table was already asking,
-      and the Overview panel's query-count guard counts what that render costs. A view-only member
-      never asked before and now always does, so their page pays one SELECT it did not before. The
-      connect panel genuinely needs the answer, so that query is bought, not leaked. %>
+      Cost, precisely: nothing, for either viewer class. `@api_keys` is an Array — the controller
+      materialises it with `to_a` because the Connection stat derives two figures and the stranded
+      set from those same rows — so this is `Array#any?`, not a SELECT, however many panels ask.
+      It reads like a query and is not one, which is the only reason worth restating that it is
+      still asked once here rather than inline in both panels.
+
+      SPGD-614 repriced this paragraph rather than editing around it. It used to describe `.any?`
+      on an UNLOADED relation, where the question really was a round trip, and it priced a
+      view-only member as paying "one SELECT it did not before". Both halves of that are now wrong,
+      and in the same direction: the relation is loaded before the view sees it, and the load
+      displaced BOTH the `SELECT 1` this line used to cost and the `api_keys.maximum(:last_used_at)`
+      the Connection stat used to run. Measured on one fixture (two keys, two distinct creators), a
+      view-only member's page went 12 queries to 11 and a `keys.manage` viewer's 14 to 12 — fewer,
+      not more, for both. The preload that would otherwise have made the member's figure a wash is
+      bought inside the `keys.manage` gate only; the controller carries that table in full. %>
   <% has_api_keys = @api_keys.any? %>
 
 <%= render "repositories/connect_this_repository", has_api_keys: has_api_keys -%>

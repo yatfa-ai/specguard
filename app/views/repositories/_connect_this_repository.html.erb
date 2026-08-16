@@ -89,13 +89,41 @@
                 tone: :success
               ) %>
         <% elsif @last_api_request_at.present? %>
+          <%# WHICH ROTATION TO DATE, once this is a SET rather than a key. Every stranded key
+              satisfies the rule against ITS OWN rotation — its use is not newer than its own
+              `rotated_at` — so the only claim true of all of them at once is that none has
+              authenticated since it was regenerated. No single date carries that:
+
+              * the NEWEST rotation makes "nothing has authenticated since <date>" true, and it is
+                the most REASSURING true reading available, on the one stat this whole change
+                exists to stop reading reassuringly. A nightly rotated five days ago and never
+                updated, beside a main rotated a minute ago, would date the reader's five-day-dead
+                pipeline at one minute.
+              * the OLDEST rotation in that same sentence is plainly FALSE whenever a second key
+                authenticated after the first key's rotation — which is the ordinary mixed case.
+
+              So the SENTENCE changes shape with the set instead of one date quietly changing
+              meaning: one key names its own rotation; several report how many and date the OLDEST,
+              which is how long something here has been stranded and points at the pipeline that
+              has been down longest. Both readings are true of every key in the set.
+
+              `rotations` cannot be empty on this branch: `@last_api_request_at` is present and
+              `@last_live_api_request_at` is not, so the key holding that use is stranded, and a
+              stranded key has a `rotated_at` by `rotated_and_unused?`'s first clause. %>
+          <% rotations = @rotated_unused_api_keys.filter_map(&:rotated_at).sort %>
           <%= render UI::StatComponent.new(
                 label: "Connection",
                 value: "Key rotated, not yet in use",
-                hint: "Nothing has authenticated since the key was regenerated " \
-                      "#{time_ago_in_words(@rotated_unused_api_keys.filter_map(&:rotated_at).max)} " \
-                      "ago — the replacement token has not reached CI. Update it wherever the old " \
-                      "one was stored.",
+                hint: if rotations.one?
+                        "Nothing has authenticated since the key was regenerated " \
+                        "#{time_ago_in_words(rotations.first)} ago — the replacement token has " \
+                        "not reached CI. Update it wherever the old one was stored."
+                      else
+                        "#{rotations.size} keys have been regenerated with nothing authenticating " \
+                        "since; the oldest was regenerated #{time_ago_in_words(rotations.first)} " \
+                        "ago — the replacement tokens have not reached CI. Update them wherever " \
+                        "the old ones were stored."
+                      end,
                 tone: :warning
               ) %>
         <% else %>

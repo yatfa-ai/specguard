@@ -188,6 +188,48 @@ RSpec.describe "Repository registration and API keys", type: :request do
       # has to say which one.
       expect(connect_text).to include("Key rotated, not yet in use")
       expect(connect_text).to match(/replacement token has not reached CI/i)
+      # The SINGULAR shape, and the control for the multi-key example below: with one stranded key
+      # the sentence names that key's own rotation, and an implementation stuck on the plural
+      # branch would report "1 keys" here.
+      expect(connect_text).to include("Nothing has authenticated since the key was regenerated")
+    end
+
+    it "dates the OLDEST rotation, and says how many, once more than one key is stranded" do
+      # The fixture that tells the candidate aggregates apart. On a one-key set `max`, `min` and
+      # `first` are indistinguishable, so every example above is blind to the choice.
+      #
+      # It also fixes what the sentence may claim. Each stranded key satisfies the rule against its
+      # OWN rotation, so the only thing true of all of them is that none has authenticated since it
+      # was regenerated — "nothing has authenticated since <newest rotation>" is true but is the
+      # most reassuring true reading available, and "<oldest rotation>" in that same sentence is
+      # false outright. Hence a sentence that changes shape with the set.
+      #
+      # Created nightly-FIRST deliberately: `show` orders the collection `created_at: :desc`, so
+      # unsorted `.first` would be the main key's one-minute-old rotation and the last assertion
+      # here catches a dropped `.sort` as well as a `max`.
+      nightly = repository.api_keys.create!(name: "Nightly")
+      nightly.touch_last_used!
+      nightly.regenerate!
+      nightly.update_columns(last_used_at: 6.days.ago, rotated_at: 5.days.ago)
+
+      main = repository.api_keys.create!(name: "Main")
+      main.touch_last_used!
+      main.regenerate!
+
+      get repository_path(repository)
+
+      # Both really are stranded — asserted through the seam, so this cannot pass on a fixture
+      # where only one of them reached the state the copy is describing.
+      expect(repository.api_keys.reload).to all(be_rotated_and_unused)
+      expect(connect_text).to include("2 keys have been regenerated")
+      # Against the seam's own figure rather than a literal date, so this pins the SOURCE.
+      expect(connect_text).to include(
+        "the oldest was regenerated " \
+        "#{ActionController::Base.helpers.time_ago_in_words(nightly.reload.rotated_at)} ago"
+      )
+      # The reading `max` produced: a reader with a five-day-dead nightly pipeline told the event
+      # was a minute old.
+      expect(connect_text).not_to include("less than a minute ago")
     end
 
     it "reads Connected again on the first request that authenticates with the replacement" do
@@ -1730,13 +1772,20 @@ RSpec.describe "Repository registration and API keys", type: :request do
       #
       # RECOUNTED AT 19 by SPGD-614, and DOWNWARDS, which is the direction that needs the louder
       # note: a budget that falls silently is how a page loses a query it was supposed to issue.
-      # This one was `api_keys.maximum(:last_used_at)`, the aggregate the Connection stat read for
-      # "when did this repository last reach the API". That stat now needs a SECOND figure — the
-      # same maximum restricted to keys still carrying the token that stamped them, since a rotated
-      # key's use belongs to a credential that no longer exists — and both are derived from the key
-      # collection `show` already loads for the list. The aggregate was the round trip that could
-      # be dropped, not the one that was added: two claims about one set of rows now cannot
-      # disagree, and they cost one query between them instead of one each.
+      # The Connection stat now needs a SECOND figure beside "when did this repository last reach
+      # the API" — the same maximum restricted to keys still carrying the token that stamped them,
+      # since a rotated key's use belongs to a credential that no longer exists — and one loaded
+      # key collection answers both, so two claims about one set of rows cannot disagree and cost
+      # one query between them instead of one each.
+      #
+      # The arithmetic on THIS fixture, which registers no keys, since -1 is a net and reading it
+      # as a single dropped query is how the next recount goes wrong: TWO round trips went away
+      # (`api_keys.maximum(:last_used_at)`, and the `SELECT 1` that `has_api_keys` cost on an
+      # unloaded relation) and ONE arrived (the key collection itself, which this page did not load
+      # at all when there was no table to render). On a repository that HAS keys the same change
+      # reads -2, because the collection was being loaded for the table regardless. Neither figure
+      # includes the `created_by_user` preload: that is bought inside the `keys.manage` gate only,
+      # and the example below is what holds it there.
       it "issues exactly the queries the page issued before the shard counts were read" do
         repository = create_repository(user: @user)
         sharded_run(repository, [61.0, 58.5, 74.25, 60.0], commit_sha: "feedfacecafe0068")
@@ -1750,6 +1799,54 @@ RSpec.describe "Repository registration and API keys", type: :request do
         # by a page that renders nothing at all.
         expect(distribution.all("li").size).to eq(4)
         expect(distribution).to have_text("5,000 tests", normalize_ws: true)
+      end
+
+      # THE SAME BUDGET FOR THE OTHER VIEWER CLASS, and the reason it needs its own example: the
+      # count above is the OWNER's, and from the key load onwards the two paths differ.
+      #
+      # The keys table names the creator of every row, so `show` preloads `created_by_user` — but
+      # that table is a `keys.manage` surface end to end, and a view-only member renders none of
+      # it. When SPGD-614 moved the key collection to `.to_a` (the Connection stat needs the rows
+      # themselves, not an aggregate over them), the preload came along and was issued for that
+      # member and thrown away: a join bought for a render that cannot read it, on the page whose
+      # stated rule is that credential metadata is gated. It was SILENT, and the silence is the
+      # point — the member's page total was 12 before and 12 after, because the load displaced two
+      # other round trips by exactly the amount the preload cost. An absolute count is built to
+      # accept that, so a total cannot be what guards this.
+      #
+      # Asserted as the SHAPE of the preload instead. Two DISTINCT creators make it unambiguous: a
+      # preload for them is one `IN (...)`, and no other users read on this page produces that —
+      # the session and owner lookups are both `id = $1 LIMIT $2`. A total could not tell "the
+      # preload is gone" from "something unrelated got cheaper"; this can.
+      #
+      # Both viewers are exercised in the one example, and both renders asserted, so neither half
+      # can pass on a page that happened to load no keys at all.
+      it "does not buy the key-creator preload for a viewer who cannot see the keys table" do
+        repository = create_repository(user: @user)
+        repository.api_keys.create!(name: "CI", created_by_user: @user)
+        repository.api_keys.create!(
+          name: "Nightly",
+          created_by_user: create_user(github_uid: "8801", github_handle: "colleague")
+        )
+        preloads = ->(statements) { statements.count { |sql| sql.include?(" IN (") } }
+
+        get repository_path(repository)
+        manager_reads = queries_against('"users"') { get repository_path(repository) }
+
+        # The control. The gated table renders here, it names two different creators, and without
+        # the preload that is one user query per row — so this half must see it bought.
+        expect(response.body).to include("api-keys")
+        expect(preloads.call(manager_reads)).to eq(1)
+
+        member = create_user(github_uid: "9990", github_handle: "viewer")
+        create_membership(repository: repository, user: member)
+        sign_in_via_github(uid: "9990")
+
+        get repository_path(repository)
+        member_reads = queries_against('"users"') { get repository_path(repository) }
+
+        expect(response.body).not_to include("api-keys")
+        expect(preloads.call(member_reads)).to eq(0)
       end
 
       # NOT `count_queries` from spec/support/query_capture.rb: this one keeps the `payload[:cached]`

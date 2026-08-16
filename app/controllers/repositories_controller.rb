@@ -58,12 +58,38 @@ class RepositoriesController < ApplicationController
 
   def show
     @repository = current_repository(:view)
-    # `includes` because the table names the creator of every row — without it, listing keys is
-    # one user query per key. Loaded with `to_a` because the two figures below are read off it:
-    # they are claims about the same set of rows, and deriving them from one loaded collection is
-    # what stops them being two answers to "when did this repository last reach the API" that can
-    # disagree. It also costs one query fewer than the `maximum` this used to run beside it.
-    @api_keys = @repository.api_keys.includes(:created_by_user).order(created_at: :desc).to_a
+    # Loaded with `to_a` because the three figures below are read off it: they are claims about the
+    # same set of rows, and deriving them from one loaded collection is what stops them being
+    # separate answers to "when did this repository last reach the API" that can disagree.
+    #
+    # The `created_by_user` preload is bought only by a viewer who will actually render the keys
+    # table. That table is the only thing that names the creator of a row
+    # (`_api_keys.html.erb:23`), and it is a `keys.manage` surface end to end — for a view-only
+    # member it does not render at all, so preloading unconditionally would issue a join and
+    # discard it, on the very page whose stated rule (`show.html.erb:60-66`) is that credential
+    # metadata is gated. Inside the gate the preload is still required: without it, listing keys is
+    # one user query per key. Asking costs nothing — `repository_policy` is memoized and already
+    # populated by `current_repository` above — and the view asks that same memoized question for
+    # `manage_keys`, so the query shape here and the render that consumes it cannot disagree about
+    # which viewer this is.
+    #
+    # PRICED, on one fixture (two keys, two distinct creators), because this load replaces two
+    # round trips rather than adding one, and the two viewer classes are owed separate figures:
+    #
+    #   keys.manage viewer  14 -> 12   drops `maximum(:last_used_at)` AND the `SELECT 1` that
+    #                                  `has_api_keys` used to cost on an unloaded relation; the
+    #                                  table's own SELECT and its preload are what remain.
+    #   view-only member    12 -> 11   drops the same two and adds only the keys SELECT, which it
+    #                                  now needs for the Connection stat. The preload is the one
+    #                                  it does NOT buy, and skipping it is the whole difference
+    #                                  between this and 12 -> 12, i.e. a join fetched and thrown
+    #                                  away.
+    #
+    # Both are pinned: the owner by the absolute page budget in `repositories_spec.rb`, the member
+    # by the paired preload guard beside it. Separate guards because from here the paths differ.
+    keys = @repository.api_keys.order(created_at: :desc)
+    keys = keys.includes(:created_by_user) if repository_policy.can?(:keys_manage)
+    @api_keys = keys.to_a
     # The keys whose `last_used_at` was stamped by a token that no longer exists: rotated, with
     # nothing having authenticated since. `ApiKey#rotated_and_unused?` carries the rule and both of
     # its nil cases. Read by the key list, which must not print an inherited "last used" age, and
