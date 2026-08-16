@@ -260,16 +260,16 @@ class BulkRegistration
     pending.each { |candidate| candidate.repository = visible[candidate.full_name.downcase] }
   end
 
-  # Owned OR shared with this user — the same set `RepositoriesController#index` lists, because that
-  # is exactly the set whose `show` page this user may open.
+  # The repositories this user may open, narrowed to the batch — `Repository.accessible_by` is the
+  # one place that set is defined, and it is exactly the set whose `show` page this user may open,
+  # which is what makes it the right gate on a link.
   #
   # `LOWER(...) IN (...)` rather than a plain `IN`, matching the case-insensitive uniqueness rule
   # that produced these skips in the first place: a row registered as `Acme/API` is the row that
   # refused `acme/api`, and a case-sensitive lookup here would fail to find the very record it is
   # explaining.
   def visible_repositories(full_names)
-    Repository.where(user_id: user.id)
-              .or(Repository.where(id: user.repository_memberships.select(:repository_id)))
+    Repository.accessible_by(user)
               .where("LOWER(repositories.github_full_name) IN (?)", full_names.map(&:downcase))
               .index_by { |repository| repository.github_full_name.downcase }
   end
