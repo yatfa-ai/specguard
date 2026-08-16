@@ -127,8 +127,39 @@ class Api::V1::RepositoriesController < Api::BaseController
       },
       api_key: {
         name: current_api_key.name,
-        last_used_at: current_api_key.last_used_at&.iso8601
+        # ⚠️ THIS ANSWERS "DID ANYTHING AUTHENTICATE", AND THAT IS THE ONLY QUESTION IT CAN ANSWER.
+        # It must not be read as evidence that anything was ACCEPTED.
+        #
+        # `Api::BaseController#authenticate_api_key!` stamps this column on the way IN, before
+        # `Api::V1::IngestsController` has looked at the payload — so a delivery refused for its
+        # body moves it exactly as far as a delivery that ingested cleanly. A repository whose every
+        # run is being thrown away therefore serves a `last_used_at` of "two minutes ago" beside a
+        # `latest_run` that is days old, and the freshest figure in the body is the one affirmatively
+        # contradicting the staleness of every other one. `repositories#show` served the same
+        # contradiction as a `Connected` stat until SPGD-563 corrected it; this is the same
+        # correction at the agent surface.
+        #
+        # `acceptance_reported_by` names the key that answers what this one cannot, rather than
+        # leaving a client to discover the distinction by being misled by it once.
+        last_used_at: current_api_key.last_used_at&.iso8601,
+        acceptance_reported_by: "delivery_health"
       },
+      # WHETHER THIS REPOSITORY'S DELIVERIES ARE BEING ACCEPTED — the verdict `api_key.last_used_at`
+      # above cannot give, and the one every run-grain figure below silently depends on.
+      #
+      # Beside `run_anchor` and deliberately NOT inside `latest_run`, on that block's own membership
+      # rule stated at `unstable_tests`: `latest_run` is single-run facts by construction, and this
+      # is a statement about a WINDOW OF DELIVERIES — several of them, most of which produced no run
+      # at all. It sits directly under `api_key` because that is the claim it corrects.
+      #
+      # SERVED ON EVERY RESPONSE, including when nothing was refused and including on a repository
+      # that has never had a run accepted — the reasoning `repositories_controller.rb:95` gives for
+      # loading the panel unconditionally. A repository with no accepted run is not the empty case,
+      # it is the worst case. And "nothing was refused" is a POSITIVE FINDING an agent cannot
+      # otherwise distinguish from "SpecGuard does not track that".
+      #
+      # See `serialized_delivery_health`.
+      delivery_health: serialized_delivery_health,
       # WHICH RUN THE RUN-GRAIN HALF OF THIS BODY DESCRIBES, and why that run. Placed before
       # `latest_run` on the `*_window` blocks' own convention — the disclosure precedes what it
       # discloses about — and it is the window-shaped block for the anchor rather than for a series.
@@ -274,6 +305,104 @@ class Api::V1::RepositoriesController < Api::BaseController
   end
 
   private
+
+  # THE DELIVERIES THIS REPOSITORY'S CI MADE THAT THE ENDPOINT REFUSED, and the one verdict that
+  # tells an agent whether the rest of this body still describes its suite.
+  #
+  # == What this block is for
+  #
+  # Every run-grain key here — `latest_run` and its five rollups, both growth pairs, `unstable_tests`
+  # — is read off rows that were ACCEPTED. When ingestion is being refused, those rows stop moving
+  # while remaining perfectly well-formed, so the response an agent receives is a complete,
+  # non-null description of a suite state that no longer exists. It then optimises a test that was
+  # deleted, hunts a flake that was fixed, or reports growth that never happened, and nothing in the
+  # body contradicts it. This is the project's own *Vacuous Green* class (SPGD-78) at the agent
+  # surface, and the trigger is not hypothetical: SPGD-560 documents a gem version floor that 400s
+  # every run over 256 KiB — every large suite, which is the population this product exists for.
+  #
+  # == The honesty bounds, none of them guessable from the keys
+  #
+  # * ⚠️ **AUTHENTICATED-AND-REFUSED ONLY. A 401 IS UNATTRIBUTABLE AND IS NOT IMPLIED HERE.**
+  #   `ApiKey.authenticate` returning `nil` resolves no repository, so there is nothing to attribute
+  #   a row to and none is written — `Api::V1::IngestsController` states that on the write path. A
+  #   client sending a revoked token sees `refusing: false` and always will. Replacing one false
+  #   claim with a second one is the failure mode this block exists to avoid.
+  # * **`reasons` is `Ingest::Payload`'s own error list, verbatim** — the same words the client was
+  #   handed in its 400, never re-worded into a platform-side verdict. This endpoint's standing rule
+  #   for `outcome`, applied one grain down.
+  # * **NOT A RETRY QUEUE.** The payload was refused and was not stored; no run of it exists and
+  #   none can be reconstructed. What ships is that the agent LEARNS it happened and what the
+  #   endpoint objected to.
+  # * **Both of `RejectedIngests#refusing?`'s bounds transfer unchanged** and are restated rather
+  #   than re-derived (argued in full at `rejected_ingests.rb:29-38`): a sharded run that is half
+  #   accepted and half refused reads as refusing, because a shard thrown away IS a suite partly
+  #   thrown away; and a refusal ages out of `IngestRejection::REPOSITORY_RETENTION_ROWS`, so a
+  #   repository refused and then silent forever eventually reads healthy again.
+  #
+  # == The two truncation bounds are independent, and both are disclosed
+  #
+  # `rejections_window.bounded` counts DELIVERIES retained; `reasons_truncated` counts REASONS
+  # inside one delivery. A list nowhere near its window bound can still be hiding almost everything
+  # — one refusal of a 20,000-example suite is a single row. `IngestRejection` carries that argument.
+  #
+  # `reasons` / `omitted_reasons_count` are served rather than the raw `details` column: `details` is
+  # capped at `RETAINED_REASONS_PER_ROW` with no per-row disclosure beside it, so serving it raw
+  # would hand a client a silently-shortened objection to read as the endpoint's whole sentence —
+  # exactly the habit this block was built to correct, at a smaller grain.
+  def serialized_delivery_health
+    {
+      refusing: rejected_ingests.refusing?,
+      last_rejection_at: rejected_ingests.last_rejection_at&.iso8601,
+      rejections_window: {
+        limit: IngestRejection::PANEL_LIMIT,
+        bounded: rejected_ingests.bounded?,
+        retention_rows: IngestRejection::REPOSITORY_RETENTION_ROWS,
+        any_reasons_truncated: rejected_ingests.truncated_rows?
+      },
+      rejections: rejected_ingests.rows.map { |rejection| serialized_ingest_rejection_row(rejection) }
+    }
+  end
+
+  # One refused delivery. `reported_client` is `nil` — never a substituted placeholder — when the
+  # client sent no `User-Agent`, which is `IngestRejection#reported_client`'s own rule: a version
+  # nobody reported must not be invented, least of all on the block whose subject is a diagnosis by
+  # client version.
+  def serialized_ingest_rejection_row(rejection)
+    {
+      occurred_at: rejection.occurred_at.iso8601,
+      reported_client: rejection.reported_client,
+      reasons: rejection.reasons,
+      omitted_reasons_count: rejection.omitted_reasons_count,
+      reasons_truncated: rejection.reasons_truncated?
+    }
+  end
+
+  # ⭐ ANCHORED ON `current_repository.latest_test_run` AND NEVER ON THE `latest_test_run` MEMO.
+  # This is the one non-obvious thing in this feature and a later reader must not "simplify" it.
+  #
+  # That memo is RE-ANCHORED BY `?commit_sha=` — deliberately, so every run-grain block describes
+  # the named run coherently. Handing it here would compare the newest refusal against an arbitrary
+  # PINNED OLDER run, so any client bookmarking an old commit on a perfectly healthy repository
+  # would be told `refusing: true`. That is the same class of falsehood this block exists to remove,
+  # reintroduced by the fix.
+  #
+  # Delivery health is a fact about the repository's DELIVERY STREAM, not about whichever run the
+  # caller anchored to, so the accepted side is the true newest accepted run on every request.
+  #
+  # Read unconditionally rather than reusing the memo when no `?commit_sha=` was sent. That
+  # conditional would save one indexed `LIMIT 1` lookup on the unpinned path and would couple this
+  # block's correctness to the CURRENT list of parameters that re-anchor — the next one to arrive
+  # would silently reintroduce the bug above, in a block whose entire purpose is not lying about
+  # freshness. One query is the right price for a correctness property that cannot decay.
+  #
+  # Memoized across the nil with `||=` on the OBJECT rather than the row, so the verdict and the
+  # rows under it are read off one bounded query no matter how many serializers ask.
+  def rejected_ingests
+    @rejected_ingests ||= RejectedIngests.for(
+      current_repository,
+      last_accepted_run_at: current_repository.latest_test_run&.created_at
+    )
+  end
 
   # WHICH RUN THE RUN-GRAIN HALF OF THIS BODY DESCRIBES, and why that one — the disclosure block for
   # the anchor, shaped like the `*_window` blocks and serving the same purpose they do: a client must
