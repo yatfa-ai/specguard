@@ -203,7 +203,15 @@ RSpec.describe "Repository drill-down carry-through", type: :request do
     # they had already navigated three rungs into.
     { name: "anchor a run from Recent runs",
       panel: "#recent-runs", link: "0ldde11",
-      sets: { commit_sha: "0ldde11vercafe00" } }
+      sets: { commit_sha: "0ldde11vercafe00" } },
+    # The way back OUT of the ask the row above enters, and it is here for the same reason its
+    # counterpart is: un-anchoring is not a request to close an open area, file or description, nor
+    # to drop `?branch=`. It renders on this fixture because `run_ask` is deliberately the LATEST
+    # run's sha, so the ask resolves, `@run_anchor_run` is present and the gesture is on the page
+    # every other row is asserted against.
+    { name: "Show the newest run",
+      panel: "#overview", link: "Show the newest run",
+      clears: :commit_sha }
   ]
 
   def href_for(gesture)
@@ -257,21 +265,27 @@ RSpec.describe "Repository drill-down carry-through", type: :request do
     end
 
     # The guard on the trap that a "tidier" helper walks straight into. Carry is the default, so an
-    # omitted ask means KEEP — which makes the three Close buttons the only things on the page that
+    # omitted ask means KEEP — which makes the CLEARING gestures the only things on the page that
     # must pass an explicit `nil`. Compacting the OVERRIDES in `drill_down_path`
     # (`asks.merge(overrides.compact)`) drops that nil before it can override anything, the reader's
-    # current ask survives, and all three buttons become no-ops that navigate to the page they are
+    # current ask survives, and every one of them becomes a no-op that navigates to the page it is
     # already on — the exact inversion of the defect the abstraction was built to kill.
     #
-    # These three are asserted separately from the matrix above rather than trusted to it, because
-    # they are the cells whose CORRECT value is an absence, and an absence is what a green suite
-    # looks like when the assertion is missing. Both halves are checked deliberately: the matrix
-    # examples above catch this mutation too (a cleared ask reappearing), and these catch it from the
-    # other side, on the one property each button exists for.
+    # How many there are is deliberately not stated, for the reason the header gives about the other
+    # two counts on this page: the set grew from three to four when "Show the newest run" shipped,
+    # and a sentence that had said "the three Close buttons" would have been left describing the
+    # page as it used to be. The table below is the only place that knows the size.
+    #
+    # They are asserted separately from the matrix above rather than trusted to it, because they are
+    # the cells whose CORRECT value is an absence, and an absence is what a green suite looks like
+    # when the assertion is missing. Both halves are checked deliberately: the matrix examples above
+    # catch this mutation too (a cleared ask reappearing), and these catch it from the other side, on
+    # the one property each gesture exists for.
     {
       "Close file" => [:spec_file, "#spec-file-examples"],
       "Close directory" => [:spec_directory, "#spec-directory-files"],
-      "Close description" => [:repeated_description, "#repeated-description-examples"]
+      "Close description" => [:repeated_description, "#repeated-description-examples"],
+      "Show the newest run" => [:commit_sha, "#overview"]
     }.each do |label, (ask, panel_id)|
       it "#{label} still drops its own ask" do
         open_every_ask

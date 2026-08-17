@@ -40,11 +40,17 @@ module RepositoriesHelper
   #   set   — pass a value (`spec_file: file.path`)
   #   clear — pass an explicit `nil` (`spec_file: nil`); `repository_path` drops nil params
   #
-  # `asks.merge(overrides)` and specifically NOT `asks.merge(overrides.compact)`. The three "Close"
-  # buttons clear their own ask by passing nil, and compacting the OVERRIDES drops that nil before it
-  # can override anything — the reader's current ask survives the merge and all three buttons become
-  # no-ops that navigate to the page they are already on. That is the precise inversion of the defect
-  # this exists to make impossible. A nil in `overrides` is a decision, not an absence.
+  # `asks.merge(overrides)` and specifically NOT `asks.merge(overrides.compact)`. Every CLEARING
+  # gesture on the page — the "Close" buttons and "Show the newest run" — clears its own ask by
+  # passing nil, and compacting the OVERRIDES drops that nil before it can override anything: the
+  # reader's current ask survives the merge and every one of them becomes a no-op that navigates to
+  # the page it is already on. That is the precise inversion of the defect this exists to make
+  # impossible. A nil in `overrides` is a decision, not an absence.
+  #
+  # Named rather than counted, deliberately. `git grep -n "<ask>: nil" -- app/views` is the roll, and
+  # it has grown once already (three buttons, then four when the run anchor got its way back), so a
+  # figure here would be a stale casualty count in the one comment someone reads to decide whether a
+  # "tidying" `.compact` is safe.
   #
   # Compacting the merged RESULT is merely pointless rather than harmful (`repository_path` already
   # omits nil params), but it reads as though nils were unwanted here, which is the belief that leads
