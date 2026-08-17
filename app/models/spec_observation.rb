@@ -1343,6 +1343,180 @@ class SpecObservation < ApplicationRecord
     { recorded_count: counts[0].to_i, unresolved_count: counts[1].to_i }
   end
 
+  # Step one of two: WHICH durable tests a repository-grain ranking is going to be about — the
+  # slowest identities of ONE run, with the coverage of the population they were ranked out of
+  # riding back beside them.
+  #
+  # **The first read in this application to group on `spec_identity_id`**, and the reason the column
+  # stopped being written-and-never-aggregated. `.slowest_in` above answers "the slowest examples in
+  # this run" and stays on the near side of the model's own boundary in as many words; this is the
+  # step that crosses it, and {SlowestTests} is what carries the crossing.
+  #
+  # == Why the candidates come from ONE run and not from the window
+  #
+  # The naive spelling of "the slowest tests in this repository" groups the whole window by identity,
+  # which is 600,000 rows aggregated per page load at the 20,000-example design point — the arithmetic
+  # `.unstable_candidates_in` states for its own grain and refuses. So the narrowing happens first and
+  # it happens here: ONE RUN's rows, reached through an index that leads with `test_run_id`, grouped
+  # and capped. The window is only ever aggregated over the identities this step hands back.
+  #
+  # WHICH `test_run_id` index is left to Postgres, and the measured answer is not the one this
+  # comment first claimed. `index_spec_observations_on_test_run_id_and_duration_seconds` is the
+  # obvious candidate and the planner does not take it: the aggregate has to visit the heap for
+  # `spec_identity_id` either way, so the wider index buys a whole-run grouping nothing and the
+  # narrower `(test_run_id, outcome)` bitmap was measured to price better. `.file_durations_in`'s own
+  # plan assertion documents exactly this — *"what matters for this criterion is that one run is read
+  # through an index rather than by walking every run's rows"* — and the certification here asserts
+  # that and not a cost tiebreak the planner is entitled to revisit.
+
+  #
+  # Anchoring on the newest run is a PARTITION AND NOT AN OVERSIGHT, and {SlowestTests} states it
+  # rather than leaving it to be discovered: a test absent from the newest run — deleted, renamed
+  # past its own identity, or simply not selected — is not in the suite being asked about, and a
+  # ranking that resurrected it would be answering a question about a suite that no longer exists.
+  #
+  # == Untimed identities are KEPT, and the ordering is what makes that safe
+  #
+  # `.slowest_in` excludes untimed rows in SQL and its comment says why that exclusion is
+  # load-bearing: `duration_seconds: :desc` is NULLS FIRST in Postgres, so a naive ordering heads a
+  # list captioned "slowest" with the examples that did not run. That argument bounds an exclusion
+  # for a read of RAW ROWS. This one aggregates, and `.file_durations_in` states the rule for that
+  # shape instead: *"dropping untimed rows changes each surviving group's own POPULATION"* — an
+  # identity carried by four examples of which two went untimed would report a total understating by
+  # half and say nothing about it. So nothing is dropped, `NULLS LAST` disarms the hazard the
+  # exclusion existed for, and every group carries `COUNT(*)` beside `COUNT(duration_seconds)` so the
+  # surface states what it summed over. An identity nothing timed sorts last and renders as "not
+  # reported" through `.humanized_duration`, never as a zero.
+  #
+  # == The three ride-alongs, and why they are windows over aggregates
+  #
+  # `COUNT(*) OVER ()` counts candidate IDENTITIES — evaluated after `GROUP BY` and before `LIMIT`,
+  # so it counts all of them however few are returned. That is the truncation disclosure
+  # `.unstable_candidates_in` documents and `SlowestTests#truncated?` reports.
+  #
+  # `SUM(COUNT(*)) OVER ()` and `SUM(COUNT(duration_seconds)) OVER ()` are a window over an
+  # aggregate, which reads oddly and is the point: they re-total the per-identity counts back up to
+  # the RUN, so the coverage fraction the caption states is measured over the very rows this ranking
+  # was drawn from, in the same round trip. Fetched separately they would be two figures with no
+  # structural reason to keep agreeing with the list — the rule `SlowestExamples` states for its own
+  # caption. Their population is the run's RESOLVED rows, which is narrower than the run: the rows
+  # this read excludes are counted by `.identity_presence_in` above, which is the gate this sits
+  # behind and never a second measurement of the same thing.
+  #
+  # @param test_run [TestRun] the ANCHOR — normally the newest run of the window.
+  # @return [Array<Array>] `[spec_identity_id, candidate_count, resolved_count, timed_count]` per
+  #   kept identity, where the last three are the same figures on every row.
+  def self.slowest_identity_candidates_in(test_run, limit: SLOWEST_LIMIT)
+    where(test_run_id: test_run.id)
+      .where.not(spec_identity_id: nil)
+      .group(:spec_identity_id)
+      .order(Arel.sql("SUM(duration_seconds) DESC NULLS LAST"), Arel.sql("spec_identity_id ASC"))
+      .limit(limit)
+      .pluck(Arel.sql("spec_identity_id"),
+             Arel.sql("COUNT(*) OVER ()"),
+             Arel.sql("SUM(COUNT(*)) OVER ()"),
+             Arel.sql("SUM(COUNT(duration_seconds)) OVER ()"))
+  end
+
+  # Everything a repository-grain ranking has to say about ONE durable test across the window, as
+  # one grouped aggregate over the candidates only — ordered, named, and kept in one constant for
+  # the reason `COVERAGE_COUNTS` and `UNSTABLE_COMPOSITION` are: the names are what the caller
+  # destructures and the expressions are what a plan assertion EXPLAINs.
+  #
+  # `total_seconds` is THE MOVED-TEST GUARANTEE made arithmetic. The grouping key is the identity,
+  # so a test that changed `file_path`/`line_number` between two runs of the window is one group and
+  # both runs' durations land in one sum — which is the whole of what slice 1 settled cross-run
+  # identity FOR. Grouped on the coordinate it would be two rows halving one test's history, and
+  # grouped on `name` a rename would do the same; `UnstableTests` groups on `name` deliberately and
+  # for a different question, and that choice is not disturbed here.
+  #
+  # `recorded_count` beside `timed_count` for `.file_durations_in`'s reason, restated one grain over:
+  # `SUM` skips NULLs silently, so a group summing four of its nine rows must say so or the total is
+  # a measurement over a population the reader cannot see.
+  #
+  # `run_count` beside `recorded_count` is the pair `UNSTABLE_COMPOSITION` needs for its own key and
+  # needs here too, though it separates something different. An identity is not a key within a single
+  # run — {NearDuplicateClusters} states this about `spec_identities` at length: a three-example
+  # table-driven loop, a shared example group, or two verbatim-identical tests are ONE identity and
+  # several examples per run, because the unique `(repository_id, text_digest)` and the resolver's
+  # cosine-1.0 match agree on one row for identical text. So `COUNT(*) > COUNT(DISTINCT test_run_id)`
+  # is what tells "ran in twelve runs" from "ran three times in each of four", and a total read
+  # without it is a wall clock the reader cannot attribute.
+  #
+  # `slowest_seconds` beside the sum for the same reason at the other end: 60 seconds is one minute-
+  # long test or sixty one-second runs of a cheap one, and the ranking's ordering cannot tell them
+  # apart. `MAX` costs nothing over rows already grouped and separates them.
+  #
+  # `names` and `file_paths` are `ARRAY_AGG(DISTINCT …) FILTER (WHERE … IS NOT NULL)` for
+  # `UNSTABLE_COMPOSITION`'s reason — a null must never arrive as a nil element inside an array the
+  # surface iterates — and they are what makes the identity legible at all. Nothing here joins
+  # `spec_identities`: the descriptions and paths the window actually recorded are what a reader
+  # recognises, and a group wearing two of either is the move or the rename this grouping exists to
+  # survive, disclosed rather than smoothed over.
+  IDENTITY_DURATION_COMPOSITION = {
+    total_seconds: "SUM(duration_seconds)",
+    recorded_count: "COUNT(*)",
+    timed_count: "COUNT(duration_seconds)",
+    run_count: "COUNT(DISTINCT test_run_id)",
+    slowest_seconds: "MAX(duration_seconds)",
+    names: "ARRAY_AGG(DISTINCT name) FILTER (WHERE name IS NOT NULL)",
+    file_paths: "ARRAY_AGG(DISTINCT spec_file_path) FILTER (WHERE spec_file_path IS NOT NULL)"
+  }.freeze
+
+  # Step two of two: how each candidate identity behaved across the whole window — over the
+  # candidates only, which is what keeps this off the window's rows.
+  #
+  # == What it costs, MEASURED rather than assumed
+  #
+  # EXPLAIN (ANALYZE) over ten candidates, a six-run window and twenty runs of history, 300 rows per
+  # run — the seed the certification in `spec/models/spec_observation_spec.rb` runs on:
+  #
+  #     Bitmap Index Scan on index_spec_observations_on_spec_identity_id   rows=200
+  #     Bitmap Heap Scan   Filter: (test_run_id = ANY (…))                 rows=60, removed=140
+  #
+  # So the honest bound is **candidates × the runs those identities appear in AT ALL**, and not
+  # candidates × the window — the index is on `spec_identity_id` ALONE, so the window predicate is a
+  # FILTER applied after the fetch rather than an index condition that narrows it. 200 rows against
+  # the window's 1,800, and against a whole-window group-by's 1,800; the ratio widens with the suite,
+  # because the number this read follows is the candidate count and the number the naive spelling
+  # follows is the row count.
+  #
+  # That leaves it bounded by RETENTION rather than by the window, which is a bound and worth naming
+  # as one: `BRANCH_RETENTION_RUNS` above caps a branch's history at 60 runs, so a candidate's rows
+  # are capped whatever window is asked for. It is also why the certification pins the bound by
+  # SHRINKING THE CANDIDATE LIST and measuring again rather than by asserting one number — what has
+  # to stay true is that the work follows the candidates, and a single ceiling would pass just as
+  # happily on a read that had stopped being narrowed at all.
+  #
+  # A composite `(spec_identity_id, test_run_id)` index would turn that filter into an index
+  # condition, and is deliberately NOT added: this ticket ships no migration, the measured read is
+  # already three orders of magnitude off the shape it replaces at the design point, and an index
+  # added on an argument rather than on a profile is the kind this table already carries two of.
+  #
+  # NO `repository_id` PREDICATE, and the omission is deliberate rather than an oversight of its
+  # sibling's care. `.outcome_composition_in` scopes by repository because `repository_id` is the
+  # LEADING COLUMN of the index it rides and there is no index on `name` without it. The index here
+  # is on `spec_identity_id` alone, so a repository predicate buys this read no index and risks
+  # costing it the one it needs — the planner would be offered
+  # `index_spec_observations_on_repository_id` as an alternative to the identity index this bound
+  # depends on. Tenancy is carried by the arguments instead, and structurally: a `spec_identity` is
+  # `repository_id`-scoped and unique on `(repository_id, text_digest)`, so ids handed back by
+  # `.slowest_identity_candidates_in` for a run of this repository are this repository's — which is
+  # why {SlowestTests} validates that the run belongs to the repository, on {NearDuplicateClusters}'
+  # precedent, rather than re-deriving the tenant here.
+  #
+  # @return [Array<Array>] `[spec_identity_id, *IDENTITY_DURATION_COMPOSITION.values]`, in that
+  #   order. Unordered between groups — the ranking is {SlowestTests}', which sorts on the summed
+  #   wall clock the sibling reads sort on and by their `NULLS LAST` rule.
+  def self.identity_duration_composition_in(run_ids:, spec_identity_ids:)
+    return [] if run_ids.empty? || spec_identity_ids.empty?
+
+    where(test_run_id: run_ids, spec_identity_id: spec_identity_ids)
+      .group(:spec_identity_id)
+      .pluck(Arel.sql("spec_identity_id"),
+             *IDENTITY_DURATION_COMPOSITION.values.map { |sql| Arel.sql(sql) })
+  end
+
   # Where ONE run's wall clock went, rolled up by DIRECTORY — the rung directly above the rollup
   # above, and the grain the question is usually asked in. "Which area of this suite carries the
   # time" is not answerable from a ranked list of files any more than it was from a ranked list of
