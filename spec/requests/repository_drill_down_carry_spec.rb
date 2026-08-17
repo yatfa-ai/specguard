@@ -214,8 +214,20 @@ RSpec.describe "Repository drill-down carry-through", type: :request do
       clears: :commit_sha }
   ]
 
+  # The gesture's own link, and EXACT-TEXT first rather than `match: :prefer_exact` alone. That
+  # strategy resolves an ambiguous LOCATOR; it does not rank a `text:` FILTER, which matches on
+  # substring — so on a panel whose rows carry both a spec-file drill-in and the definition-site
+  # link beside it, "spec/requests/checkout_spec.rb" matches the coordinate
+  # "spec/requests/checkout_spec.rb:14" just as well and the matrix reads whichever came first.
+  # The two are never exactly equal: `line_number` is NOT NULL, so the coordinate always carries a
+  # `:line` the path it is built from does not. The fallback keeps every gesture whose link text is
+  # legitimately a substring of its element working as before.
   def href_for(gesture)
-    page.find(gesture[:panel]).find("a", text: gesture[:link], match: :prefer_exact)[:href]
+    panel = page.find(gesture[:panel])
+    link = panel.all("a", exact_text: gesture[:link]).first ||
+           panel.find("a", text: gesture[:link], match: :prefer_exact)
+
+    link[:href]
   end
 
   # A query value as it appears in a URL, so an assertion cannot pass on a substring of a longer

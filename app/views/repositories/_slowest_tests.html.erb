@@ -81,12 +81,34 @@
 
                       The location line below is therefore rendered only when there IS a name to
                       locate: the fallback already IS the location, and a row wearing it must not
-                      be made to wear it twice. %>
-                  <%= observation.label %>
+                      be made to wear it twice.
+
+                      Whichever of the two carries the coordinate carries the LINK to it, through
+                      `Repository#github_blob_url` and against the sha of the run this page is
+                      anchored to — the same composition and the same new-tab convention the
+                      "Unannotated examples" panel introduced. A nameless row wears the coordinate
+                      as its entire identity, so leaving that branch unlinked would leave exactly
+                      the rows that most need to be findable pointing nowhere.
+
+                      ZERO NEW QUERIES: `@repository` and `@latest_test_run` are both loaded before
+                      this partial renders — `@slowest_examples` is assigned only under
+                      `@latest_test_run` — and `#github_blob_url` is string composition. %>
+                  <% definition_site_url = @repository.github_blob_url(observation.file_path,
+                                                                       observation.line_number,
+                                                                       @latest_test_run.commit_sha) %>
                   <% if observation.name.present? %>
+                    <%= observation.label %>
                     <span class="block font-mono text-xs text-app-muted">
-                      <%= observation.location_label %>
+                      <%= link_to observation.location_label, definition_site_url,
+                                  class: "underline underline-offset-2 decoration-app-border-light " \
+                                         "text-app-content hover:decoration-app-content",
+                                  target: "_blank", rel: "noopener noreferrer" %>
                     </span>
+                  <% else %>
+                    <%= link_to observation.label, definition_site_url,
+                                class: "underline underline-offset-2 decoration-app-border-light " \
+                                       "text-app-content hover:decoration-app-content",
+                                target: "_blank", rel: "noopener noreferrer" %>
                   <% end %>
                   <%# The file that RAN the example, and the link that stops these rows dead-ending.
                       This panel is the page's entry point to per-test data, every row on it is an

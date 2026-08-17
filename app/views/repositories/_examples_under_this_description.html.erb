@@ -160,8 +160,24 @@
                   <%# `#location_label` is `file_path` + `line_number` — the DEFINITION site, and
                       specifically not `spec_file_path` + `line_number`, which for a shared example
                       group pairs two halves from different files. Both columns are NOT NULL, so this
-                      one always names the row even where the one beside it cannot. %>
-                  <%= observation.location_label %>
+                      one always names the row even where the one beside it cannot.
+
+                      Which is why it is a LINK, through `Repository#github_blob_url` and against
+                      the sha of the run this page is anchored to — the same composition and the
+                      same new-tab convention the "Unannotated examples" panel introduced. For a
+                      row whose `spec_file_path` is nil this cell is the ONLY identity on the row,
+                      and the one beside it goes nowhere by construction.
+
+                      ZERO NEW QUERIES: `@repository` and `@latest_test_run` are both loaded before
+                      this partial renders — `@repeated_description_examples` is assigned only under
+                      `@latest_test_run` — and `#github_blob_url` is string composition. %>
+                  <%= link_to observation.location_label,
+                              @repository.github_blob_url(observation.file_path,
+                                                          observation.line_number,
+                                                          @latest_test_run.commit_sha),
+                              class: "underline underline-offset-2 decoration-app-border-light " \
+                                     "text-app-content hover:decoration-app-content",
+                              target: "_blank", rel: "noopener noreferrer" %>
                 </td>
                 <td class="px-3 py-2 text-app-content tabular-nums">
                   <%# Through `SpecObservation#duration_label`, this table's one formatting seam and

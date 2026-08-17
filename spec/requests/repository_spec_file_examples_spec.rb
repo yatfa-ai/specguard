@@ -47,6 +47,16 @@ RSpec.describe "Repository spec file examples", type: :request do
 
   def row_names = rows.map { |row| row[:name] }
 
+  # The definition-site link — the row's only anchor, on BOTH label branches: a named row wears it
+  # on the location line under the name and a nameless one wears the coordinate AS the name, so a
+  # cell-wide read finds the same element either way and an example does not have to know which
+  # branch built the row.
+  def definition_links = panel.all("tbody tr").map { |row| row.all("td").first.find("a") }
+
+  def definition_hrefs = definition_links.map { |link| link[:href] }
+
+  def blob(sha, path, line) = "https://github.com/acme/billing-service/blob/#{sha}/#{path}#L#{line}"
+
   # The example's NAME, without the definition-site line rendered under it. The two share one cell,
   # so a whole-cell read would turn every ordering assertion in this file into an assertion about
   # paths as well — and the fallback row, where the name IS the location, has no span at all.
@@ -284,6 +294,99 @@ RSpec.describe "Repository spec file examples", type: :request do
       get repository_path(shared_group_run, spec_file: ORDER_SPEC)
 
       expect(basis_line).to have_text("Each row names where it is DEFINED", normalize_ws: true)
+    end
+
+    # The row the link exists to serve, on the panel that exists to serve it: this list is keyed on
+    # the INCLUDING file, so it contains rows defined somewhere the reader has not opened and cannot
+    # reach from here. The href is built from the definition site the cell prints, never from the
+    # `?spec_file=` ask the panel was opened by.
+    it "links the coordinate to the file it is DEFINED in, not the file this panel is keyed on" do
+      get repository_path(shared_group_run, spec_file: ORDER_SPEC)
+
+      expect(definition_hrefs.first)
+        .to eq(blob("feedfacecafe0001", "spec/support/shared_examples.rb", 7))
+      expect(definition_hrefs.first).not_to include(ORDER_SPEC)
+    end
+  end
+
+  # The coordinate as a DESTINATION rather than as text, through the seam
+  # spec/requests/repository_unannotated_examples_spec.rb pins on the panel that introduced it.
+  # This panel's own comment states the reason it prints the column at all — keyed on the including
+  # file, the list contains rows defined somewhere else "and the reader has to be able to go and
+  # find them" — which is not something a reader can do with a string.
+  describe "the definition site as a link" do
+    it "links each listed row's coordinate to that line on GitHub" do
+      get repository_path(two_file_run, spec_file: ORDER_SPEC)
+
+      expect(definition_hrefs).to eq([blob("feedfacecafe0001", ORDER_SPEC, 2),
+                                      blob("feedfacecafe0001", ORDER_SPEC, 1),
+                                      blob("feedfacecafe0001", ORDER_SPEC, 3)])
+      # The link text is the coordinate the panel already printed, not a second control on the row.
+      expect(definition_links.map { |link| link.text.strip })
+        .to eq(["#{ORDER_SPEC}:2", "#{ORDER_SPEC}:1", "#{ORDER_SPEC}:3"])
+    end
+
+    # BOTH LABEL BRANCHES. `#label` is `name.presence || location_label`, so a row from a producer
+    # that sent no name wears the coordinate AS its name and renders through the other site
+    # entirely — and this panel's comment says both branches go through the same two seams the
+    # ranking above does, so both have to be navigable or the panels disagree about one example.
+    it "links the coordinate on a row that wears it as its name" do
+      repository = create_repository(user: @user)
+      ingest(repository, [example_spec(file_path: ORDER_SPEC, duration: 1.0, line_number: 42,
+                                       name: nil)])
+
+      get repository_path(repository, spec_file: ORDER_SPEC)
+
+      expect(row_names).to eq(["#{ORDER_SPEC}:42"])
+      expect(definition_hrefs).to eq([blob("feedfacecafe0001", ORDER_SPEC, 42)])
+      # And NOT TWICE: the fallback already IS the coordinate, so there is no location line under it
+      # to link as well, and the cell holds exactly one anchor.
+      expect(panel.first("tbody tr").all("td").first.all("span")).to be_empty
+      expect(definition_links.size).to eq(1)
+    end
+
+    # THE ANCHORED RUN'S SHA, not `main` and not the newest run. `file_path`/`line_number` are a
+    # last known path rather than an identity (SPGD-114), so a page anchored on an older run via
+    # `?commit_sha=` must link into THAT run's tree rather than at whatever has since drifted onto
+    # the line.
+    it "pins the link to the run the page is anchored on rather than the newest one" do
+      repository = create_repository(user: @user)
+      ingest(repository, [example_spec(file_path: ORDER_SPEC, duration: 1.0, line_number: 2,
+                                       name: "Order refuses a negative quantity")],
+             commit_sha: "aaaa1111bbbb2222")
+      ingest(repository, [example_spec(file_path: ORDER_SPEC, duration: 1.0, line_number: 2,
+                                       name: "Order refuses a negative quantity")],
+             commit_sha: "cccc3333dddd4444")
+
+      get repository_path(repository, spec_file: ORDER_SPEC, commit_sha: "aaaa1111bbbb2222")
+
+      expect(definition_hrefs).to eq([blob("aaaa1111bbbb2222", ORDER_SPEC, 2)])
+      expect(definition_hrefs.first).not_to include("cccc3333dddd4444")
+    end
+
+    # The pairing that stops the assertion above from passing on a page that simply had one run.
+    it "links at the newest run's sha when no anchor was asked for" do
+      repository = create_repository(user: @user)
+      ingest(repository, [example_spec(file_path: ORDER_SPEC, duration: 1.0, line_number: 2,
+                                       name: "Order refuses a negative quantity")],
+             commit_sha: "aaaa1111bbbb2222")
+      ingest(repository, [example_spec(file_path: ORDER_SPEC, duration: 1.0, line_number: 2,
+                                       name: "Order refuses a negative quantity")],
+             commit_sha: "cccc3333dddd4444")
+
+      get repository_path(repository, spec_file: ORDER_SPEC)
+
+      expect(definition_hrefs).to eq([blob("cccc3333dddd4444", ORDER_SPEC, 2)])
+    end
+
+    # A NEW TAB, the convention the "Unannotated tests here" panel introduced deliberately for the
+    # app's first link that leaves it. The reader is mid-list on a file they narrowed to, and `rel`
+    # is written out rather than left to the browsers that imply it.
+    it "opens the file in a new tab, leaving the list where the reader had it" do
+      get repository_path(two_file_run, spec_file: ORDER_SPEC)
+
+      expect(definition_links.map { |link| link[:target] }.uniq).to eq(["_blank"])
+      expect(definition_links.map { |link| link[:rel] }.uniq).to eq(["noopener noreferrer"])
     end
   end
 

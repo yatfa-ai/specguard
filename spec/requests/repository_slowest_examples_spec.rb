@@ -53,6 +53,15 @@ RSpec.describe "Repository slowest tests", type: :request do
 
   def row_labels = rows.map { |row| row[:label] }
 
+  # The run-in line's span and the drill-in link inside it, told apart from the definition-site link
+  # that shares the cell by POSITION and never by text: the run-in line is ALWAYS the last span of
+  # the cell, and for an ordinary example the two coordinate lines read nearly the same, so a text
+  # filter would select whichever the row happened to render first. The span is always there — a
+  # path, or "not reported" — and only the path branch carries a link.
+  def ran_in_cell(row) = row.all("td").first.all("span").last
+
+  def ran_in_link(row) = ran_in_cell(row).find("a")
+
   # One ingested run, through the producer. `specs` are the wire hashes a client POSTs; the
   # recorder reads them by string key, which is what `Ingest::Payload` hands it after JSON parsing.
   def ingest(repository, specs, commit_sha: "feedfacecafe0001", **attrs)
@@ -166,7 +175,9 @@ RSpec.describe "Repository slowest tests", type: :request do
       repository
     end
 
-    def links = panel.all("tbody tr a")
+    # The drill-in link, told apart from the definition-site link that now sits in the same cell by
+    # POSITION and never by text — the same rule `#rows` tells the two coordinate lines apart by.
+    def links = panel.all("tbody tr").flat_map { |row| ran_in_cell(row).all("a") }
 
     # The rows of the destination panel, as text. Used to compare the panel reached from HERE against
     # the same panel reached from the by-file rollup, which is the only assertion that can say the
@@ -179,7 +190,7 @@ RSpec.describe "Repository slowest tests", type: :request do
     it "links each row's file into the spec-file drill-down" do
       get repository_path(two_file_run)
 
-      href = panel.first("tbody tr").find("a", text: order_spec)[:href]
+      href = ran_in_link(panel.first("tbody tr"))[:href]
 
       expect(href).to include("spec_file=#{CGI.escape(order_spec)}")
       expect(href).to include("#spec-file-examples")
@@ -234,9 +245,11 @@ RSpec.describe "Repository slowest tests", type: :request do
       get repository_path(repository)
 
       expect(rows.first[:ran_in]).to eq("not reported")
-      expect(panel.first("tbody tr")).to have_no_css("a")
-      # The definition site is NOT NULL and is what such a row is read by.
+      expect(ran_in_cell(panel.first("tbody tr"))).to have_no_css("a")
+      # The definition site is NOT NULL and is what such a row is read by — and the only thing on
+      # the row still worth following.
       expect(rows.first[:location]).to eq("#{order_spec}:1")
+      expect(panel.first("tbody tr").all("td").first.all("a").size).to eq(1)
     end
 
     # Opening a file from here is not a request to close a branch, an area or a description the
@@ -248,7 +261,7 @@ RSpec.describe "Repository slowest tests", type: :request do
       get repository_path(two_file_run, branch: "main", spec_directory: "spec/models",
                                         repeated_description: description)
 
-      href = panel.first("tbody tr").find("a", text: order_spec)[:href]
+      href = ran_in_link(panel.first("tbody tr"))[:href]
 
       expect(href).to include("branch=main")
       expect(href).to include("spec_directory=#{CGI.escape('spec/models')}")
@@ -268,7 +281,7 @@ RSpec.describe "Repository slowest tests", type: :request do
     it "opens the same file panel the by-file rollup opens" do
       get repository_path(two_file_run)
 
-      from_slowest = panel.first("tbody tr").find("a", text: order_spec)[:href]
+      from_slowest = ran_in_link(panel.first("tbody tr"))[:href]
       from_rollup = Capybara.string(response.body).find("#spec-file-durations")
                             .find("a", text: order_spec)[:href]
 
@@ -280,6 +293,168 @@ RSpec.describe "Repository slowest tests", type: :request do
       expect(via_slowest).to eq(via_rollup)
       # Falsifiable: two empty panels are equal to each other and prove nothing.
       expect(via_slowest.size).to eq(1)
+    end
+  end
+
+  # The coordinate as a DESTINATION rather than as text, through the seam
+  # spec/requests/repository_unannotated_examples_spec.rb pins on the panel that introduced it.
+  # `SpecObservation#location_label`'s comment opens "Where to go and look."; until now this panel
+  # printed where and stopped there, and the row it stranded hardest was the one it exists to
+  # rescue — a producer that sent no name leaves the coordinate as the row's ENTIRE identity, so the
+  # rows a reader could least identify were also the ones nothing could be done about.
+  #
+  # NOT the `?spec_file=` drill-in above under another name: that opens a panel on this page keyed
+  # on the INCLUDING file, this leaves the app for the DEFINITION site, and the shared-example-group
+  # example below is the row where the two are different files.
+  describe "the definition site as a link" do
+    def order_spec = "spec/models/order_spec.rb"
+
+    def invoice_spec = "spec/models/invoice_spec.rb"
+
+    # The definition-site link, told apart from the drill-in beside it by POSITION and never by
+    # text — the rule the whole file reads this cell by. It is the FIRST anchor of the row's first
+    # cell on BOTH label branches (under the name on a named row, AS the name on a nameless one),
+    # because the run-in line is always the LAST span of that cell.
+    def definition_link(row) = row.all("td").first.all("a").first
+
+    def definition_hrefs = panel.all("tbody tr").map { |row| definition_link(row)[:href] }
+
+    def blob(sha, path, line) = "https://github.com/acme/billing-service/blob/#{sha}/#{path}#L#{line}"
+
+    it "links each ranked row's coordinate to that line on GitHub" do
+      repository = create_repository(user: @user)
+      ingest(repository, [example_spec(name: "Order refuses a negative quantity", duration: 9.0,
+                                       line_number: 30, file_path: order_spec),
+                          example_spec(name: "Invoice finalize locks the line items",
+                                       duration: 4.0, line_number: 12)])
+
+      get repository_path(repository)
+
+      expect(definition_hrefs).to eq([blob("feedfacecafe0001", order_spec, 30),
+                                      blob("feedfacecafe0001", invoice_spec, 12)])
+      # The link text is the coordinate the panel already printed — the same string the reader was
+      # reading, not a second control bolted onto the row.
+      expect(definition_link(panel.first("tbody tr")).text.strip).to eq("#{order_spec}:30")
+    end
+
+    # THE BRANCH THAT IS EASY TO MISS. `#label` is `name.presence || location_label`, so a row from
+    # a producer that sent no name wears the coordinate AS its name and renders through the other
+    # site entirely. Linking only the location line under a name would leave inert exactly the rows
+    # the fallback exists for — the ones this panel's own comment calls a row the reader "can
+    # neither identify nor go and find".
+    it "links the coordinate on a row that wears it as its name" do
+      repository = create_repository(user: @user)
+      ingest(repository, [example_spec(name: nil, duration: 4.0, line_number: 88,
+                                       file_path: "spec/models/ledger_spec.rb")])
+
+      get repository_path(repository)
+
+      expect(row_labels).to eq(["spec/models/ledger_spec.rb:88"])
+      expect(definition_hrefs).to eq([blob("feedfacecafe0001", "spec/models/ledger_spec.rb", 88)])
+      # And NOT TWICE: the fallback already IS the coordinate, so there is no second location line
+      # to link, and the cell holds this link plus the drill-in and nothing else.
+      expect(rows.first[:location]).to be_nil
+      expect(panel.first("tbody tr").all("td").first.all("a").size).to eq(2)
+    end
+
+    # THE DEFINITION SITE, never the including file. `#location_label` pairs `file_path` with
+    # `line_number` and refuses `spec_file_path` because for a shared example group the two halves
+    # come from different files; the link inherits that constraint rather than reaching for the
+    # column the row is drilled in by. Line 7 of `order_spec.rb` is not this example.
+    it "builds the link from the file the example is DEFINED in, not the file that ran it" do
+      repository = create_repository(user: @user)
+      ingest(repository, [example_spec(name: "behaves like an auditable record", duration: 9.0,
+                                       line_number: 7,
+                                       file_path: "spec/support/shared_examples.rb",
+                                       spec_file_path: order_spec, id: "./#{order_spec}[1:1:1]")])
+
+      get repository_path(repository)
+
+      expect(definition_hrefs).to eq([blob("feedfacecafe0001", "spec/support/shared_examples.rb", 7)])
+      expect(definition_hrefs.first).not_to include(order_spec)
+      # And the drill-in beside it still reaches the file that RAN it, which is the whole reason the
+      # row carries two links rather than one.
+      expect(ran_in_link(panel.first("tbody tr"))[:href]).to include("spec_file=#{CGI.escape(order_spec)}")
+    end
+
+    # THE ANCHORED RUN'S SHA, not `main` and not the newest run. `file_path`/`line_number` are a
+    # last known path rather than an identity (SPGD-114): the coordinate is accurate against the
+    # tree the run that recorded it was taken from, so a page anchored on an older run via
+    # `?commit_sha=` must link into THAT run's tree.
+    it "pins the link to the run the page is anchored on rather than the newest one" do
+      repository = create_repository(user: @user)
+      ingest(repository, [example_spec(name: "Order refuses a negative quantity", duration: 9.0,
+                                       line_number: 30, file_path: order_spec)],
+             commit_sha: "aaaa1111bbbb2222")
+      ingest(repository, [example_spec(name: "Order refuses a negative quantity", duration: 9.0,
+                                       line_number: 30, file_path: order_spec)],
+             commit_sha: "cccc3333dddd4444")
+
+      get repository_path(repository, commit_sha: "aaaa1111bbbb2222")
+
+      expect(definition_hrefs).to eq([blob("aaaa1111bbbb2222", order_spec, 30)])
+      expect(definition_hrefs.first).not_to include("cccc3333dddd4444")
+    end
+
+    # The pairing that stops the assertion above from passing on a page that simply had one run.
+    it "links at the newest run's sha when no anchor was asked for" do
+      repository = create_repository(user: @user)
+      ingest(repository, [example_spec(name: "Order refuses a negative quantity", duration: 9.0,
+                                       line_number: 30, file_path: order_spec)],
+             commit_sha: "aaaa1111bbbb2222")
+      ingest(repository, [example_spec(name: "Order refuses a negative quantity", duration: 9.0,
+                                       line_number: 30, file_path: order_spec)],
+             commit_sha: "cccc3333dddd4444")
+
+      get repository_path(repository)
+
+      expect(definition_hrefs).to eq([blob("cccc3333dddd4444", order_spec, 30)])
+    end
+
+    # A NEW TAB, the convention the "Unannotated tests here" panel introduced deliberately for the
+    # app's first link that leaves it. `rel` is written out rather than left to the browsers that
+    # imply it. The drill-in beside it stays in the tab, which is why this reads the two apart.
+    it "opens the file in a new tab, leaving the ranking where the reader had it" do
+      repository = create_repository(user: @user)
+      ingest(repository, [example_spec(name: "Order refuses a negative quantity", duration: 9.0,
+                                       line_number: 30, file_path: order_spec)])
+
+      get repository_path(repository)
+
+      link = definition_link(panel.first("tbody tr"))
+
+      expect(link[:target]).to eq("_blank")
+      expect(link[:rel]).to eq("noopener noreferrer")
+      expect(ran_in_link(panel.first("tbody tr"))[:target]).to be_nil
+    end
+
+    # ZERO NEW QUERIES: `@repository` and `@latest_test_run` are both loaded before this partial
+    # renders and `#github_blob_url` is string composition, so ten linked rows must cost exactly
+    # what one costs.
+    #
+    # `count_queries` rather than the `queries_against("spec_observations")` the budget at the foot
+    # of this file uses, and deliberately: the regression this guards against is a per-ROW reach for
+    # `@repository` or `@latest_test_run`, which would show up against `repositories` or
+    # `test_runs` and be invisible to a single-table count.
+    #
+    # Two SINGLE-RUN repositories rather than two runs of one, on the precedent that budget sets:
+    # a second run puts the cross-run comparison panel and the run-anchor lookup on the page, so
+    # the two pages would differ by more than the row count.
+    it "costs the same number of queries for ten linked rows as for one" do
+      one_row = create_repository(user: @user, github_full_name: "acme/small-suite")
+      ingest(one_row, [example_spec(name: "only", duration: 1.0, line_number: 1)])
+      ten_rows = create_repository(user: @user, github_full_name: "acme/large-suite")
+      ingest(ten_rows, (1..SpecObservation::SLOWEST_LIMIT)
+                         .map { |n| example_spec(name: "example #{n}", duration: n.to_f, line_number: n) })
+
+      get repository_path(one_row)
+      one = count_queries { get repository_path(one_row) }
+      get repository_path(ten_rows)
+      ten = count_queries { get repository_path(ten_rows) }
+
+      expect(rows.size).to eq(SpecObservation::SLOWEST_LIMIT)
+      expect(definition_hrefs.uniq.size).to eq(SpecObservation::SLOWEST_LIMIT)
+      expect(ten).to eq(one)
     end
   end
 
