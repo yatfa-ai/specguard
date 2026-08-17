@@ -1768,9 +1768,24 @@
           consecutive rows are routinely two different branches. They are not a series, and the
           difference between two of these test counts is not a change in the suite. Suite growth is
           measured on the Overview panel above, and only against the previous run on the same branch.
-          <%# Every commit here opens the whole page on that run, so the caption says what the
-              gesture does — a column of shas that became clickable with nothing announcing it is a
-              feature only a reader who happens to hover finds.
+          <%# Every commit here opens the whole page anchored on that row's OWN run, so the caption
+              says what the gesture does — a column of shas that became clickable with nothing
+              announcing it is a feature only a reader who happens to hover finds.
+
+              "its own run" and not "that run": the sentence immediately above this one ends on the
+              noun phrase "the previous run on the same branch", which is the nearest antecedent a
+              bare "that run" can bind to — and that names the run suite growth is MEASURED AGAINST,
+              which is precisely the run clicking a commit does NOT open. A pronoun one clause away
+              from the wrong referent describes the wrong gesture.
+
+              ⚠️ This STATIC sentence must not contain the word "anchored", and that is a live
+              coupling rather than a style note. The silent-state pin
+              (`repository_run_anchor_spec.rb`, "says nothing in the Recent runs caption") asserts
+              the whole caption `not_to include("anchored")`, because silence is the absence of the
+              note and there is no element to point at when nothing was printed. The word is
+              therefore reserved for `recent_runs_anchor_note`'s output; spending it here turns the
+              caption's unconditional half into a false positive and the pin goes permanently red.
+              Reword around it, as this sentence does.
 
               The second sentence is the qualification `?commit_sha=` cost this caption, and it is
               stated only where it applies. On a default page the Overview's run IS the top row here
@@ -1791,7 +1806,7 @@
 
               Printed rather than left to `aria-current`, which announces the marked row to a screen
               reader and says nothing at all to anyone else. %>
-          Every commit below opens this page on that run.
+          Every commit below opens this page on its own run.
           <%= recent_runs_anchor_note(@run_anchor_run, @recent_test_runs) %>
         </p>
         <%= render UI::TableComponent.new(columns: ["Commit", "Branch", "Tests", "Duration", "Annotated", "Ingested"],
