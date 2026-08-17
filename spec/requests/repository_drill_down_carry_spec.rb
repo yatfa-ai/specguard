@@ -214,20 +214,29 @@ RSpec.describe "Repository drill-down carry-through", type: :request do
       clears: :commit_sha }
   ]
 
-  # The gesture's own link, and EXACT-TEXT first rather than `match: :prefer_exact` alone. That
-  # strategy resolves an ambiguous LOCATOR; it does not rank a `text:` FILTER, which matches on
-  # substring — so on a panel whose rows carry both a spec-file drill-in and the definition-site
-  # link beside it, "spec/requests/checkout_spec.rb" matches the coordinate
-  # "spec/requests/checkout_spec.rb:14" just as well and the matrix reads whichever came first.
-  # The two are never exactly equal: `line_number` is NOT NULL, so the coordinate always carries a
-  # `:line` the path it is built from does not. The fallback keeps every gesture whose link text is
-  # legitimately a substring of its element working as before.
+  # The gesture's own link, by EXACT text rather than `match: :prefer_exact`. That strategy resolves
+  # an ambiguous LOCATOR; it does not rank a `text:` FILTER, which matches on substring — so on a
+  # panel whose rows carry both a spec-file drill-in and the definition-site link beside it,
+  # "spec/requests/checkout_spec.rb" matches the coordinate "spec/requests/checkout_spec.rb:14" just
+  # as well, and the matrix silently read whichever anchor came first. Two gestures here
+  # ("open a file from Slowest tests", "open a file from Examples under this description") sit on
+  # such panels; a substring filter reads the wrong anchor on both, and only one of the two FAILS
+  # when it does — the other's two hrefs carry the same asks, so it passes while asserting about a
+  # link it was not aiming at. That is the failure this file cannot afford, because a matrix that
+  # cannot say WHICH anchor it read proves nothing about the link it names.
+  #
+  # What makes the exact match unique is a schema fact: `line_number` is NOT NULL, so the coordinate
+  # always carries a `:line` that the path it is built from does not. Every gesture in the table
+  # above has its link text as the EXACT text of its anchor — measured, one exact match each, on the
+  # page `open_every_ask` builds.
+  #
+  # So there is no substring fallback, deliberately. A gesture whose text stops identifying its
+  # anchor is the one condition a matrix that identifies gestures BY TEXT must not survive quietly:
+  # `find` raises `Ambiguous` if a second exact match ever appears and `ElementNotFound` if the text
+  # drifts, where falling through to first-substring-match would route straight back into the bug
+  # above.
   def href_for(gesture)
-    panel = page.find(gesture[:panel])
-    link = panel.all("a", exact_text: gesture[:link]).first ||
-           panel.find("a", text: gesture[:link], match: :prefer_exact)
-
-    link[:href]
+    page.find(gesture[:panel]).find("a", exact_text: gesture[:link])[:href]
   end
 
   # A query value as it appears in a URL, so an assertion cannot pass on a substring of a longer
