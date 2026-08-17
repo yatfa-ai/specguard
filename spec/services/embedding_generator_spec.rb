@@ -658,6 +658,56 @@ RSpec.describe EmbeddingGenerator do
       end
     end
 
+    # The third configuration state, and the only one that reaches `credential`'s rescue: the
+    # credentials store is PRESENT but cannot be decrypted — `config/credentials.yml.enc` exists
+    # while RAILS_MASTER_KEY is absent or wrong, which is the ordinary state of a freshly
+    # provisioned container or a key rotated in one place. `Rails.application.credentials.dig`
+    # raises ActiveSupport::MessageEncryptor::InvalidMessage there.
+    #
+    # This must degrade to the same quiet "not configured" the example above pins, because the
+    # consumer's rescue is deliberately narrow: ingest/identity_resolver.rb:1080 rescues
+    # EmbeddingGenerator::Error and NOTHING WIDER (documented as intentional at :1073), and its
+    # `retry_on EmbeddingGenerator::Error` (:111) cannot fire for anything outside that class. A
+    # raw InvalidMessage escaping `credential` is therefore an UNATTRIBUTABLE job failure rather
+    # than an attributable configuration fault.
+    it "reports not-configured when the credentials store cannot be decrypted, rather than leaking the decryption error" do
+      allow(Rails.application.credentials)
+        .to receive(:dig).with(:openai, :api_key).and_raise(ActiveSupport::MessageEncryptor::InvalidMessage)
+
+      with_api_key(nil) do
+        expect(described_class::OpenAIProvider.api_key).to eq(described_class::OpenAIProvider::PLACEHOLDER)
+        expect(described_class).not_to be_configured
+      end
+    end
+
+    # The operator-facing half of the same guarantee: not merely "no crash at load", but that the
+    # failure ARRIVES AS THE CLASS the caller rescues, carrying the actionable remedy. Asserting
+    # the class alone would pass on a raw InvalidMessage if the rescue were widened wrongly, so
+    # the message is pinned too.
+    it "surfaces an undecryptable store as an actionable EmbeddingGenerator::Error naming OPENAI_API_KEY" do
+      allow(Rails.application.credentials)
+        .to receive(:dig).with(:openai, :api_key).and_raise(ActiveSupport::MessageEncryptor::InvalidMessage)
+
+      with_api_key(nil) do
+        expect { described_class.call("some text") }
+          .to raise_error(described_class::Error, /not configured.*OPENAI_API_KEY/)
+      end
+    end
+
+    # ENV precedence is unaffected by the store's health — `credential` is never reached when ENV
+    # answers, so a store that would raise cannot mask the precedence contract pinned at the top
+    # of this block. Without this, the two examples above could be satisfied by an implementation
+    # that consulted credentials first.
+    it "never consults a raising credentials store when ENV answers" do
+      allow(Rails.application.credentials)
+        .to receive(:dig).with(:openai, :api_key).and_raise(ActiveSupport::MessageEncryptor::InvalidMessage)
+
+      with_api_key("sk-from-env") do
+        expect(described_class::OpenAIProvider.api_key).to eq("sk-from-env")
+        expect(described_class).to be_configured
+      end
+    end
+
     it "defaults to text-embedding-3-small, the 1536-dimension model" do
       expect(described_class::OpenAIProvider::DEFAULT_MODEL).to eq("text-embedding-3-small")
       expect(described_class::OpenAIProvider.model).to eq("text-embedding-3-small")
