@@ -111,8 +111,8 @@ class Api::V1::RepositoriesController < Api::BaseController
   # picks it, which is why it is read in exactly ONE place — the `latest_test_run` memo below — and
   # every block hanging off that memo re-anchors without reading the parameter at all.
   #
-  # INCLUDED by `RepositoriesController` as well, with the four of the five before it that are and
-  # unlike `?unstable_test=`. This comment used to hold the commission open, against a human page
+  # INCLUDED by `RepositoriesController` as well, unlike `?unstable_test=` and
+  # `?unannotated_examples=`. This comment used to hold the commission open, against a human page
   # that anchored every panel on the repository's newest run; `e569554` redeemed it, and the page
   # now takes `?commit_sha=` and anchors on the run it names. The comment beside that controller's
   # own include quotes the commission this block once carried and answers "This is that reader."
@@ -1197,10 +1197,10 @@ class Api::V1::RepositoriesController < Api::BaseController
   # ask without either touching the other. It IS re-anchored by `?commit_sha=`, and this drill-in
   # follows it there WITHOUT READING THE PARAMETER: both hang off the one `latest_test_run` memo, so
   # the rows here and the `latest_run` they are an area OF can never come from two different runs.
-  # Which run that is, `run_anchor` says. The panel is the surface that now diverges: on a default
-  # call this list is the panel's, but `RepositoriesController` deliberately does not include
-  # `RequestedCommitShaParam` (see that module's own comment), so under `?commit_sha=` the API
-  # describes the named run and the human page stays on the newest.
+  # Which run that is, `run_anchor` says. It is the repository's newest one only on a default call,
+  # and on an explicit ask this list is STILL the panel's: `RepositoriesController` reads
+  # `?commit_sha=` through this same `RequestedCommitShaParam` — the comment beside its own include
+  # is the corroboration — so both surfaces re-anchor on the run the client named.
   #
   # THE SAME OBJECT THE PANEL READS, never a hand-written query — this file's governing rule, stated
   # in full on `serialized_spec_files` above. `SpecDirectoryFiles` is view-free, so the API and the
