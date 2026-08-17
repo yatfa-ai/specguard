@@ -235,6 +235,8 @@ class NearDuplicateClusters
   #   nothing, where every cluster weighs 0 and `#recorded?` says why.
   def self.for(repository, run: repository.latest_test_run, limit: LIMIT, similarity: SIMILARITY,
                neighbours: NEIGHBOURS)
+    validate_run!(repository, run)
+
     edges = SpecIdentity.near_duplicate_pairs_in(repository, similarity: similarity,
                                                              neighbours: neighbours,
                                                              run_id: run&.id)
@@ -244,6 +246,31 @@ class NearDuplicateClusters
         population: SpecIdentity.clusterable_population_in(repository),
         presence: run ? SpecObservation.identity_presence_in(run) : UNRUN)
   end
+
+  # The two halves of this object are tenant-safe by DIFFERENT means, and only one of them is
+  # structural — which is why the argument is checked rather than trusted.
+  #
+  # The clustering half cannot cross a tenant boundary whatever it is handed: the edge query joins
+  # `n.repository_id = a.repository_id` and is pinned by its own "tenant boundary" example, so a
+  # foreign run simply weighs every cluster at 0, correctly, because nothing joins. The CAPTION half
+  # has no such protection — `SpecObservation.identity_presence_in` is `where(test_run_id:)` with no
+  # tenant predicate, being a read whose run is normally its caller's own — so a foreign run makes
+  # `#recorded_count` report ANOTHER TENANT'S row count beside a list of this one's clusters. Caption
+  # and list would then be halves of two different populations, which is the one property this
+  # object's class comment claims for itself.
+  #
+  # A raise rather than a silent scoping: `run:` is documented as the knob a surface turns to weigh
+  # the same clusters against a different run, so a run from the wrong repository is a caller's bug
+  # and quietly substituting the right one would hide it. `nil` is the documented "has ingested
+  # nothing" case and passes through — `UNRUN` answers for it.
+  def self.validate_run!(repository, run)
+    return if run.nil? || run.repository_id == repository.id
+
+    raise ArgumentError,
+          "run #{run.id} belongs to repository #{run.repository_id}, not #{repository.id} — " \
+          "the weighed run must be the clustered repository's own"
+  end
+  private_class_method :validate_run!
 
   def initialize(clusters:, limit:, population:, presence:, run: nil)
     @all_clusters = clusters
@@ -368,7 +395,29 @@ class NearDuplicateClusters
   # Every example under every cluster reported a timing — over the whole clustered population and
   # not over the listed head, so a truncated repository cannot read as complete on the strength of
   # the ten clusters that fit.
-  def complete? = any? && clustered_timed_count == clustered_example_count
+  #
+  # **The guard is the denominator, and it may not be `any?`.** `any?` is a statement about
+  # IDENTITIES; the equality beside it is over EXAMPLES, and nothing forces the second population to
+  # be non-empty once the first is. When the weighed run observed no member of any cluster both
+  # sides are `0`, `0 == 0`, and an object whose whole thesis is that a surface must be told what it
+  # cannot see would answer "complete" over a population it never read — while `#coverage_label`
+  # says "0 of 0" and every cluster says "not reported" in the same breath.
+  #
+  # That state is ORDINARY here, not pathological: a member the weighed run did not observe is a
+  # deleted or renamed test, and `TestRun.latest_test_run` picks a run up the instant its first
+  # shard lands, so the newest run is routinely one that has observed almost nothing yet. Extend
+  # "did not observe this member" to every member of every cluster and this is where you are.
+  #
+  # This is the one guard that could NOT be inherited from the template. `RepeatedDescriptions:154`
+  # is this predicate verbatim, `any?` included, and it is safe there for a reason that does not
+  # cross over: its rows come out of `HAVING COUNT(*) > 1`, so a row cannot exist with fewer than
+  # two examples under it and `any?` implies a positive denominator. The other four siblings guard
+  # on `recorded?` and get the same protection by a different route. This object is the first where
+  # the guard and the equality would be counted over two different populations, so it asks the
+  # denominator directly — and asks it over `@all_clusters`, the same set `window` sums, rather than
+  # over the listed head `any_timed?` reads.
+  def complete? = clustered_example_count.positive? &&
+                  clustered_timed_count == clustered_example_count
 
   # What the summed wall clock on this panel was measured over, always as a fraction and never as a
   # bare count — the denominator is the point.

@@ -498,6 +498,96 @@ RSpec.describe NearDuplicateClusters do
     end
   end
 
+  # The state above, extended from ONE member to every member of every cluster — and the reason
+  # `#complete?` cannot guard on `#any?`. `any?` is a statement about identities; the equality it
+  # guards is over examples, and once the weighed run observed neither population the second is
+  # empty while the first is not.
+  #
+  # This is ordinary rather than pathological, which is what makes it worth an example: membership
+  # spans runs, so a cluster found from older runs survives into a run that never observed it — a
+  # branch run, a subset run, or the in-flight window of a sharded one, which `latest_test_run`
+  # picks up the instant its first shard lands.
+  describe "a cluster the weighed run never observed" do
+    let(:newest) { create_test_run(repository: repository, commit_sha: "beef0001") }
+
+    before do
+      observe(identity(EXPIRED, line: 3), duration: 1.0)
+      observe(identity(OUTRIGHT, line: 9), duration: 2.0)
+      # A newer run carrying an unrelated spec file and nothing from the cluster above.
+      observe(identity(UNRELATED, line: 20, path: "spec/models/shipping_spec.rb"),
+              test_run: newest, duration: 3.0)
+    end
+
+    it "still holds the cluster, because membership spans runs" do
+      result = described_class.for(repository, run: newest)
+
+      expect(result.clusters.size).to eq(1)
+      expect(result.clusters.first.member_count).to eq(2)
+      expect(result).to be_any
+    end
+
+    it "weighs it at nothing and says its members went unobserved" do
+      cluster = described_class.for(repository, run: newest).clusters.first
+
+      expect(cluster.example_count).to be_zero
+      expect(cluster).not_to be_timed
+      expect(cluster.members.reject(&:observed?).map(&:text)).to contain_exactly(EXPIRED, OUTRIGHT)
+      expect(cluster).to be_unobserved_members
+    end
+
+    # ⛔ The assertion the guard exists for. Every operand of the equality is 0 here, so `0 == 0`
+    # holds and the OLD guard — `any?`, true because the cluster is right there — let it through:
+    # a panel told "not reported", "0 of 0" and "complete" in one breath. Revert the guard to `any?`
+    # and this example goes red, which is the only thing that makes it load-bearing.
+    it "does not call the coverage complete over a population it never read" do
+      result = described_class.for(repository, run: newest)
+
+      expect(result).to be_any
+      expect(result.coverage_label).to eq("0 of 0")
+      expect(result).not_to be_any_timed
+      expect(result).not_to be_complete
+    end
+
+    # The same object weighed against the run that DID observe the members: the clusters are the
+    # same clusters, and only now is completeness a claim about something.
+    it "is complete again when weighed against the run that observed them" do
+      result = described_class.for(repository, run: run)
+
+      expect(result.clusters.size).to eq(1)
+      expect(result.coverage_label).to eq("2 of 2")
+      expect(result).to be_complete
+    end
+  end
+
+  # The reviewer's non-blocking note, taken: the clustering half is tenant-safe by construction
+  # (`n.repository_id = a.repository_id`, pinned above), but `identity_presence_in` has no tenant
+  # predicate, so a foreign run would caption this repository's clusters with another's row count.
+  describe "a weighed run from the wrong repository" do
+    let(:other) do
+      create_repository(user: create_user(github_uid: "4004", github_handle: "elsewhere"),
+                        github_full_name: "acme/elsewhere")
+    end
+
+    it "is refused rather than captioned with the other tenant's rows" do
+      observe(identity(EXPIRED, line: 3))
+      foreign = create_test_run(repository: other, commit_sha: "f0re1980")
+
+      expect { described_class.for(repository, run: foreign) }
+        .to raise_error(ArgumentError, /belongs to repository/)
+    end
+
+    # `nil` is the documented "this repository has never ingested" case and is NOT the error case.
+    it "still answers for a repository with no run at all" do
+      identity(EXPIRED, line: 3)
+
+      result = described_class.for(repository, run: nil)
+
+      expect(result).not_to be_weighed
+      expect(result).not_to be_recorded
+      expect(result.recorded_count).to be_zero
+    end
+  end
+
   describe "truncation, which the caption has to say rather than imply" do
     it "counts every cluster it found, not the ones that fit" do
       # Three pairs drawn from three disjoint vocabularies. Measured: 0.91–0.99 within a pair,
