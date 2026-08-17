@@ -658,6 +658,91 @@ RSpec.describe EmbeddingGenerator do
       end
     end
 
+    # The third configuration state, and the only one that reaches `credential`'s rescue: the
+    # credentials store is PRESENT but cannot be DECRYPTED — `config/credentials.yml.enc` exists
+    # and RAILS_MASTER_KEY (or config/master.key) holds the WRONG key, the state a key rotated in
+    # one place but not the other leaves behind. Only that state raises
+    # ActiveSupport::MessageEncryptor::InvalidMessage.
+    #
+    # A MISSING key is a different state and does NOT arrive here — traced and probed against
+    # activesupport 8.1.3.1 as installed, with this app's `require_master_key` false (it is set
+    # nowhere in config/): EncryptedFile#key returns nil, #read raises MissingContentError, and
+    # EncryptedConfiguration#read rescues that to "", so `dig` returns nil and never raises. That
+    # is the state the "neither set" example above already pins, not this one. (Were
+    # `require_master_key` true, the class would be MissingKeyError — a RuntimeError, still caught
+    # by this rescue's StandardError, still not InvalidMessage.)
+    #
+    # == What the rescue actually buys, on each of the two surfaces
+    #
+    # Through the INTERFACE (`.call` :94, `.embed_many` :135) an escaping InvalidMessage would not
+    # go unattributed: both re-wrap StandardError into EmbeddingGenerator::Error, and those are the
+    # only two entry points that can REACH this provider path from ingest/identity_resolver.rb
+    # (:1079 embed_many, :2312 call), so its deliberately narrow `rescue EmbeddingGenerator::Error`
+    # (:1080, narrowness documented at :1073) still fires. The resolver has a THIRD call —
+    # `EmbeddingGenerator.equivalent?` at :1680 — which those two rescues do NOT wrap; it is inert
+    # here because `equivalent?` (:157) returns early unless the provider publishes `.normalize`,
+    # and only LocalProvider does (:337), so under OpenAIProvider it never reaches `credential`.
+    #
+    # No retry re-fires on either surface, and this rescue is not what protects one: there is no
+    # `retry_on` anywhere in this application, and three places document that the obvious one
+    # *could not* fire if there were — identity_resolver.rb:110-115 and :2304-2307, and
+    # identity_resolution_job.rb:14-17. `#embed` consumes EmbeddingGenerator::Error at the single
+    # call site, so the retry lives in the work list rather than in a job policy.
+    #
+    # What a regression costs THERE is the MESSAGE: the operator loses the actionable
+    # "not configured — set OPENAI_API_KEY" and gets an opaque decryption string instead. That is
+    # why the example below pins the message and not just the class — class alone would be a
+    # vacuous green.
+    #
+    # On the PROVIDER surface (`OpenAIProvider.api_key`, `configured?`) there is no such wrapper,
+    # so an escaping InvalidMessage is raw: `configured?` raises instead of answering false. That
+    # is the unattributable half, and it is what the first example below pins.
+    it "reports not-configured when the credentials store cannot be decrypted, rather than leaking the decryption error" do
+      allow(Rails.application.credentials)
+        .to receive(:dig).with(:openai, :api_key).and_raise(ActiveSupport::MessageEncryptor::InvalidMessage)
+
+      with_api_key(nil) do
+        expect(described_class::OpenAIProvider.api_key).to eq(described_class::OpenAIProvider::PLACEHOLDER)
+        expect(described_class).not_to be_configured
+      end
+    end
+
+    # The operator-facing half of the same guarantee: not merely "no crash at load", but that the
+    # failure arrives carrying the ACTIONABLE REMEDY. The class alone cannot carry that weight —
+    # with the rescue deleted, `.call`'s own outer rescue (:94) re-wraps InvalidMessage and the
+    # raised object is STILL an EmbeddingGenerator::Error, so `raise_error(Error)` on its own is a
+    # vacuous green. The message is the only thing that separates "not configured — set
+    # OPENAI_API_KEY" from "embedding provider failed: <decryption noise>", so the message is what
+    # is pinned. (Verified: this is the falsifier failure the rescue-deletion run produces.)
+    it "surfaces an undecryptable store as an actionable EmbeddingGenerator::Error naming OPENAI_API_KEY" do
+      allow(Rails.application.credentials)
+        .to receive(:dig).with(:openai, :api_key).and_raise(ActiveSupport::MessageEncryptor::InvalidMessage)
+
+      with_api_key(nil) do
+        expect { described_class.call("some text") }
+          .to raise_error(described_class::Error, /not configured.*OPENAI_API_KEY/)
+      end
+    end
+
+    # ENV precedence is unaffected by the store's health — but pinning that by asserting the
+    # RETURNED VALUE under a raising stub has no teeth, so this asserts the store is never
+    # CONSULTED instead. `credential`'s own rescue erases the evidence: a raising stub is
+    # indistinguishable from a nil-returning one by the time `api_key` answers, so it yields
+    # "sk-from-env" under EITHER ordering. Probed rather than assumed — with `api_key` reordered to
+    # `credential(:api_key) || ENV[...].presence`, the value-asserting form stayed GREEN (7
+    # examples, 0 failures), the Vacuous Green shape from SPGD-78: the name claimed a guarantee no
+    # line in it established. The message expectation below does fail under that reordering (7
+    # examples, 1 failure, this one), which is what makes it a real control on the precedence
+    # contract pinned at the top of this block.
+    it "never consults the credentials store when ENV answers" do
+      expect(Rails.application.credentials).not_to receive(:dig)
+
+      with_api_key("sk-from-env") do
+        expect(described_class::OpenAIProvider.api_key).to eq("sk-from-env")
+        expect(described_class).to be_configured
+      end
+    end
+
     it "defaults to text-embedding-3-small, the 1536-dimension model" do
       expect(described_class::OpenAIProvider::DEFAULT_MODEL).to eq("text-embedding-3-small")
       expect(described_class::OpenAIProvider.model).to eq("text-embedding-3-small")
