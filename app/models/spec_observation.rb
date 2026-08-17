@@ -1340,7 +1340,8 @@ class SpecObservation < ApplicationRecord
       Arel.sql("COUNT(*) FILTER (WHERE spec_identity_id IS NULL)")
     )
 
-    { recorded_count: counts[0].to_i, unresolved_count: counts[1].to_i }  end
+    { recorded_count: counts[0].to_i, unresolved_count: counts[1].to_i }
+  end
 
   # Where ONE run's wall clock went, rolled up by DIRECTORY — the rung directly above the rollup
   # above, and the grain the question is usually asked in. "Which area of this suite carries the
