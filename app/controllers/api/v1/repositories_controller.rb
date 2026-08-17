@@ -78,10 +78,10 @@ class Api::V1::RepositoriesController < Api::BaseController
   # `RequestedUnstableTestParam`, which holds that reasoning in full.
   include RequestedUnstableTestParam
 
-  # `?unannotated_examples=` read as a request for the run's unannotated examples — the seventh
-  # `Requested*Param` this controller reads, and the first that carries NO VALUE.
+  # `?unannotated_examples=` read as a request for the run's unannotated examples — the first
+  # `Requested*Param` this controller reads that carries NO VALUE.
   #
-  # The six above all name a WHICH — which branch, which commit, which area, which file, which
+  # The parameters above it all name a WHICH — which branch, which area, which file, which
   # description, which test — because each opens the rows behind a LINE of a ranking the client had
   # already read. This one opens a POPULATION: the figure it drills out of is a subtraction on the run
   # itself (`total_specs_count - annotated_specs_count`), which has no rows and therefore no keys, so
@@ -96,20 +96,24 @@ class Api::V1::RepositoriesController < Api::BaseController
   # second reader of THIS parameter to share a guard with. When one arrives it includes this module
   # rather than re-deriving the guard, which is the whole reason the guard lives in a module at all.
   #
-  # It reaches no SQL comparison at all, which makes the hazard the MIRROR of the six above rather
-  # than a weaker version of it. Theirs is a silent wrong answer — an Array becomes an `IN` list under
-  # a caption naming one thing; this one's is a silent EXTRA answer, because all three malformed
+  # It reaches no SQL comparison at all, which makes the hazard the MIRROR of the value-carrying
+  # parameters' rather than a weaker version of it. Theirs is a silent wrong answer — an Array becomes
+  # an `IN` list, answering about several things under a caption naming one for the parameters above,
+  # and re-anchoring the whole response for `?commit_sha=` below, which is the widest wrong answer
+  # this endpoint can give; this one's is a silent EXTRA answer, because all three malformed
   # shapes are truthy in Ruby and an unguarded `.present?` would open a hundred-row block on a query
   # string nobody meant to send. See `RequestedUnannotatedExamplesParam`, which holds that reasoning in
   # full, including why `?unannotated_examples=false` is an ask like any other.
   include RequestedUnannotatedExamplesParam
 
-  # `?commit_sha=` read as a commit sha, to name WHICH RUN this endpoint describes — the sixth
-  # `Requested*Param` here and the only one that re-anchors rather than narrows. The five above take
-  # the anchor as given: `?branch=` narrows a history and the three drill-in parameters open one
-  # area, one file or one description OF the run `latest_test_run` had already picked. This one
-  # picks it, which is why it is read in exactly ONE place — the `latest_test_run` memo below — and
-  # every block hanging off that memo re-anchors without reading the parameter at all.
+  # `?commit_sha=` read as a commit sha, to name WHICH RUN this endpoint describes — the only
+  # `Requested*Param` here that re-anchors rather than narrows. Every parameter above leaves the
+  # anchor alone: `?branch=` narrows a history, the drill-in parameters open one area, one file or
+  # one description OF the run `latest_test_run` had already picked, `?unstable_test=` opens a WINDOW
+  # across runs rather than a run, and `?unannotated_examples=` opens a POPULATION inside the run
+  # already picked. This one picks it, which is why it is read in exactly ONE place — the
+  # `latest_test_run` memo below — and every block hanging off that memo re-anchors without reading
+  # the parameter at all.
   #
   # INCLUDED by `RepositoriesController` as well, unlike `?unstable_test=` and
   # `?unannotated_examples=`. This comment used to hold the commission open, against a human page
