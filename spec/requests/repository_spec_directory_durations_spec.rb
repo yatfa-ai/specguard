@@ -1177,7 +1177,12 @@ RSpec.describe "Repository heaviest spec directories", type: :request do
         end
         unopened = queries_against("spec_observations") { get repository_path(repository) }
 
-        expect(unopened.size).to eq(opened.size - 1)
+        # TWO reads sit behind the `?spec_directory=` gate since SPGD-658, not one: this panel's
+        # file listing, and the per-example annotation worklist that rides the same ask. Both are
+        # narrowed to the area and neither is taken without it, which is what this example is about
+        # — the delta names how many reads the gate holds back, and it moved because a read was
+        # added behind it rather than because one escaped.
+        expect(unopened.size).to eq(opened.size - 2)
       end
 
       it "costs the same number of queries on a 27-file area as on a 3-file one" do

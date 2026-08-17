@@ -392,6 +392,45 @@ class RepositoriesController < ApplicationController
     if @latest_test_run && @spec_directory_request
       @spec_directory_files = SpecDirectoryFiles.for(@latest_test_run, @spec_directory_request)
     end
+    # THE LAST RUNG OF THE ANNOTATION LADDER, and the one this page never had: not WHICH AREAS carry
+    # the run's annotation debt but WHICH TESTS. The Overview panel prints "Not visible to
+    # SpecGuard" as `total_specs_count - annotated_specs_count` and says *"SpecGuard cannot see the
+    # other N tests"*; `@unannotated_directories` above ranks the areas that count is concentrated
+    # in. Neither names a test. Until this, acting on the panel this page had just handed the owner
+    # meant leaving the product for `GET /api/v1/repository?unannotated_examples=1&spec_directory=…`
+    # with an API key.
+    #
+    # NO NEW PARAMETER. It rides `?spec_directory=` and `?spec_file=`, the same asks the duration
+    # drill-downs above read. One ask now opens THREE panels, each answering in its own grain over
+    # the same area — that is how `drill_down_path` composes asks, and `show.html.erb` states the
+    # rule where the second one landed: it is not a collision to be fixed by minting another
+    # parameter. Assigned HERE rather than beside `@unannotated_directories`, which is the panel it
+    # belongs to topically, because it reads BOTH asks and `@spec_directory_request` is resolved
+    # directly above.
+    #
+    # Guarded on a narrowing having been ASKED for as well as on there being a run, so a page nobody
+    # asked an area or a file of issues no query at all — the same guard `SpecFileExamples` carries
+    # one axis over. `UnannotatedExamples.for`'s narrowings are OPTIONAL and whole-run is a complete
+    # ask on the JSON endpoint; this surface deliberately does not take it. A hundred rows of a
+    # twelve-thousand-example run's debt, unasked, on every dashboard load is the Overview's
+    # subtraction again at length rather than a worklist, and it would put a per-example read on the
+    # budget of every reader who never opened anything.
+    #
+    # Both narrowings are handed over together and are AND-ed by the read, never ranked: see
+    # `SpecObservation.unannotated_in`, where the absence of a precedence rule is argued. Note the
+    # signature — `test_run` is positional and the narrowings are keywords.
+    #
+    # Anchored on `@latest_test_run` for the reason every drill-down above is: the area was picked
+    # out of a ranking of that run, so its examples must come from that same run or the panel would
+    # be answering about rows the reader did not click.
+    #
+    # ONE query, bounded by the size of the narrowed slice and capped at
+    # `SpecObservation::UNANNOTATED_EXAMPLES_LIMIT`, with the population count riding the same rows
+    # as a window — and none at all without an ask: see `UnannotatedExamples`.
+    if @latest_test_run && (@spec_file_request || @spec_directory_request)
+      @unannotated_examples = UnannotatedExamples.for(@latest_test_run, spec_file: @spec_file_request,
+                                                                       spec_directory: @spec_directory_request)
+    end
     # The same areas, asked of TWO runs instead of one: not which area carries the time but which
     # area got bigger or smaller since the previous run ON THIS BRANCH. `@previous_test_run` above
     # is that run and is already in memory, so riding it costs nothing and keeps this panel on the
