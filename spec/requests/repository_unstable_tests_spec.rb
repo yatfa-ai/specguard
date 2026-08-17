@@ -716,10 +716,18 @@ RSpec.describe "Repository unstable tests", type: :request do
     # spec/requests/repository_spec_directory_window_growth_spec.rb. Both fixtures below hold more
     # than two runs on the branch, so that read names a different pair from the last-push one and is
     # a real round trip on each of them rather than a query-cache repeat.
-    # The eighth is the single-run by-AREA rollup on the ANNOTATION axis — "Where the unannotated
-    # tests are", SPGD-649. It reads the latest run's rows only, so it moves with neither the length
-    # of the window nor how red it went, and it is not the by-duration rollup counted above: that one
-    # ranks the same areas by wall clock. Its own budget is pinned in
+    #
+    # RECOUNTED AT 14 by SPGD-649, which added the "Where the unannotated tests are" panel: ONE
+    # further read of this table, the same run's rows grouped by AREA on the ANNOTATION axis. It is
+    # the eighth neighbour, and it is the one the enumeration above does not carry — that sentence
+    # is left at thirteen because thirteen is what it correctly said at its own moment, and this
+    # line is where the fourteenth is accounted for. Restated at the new total: TEN of the fourteen
+    # belong to panels this slice did not write, and the four this example pins for THIS panel are
+    # unchanged, which is the half the assertion is here to hold still. The added read moves with
+    # neither the length of the window nor how red it went, since it reads the latest run's rows
+    # only, and it is not the by-duration rollup counted above under another name: that one groups
+    # the identical population and ranks it by wall clock, so neither ranking can be read off the
+    # other. Its own budget is pinned in
     # spec/requests/repository_unannotated_directories_spec.rb.
     it "costs the same four reads at 30 runs of 200 examples as at 3 runs of 3" do
       small = create_repository(user: @user, github_full_name: "acme/small-suite")
@@ -775,13 +783,14 @@ RSpec.describe "Repository unstable tests", type: :request do
       # TEN of these belong to the panels above, which read the latest run (and, for the three
       # by-area comparisons, an earlier one) regardless — the tenth being the single-run annotation
       # rollup SPGD-649 added, which reads the latest run whatever the window says; the eleventh is
-      # this panel's gating probe, and there is no twelfth. The window comparison is among the nine and not among what the
-      # gate withholds: its own gate is about SIZES and is satisfied here, where this panel's is
-      # about OUTCOMES and is not — two windows of the same runs, two different questions to refuse.
+      # this panel's gating probe, and there is no twelfth. The window comparison is among the ten
+      # and not among what the gate withholds: its own gate is about SIZES and is satisfied here,
+      # where this panel's is about OUTCOMES and is not — two windows of the same runs, two
+      # different questions to refuse.
       expect(queries.size).to eq(11)
       # What the gate withholds is a grouping by description over the WINDOW — the candidate
       # narrowing and the composition that follows it, both of which narrow `test_run_id` to a LIST
-      # of runs. The single-run `GROUP BY name` among the nine belongs to the "Descriptions this run
+      # of runs. The single-run `GROUP BY name` among the ten belongs to the "Descriptions this run
       # recorded more than once" panel and is not this one's: it asks about one run's rows, needs no
       # outcome to have been reported, and is therefore not something an incomparable window has any
       # reason to withhold. Discriminated on the window narrow rather than on the grouping alone,
