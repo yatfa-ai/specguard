@@ -10,7 +10,7 @@
 #
 # It's strongly recommended that you check this file into your version control system.
 
-ActiveRecord::Schema[8.1].define(version: 2026_08_16_130000) do
+ActiveRecord::Schema[8.1].define(version: 2026_08_17_120000) do
   # These are extensions that must be enabled in order to support this database
   enable_extension "pg_catalog.plpgsql"
   enable_extension "vector"
@@ -31,7 +31,7 @@ ActiveRecord::Schema[8.1].define(version: 2026_08_16_130000) do
 
   create_table "embedding_cache_entries", force: :cascade do |t|
     t.datetime "created_at", null: false
-    t.vector "embedding", limit: 1536, null: false
+    t.halfvec "embedding", limit: 1024, null: false
     t.string "provider_fingerprint", null: false
     t.string "text_digest", limit: 64, null: false
     t.datetime "updated_at", null: false
@@ -193,7 +193,7 @@ ActiveRecord::Schema[8.1].define(version: 2026_08_16_130000) do
 
   create_table "spec_identities", force: :cascade do |t|
     t.datetime "created_at", null: false
-    t.vector "embedding", limit: 1536, null: false
+    t.halfvec "embedding", limit: 1024, null: false
     t.string "file_path", null: false
     t.bigint "last_seen_test_run_id"
     t.integer "line_number", null: false
@@ -202,7 +202,7 @@ ActiveRecord::Schema[8.1].define(version: 2026_08_16_130000) do
     t.text "text", null: false
     t.string "text_digest", limit: 64, null: false
     t.datetime "updated_at", null: false
-    t.index ["embedding"], name: "index_spec_identities_on_embedding", opclass: :vector_cosine_ops, using: :hnsw
+    t.index ["embedding"], name: "index_spec_identities_on_embedding", opclass: :halfvec_cosine_ops, using: :hnsw
     t.index ["last_seen_test_run_id"], name: "index_spec_identities_on_last_seen_test_run_id"
     t.index ["repository_id", "text_digest"], name: "index_spec_identities_on_text", unique: true
     t.index ["repository_id"], name: "index_spec_identities_on_repository_id"
@@ -212,7 +212,7 @@ ActiveRecord::Schema[8.1].define(version: 2026_08_16_130000) do
     t.string "action", null: false
     t.text "behavior", null: false
     t.datetime "created_at", null: false
-    t.vector "embedding", limit: 1536
+    t.halfvec "embedding", limit: 1024
     t.string "entity", null: false
     t.string "file_path", null: false
     t.string "layer", null: false
@@ -222,7 +222,7 @@ ActiveRecord::Schema[8.1].define(version: 2026_08_16_130000) do
     t.bigint "test_run_id"
     t.datetime "updated_at", null: false
     t.index ["action"], name: "index_spec_intents_on_action"
-    t.index ["embedding"], name: "index_spec_intents_on_embedding", opclass: :vector_cosine_ops, using: :hnsw
+    t.index ["embedding"], name: "index_spec_intents_on_embedding", opclass: :halfvec_cosine_ops, using: :hnsw
     t.index ["entity"], name: "index_spec_intents_on_entity"
     t.index ["repository_id", "entity", "action"], name: "index_spec_intents_on_repository_id_and_entity_and_action"
     t.index ["repository_id", "file_path", "line_number"], name: "index_spec_intents_on_location", unique: true

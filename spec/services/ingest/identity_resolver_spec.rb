@@ -46,7 +46,7 @@ RSpec.describe Ingest::IdentityResolver do
   # How many embeddings a block caused, counted through `EmbeddingGenerator.provider=` — the public
   # swap seam `with lexical embeddings` itself uses — rather than by stubbing
   # `EmbeddingGenerator.call`: what is counted is then the real call the resolver makes through the
-  # real interface, width validation and all. Delegating to `LocalProvider` rather than returning a
+  # real interface, width validation and all. Delegating to `LexicalEmbeddingProvider` rather than returning a
   # fixture vector keeps every fallthrough behaving exactly as it does everywhere else in this file,
   # so the counter can be installed without changing what the example under it measures.
   #
@@ -57,7 +57,7 @@ RSpec.describe Ingest::IdentityResolver do
   #
   # `normalize` is delegated for the same reason `call` is: `EmbeddingGenerator.equivalent?` asks
   # the installed provider whether two spellings collapse together, and a counter that answered
-  # differently from `LocalProvider` would change the path it is supposed to be measuring — the
+  # differently from `LexicalEmbeddingProvider` would change the path it is supposed to be measuring — the
   # drift refresh would go inert exactly in the examples that count what it costs.
   let(:counting_provider) do
     Class.new do
@@ -66,10 +66,10 @@ RSpec.describe Ingest::IdentityResolver do
 
         def call(text)
           @calls = calls + 1
-          EmbeddingGenerator::LocalProvider.call(text)
+          LexicalEmbeddingProvider.call(text)
         end
 
-        def normalize(text) = EmbeddingGenerator::LocalProvider.normalize(text)
+        def normalize(text) = LexicalEmbeddingProvider.normalize(text)
       end
     end
   end
@@ -798,7 +798,7 @@ RSpec.describe Ingest::IdentityResolver do
       unannotated_spec(file_path: "spec/a_spec.rb", line_number: line, name: name)
     end
 
-    it "fetches the four columns its callers read and leaves the 1536-float vector in the database" do
+    it "fetches the four columns its callers read and leaves the 1024-float vector in the database" do
       # **The file's own rule, on the path that runs per row.** `#digest_index`, `#resight_all` and
       # `#refresh` each state in their own words that a vector must not be loaded to be worked
       # around; this is the method that used to load one on every similarity hit, because
@@ -843,7 +843,7 @@ RSpec.describe Ingest::IdentityResolver do
 
     # == The tie is the provider's normal output, not a hand-made distance
     #
-    # `LocalProvider` embeds a normalised form and says so as a guarantee: two texts with the same
+    # `LexicalEmbeddingProvider` embeds a normalised form and says so as a guarantee: two texts with the same
     # normalised form embed *"to the same array of floats"*. So these three spellings are one
     # vector, and the two rows below sit at cosine distance 0.0 from the third — a real tie, built
     # from the documented property rather than from a fixture vector that approximates one.
@@ -1481,8 +1481,8 @@ RSpec.describe Ingest::IdentityResolver do
     # question here is how many REQUESTS a page of them costs.
     #
     # `counting_provider` cannot answer it. It counts TEXTS, which is the right figure for the
-    # shipped `LocalProvider` (hashing in this process, N times, is the cheapest shape there is) and
-    # the wrong one for `OpenAIProvider`, where the bill and the latency are per REQUEST. So this
+    # shipped `LexicalEmbeddingProvider` (hashing in this process, N times, is the cheapest shape there is) and
+    # the wrong one for `VoyageProvider`, where the bill and the latency are per REQUEST. So this
     # group installs a provider that implements the batch entry point and counts both.
     let(:batching_provider) do
       Class.new do
@@ -1493,20 +1493,20 @@ RSpec.describe Ingest::IdentityResolver do
 
           def call(text)
             @calls = calls + 1
-            EmbeddingGenerator::LocalProvider.call(text)
+            LexicalEmbeddingProvider.call(text)
           end
 
           def embed_many(texts)
             @batches = batches + 1
             batched.concat(texts)
-            texts.map { |text| EmbeddingGenerator::LocalProvider.call(text) }
+            texts.map { |text| LexicalEmbeddingProvider.call(text) }
           end
 
           # Delegated for the same reason the two above are: an instrument must not change the path
           # it measures. `EmbeddingGenerator.equivalent?` asks the INSTALLED provider which spellings
           # collapse together, so a counter that stayed silent about normalisation would take the
           # punctuation-drift example below down a branch production never takes.
-          def normalize(text) = EmbeddingGenerator::LocalProvider.normalize(text)
+          def normalize(text) = LexicalEmbeddingProvider.normalize(text)
         end
       end
     end
@@ -1584,7 +1584,7 @@ RSpec.describe Ingest::IdentityResolver do
       # row it had while every one of those rows holds the wrong vector. That is the mis-pairing
       # this example is really for, and only the vector itself can see it.
       #
-      # Asserted against `LocalProvider`'s answer for each row's OWN text rather than against a
+      # Asserted against `LexicalEmbeddingProvider`'s answer for each row's OWN text rather than against a
       # fixture, so what has to line up is the provider's real output. Compared within a tolerance
       # because pgvector stores four-byte floats and Ruby's are eight — an exact `eq` would fail on
       # the storage round trip rather than on the pairing.
@@ -1592,7 +1592,7 @@ RSpec.describe Ingest::IdentityResolver do
       first = ingest(new_page, ci_run_id: "run-1")
 
       repository.spec_identities.each do |identity|
-        own = EmbeddingGenerator::LocalProvider.call(identity.text)
+        own = LexicalEmbeddingProvider.call(identity.text)
         drift = own.zip(identity.embedding.to_a).map { |mine, stored| (mine - stored).abs }.max
 
         expect(drift).to be < 1e-5
@@ -1628,13 +1628,13 @@ RSpec.describe Ingest::IdentityResolver do
         @batches = batches + 1
         raise EmbeddingGenerator::Error, "cannot embed the page" if texts.include?(poison)
 
-        texts.map { |text| EmbeddingGenerator::LocalProvider.call(text) }
+        texts.map { |text| LexicalEmbeddingProvider.call(text) }
       end
       provider.define_singleton_method(:call) do |text|
         @calls = calls + 1
         raise EmbeddingGenerator::Error, "cannot embed #{text}" if text == poison
 
-        EmbeddingGenerator::LocalProvider.call(text)
+        LexicalEmbeddingProvider.call(text)
       end
 
       run = record(new_page, ci_run_id: "run-1")
@@ -1786,7 +1786,7 @@ RSpec.describe Ingest::IdentityResolver do
     # and is therefore uncached, which is what keeps those examples measuring what they always
     # measured. Adding the key there would have quietly moved 186 examples onto a new path.
     #
-    # `call`, `embed_many` and `normalize` all delegate to `LocalProvider` for the reason
+    # `call`, `embed_many` and `normalize` all delegate to `LexicalEmbeddingProvider` for the reason
     # `batching_provider` states: an instrument must not change the path it measures.
     let(:caching_provider) do
       Class.new do
@@ -1800,16 +1800,16 @@ RSpec.describe Ingest::IdentityResolver do
 
           def call(text)
             @calls = calls + 1
-            EmbeddingGenerator::LocalProvider.call(text)
+            LexicalEmbeddingProvider.call(text)
           end
 
           def embed_many(texts)
             @batches = batches + 1
             batched.concat(texts)
-            texts.map { |text| EmbeddingGenerator::LocalProvider.call(text) }
+            texts.map { |text| LexicalEmbeddingProvider.call(text) }
           end
 
-          def normalize(text) = EmbeddingGenerator::LocalProvider.normalize(text)
+          def normalize(text) = LexicalEmbeddingProvider.normalize(text)
         end
       end
     end
@@ -1823,14 +1823,14 @@ RSpec.describe Ingest::IdentityResolver do
         class << self
           def batches = @batches ||= 0
 
-          def call(text) = EmbeddingGenerator::LocalProvider.call(text)
+          def call(text) = LexicalEmbeddingProvider.call(text)
 
           def embed_many(texts)
             @batches = batches + 1
-            texts.map { |text| EmbeddingGenerator::LocalProvider.call(text) }
+            texts.map { |text| LexicalEmbeddingProvider.call(text) }
           end
 
-          def normalize(text) = EmbeddingGenerator::LocalProvider.normalize(text)
+          def normalize(text) = LexicalEmbeddingProvider.normalize(text)
         end
       end
     end
@@ -2286,13 +2286,13 @@ RSpec.describe Ingest::IdentityResolver do
           @batches = batches + 1
           raise EmbeddingGenerator::Error, "cannot embed the page" if texts.include?(poison)
 
-          texts.map { |text| EmbeddingGenerator::LocalProvider.call(text) }
+          texts.map { |text| LexicalEmbeddingProvider.call(text) }
         end
         provider.define_singleton_method(:call) do |text|
           @calls = calls + 1
           raise EmbeddingGenerator::Error, "cannot embed #{text}" if text == poison
 
-          EmbeddingGenerator::LocalProvider.call(text)
+          LexicalEmbeddingProvider.call(text)
         end
 
         run = record(shared_page, ci_run_id: "run-1")
@@ -2328,7 +2328,7 @@ RSpec.describe Ingest::IdentityResolver do
       # four-byte float the column stores — the same tolerance the order-contract example uses, and
       # for the same reason.
       other_repository.spec_identities.each do |identity|
-        own = EmbeddingGenerator::LocalProvider.call(identity.text)
+        own = LexicalEmbeddingProvider.call(identity.text)
         drift = own.zip(identity.embedding.to_a).map { |mine, stored| (mine - stored).abs }.max
 
         expect(drift).to be < 1e-5
@@ -2444,7 +2444,7 @@ RSpec.describe Ingest::IdentityResolver do
 
   describe "an example the provider cannot embed" do
     # The provider, down and back. `reset` on the proxy rather than a second `allow`, so the "back"
-    # state is the real `LocalProvider` this group installed and not another stub.
+    # state is the real `LexicalEmbeddingProvider` this group installed and not another stub.
     def provider_down
       allow(EmbeddingGenerator).to receive(:call).and_raise(EmbeddingGenerator::Error, "provider down")
     end

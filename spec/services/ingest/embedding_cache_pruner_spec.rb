@@ -13,7 +13,7 @@ require "rails_helper"
 # afterwards, which is the property a caller can actually observe and the one a cache-destroying
 # implementation would fail.
 RSpec.describe Ingest::EmbeddingCachePruner do
-  # One deterministic vector, at the column's real width. `vector(1536)` is float4 per element, so a
+  # One deterministic vector, at the column's real width. `vector(1024)` is float4 per element, so a
   # round trip rounds — irrelevant to every assertion here, which are about WHICH ROWS exist, but
   # the width matters INDIRECTLY, and not the way this comment used to say. It does not make the
   # ROW ~6KB: the column is stored out of line, so the heap tuple is a 168-byte stub. What the width
@@ -150,7 +150,7 @@ RSpec.describe Ingest::EmbeddingCachePruner do
   describe "convergence across invocations" do
     # The ceiling is a bound on ONE invocation, so what it buys is convergence rather than
     # completeness. Stubbed small because the shipped ceiling is 10,000 rows and a fixture of that
-    # many 1536-dimension vectors would be ~81MB of spec — the constants are the mechanism and the
+    # many 1024-dimension vectors would be ~81MB of spec — the constants are the mechanism and the
     # numbers are not.
     before do
       stub_const("#{described_class}::DELETE_BATCH_SIZE", 2)

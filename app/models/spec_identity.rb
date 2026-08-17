@@ -73,13 +73,23 @@ class SpecIdentity < ApplicationRecord
   # == What the number is derived from
   #
   # The behaviour this slice exists for does not depend on the threshold at all: a test that moved
-  # ten lines has *identical* text, `EmbeddingGenerator::LocalProvider` is a pure function of that
+  # ten lines has *identical* text, the embedding is a pure function of that
   # text, and neither path nor line number is a feature of it — so the move scores exactly 1.0. The
   # threshold's whole job is to bound how far from identical a match may be.
   #
-  # Measured on the shipped provider (`ruby -r./app/services/embedding_generator -e` over
-  # representative pairs; re-derivable in seconds, which is why the pairs are named rather than the
-  # numbers merely asserted):
+  # ⚠️ **The bands below were measured on the feature-hashing provider this application shipped
+  # until 2026-08-17, and they do not describe `EmbeddingGenerator::VoyageProvider`.** They are kept
+  # because they are what this constant was chosen from and deleting them would leave 0.95 looking
+  # arbitrary — not because they are still evidence for it. A lexical embedder and a semantic one
+  # disagree most sharply on exactly the row that decides this number: *"the same behaviour
+  # reworded"* scores 0.62 under hashing, which is why 0.95 could refuse it as a rename, and a
+  # semantic model is built to score that pair HIGH. **This constant is uncalibrated for the current
+  # provider and re-deriving it is open work.** Until it is re-measured, expect renames to be
+  # absorbed into the existing identity rather than starting a new history — the failure mode this
+  # comment's last paragraph calls the permanent, history-corrupting one.
+  #
+  # Measured on the RETIRED lexical provider (now `LexicalEmbeddingProvider`, kept in
+  # `spec/support/lexical_embeddings.rb` for the resolution specs), over representative pairs:
   #
   #   same text, differing only in whitespace/punctuation   1.00   ← must match
   #   a corrected typo                                      0.95
@@ -95,17 +105,6 @@ class SpecIdentity < ApplicationRecord
   # corrupts both histories, while one set too high starts a new history for a trivially edited test
   # — which is what the settled model prescribes for a rename anyway. The failure modes are not
   # symmetric, so the threshold is not centred.
-  #
-  # == Why hash collisions do not move it
-  #
-  # SPGD-252 measured `LocalProvider` over a full census of all 199,990,000 pairs of 20,000 real
-  # RSpec example names from one repository (discourse@`f3c568c`), comparing the shipped 1536-bucket
-  # vector against the same features in a collision-free unbounded space. Mean |hashed − exact|
-  # cosine error **0.0196**; the largest overstatement anywhere in the census **+0.274**; at cosine
-  # ≥ 0.88, **119** false matches (1 in 1.68 million) — and **zero** of them, at every threshold
-  # from 0.75 to 0.95, involved a pair the collision-free algorithm scores as unrelated. Every false
-  # match was a near-miss nudged across the line, never an invented resemblance. Hashing is not what
-  # decides this number; the bands above are.
   MATCH_SIMILARITY = 0.95
 
   # What `nearest_neighbors(threshold:)` wants, which is a cosine *distance* — `1 - similarity`.

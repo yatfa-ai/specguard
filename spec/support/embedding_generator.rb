@@ -4,7 +4,7 @@ require "digest"
 
 # Deterministic stand-in for the embedding provider, installed for the whole suite (see the
 # RSpec.configure block at the bottom). No spec ever reaches the network, and no spec needs an
-# API key — `bin/rspec` is green with OPENAI_API_KEY unset.
+# API key — `bin/rspec` is green with OPENROUTER_API_KEY unset.
 #
 # ## The determinism is a load-bearing property, not a convenience
 #
@@ -18,7 +18,8 @@ require "digest"
 # would flake rather than fail, which is worse. Treat "same string → same vector" as part of the
 # contract of this file and do not "improve" it with anything non-reproducible.
 #
-# Vectors are unit-normalised, like real OpenAI embeddings, so cosine similarity behaves sensibly.
+# Vectors are unit-normalised, like the vendor embeddings they stand in for, so cosine similarity
+# behaves sensibly.
 # Values are pseudo-random, so two different strings are near-orthogonal regardless of how similar
 # they read — this stub models *identity*, not *meaning*. A spec that needs a specific similarity
 # should assign vectors explicitly rather than expect semantics from this.

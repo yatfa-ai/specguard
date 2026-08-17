@@ -1,11 +1,8 @@
 # frozen_string_literal: true
 
-require "digest"
-
-# Turns a string into an embedding vector. Nothing in the application calls it yet — see the
-# *Overview & Architecture* article for what is actually wired. It exists for the duplicate-
-# detection engine that is meant to rest on it: ingestion would embed "{entity} {action} {behavior}"
-# for every intent, and a lookup would embed the text it is asking about and compare.
+# Turns a string into an embedding vector. `Ingest::IdentityResolver` embeds the text standing for
+# each test — an `@intent` declaration where there is one, the example's name where there is not —
+# and `SpecIdentity` matches the result against the identities a repository already has.
 #
 # ## Contract
 #
@@ -14,65 +11,60 @@ require "digest"
 #
 # Anything that goes wrong with the provider — transport error, HTTP error, malformed body, a
 # vector of the wrong size, a non-finite element — surfaces as EmbeddingGenerator::Error. Callers
-# (the ingestion job, IntentChecker) rescue one class and never see a Faraday or OpenAI exception.
+# rescue one class and never see a Faraday exception.
 #
 # `.call` is the single-text entry point and `.embed_many` the batch one. They are two entry points
 # to the same guarantees, not two behaviours: a text embedded through either arrives at the same
 # vector, so batching is an I/O decision a caller may take without changing what it gets back.
 #
+# ## The provider
+#
+# **`VoyageProvider` is the only one, and there is no fallback.** `voyageai/voyage-4-lite` through
+# OpenRouter, 1024 dimensions, over the network, for money. It replaced two implementations that
+# used to sit here — in-process feature hashing, and OpenAI's endpoint — and the reason it replaced
+# both is the same one: a second provider means vectors from two different functions of the text
+# can reach one column, and no assertion anywhere catches a similarity computed across that seam.
+# **Owner decision, 2026-08-17: one provider, one model, one width.**
+#
 # ## Swapping the provider
 #
-# `EmbeddingGenerator` is the interface; `LocalProvider` is merely the default implementation.
-# Point it at any object answering `.call(text)`:
+# `EmbeddingGenerator` is the interface; `VoyageProvider` is its implementation. Point it at any
+# object answering `.call(text)`:
 #
-#   EmbeddingGenerator.provider = EmbeddingGenerator::OpenAIProvider
-#   EmbeddingGenerator.provider = nil   # back to the default
+#   EmbeddingGenerator.provider = SomeOtherEmbedder
+#   EmbeddingGenerator.provider = nil   # back to VoyageProvider
+#
+# This seam exists for the SUITE, not for a choice of vendor: `spec/support/embedding_generator.rb`
+# installs a deterministic stub so that no spec reaches the network or needs a key. Production runs
+# what this file ships and nothing else.
 #
 # `.call(text)` is the whole of what a provider must implement. `embed_many(texts)` is OPTIONAL: a
 # provider that does not answer it is asked one text at a time and is none the wiser, which is what
-# lets the batch entry point be a pure addition to an interface other people implement. Overriding
-# it is worth it only where a batch costs less than the sum of its parts — that is one HTTP request
-# instead of N for `OpenAIProvider`, and nothing at all for an in-process embedder like
-# `LocalProvider`, whose N calls ARE the cheapest available shape.
-#
-# Callers are unaffected — they only ever say `EmbeddingGenerator.call(text)` or, for a page of
-# them, `EmbeddingGenerator.embed_many(texts)`. This is the seam the suite uses to install a
-# deterministic stub (spec/support/embedding_generator.rb).
+# lets the batch entry point be a pure addition to an interface other people implement.
 #
 # The guarantees above hold *across* the seam: width validation, error wrapping and `configured?`
-# live on this class, not in any provider, so swapping the provider cannot void them.
-#
-# ## Which provider is the default, and why
-#
-# `LocalProvider` — in-process Ruby feature hashing, no credentials, no network, nothing to host.
-# **Owner decision, 2026-08-08: SpecGuard does not pay for embeddings.** `OpenAIProvider` stays as
-# the interface's other implementation and is installed explicitly by whoever wants to pay for it:
-#
-#   EmbeddingGenerator.provider = EmbeddingGenerator::OpenAIProvider   # in an initializer
-#
-# The trade is stated on LocalProvider: it measures *lexical* overlap, not meaning. Read that
-# before relying on a similarity score for anything user-facing.
+# live on this class, not in the provider, so swapping the provider cannot void them.
 #
 # ## Credentials
 #
-# Only `OpenAIProvider` needs any. ENV first, encrypted credentials second, and a PLACEHOLDER when
-# neither is set — the same shape as SpecGuard::GithubOauth (config/initializers/omniauth.rb), for
-# the same reason: the app boots and the suite runs green with no embedding API key present.
-# `configured?` reports the truth so callers can say so rather than dead-ending. Nothing here talks
-# to the network until `.call`, and with the default provider nothing talks to it at all.
+# ENV first, encrypted credentials second, and a PLACEHOLDER when neither is set — the same shape as
+# SpecGuard::GithubOauth (config/initializers/omniauth.rb), for the same reason: the app boots and
+# the suite runs green with no embedding API key present. `configured?` reports the truth so callers
+# can say so rather than dead-ending. Nothing here talks to the network until `.call`.
 #
-#   export OPENAI_API_KEY=sk-...
+#   export OPENROUTER_API_KEY=sk-or-v1-...
 #
 # or via `bin/rails credentials:edit`:
 #
-#   openai:
-#     api_key: sk-...
+#   openrouter:
+#     api_key: sk-or-v1-...
 class EmbeddingGenerator
   Error = Class.new(StandardError)
 
-  # Fixed by the `spec_intents.embedding` column and its HNSW index (db/schema.rb). Changing it is
-  # a migration plus a re-embed of every row, never a config change.
-  DIMENSIONS = 1536
+  # `voyageai/voyage-4-lite`'s native width, and the width of every embedding column
+  # (`halfvec(1024)`, db/schema.rb). Changing it is a migration plus a re-embed of every row, never
+  # a config change.
+  DIMENSIONS = 1024
 
   class << self
     attr_writer :provider
@@ -80,12 +72,12 @@ class EmbeddingGenerator
     # Resolved on every call rather than memoized, so a reload in development never leaves a
     # stale autoloaded class behind.
     def provider
-      @provider || LocalProvider
+      @provider || VoyageProvider
     end
 
-    # The guarantees in the contract above belong to the *interface*, not to any one provider —
-    # DIMENSIONS is fixed by the column, so validating inside OpenAIProvider would have guarded
-    # only against a misbehaving OpenAI and not against a misbehaving provider.
+    # The guarantees in the contract above belong to the *interface*, not to the provider —
+    # DIMENSIONS is fixed by the column, so validating inside VoyageProvider would have guarded
+    # only against a misbehaving vendor and not against a misbehaving provider.
     def call(text)
       validate(provider.call(text))
     rescue Error
@@ -99,10 +91,9 @@ class EmbeddingGenerator
     #   same length as `texts`.
     # @raise [Error] if the batch could not be embedded — the same one class {.call} raises.
     #
-    # The batch entry point, added for the identity resolver: a page of changed tests is one
-    # provider request instead of one per test. It buys nothing on the default provider (hashing in
-    # this process, N times, is already the cheapest shape) and it is the whole cost of a changed
-    # 20,000-example suite on `OpenAIProvider`, which pays an HTTPS round trip per `.call`.
+    # The batch entry point, for the identity resolver: a page of changed tests is one provider
+    # request instead of one per test. On a network provider that is the whole cost of a changed
+    # 20,000-example suite, since every `.call` is an HTTPS round trip and a billed request.
     #
     # == The order is the contract
     #
@@ -110,7 +101,7 @@ class EmbeddingGenerator
     # vector to the row whose text they contributed, so an order the provider merely happened to
     # preserve would attach the wrong history to the wrong test — silently, since every vector is a
     # perfectly valid vector. That is why the size check below is an error and not a truncation, and
-    # why `OpenAIProvider#fetch_many` sorts by the response's own `index` rather than trusting the
+    # why `VoyageProvider#fetch_many` sorts by the response's own `index` rather than trusting the
     # order the array arrived in.
     #
     # == Failure is all-or-nothing HERE, and per-row one level up
@@ -148,10 +139,14 @@ class EmbeddingGenerator
     #
     # Optional on the interface, and the default is the CONSERVATIVE one: a provider that does not
     # publish a normalisation makes no promise that two different strings embed alike, so nothing but
-    # byte equality is treated as equivalence. `OpenAIProvider` is that case — it sends the text as
-    # written — and a caller acting on a `false` here does exactly what it did before this method
-    # existed. Only `LocalProvider`, which really does drop punctuation and collapse whitespace
-    # (see its `.normalize`), can answer `true` for two different strings.
+    # byte equality is treated as equivalence.
+    #
+    # ⚠️ `VoyageProvider` is that case — it sends the text as written — so **this answers `false` for
+    # every pair of different strings in production**, and `Ingest::IdentityResolver#note_drift`, the
+    # only caller, is inert. That is correct rather than merely tolerated: under a provider that does
+    # not collapse punctuation, two spellings really are two different vectors and the drift really
+    # is an edit. It is a live path only under a normalising provider, which this application no
+    # longer ships.
     def equivalent?(one, other)
       return true if one == other
       return false unless provider.respond_to?(:normalize)
@@ -167,17 +162,16 @@ class EmbeddingGenerator
     # produce it again is the same thing; this is the provider's own claim about what "the same
     # thing" means for it.
     #
-    # Optional on the interface, with the CONSERVATIVE default — the shape `#equivalent?` and
-    # `#configured?` above use. A provider that does not publish a fingerprint gets **no caching at
-    # all**, not a default key: the two failure modes are not comparable. No caching costs money and
-    # behaves exactly as this application did before the cache existed. A guessed key — the class
-    # name, say — would be *wrong* the moment a provider read a model from the environment, and the
-    # symptom is a vector from the previous model silently attached to a test, which no assertion
-    # anywhere would catch. So the absence of an answer is treated as a refusal, and refusal is
-    # free.
+    # Optional on the interface, with the CONSERVATIVE default. A provider that does not publish a
+    # fingerprint gets **no caching at all**, not a default key: the two failure modes are not
+    # comparable. No caching costs money and behaves exactly as this application did before the
+    # cache existed. A guessed key — the class name, say — would be *wrong* the moment a provider
+    # read a model from the environment, and the symptom is a vector from the previous model
+    # silently attached to a test, which no assertion anywhere would catch. So the absence of an
+    # answer is treated as a refusal, and refusal is free.
     #
     # ⚠️ **Computed on every call and never memoized**, for the same reason `.provider` is resolved
-    # on every call. `OpenAIProvider.model` reads `ENV["SPECGUARD_EMBEDDING_MODEL"]` each time it is
+    # on every call. `VoyageProvider.model` reads `ENV["SPECGUARD_EMBEDDING_MODEL"]` each time it is
     # asked, so a fingerprint captured once at boot would keep naming the model the process started
     # with and would go on authorising cache hits from it after the deployment had moved. This is a
     # correctness requirement, not a style preference: a memoized fingerprint is exactly the
@@ -195,9 +189,9 @@ class EmbeddingGenerator
       provider.fingerprint.presence
     end
 
-    # Delegated, so a provider needing no credentials at all (a local Ollama embedder) reports the
-    # truth instead of OpenAI's answer. A provider that does not implement the predicate has
-    # nothing to configure, so it is ready by definition.
+    # Delegated, so a provider needing no credentials at all reports the truth instead of
+    # VoyageProvider's answer. A provider that does not implement the predicate has nothing to
+    # configure, so it is ready by definition.
     def configured?
       provider.respond_to?(:configured?) ? provider.configured? : true
     end
@@ -232,8 +226,8 @@ class EmbeddingGenerator
       vector.map do |value|
         Float(value).tap do |float|
           # pgvector rejects these at INSERT ("NaN not allowed in vector"), so without this the
-          # failure would surface in slice 3 as ActiveRecord::StatementInvalid — the one remaining
-          # way for something to go wrong and not arrive as an Error.
+          # failure would surface as ActiveRecord::StatementInvalid — the one remaining way for
+          # something to go wrong and not arrive as an Error.
           unless float.finite?
             raise Error, "embedding provider returned a non-finite value (#{float})"
           end
@@ -244,199 +238,52 @@ class EmbeddingGenerator
     end
   end
 
-  # The default provider: feature hashing, in-process, in pure Ruby. No API key, no network call,
-  # no model to host, no per-embedding cost. Ported from the same approach yatfa has run in
-  # production; the shape below is that algorithm, not a novel one.
+  # The provider: `voyageai/voyage-4-lite`, reached through OpenRouter's OpenAI-compatible
+  # `/v1/embeddings` endpoint.
   #
-  # ## How a string becomes 1536 floats
+  # ## Why this model
   #
-  #   1. Downcase and split into alphanumeric word tokens, then rejoin with single spaces. This
-  #      drops punctuation and collapses whitespace, so "Order#checkout" and "Order  checkout"
-  #      embed identically.
-  #   2. Take two kinds of feature from that: the words themselves, and every 3-character n-gram of
-  #      the rejoined string. N-grams are what make the vector tolerate a suffix, a plural or a
-  #      typo — "expired" and "expires" share four of their five trigrams.
-  #   3. SHA-256 each feature. The first 8 bytes pick the dimension it lands in; a *different* 4
-  #      bytes pick a signed weight, so index and weight are independent rather than two views of
-  #      the same number.
-  #   4. Accumulate — several features legitimately land in the same dimension (see the collision
-  #      audit below) and their weights sum.
-  #   5. L2-normalise, so pgvector's `<=>` cosine operator ranks sensibly and every vector is
-  #      directly comparable to every other.
+  # It returns 1024 dimensions natively — no `dimensions` parameter, no Matryoshka truncation, no
+  # room for a deployment to ask for a width the column cannot hold. At $0.02 per million tokens a
+  # full 20,000-example suite embeds for well under a cent, which is what makes a paid provider the
+  # default at all.
   #
-  # Signed weights are the load-bearing part of step 3: with random signs, two colliding features
-  # cancel as often as they reinforce, so a collision perturbs an inner product instead of
-  # inflating it. Weights that were all positive would make every collision a false match.
+  # ## Why through OpenRouter rather than Voyage directly
   #
-  # ## Determinism
+  # One account and one key for whatever this application ends up calling. The cost is that
+  # OpenRouter does not list embedding models in its `/api/v1/models` catalogue, so the model name
+  # below is not discoverable from the API and is pinned here instead — if it is ever retired, this
+  # provider starts raising rather than quietly falling back to something of a different width.
+  # There is no fallback by design; see the class-level note above.
   #
-  # Same text in, same vector out. Nothing here reads a seed, a clock or a random source: the vector
-  # is a pure function of the string, so it is byte-identical across examples, processes, restarts
-  # and machines running the same platform. That is what lets the identity half of the product work
-  # at all — an unchanged test name embeds to an unchanged vector between two runs a week apart.
+  # ## HTTP client
   #
-  # The claim stops at the platform boundary, and deliberately. Every step up to the weight is exact
-  # integer work — SHA-256, byte slicing, modulo — but `Math.sin` delegates to the host's libm, and
-  # glibc, musl and Darwin are not guaranteed to agree in the last ULP for the same double. So a
-  # change of C library or CPU architecture (a base image moving from glibc to musl, say) may perturb
-  # the low bits of a weight even though the algorithm is unchanged. Within one deployment platform
-  # the output is exact and reproducible; *across* platforms, treat it as reproducible to within
-  # floating-point rounding rather than bit-for-bit.
-  #
-  # One deviation from a literal reading of the reference, and the reason for it: the weight is
-  # `sin` of a hash-derived *phase in [0, 2π)*, not `sin` of the raw hash. `Math.sin` of a number
-  # the size of a SHA-256 digest is not portable — argument reduction that far out is
-  # libm-specific, and a 256-bit integer does not survive `to_f` at all (it is `Infinity`). Keeping
-  # the argument inside one period preserves the property that matters — a deterministic,
-  # pseudo-random, signed weight per feature — and makes it computable at all, to within the
-  # platform bound stated above.
-  #
-  # ## What this measures, and what it does not
-  #
-  # **Lexical overlap, not meaning.** Two tests whose names share vocabulary or character n-grams
-  # match; two tests describing the same behaviour in entirely different words do not. "rejects
-  # checkout on an expired card" and "rejects checkout when the card is expired" cluster. "returns
-  # 402 payment required" and "rejects the transaction" do not. This is a property of the engine,
-  # not a defect in it, and it lands differently on the product's two halves: test *identity*
-  # (same name → same vector) is served exactly, while duplicate *clustering* only ever sees the
-  # duplicates that were phrased alike. Do not read a cosine from this provider as a claim about
-  # semantics.
-  #
-  # ## Collisions
-  #
-  # 1536 buckets is a small target for an unbounded feature space, so distinct features do land on
-  # the same dimension. `script/embedding_collision_audit.rb` measures what that costs at this
-  # product's scale — 20,000 real RSpec example names from a single codebase — printing the corpus
-  # it used, the method and the result; ticket SPGD-252 records the run it was measured on. Read
-  # that result before choosing any similarity threshold; it is the evidence a threshold should be
-  # picked from, and the script re-derives it on whatever corpus you point it at.
-  class LocalProvider
-    NGRAM_SIZE = 3
-
-    # The hash-to-phase resolution: 2**32 distinct weights per feature, taken from bytes 8..11 of
-    # the digest.
-    PHASE_STEPS = 2**32
-    PHASE_STEP_RADIANS = (2 * Math::PI) / PHASE_STEPS
-
-    WORD = /[[:alnum:]]+/
-
-    class << self
-      def call(text)
-        new(text).call
-      end
-
-      # The form step 1 above reduces a text to, and therefore the ONLY thing the vector is a
-      # function of: `#features` reads its words and its n-grams off this string and nothing else
-      # touches `@text`. So two texts with the same normalised form embed identically — not
-      # approximately, not at cosine 1.0 within tolerance, but to the same array of floats.
-      #
-      # Public because that equality is a fact callers need and cannot safely re-derive:
-      # `EmbeddingGenerator.equivalent?` is the interface-level question and this is this provider's
-      # answer to it. A second copy of the tokenisation elsewhere would drift from this one and the
-      # symptom would be an identity quietly re-pointed at text that does not embed the same.
-      def normalize(text)
-        text.to_s.downcase.scan(WORD).join(" ")
-      end
-
-      # Nothing to configure — that is the entire point of this provider. Stated rather than
-      # inherited from the interface's default so that "needs no credentials" is legible here,
-      # where someone comparing the two providers is looking.
-      def configured?
-        true
-      end
-
-      # **No `fingerprint`, and its absence is the decision.** `EmbeddingGenerator.fingerprint`
-      # reads a provider that does not publish one as a refusal to be cached, which is the right
-      # answer for this one: the vector is a hash computed in this process, so a cache hit would
-      # replace arithmetic with a database round trip and a table write. It would be slower than
-      # the thing it is caching, and it would fill a deployment-global table with entries that can
-      # never repay their own storage.
-      #
-      # It is stated as a comment rather than a method because there is no method to write — but it
-      # is stated, because "the default provider is uncached" looks like an oversight otherwise,
-      # and because it is what keeps this application's shipped behaviour byte-identical to what it
-      # was before the cache existed. `OpenAIProvider`, where a repeat embed is a billed HTTPS
-      # round trip, is the case the cache exists for and the one that publishes a key.
-    end
-
-    def initialize(text)
-      @text = text.to_s
-    end
-
-    # Returns the raw vector. Width and element types are the interface's business
-    # (EmbeddingGenerator.validate) so that every provider is held to them, not just this one.
-    def call
-      vector = Array.new(DIMENSIONS, 0.0)
-
-      features.each do |feature|
-        index, phase = Digest::SHA256.digest(feature).unpack("Q>N")
-        vector[index % DIMENSIONS] += Math.sin(phase * PHASE_STEP_RADIANS)
-      end
-
-      unit_normalise(vector)
-    end
-
-    # The features this text hashes into: its words, then its 3-character n-grams, namespaced
-    # apart so the word "the" and the trigram "the" are not the same feature counted twice.
-    #
-    # Public because `script/embedding_collision_audit.rb` measures the *shipped* tokenisation
-    # rather than a second copy of it that could quietly drift from this one. Nothing in the
-    # request path calls it.
-    def features
-      words.map { |word| "w:#{word}" } + ngrams.map { |ngram| "g:#{ngram}" }
-    end
-
-    private
-
-    def words
-      normalized.split(" ")
-    end
-
-    def ngrams
-      return [] if normalized.length < NGRAM_SIZE
-
-      (0..normalized.length - NGRAM_SIZE).map { |offset| normalized[offset, NGRAM_SIZE] }
-    end
-
-    # Both feature kinds are read off the SAME normalised string rather than each re-deriving it,
-    # which is what makes `.normalize` the whole of what this vector depends on rather than a third
-    # spelling of the tokenisation that happens to agree with the other two today.
-    def normalized
-      @normalized ||= self.class.normalize(@text)
-    end
-
-    # A text with no alphanumeric content has no features and so no direction to point in. Zero is
-    # the honest answer: it is finite, it is the right width, and pgvector's cosine operator
-    # returns NaN distance against it rather than a confident wrong neighbour.
-    def unit_normalise(vector)
-      magnitude = Math.sqrt(vector.sum { |value| value * value })
-      return vector if magnitude.zero?
-
-      vector.map { |value| value / magnitude }
-    end
-  end
-
-  # The other implementation: OpenAI's embeddings endpoint. Costs money and requires a key, so it
-  # is not the default — install it explicitly (see "Which provider is the default" above).
-  class OpenAIProvider
+  # Faraday directly. The request is one JSON POST and one JSON response, which is not enough to
+  # justify a vendor SDK, and the SDK this used to hold was OpenAI's — a dependency named for a
+  # vendor this application no longer calls.
+  class VoyageProvider
     PLACEHOLDER = "specguard-embeddings-not-configured"
-    DEFAULT_MODEL = "text-embedding-3-small" # 1536 dimensions — matches EmbeddingGenerator::DIMENSIONS
+    DEFAULT_MODEL = "voyageai/voyage-4-lite" # 1024 dimensions — matches EmbeddingGenerator::DIMENSIONS
+    ENDPOINT = "https://openrouter.ai/api/v1/embeddings"
+    # Long enough for a full page of texts in one request, short enough that a hung upstream fails
+    # the job rather than holding a Solid Queue worker for the rest of the day.
+    TIMEOUT_SECONDS = 60
+    OPEN_TIMEOUT_SECONDS = 10
 
     class << self
       def call(text)
         new(text).call
       end
 
-      # The one place batching is worth implementing: OpenAI's embeddings endpoint takes an ARRAY of
-      # inputs in a single request natively, so a page of 500 changed tests is one HTTPS round trip
-      # and one billed request rather than 500 of each. `ruby-openai` forwards the parameters hash
-      # verbatim, so this is the same call with a different `input`.
+      # The one place batching is worth implementing: the endpoint takes an ARRAY of inputs in a
+      # single request natively, so a page of 500 changed tests is one HTTPS round trip and one
+      # billed request rather than 500 of each.
       def embed_many(texts)
         new(texts).call_many
       end
 
       def api_key
-        ENV["OPENAI_API_KEY"].presence || credential(:api_key) || PLACEHOLDER
+        ENV["OPENROUTER_API_KEY"].presence || credential(:api_key) || PLACEHOLDER
       end
 
       def model
@@ -447,30 +294,30 @@ class EmbeddingGenerator
         api_key != PLACEHOLDER
       end
 
-      # What this provider's vectors are a function of: the vendor and the model, and nothing else.
-      # `text-embedding-3-small` and `text-embedding-3-large` are different functions of the same
-      # text, so `SPECGUARD_EMBEDDING_MODEL` moving must make every entry written under the old one
-      # unreadable — and does, because the key stops matching. Read through `.model` rather than
-      # from the constant, so an environment override is included; asked per call rather than
-      # memoized, because `.model` itself is (see `EmbeddingGenerator.fingerprint`).
+      # What this provider's vectors are a function of: the gateway and the model, and nothing else.
+      # Two models are different functions of the same text, so `SPECGUARD_EMBEDDING_MODEL` moving
+      # must make every entry written under the old one unreadable — and does, because the key stops
+      # matching. Read through `.model` rather than from the constant, so an environment override is
+      # included; asked per call rather than memoized, because `.model` itself is (see
+      # `EmbeddingGenerator.fingerprint`).
       #
       # **Not the API key**, deliberately. Two deployments holding different keys against the same
       # model get the same vectors for the same text, so including the key would partition the
       # cache by something that does not change its contents — and would write a credential-derived
-      # value into a database column, which is a leak with no upside. `PLACEHOLDER` is likewise not
-      # consulted: an unconfigured provider raises at `#call` long before anything is cached, so
-      # there is nothing to protect against here.
+      # value into a database column, which is a leak with no upside.
       #
-      # Prefixed with the vendor so that a future provider defaulting to the same model name cannot
-      # collide with this one's entries.
+      # Prefixed with the gateway so that a future provider defaulting to the same model name cannot
+      # collide with this one's entries. It also retires every `openai:`-prefixed entry the previous
+      # provider wrote, which is the correct outcome: those are 1536-wide vectors from a different
+      # model and nothing may read them again.
       def fingerprint
-        "openai:#{model}"
+        "openrouter:#{model}"
       end
 
       private
 
       def credential(key)
-        Rails.application.credentials.dig(:openai, key).presence
+        Rails.application.credentials.dig(:openrouter, key).presence
       rescue StandardError
         nil
       end
@@ -484,7 +331,7 @@ class EmbeddingGenerator
     end
 
     # Returns the raw vector. Width and element types are the interface's business
-    # (EmbeddingGenerator.validate) so that every provider is held to them, not just this one.
+    # (EmbeddingGenerator.validate) so that the provider is held to them rather than trusted on them.
     def call
       require_configuration
 
@@ -505,15 +352,12 @@ class EmbeddingGenerator
     def require_configuration
       return if self.class.configured?
 
-      raise Error, "embedding provider is not configured — set OPENAI_API_KEY (or credentials openai.api_key)"
+      raise Error, "embedding provider is not configured — set OPENROUTER_API_KEY " \
+                   "(or credentials openrouter.api_key)"
     end
 
     def fetch
       embeddings.dig("data", 0, "embedding")
-    rescue Faraday::Error, ::OpenAI::Error => e
-      # A narrower rescue than the interface's, kept for the better message. Deliberately not
-      # re-raising the transport exception: callers rescue EmbeddingGenerator::Error.
-      raise Error, "embedding provider failed: #{e.message}"
     end
 
     # **Sorted by the response's own `index`, not read in arrival order.** The endpoint documents
@@ -529,16 +373,50 @@ class EmbeddingGenerator
 
       rows.each_with_index.sort_by { |row, position| row["index"] || position }
           .map { |row, _position| row["embedding"] }
-    rescue Faraday::Error, ::OpenAI::Error => e
+    end
+
+    # One POST, and every way it can fail arrives as an Error.
+    #
+    # The status check is explicit because Faraday does not raise on 4xx/5xx unless the
+    # `raise_error` middleware is installed, and a 429 whose body has no `data` key would otherwise
+    # surface as the interface's "returned no vector (got NilClass)" — true, but not the reason.
+    # The upstream's own message is carried through instead, since a quota or a retired model is
+    # something the operator has to read.
+    def embeddings
+      response = connection.post(ENDPOINT) do |request|
+        request.body = { model: self.class.model, input: @input }
+      end
+
+      unless response.success?
+        raise Error, "embedding provider failed: HTTP #{response.status} #{error_message(response)}"
+      end
+
+      response.body
+    rescue Faraday::Error => e
+      # A narrower rescue than the interface's, kept for the better message. Deliberately not
+      # re-raising the transport exception: callers rescue EmbeddingGenerator::Error.
       raise Error, "embedding provider failed: #{e.message}"
     end
 
-    def embeddings
-      client.embeddings(parameters: { model: self.class.model, input: @input })
+    # OpenRouter reports failures as `{"error": {"message": …}}`; a gateway between us and it may
+    # answer with HTML instead, so the body is only read as a hash when it is one and the raw body
+    # is the fallback rather than an exception on top of an exception.
+    def error_message(response)
+      body = response.body
+
+      return body.dig("error", "message") || body.to_s if body.is_a?(Hash)
+
+      body.to_s.truncate(200)
     end
 
-    def client
-      ::OpenAI::Client.new(access_token: self.class.api_key)
+    def connection
+      Faraday.new do |faraday|
+        faraday.request :json
+        faraday.response :json
+        faraday.headers["Authorization"] = "Bearer #{self.class.api_key}"
+        faraday.options.timeout = TIMEOUT_SECONDS
+        faraday.options.open_timeout = OPEN_TIMEOUT_SECONDS
+      end
     end
   end
 end

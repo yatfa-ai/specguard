@@ -34,7 +34,7 @@ class EmbeddingCacheEntry < ApplicationRecord
   # How long a cached vector may be served before the provider is asked again.
   #
   # **What this is a bound on is provider drift the fingerprint cannot see.** A fingerprint is a
-  # claim about what will embed the text — `"openai:text-embedding-3-small"` — and it moves when
+  # claim about what will embed the text — `"openrouter:voyageai/voyage-4-lite"` — and it moves when
   # the provider or the configured model moves. It does NOT move when a vendor changes what a
   # stable model name returns underneath it, which vendors do. Without a window, an entry written
   # under such a name is served forever and the drift is permanent and invisible; with one, the
@@ -98,14 +98,23 @@ class EmbeddingCacheEntry < ApplicationRecord
   # `where(text_digest: [])` compiles to `1=0` and Rails answers it without a round trip, so an
   # empty page costs nothing and needs no guard — the same property `#digest_index` relies on.
   #
-  # == A cached vector is float4, and so is every vector this application keeps
+  # == A cached vector is float16, and so is every vector this application keeps
   #
-  # `vector(1536)` is float4 per element, so what comes back here is the provider's float64 answer
-  # rounded to single precision — `0.9993489583…` returns as `0.99934894`. That is NOT a difference
-  # between the cached path and the fresh one in any way a caller can observe, because the fresh
-  # vector's only destinations are the same precision: `spec_identities.embedding` is `vector(1536)`
-  # too, and the cosine comparison in `#nearest` runs against rows already stored at float4. The
-  # relative error is ~1e-7 against thresholds of 0.95 and 0.88. Stated because "the cache returns
+  # `halfvec(1024)` is IEEE half precision per element, so what comes back here is the provider's
+  # float64 answer rounded to ~3 significant decimal digits — `0.9993489583…` returns as `0.99951`.
+  # That is NOT a difference between the cached path and the fresh one in any way a caller can
+  # observe, because the fresh vector's only destinations are the same precision:
+  # `spec_identities.embedding` is `halfvec(1024)` too, and the cosine comparison in `#nearest` runs
+  # against rows already stored at half precision.
+  #
+  # ⚠️ The relative error is ~1e-3, not the ~1e-7 this column carried as `vector(1536)` — four
+  # orders of magnitude coarser, and worth stating rather than inheriting the old sentence. It is
+  # still far below what a threshold of 0.95 or 0.88 can notice, because the error is on the
+  # ELEMENTS and a cosine over 1024 of them averages it down rather than accumulating it. What it
+  # does rule out is reading a stored cosine as exact: a comparison against 1.0 was already the
+  # wrong instrument (see `EmbeddingGenerator.equivalent?`) and at this precision it is hopeless.
+  #
+  # Stated because "the cache returns
   # exactly what the provider returned" is the obvious assumption and it is false — a spec asserting
   # byte-equality of a cached vector against a freshly generated one would fail, correctly, and the
   # thing to fix would be the spec.

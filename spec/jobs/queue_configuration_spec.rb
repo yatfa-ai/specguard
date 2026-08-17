@@ -48,8 +48,8 @@ RSpec.describe "Queue configuration" do
       schema = Rails.root.join("db/schema.rb").read
 
       expect(schema).to include('enable_extension "vector"')
-      expect(schema).to include('t.vector "embedding", limit: 1536')
-      expect(schema).to include('name: "index_spec_intents_on_embedding", opclass: :vector_cosine_ops, using: :hnsw')
+      expect(schema).to include('t.halfvec "embedding", limit: 1024')
+      expect(schema).to include('name: "index_spec_intents_on_embedding", opclass: :halfvec_cosine_ops, using: :hnsw')
       expect(schema).to include('name: "index_spec_intents_on_location", unique: true')
     end
   end

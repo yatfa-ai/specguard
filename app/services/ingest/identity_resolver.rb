@@ -99,9 +99,9 @@ module Ingest
   # The fourth is the EMBED, and it is the one that is entirely about which provider is installed:
   # the path a CHANGED suite takes, which no equality can shortcut. {#page_embeddings} asks for a
   # page's worth of vectors in ONE provider request, so a changed 20,000-example suite is ~40 round
-  # trips rather than 20,000 — free either way on the shipped `LocalProvider`, which is the whole
-  # reason it went last, and the difference between a usable deployment and an unusable one for
-  # anyone who installs `EmbeddingGenerator::OpenAIProvider`. CACHING those vectors was the rest of
+  # trips rather than 20,000 — which, on the network provider this application ships, is the
+  # difference between a usable deployment and an unusable one, and the reason it went last rather
+  # than never. CACHING those vectors was the rest of
   # that axis and it is now here too — {EmbeddingCacheEntry} for the store (SPGD-420) and
   # {#reclaim_expired_cache} for the half that bounds what it costs to keep (SPGD-428), which is
   # what makes it a store-and-invalidate answer rather than only the store. Also the ANN recall
@@ -239,7 +239,7 @@ module Ingest
     # a round trip per upgrade otherwise.
     #
     # Still no record and still no vector, which is {#digest_index}'s standing rule — `signal_source`
-    # is a short string, and loading identities to read one of their columns would put the 1536
+    # is a short string, and loading identities to read one of their columns would put the 1024
     # element embeddings that method exists to avoid touching straight into memory.
     HeldIdentity = Struct.new(:id, :source) do
       # Mirrors {SpecIdentity#from_name?} over the plucked value rather than over a record. The two
@@ -827,11 +827,10 @@ module Ingest
     # identical-text shortcut removes for an UNCHANGED suite and does nothing for a changed one. Any
     # first run, any rename, any delivery whose text is not byte-identical to a row already held
     # still reached the provider once per example — 20,000 sequential HTTPS round trips on a changed
-    # 20,000-example suite for a deployment that installed `EmbeddingGenerator::OpenAIProvider`,
-    # against an endpoint that takes the whole array in one request.
+    # 20,000-example suite, against an endpoint that takes the whole array in one request.
     #
-    # It is free on the shipped provider and that is not a reason to leave it: the provider is
-    # swappable by design and this is the seam at which the swap becomes affordable.
+    # There is no provider on which that is free: `EmbeddingGenerator::VoyageProvider` is the only
+    # one this application ships, and every `.call` on it is a billed request over the network.
     #
     # == The cost is per page and the DECISION is still per row
     #
@@ -874,8 +873,8 @@ module Ingest
     # nil exactly as it was.
     #
     # `texts - cached.keys` is the whole of the change to what gets asked. When the provider
-    # publishes no fingerprint — which every provider this repository ships does except
-    # `OpenAIProvider`, and which the whole test suite's provider does — `cached` is empty, the
+    # publishes no fingerprint — which the whole test suite's provider does, and which the shipped
+    # `VoyageProvider` does not — `cached` is empty, the
     # subtraction is a no-op, and this method is byte-for-byte the behaviour it had before.
     def page_embeddings(observations)
       texts = unheld_texts(observations)
@@ -895,7 +894,7 @@ module Ingest
     # call and memoizing it here would reintroduce exactly the staleness that contract exists to
     # prevent.
     #
-    # Rescued because it runs provider code: `OpenAIProvider.fingerprint` reads the environment
+    # Rescued because it runs provider code: `VoyageProvider.fingerprint` reads the environment
     # today and a future provider might read a config file or a socket. Whatever it does, a
     # provider that cannot say what it is must cost this ingest nothing more than the caching it
     # declines to authorise. Nil is the same answer as "no fingerprint published", and the caller
@@ -1022,7 +1021,7 @@ module Ingest
     # page, every page, and a full page of single-text requests each time. At {BATCH_SIZE} = 500 a
     # first or fully-changed run at the roadmap's 20,000-example design point is 40 pages, so a
     # provider that was simply down cost 40 batch + 20,000 single requests, 20,040 `warn` lines,
-    # 20,000 {#record_resolve_failure} `UPDATE`s — and zero identities. Under `OpenAIProvider`, where
+    # 20,000 {#record_resolve_failure} `UPDATE`s — and zero identities. Under `VoyageProvider`, where
     # every `.call` is a serial HTTPS round trip, that is hours of a three-thread pool spent inside a
     # job holding a six-hour run-scoped semaphore, with every other shard's job queued behind it.
     # {RETRY_SWEEP_LIMIT} bounds how much failure a delivery INHERITS; nothing bounded how much one
@@ -1398,14 +1397,11 @@ module Ingest
     # 20,000-example suite was therefore 20,000 embeddings and 20,000 approximate-index lookups to
     # rediscover 20,000 rows that this equality names outright.
     #
-    # The embed costs no money on the shipped provider and it is not free:
-    # `EmbeddingGenerator::LocalProvider` SHA-256s every word and every 3-character n-gram — roughly
-    # 68 digests for a 60-character description, ~1.4M per ingest at the design point, on every
-    # ingest forever. And the provider is swappable by design (`EmbeddingGenerator.provider=`), so a
-    # deployment that installed `OpenAIProvider` pays 20,000 billed API calls per unchanged
-    # re-ingest. It also narrows {#nearest}'s recall exposure by not reaching the index at all on
-    # the identical-text case — which does not settle the measurement that method hands to SPGD-72,
-    # only shrinks what rides on it.
+    # The embed is a billed HTTPS round trip on the provider this application ships, so an unchanged
+    # re-ingest that skipped this equality would pay 20,000 of them to rediscover 20,000 rows it
+    # already holds — every ingest, forever. It also narrows {#nearest}'s recall exposure by not
+    # reaching the index at all on the identical-text case — which does not settle the measurement
+    # that method hands to SPGD-72, only shrinks what rides on it.
     #
     # That removed the WORK. Removing the round trips is {#digest_index}, and it is the same
     # optimisation finished rather than a second one: the equality that answered a row for free still
@@ -1414,12 +1410,19 @@ module Ingest
     #
     # == This is a SHORTCUT and never THE lookup
     #
-    # **The digest is over the raw text; the embedding is over a normalized form of it.**
-    # `LocalProvider` downcases, splits on `[[:alnum:]]+` and rejoins with single spaces, so
-    # `"Order#checkout"` and `"Order  checkout"` embed *identically* while their SHA-256 digests
-    # differ. A miss here is therefore not evidence that the test is new — it is evidence that the
-    # cheap question cannot answer this one — and {#identity_for} falls through to today's path
-    # completely unchanged.
+    # **The digest is exact; the embedding is not.** SHA-256 answers "these are the same bytes",
+    # and two descriptions differing only by a comma or a doubled space are not the same bytes —
+    # while the vectors they embed to sit far above `SpecIdentity::MATCH_SIMILARITY`, because a
+    # comma is not what a text is about. A miss here is therefore not evidence that the test is new
+    # — it is evidence that the cheap question cannot answer this one — and {#identity_for} falls
+    # through to today's path completely unchanged.
+    #
+    # ⚠️ It was a *stronger* statement under the feature-hashing provider this application shipped
+    # until 2026-08-17: that one embedded a downcased, punctuation-stripped form, so those two
+    # spellings embedded *identically* rather than merely closely. `VoyageProvider` sends the text
+    # as written, so the gap between the digest and the vector is now a matter of degree rather than
+    # of kind — which changes nothing here, since this was always a shortcut past the similarity
+    # lookup and never a substitute for it.
     #
     # Reading this as the lookup and the embed as an insert-only fallback is the tempting shape and
     # it is wrong: it would start a second history for every test whose description gained a comma,
@@ -1429,10 +1432,13 @@ module Ingest
     # absent from the page's map is absent for the same reason it missed the per-row `find_by`, and
     # falls through to the same place.
     #
-    # That miss is now paid ONCE per drift rather than on every ingest: {#note_drift} re-points the
-    # identity at the spelling that was actually presented, so the run after the drift asks this
-    # equality and gets its answer for free. The fallthrough is unchanged — what changed is that the
-    # row stops needing it.
+    # ⚠️ Under a normalising provider that miss was paid ONCE per drift rather than on every ingest:
+    # {#note_drift} re-pointed the identity at the spelling actually presented, so the run after the
+    # drift asked this equality and got its answer for free. `VoyageProvider` publishes no
+    # normalisation, so `EmbeddingGenerator.equivalent?` answers `false` for every pair of different
+    # strings and {#note_drift} never fires — the miss is paid on every ingest again, and is settled
+    # by {#nearest} rather than by this equality. The fallthrough is unchanged; what changed is how
+    # often it is taken.
     def identical_text(signal)
       @digest_index[SpecIdentity.digest_for(signal.text)]&.id
     end
@@ -1555,8 +1561,8 @@ module Ingest
     # == The projection is narrowed, and it is the four columns the callers actually read
     #
     # `neighbor` decides its select list as `select_values.any? ? [] : column_names` — so a scope
-    # carrying no `select` gets EVERY column, `embedding` among them, and each hit ships a 1536
-    # element pgvector back to materialise 1536 Ruby `Float`s that nothing reads. This is the
+    # carrying no `select` gets EVERY column, `embedding` among them, and each hit ships a 1024
+    # element pgvector back to materialise 1024 Ruby `Float`s that nothing reads. This is the
     # per-row path: an unchanged re-ingest never reaches it (the digest shortcut returns first), but
     # a first run or a changed suite at the 20,000-example design point pays it 20,000 times, inside
     # a job holding a run-scoped semaphore. It is the same prohibition {#digest_index},
@@ -1569,16 +1575,22 @@ module Ingest
     # nothing here. A fifth reader would raise `ActiveModel::MissingAttributeError` on the row
     # rather than fail quietly, so this list stays honest by being too narrow and not too wide.
     #
-    # == `order(:id)`: exact ties are the NORMAL case under the shipped provider
+    # == `order(:id)`: exact ties, and why the tiebreak stays
     #
     # `neighbor` calls `reorder`, which replaces the order with distance alone, and `first` on an
-    # already-ordered relation adds no key of its own. {EmbeddingGenerator::LocalProvider} embeds a
-    # normalised form, so two spellings differing only in punctuation or whitespace embed to the
-    # same array of floats — not approximately, byte-identically — and this class already asserts
-    # such rows can coexist in one repository ({#refresh}'s rescue). Once two do, a third equivalent
-    # observation matches BOTH at distance 0 and Postgres is free to emit either first: one test's
-    # durations split across two identities, and {#note_drift} converges on a different row each
-    # pass. Rails appends to the gem's `reorder`, so this is the second key that ranking never had.
+    # already-ordered relation adds no key of its own. Two identities can hold texts that embed to
+    # the same array of floats — byte-identically, not approximately — and this class already
+    # asserts such rows can coexist in one repository ({#refresh}'s rescue). Once two do, a third
+    # equivalent observation matches BOTH at distance 0 and Postgres is free to emit either first:
+    # one test's durations split across two identities, and {#note_drift} converges on a different
+    # row each pass. Rails appends to the gem's `reorder`, so this is the second key that ranking
+    # never had.
+    #
+    # ⚠️ This was the NORMAL case under the feature-hashing provider retired on 2026-08-17, which
+    # embedded a downcased, punctuation-stripped form and so collapsed whole families of spellings
+    # onto one vector. `VoyageProvider` sends the text as written, which makes an exact tie rare
+    # rather than routine — and rare is not never, so the tiebreak is not removed. A
+    # non-deterministic winner is the kind of bug that reproduces once a quarter.
     # {#failed_embed_backlog} and {#unattempted_embed_backlog} carry an explicit tiebreak for the
     # same REASON — cite them for that and not for the shape, because their cost is nothing like
     # this one's. Inert under a provider that publishes no normalisation, where the two vectors
@@ -1596,7 +1608,7 @@ module Ingest
     #
     # Postgres can no longer take the ordering straight off the HNSW scan, so it sorts over the
     # candidates the scan drains rather than stopping at the first row that clears the threshold.
-    # The cost is bounded, does not grow with the table, and is far smaller than the 20,000 x 1536
+    # The cost is bounded, does not grow with the table, and is far smaller than the 20,000 x 1024
     # `Float` materialisations the narrowing above removes — it is **accepted deliberately**. What
     # it scales with is `ef_search`, which is **SPGD-72's** to set: this key makes that ticket's
     # likeliest move — raising `ef_search` — dearer than it was before, because the incremental sort
@@ -1607,10 +1619,18 @@ module Ingest
     # On PG 17.10 / pgvector 0.8.0 at stock `random_page_cost` 4, the planner did not choose
     # `index_spec_identities_on_embedding` for ANY shape of this query — not with both filters, not
     # with one, not for a bare `ORDER BY embedding <=> $1 LIMIT 1`; `pg_stat_user_indexes.idx_scan`
-    # for that 156 MB index stayed at **0**. The reason is TOAST: a 1536-float vector lives out of
+    # for that 156 MB index stayed at **0**. The reason is TOAST: a 1536-float `vector` lives out of
     # line, so the heap for 20,000 rows is ~5 MB against ~160 MB of TOAST, and a Seq Scan costs out
     # at ~900 while the HNSW scan starts at ~2341. The planner takes the "cheap" seq scan and then
     # pays a detoast per row — 145 ms/query actual, against 0.6-1.1 ms for the forced ANN plan.
+    #
+    # ⚠️ **That measurement is on the column this table no longer has.** The 2026-08-17 migration
+    # moved `embedding` to `halfvec(1024)`, which is 2,052 bytes per datum against 6,148 — still
+    # over `TOAST_TUPLE_THRESHOLD` and so still out of line, but only just, and the TOAST that
+    # drives the finding above shrinks by about two thirds. Both sides of the comparison move: the
+    # seq scan's detoast gets cheaper, and so does every HNSW hop. **Which plan the planner picks
+    # after the migration has NOT been re-measured** — it is the same question SPGD-72 already owns,
+    # asked of a column three times smaller.
     # So on this configuration the tiebreak is free (146.95 vs 146.60 ms/query, inside noise)
     # because the ANN plan it burdens never runs. Do not read that as permission to relax the key:
     # planner settings, PG version and data shape all move this, the cost above lands the moment the
@@ -1652,7 +1672,7 @@ module Ingest
     # `EmbeddingGenerator.equivalent?` and not a comparison against a cosine of 1.0: the provider
     # knows which of its inputs collapse together, and a float distance is the wrong instrument for
     # an exact question. A provider that publishes no normalisation answers `false` for every pair
-    # of different strings, so this whole path is inert under `OpenAIProvider` — correctly, because
+    # of different strings, so this whole path is inert under `VoyageProvider` — correctly, because
     # there the two spellings really are two different vectors and the drift really is an edit.
     #
     # == Same source only
@@ -1695,11 +1715,18 @@ module Ingest
     # would make annotating a test change nothing"* — so on the annotation run the text representing
     # this test changes from its `full_description` to its triple, and the row it already has is held
     # under a string no run will ever present again. {#identical_text} asks for the triple's digest
-    # and misses; {#nearest} misses too, and not by a margin a threshold could close: `LocalProvider`
-    # is lexical by construction, and this repository's own `annotated_spec` fixture — a triple that
-    # strictly CONTAINS the whole name — scores 0.8614 against a 0.95 bar. Lowering the bar that far
+    # and misses; {#nearest} misses too, and not by a margin a threshold could close: this
+    # repository's own `annotated_spec` fixture — a triple that strictly CONTAINS the whole name —
+    # scored 0.8614 against a 0.95 bar on the lexical provider retired on 2026-08-17. Lowering the
+    # bar that far
     # would merge tests that merely read alike, which the resolver spec pins separately. So this is
     # not similarity tuned too tight; it is a question similarity cannot answer.
+    #
+    # ⚠️ That 0.8614 has NOT been re-measured on `VoyageProvider`, and a semantic model may well
+    # score a containing triple above 0.95 — see `SpecIdentity::MATCH_SIMILARITY`, which is
+    # uncalibrated for the current provider. This path does not depend on the number: it exists so
+    # that the transition is answered by evidence rather than by a distance, and it stays correct
+    # whichever side of the bar similarity happens to land on.
     #
     # It does not have to. The evidence is already on the row: {Ingest::ObservationRecorder} writes
     # `name` for every example, so at the moment of the miss this resolver is holding the exact
@@ -1803,7 +1830,7 @@ module Ingest
     # The upgrade itself, as one guarded statement.
     #
     # `update_all` and not `update!`: the row is named by id and nothing on it is read first, so
-    # loading it would fetch a 1536 element vector to overwrite it — and the model's mirrored
+    # loading it would fetch a 1024 element vector to overwrite it — and the model's mirrored
     # `text_digest` uniqueness validation would answer from a SELECT that the unique index has to
     # decide anyway. The index decides it, and the conflict is contained here.
     #
@@ -1909,7 +1936,7 @@ module Ingest
 
     # The refresh itself, as one guarded statement — {#upgrade}'s shape, for {#upgrade}'s reasons.
     # `update_all` by id and never a loaded record: the row is named outright and nothing on it is
-    # read first, so loading it would fetch a 1536 element vector in order to overwrite it.
+    # read first, so loading it would fetch a 1024 element vector in order to overwrite it.
     #
     # **`text_digest` is the compare-and-set.** The refresh is only ever correct against the row as
     # it was when {#nearest} matched it, and a concurrent shard resolving the same test — or
@@ -1970,7 +1997,7 @@ module Ingest
     #
     # A guard that fails updates nothing and this still returns the identity — the observation is an
     # observation OF this test whether or not it is the most recent one, and the link is what
-    # {#claim} records. No callbacks and no validation pass over a 1536 element vector that has not
+    # {#claim} records. No callbacks and no validation pass over a 1024 element vector that has not
     # changed, exactly as before.
     #
     # Takes an ID rather than a record, which is all either caller has now that {#identical_text}

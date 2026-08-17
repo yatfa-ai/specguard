@@ -63,8 +63,10 @@ module Ingest
   # the path that causes the growth. That is the same rule that puts {Ingest::ObservationPruner} at
   # {Ingest::RunRecorder}, applied to a different table rather than copied to the same call site:
   # `RunRecorder` writes `spec_observations` and writes nothing here, and an ingest under a provider
-  # that publishes no fingerprint — which is every provider this repository ships except
-  # `OpenAIProvider` — grows this table not at all while still going through it in full.
+  # that publishes no fingerprint — the suite's stub, and anything else installed through the swap
+  # seam — grows this table not at all while still going through it in full. The shipped
+  # `EmbeddingGenerator::VoyageProvider` does publish one, so on a real deployment this table grows
+  # and this pruner is the thing that bounds it.
   #
   # The resolve is also already OFF the ingest transaction, by construction rather than by
   # arrangement: it runs in {Ingest::IdentityResolutionJob}. At the `RunRecorder` seam this work
@@ -168,14 +170,23 @@ module Ingest
     #
     # == Where a row actually lives, MEASURED rather than inferred from the column width
     #
+    # ⚠️ **Measured on `vector(1536)`, which this table no longer uses.** The 2026-08-17 migration
+    # moved `embedding` to `halfvec(1024)` — 2 bytes per element rather than 4, and 1024 of them
+    # rather than 1536, so the datum is 2,052 bytes where it was 6,148. It is still past
+    # `TOAST_TUPLE_THRESHOLD` and still stored out of line, so the SHAPE of everything below holds
+    # and the batch size does not have to move; the figures do. Roughly a third of the TOAST, about
+    # two chunks per row rather than four, and a heap tuple unchanged at 168 bytes because the
+    # pointer that replaces the vector is the same 18 bytes either way. **Re-measure before quoting
+    # a number from here.**
+    #
     # `vector(1536)` is 1536 float4s — 6,148 bytes with its header — which is far past
     # `TOAST_TUPLE_THRESHOLD`, so the column is stored OUT OF LINE. On `embedding_cache_entries`,
     # `pg_attribute.attstorage` for `embedding` is `e` (EXTERNAL: out-of-line and NOT compressed)
     # and `pg_class.reltoastrelid` is populated. What remains in the heap is a stub — `id`, two
     # timestamps, `text_digest`, `provider_fingerprint`, and an 18-byte TOAST pointer.
     #
-    # Measured on a faithful reproduction of this table (identical DDL and `attstorage`, the
-    # production `openai:text-embedding-3-small` fingerprint, a real 64-char digest), at exactly
+    # Measured on a faithful reproduction of that table (identical DDL and `attstorage`, the
+    # then-production `openai:text-embedding-3-small` fingerprint, a real 64-char digest), at exactly
     # this batch size, after `VACUUM ANALYZE`:
     #
     #   heap tuple           168 bytes exactly (`pageinspect.heap_page_items.lp_len`)

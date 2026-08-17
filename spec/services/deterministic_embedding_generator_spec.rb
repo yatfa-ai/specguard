@@ -5,10 +5,10 @@ require "rails_helper"
 # The stub's determinism is what later threshold assertions rest on, so it is tested like
 # production code rather than trusted. See spec/support/embedding_generator.rb.
 RSpec.describe DeterministicEmbeddingGenerator do
-  it "returns a vector of exactly 1536 floats" do
+  it "returns a vector of exactly 1024 floats" do
     vector = described_class.call("Order checkout returns 402 on expired card")
 
-    expect(vector.size).to eq(1536)
+    expect(vector.size).to eq(1024)
     expect(vector).to all(be_a(Float))
   end
 
@@ -45,7 +45,7 @@ RSpec.describe DeterministicEmbeddingGenerator do
   end
 
   it "never reaches the network" do
-    expect(OpenAI::Client).not_to receive(:new)
+    expect(Faraday).not_to receive(:new)
 
     EmbeddingGenerator.call("no api key needed")
   end
