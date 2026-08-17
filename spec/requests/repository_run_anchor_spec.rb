@@ -182,6 +182,14 @@ RSpec.describe "Repository run anchor", type: :request do
     # description, nor to drop `?branch=` — the same invariant "Close file" and "Close directory"
     # keep about each other. The four asks name rows of the NEWEST run, so the page this lands on can
     # actually hold them open and the drill-down panel below is observable rather than inferred.
+    #
+    # The OWNER of that invariant is spec/requests/repository_drill_down_carry_spec.rb, where this
+    # gesture has a row and its cells are checked by construction against every ask at once. This
+    # example is not that check and does not replace it: it is written by the same hand that wrote the
+    # href, which is exactly the reading a per-feature assertion cannot give — a future edit that
+    # dropped a SIBLING'S ask is the failure the matrix exists for, and it would keep this green. What
+    # this adds is the FOLLOW: the ask survives the href and the panel it names is still open on the
+    # page the click lands on, which the matrix (an href-level spec) does not look at.
     it "keeps every other ask open" do
       older, = two_run_history
       open_asks = { branch: "main",
