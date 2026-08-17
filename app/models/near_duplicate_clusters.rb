@@ -67,20 +67,25 @@
 # method on this object or its structs returns a verdict. There is no `#redundant?` here to be
 # tempted by, for the same reason there is none there.
 #
-# == ⭐ What the similarity actually measures, which is less than the panel's name suggests
+# == ⭐ What the similarity actually measures
 #
-# **Lexical overlap, not meaning.** `EmbeddingGenerator::LocalProvider` — the shipped default, an
-# owner decision — hashes words and character n-grams; it does not read. Its own documentation
-# gives the pair, and it is measured rather than asserted: "Checkout rejects an expired card" and
-# "Checkout returns 402 payment required" describe one behaviour and score **0.31**, far below any
-# threshold this object could sanely carry. Two tests that duplicate each other in entirely
-# different words are invisible here and always will be.
+# **Semantic similarity, not exact wording.** `EmbeddingGenerator::VoyageProvider` —
+# `voyageai/voyage-4-lite`, the only provider this application ships — reads the text rather than
+# hashing it, so two tests describing one behaviour in entirely different words CAN cluster.
 #
-# That is a property of the engine, not a defect in it, and it is why `#similarity_basis` is a
-# method rather than a footnote: a cluster count rendered without it is a confident number over a
-# lexical sliver of the real duplication, which is the roadmap's *Vacuous Green* failure wearing a
-# different spelling. The honest reading of an empty list here is "nothing was phrased alike",
-# never "nothing is duplicated".
+# ⚠️ That is the opposite of what this panel was built against, and the caveat inverts with it. Until
+# 2026-08-17 the engine was feature hashing, and the honest reading of an empty list was *"nothing
+# was phrased alike"* — the measured pair being "Checkout rejects an expired card" against "Checkout
+# returns 402 payment required", one behaviour, **0.31**, invisible. On the current provider that
+# pair is the kind this engine is meant to find, and the exposure moves to the other end: a cosine
+# that reads meaning will cluster tests that are *related* as readily as tests that are *redundant*,
+# and `SIMILARITY` has not been re-derived for it (see the constant, which says so at length). So the
+# honest reading of a NON-empty list is now the cautious one: "these read as similar", never "these
+# are duplicates".
+#
+# `#similarity_basis` is a method rather than a footnote for the same reason it always was: a cluster
+# count rendered without it is a confident number over an uncalibrated threshold, which is the
+# roadmap's *Vacuous Green* failure wearing a different spelling.
 #
 # == The partition is `signal_source`, and it is a partition rather than a caveat
 #
@@ -148,12 +153,12 @@ class NearDuplicateClusters
   # So the threshold has to land strictly inside (0.80, 0.89]. That is a 0.09-wide window, and the
   # question is where in it.
   #
-  # **The margin comes from `script/embedding_collision_audit.rb`**, which is the evidence
-  # `EmbeddingGenerator::LocalProvider` says to read before choosing any similarity threshold, and
-  # which re-derives itself on whatever corpus it is pointed at. Re-run for this slice against this
+  # **The margin came from `script/embedding_collision_audit.rb`**, which was the evidence the
+  # feature-hashing provider told you to read before choosing any similarity threshold, and which
+  # re-derived itself on whatever corpus it was pointed at. Run for this slice against this
   # repository's own suite — `SIZE=1700 ruby script/embedding_collision_audit.rb spec`, 1,700 real
   # example names, a full census of all 1,444,150 pairs, each scored twice: once as the 1536-bucket
-  # vector production stores, once in a collision-free space:
+  # vector production then stored, once in a collision-free space:
   #
   #   mean |hashed − exact| cosine error                    0.0196
   #   pairs whose error is under 0.05                       94.5%
@@ -186,6 +191,27 @@ class NearDuplicateClusters
   # The failure modes are not symmetric and the number is not centred blindly: a threshold set too
   # high silently under-reports, which this object discloses as coverage; one set too low fills a
   # review queue with unrelated pairs, which nothing downstream can undo. It errs high.
+  #
+  # ⚠️ **Every number above is measured on the feature-hashing provider retired on 2026-08-17, and
+  # this constant is UNCALIBRATED for `EmbeddingGenerator::VoyageProvider`.** The collision census
+  # is not merely stale, it is answering a question that no longer exists: there are no hash
+  # collisions in a vendor embedding, so the entire "hashing nudges near-misses across the line"
+  # margin is gone. What replaces it has not been measured.
+  #
+  # The direction of the risk INVERTS, and that is the part to act on. The window above is
+  # (0.80, 0.89] because a lexical engine scored *"the same behaviour reworded"* at 0.62 — the pair
+  # this panel was built to admit it could not see. A semantic model is built to score that pair
+  # high, so on the current provider 0.85 is no longer a cautious threshold near the top of a narrow
+  # window; it is plausibly a LOW one that clusters merely-related tests. The disclosed failure mode
+  # was "silently under-reports"; the undisclosed one is now "fills a review queue with pairs that
+  # are not duplicates", which this comment's own last paragraph calls the one nothing downstream
+  # can undo. Re-deriving this on real Voyage vectors is open work and should land before this panel
+  # is trusted.
+  #
+  # The one invariant that still holds arithmetically: this sits strictly below
+  # `SpecIdentity::MATCH_SIMILARITY` (0.95), so the 0.85–0.95 band still resolves to two identities
+  # while being reportable as two redundant tests. Both constants are uncalibrated, so the ordering
+  # is preserved but the band's meaning is not.
   SIMILARITY = 0.85
 
   # What the `<=>` operator in the pair read wants, which is a cosine *distance*. Derived rather
@@ -241,9 +267,12 @@ class NearDuplicateClusters
   LIMIT = 10
 
   # What a cosine from the shipped provider is a measurement OF, stated on the object because a
-  # cluster count rendered without it is a confident number over a lexical sliver — see the class
-  # comment's ⭐ section, which names the measured 0.31 pair this misses.
-  SIMILARITY_BASIS = "lexical overlap, not meaning"
+  # cluster count rendered without it is a confident number over an uncalibrated threshold — see the
+  # class comment's ⭐ section, and `SIMILARITY`, which records what has not been re-measured.
+  #
+  # It changed on 2026-08-17 with the provider: this read "lexical overlap, not meaning" while the
+  # engine was feature hashing, and that sentence is now false in both halves.
+  SIMILARITY_BASIS = "semantic similarity, not exact wording"
 
   # What a repository that has never ingested weighs, which is nothing — and there is no run to ask
   # it of. Spelled here rather than by teaching `SpecObservation.identity_presence_in` to take a

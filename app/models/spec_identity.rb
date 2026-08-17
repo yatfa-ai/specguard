@@ -252,7 +252,7 @@ class SpecIdentity < ApplicationRecord
   # so the wrong plan wins on paper and loses by an order of magnitude in practice.
   #
   # So the statement states the real price: the default, times the number of dimensions the operator
-  # actually walks. **Derived from `EmbeddingGenerator::DIMENSIONS`** rather than written as 3.84, so
+  # actually walks. **Derived from `EmbeddingGenerator::DIMENSIONS`** rather than written as 2.56, so
   # a future change of embedding width re-prices the operator instead of leaving a stale literal
   # behind. It is a correction to an input, not a thumb on the scale — every plan the planner
   # compares is re-priced by the same true fact, and the sort path loses because it really does call
@@ -480,8 +480,8 @@ class SpecIdentity < ApplicationRecord
     #
     # `SET LOCAL` binds to the TRANSACTION, not to the block that issued it, and
     # `ActiveRecord::Base.transaction` JOINS an ambient transaction rather than opening its own. So
-    # a caller that wraps this read in a transaction of theirs would carry `cpu_operator_cost = 3.84`
-    # into every statement they ran afterwards — re-pricing queries that have no 1536-dimension
+    # a caller that wraps this read in a transaction of theirs would carry `cpu_operator_cost = 2.56`
+    # into every statement they ran afterwards — re-pricing queries that have no 1024-dimension
     # operator anywhere in them, from a method they called for its return value. `requires_new:` is
     # not the fix either: a savepoint is not a new transaction as far as a GUC is concerned.
     #

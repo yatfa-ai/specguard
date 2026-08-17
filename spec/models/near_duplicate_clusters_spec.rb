@@ -2,21 +2,29 @@
 
 require "rails_helper"
 
-# The similarity numbers in this file are the SHIPPED provider's, measured rather than assumed —
-# `include_context "with lexical embeddings"` installs `EmbeddingGenerator::LocalProvider`, the same
-# code production runs, so every threshold assertion here is against the vectors the constant was
-# chosen from. Under the suite's default stub two different strings are near-orthogonal however
-# alike they read, and every one of these examples would pass or fail for reasons that have nothing
-# to do with clustering.
+# The similarity numbers in this file are a LEXICAL provider's, measured rather than assumed —
+# `include_context "with lexical embeddings"` installs `LexicalEmbeddingProvider` (spec support), so
+# every threshold assertion here is against vectors with the property the constant was chosen from.
+# Under the suite's default stub two different strings are near-orthogonal however alike they read,
+# and every one of these examples would pass or fail for reasons that have nothing to do with
+# clustering.
+#
+# ⚠️ **This is no longer the provider production runs.** Since 2026-08-17 that is
+# `EmbeddingGenerator::VoyageProvider`, which reads meaning; `NearDuplicateClusters::SIMILARITY` is
+# uncalibrated for it and says so. These examples therefore pin this object's LOGIC — how it forms,
+# ranks, partitions and truncates clusters at a given floor — and not the floor's correctness. The
+# REWORDED pair below is the one that shows the gap: invisible to a lexical engine at 0.28, and
+# exactly the kind a semantic one is built to find.
 #
 #   Checkout rejects an expired card / … expired card outright               0.89
 #   Checkout rejects an expired card / … expired credit card                 0.90
 #   Checkout rejects an expired card / … expired card when the card is expired  0.80
-#   Checkout rejects an expired card / Checkout returns 402 payment required 0.31
-#   Checkout rejects an expired card / Shipping calculates a delivery estimate  0.07
+#   Checkout rejects an expired card / Checkout returns 402 payment required 0.28
+#   Checkout rejects an expired card / Shipping calculates a delivery estimate  0.04
 #
-# Re-derive any of them with:
-#   ruby -r./app/services/embedding_generator -e 'a,b = ARGV; ...'
+# Re-derived at DIMENSIONS = 1024; they were 0.89 / 0.90 / 0.80 / 0.31 / 0.05 at 1536, which moved
+# no verdict against the 0.85 floor. Re-derive any of them with:
+#   ruby -e 'require "./spec/support/lexical_embeddings"; ...'
 RSpec.describe NearDuplicateClusters do
   include_context "with lexical embeddings"
 
@@ -27,7 +35,7 @@ RSpec.describe NearDuplicateClusters do
   CREDIT = "Checkout rejects an expired credit card"
   # 0.80 — the measured "lexically similar but DIFFERENT test" mark the threshold sits above.
   RESTATED = "Checkout rejects an expired card when the card is expired"
-  # 0.31 — the pair `EmbeddingGenerator::LocalProvider` names as the limit of a lexical engine.
+  # 0.28 — the pair a lexical engine cannot see, and the whole reason the shipped provider is not one.
   REWORDED = "Checkout returns 402 payment required"
   UNRELATED = "Shipping calculates a delivery estimate"
 
@@ -308,7 +316,7 @@ RSpec.describe NearDuplicateClusters do
     end
 
     it "carries the limitation on the object rather than in a comment" do
-      expect(described_class.for(repository).similarity_basis).to eq("lexical overlap, not meaning")
+      expect(described_class.for(repository).similarity_basis).to eq("semantic similarity, not exact wording")
     end
 
     it "states the floor it searched at, so a reader is not left to assume one" do
@@ -709,7 +717,7 @@ RSpec.describe NearDuplicateClusters do
         SELECT #{target.id}, 'example ' || g,
                md5(#{target.id}::text || g::text) || md5(g::text), 'name',
                (SELECT ARRAY(SELECT sin((g * 12.9898) + (i * 78.233))
-                             FROM generate_series(1, 1536) i))::vector,
+                             FROM generate_series(1, 1024) i))::halfvec,
                'spec/models/a_spec.rb', g, now(), now()
         FROM generate_series(1, #{count}) g
       SQL
@@ -765,7 +773,7 @@ RSpec.describe NearDuplicateClusters do
         SELECT r.id, 'tiny ' || r.id || ' ' || g,
                md5(r.id::text || g::text) || md5(g::text), 'name',
                (SELECT ARRAY(SELECT sin((r.id * 3.7) + (g * 12.9898) + (i * 78.233))
-                             FROM generate_series(1, 1536) i))::vector,
+                             FROM generate_series(1, 1024) i))::halfvec,
                'spec/models/tiny_spec.rb', g, now(), now()
         FROM repositories r
         CROSS JOIN generate_series(1, #{TINY_TENANT_SIZE}) g
@@ -797,7 +805,7 @@ RSpec.describe NearDuplicateClusters do
     # transaction strategy instead of on the code.
     #
     # And it puts the price back, for the same reason the read does. This helper would otherwise be
-    # the one thing in the file that leaves a 1536× operator price set on the example's transaction,
+    # the one thing in the file that leaves a 1024× operator price set on the example's transaction,
     # twenty lines above the example that exists to prove nothing does.
     def plan_for_actual_sql(&)
       sql = captured_sql(&)
@@ -912,7 +920,7 @@ RSpec.describe NearDuplicateClusters do
     # The corrected price is a fact about ONE statement, and it binds to the transaction rather than
     # to the block that asked for it. This example runs inside the suite's per-example transaction,
     # so it IS the nested case: a caller who wrapped this read in a transaction of their own and
-    # went on running unrelated queries under a 1536× operator price they never asked for.
+    # went on running unrelated queries under a 1024× operator price they never asked for.
     it "puts the operator price back for whoever called it" do
       cost = -> { ActiveRecord::Base.connection.select_value("SHOW cpu_operator_cost") }
       before = cost.call

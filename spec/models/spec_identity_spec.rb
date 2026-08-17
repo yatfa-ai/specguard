@@ -93,7 +93,7 @@ RSpec.describe SpecIdentity do
                                 .find { |candidate| candidate.columns == ["embedding"] }
 
       expect(index.using).to eq(:hnsw)
-      expect(index.opclasses).to eq(:vector_cosine_ops)
+      expect(index.opclasses).to eq(:halfvec_cosine_ops)
     end
   end
 
