@@ -267,9 +267,13 @@ class SpecDirectoryRuntimeGrowth
     def latest_label = SpecObservation.humanized_duration(latest_seconds)
 
     # How much of this area each side actually timed, always as a fraction and never as a bare
-    # count — `SpecDirectoryDurations#coverage_label`'s rule, doubled because there are two sides:
+    # count — `SpecObservation.coverage_fraction`'s rule, doubled because there are two sides:
     # "12" in a column of "12 of 40" reads as twelve of something unstated, and a total summed over
-    # a third of an area is exactly the reading this column exists to qualify.
+    # a third of an area is exactly the reading this column exists to qualify. Doubled is also why
+    # it is built here instead of spelled through that seam, which draws the boundary in its own
+    # words: it renders ONE population, for the single-sided callers like
+    # `SpecDirectoryDurations::Row#coverage_label`, and a two-sided comparison is a different
+    # sentence rather than that one said twice.
     def coverage_label
       "#{previous_timed_count} of #{previous_recorded_count} → " \
         "#{latest_timed_count} of #{latest_recorded_count}"
