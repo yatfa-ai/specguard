@@ -1781,13 +1781,18 @@
               handed a marked third one would read a correct page as a rendering bug. It is the same
               qualification the API's `run_anchor` block carries about its own `history`.
 
+              ⭐ Computed from `@run_anchor_run` AND THE ROWS THEMSELVES, never from
+              `@run_anchor_request` — this sentence and the `aria-current` marking below it are two
+              statements about ONE choice, so they read one source or they come apart. Gated on the
+              raw ask, the caption promises a marked row on a page that fell back and marked none,
+              and again on a resolved ask whose run is behind this panel's bound: both are the
+              Overview being contradicted one panel below by the sentence that exists to stop that
+              happening. `RepositoriesHelper#recent_runs_anchor_note` holds the three states.
+
               Printed rather than left to `aria-current`, which announces the marked row to a screen
               reader and says nothing at all to anyone else. %>
           Every commit below opens this page on that run.
-          <% if @run_anchor_request.present? %>
-            This page is anchored on a run the URL named, so the marked row here is the one every
-            panel above describes — and it is not necessarily the newest.
-          <% end %>
+          <%= recent_runs_anchor_note(@run_anchor_run, @recent_test_runs) %>
         </p>
         <%= render UI::TableComponent.new(columns: ["Commit", "Branch", "Tests", "Duration", "Annotated", "Ingested"],
                                           describedby: "recent-runs-basis") do %>
@@ -1823,7 +1828,19 @@
                     chose nothing and the top row is the anchor by construction rather than by a
                     gesture they made. Matched on the ROW and not on the sha: a repository can hold
                     two runs of one commit (a re-run, a second CI workflow), `latest_test_run_for_commit`
-                    resolves an ask to exactly one of them, and a sha comparison would mark both. %>
+                    resolves an ask to exactly one of them, and a sha comparison would mark both —
+                    pinned by "marks one row when two runs share a commit" in
+                    spec/requests/repository_run_anchor_spec.rb, which is the example a sha
+                    comparison fails and every other example here passes.
+
+                    `aria-[current=true]:font-semibold` is the ONE place this page pairs
+                    `aria-current` with a visual treatment, and it is a deliberate yes rather than a
+                    drift: the nine sibling drill-down links mark a path, a filename or a branch —
+                    each visibly different from its neighbours, so a sighted reader finds the taken
+                    choice by reading the column. This column is ten seven-character hashes with no
+                    shape to tell them apart, and "which one am I on" is not a question it can be
+                    read for. The screen-reader answer and the sighted answer therefore need
+                    different carriers here, where one carrier is enough everywhere else. %>
                 <%= link_to test_run.commit_sha.first(7),
                             drill_down_path(@repository, commit_sha: test_run.commit_sha,
                                             anchor: "overview"),

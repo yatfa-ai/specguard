@@ -38,6 +38,20 @@ RSpec.describe "Repository run anchor", type: :request do
   # `minimum: 1` and raises on the very state these examples are asserting.
   def anchor_notice = page.all("#run-anchor-notice").first&.text&.squish
 
+  # The "Recent runs" caption, which is the page's SECOND statement about the anchor and the one
+  # that has to agree with the marking below it rather than with the raw ask.
+  def recent_runs_caption = page.find("#recent-runs-basis").text.squish
+
+  # The rows carrying `aria-current`, BY POSITION in the list. Positions rather than link text,
+  # because the case that matters most is two runs of one commit — where every candidate row prints
+  # the same seven characters and only the position separates the row the ask resolved to from the
+  # row that merely shares its sha.
+  def marked_row_positions
+    panel("recent-runs").all("tbody tr").each_with_index
+                        .select { |row, _| row.all("a[aria-current]").any? }.map(&:last)
+  end
+
+
   def ingest_run(commit_sha:, specs:, at: nil, branch: "main")
     run = Ingest::RunRecorder.record(
       repository,
@@ -167,7 +181,42 @@ RSpec.describe "Repository run anchor", type: :request do
       expect(response).to have_http_status(:ok)
       expect(anchor_notice).to include("no run at all on this repository yet")
     end
+
+    # ⭐ The page's SECOND statement about the anchor must not make its first one a liar. Gated on
+    # the RAW ASK, the "Recent runs" caption claimed "this page is anchored on a run the URL named,
+    # so the marked row here is the one every panel above describes" on the very page whose Overview
+    # had just said SpecGuard has no run for that sha — two panels flatly contradicting each other,
+    # one of them sending the reader to a marked row that a fallback never renders. Silence here is
+    # the answer rather than a third wording: the Overview disclosed the substitution, and this panel
+    # has no marking to explain.
+    it "says nothing in the Recent runs caption, which has no marked row to explain" do
+      two_run_history
+
+      get repository_path(repository, commit_sha: "deadbeefdeadbeef")
+
+      expect(recent_runs_caption).not_to include("anchored")
+      expect(marked_row_positions).to be_empty
+    end
+
+    # The echoed sha is the one unvalidated value this page prints back, and it reaches the reader
+    # escaped EXACTLY ONCE. `truncate` defaults to escaping its input and returning a `SafeBuffer`;
+    # interpolating that into a plain String yields a String that is not itself safe but already
+    # holds escaped text, and ERB escapes it again — so `?commit_sha=a%26b` printed `a&amp;b` at the
+    # reader. It errs safe rather than dangerous, which is exactly why it survived being read: the
+    # page was never unsafe, it was just wrong about a value it was quoting back.
+    #
+    # Both halves asserted, because the fix moved an escape: the sha renders as the reader typed it
+    # AND the raw body carries no live markup.
+    it "echoes an unvalidated sha escaped exactly once, and never as markup" do
+      two_run_history
+
+      get repository_path(repository, commit_sha: "a&b<script>x</script>")
+
+      expect(anchor_notice).to include("SpecGuard has no run for a&b<script>x</script>")
+      expect(response.body).not_to include("<script>x</script>")
+    end
   end
+
 
   describe "no ask at all" do
     # The page as it was. A default call must be byte-identical to the one this page served before
@@ -313,14 +362,36 @@ RSpec.describe "Repository run anchor", type: :request do
       expect(panel("recent-runs").all("a[aria-current]")).to be_empty
     end
 
+    # ⭐ The rule the view argues for at length and nothing was checking: the mark is matched on the
+    # ROW and never on the sha. `test_runs` has no uniqueness constraint on `commit_sha` — a CI
+    # re-run of one commit is a second row — so `latest_test_run_for_commit` resolves an ask to
+    # exactly one of them while a sha comparison would mark both, and the page would show two
+    # "current" rows for a reader who is on one.
+    #
+    # Asserted by POSITION, which is the only thing that separates them: both rows print the same
+    # seven characters. Newest-first, so the re-run is row 1 and the run it re-ran is row 2, and the
+    # ask resolves to the newer of the two.
+    it "marks one row when two runs share a commit" do
+      ingest_run(commit_sha: "0nesha00cafe0001", at: 3.hours.ago,
+                 specs: [spec_in("spec/models/order_spec.rb", 1)])
+      ingest_run(commit_sha: "0nesha00cafe0001", at: 2.hours.ago,
+                 specs: [spec_in("spec/models/order_spec.rb", 1)])
+      ingest_run(commit_sha: "newest00cafe0002", at: 1.hour.ago,
+                 specs: [spec_in("spec/requests/checkout_spec.rb", 2)])
+
+      get repository_path(repository, commit_sha: "0nesha00cafe0001")
+
+      expect(marked_row_positions).to eq([1])
+    end
+
     it "qualifies the caption only where the qualification applies" do
       older, = two_run_history
 
       get repository_path(repository)
-      expect(page.find("#recent-runs-basis").text.squish).not_to include("not necessarily the newest")
+      expect(recent_runs_caption).not_to include("not necessarily the newest")
 
       get repository_path(repository, commit_sha: older.commit_sha)
-      expect(page.find("#recent-runs-basis").text.squish).to include("not necessarily the newest")
+      expect(recent_runs_caption).to include("not necessarily the newest")
     end
 
     # The suite trajectory keeps drawing the branch of the repository's NEWEST run, because
@@ -337,6 +408,52 @@ RSpec.describe "Repository run anchor", type: :request do
 
       expect(panel_text("suite-trajectory")).to include("on main")
       expect(panel_text("suite-trajectory")).not_to include("on feature/x")
+    end
+  end
+
+  # ⭐ The state the controller's own wiring comment names — the anchored run "from behind its bound
+  # entirely" — and the one the caption promised a marked row for. `Repository#recent_test_runs` is
+  # capped at ten rows, so a resolved ask on an older run renders a page where every panel above is
+  # correctly re-anchored and NOTHING in this list is marked. A caption gated on the raw ask sends
+  # that reader hunting for a mark that was never rendered, which is the least useful sentence the
+  # page could give them and the one they used to get.
+  describe "an anchored run behind the Recent runs bound" do
+    # Eleven runs, and the ask names the eldest. Backdated explicitly rather than left to insertion
+    # order, because the bound is applied to an ordering by `created_at` and eleven rows written in
+    # one example land microseconds apart.
+    def eleven_run_history
+      eldest = ingest_run(commit_sha: "0ldest00cafe0001", at: 11.hours.ago,
+                          specs: [spec_in("spec/models/order_spec.rb", 1)])
+      10.times do |i|
+        ingest_run(commit_sha: format("newer%02dcafe00001", i), at: (10 - i).hours.ago,
+                   specs: [spec_in("spec/requests/checkout_spec.rb", 4)])
+      end
+
+      eldest
+    end
+
+    # The ask IS honoured — this is not a fallback — and the panel simply cannot show it.
+    it "anchors every panel on the named run and marks no row" do
+      eldest = eleven_run_history
+
+      get repository_path(repository, commit_sha: eldest.commit_sha)
+
+      expect(panel_text("overview")).to include("Measured on #{eldest.commit_sha.first(7)}")
+      expect(panel("recent-runs").all("tbody tr").size).to eq(10)
+      expect(marked_row_positions).to be_empty
+    end
+
+    # The caption for that reader: which run holds the page, and that it is not one of these rows.
+    # Both halves matter — dropping the sentence entirely would leave them reading ten unmarked rows
+    # under a page anchored somewhere else, with the Overview's disclosure the only clue.
+    it "says the anchored run is not among the rows rather than promising a marked one" do
+      eldest = eleven_run_history
+
+      get repository_path(repository, commit_sha: eldest.commit_sha)
+
+      expect(recent_runs_caption).to include("anchored on #{eldest.commit_sha.first(7)}")
+      expect(recent_runs_caption).to include("not among the most recent runs listed here")
+      expect(recent_runs_caption).not_to include("the marked row here")
     end
   end
 

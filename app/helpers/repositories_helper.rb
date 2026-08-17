@@ -312,11 +312,15 @@ module RepositoriesHelper
   # ever appears next to a substitution it is describing.
   #
   # The asked-for name is truncated: it is unvalidated URL input, and a branch name is a short
-  # thing. Escaping is ERB's, which is why this returns a plain String and not `html_safe` markup.
+  # thing. `escape: false` because the escaping is ERB's, done once at the render — `truncate`
+  # defaults to escaping its input and returning a `SafeBuffer`, and interpolating that into a plain
+  # String yields an unsafe String carrying already-escaped content, which ERB then escapes a second
+  # time (`?branch=a%26b` printing `a&amp;b` on the page). Returning raw text and letting the view
+  # escape it keeps one escape at one seam, which is what this returning a plain String is for.
   def trajectory_branch_fallback_notice(requested, trajectory)
     return nil if requested.blank? || trajectory.branch == requested
 
-    asked = truncate(requested, length: 60)
+    asked = truncate(requested, length: 60, escape: false)
 
     if trajectory.branch.blank?
       return "SpecGuard has no runs on #{asked}. The latest run named no branch, so there is " \
@@ -364,6 +368,46 @@ module RepositoriesHelper
       "than on whichever run reported most recently. Every panel describing a single run describes " \
       "that one. “Recent runs” and “Suite growth” are histories rather than rows, so they are not " \
       "re-anchored: the run named here need not be the newest one below."
+  end
+
+  # What the anchor means FOR THE "RECENT RUNS" LIST — the panel's half of the same disclosure
+  # `#run_anchor_notice` makes in the Overview.
+  #
+  # ⭐ THE SECOND STATEMENT ABOUT ONE CHOICE, and it is computed from the same two facts the choice
+  # itself is: the resolved run (never the raw ask) and the rows actually rendered. That is the rule
+  # `#run_anchor_notice` states above and the reason it is repeated here rather than assumed: a
+  # caption gated on the ASK claims the URL's run is the marked one on a page that fell back and
+  # marked nothing, which is the Overview flatly contradicted one panel below by the sentence meant
+  # to close exactly that gap. `RequestedCommitShaParam` names the shape — "the fallback would then
+  # serve the newest run while `run_anchor` claimed a request had been made."
+  #
+  # THREE states because the reader is in one of three positions, and only the first is the state a
+  # single unconditional sentence describes:
+  #
+  # * **Resolved, and in the window** — there is a marked row, so the caption says the marked row is
+  #   the one every panel above describes and warns it need not be the top one.
+  # * **Resolved, but behind the panel's bound** — `@recent_test_runs` is capped at ten rows, and an
+  #   anchored run outside that window is simply not here to mark. The reader still needs to know
+  #   their ask was honoured, so the sentence says which run holds the page AND that no row is
+  #   marked; sending them hunting for a mark that was never rendered is the failure mode.
+  # * **Fell back** — SILENT. The Overview already said the sha resolved to nothing and named the
+  #   substitute, and there is no marking here to explain. A second telling would restate a fact the
+  #   reader has read one panel up, in a panel that has nothing to add to it.
+  #
+  # `listed` is passed in rather than read off `@recent_test_runs`, so the membership test and the
+  # `aria-current` marking in the view cannot come to be asked of two different collections — the
+  # same reason `anchored` is the row rather than a sha.
+  def recent_runs_anchor_note(anchored, listed)
+    return nil if anchored.nil?
+
+    if listed.any? { |test_run| test_run.id == anchored.id }
+      return "This page is anchored on a run the URL named, so the marked row here is the one " \
+             "every panel above describes — and it is not necessarily the newest."
+    end
+
+    "This page is anchored on #{anchored.commit_sha.first(7)} — the run the URL named, which every " \
+      "panel above describes. It is not among the most recent runs listed here, so no row below is " \
+      "marked."
   end
 
   # == The "Slowest tests" panel's outcome sentence
@@ -816,8 +860,13 @@ module RepositoriesHelper
   # The asked-for sha is truncated, and this is the only place on the page that echoes it back: it
   # is unvalidated URL input, and `test_runs.commit_sha` is a plain `string` column written from
   # whatever CI reported — short form and long form both — so there is no length this could rely on.
+  #
+  # `escape: false` for the reason `#trajectory_branch_fallback_notice` gives over the same idiom:
+  # this returns a plain String precisely so that ERB escapes it, once, at the render. `truncate`
+  # escaping first would put a `SafeBuffer` of already-escaped text inside a String that is not
+  # itself safe, and the echoed sha would reach the page escaped twice.
   def run_anchor_fallback_sentence(requested, shown)
-    asked = truncate(requested, length: 60)
+    asked = truncate(requested, length: 60, escape: false)
 
     if shown.nil?
       return "SpecGuard has no run for #{asked}, and no run at all on this repository yet — so " \
