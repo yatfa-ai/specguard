@@ -89,11 +89,12 @@ class Api::V1::RepositoriesController < Api::BaseController
   # The predicate spelling — `requested_unannotated_examples?` rather than a `requested_*` reader — is
   # what says that at the call site.
   #
-  # NOT included by `RepositoriesController`, like `?unstable_test=` and `?commit_sha=` and unlike the
-  # four before them, and that is a fact about the surfaces rather than an omission: the dashboard
-  # prints the subtraction and offers no way to open it, which is the gap this parameter exists to
-  # close on the agent surface first. When the panel arrives it includes this module rather than
-  # re-deriving the guard, which is the whole reason the guard lives in a module at all.
+  # NOT included by `RepositoriesController`, like `?unstable_test=` and unlike the other five, and
+  # that is a fact about the surfaces rather than an omission: the dashboard opens this subtraction
+  # only through the per-example drill-in `445cb7f` added, which rides the existing
+  # `?spec_file=`/`?spec_directory=` asks and takes no parameter of its own, so there is still no
+  # second reader of THIS parameter to share a guard with. When one arrives it includes this module
+  # rather than re-deriving the guard, which is the whole reason the guard lives in a module at all.
   #
   # It reaches no SQL comparison at all, which makes the hazard the MIRROR of the six above rather
   # than a weaker version of it. Theirs is a silent wrong answer — an Array becomes an `IN` list under
@@ -110,10 +111,11 @@ class Api::V1::RepositoriesController < Api::BaseController
   # picks it, which is why it is read in exactly ONE place — the `latest_test_run` memo below — and
   # every block hanging off that memo re-anchors without reading the parameter at all.
   #
-  # NOT included by `RepositoriesController`, like `?unstable_test=` and unlike the four before it,
-  # and that is a fact about the surfaces rather than an omission: the human page anchors its panels
-  # on the repository's newest run and offers no run selector, so there is no second reader to share
-  # a guard with yet. When one arrives it includes this module rather than re-deriving the guard.
+  # INCLUDED by `RepositoriesController` as well, unlike `?unstable_test=` and
+  # `?unannotated_examples=`. This comment used to hold the commission open, against a human page
+  # that anchored every panel on the repository's newest run; `e569554` redeemed it, and the page
+  # now takes `?commit_sha=` and anchors on the run it names. The comment beside that controller's
+  # own include quotes the commission this block once carried and answers "This is that reader."
   #
   # It reaches `where(commit_sha: …)` on a plain string column, which is the same silent hazard
   # `?spec_file=` documents — an Array does not raise, it becomes an `IN` list — and at THIS position
@@ -1195,10 +1197,10 @@ class Api::V1::RepositoriesController < Api::BaseController
   # ask without either touching the other. It IS re-anchored by `?commit_sha=`, and this drill-in
   # follows it there WITHOUT READING THE PARAMETER: both hang off the one `latest_test_run` memo, so
   # the rows here and the `latest_run` they are an area OF can never come from two different runs.
-  # Which run that is, `run_anchor` says. The panel is the surface that now diverges: on a default
-  # call this list is the panel's, but `RepositoriesController` deliberately does not include
-  # `RequestedCommitShaParam` (see that module's own comment), so under `?commit_sha=` the API
-  # describes the named run and the human page stays on the newest.
+  # Which run that is, `run_anchor` says. It is the repository's newest one only on a default call,
+  # and on an explicit ask this list is STILL the panel's: `RepositoriesController` reads
+  # `?commit_sha=` through this same `RequestedCommitShaParam` — the comment beside its own include
+  # is the corroboration — so both surfaces re-anchor on the run the client named.
   #
   # THE SAME OBJECT THE PANEL READS, never a hand-written query — this file's governing rule, stated
   # in full on `serialized_spec_files` above. `SpecDirectoryFiles` is view-free, so the API and the
@@ -1280,9 +1282,10 @@ class Api::V1::RepositoriesController < Api::BaseController
   # an area ask without any of the three touching another. `?commit_sha=` is the one ask that DOES
   # move the anchor, and this drill-in moves with it unread — the file is always a file OF the run
   # `latest_run` named, because both read the single `latest_test_run` memo, and `run_anchor` names
-  # that run. It is the repository's newest one only on a default call, which is also the only call
-  # on which this list is the panel's: `RepositoriesController` has no run selector and does not
-  # include `RequestedCommitShaParam`, so under an explicit ask the two surfaces genuinely diverge.
+  # that run. It is the repository's newest one only on a default call, and on an explicit ask this
+  # list is STILL the panel's: `RepositoriesController` reads `?commit_sha=` through this same
+  # `RequestedCommitShaParam`, so under an explicit ask the two surfaces agree — both re-anchor on
+  # the run the client named rather than diverging.
   #
   # THE SAME OBJECT THE PANEL READS, never a hand-written query — this file's governing rule, stated
   # in full on `serialized_spec_files` above. `SpecFileExamples` is view-free apart from
@@ -1390,9 +1393,9 @@ class Api::V1::RepositoriesController < Api::BaseController
   # another. The fifth ask is the exception and is meant to be: `?commit_sha=` re-anchors
   # `latest_run`, and this drill-in re-anchors with it without reading the parameter, because the
   # group is always a group WITHIN the run that one `latest_test_run` memo picked. `run_anchor` is
-  # what names it. Only on a default call is that the repository's newest run and these rows the
-  # panel's — `RepositoriesController` does not include `RequestedCommitShaParam`, so under an
-  # explicit ask the panel stays on the newest run and this list does not.
+  # what names it. Only on a default call is that the repository's newest run, and these rows are
+  # the panel's on an explicit ask too — `RepositoriesController` reads `?commit_sha=` through this
+  # same `RequestedCommitShaParam`, so both surfaces re-anchor on the run the client named.
   #
   # THE SAME OBJECT THE PANEL READS, never a hand-written query — this file's governing rule, stated
   # in full on `serialized_spec_files` above. `RepeatedDescriptionExamples` is view-free apart from
