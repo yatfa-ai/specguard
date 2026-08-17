@@ -659,17 +659,33 @@ RSpec.describe EmbeddingGenerator do
     end
 
     # The third configuration state, and the only one that reaches `credential`'s rescue: the
-    # credentials store is PRESENT but cannot be decrypted — `config/credentials.yml.enc` exists
-    # while RAILS_MASTER_KEY is absent or wrong, which is the ordinary state of a freshly
-    # provisioned container or a key rotated in one place. `Rails.application.credentials.dig`
-    # raises ActiveSupport::MessageEncryptor::InvalidMessage there.
+    # credentials store is PRESENT but cannot be DECRYPTED — `config/credentials.yml.enc` exists
+    # and RAILS_MASTER_KEY (or config/master.key) holds the WRONG key, the state a key rotated in
+    # one place but not the other leaves behind. Only that state raises
+    # ActiveSupport::MessageEncryptor::InvalidMessage.
     #
-    # This must degrade to the same quiet "not configured" the example above pins, because the
-    # consumer's rescue is deliberately narrow: ingest/identity_resolver.rb:1080 rescues
-    # EmbeddingGenerator::Error and NOTHING WIDER (documented as intentional at :1073), and its
-    # `retry_on EmbeddingGenerator::Error` (:111) cannot fire for anything outside that class. A
-    # raw InvalidMessage escaping `credential` is therefore an UNATTRIBUTABLE job failure rather
-    # than an attributable configuration fault.
+    # A MISSING key is a different state and does NOT arrive here — traced and probed against
+    # activesupport 8.1.3.1 as installed, with this app's `require_master_key` false (it is set
+    # nowhere in config/): EncryptedFile#key returns nil, #read raises MissingContentError, and
+    # EncryptedConfiguration#read rescues that to "", so `dig` returns nil and never raises. That
+    # is the state the "neither set" example above already pins, not this one. (Were
+    # `require_master_key` true, the class would be MissingKeyError — a RuntimeError, still caught
+    # by this rescue's StandardError, still not InvalidMessage.)
+    #
+    # == What the rescue actually buys, on each of the two surfaces
+    #
+    # Through the INTERFACE (`.call` :94, `.embed_many` :135) an escaping InvalidMessage would not
+    # go unattributed: both re-wrap StandardError into EmbeddingGenerator::Error, and those are the
+    # only two entry points ingest/identity_resolver.rb uses (:1079 embed_many, :2312 call), so its
+    # deliberately narrow `rescue EmbeddingGenerator::Error` (:1080, narrowness documented at
+    # :1073) and its `retry_on` (:111) both still fire. What a regression costs THERE is the
+    # MESSAGE: the operator loses the actionable "not configured — set OPENAI_API_KEY" and gets an
+    # opaque decryption string instead. That is why the example below pins the message and not just
+    # the class — class alone would be a vacuous green.
+    #
+    # On the PROVIDER surface (`OpenAIProvider.api_key`, `configured?`) there is no such wrapper,
+    # so an escaping InvalidMessage is raw: `configured?` raises instead of answering false. That
+    # is the unattributable half, and it is what the first example below pins.
     it "reports not-configured when the credentials store cannot be decrypted, rather than leaking the decryption error" do
       allow(Rails.application.credentials)
         .to receive(:dig).with(:openai, :api_key).and_raise(ActiveSupport::MessageEncryptor::InvalidMessage)
@@ -681,9 +697,12 @@ RSpec.describe EmbeddingGenerator do
     end
 
     # The operator-facing half of the same guarantee: not merely "no crash at load", but that the
-    # failure ARRIVES AS THE CLASS the caller rescues, carrying the actionable remedy. Asserting
-    # the class alone would pass on a raw InvalidMessage if the rescue were widened wrongly, so
-    # the message is pinned too.
+    # failure arrives carrying the ACTIONABLE REMEDY. The class alone cannot carry that weight —
+    # with the rescue deleted, `.call`'s own outer rescue (:94) re-wraps InvalidMessage and the
+    # raised object is STILL an EmbeddingGenerator::Error, so `raise_error(Error)` on its own is a
+    # vacuous green. The message is the only thing that separates "not configured — set
+    # OPENAI_API_KEY" from "embedding provider failed: <decryption noise>", so the message is what
+    # is pinned. (Verified: this is the falsifier failure the rescue-deletion run produces.)
     it "surfaces an undecryptable store as an actionable EmbeddingGenerator::Error naming OPENAI_API_KEY" do
       allow(Rails.application.credentials)
         .to receive(:dig).with(:openai, :api_key).and_raise(ActiveSupport::MessageEncryptor::InvalidMessage)
