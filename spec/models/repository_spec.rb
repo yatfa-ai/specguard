@@ -32,6 +32,60 @@ RSpec.describe Repository do
     expect(duplicate).not_to be_valid
   end
 
+  describe "#github_blob_url" do
+    # The one seam every "go and look" link on the dashboard composes through. `#github_url` names
+    # the repository; this names a LINE, which is the grain every per-example surface prints and
+    # until now could not open.
+    it "composes a line-anchored blob URL at the ref it was given" do
+      repository = create_repository(github_full_name: "acme/billing-service")
+
+      expect(repository.github_blob_url("spec/models/order_spec.rb", 30, "feedfacecafe0001"))
+        .to eq("https://github.com/acme/billing-service/blob/feedfacecafe0001/spec/models/order_spec.rb#L30")
+    end
+
+    # The ref is the CALLER's, and there is no default — a coordinate is only true against the tree
+    # it was recorded from (`file_path`/`line_number` are a last known path, not an identity), so
+    # pinning to a sha and pinning to `main` are different links and the caller has to say which.
+    it "pins to whatever ref the caller names rather than to a branch of its own" do
+      repository = create_repository(github_full_name: "acme/billing-service")
+
+      expect(repository.github_blob_url("spec/models/order_spec.rb", 30, "0ff10e"))
+        .to include("/blob/0ff10e/")
+      expect(repository.github_blob_url("spec/models/order_spec.rb", 30, "main"))
+        .to include("/blob/main/")
+    end
+
+    # Escaped SEGMENT-WISE: the separators are structure and everything else in a segment is not.
+    # A whole-string `url_encode` would collapse the path into one escaped filename GitHub cannot
+    # resolve, and no escaping at all would let a `#` in a filename terminate the path and swallow
+    # the line anchor.
+    it "escapes each path segment without escaping the separators" do
+      repository = create_repository(github_full_name: "acme/billing-service")
+
+      url = repository.github_blob_url("spec/models/order #2_spec.rb", 7, "abc123")
+
+      expect(url).to eq("https://github.com/acme/billing-service/blob/abc123/spec/models/order%20%232_spec.rb#L7")
+    end
+
+    # The same rule on the ref, for the same reason: a sha needs no escaping, but a ref is a
+    # caller's string and a branch name legitimately carries slashes that must stay separators.
+    it "keeps the slashes in a branch-shaped ref" do
+      repository = create_repository(github_full_name: "acme/billing-service")
+
+      expect(repository.github_blob_url("spec/models/order_spec.rb", 3, "feature/deep links"))
+        .to include("/blob/feature/deep%20links/spec/models/order_spec.rb#L3")
+    end
+
+    # It COMPOSES and asks GitHub nothing — no probe, no existence check, and so no query and no
+    # network call on a hundred-row worklist. An unpushed sha or a path deleted since answers 404,
+    # which is GitHub telling the truth rather than something to guard here.
+    it "issues no query" do
+      repository = create_repository(github_full_name: "acme/billing-service")
+
+      expect(count_queries { repository.github_blob_url("spec/models/order_spec.rb", 1, "abc") }).to eq(0)
+    end
+  end
+
   describe "#latest_test_run" do
     # The anchor every suite figure on the Overview panel and the API's `latest_run` block is read
     # off, so what "latest" means is pinned here directly rather than inferred through a figure

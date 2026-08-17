@@ -65,6 +65,17 @@ RSpec.describe "Repository unannotated examples", type: :request do
 
   def row_location(cell) = cell.all("span").map { |span| span.text.strip }.join
 
+  # The definition-site ANCHOR in a row's first cell — the link this worklist hands the reader their
+  # next action through. Exactly one per row on both label branches: a named row wears it on the
+  # location line under the name, and a nameless row wears the coordinate AS the name, so a
+  # cell-wide `find("a")` finds the same element either way and an example does not have to know
+  # which branch built the row.
+  def row_links = panel.all("tbody tr").map { |row| row.all("td").first.find("a") }
+
+  def row_hrefs = row_links.map { |link| link[:href] }
+
+  def blob(sha, path, line) = "https://github.com/acme/billing-service/blob/#{sha}/#{path}#L#{line}"
+
   def ingest(repository, specs, commit_sha: "feedfacecafe0001", **attrs)
     Ingest::RunRecorder.record(
       repository,
@@ -429,6 +440,130 @@ RSpec.describe "Repository unannotated examples", type: :request do
 
       expect(link["aria-current"]).to eq("true")
       expect(directories_panel.find("a", text: "spec/requests", match: :prefer_exact)["aria-current"]).to be_nil
+    end
+  end
+
+  # The coordinate as a DESTINATION rather than as text. Every panel above this one hands the reader
+  # a narrower question; this one hands them a task, and the task is singular and known — open that
+  # file at that line and write an `@intent`. Until now the column printed where to go and stopped.
+  describe "the definition site as a link" do
+    it "links each row's coordinate to that line on GitHub" do
+      get repository_path(debt_run, spec_directory: area)
+
+      expect(row_hrefs).to eq([blob("feedfacecafe0001", shared_group_file, 7),
+                               blob("feedfacecafe0001", order_spec, 30),
+                               blob("feedfacecafe0001", refund_spec, 9)])
+    end
+
+    # The link text is the coordinate the panel already printed, so nothing about the row's identity
+    # changed — the same string a reader was reading is now the thing they click.
+    it "links the coordinate itself rather than adding a second control to the row" do
+      get repository_path(debt_run, spec_directory: area)
+
+      expect(row_links.map { |link| link.text.strip })
+        .to eq(["#{shared_group_file}:7", "#{order_spec}:30", "#{refund_spec}:9"])
+      expect(panel.all("tbody tr a").size).to eq(3)
+    end
+
+    # BOTH LABEL BRANCHES, and this is the one that is easy to miss: `#label` is
+    # `name.presence || location_label`, so a row from a producer that sent no name wears the
+    # coordinate AS its name and renders through the other site entirely. Linking only the location
+    # line under a name would leave inert exactly the rows the fallback exists for — the ones the
+    # model comment says a reader "can neither identify nor go and find".
+    #
+    # `name` is nullable and the client sends nil for an example it could not describe, on the same
+    # precedent spec/requests/repository_slowest_examples_spec.rb pins one panel over.
+    it "links the coordinate on a row that wears it as its name" do
+      repository = create_repository(user: @user)
+      ingest(repository, [unannotated_spec(file_path: order_spec, line_number: 30).merge(name: nil)])
+
+      get repository_path(repository, spec_directory: area)
+
+      expect(row_names).to eq(["#{order_spec}:30"])
+      expect(row_hrefs).to eq([blob("feedfacecafe0001", order_spec, 30)])
+      # The fallback already IS the coordinate, so the row is not made to wear it — or link it —
+      # twice.
+      expect(panel.all("tbody tr a").size).to eq(1)
+    end
+
+    # THE DEFINITION SITE, never the including file. `location_label` pairs `file_path` with
+    # `line_number` and refuses `spec_file_path` because for a shared example group the two halves
+    # come from different files; the link inherits that constraint exactly rather than reaching for
+    # the column this list is ORDERED by. Line 7 of `order_spec.rb` is not this test, and on a
+    # worklist that is a reader sent to annotate something that is not there.
+    it "builds the link from the file the example is DEFINED in, not the file that ran it" do
+      get repository_path(debt_run, spec_directory: area)
+
+      shared = row_hrefs.first
+
+      expect(shared).to eq(blob("feedfacecafe0001", shared_group_file, 7))
+      expect(shared).not_to include(order_spec)
+      # And the "Spec file" column, which is the one that legitimately shows the including file,
+      # stays the plain text it was.
+      expect(panel.all("tbody tr").first.all("td").last).to have_no_css("a")
+    end
+
+    # THE ANCHORED RUN'S SHA, not `main` and not the newest run. `file_path`/`line_number` are a
+    # last known path rather than an identity (SPGD-114): the coordinate is accurate against the
+    # tree the run that recorded it was taken from, so a page anchored on an older run via
+    # `?commit_sha=` must link into THAT run's tree. Linking at `main` would send a reader to
+    # whatever has since drifted onto line 30.
+    it "pins the link to the run the page is anchored on rather than the newest one" do
+      repository = create_repository(user: @user)
+      ingest(repository, [unannotated_spec(file_path: order_spec, line_number: 30)],
+             commit_sha: "aaaa1111bbbb2222")
+      ingest(repository, [unannotated_spec(file_path: order_spec, line_number: 30)],
+             commit_sha: "cccc3333dddd4444")
+
+      get repository_path(repository, spec_directory: area, commit_sha: "aaaa1111bbbb2222")
+
+      expect(row_hrefs).to eq([blob("aaaa1111bbbb2222", order_spec, 30)])
+      expect(row_hrefs.first).not_to include("cccc3333dddd4444")
+    end
+
+    # The pairing that stops the assertion above from passing on a page that simply had one run:
+    # unanchored, the same repository links at the NEWEST sha.
+    it "links at the newest run's sha when no anchor was asked for" do
+      repository = create_repository(user: @user)
+      ingest(repository, [unannotated_spec(file_path: order_spec, line_number: 30)],
+             commit_sha: "aaaa1111bbbb2222")
+      ingest(repository, [unannotated_spec(file_path: order_spec, line_number: 30)],
+             commit_sha: "cccc3333dddd4444")
+
+      get repository_path(repository, spec_directory: area)
+
+      expect(row_hrefs).to eq([blob("cccc3333dddd4444", order_spec, 30)])
+    end
+
+    # A NEW TAB, introduced here deliberately — this is the app's first link that leaves it, and the
+    # reader is mid-worklist. Annotating one test and losing a hundred-row list narrowed by two asks
+    # would make the panel worse to use the further through it you got. `rel` is written out rather
+    # than left to the browsers that imply it.
+    it "opens the file in a new tab, leaving the worklist where the reader had it" do
+      get repository_path(debt_run, spec_directory: area)
+
+      expect(row_links.map { |link| link[:target] }.uniq).to eq(["_blank"])
+      expect(row_links.map { |link| link[:rel] }.uniq).to eq(["noopener noreferrer"])
+    end
+
+    # ZERO NEW QUERIES. `@repository` and `@latest_test_run` are both already loaded by the time this
+    # partial renders and `#github_blob_url` is string composition, so a hundred links must cost
+    # exactly what three cost. Compared across two narrowings of ONE page rather than across two
+    # repositories, so nothing but the row count differs between the two budgets.
+    it "costs the same number of queries for a hundred linked rows as for three" do
+      repository = create_repository(user: @user)
+      ingest(repository,
+             (1..3).map { |n| unannotated_spec(file_path: "#{area}/m#{n}_spec.rb", line_number: n) } +
+             (1..100).map { |n| unannotated_spec(file_path: "spec/requests/r#{n}_spec.rb", line_number: n) })
+
+      get repository_path(repository, spec_directory: area)
+      three = count_queries { get repository_path(repository, spec_directory: area) }
+      get repository_path(repository, spec_directory: "spec/requests")
+      hundred = count_queries { get repository_path(repository, spec_directory: "spec/requests") }
+
+      expect(rows.size).to eq(100)
+      expect(row_hrefs.uniq.size).to eq(100)
+      expect(hundred).to eq(three)
     end
   end
 
