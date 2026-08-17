@@ -1786,6 +1786,24 @@ RSpec.describe "Repository registration and API keys", type: :request do
       # reads -2, because the collection was being loaded for the table regardless. Neither figure
       # includes the `created_by_user` preload: that is bought inside the `keys.manage` gate only,
       # and the example below is what holds it there.
+      #
+      # RECOUNTED AT 20 by SPGD-649, which added the "Where the unannotated tests are" panel: ONE
+      # further read of `spec_observations`, the same run's rows grouped by AREA on the ANNOTATION
+      # axis. Not derivable from the by-duration rollup SPGD-292 counted above, which groups the
+      # identical population: that one ranks by wall clock and its coverage figure is TIMING
+      # coverage, so an area of four hundred fast unannotated examples heads this list and sits
+      # nowhere near the head of that one. One grouped aggregate carrying its own `COUNT(*) OVER ()`,
+      # so the caption's population figure rides back with the rows rather than costing a second
+      # round trip — see `UnannotatedDirectories`.
+      #
+      # Issued on this fixture for the reason the `spec_observations` reads above are: the run
+      # recorded no examples, the aggregate comes back empty, and the panel renders its
+      # "no per-example detail" state rather than a ranking. It is gated on `@latest_test_run` like
+      # every other per-example panel, so the count on a never-ingested repository is unchanged —
+      # the half this fixture cannot see, pinned in
+      # spec/requests/repository_unannotated_directories_spec.rb, which also carries the panel's own
+      # N+1 guard: the equality across two suite sizes that an absolute count here cannot tell from
+      # an ordinary widening.
       it "issues exactly the queries the page issued before the shard counts were read" do
         repository = create_repository(user: @user)
         sharded_run(repository, [61.0, 58.5, 74.25, 60.0], commit_sha: "feedfacecafe0068")
@@ -1794,7 +1812,7 @@ RSpec.describe "Repository registration and API keys", type: :request do
         # first-request-only work cannot land in it.
         get repository_path(repository)
 
-        expect(count_all_queries { get repository_path(repository) }).to eq(19)
+        expect(count_all_queries { get repository_path(repository) }).to eq(20)
         # And the page really did render the thing being counted — an absolute count is satisfied
         # by a page that renders nothing at all.
         expect(distribution.all("li").size).to eq(4)

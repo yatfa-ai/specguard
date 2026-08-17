@@ -95,18 +95,37 @@ class UnannotatedDirectories
   # per-area grain to disclose. `SpecDirectoryDurations` draws the same line for the same reason.
   def recorded? = rows.any?
 
+  # Whether the ranking was CUT — the run touched `directory_count` areas and this list holds
+  # `rows.size` of them. The caption's whole job: "the areas carrying this run's annotation debt" on
+  # a run that touched eighty is a truncated list wearing the shape of a complete one, which is the
+  # one thing the comment on `directory_count` says a disclosure may not do.
+  #
+  # WRITTEN HERE ONCE AND TAKEN BACK OFF, under the rule the `Row` preamble below states — a
+  # predicate no surface calls is a claim this object makes that nothing has ever checked — and the
+  # comment that removed it named the exact condition for its return: *"whoever builds the dashboard
+  # panel should add what it calls, with the spec that runs it."* Both halves of that are now true.
+  # The "Where the unannotated tests are" panel branches its caption on this, and
+  # spec/models/unannotated_directories_spec.rb runs BOTH of its answers rather than only the cut
+  # one. `SpecDirectoryDurations#truncated?` and `RepeatedDescriptions#truncated?` are this same
+  # predicate over their own two operands, each phrasing the same disclosure for its own panel.
+  #
+  # It derives no figure the object did not already have: both operands come back from the one
+  # grouped read that built the rows, so this cannot describe a different population from the list
+  # it captions. It is a fact about the LIST, never about the run's debt — a complete list of ten
+  # areas and a cut list of ten areas differ here and nowhere else on this object.
+  def truncated? = directory_count > rows.size
+
   # One area's annotation debt, and the population it was counted against.
   #
-  # No `#coverage_label`, no `#fraction`, no `#complete?`, AND NO `#truncated?` — the last of those was
-  # written here and taken back off, which is this rule applied to this class rather than merely
-  # restated by it. `UnannotatedExamples` refuses `recorded?` and `truncated?` on exactly this
-  # reasoning: a predicate no surface calls is a claim this object makes that nothing has ever checked.
+  # No `#coverage_label`, no `#fraction`, no `#complete?` — the Row ships OPERANDS and the reading is
+  # the reader's, which is the class comment's rule and is untouched by the predicate above.
+  # `UnannotatedExamples` refuses `recorded?` and `truncated?` on the reasoning this class applies
+  # too: a predicate no surface calls is a claim this object makes that nothing has ever checked.
   # `#recorded?` stays because `serialized_unannotated_directories` calls it and request examples run
-  # BOTH of its answers; `directory_count > rows.size` had no caller and no spec, and the truncation it
-  # would have phrased is already shipped as the two operands a client compares themselves — which is
-  # what the comment on `directory_count` says the disclosure is. `SpecDirectoryDurations#truncated?`
-  # is not a counter-precedent: its panel partials call it. This rollup is API-only; the serializer
-  # ships the integers and nothing derived from them. Whoever builds the dashboard panel should add
-  # what it calls, with the spec that runs it.
+  # BOTH of its answers; `#truncated?` was removed on that same rule while this rollup was API-only —
+  # the serializer ships the integers and nothing derived from them, so the truncation was left as
+  # the two operands a client compares itself — and it is back because a caller and its spec now
+  # exist. `SpecDirectoryDurations#truncated?` was never a counter-precedent: its panel partials call
+  # it, and so, now, does this one's.
   Row = Struct.new(:path, :unannotated_count, :recorded_count, keyword_init: true)
 end

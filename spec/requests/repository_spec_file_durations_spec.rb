@@ -305,8 +305,12 @@ RSpec.describe "Repository heaviest spec files", type: :request do
       # description, which that grouping excludes in its WHERE clause and therefore cannot count for
       # itself. Only the first of the two is a `GROUP BY`, which is why the grouping tally below
       # moves to three rather than four: the presence count is a plain aggregate over one run.
-      expect(large_queries.size).to eq(7)
-      expect(large_queries.count { |sql| sql.include?("GROUP BY") }).to eq(3)
+      # RECOUNTED AT 8 by SPGD-649, which added the "Where the unannotated tests are" panel: ONE
+      # further read, the same run's rows grouped by AREA on the ANNOTATION axis rather than on the
+      # wall clock the by-directory rollup ranks them by. It IS a `GROUP BY`, so the grouping tally
+      # below moves with it — from three to four — where SPGD-344's presence count did not.
+      expect(large_queries.size).to eq(8)
+      expect(large_queries.count { |sql| sql.include?("GROUP BY") }).to eq(4)
     end
   end
 

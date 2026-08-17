@@ -1,0 +1,159 @@
+    <%# == WHERE the tests SpecGuard cannot see actually are
+        The discharge of the one figure on the Overview panel that named a problem and offered no
+        route into it. That panel prints "Not visible to SpecGuard" as
+        `total_specs_count - annotated_specs_count` and then says, in as many words, *"SpecGuard
+        cannot see the other 12,403 tests."* A subtraction is the entire answer it can give: a
+        five-figure count, and not one path a reader could open. This panel is the rows behind it.
+
+        The same rows have had a ranked, scoped worklist on the API since SPGD-591/608/623 and on
+        the MCP bridge since SPGD-599. The dashboard — the surface the owner actually opens — was
+        the rung that was never built, and it is the item SPGD-590 deferred by name.
+
+        NOT the by-duration rollup directly above, which ranks the same population — one run's areas
+        — on a different axis and cannot stand in for this one. That panel ranks by WALL CLOCK and
+        its coverage column is TIMING coverage; an area of four hundred fast unannotated examples
+        heads this list and appears nowhere near the head of that one. Two reads, side by side,
+        each stating its own basis.
+
+        Rendered whenever there is a RUN, and the three states it distinguishes are the whole point
+        of the gating:
+
+        * No run at all — no panel. The Overview's "No CI run has reported yet" is this page's one
+          statement of that, and a second empty state repeating it would invite the reading that a
+          repository CI has never reported for measured zero debt.
+        * A run that wrote no per-example rows — the panel renders and says the DETAIL is missing.
+          That is a fact about what the client sent, and it must not wear the spelling of "nothing
+          is unannotated".
+        * A run whose rows carry no debt — the panel renders and says so out loud. `RejectedIngests`
+          states the rule this follows: a positive finding has to be distinguishable from "SpecGuard
+          does not track that", and a panel that vanished when the news was good would leave the two
+          looking identical.
+
+        Outside the `manage_keys` gate, like the rankings above: read-only suite telemetry, nothing
+        credential and nothing actionable on these rows. No drill-down link, because
+        `UnannotatedDirectories.for` takes no narrowing argument and there is no per-area rung
+        beneath this one on this page — the per-example worklist is the API's `?spec_directory=`,
+        which this panel names the area for. %>
+    <% if @unannotated_directories %>
+      <%= render UI::PanelComponent.new(title: "Where the unannotated tests are", id: "unannotated-directories",
+                                        class: "lg:col-span-3") do %>
+        <% if @unannotated_directories.recorded? %>
+          <%# Whether any LISTED area carries debt — and the reason that is allowed to be read as a
+              statement about the RUN, which for a capped list it usually is not.
+
+              The ranking is `COUNT(*) FILTER (WHERE status = 'unannotated') DESC`, so the maximum is
+              at the HEAD by construction: if the first row carries none, no row below it and no row
+              cut by the limit can carry any either. That inference is the only thing that makes a
+              run-scoped sentence safe under a caption that says "the 10 of 84"; it is a fold over
+              the listed rows and it is stated here rather than assumed, because the same fold under
+              any OTHER ordering would be a claim about ten areas dressed as a claim about eighty.
+
+              In the view and not on the object on purpose: `UnannotatedDirectories` ships operands
+              and no verdicts, and "this run has debt" is exactly the kind of reading its class
+              comment twice refuses to make on the reader's behalf. Nothing is recomputed here — the
+              counts printed below are the object's own integers, and this asks only whether one of
+              them is positive. %>
+          <% carries_debt = @unannotated_directories.rows.any? { |directory| directory.unannotated_count.positive? } %>
+
+          <% if carries_debt %>
+            <%# What the rows ARE, before they are read as a verdict, and what the list is the head
+                OF. Both claims are counted off the same grouped read that returned the rows, so this
+                paragraph cannot end up describing a different row set from the table under it. %>
+            <p class="text-xs text-app-muted mb-3" id="unannotated-directories-basis">
+              <%# The cap, disclosed whether or not anything was cut. `rows.size` cannot state the
+                  population — it IS the truncated figure — so the total rides back on the same
+                  aggregate and `#truncated?` decides which sentence is true. A cut list that does
+                  not say it was cut is read as the whole story. %>
+              <% if @unannotated_directories.truncated? %>
+                The <%= number_with_delimiter(@unannotated_directories.rows.size) %> areas carrying
+                the most unannotated tests, of the
+                <%= number_with_delimiter(@unannotated_directories.directory_count) %> this run
+                recorded examples in, most first
+              <% else %>
+                All <%= number_with_delimiter(@unannotated_directories.directory_count) %>
+                <%= "directory".pluralize(@unannotated_directories.directory_count) %> this run
+                recorded examples in, most unannotated first
+              <% end %>
+              — grouped on the immediate parent of the file that RAN each example, so a shared
+              example group counts against the area including it rather than against
+              <code>spec/support</code>, and the areas sit side by side rather than inside one
+              another.
+              <%# The denominator is on every row for the same reason the panel refuses a fraction:
+                  the two operands are what a reader decides FROM. Said here as well because a reader
+                  scanning a column of counts needs to know what the second one is before the first
+                  means anything. %>
+              Each area shows how many of its examples carry no <code>@intent</code> and how many
+              this run recorded there in total — the operands, never a percentage: an area at 40 of
+              40 is equally a module nobody has annotated yet and a module of generated specs nobody
+              intends to, and nothing on this page decides which.
+              <%# An area with no debt is a ROW here, which surprises a reader who expected a list of
+                  problems. Stated, because a `0` in a panel titled "where the unannotated tests are"
+                  otherwise reads as a rendering bug. %>
+              An area whose examples all carry one is listed at 0 rather than dropped, so this is
+              where the run's areas stand and not only where its debt is.
+              <%# Counted off THIS RUN'S per-example rows. The Overview's figure is a subtraction over
+                  the run's own counters, and while both sides read the same `status` the payload
+                  wrote, the two populations are not guaranteed identical — a client that reports
+                  totals for more examples than it sends detail for has more of the first than of the
+                  second. So the sums here are not promised to add up to the headline, and saying so
+                  is cheaper than a reader discovering it with a calculator. %>
+              Counted off the per-example rows this run reported, which is a different population
+              from the suite size on the Overview panel above and may legitimately differ from it.
+            </p>
+
+            <%= render UI::TableComponent.new(columns: ["Directory", "Not visible to SpecGuard",
+                                                        "Examples this run recorded"],
+                                              describedby: "unannotated-directories-basis") do %>
+              <% @unannotated_directories.rows.each do |directory| %>
+                <tr>
+                  <td class="px-3 py-2 font-mono text-xs text-app-content"><%= directory.path %></td>
+                  <%# Both operands, side by side and both bare integers. No fraction, no percentage,
+                      no threshold and no colour on the row — `UnannotatedDirectories` states that
+                      boundary twice and it governs this partial too. `tabular-nums` so a column of
+                      counts lines up the way every other numeric column on this page does. %>
+                  <td class="px-3 py-2 text-app-content tabular-nums">
+                    <%= number_with_delimiter(directory.unannotated_count) %>
+                  </td>
+                  <td class="px-3 py-2 text-app-content-secondary tabular-nums">
+                    <%= number_with_delimiter(directory.recorded_count) %>
+                  </td>
+                </tr>
+              <% end %>
+            <% end %>
+          <% else %>
+            <%# The good news, said out loud, and scoped to exactly what these rows can see: every
+                example this run RECORDED carries an intent. Not "the suite is fully annotated" — the
+                Overview's subtraction is over the run's counters and answers that question for
+                itself.
+
+                `directory_count` and not `rows.size`: the count is taken before the LIMIT, so it
+                covers the areas past the cap as well — and past the cap is where the head-of-list
+                inference above is doing its work. %>
+            <%= render UI::EmptyStateComponent.new(
+                  title: "No unannotated tests in this run",
+                  description: "Every example this run recorded carries an @intent, across all " \
+                               "#{number_with_delimiter(@unannotated_directories.directory_count)} " \
+                               "#{'directory'.pluralize(@unannotated_directories.directory_count)} " \
+                               "it touched, so there is no area to rank here."
+                ) %>
+          <% end %>
+        <% else %>
+          <%# A run with no per-example rows AT ALL — ingested before those rows existed, or from a
+              client that sends only totals. There is no per-area grain to disclose, and the one
+              thing this state may not do is read as the state above it: "nobody sent the detail" and
+              "nothing is unannotated" are the same empty table and opposite news.
+
+              The panel stays rather than disappearing, because its absence would be a third
+              indistinguishable thing on a page where the Overview may be printing a five-figure
+              invisible count at the same time — the reader would be told the debt exists and shown
+              no reason this panel is not describing it. %>
+          <%= render UI::EmptyStateComponent.new(
+                title: "No per-example detail on this run",
+                description: "This run reported suite totals without the per-example rows SpecGuard " \
+                             "rolls up by area, so there is nothing to say about where its " \
+                             "unannotated tests are — not that it has none. Any count on the " \
+                             "Overview above is taken from the run's own totals."
+              ) %>
+        <% end %>
+      <% end %>
+    <% end %>

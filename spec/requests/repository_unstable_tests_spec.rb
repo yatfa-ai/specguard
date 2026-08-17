@@ -716,6 +716,11 @@ RSpec.describe "Repository unstable tests", type: :request do
     # spec/requests/repository_spec_directory_window_growth_spec.rb. Both fixtures below hold more
     # than two runs on the branch, so that read names a different pair from the last-push one and is
     # a real round trip on each of them rather than a query-cache repeat.
+    # The eighth is the single-run by-AREA rollup on the ANNOTATION axis — "Where the unannotated
+    # tests are", SPGD-649. It reads the latest run's rows only, so it moves with neither the length
+    # of the window nor how red it went, and it is not the by-duration rollup counted above: that one
+    # ranks the same areas by wall clock. Its own budget is pinned in
+    # spec/requests/repository_unannotated_directories_spec.rb.
     it "costs the same four reads at 30 runs of 200 examples as at 3 runs of 3" do
       small = create_repository(user: @user, github_full_name: "acme/small-suite")
       3.times do |index|
@@ -742,7 +747,7 @@ RSpec.describe "Repository unstable tests", type: :request do
       # panels would be equal and worthless.
       expect(rows.size).to eq(4)
       expect(large_queries.size).to eq(small_queries.size)
-      expect(large_queries.size).to eq(13)
+      expect(large_queries.size).to eq(14)
     end
 
     # The candidate narrowing is what makes the composition affordable, and its `IN` list is capped
@@ -757,7 +762,7 @@ RSpec.describe "Repository unstable tests", type: :request do
         ingest(repository, specs, commit_sha: "red#{format("%011d", index)}", at: (30 - index).days.ago)
       end
 
-      expect(queries_against("spec_observations") { get repository_path(repository) }.size).to eq(13)
+      expect(queries_against("spec_observations") { get repository_path(repository) }.size).to eq(14)
     end
 
     # The gate is what it says it is: a window that cannot be compared asks nothing past the probe
@@ -767,12 +772,13 @@ RSpec.describe "Repository unstable tests", type: :request do
 
       queries = queries_against("spec_observations") { get repository_path(repository) }
 
-      # Nine of these belong to the panels above, which read the latest run (and, for the three
-      # by-area comparisons, an earlier one) regardless; the tenth is this panel's gating probe,
-      # and there is no eleventh. The window comparison is among the nine and not among what the
+      # TEN of these belong to the panels above, which read the latest run (and, for the three
+      # by-area comparisons, an earlier one) regardless — the tenth being the single-run annotation
+      # rollup SPGD-649 added, which reads the latest run whatever the window says; the eleventh is
+      # this panel's gating probe, and there is no twelfth. The window comparison is among the nine and not among what the
       # gate withholds: its own gate is about SIZES and is satisfied here, where this panel's is
       # about OUTCOMES and is not — two windows of the same runs, two different questions to refuse.
-      expect(queries.size).to eq(10)
+      expect(queries.size).to eq(11)
       # What the gate withholds is a grouping by description over the WINDOW — the candidate
       # narrowing and the composition that follows it, both of which narrow `test_run_id` to a LIST
       # of runs. The single-run `GROUP BY name` among the nine belongs to the "Descriptions this run
