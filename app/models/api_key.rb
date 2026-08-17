@@ -52,8 +52,15 @@ class ApiKey < ApplicationRecord
   #
   # `rotated_at` is written in the SAME `save!` that swaps the digest, and that is the point of it
   # rather than a detail of it: the row can then never carry a new token beside a `last_used_at`
-  # stamped by the old one without also carrying the timestamp that says so. See
-  # {#rotated_and_unused?}, which is the only thing that reads it.
+  # stamped by the old one without also carrying the timestamp that says so.
+  #
+  # {#rotated_and_unused?} is the predicate the rotated-but-unused state is DERIVED from, and it is
+  # where the rule lives — but the column itself is not private to this class. It is also SERVED, by
+  # `GET /api/v1/repository`, under both `api_key.rotated_at` and
+  # `credential_health.keys[].rotated_at`, and it is read directly by the repository page's
+  # api-keys and connect-this-repository partials, which date the stranded-key copy from it. So
+  # changing when this is written or cleared moves a published API contract and rendered web copy
+  # along with the predicate — the blast radius is not local to this model.
   def regenerate!
     # `assign_token` is idempotent by design, and that is exactly what has to be defeated here:
     # this row is already carrying the token it was minted with.
