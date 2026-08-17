@@ -401,12 +401,12 @@ class RepositoriesController < ApplicationController
     # with an API key.
     #
     # NO NEW PARAMETER. It rides `?spec_directory=` and `?spec_file=`, the same asks the duration
-    # drill-downs above read. One ask now opens THREE panels, each answering in its own grain over
-    # the same area — that is how `drill_down_path` composes asks, and `show.html.erb` states the
-    # rule where the second one landed: it is not a collision to be fixed by minting another
-    # parameter. Assigned HERE rather than beside `@unannotated_directories`, which is the panel it
-    # belongs to topically, because it reads BOTH asks and `@spec_directory_request` is resolved
-    # directly above.
+    # drill-downs above read. One ask opens EVERY panel that reads it, each answering in its own
+    # grain over the same area — that is how `drill_down_path` composes asks, and `show.html.erb`
+    # states the rule at "Areas that grew or shrank": it is not a collision to be fixed by minting
+    # another parameter. Assigned HERE rather than beside `@unannotated_directories`, which is the
+    # panel it belongs to topically, because it reads BOTH asks and `@spec_directory_request` is
+    # resolved directly above.
     #
     # Guarded on a narrowing having been ASKED for as well as on there being a run, so a page nobody
     # asked an area or a file of issues no query at all — the same guard `SpecFileExamples` carries
@@ -455,10 +455,10 @@ class RepositoriesController < ApplicationController
       #
       # Guarded on the same two runs AND on an area having been asked for, so a page nobody asked an
       # area of issues no query at all. The ask is `?spec_directory=` — the SAME parameter the
-      # durations drill-down above reads, deliberately not a second one. One ask now opens TWO
-      # panels, each answering in its own grain: which files carry the area's wall clock, and which
-      # of them moved since the previous run. That is how `drill_down_path` composes asks and it is
-      # intended — a later reader should not "fix" it by splitting the parameter in two.
+      # durations drill-down above reads, deliberately not a second one. One ask opens EVERY panel
+      # that reads it, each answering in its own grain over the same area. That is how
+      # `drill_down_path` composes asks and it is intended — a later reader should not "fix" it by
+      # splitting the parameter in two.
       #
       # `@spec_directory_growth` is passed rather than the runs alone: this drill-in inherits that
       # panel's comparability verdict instead of re-deriving it, so it cannot assert a comparison
