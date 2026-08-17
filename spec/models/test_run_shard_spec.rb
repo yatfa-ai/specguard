@@ -39,11 +39,15 @@ RSpec.describe TestRunShard do
         .to change(TestRunShard, :count).by(1)
     end
 
-    # The `WHERE shard_id IS NOT NULL` clause. A client that shards without exposing an index the
-    # gem recognises sends nothing to tell its slices apart, so each POST *has* to become its own
-    # row — `Ingest::RunRecorder#upsert_shard` says as much where it takes that branch. A
-    # non-partial index would refuse the second anonymous slice outright and report a four-way
-    # split as a quarter of the suite, which is the failure the counting exists to prevent.
+    # One row per anonymous slice. A client that shards without exposing an index the gem
+    # recognises sends nothing to tell its slices apart, so each POST *has* to become its own row —
+    # `Ingest::RunRecorder#upsert_shard` says as much where it takes that branch, and a four-way
+    # split collapsing to one row would report a quarter of the suite as the whole of it.
+    #
+    # Note what this does NOT hold: under Postgres's default `NULLS DISTINCT` the
+    # `WHERE shard_id IS NOT NULL` clause is not what admits these rows — a plain unique index on
+    # `(test_run_id, shard_id)` admits them too (measured). What this example refuses is a future
+    # `NULLS NOT DISTINCT`, which is the only mutation that reds it.
     it "lets a run hold any number of slices the client did not name" do
       expect do
         3.times { run.test_run_shards.create!(slice(shard_id: nil)) }
