@@ -676,12 +676,23 @@ RSpec.describe EmbeddingGenerator do
     #
     # Through the INTERFACE (`.call` :94, `.embed_many` :135) an escaping InvalidMessage would not
     # go unattributed: both re-wrap StandardError into EmbeddingGenerator::Error, and those are the
-    # only two entry points ingest/identity_resolver.rb uses (:1079 embed_many, :2312 call), so its
-    # deliberately narrow `rescue EmbeddingGenerator::Error` (:1080, narrowness documented at
-    # :1073) and its `retry_on` (:111) both still fire. What a regression costs THERE is the
-    # MESSAGE: the operator loses the actionable "not configured — set OPENAI_API_KEY" and gets an
-    # opaque decryption string instead. That is why the example below pins the message and not just
-    # the class — class alone would be a vacuous green.
+    # only two entry points that can REACH this provider path from ingest/identity_resolver.rb
+    # (:1079 embed_many, :2312 call), so its deliberately narrow `rescue EmbeddingGenerator::Error`
+    # (:1080, narrowness documented at :1073) still fires. The resolver has a THIRD call —
+    # `EmbeddingGenerator.equivalent?` at :1680 — which those two rescues do NOT wrap; it is inert
+    # here because `equivalent?` (:157) returns early unless the provider publishes `.normalize`,
+    # and only LocalProvider does (:337), so under OpenAIProvider it never reaches `credential`.
+    #
+    # No retry re-fires on either surface, and this rescue is not what protects one: there is no
+    # `retry_on` anywhere in this application, and three places document that the obvious one
+    # *could not* fire if there were — identity_resolver.rb:110-115 and :2304-2307, and
+    # identity_resolution_job.rb:14-17. `#embed` consumes EmbeddingGenerator::Error at the single
+    # call site, so the retry lives in the work list rather than in a job policy.
+    #
+    # What a regression costs THERE is the MESSAGE: the operator loses the actionable
+    # "not configured — set OPENAI_API_KEY" and gets an opaque decryption string instead. That is
+    # why the example below pins the message and not just the class — class alone would be a
+    # vacuous green.
     #
     # On the PROVIDER surface (`OpenAIProvider.api_key`, `configured?`) there is no such wrapper,
     # so an escaping InvalidMessage is raw: `configured?` raises instead of answering false. That
@@ -713,13 +724,18 @@ RSpec.describe EmbeddingGenerator do
       end
     end
 
-    # ENV precedence is unaffected by the store's health — `credential` is never reached when ENV
-    # answers, so a store that would raise cannot mask the precedence contract pinned at the top
-    # of this block. Without this, the two examples above could be satisfied by an implementation
-    # that consulted credentials first.
-    it "never consults a raising credentials store when ENV answers" do
-      allow(Rails.application.credentials)
-        .to receive(:dig).with(:openai, :api_key).and_raise(ActiveSupport::MessageEncryptor::InvalidMessage)
+    # ENV precedence is unaffected by the store's health — but pinning that by asserting the
+    # RETURNED VALUE under a raising stub has no teeth, so this asserts the store is never
+    # CONSULTED instead. `credential`'s own rescue erases the evidence: a raising stub is
+    # indistinguishable from a nil-returning one by the time `api_key` answers, so it yields
+    # "sk-from-env" under EITHER ordering. Probed rather than assumed — with `api_key` reordered to
+    # `credential(:api_key) || ENV[...].presence`, the value-asserting form stayed GREEN (7
+    # examples, 0 failures), the Vacuous Green shape from SPGD-78: the name claimed a guarantee no
+    # line in it established. The message expectation below does fail under that reordering (7
+    # examples, 1 failure, this one), which is what makes it a real control on the precedence
+    # contract pinned at the top of this block.
+    it "never consults the credentials store when ENV answers" do
+      expect(Rails.application.credentials).not_to receive(:dig)
 
       with_api_key("sk-from-env") do
         expect(described_class::OpenAIProvider.api_key).to eq("sk-from-env")
