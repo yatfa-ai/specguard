@@ -560,8 +560,9 @@ RSpec.describe NearDuplicateClusters do
   end
 
   # The reviewer's non-blocking note, taken: the clustering half is tenant-safe by construction
-  # (`n.repository_id = a.repository_id`, pinned above), but `identity_presence_in` has no tenant
-  # predicate, so a foreign run would caption this repository's clusters with another's row count.
+  # (`n.repository_id = ?`, bound to this repository and pinned above), but `identity_presence_in`
+  # has no tenant predicate, so a foreign run would caption this repository's clusters with
+  # another's row count.
   describe "a weighed run from the wrong repository" do
     let(:other) do
       create_repository(user: create_user(github_uid: "4004", github_handle: "elsewhere"),

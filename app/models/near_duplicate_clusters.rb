@@ -276,9 +276,17 @@ class NearDuplicateClusters
   # The two halves of this object are tenant-safe by DIFFERENT means, and only one of them is
   # structural — which is why the argument is checked rather than trusted.
   #
-  # The clustering half cannot cross a tenant boundary whatever it is handed: the edge query joins
-  # `n.repository_id = a.repository_id` and is pinned by its own "tenant boundary" example, so a
-  # foreign run simply weighs every cluster at 0, correctly, because nothing joins. The CAPTION half
+  # The clustering half cannot cross a tenant boundary whatever it is handed: the edge query pins
+  # the neighbour scan with `n.repository_id = ?`, bound to the same repository the outer `WHERE`
+  # already pins, and is held there by its own "tenant boundary" example — so a foreign run simply
+  # weighs every cluster at 0, correctly, because nothing joins. A literal is the STRONGER form of
+  # that guarantee, not merely a different spelling of it: the correlated `n.repository_id =
+  # a.repository_id` it replaced derived the tenant from whatever row the lateral was invoked for,
+  # so the boundary held only as a consequence of the outer predicate holding first, while a literal
+  # states the tenant in the inner scan itself and cannot be widened by anything the outer query
+  # later does. (It was changed for a planner reason, not this one — `spec_identity.rb:334` argues
+  # that at the query, and warns against tidying it back. The tenant argument here survives either
+  # spelling; it is simply cheaper to make about this one.) The CAPTION half
   # has no such protection — `SpecObservation.identity_presence_in` is `where(test_run_id:)` with no
   # tenant predicate, being a read whose run is normally its caller's own — so a foreign run makes
   # `#recorded_count` report ANOTHER TENANT'S row count beside a list of this one's clusters. Caption
@@ -446,11 +454,23 @@ class NearDuplicateClusters
                   clustered_timed_count == clustered_example_count
 
   # What the summed wall clock on this panel was measured over, always as a fraction and never as a
-  # bare count — the denominator is the point.
-  def coverage_label = "#{clustered_timed_count} of #{clustered_example_count}"
+  # bare count — the denominator is the point. Spelled through the seam that owns that rule, so this
+  # grain cannot word the fraction one way while the nine single-sided sites already routed through
+  # it word it another; `#duration_label` below reaches for the sibling seam one method away for the
+  # same reason, and only honouring one of the two would be an accident rather than a distinction.
+  def coverage_label = SpecObservation.coverage_fraction(clustered_timed_count,
+                                                         clustered_example_count)
 
   # How much of the repository's embedded population these clusters account for. The answer to "and
   # the other 3,900 tests?", which a bare cluster count invites and cannot answer.
+  #
+  # NOT spelled through `SpecObservation.coverage_fraction`, and the omission is deliberate: that
+  # seam's operands are named `(timed, recorded)` and every site routed through it is TIMING
+  # coverage — `unannotated_directories.rb:17` says so in those words when it explains why a
+  # duration ranking cannot stand in for an annotation one. This fraction counts IDENTITIES over
+  # identities and has no timing in it at all. Routing it there would render correctly today and
+  # quietly enlarge what the seam claims to mean, which is the failure the seam exists to prevent
+  # rather than an instance of the rule it enforces.
   def identity_coverage_label = "#{clustered_identity_count} of #{identity_count}"
 
   # One group of tests that read alike, and what the examples under them cost in the weighed run.
@@ -501,8 +521,10 @@ class NearDuplicateClusters
     def duration_label = SpecObservation.humanized_duration(total_seconds)
 
     # How much of the cluster the total covers. Always the fraction, over EXAMPLES rather than over
-    # members: "6 of 8" is a claim about what ran, and members are texts.
-    def coverage_label = "#{timed_count} of #{example_count}"
+    # members: "6 of 8" is a claim about what ran, and members are texts. Through the same seam the
+    # panel caption above and the member rows below are spelled by, so the three grains on this
+    # object cannot disagree with each other about how a fraction is worded.
+    def coverage_label = SpecObservation.coverage_fraction(timed_count, example_count)
 
     # The tightest and loosest edge inside this cluster, both rounded to the two places a surface
     # can honestly render — the provider's own error against a collision-free space is ~0.02 (see
@@ -537,7 +559,7 @@ class NearDuplicateClusters
     def observed? = example_count.positive?
 
     def duration_label = SpecObservation.humanized_duration(total_seconds)
-    def coverage_label = "#{timed_count} of #{example_count}"
+    def coverage_label = SpecObservation.coverage_fraction(timed_count, example_count)
     def location = "#{file_path}:#{line_number}"
   end
 
