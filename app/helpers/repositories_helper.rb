@@ -254,9 +254,11 @@ module RepositoriesHelper
   #
   # The cut wording says "these #{n}" and NOT "the #{n} SpecGuard walked to". The count is a count of
   # this list, and this list is not the walk's output: `Repository#branch_histories` UNIONs the
-  # bounded walk with the PINNED branch outside `:branch_limit` (`app/models/repository.rb:255-259`),
-  # which is the same fact `trajectory_walk_cut?` uses `>=` for. On a cut repository the branch being
-  # drawn is routinely in this list *because the walk never reached it* — pin `main` on a repository
+  # bounded walk with the PINNED branch outside `:branch_limit` (the arm of that method's `UNION`
+  # reading `SELECT pin FROM unnest(ARRAY[:pinned_branches]…)`, which sits outside the subquery
+  # carrying the `LIMIT :branch_limit`), which is the same fact `trajectory_walk_cut?` uses `>=`
+  # for. On a cut repository the branch being drawn is routinely in this list *because the walk
+  # never reached it* — pin `main` on a repository
   # of `feature/*` and it arrives behind every one of them — so naming the size as the walked figure
   # is off by the pins, in the one branch of this method written to not overclaim. A bare count
   # claims nothing about provenance and is true however a row got here; the bound the reader

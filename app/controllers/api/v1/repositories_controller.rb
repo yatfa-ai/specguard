@@ -197,10 +197,11 @@ class Api::V1::RepositoriesController < Api::BaseController
       # at all. It sits directly under `api_key` because that is the claim it corrects.
       #
       # SERVED ON EVERY RESPONSE, including when nothing was refused and including on a repository
-      # that has never had a run accepted — the reasoning `repositories_controller.rb:95` gives for
-      # loading the panel unconditionally. A repository with no accepted run is not the empty case,
-      # it is the worst case. And "nothing was refused" is a POSITIVE FINDING an agent cannot
-      # otherwise distinguish from "SpecGuard does not track that".
+      # that has never had a run accepted — the reasoning `RepositoriesController#show` gives at its
+      # `@rejected_ingests = RejectedIngests.for(...)` load for loading the panel unconditionally
+      # rather than gating it on `@latest_test_run`. A repository with no accepted run is not the
+      # empty case, it is the worst case. And "nothing was refused" is a POSITIVE FINDING an agent
+      # cannot otherwise distinguish from "SpecGuard does not track that".
       #
       # See `serialized_delivery_health`.
       delivery_health: serialized_delivery_health,

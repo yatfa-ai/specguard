@@ -902,10 +902,12 @@ RSpec.describe "Repository suite-size trajectory", type: :request do
       # NOTE: the sentence says "these 11" and NOT "the 11 SpecGuard walked to". The walk reached
       # TEN here — `BRANCH_HISTORY_LIMIT` is stubbed to 10 and the walk is alphabetical, so it gets
       # `feature/000`…`feature/009` and stops. `main` is the eleventh and it is in this list because
-      # it was PINNED, outside `:branch_limit` (`app/models/repository.rb:255-259`) — i.e. it is here
-      # precisely because the walk never reached it, which is the same fact `trajectory_walk_cut?`
-      # needs `>=` for. A provenance claim over this count is off by the pins in exactly the branch
-      # written to not overclaim; the bare count is true however a row arrived. Do not reach for
+      # it was PINNED, outside `:branch_limit` (the `unnest(ARRAY[:pinned_branches]…)` arm of
+      # `Repository#branch_histories`' `UNION`, outside the `LIMIT :branch_limit` subquery beside
+      # it) — i.e. it is here precisely because the walk never reached it, which is the same fact
+      # `trajectory_walk_cut?` needs `>=` for. A provenance claim over this count is off by the pins
+      # in exactly the branch written to not overclaim; the bare count is true however a row
+      # arrived. Do not reach for
       # "walked to" when rewording this again.
       expect(trajectory_panel.find("#suite-trajectory-branches-basis")).to have_text(
         "At least 3 further branches have runs and are not in the row above. The branch menu names " \
