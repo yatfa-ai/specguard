@@ -9,17 +9,30 @@
 # `repository_directory_*_growth` files — need the same walk, and five copies are five walks free to
 # drift.
 #
-# AND THE DRIFT HERE FAILS VACUOUSLY GREEN, which is why one copy each was the wrong shape. The call
-# sites read
+# AND FOR FOUR OF THE FIVE COPIES THE DRIFT WOULD HAVE FAILED VACUOUSLY GREEN — measured, not
+# asserted. Most call sites read
 #
 #   expect(strings_in(rows)).to all(start_with("spec/models/"))
 #   expect(strings_in(rows)).not_to include("New file", "File removed", "Not timed", "±0")
 #
-# and `all` passes on an empty collection, as does `not_to include`. Drop the `when Array` branch
-# from one copy and that file's walk returns `[]` on the drill-in blocks whose rows are nested
-# arrays — every assertion still passes, the guard stops catching label leakage entirely, and it
-# reports green while doing it. A guard that has quietly stopped looking is worse than no guard,
-# because it still reports a verdict. So the walk is DEFINED ONCE, here.
+# and `all` passes on an empty collection, as does `not_to include`. Drop the `when Array` branch and
+# such a walk returns `[]` on the drill-in blocks whose rows are nested arrays; every one of those
+# assertions still passes, so the guard stops catching label leakage entirely while reporting green.
+#
+# THE FIFTH IS THE ONE THAT WOULD HAVE CAUGHT IT, and which one that is turns on the OPERAND WALKED,
+# not on the matcher. Four files do also assert positively —
+# `expect(strings_in(window)).to contain_exactly(...)` at run_growth:173, runtime_growth:190,
+# run_file:216 and runtime_file:276 — but `window` was measured to carry no array at all in any of
+# the four, so the `Array` branch descends into nothing there and all four survive the mutation.
+# Only repository_directory_growth_spec.rb:244 walks a NESTED operand positively: its `block` holds
+# a single array, at `rows`, carrying the three area paths, and dropping the branch makes exactly
+# those three elements go missing. That one example is the whole of the red.
+#
+# Which is the argument for defining the walk once, at its strongest: of the 20 invocations across
+# these five files, 19 cannot tell a walk that has stopped walking from one that legitimately found
+# nothing. A guard that has quietly stopped looking is worse than no guard, because it still reports
+# a verdict — so the walk is DEFINED ONCE, here, and all five files stand behind the one invocation
+# that can fail.
 #
 # WALKED RATHER THAN LISTED KEY BY KEY, so a label-shaped value added to a row, or to a block, later
 # is caught by the same example rather than by nobody.
