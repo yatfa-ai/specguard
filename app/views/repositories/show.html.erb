@@ -143,6 +143,27 @@
           <p class="text-xs text-app-muted"><%= held_access_description(viewer_access) %></p>
         <% end %>
 
+        <%# WHICH RUN this whole page is anchored on, whenever `?commit_sha=` named one — the web's
+            counterpart to the JSON endpoint's `run_anchor` block, and the half of that ask this
+            surface could not have without it. The parameter re-anchors every run-grain panel on the
+            page; the panels themselves each go on correctly labelling the run they drew, which is
+            precisely why the anchor needs saying out loud. A page pinned to a three-week-old commit
+            and a page showing this morning's run are, panel by panel, indistinguishable.
+
+            Rendered in the OVERVIEW rather than page-wide, because this panel is where the page
+            already says which run it means ("Measured on abc1234" below), and a second statement of
+            the same subject belongs beside the first.
+
+            Above the `@latest_test_run.nil?` split rather than inside either arm: an ask that
+            resolved to nothing on a repository with no runs at all is a state the empty state below
+            cannot describe — it says CI has never reported, which is true and is not what that
+            reader asked. Renders nothing at all on the ordinary no-ask page; see
+            `RepositoriesHelper#run_anchor_notice` for why the default is silent here where the API
+            serializes a block on every call. %>
+        <% if (anchor_notice = run_anchor_notice(@run_anchor_request, @run_anchor_run, @latest_test_run)) %>
+          <p class="text-xs text-app-muted" id="run-anchor-notice"><%= anchor_notice %></p>
+        <% end %>
+
         <% if @latest_test_run.nil? %>
           <%# "Never ingested" is not "measured zero". Rendering `0%` here — which is what
               flooring a repository-wide figure at 0.0 amounts to — makes a repository whose CI has
@@ -1707,8 +1728,15 @@
     <%# Read-only suite telemetry, deliberately OUTSIDE the `manage_keys` gate above — the same
         class of information as the connection-health stat: a `view` member legitimately needs to
         see whether CI is still reporting and what it reported. Nothing here is credential
-        metadata and nothing here actions anything, so it is not a "control" and has no business
+        metadata and nothing here changes any state, so it is not a "control" and has no business
         in the `rendered_controls` matrix (spec/requests/repository_sharing_spec.rb).
+
+        The commit cells became links and that does not move the line. A control acts — it mints,
+        revokes, renames or destroys, and rendering one to a viewer who does not hold the
+        capability could only ever produce a 403. A GET that re-reads the same telemetry under a
+        different anchor is navigation, and it is available to exactly the viewers this panel
+        already is: the `?commit_sha=` ask is served by `RepositoriesController#show`, behind the
+        same `:view` authorization as the page it re-renders.
 
         Ten rows regardless of suite size: this is a history of *runs*, not of tests. A 20,000-test
         suite still renders ten rows, and there is no per-spec aggregation behind any cell. %>
@@ -1740,12 +1768,70 @@
           consecutive rows are routinely two different branches. They are not a series, and the
           difference between two of these test counts is not a change in the suite. Suite growth is
           measured on the Overview panel above, and only against the previous run on the same branch.
+          <%# Every commit here opens the whole page on that run, so the caption says what the
+              gesture does — a column of shas that became clickable with nothing announcing it is a
+              feature only a reader who happens to hover finds.
+
+              The second sentence is the qualification `?commit_sha=` cost this caption, and it is
+              stated only where it applies. On a default page the Overview's run IS the top row here
+              and the panel wiring guarantees it (`Repository#recent_test_runs` shares
+              `latest_test_run`'s ordering, tie-break included). Under an explicit ask that identity
+              is not expected to hold — the anchored run is a row from the middle of this list, or
+              from behind its ten-row bound entirely — and a reader who was promised the top row and
+              handed a marked third one would read a correct page as a rendering bug. It is the same
+              qualification the API's `run_anchor` block carries about its own `history`.
+
+              Printed rather than left to `aria-current`, which announces the marked row to a screen
+              reader and says nothing at all to anyone else. %>
+          Every commit below opens this page on that run.
+          <% if @run_anchor_request.present? %>
+            This page is anchored on a run the URL named, so the marked row here is the one every
+            panel above describes — and it is not necessarily the newest.
+          <% end %>
         </p>
         <%= render UI::TableComponent.new(columns: ["Commit", "Branch", "Tests", "Duration", "Annotated", "Ingested"],
                                           describedby: "recent-runs-basis") do %>
           <% @recent_test_runs.each do |test_run| %>
             <tr>
-              <td class="px-3 py-2 font-mono text-xs text-app-content"><%= test_run.commit_sha.first(7) %></td>
+              <td class="px-3 py-2 font-mono text-xs text-app-content">
+                <%# The way INTO the row, and the rung this panel never had: until now these ten
+                    shas were the only place on the page naming a run other than the newest one, and
+                    not one of them was a link. Every run-grain panel above answered about the
+                    newest run and about nothing else, on the one surface a repository owner
+                    actually opens — while the JSON endpoint (SPGD-544) and the MCP bridge
+                    (SPGD-552) had both been able to be asked which run they meant since they
+                    shipped.
+
+                    `commit_sha` is the FULL sha and never the seven-character label beside it:
+                    `RequestedCommitShaParam` reaches a `where(commit_sha: …)` equality on a plain
+                    string column, so an abbreviated value would match nothing and every one of
+                    these links would fall back to the newest run — the silent substitution this
+                    feature exists to disclose, manufactured by its own navigation.
+
+                    Through `drill_down_path`, so every OTHER ask rides through — an open area or an
+                    open file survives the jump, which is the entire point of anchoring a run rather
+                    than starting over on one. Stated once in the helper rather than re-decided in a
+                    hand-written argument here, which is exactly how the sibling link at "Heaviest
+                    spec directories" came to drop an open file for as long as it did.
+
+                    `anchor: "overview"` because that is where the answer lands: the Overview panel
+                    is where the page names its run and where the anchor disclosure is rendered.
+
+                    `aria-current` on the anchored row, as every sibling drill-down link on this page
+                    carries: this is a list of choices with one of them taken. Only ever set under an
+                    explicit ask — on a default page nothing here is "current", because the reader
+                    chose nothing and the top row is the anchor by construction rather than by a
+                    gesture they made. Matched on the ROW and not on the sha: a repository can hold
+                    two runs of one commit (a re-run, a second CI workflow), `latest_test_run_for_commit`
+                    resolves an ask to exactly one of them, and a sha comparison would mark both. %>
+                <%= link_to test_run.commit_sha.first(7),
+                            drill_down_path(@repository, commit_sha: test_run.commit_sha,
+                                            anchor: "overview"),
+                            class: "underline underline-offset-2 decoration-app-border-light " \
+                                   "text-app-content hover:decoration-app-content " \
+                                   "aria-[current=true]:font-semibold",
+                            aria: { current: test_run.id == @run_anchor_run&.id ? "true" : nil } %>
+              </td>
               <td class="px-3 py-2 text-app-content-secondary">
                 <%# `branch` is nullable (db/schema.rb) and Ingest::Payload accepts a body without
                     it, so a blank cell would be a client omission dressed up as a fact. %>
@@ -1802,10 +1888,14 @@
                     produced entirely by telemetry loss.
 
                     Through `TestRun#wall_clock_coverage` — the seam the Overview panel's own wall
-                    clock label reads — and never re-spelled here. The top row of this table IS the
-                    run that panel names (`Repository#recent_test_runs` shares `latest_test_run`'s
-                    ordering including the tie-break), so one page renders one float twice and the
-                    two renderings must not word it differently.
+                    clock label reads — and never re-spelled here. On a default page the top row of
+                    this table IS the run that panel names (`Repository#recent_test_runs` shares
+                    `latest_test_run`'s ordering including the tie-break), so one page renders one
+                    float twice and the two renderings must not word it differently. Under an
+                    explicit `?commit_sha=` the anchored run is a row further down this list, or
+                    behind its bound entirely — the shared seam is what keeps the two wordings
+                    agreeing wherever the row lands, which is more of the reason for it rather than
+                    less.
 
                     Gated on `multi_shard?`, which is the Overview's own gate and deliberately NOT
                     the `shard_count.positive?` the Tests cell uses one column over. That predicate

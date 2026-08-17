@@ -54,12 +54,20 @@ module RepositoriesHelper
   # of the asks, and one of them ("Close file") chooses its anchor from what else is open.
   #
   # The asks are read from the raw REQUEST ivars, never from a resolved object — `branch` is
-  # `@trajectory_branch_request` and not the run the fallback settled on, so a link reproduces what
-  # the reader asked for rather than what they got. A site that wants a resolved value passes it as
-  # an override instead (the area-files table names `@spec_directory_files.path`, its own panel's
-  # subject, rather than leaning on that ivar and the request agreeing).
+  # `@trajectory_branch_request` and not the run the fallback settled on, and `commit_sha` is
+  # `@run_anchor_request` and not the run it resolved to, so a link reproduces what the reader asked
+  # for rather than what they got. A site that wants a resolved value passes it as an override
+  # instead (the area-files table names `@spec_directory_files.path`, its own panel's subject, rather
+  # than leaning on that ivar and the request agreeing).
+  #
+  # `commit_sha` is the one ask here that RE-ANCHORS rather than narrows — it names which run every
+  # panel describes, where the other four pick a series or open a panel of the run already chosen —
+  # and it is in this hash for exactly the reason the other four are: a gesture aimed at one ask must
+  # not close the others as a side effect. Opening an area is not a request to jump back to the
+  # newest run.
   def drill_down_path(repository, anchor:, **overrides)
     asks = { branch: @trajectory_branch_request,
+             commit_sha: @run_anchor_request,
              spec_file: @spec_file_request,
              spec_directory: @spec_directory_request,
              repeated_description: @repeated_description_request }
@@ -317,6 +325,45 @@ module RepositoriesHelper
 
     "SpecGuard has no runs on #{asked}, so this panel is drawn on #{trajectory.branch} — the " \
       "branch of the repository's latest run — instead."
+  end
+
+  # == The run every panel on this page is anchored on
+
+  # WHICH RUN this page is describing, said out loud whenever `?commit_sha=` named one — the web's
+  # counterpart to the `run_anchor` block `Api::V1::RepositoriesController#serialized_run_anchor`
+  # serializes on every call.
+  #
+  # `nil` on the ordinary no-ask page, which is the whole of the difference between this and the
+  # API's block. A JSON client reads its anchor out of a field and pays nothing for one it did not
+  # ask about; a reader pays for every sentence on the page, and "this page is anchored on the run
+  # that reported most recently" under a panel already headed "Measured on abc1234" is a sentence
+  # that teaches a reader to skim the ones that matter.
+  #
+  # BOTH answers to an ask are stated, and they must not be able to render the same. The resolved
+  # one is not decoration: the anchor is invisible from the figures themselves — every panel is
+  # correctly labelled with the run it drew, and correctly labelled is exactly how a page pinned to
+  # a three-week-old commit reads to someone who arrived by a link. The fallback one is the defect
+  # this feature exists to close, and the reason it cannot be left silent is the one the JSON
+  # endpoint gives about the same substitution: without it the URL names a sha, the page describes
+  # a different run, and nothing anywhere says the ask was not honoured.
+  #
+  # Decided on WHETHER THE ASK RESOLVED — `anchored` is the row `?commit_sha=` found, or nil — and
+  # never by comparing two shas. That is `serialized_run_anchor`'s rule (`resolved:` is read off the
+  # finder, not off an equality) and it is what stops the disclosure and the choice it discloses from
+  # coming apart: a repository can hold two runs of one commit, and the sha a reader asked for is
+  # then equal to the sha they were served on a page that resolved their ask exactly.
+  #
+  # Both branches return a plain String and not `html_safe` markup, so escaping is ERB's — the same
+  # stance `#trajectory_branch_fallback_notice` takes one ask over, and it matters here because the
+  # fallback branch prints back a sha nobody validated.
+  def run_anchor_notice(requested, anchored, shown)
+    return nil if requested.blank?
+    return run_anchor_fallback_sentence(requested, shown) if anchored.nil?
+
+    "This page is anchored on #{anchored.commit_sha.first(7)} — the run this URL names — rather " \
+      "than on whichever run reported most recently. Every panel describing a single run describes " \
+      "that one. “Recent runs” and “Suite growth” are histories rather than rows, so they are not " \
+      "re-anchored: the run named here need not be the newest one below."
   end
 
   # == The "Slowest tests" panel's outcome sentence
@@ -756,6 +803,30 @@ module RepositoriesHelper
   end
 
   private
+
+  # Said when the reader named a run SpecGuard has none of, and the page anchored on another one.
+  #
+  # Two states, because they are two different facts about this repository and only one of them is
+  # about the sha. A repository with runs substituted its newest one and the sentence names it, so
+  # the reader can see which run they are actually reading; a repository with NO runs substituted
+  # nothing at all, and telling that reader the page "is anchored on — instead" would name an empty
+  # string where a commit should be. It is the same split `#trajectory_branch_fallback_notice` makes
+  # for a trajectory whose fallback branch is itself blank.
+  #
+  # The asked-for sha is truncated, and this is the only place on the page that echoes it back: it
+  # is unvalidated URL input, and `test_runs.commit_sha` is a plain `string` column written from
+  # whatever CI reported — short form and long form both — so there is no length this could rely on.
+  def run_anchor_fallback_sentence(requested, shown)
+    asked = truncate(requested, length: 60)
+
+    if shown.nil?
+      return "SpecGuard has no run for #{asked}, and no run at all on this repository yet — so " \
+             "there is nothing here anchored on it."
+    end
+
+    "SpecGuard has no run for #{asked}, so this page is anchored on " \
+      "#{shown.commit_sha.first(7)} — the run that reported most recently — instead."
+  end
 
   # "2 earlier runs in this window on main" — the noun phrase both no-baseline branches count with,
   # written once so the two of them cannot drift into describing the same window differently. The
