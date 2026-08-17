@@ -569,7 +569,12 @@ RSpec.describe "Repository repeated description examples", type: :request do
       # count of rows carrying no description) and ONE for this panel. The list and both figures in
       # its caption come back on that one read: the counts are windows on it rather than a second
       # aggregate.
-      expect(large_queries.size).to eq(8)
+      # RECOUNTED AT 9 by SPGD-649, which added the "Where the unannotated tests are" panel: ONE
+      # further read of the same run's rows, grouped by AREA on the ANNOTATION axis — a different
+      # axis from the by-directory rollup already counted here, which ranks that identical
+      # population by wall clock. It is not a per-description read and does not move with a
+      # description being open, which is why the drill-down's own delta below is still exactly one.
+      expect(large_queries.size).to eq(9)
     end
 
     # The whole drill-down is off the default page's budget. A reader who never opens a description
@@ -583,7 +588,7 @@ RSpec.describe "Repository repeated description examples", type: :request do
       unopened = queries_against("spec_observations") { get repository_path(repository) }
 
       expect(unopened.size).to eq(opened.size - 1)
-      expect(unopened.size).to eq(7)
+      expect(unopened.size).to eq(8)
     end
   end
 end

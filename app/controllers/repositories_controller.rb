@@ -292,6 +292,28 @@ class RepositoriesController < ApplicationController
     # Guarded identically, and on nothing else. ONE query, not growing with the size of the suite:
     # see `SpecDirectoryDurations`.
     @spec_directory_durations = SpecDirectoryDurations.for(@latest_test_run) if @latest_test_run
+    # The SAME grain as the line above and a different AXIS, which is why it is a second read rather
+    # than a column on that one. That rollup ranks areas by WALL CLOCK and its coverage figure is
+    # TIMING coverage; this one ranks them by how many of their examples SpecGuard cannot see. An
+    # area of four hundred fast unannotated examples heads this list and appears nowhere near the
+    # head of that one, so neither is derivable from the other.
+    #
+    # The Overview panel at the top of this page already prints the run's invisible count — a
+    # subtraction, `total_specs_count - annotated_specs_count` — and a subtraction is the whole
+    # answer it can give: a five-figure count of tests the reader is handed no route to any of. The
+    # API has served the ranked, scoped worklist behind that figure since SPGD-591/608/623; this is
+    # the same rows on the page the owner actually opens.
+    #
+    # Guarded identically, and on nothing else — with no run there is nothing to rank, and the
+    # Overview's "No CI run has reported yet" is this page's one statement of that. Whether the run
+    # recorded per-example rows at all is a question the object answers (`#recorded?`), so the panel
+    # branches on one read rather than the controller taking a second.
+    #
+    # ONE query, not growing with the size of the suite: one grouped aggregate carrying its own
+    # `COUNT(*) OVER ()`, capped at `SpecObservation::UNANNOTATED_DIRECTORIES_LIMIT`. Shared verbatim
+    # with the API's `unannotated_directories` block, so the two consumers cannot disagree about a
+    # directory — see `UnannotatedDirectories`.
+    @unannotated_directories = UnannotatedDirectories.for(@latest_test_run) if @latest_test_run
     # The same run's rows at a grain none of the panels above reach: not which FILES or AREAS the
     # wall clock went into, but which DESCRIPTIONS more than one example of the run recorded, and
     # what those examples cost between them. Reachable from nowhere until now — `GROUP BY name`

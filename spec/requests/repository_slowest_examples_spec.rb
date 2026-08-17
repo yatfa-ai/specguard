@@ -556,9 +556,15 @@ RSpec.describe "Repository slowest tests", type: :request do
       # therefore cannot count for itself. Its own budget, including that the two stay two as the
       # number of repeated descriptions grows, is asserted in
       # spec/requests/repository_repeated_descriptions_spec.rb.
+      # RECOUNTED AT 8 by SPGD-649, which added the "Where the unannotated tests are" panel: ONE
+      # further read of this table, the same run's rows grouped by AREA on the ANNOTATION axis. It
+      # is not the by-directory rollup counted above under another name — that one groups the
+      # identical population and ranks it by WALL CLOCK, so neither ranking can be read off the
+      # other. Its own budget, and that it stays one read as the number of areas grows, is asserted
+      # in spec/requests/repository_unannotated_directories_spec.rb.
       # Page-wide rather than panel-scoped on purpose: what must not grow is the number of times
       # ONE page walks this table, and only a count taken across the whole request can say that.
-      expect(large_queries.size).to eq(7)
+      expect(large_queries.size).to eq(8)
     end
   end
 

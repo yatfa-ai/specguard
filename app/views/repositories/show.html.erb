@@ -842,6 +842,12 @@
 
 <%= render "repositories/suite_growth" -%>
 
+<%# Directly under the growth panel and ahead of the wall-clock family below it, because this is the
+    ANNOTATION axis the Overview panel opened at the top of this page and then dead-ended — the
+    "Not visible to SpecGuard" figure and the sentence beside it are what this answers. The
+    duration rankings are a different question and stay together after it. %>
+<%= render "repositories/unannotated_directories" -%>
+
 <%= render "repositories/slowest_tests" -%>
 
 <%= render "repositories/heaviest_spec_files" -%>
