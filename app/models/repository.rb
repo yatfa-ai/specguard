@@ -76,6 +76,40 @@ class Repository < ApplicationRecord
 
   def github_url = "https://github.com/#{github_full_name}"
 
+  # ONE LINE of ONE FILE at ONE REF, on GitHub — the sibling of `#github_url` above, which names the
+  # repository and nothing inside it. A surface that has printed a `file_path:line_number` coordinate
+  # has told the reader where to go; this is what lets them go there.
+  #
+  # `ref` IS REQUIRED AND HAS NO DEFAULT, and that is the whole design of this method. A coordinate
+  # belongs to the tree the run that recorded it was taken from: `file_path`/`line_number` are the
+  # LAST KNOWN PATH of a test rather than its identity (SPGD-114), so a test that moved is the same
+  # test and its old line number is only true against the sha it was read at. Defaulting to `main` —
+  # or to the repository's default branch, or to anything this object could supply on its own —
+  # would silently hand every caller a link to whatever has since drifted onto that line. A caller
+  # that cannot name a ref does not have a coordinate worth linking, and should say so rather than
+  # be given a plausible wrong answer.
+  #
+  # NO EXISTENCE CLAIM. This composes a URL and asks GitHub nothing: an unpushed sha, a path deleted
+  # since, a line past the end of the file each answer 404 or land short, and that is GitHub telling
+  # the truth about a commit rather than something to guard against here. A probe would be a network
+  # call per row on a hundred-row worklist, and a conditional would leave the reader unable to tell
+  # "we could not check" from "it is not there".
+  #
+  # Escaped SEGMENT-WISE on both the path and the ref, because `/` is the one character in either
+  # that must survive as structure: `url_encode` on the whole string would turn `spec/models/x.rb`
+  # into a single escaped filename GitHub cannot resolve. Applied to the ref for the same reason it
+  # is applied to the path — a sha needs no escaping at all, but a ref is a caller's string and a
+  # branch name legitimately carries slashes.
+  #
+  # @param path [String] repository-relative file path — the DEFINITION site (`file_path`), never
+  #   `spec_file_path`, which for a shared example group is a different file from the one the line
+  #   number describes.
+  # @param line [Integer] 1-based line number within `path`
+  # @param ref [String] the commit sha (or ref) to pin the link to
+  def github_blob_url(path, line, ref)
+    "#{github_url}/blob/#{escape_path_segments(ref)}/#{escape_path_segments(path)}#L#{line}"
+  end
+
   # Ties broken by id so two runs ingested in the same instant still order deterministically.
   def latest_test_run
     test_runs.order(created_at: :desc, id: :desc).first
@@ -475,6 +509,15 @@ class Repository < ApplicationRecord
   end
 
   private
+
+  # Percent-escape a slash-separated string one segment at a time, so the separators survive as URL
+  # structure and everything else in a segment is escaped. `ERB::Util.url_encode` is the strict one
+  # — it leaves only unreserved characters alone, so a `#` or a space in a filename cannot terminate
+  # the path or split the URL. `CGI.escape` would encode a space as `+`, which is a query-string
+  # rule and wrong in a path.
+  def escape_path_segments(value)
+    value.to_s.split("/").map { |segment| ERB::Util.url_encode(segment) }.join("/")
+  end
 
   def normalize_full_name
     self.github_full_name = self.class.normalize_full_name(github_full_name)
