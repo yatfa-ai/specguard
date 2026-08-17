@@ -78,7 +78,7 @@ class Api::V1::RepositoriesController < Api::BaseController
   # `RequestedUnstableTestParam`, which holds that reasoning in full.
   include RequestedUnstableTestParam
 
-  # `?unannotated_examples=` read as a request for the run's unannotated examples — the first
+  # `?unannotated_examples=` read as a request for the run's unannotated examples — the only
   # `Requested*Param` this controller reads that carries NO VALUE.
   #
   # The parameters above it all name a WHICH — which branch, which area, which file, which
@@ -97,13 +97,14 @@ class Api::V1::RepositoriesController < Api::BaseController
   # rather than re-deriving the guard, which is the whole reason the guard lives in a module at all.
   #
   # It reaches no SQL comparison at all, which makes the hazard the MIRROR of the value-carrying
-  # parameters' rather than a weaker version of it. Theirs is a silent wrong answer — an Array becomes
-  # an `IN` list, answering about several things under a caption naming one for the parameters above,
-  # and re-anchoring the whole response for `?commit_sha=` below, which is the widest wrong answer
-  # this endpoint can give; this one's is a silent EXTRA answer, because all three malformed
-  # shapes are truthy in Ruby and an unguarded `.present?` would open a hundred-row block on a query
-  # string nobody meant to send. See `RequestedUnannotatedExamplesParam`, which holds that reasoning in
-  # full, including why `?unannotated_examples=false` is an ask like any other.
+  # parameters rather than a weaker version of it. Theirs is a silent wrong answer: an Array becomes
+  # an `IN` list, which answers about several things under a caption naming one for the parameters
+  # above, and for `?commit_sha=` below re-anchors the whole response — the widest wrong answer this
+  # endpoint can give, as its own block grades it. This one's is a silent EXTRA answer, because all
+  # three malformed shapes are truthy in Ruby and an unguarded `.present?` would open a hundred-row
+  # block on a query string nobody meant to send. See `RequestedUnannotatedExamplesParam`, which
+  # holds that reasoning in full, including why `?unannotated_examples=false` is an ask like any
+  # other.
   include RequestedUnannotatedExamplesParam
 
   # `?commit_sha=` read as a commit sha, to name WHICH RUN this endpoint describes — the only
