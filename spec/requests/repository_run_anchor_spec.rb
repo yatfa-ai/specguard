@@ -131,6 +131,100 @@ RSpec.describe "Repository run anchor", type: :request do
     end
   end
 
+  # ⭐ THE WAY BACK OUT, which the ask shipped without. Entering the anchor costs one click from any
+  # commit cell in "Recent runs"; leaving it cost URL surgery, because nothing on the page emitted
+  # `commit_sha: nil` and `drill_down_path` carries the ask by default — so once anchored, every
+  # subsequent drill-in, close and area link re-emitted it. The three sibling asks each shipped with
+  # a clearing gesture ("Close file", "Close directory", "Close description") and this one is the
+  # fourth, on the same rule: it names the one ask it clears and every other one rides through.
+  #
+  # Read off the RENDERED HREF rather than by constructing the expected URL here, because the failure
+  # this guards against is precisely a link built by omission — a `drill_down_path` call that leaves
+  # `commit_sha` out instead of passing an explicit nil produces a button that navigates to the page
+  # it is already on, and an expectation written from the same belief would agree with it.
+  describe "the gesture that clears the anchor" do
+    def un_anchor_gesture = panel("overview").all("a", text: "Show the newest run").first
+
+    def asks_in(href) = Rack::Utils.parse_nested_query(URI.parse(href).query)
+
+    # The fragment is the button's landing anchor and is not part of the path a request spec issues;
+    # `get` would read `#overview` as the last characters of the slug.
+    def follow(href)
+      uri = URI.parse(href)
+      get [uri.path, uri.query].compact.join("?")
+    end
+
+    it "offers a gesture whose href drops the anchor" do
+      older, = two_run_history
+
+      get repository_path(repository, commit_sha: older.commit_sha)
+
+      expect(un_anchor_gesture).not_to be_nil
+      expect(asks_in(un_anchor_gesture[:href])).not_to have_key("commit_sha")
+    end
+
+    # Success criterion, first half: ONE CLICK returns the page to the newest run. All three of the
+    # page's statements about the anchor go with it — the Overview disclosure, and the "Recent runs"
+    # marking, which is computed off `@run_anchor_run` and so clears for free with the ask.
+    it "returns the page to the newest run when followed" do
+      older, newer = two_run_history
+
+      get repository_path(repository, commit_sha: older.commit_sha)
+      follow(un_anchor_gesture[:href])
+
+      expect(response).to have_http_status(:ok)
+      expect(panel_text("overview")).to include("Measured on #{newer.commit_sha.first(7)}")
+      expect(anchor_notice).to be_nil
+      expect(marked_row_positions).to be_empty
+    end
+
+    # Success criterion, second half. Un-anchoring is not a request to close an open area, file or
+    # description, nor to drop `?branch=` — the same invariant "Close file" and "Close directory"
+    # keep about each other. The four asks name rows of the NEWEST run, so the page this lands on can
+    # actually hold them open and the drill-down panel below is observable rather than inferred.
+    it "keeps every other ask open" do
+      older, = two_run_history
+      open_asks = { branch: "main",
+                    spec_directory: "spec/requests",
+                    spec_file: "spec/requests/checkout_spec.rb",
+                    repeated_description: "User is valid with a handle" }
+
+      get repository_path(repository, commit_sha: older.commit_sha, **open_asks)
+      href = un_anchor_gesture[:href]
+
+      expect(asks_in(href)).to eq(open_asks.transform_keys(&:to_s))
+
+      follow(href)
+
+      expect(panel_text("spec-file-examples")).to include("spec/requests/checkout_spec.rb")
+    end
+
+    # ⭐ The gate that is easy to get wrong, because the disclosure this button sits beside renders on
+    # BOTH branches. When `?commit_sha=` named no run the page is ALREADY showing the newest run, so
+    # a button gated on the ask rather than on the resolved run would navigate the reader to the page
+    # they are on — the precise no-op `drill_down_path`'s comment exists to make impossible.
+    #
+    # The fallback disclosure is asserted alongside the absence, so this cannot pass on a page that
+    # simply failed to render the whole block.
+    it "is absent where the ask fell back, which is already showing the newest run" do
+      two_run_history
+
+      get repository_path(repository, commit_sha: "deadbeefdeadbeef")
+
+      expect(anchor_notice).to include("SpecGuard has no run for deadbeefdeadbeef")
+      expect(un_anchor_gesture).to be_nil
+    end
+
+    # And on the ordinary page, where there is no state to leave and no sentence to answer.
+    it "is absent when the reader asked for no anchor at all" do
+      two_run_history
+
+      get repository_path(repository)
+
+      expect(un_anchor_gesture).to be_nil
+    end
+  end
+
   describe "a sha the repository has no run for" do
     # Success criterion 2. Not a 404 and not an error — a stale bookmark, a pruned run and a commit
     # whose CI never reported are all ordinary ways to arrive here.

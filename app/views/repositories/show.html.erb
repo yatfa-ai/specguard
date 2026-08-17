@@ -161,7 +161,46 @@
             `RepositoriesHelper#run_anchor_notice` for why the default is silent here where the API
             serializes a block on every call. %>
         <% if (anchor_notice = run_anchor_notice(@run_anchor_request, @run_anchor_run, @latest_test_run)) %>
-          <p class="text-xs text-app-muted" id="run-anchor-notice"><%= anchor_notice %></p>
+          <div class="flex flex-wrap items-center gap-2">
+            <p class="text-xs text-app-muted" id="run-anchor-notice"><%= anchor_notice %></p>
+            <%# THE WAY BACK OUT, and it belongs beside the sentence that announces the state it
+                leaves. Entering the anchor costs one click — every commit cell in "Recent runs"
+                below is a link into it — and until this button there was no gesture anywhere that
+                removed `?commit_sha=`, so the only exit was editing the URL. That is the argument
+                "Close file" makes about its own ask one panel over, and it bites harder here:
+                `drill_down_path` carries `commit_sha` by default (correctly — opening an area is not
+                a request to jump back to the newest run), so once anchored, every subsequent link on
+                the page re-emits the anchor and the state perpetuates itself rather than lapsing.
+
+                ONLY ON THE RESOLVED BRANCH, gated on `@run_anchor_run` and NOT on the notice above
+                it. `#run_anchor_notice` returns the FALLBACK sentence when the ask named no run, and
+                on that branch the page is already showing the newest run — the button would navigate
+                to the page it is on, which is the exact no-op inversion `drill_down_path`'s comment
+                warns about. The `<p>` speaks on both branches and this speaks on one, so the two
+                conditions are deliberately not shared.
+
+                `commit_sha: nil` explicitly, never an omission: under carry-by-default an omission
+                means "keep the anchor" and this button would do nothing. The fourth of the controls
+                that CLEAR an ask, on the same rule as the three "Close" buttons — and like them,
+                every OTHER ask rides through. Un-anchoring is not a request to close an open file,
+                area or description, nor to drop `?branch=`.
+
+                Anchored back at "overview" — this panel — because that is where the button is and
+                where the sentence it answers is re-read on the page it lands on.
+
+                NAVIGATION rather than a control, on the rule `?commit_sha=`'s commit links already
+                settled below: a GET that re-reads the same telemetry under a different anchor is
+                navigation, behind the same `:view` authorization as the page it re-renders, and
+                stays out of the `rendered_controls` matrix. `size: :xs` and not the `:md` the panel
+                actions use, because this one sits inline beside a `text-xs` sentence rather than in
+                a panel's action bar. %>
+            <% if @run_anchor_run %>
+              <%= render UI::ButtonComponent.new(
+                    variant: :ghost, size: :xs,
+                    href: drill_down_path(@repository, commit_sha: nil, anchor: "overview")
+                  ) { "Show the newest run" } %>
+            <% end %>
+          </div>
         <% end %>
 
         <% if @latest_test_run.nil? %>
