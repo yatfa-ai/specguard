@@ -208,6 +208,32 @@ class NearDuplicateClusters
   # `#saturated_identity_count` counts the identities that came back with a full `k` of qualifying
   # neighbours and `#saturated?` says so on the object, rather than letting a truncated component
   # pass for a complete one.
+  #
+  # == What linear actually costs, measured — and who owns the part that is left
+  #
+  # Linear is a shape, not a promise that it is cheap. Measured end to end on one `.for` call, a
+  # seeded tenant inside a 13,200-identity table across 122 repositories, `ANALYZE`d:
+  #
+  #      250 identities ..... 0.66s        1,000 identities ..... 2.29s
+  #    3,000 identities ..... 5.97s        (7 queries at every size)
+  #
+  # Growth is linear in the suite and the query count is flat at 7 — the property `k` buys, and the
+  # one criterion 8 pins. It is worth reading against what the same fixture does when the planner
+  # picks the quadratic plan instead: 0.63s / 6.88s / 68s, where the last number is the one QA
+  # measured on a running application. See {SpecIdentity::VECTOR_OPERATOR_COST} and the literal
+  # tenant bind at `.near_duplicate_pairs_in` for what makes the difference.
+  #
+  # Extrapolated linearly, the 20,000-identity design point is tens of seconds. **So this is still
+  # not an object to hang off a synchronous page view at that size**, and SPGD-115 should consume it
+  # knowing so — the sentence above about a census is a statement about the shape of the work, not a
+  # claim that a suite of any size renders instantly.
+  #
+  # The residual is a per-probe constant of roughly 2ms, and it is not the plan's fault: HNSW draws
+  # its candidates from the whole index and applies `repository_id` afterwards, so a tenant that is
+  # a fraction of the table pays for candidates it then discards. That is precisely the
+  # tenant-filtered-recall question {Ingest::IdentityResolver#nearest} hands to **SPGD-72** by name,
+  # along with the two knobs that would move it — `hnsw.ef_search` and `hnsw.iterative_scan`. Not
+  # re-derived here, by this slice's own carve-out.
   NEIGHBOURS = 10
 
   # How many clusters the ranking returns. Truncation is disclosed by `#truncated?` and

@@ -238,26 +238,29 @@ class SpecIdentity < ApplicationRecord
 
   # What one `<=>` actually costs the planner, and the reason `.near_duplicate_pairs_in` sets it.
   #
-  # **Measured, not guessed: without this the read is 64× slower and the HNSW index goes unused.**
-  # At 3,000 identities in one repository (a second tenant present, `ANALYZE`d) Postgres declines
-  # the vector index and instead fetches every sibling of every row through
-  # `index_spec_identities_on_repository_id` and sorts them by distance — 3,000 × 3,000 cosine
-  # distances, which is the all-pairs shape the read exists to avoid, wearing an index scan's
-  # spelling. Wall clock: **69.06s against 1.07s** for the identical statement and identical rows.
+  # **Necessary, and on its own not sufficient** — it is one of the two corrections that together
+  # get the HNSW index chosen; the other is the literal tenant bind argued at
+  # `.near_duplicate_pairs_in`, which carries the 2×2 measurement showing each is load-bearing.
+  # Read that table before touching either: with the corrected price alone the read still takes
+  # 66.6s on the sort plan, which is why a sweep of this value over four orders of magnitude was
+  # observed to leave the plan unmoved at every setting.
   #
   # The planner is not being stupid; it is being told a false price. `cpu_operator_cost` defaults to
   # 0.0025 — "the cost of processing one operator or function call" — calibrated so that 1.0 is one
   # sequential page read, and it is charged once per `<=>`. But `<=>` on this column is 1,536
   # multiply-accumulates and two square roots, not one comparison. Under the default the sort path's
   # 3,000 distance calls are priced at 7.5 while the HNSW descent's own overhead is priced honestly,
-  # so the wrong plan wins on paper and loses by two orders of magnitude in practice.
+  # so the wrong plan wins on paper and loses by an order of magnitude in practice.
   #
   # So the statement states the real price: the default, times the number of dimensions the operator
   # actually walks. **Derived from `EmbeddingGenerator::DIMENSIONS`** rather than written as 3.84, so
   # a future change of embedding width re-prices the operator instead of leaving a stale literal
   # behind. It is a correction to an input, not a thumb on the scale — every plan the planner
   # compares is re-priced by the same true fact, and the sort path loses because it really does call
-  # the operator three thousand times more often.
+  # the operator three thousand times more often. That "not a thumb on the scale" is also why it
+  # cannot work alone: an honest price applied to a dishonest row count is still a wrong answer, and
+  # re-pricing both paths equally cannot flip a comparison. Correcting the count is what makes the
+  # correction bite.
   #
   # == What this is NOT
   #
@@ -265,6 +268,14 @@ class SpecIdentity < ApplicationRecord
   # decide how HARD the index looks and are handed to **SPGD-72** by name at {Ingest::IdentityResolver#nearest};
   # nothing here touches them, and this setting changes only WHICH plan is chosen, never what a
   # chosen plan returns. Left alone, the recall question stays exactly where that method put it.
+  #
+  # Not `enable_sort = off` or any other `enable_*` switch either, and deliberately. Those assert
+  # that the planner is wrong; these two corrections assert that it was misinformed, and then inform
+  # it. The distinction is not stylistic: a disabled node stays disabled for every relation in the
+  # statement — including the outer `ORDER BY`, which has no index to fall back on — and it keeps
+  # forcing the index long after the repository has shrunk to a size where scanning really is
+  # cheaper. A corrected price and a corrected count leave the planner free to make that call, and
+  # on a small tenant it correctly still declines the index.
   VECTOR_OPERATOR_COST = 0.0025 * EmbeddingGenerator::DIMENSIONS
 
   belongs_to :repository
@@ -320,9 +331,38 @@ class SpecIdentity < ApplicationRecord
   # filtering afterwards would spend the cap on rows that can never qualify and quietly under-report
   # the smaller partition.
   #
-  # `repository_id` is the tenant boundary, and it is written as `n.repository_id =
-  # a.repository_id` rather than as a second bind so the correlation is visible: similarity does not
-  # get to cross tenants here for the same reason it does not in `#nearest`.
+  # ⭐ `repository_id` is the tenant boundary, and it is bound as a LITERAL — `n.repository_id = ?`,
+  # the same repository the outer `WHERE` already pins — rather than correlated as
+  # `n.repository_id = a.repository_id`. Similarity does not get to cross tenants here for the same
+  # reason it does not in `#nearest`; the two spellings say that identically, and were verified to
+  # return byte-identical result sets. The correlated one reads better and is the one to reach for.
+  # **It was measured to cost the plan**, so the worse-reading spelling is the one that ships, and
+  # the reason is written down here because a later reader will otherwise "tidy" it back.
+  #
+  # A correlated `n.repository_id = a.repository_id` hides the VALUE from the planner. Inside a
+  # LATERAL it cannot know which tenant `a` will hand over — equivalence-class propagation does not
+  # cross the subquery boundary, so the outer `a.repository_id = 7` never reaches the inner scan —
+  # and it falls back to `1/ndistinct(repository_id)`. On a table of 13,200 identities across 122
+  # repositories that estimates **113 sibling rows against an actual 2,999**: a 26× underestimate,
+  # which is what makes sorting the siblings look cheaper than descending the index. Bound as a
+  # literal, the planner reads that one value's own statistics and estimates 3,142 — and chooses
+  # the index.
+  #
+  # ⭐ This and {VECTOR_OPERATOR_COST} are each necessary and neither is sufficient. Measured on the
+  # identical statement over identical rows, 3,000 identities in the target tenant:
+  #
+  #   correlated tenant + default price ....... sort plan, 64.8s
+  #   correlated tenant + corrected price ..... sort plan, 66.6s
+  #   literal tenant    + default price ....... sort plan, 65.8s
+  #   literal tenant    + corrected price ..... HNSW,       5.7s
+  #
+  # The bottom two rows are why a cost sweep alone can never fix this, and the diagonal is why
+  # either fix alone reads as a failure: a price is only meaningful multiplied by a count, and the
+  # count was wrong by 26×. Raising the price while the count stays wrong re-prices the HNSW path
+  # by the same factor, so the comparison never flips however far it is pushed. Correcting the
+  # count while the price stays wrong leaves 2,999 cosine distances valued at 7.5 in total, which
+  # is still cheaper on paper than any index descent. Only both together make the planner's
+  # arithmetic match the machine's.
   #
   # == The weight join, which is the whole point of the read
   #
@@ -380,13 +420,16 @@ class SpecIdentity < ApplicationRecord
   # group of three, on a panel that is already explicit about presenting rather than concluding.
   # Different exposure, same measurement — and that measurement is **SPGD-72's**, not this read's.
   #
-  # == The plan has to be forced, and the forcing is a corrected price rather than a hint
+  # == The plan is corrected, not forced, and it takes both corrections
   #
-  # Postgres will not choose the HNSW index for this shape on its own: it prices `<=>` as one
-  # ordinary operator call and therefore believes that fetching a repository's every identity and
-  # sorting them by distance is cheap. It is not — that is the all-pairs join this read exists to
-  # avoid, and it was measured at 64× slower. {VECTOR_OPERATOR_COST} states the operator's real
-  # price for the length of this statement; the argument is there in full.
+  # Postgres will not choose the HNSW index for this shape on its own. It is wrong about two
+  # separate things at once: it prices `<=>` as one ordinary operator call, and inside the LATERAL
+  # it cannot see which tenant it is counting, so it estimates 113 siblings where there are 2,999.
+  # Believing that fetching a repository's every identity and sorting them by distance is cheap, it
+  # does exactly that — the all-pairs join this read exists to avoid, measured at 64.8s against
+  # 5.7s for the same rows. {VECTOR_OPERATOR_COST} corrects the price and the literal tenant bind
+  # corrects the count; the 2×2 measurement showing that neither alone moves the plan is in the
+  # filters section above, and the price's own argument is at the constant.
   #
   # @param neighbours [Integer] the per-row cap, `k`. Bounded work per row is what makes the
   #   statement's cost linear rather than quadratic; the cost is that an identity with more than `k`
@@ -403,7 +446,7 @@ class SpecIdentity < ApplicationRecord
   #   identity none of whose examples in that run were timed, and `example_count` is 0 for one the
   #   run did not observe.
   def self.near_duplicate_pairs_in(repository, similarity:, neighbours:, run_id:)
-    sql = sanitize_sql_array([ <<~SQL, neighbours, run_id, repository.id, 1 - similarity ])
+    sql = sanitize_sql_array([ <<~SQL, repository.id, neighbours, run_id, repository.id, 1 - similarity ])
       SELECT a.id, a.text, a.signal_source, a.file_path, a.line_number,
              w.example_count, w.total_seconds, w.timed_count,
              b.neighbour_id, 1 - b.distance AS similarity
@@ -411,7 +454,7 @@ class SpecIdentity < ApplicationRecord
       CROSS JOIN LATERAL (
         SELECT n.id AS neighbour_id, n.embedding <=> a.embedding AS distance
         FROM spec_identities n
-        WHERE n.repository_id = a.repository_id
+        WHERE n.repository_id = ?
           AND n.signal_source = a.signal_source
           AND n.id <> a.id
         ORDER BY n.embedding <=> a.embedding

@@ -682,6 +682,8 @@ RSpec.describe NearDuplicateClusters do
       # shape production has, and the one that decides the OUTER access path.
       seed(create_repository(user: create_user(github_uid: "3003", github_handle: "neighbour"),
                              github_full_name: "acme/neighbour"), identities)
+      # ⭐ And a crowd of small ones, which is what decides the INNER access path. See the helper.
+      seed_tiny_tenants
       seed_observations(repository)
       # Without stats the planner works off hard-coded defaults and its choice says nothing about
       # the data. `ANALYZE` is legal inside the transaction the suite wraps each example in.
@@ -726,6 +728,47 @@ RSpec.describe NearDuplicateClusters do
                now(), now()
         FROM spec_identities i
         WHERE i.repository_id = #{target.id}
+      SQL
+    end
+
+    # ⭐ A hundred small tenants, and they are the difference between this block passing on a broken
+    # read and catching it. **This fixture shipped with two tenants, and QA found the quadratic plan
+    # on a running application anyway** — the examples below were green against a read that took
+    # 68 seconds in production.
+    #
+    # The reason is that the planner's estimate for the inner `repository_id` predicate is
+    # `total_rows / ndistinct(repository_id)`, and nothing else. At two tenants of 3,000 that is
+    # 6,000 / 2 = 3,000, which is the true sibling count — the estimate is ACCURATE by arithmetic
+    # accident, the sort path is correctly priced as expensive, and the index wins for a reason the
+    # production table does not supply. Production has many repositories, most of them small; there
+    # the same division reads 6,500 / 102 = 64 against an actual 2,999, and the sort path wins.
+    #
+    # So the crowd is the fixture's whole point, and it is built to be cheap rather than realistic:
+    # 100 tenants × 5 identities is 500 more vector rows, and it moves `ndistinct` from 2 to 102,
+    # which is the only property the estimate reads. Deleting these rows to "speed up the fixture"
+    # restores a two-tenant table and with it a green suite over the plan this block exists to
+    # refuse.
+    TINY_TENANTS = 100
+    TINY_TENANT_SIZE = 5
+
+    def seed_tiny_tenants
+      connection = ActiveRecord::Base.connection
+      connection.execute(<<~SQL.squish)
+        INSERT INTO repositories (user_id, name, github_full_name, created_at, updated_at)
+        SELECT #{repository.user_id}, 'tiny-' || t, 'acme/tiny-' || t, now(), now()
+        FROM generate_series(1, #{TINY_TENANTS}) t
+      SQL
+      connection.execute(<<~SQL.squish)
+        INSERT INTO spec_identities (repository_id, text, text_digest, signal_source, embedding,
+                                     file_path, line_number, created_at, updated_at)
+        SELECT r.id, 'tiny ' || r.id || ' ' || g,
+               md5(r.id::text || g::text) || md5(g::text), 'name',
+               (SELECT ARRAY(SELECT sin((r.id * 3.7) + (g * 12.9898) + (i * 78.233))
+                             FROM generate_series(1, 1536) i))::vector,
+               'spec/models/tiny_spec.rb', g, now(), now()
+        FROM repositories r
+        CROSS JOIN generate_series(1, #{TINY_TENANT_SIZE}) g
+        WHERE r.github_full_name LIKE 'acme/tiny-%'
       SQL
     end
 
