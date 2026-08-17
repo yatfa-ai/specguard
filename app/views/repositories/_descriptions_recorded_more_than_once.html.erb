@@ -203,9 +203,11 @@
                       <%= group.coverage_label %>
                     </td>
                     <td class="px-3 py-2 text-app-content tabular-nums">
-                      <%# Through `SpecObservation.humanized_duration`, the same seam every other
-                          duration on this page renders through — so a group that measured nothing
-                          says "not reported" rather than wearing the spelling of a zero. %>
+                      <%# Through `SpecObservation.humanized_duration`, the same seam one example's
+                          duration and one area's total render through — so no two grains on this
+                          page can disagree about how a duration is spelled, and a group that
+                          measured nothing says "not reported" rather than wearing the spelling of
+                          a zero. %>
                       <%= group.duration_label %>
                     </td>
                   </tr>
