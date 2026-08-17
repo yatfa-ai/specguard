@@ -936,6 +936,37 @@ RSpec.describe "Repository suite-size trajectory", type: :request do
       )
     end
 
+    # ⭐ The echoed branch name is the one unvalidated value this panel prints back, and it reaches
+    # the reader escaped EXACTLY ONCE. This was a live, user-visible defect in
+    # `trajectory_branch_fallback_notice` for the whole of its life, and it survived every reading
+    # of that helper for one reason: NO EXAMPLE ASSERTED THE PROPERTY. `truncate` defaults to
+    # escaping its input and returning a `SafeBuffer`; interpolating that into a plain String yields
+    # a String that is not itself safe but already holds escaped text, and ERB escapes it a second
+    # time — so `?branch=a%26b` printed `a&amp;b` at the reader.
+    #
+    # Every other example in this describe asks for `feature/deleted` or `feature/gone`, branch
+    # names with nothing escapable in them, so they pass identically with `escape: false` present or
+    # removed. That is exactly the state that let the bug ship, and removing the option now reads as
+    # tidying away a redundant argument. This example is what makes it not redundant.
+    #
+    # Both halves asserted, because the fix MOVED an escape rather than adding one: the name renders
+    # as the reader typed it AND the raw body carries no live markup. The twin over the sha echo on
+    # the same page is `spec/requests/repository_run_anchor_spec.rb`, "echoes an unvalidated sha
+    # escaped exactly once, and never as markup" — the two idioms are identical and are pinned
+    # identically.
+    it "echoes an unvalidated branch name escaped exactly once, and never as markup" do
+      repository = repository_anchored_on_a_feature_branch
+
+      get repository_path(repository, branch: "a&b<script>x</script>")
+
+      expect(response).to have_http_status(:ok)
+      expect(trajectory_panel.find("#suite-trajectory-branch-fallback")).to have_text(
+        "SpecGuard has no runs on a&b<script>x</script>, so this panel is drawn on feature/x",
+        normalize_ws: true
+      )
+      expect(response.body).not_to include("<script>x</script>")
+    end
+
     it "treats a blank branch as no ask at all, and says nothing about a fallback that did not happen" do
       repository = repository_anchored_on_a_feature_branch
 

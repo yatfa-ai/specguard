@@ -31,6 +31,24 @@ class RepositoriesController < ApplicationController
   # `WHERE name = ''`, a query for a description no row can carry.
   include RequestedRepeatedDescriptionParam
 
+  # `?commit_sha=` read as a commit sha, naming WHICH RUN this page is anchored on. The fifth ask
+  # this page reads and the only one that RE-ANCHORS rather than narrows: the four above take the
+  # anchor as given — `?branch=` picks a series for one panel, and the three drill-in parameters
+  # open one area, one file or one description OF the run `show` had already chosen. This one
+  # chooses that run, which is why it is read in exactly one place (the `@latest_test_run`
+  # assignment in `show`) and every panel hanging off that ivar re-anchors without reading the
+  # parameter at all.
+  #
+  # The module is INCLUDED and not re-derived, which is what the comment beside
+  # `Api::V1::RepositoriesController`'s own include promised would happen: it said this page "offers
+  # no run selector, so there is no second reader to share a guard with yet. When one arrives it
+  # includes this module rather than re-deriving the guard." This is that reader. The hazard is the
+  # same at both surfaces and is argued in full in `RequestedCommitShaParam` — the value reaches a
+  # `where(commit_sha: …)` on a plain string column, where an Array does not raise but silently
+  # becomes an `IN` list at the position that CHOOSES THE RUN, so every panel on this page would
+  # describe whichever of several unrelated commits sorted newest.
+  include RequestedCommitShaParam
+
   # The repositories this user may pick from, straight off GitHub, and the four different things to
   # say when that list cannot be loaded. Shared with `BulkRegistrationsController`, which renders a
   # picker built from the same listing and has to answer the same questions the same way.
@@ -118,7 +136,40 @@ class RepositoriesController < ApplicationController
     # never reported must not look identical to one that reported and genuinely found no
     # annotations. Deliberately the run row itself and not a repository-wide ratio floored at 0.0,
     # which cannot express that difference — a floored figure reads the same either way.
-    @latest_test_run = @repository.latest_test_run
+    #
+    # WHICH run that is has been a question this page could not be asked until now. It is
+    # `?commit_sha=`, the same ask the JSON endpoint (SPGD-544) and the MCP bridge (SPGD-552) have
+    # taken since they shipped, and the reason it is worth having here is the one the bridge states
+    # about itself: without a run ask, the anchor names the repository's NEWEST run, which may be
+    # another branch's, with no error and no signal that you were answered about someone else's
+    # commit. On the web there was no ask AND no signal.
+    #
+    # THREE locals rather than one, because three different questions are asked of them below and
+    # collapsing any two of them is a bug this page would ship green.
+    #
+    # `newest_test_run` — the repository's newest accepted run, unconditionally, whatever was asked.
+    # It is what "when did CI last succeed" and "which series is the trajectory drawn on" mean, and
+    # neither is a question about the reader's anchor. Read once here rather than re-read at each of
+    # those two sites, so the page costs exactly the one indexed `LIMIT 1` it always cost on a
+    # default call; it is a plain local and is never reassigned, so unlike the memo below it cannot
+    # acquire a re-anchoring parameter later (see `@rejected_ingests`, which is where the API hit
+    # this and wrote the rule out).
+    #
+    # `@run_anchor_request` — the RAW ask, kept whatever it names, on the idiom
+    # `@trajectory_branch_request` below already sets for the same shape of ask on this page: a
+    # panel can only SAY the fallback happened if the ask survives it, and a stale bookmark, a
+    # pruned run and a commit whose CI never reported are all ordinary ways to arrive here.
+    #
+    # `@run_anchor_run` — the run the ask RESOLVED to, or nil. The disclosure is computed off this
+    # rather than by comparing two shas, for the reason `serialized_run_anchor` gives: the choice
+    # and the statement about the choice must not be able to come apart.
+    #
+    # NO 404 and no validation branch, at any of the three. An unknown, blank or malformed sha is
+    # not a malformed request — it falls back to the newest run and the page says so.
+    newest_test_run = @repository.latest_test_run
+    @run_anchor_request = requested_commit_sha
+    @run_anchor_run = @run_anchor_request && @repository.latest_test_run_for_commit(@run_anchor_request)
+    @latest_test_run = @run_anchor_run || newest_test_run
     # The refused half of the same delivery stream the run above is the accepted half of, and the
     # verdict the Connect panel's "Connection" stat needs in order to stop being wrong.
     #
@@ -134,11 +185,24 @@ class RepositoriesController < ApplicationController
     # CI last succeed" sitting one line from the first. `RejectedIngests` carries the comparison
     # rule and both of its bounds.
     #
+    # ⭐ ANCHORED ON `newest_test_run` AND NEVER ON `@latest_test_run`. This is the one non-obvious
+    # thing about this block and a later reader must not "simplify" it — the API states the same
+    # rule over the same comparison at `Api::V1::RepositoriesController#rejected_ingests`.
+    #
+    # That ivar is RE-ANCHORED BY `?commit_sha=`, deliberately, so every run-grain panel describes
+    # the named run coherently. Handing it here would compare the newest REFUSAL against an
+    # arbitrary pinned OLDER run, so any reader bookmarking an old commit on a perfectly healthy
+    # repository would be told their deliveries are being refused. That is the same class of
+    # falsehood this block exists to remove, reintroduced by the feature above it.
+    #
+    # Delivery health is a fact about the repository's DELIVERY STREAM, not about whichever run the
+    # reader anchored to, so the accepted side is the true newest accepted run on every request.
+    #
     # Loaded unconditionally and NOT gated on `@latest_test_run`, unlike the per-example panels
     # below: a repository that has never had a run accepted is not the empty case here, it is the
     # worst case — every delivery it ever made was refused, and that is precisely when the reader
     # needs the list. One bounded query, capped at `IngestRejection::PANEL_LIMIT`.
-    @rejected_ingests = RejectedIngests.for(@repository, last_accepted_run_at: @latest_test_run&.created_at)
+    @rejected_ingests = RejectedIngests.for(@repository, last_accepted_run_at: newest_test_run&.created_at)
     # The one figure on that panel read off *two* rows: the run the suite size is compared against,
     # so a size can be reported as a change and not only as a level. Passed the already-loaded
     # latest run rather than looking it up again, so this costs exactly one query — and none at all
@@ -158,9 +222,17 @@ class RepositoriesController < ApplicationController
     # deletion no commit made. See `TestRun#suite_size_measured?` / `#assembled_like?`.
     @previous_test_run = @repository.previous_test_run_on_branch(@latest_test_run)
     # The tail of that same append-only history for the "Recent runs" panel. Bounded at ten rows by
-    # the model, so this stays O(1) no matter how long CI has been reporting. It shares
-    # `latest_test_run`'s ordering by construction, so the run named on the Overview panel above is
-    # always the top row here — the two panels cannot name different commits on the same page.
+    # the model, so this stays O(1) no matter how long CI has been reporting.
+    #
+    # NOT RE-ANCHORED BY `?commit_sha=`, and that is the contract rather than an omission: history
+    # is a SERIES and the anchor is a ROW. It shares `latest_test_run`'s ordering by construction,
+    # so on a default call the run named on the Overview panel above is always the top row here and
+    # the two panels cannot name different commits on the same page. ⭐ THAT IDENTITY IS NOT
+    # EXPECTED TO HOLD UNDER AN EXPLICIT ASK: naming an older run makes the Overview's run a row
+    # from the middle of this list, or from behind its bound entirely. The API says the same of its
+    # own `history` at `serialized_run_anchor`, and on this page the anchor disclosure in the
+    # Overview panel plus the `aria-current` row here are what make the difference legible instead
+    # of reading as a rendering bug.
     #
     # Materialised with `.to_a` rather than left as a relation, because each row is then primed
     # with its own shard count — see `ShardCountPreloading`. Every reader in the view is `any?` /
@@ -180,18 +252,28 @@ class RepositoriesController < ApplicationController
     # for every visitor while the trunk holds a month of comparable history in the same table.
     # `?branch=` is how a reader asks for that history back.
     #
-    # Deliberately a SEPARATE anchor from `@latest_test_run`, which stays exactly what it was: the
-    # Overview's suite size, its delta and the Recent runs panel all name the latest run and go on
-    # naming it whatever this parameter says. Only the trajectory moves — so a reader who selects a
-    # branch cannot end up reading a headline figure about one run under a chart about another.
+    # Deliberately a SEPARATE anchor from `@latest_test_run`, which `?branch=` leaves exactly as it
+    # found it: the Overview's suite size, its delta and every drill-in go on naming the run that
+    # ivar holds whatever this parameter says. Only the trajectory moves — so a reader who selects a
+    # branch cannot end up reading a headline figure about one run under a chart about another. That
+    # separation is what lets the two asks compose: `?branch=` picks the series, `?commit_sha=` picks
+    # the row, and neither redefines the other.
     #
-    # An absent, blank or unrecognised branch falls back to `@latest_test_run` and renders exactly
-    # what this page rendered before the parameter existed. A deleted branch, a typo and a stale
-    # bookmark are all ordinary ways to arrive here. `@trajectory_branch_request` keeps the raw ask
-    # so the panel can SAY the fallback happened, rather than quietly drawing a different branch
+    # An absent, blank or unrecognised branch falls back to the repository's newest run and renders
+    # exactly what this page rendered before the parameter existed. A deleted branch, a typo and a
+    # stale bookmark are all ordinary ways to arrive here. `@trajectory_branch_request` keeps the raw
+    # ask so the panel can SAY the fallback happened, rather than quietly drawing a different branch
     # from the one the URL names.
+    #
+    # The fallback is `newest_test_run` and specifically NOT `@latest_test_run`, for the reason
+    # "Recent runs" above is not re-anchored either: this panel draws a SERIES, and `?commit_sha=`
+    # names a row. On a default call the two are the same object and this is byte-identical to what
+    # it always was; under an explicit ask, re-anchoring here would silently move a thirty-run
+    # window onto the pinned run's branch on the strength of a parameter that says nothing about
+    # which series to draw. A reader who wants that series asks for it with `?branch=`, which is the
+    # ask this panel is built around.
     @trajectory_branch_request = requested_branch
-    @trajectory_run = @repository.latest_test_run_on_branch(@trajectory_branch_request) || @latest_test_run
+    @trajectory_run = @repository.latest_test_run_on_branch(@trajectory_branch_request) || newest_test_run
     # The choices, each with how much history it holds — ONE bounded query, and specifically not a
     # `SELECT DISTINCT branch` over the whole run history, which is the O(history) scan
     # `Repository#branch_histories` documents at length for refusing.
