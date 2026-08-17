@@ -30,10 +30,14 @@
           looking identical.
 
         Outside the `manage_keys` gate, like the rankings above: read-only suite telemetry, nothing
-        credential and nothing actionable on these rows. No drill-down link, because
-        `UnannotatedDirectories.for` takes no narrowing argument and there is no per-area rung
-        beneath this one on this page — the per-example worklist is the API's `?spec_directory=`,
-        which this panel names the area for. %>
+        credential and nothing actionable on these rows.
+
+        EACH AREA IS A LINK, and it was not. This panel shipped naming an area for an ask only the
+        JSON API could answer — `UnannotatedDirectories.for` takes no narrowing argument, and there
+        was no per-area rung beneath this one on the page — so a reader handed a ranking of where
+        their debt was had to leave the product to see one test in it. There is a rung now:
+        "Unannotated tests here", opened with `?spec_directory=`, which is the SAME ask the duration
+        drill-downs read rather than a second parameter minted for this one. %>
     <% if @unannotated_directories %>
       <%= render UI::PanelComponent.new(title: "Where the unannotated tests are", id: "unannotated-directories",
                                         class: "lg:col-span-3") do %>
@@ -106,7 +110,34 @@
                                               describedby: "unannotated-directories-basis") do %>
               <% @unannotated_directories.rows.each do |directory| %>
                 <tr>
-                  <td class="px-3 py-2 font-mono text-xs text-app-content"><%= directory.path %></td>
+                  <td class="px-3 py-2 font-mono text-xs text-app-content">
+                    <%# The way INTO the row. A count of an area's invisible tests is a finding a
+                        reader cannot act on until they know WHICH tests, and until this link existed
+                        there was no route to that anywhere on this page — the per-example worklist
+                        was the API's, which the reader would have to leave the product and carry an
+                        API key to reach.
+
+                        `?spec_directory=`, the SAME ask "Heaviest spec directories" and "Areas that
+                        grew or shrank" set. One ask now opens THREE panels, each answering in its own
+                        grain over the same area, and `show.html.erb` states the rule where the second
+                        one landed: that is how `drill_down_path` composes asks and it is not a
+                        collision to be fixed by minting a second parameter.
+
+                        Through `drill_down_path`, so every OTHER ask rides through — stated once in
+                        the helper rather than re-decided in a hand-written argument here, which is
+                        exactly how the sibling link at "Heaviest spec directories" came to drop an
+                        open file for as long as it did.
+
+                        `aria-current` on the open area, as both sibling links carry: this is a list
+                        of choices with one of them taken, and the panel it opens is directly below
+                        rather than in view. %>
+                    <%= link_to directory.path,
+                                drill_down_path(@repository, spec_directory: directory.path,
+                                                anchor: "unannotated-examples"),
+                                class: "underline underline-offset-2 decoration-app-border-light " \
+                                       "text-app-content hover:decoration-app-content",
+                                aria: { current: directory.path == @spec_directory_request ? "true" : nil } %>
+                  </td>
                   <%# Both operands, side by side and both bare integers. No fraction, no percentage,
                       no threshold and no colour on the row — `UnannotatedDirectories` states that
                       boundary twice and it governs this partial too. `tabular-nums` so a column of
