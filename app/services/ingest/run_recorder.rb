@@ -222,7 +222,14 @@ module Ingest
       return run.test_run_shards.create!(contribution) if @shard_id.blank?
 
       shard = run.test_run_shards.find_or_initialize_by(shard_id: @shard_id)
-      shard.update!(contribution)
+
+      # A SAVEPOINT, for the same reason `#create_run` takes one: without `requires_new` this write
+      # merely *joins* the transaction `#record` opened, and Postgres aborts that entire transaction
+      # on a constraint violation — which would leave the rescue below re-reading the winner on a
+      # connection that refuses every subsequent statement. Measured before this line existed: the
+      # rescue raised `PG::InFailedSqlTransaction` at its `find_by!` rather than recovering, so the
+      # last-writer-wins semantic it describes was unreachable and the loser answered 500.
+      TestRun.transaction(requires_new: true) { shard.update!(contribution) }
       shard
     rescue ActiveRecord::RecordNotUnique
       # Two deliveries of the *same* shard racing each other — a retried job overlapping the

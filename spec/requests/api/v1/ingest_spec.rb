@@ -437,6 +437,86 @@ RSpec.describe "POST /api/v1/ingest", type: :request do
     end
   end
 
+  # The other half of the same shape, sixty lines further down `Ingest::RunRecorder` and read here
+  # next to its twin on purpose: the run identity above has a partial unique index and a rescue,
+  # and so does the *shard* identity — `#upsert_shard` reads a shard row before it writes one, and
+  # a retried job overlapping the original is two deliveries of the same shard reaching that write
+  # together. The loser meets `index_test_run_shards_on_test_run_id_and_shard_id`.
+  #
+  # Driven through the recorder for the reason the group above gives, and faked the way
+  # `spec/support/uniqueness_race.rb` describes: what is stubbed is only the *timing* of the
+  # lookup. `find_or_initialize_by` is allowed to run for real at a moment when the row genuinely
+  # does not exist, the winner's delivery lands immediately afterwards, and the write, the index,
+  # the rescue and the recompute are all the production path. Nothing fabricates the exception —
+  # a stubbed `and_raise` would pass over whether this write can survive a real conflict at all
+  # (see `#upsert_shard`'s savepoint), which is the question the example exists to answer. The cap
+  # example above uses `and_raise` deliberately, for a collision that by construction never
+  # resolves; this one must not.
+  describe "two deliveries of the same shard racing each other" do
+    let(:attributes) do
+      { ci_run_id: "gha-42", commit_sha: "deadbee", duration_seconds: 30.0,
+        total_specs_count: 3, annotated_specs_count: 1 }
+    end
+    let(:recorder) { Ingest::RunRecorder.new(repository, attributes, shard_id: "shard-1") }
+
+    # The winner reports the same shard through the recorder rather than by hand, so the row the
+    # loser collides with is one production actually writes, and so the run it belongs to has the
+    # slices a run with a `ci_run_id` is required to have.
+    def land_the_winner
+      Ingest::RunRecorder.record(repository,
+                                 attributes.merge(total_specs_count: 5, annotated_specs_count: 2,
+                                                  duration_seconds: 40.0),
+                                 shard_id: "shard-1")
+    end
+
+    # Wrapped rather than replaced, and re-applied on every call, because `run.lock!` reloads the
+    # run and drops its association cache — the proxy the write goes through is not the one that
+    # existed when the run was found.
+    def fake_the_lookup_timing(run, &landing)
+      allow(run).to receive(:test_run_shards).and_wrap_original do |original_shards|
+        original_shards.call.tap do |shards|
+          allow(shards).to receive(:find_or_initialize_by).and_wrap_original do |original, *args|
+            original.call(*args).tap { landing.call }
+          end
+        end
+      end
+    end
+
+    it "overwrites the winner's row rather than raising when both deliveries write at once" do
+      winner = nil
+      raced = false
+
+      allow(recorder).to receive(:find_or_create_run).and_wrap_original do |original|
+        original.call.tap do |run|
+          fake_the_lookup_timing(run) do
+            next if raced
+
+            raced = true
+            winner = land_the_winner
+          end
+        end
+      end
+
+      run = nil
+      expect { run = recorder.record }.not_to raise_error
+
+      # One row, not two: the index refused the loser's insert instead of letting it split this
+      # slice's counts across a pair of rows the SUM would then double.
+      expect(raced).to be(true)
+      expect(TestRun.sole.id).to eq(winner.id)
+      expect(TestRun.sole.test_run_shards.count).to eq(1)
+
+      # Last writer wins, which is the declared semantic for a shard reporting twice. The loser
+      # arrived second, so its 3/1/30.0 is what the surviving row holds and what the run's
+      # recomputed totals report — not the winner's 5/2/40.0, and not the two of them added.
+      expect(TestRun.sole.test_run_shards.sole)
+        .to have_attributes(shard_id: "shard-1", total_specs_count: 3, annotated_specs_count: 1,
+                            duration_seconds: 30.0)
+      expect(run).to have_attributes(total_specs_count: 3, annotated_specs_count: 1,
+                                     duration_seconds: 30.0)
+    end
+  end
+
   # Missing annotations are never an ingestion failure — only malformed ones are. Adoption of the
   # protocol has to be opt-in and gradual, so a suite that annotates nothing still reports.
   describe "a run with no annotations" do
