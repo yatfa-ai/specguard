@@ -158,12 +158,34 @@
                       specifically not `spec_file_path` + `line_number`, which for a shared example
                       group would pair two halves from different files. It is the reason this panel
                       shows the column at all: keyed on the including file, this list contains rows
-                      defined somewhere else, and the reader has to be able to go and find them. %>
-                  <%= observation.label %>
+                      defined somewhere else, and the reader has to be able to go and find them.
+
+                      So the coordinate is a LINK to that definition site, through
+                      `Repository#github_blob_url` and against the sha of the run this page is
+                      anchored to — the same composition and the same new-tab convention the
+                      "Unannotated examples" panel introduced. Whichever of the two lines carries
+                      the coordinate carries the link; a nameless row wears it as its entire
+                      identity, and "go and find them" is not something a reader can do with text.
+
+                      ZERO NEW QUERIES: `@repository` and `@latest_test_run` are both loaded before
+                      this partial renders — `@spec_file_examples` is assigned only under
+                      `@latest_test_run` — and `#github_blob_url` is string composition. %>
+                  <% definition_site_url = @repository.github_blob_url(observation.file_path,
+                                                                       observation.line_number,
+                                                                       @latest_test_run.commit_sha) %>
                   <% if observation.name.present? %>
+                    <%= observation.label %>
                     <span class="block font-mono text-xs text-app-muted">
-                      <%= observation.location_label %>
+                      <%= link_to observation.location_label, definition_site_url,
+                                  class: "underline underline-offset-2 decoration-app-border-light " \
+                                         "text-app-content hover:decoration-app-content",
+                                  target: "_blank", rel: "noopener noreferrer" %>
                     </span>
+                  <% else %>
+                    <%= link_to observation.label, definition_site_url,
+                                class: "underline underline-offset-2 decoration-app-border-light " \
+                                       "text-app-content hover:decoration-app-content",
+                                target: "_blank", rel: "noopener noreferrer" %>
                   <% end %>
                 </td>
                 <td class="px-3 py-2 text-app-content tabular-nums">
