@@ -5,11 +5,13 @@ require "rails_helper"
 # `#percent` is the Overview panel's SECOND, independent computation of the headline "annotated %".
 # The panel renders that one share twice, from two separate code paths:
 #
-#   * `show.html.erb:277` -> `TestRun#annotated_ratio` — `(annotated / total * 100).round(1)`,
-#     guarded by `total_specs_count.to_i.zero?`, pinned by `spec/models/test_run_spec.rb`.
-#   * `show.html.erb:234` -> this component — `((value / max) * 100).clamp(0.0, 100.0).round(1)`,
-#     guarded by `max <= 0`, handed the RAW COUNTS rather than the ratio (deliberately, see the
-#     comment at the call site) so it recomputes the share itself.
+#   * the Overview panel's `<%= @latest_test_run.annotated_ratio %>%` line -> `TestRun#annotated_ratio`
+#     — `(annotated / total * 100).round(1)`, guarded by `total_specs_count.to_i.zero?`, pinned by
+#     `spec/models/test_run_spec.rb`.
+#   * that same panel's `UI::MeterComponent.new(value: annotated_specs, max: total_specs, …)` call
+#     site -> this component — `((value / max) * 100).clamp(0.0, 100.0).round(1)`, guarded by
+#     `max <= 0`, handed the RAW COUNTS rather than the ratio (deliberately, see the comment at the
+#     call site) so it recomputes the share itself.
 #
 # Only the model side was pinned. A rounding or formatting change to `percent` alone makes the
 # panel visibly contradict itself — two different percentages for one fact, side by side — with

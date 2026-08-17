@@ -66,12 +66,12 @@ class RepositoriesController < ApplicationController
     # table. That table is the only thing that names the creator of a row
     # (`_api_keys.html.erb:23`), and it is a `keys.manage` surface end to end — for a view-only
     # member it does not render at all, so preloading unconditionally would issue a join and
-    # discard it, on the very page whose stated rule (`show.html.erb:60-66`) is that credential
-    # metadata is gated. Inside the gate the preload is still required: without it, listing keys is
-    # one user query per key. Asking costs nothing — `repository_policy` is memoized and already
-    # populated by `current_repository` above — and the view asks that same memoized question for
-    # `manage_keys`, so the query shape here and the render that consumes it cannot disagree about
-    # which viewer this is.
+    # discard it, on the very page whose stated rule (the API keys panel comment in `show.html.erb`)
+    # is that credential metadata is gated. Inside the gate the preload is still required: without
+    # it, listing keys is one user query per key. Asking costs nothing — `repository_policy` is
+    # memoized and already populated by `current_repository` above — and the view asks that same
+    # memoized question for `manage_keys`, so the query shape here and the render that consumes it
+    # cannot disagree about which viewer this is.
     #
     # PRICED, on one fixture (two keys, two distinct creators), because this load replaces two
     # round trips rather than adding one, and the two viewer classes are owed separate figures:
