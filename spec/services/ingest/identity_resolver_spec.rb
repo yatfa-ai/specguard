@@ -1250,8 +1250,20 @@ RSpec.describe Ingest::IdentityResolver do
     # Its own group rather than a fourth example over there for the reason that one gives for
     # separating its two instruments: a page has several costs and they are bounded separately, so
     # each gets a predicate of its own and a slice that batched one of them cannot hide inside a
-    # total. `\AINSERT` is that predicate here, and it names exactly one statement in the resolver.
-    def insert_statements(&) = executed_sql(&).grep(/\AINSERT\b/)
+    # total.
+    #
+    # **Scoped to the table, not to the verb, for exactly that reason.** `\AINSERT` alone would not
+    # be this group's cost: SPGD-420 put a second `INSERT` on this same path, so a page resolved
+    # through a provider that publishes a fingerprint writes `embedding_cache_entries` as well as
+    # `spec_identities`. The fixtures here never reach it — they run on a provider publishing no
+    # fingerprint, which `Ingest::IdentityResolver#store_embeddings` returns early on, and "what a
+    # page of changed text costs the SECOND time this deployment sees it" says at its own
+    # `caching_provider` that a published fingerprint is the one thing separating that instrument
+    # from every other embedding fixture in this file. So a bare verb predicate would have counted
+    # one and been right by a property of the fixture rather than by construction. Naming the table
+    # is what makes this count the page's identity write whatever else the path grows, and it is
+    # the discipline that group's own `cache_statements` already keeps from the other side.
+    def insert_statements(&) = executed_sql(&).grep(/\AINSERT INTO "spec_identities"/)
 
     it "writes a whole page's new identities in one INSERT, not in one per test" do
       # Asserted as an EXACT constant rather than as "fewer than twelve", the discipline the group
