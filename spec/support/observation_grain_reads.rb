@@ -147,7 +147,7 @@
 # ORDER BY is `array_position(…)`, which would in fact be unique but rests on the ordering strategy
 # rather than on the projection — the accident this file has twice declined to rest a partition on.
 # The alias is the only match here whose uniqueness is guaranteed BY A RULE WRITTEN BESIDE THE SQL,
-# and it is now the guarantee three of the thirteen grains stand on.
+# and it is now the guarantee that several of this file's grains stand on.
 #
 # == The EIGHTH arrival, where the alias family's guarantee is joined by a second one
 #
@@ -213,7 +213,7 @@ module ObservationGrainReads
   # for the partition, went stale the first time a read was added here — whether that read opened a
   # NEW grain or landed in an EXISTING one. Both halves rot, and they rot on different commits: the
   # growth grain's second reader (see "TWO READERS" above) moved every total-reads figure quoted
-  # here while leaving the grain count untouched. The SINGLE-ASK blocks in
+  # here FOR ANOTHER FIXTURE while leaving the grain count untouched. The SINGLE-ASK blocks in
   # `repository_unstable_tests_spec.rb`, `repository_directory_growth_spec.rb` and
   # `repository_directory_runtime_file_growth_spec.rb` each leave at least as many grains live as
   # either example — the last of them more than either — and each issues MORE total reads than either,
@@ -318,13 +318,13 @@ module ObservationGrainReads
   # `classified_observation_reads` above — rank their fixture AGAINST THIS PARTITION: how much of it
   # the fixture leaves live, and how it places against other fixtures on grains live and on total
   # reads. A read added here can falsify all three without touching a line either of those files
-  # owns, and it does not have to be a NEW grain to do it: every grain added so far has corrected the
-  # counts in THIS file and left those paragraphs stale, and the growth grain's SECOND READER —
-  # `directory_run_growth`, see "The growth grain has TWO READERS" above — moved their total-reads
-  # figures without changing the grain count at all. So when you add a read here, whether it opens a
-  # new grain or joins an existing one, RE-READ THOSE TWO REQUEST SPECS, and keep their prose free of
-  # any suite-wide total or counted ranking — the claim they need is "this fixture leaves several
-  # grains live", which no later read can falsify.
+  # owns, and it does not have to be a NEW grain to do it: every grain added so far has corrected
+  # THIS file's own count of the partition and left those paragraphs stale, and the growth grain's
+  # SECOND READER — `directory_run_growth`, see "The growth grain has TWO READERS" above — moved
+  # their total-reads figures without changing the grain count at all. So when you add a read here,
+  # whether it opens a new grain or joins an existing one, RE-READ THOSE TWO REQUEST SPECS, and keep
+  # their prose free of any suite-wide total or counted ranking — the claim they need is "this
+  # fixture leaves several grains live", which no later read can falsify.
   #
   # `growth` (5), `directory_files` (6) and `runtime_growth` (10) each carry an EXCLUSION rather than
   # only their own pattern, and the exclusions are not decoration. `directory_file_growth` (9) is the
