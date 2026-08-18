@@ -2,7 +2,7 @@
 
 require "rails_helper"
 
-# The "Rejected deliveries" panel on repositories#show, and the "Connection" stat it corrects.
+# The "Rejected deliveries" panel on repositories#show, and the connection indicator it corrects.
 #
 # Its own file, for the reason the sibling panel specs state for themselves: the Overview/API-keys
 # file is edited by other slices, and every example here needs the same refused-delivery fixture.
@@ -37,7 +37,7 @@ RSpec.describe "Repository rejected deliveries", type: :request do
   def visit_repository = get repository_path(repository)
 
   def panel = Capybara.string(response.body).find("#rejected-ingests")
-  def connect_panel = Capybara.string(response.body).find("#connect")
+  def connect_panel = Capybara.string(response.body).find("#connection-indicator")
 
   # Whitespace-collapsed, because every sentence these examples read is assembled across several
   # ERB lines: a phrase that reads as one on the page is a phrase with a newline in the middle in
@@ -78,7 +78,7 @@ RSpec.describe "Repository rejected deliveries", type: :request do
 
     # Success criterion 7 — the defect itself. Before this, exactly here, the page said
     # "Connected" in success tone over a pipeline throwing every run away.
-    describe "the Connection stat" do
+    describe "the connection indicator" do
       it "does not read Connected" do
         expect(connect_text).not_to include("Connected")
       end
@@ -145,45 +145,26 @@ RSpec.describe "Repository rejected deliveries", type: :request do
       expect(panel_text).to match(/refused for its payload/i)
     end
 
-    it "leaves the Connection stat reading Connected" do
+    it "leaves the connection indicator reading Connected" do
       expect(connect_text).to include("Connected")
     end
   end
 
-  # Success criterion 8. The old sentence was true for 401 and false for 400; the correction has to
-  # keep the first half true rather than drop the distinction.
-  describe "the Connect panel's explanation of what records a use" do
-    before do
-      refuse_a_delivery
-      visit_repository
-    end
-
-    it "no longer claims a rejected request never records a use" do
-      expect(connect_text).not_to match(/never records a use/i)
-    end
-
-    it "still says a 401 records no use" do
-      expect(connect_text).to match(/401.*records no use at all/im)
-    end
-
-    it "says a 400 does record one, so a recent use is not proof a run was stored" do
-      expect(connect_text).to match(/does.*record a use/im)
-      expect(connect_text).to include("400")
-    end
-
-    # SPGD-614. The "never" rule was the only heuristic this panel handed the reader, and it is the
-    # one that cannot fire on the failure it is most needed for: a rotated key is never at "never",
-    # because it inherits its predecessor's timestamp. A reader applying the rule as written
-    # concludes that a pipeline 401ing on every delivery is healthy.
-    it "names the rotated state, so the rule it teaches covers the case the panel now detects" do
-      expect(connect_text).to match(/not used since\s*rotation/i)
-      expect(connect_text).to match(/regenerat\w+ a key retires its token/i)
-
-      # And it must still be a rule about 401s rather than a second sentence about payloads — the
-      # distinction the two examples above exist to protect.
-      expect(connect_text).to match(/401/)
-    end
-  end
+  # WHAT USED TO BE HERE, and why its removal is a deliverable rather than a loss of coverage.
+  #
+  # Four examples pinned the Connect panel's prose explanation of what records a use: that a 401
+  # records none, that a 400 does, and that a rotated key reads "not used since rotation" rather
+  # than "never". Every sentence of it was true and every sentence of it was a manual, one panel
+  # above the table it was describing — this file's own subject, "Rejected deliveries", which lists
+  # each refusal with its reason and its time.
+  #
+  # SPGD-705 removed the prose and kept the behaviour. The distinctions it taught the reader to
+  # derive are now surfaced directly instead of explained: the refusing state is its own branch of
+  # the connection indicator (pinned above, and it is what the 401-vs-400 sentence existed to let a
+  # reader work out for themselves), and the rotated state is its own branch too, pinned in
+  # spec/requests/repositories_spec.rb with the copy that names the rotation and the remedy. So the
+  # examples are deleted rather than rewritten: there is no prose left for them to assert against,
+  # and the states they protected are asserted structurally somewhere better.
 
   # The claim the page's query budget in spec/requests/repositories_spec.rb makes on this panel's
   # behalf: it is ONE read, and it stays one read as the list fills up. An absolute count there

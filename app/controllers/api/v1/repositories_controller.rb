@@ -433,7 +433,7 @@ class Api::V1::RepositoriesController < Api::BaseController
   end
 
   # The keys whose `last_used_at` was stamped by a token that no longer exists, and the verdict the
-  # UI's "Connection" stat is built on. `ApiKey#rotated_and_unused?` carries the rule — an ordering
+  # UI's connection indicator is built on. `ApiKey#rotated_and_unused?` carries the rule — an ordering
   # comparison between the rotation and the last use, with both nil cases decided — and it is the
   # same object the two web surfaces read, so the agent and the page cannot disagree about a key.
   #

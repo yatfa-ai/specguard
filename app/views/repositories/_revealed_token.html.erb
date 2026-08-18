@@ -19,7 +19,35 @@
       <meta name="turbo-cache-control" content="no-cache">
     <% end %>
     <% revealed_heading = @revealed_token_regenerated ? "Your regenerated API key" : "Your new API key" %>
-    <%= render UI::PanelComponent.new(title: @revealed_token_name.present? ? "#{revealed_heading}: #{@revealed_token_name}" : revealed_heading) do %>
+    <%# The panel is given an id and a scroll controller because a correct render is not enough here.
+        This template is very tall and the control that produced this panel — mint, or rotate — sits
+        near the bottom of it, while this renders near the top. Turbo Drive preserves scroll across
+        the visit that follows the redirect, so the reveal can be perfect and arrive off-screen, and
+        the person who pressed the button sees nothing happen. There is no second chance: only a
+        digest is stored, so a missed reveal costs a rotation, which breaks whatever still carries
+        the old token.
+
+        Two mechanisms, deliberately, because they fail in different places. `ApiKeysController`
+        redirects to `#revealed-key`, which a browser honours with no JavaScript at all and which
+        Turbo honours on an ordinary advance visit; `scroll_into_view_controller.js` covers the case
+        where Turbo restores the previous scroll position instead of consulting the fragment.
+        Neither names a pixel, so neither rots as this page keeps growing.
+
+        The second is not redundancy, and that is measured rather than assumed. The hypothesised
+        cause does not reproduce in headless Chromium — Turbo scrolls to the top there, and the
+        reveal is the first panel on the page, so it lands by coincidence. Driving
+        `spec/system/api_key_reveal_spec.rb` against a page that had been given a scroll-restoring
+        listener: with neither mechanism, both examples fail; with the fragment ALONE, both still
+        fail; with the controller, both pass. The fragment earns its place for the no-JavaScript
+        reader, and the controller is what actually closes the reported failure.
+
+        The id is on the PANEL rather than on an inner element so the whole thing — heading,
+        warning, token and prompt — comes into view together. %>
+    <%= render UI::PanelComponent.new(
+          title: @revealed_token_name.present? ? "#{revealed_heading}: #{@revealed_token_name}" : revealed_heading,
+          id: "revealed-key",
+          data: { controller: "scroll-into-view" }
+        ) do %>
       <%# Auto-copy is declared here rather than defaulted on in the controller because it is right
           for exactly this call site: overwriting a clipboard is cheap and reversible, and leaving
           this page without the token is neither. The two outcome messages are passed in rather
@@ -73,48 +101,63 @@
           </p>
         </div>
 
-        <%# The whole point of this snippet is that it is ready to paste: the real token is already
-            in it, so there is no `<token>` to swap by hand while the value is still on screen. The
-            persistent panel below keeps the placeholder form, because it has to outlive the flash
-            and by then the secret is unrecoverable.
+        <%# == The integration, ready to paste, with the credential already in it
+            ==================================================================================
 
-            This REPLACES the "Use it as `Authorization: Bearer <token>` against <url>" line that
-            stood here: a placeholder instruction at the one moment the real value is on screen is
-            the exact incoherence this panel existed to fix. Nothing it said is lost — the header,
-            the URL and the token are all in the command below, and now in runnable form.
+            The whole point of what follows is that it is ready to paste: the real token is already
+            in it, so there is no `<token>` to swap by hand while the value is still on screen. The
+            persistent panel below keeps the by-name form, because it has to outlive the flash and
+            by then the secret is unrecoverable.
+
+            The same prompt the persistent "Wire this repository up" panel carries, from the same
+            helper, differing in exactly one paragraph: here the real token is inlined, so what the
+            reader pastes into a coding agent works as pasted. That is a property only THIS render
+            can have. `ApiKey` stores a SHA-256 digest and the plaintext lives for this one
+            flash-backed render, so every later render — including a plain reload of this page —
+            can name the CI secret and nothing more.
+
+            This REPLACES the "Next steps" list, which was correct and stopped short: store the key
+            as a CI secret, point a client at `GET /api/v1/repository`, come back and check the
+            stat. Every step of it was about the READ endpoint, which sends SpecGuard nothing, and
+            a reader who followed it to the end had a working credential, a 200, and no telemetry.
+            The write endpoint, the client gem, the linter and the annotation protocol are all on
+            the guide the prompt points at, which is verified against the endpoint by
+            `spec/requests/integration_guide_spec.rb`.
 
             Its OWN `copy-text` scope, so this longer payload cannot become the auto-copy scope's
             `sourceTarget` — see the note on "The key" above. Nested means its Copy button copies
-            the curl and the panel still auto-copies the bare token. %>
+            the prompt and the panel still auto-copies the bare token. %>
         <div class="space-y-1" data-controller="copy-text">
-          <p class="section-label text-app-content-secondary">Try it now</p>
-          <%= render UI::CopyableCodeComponent.new do %>curl -H "Authorization: Bearer <%= @revealed_token %>" <%= api_v1_repository_url %><% end %>
+          <p class="section-label text-app-content-secondary">Wire the repository up</p>
+          <%= render UI::CopyableCodeComponent.new(multiline: true) do %><%= integration_guide_agent_prompt(
+                repository: @repository,
+                guide_url: integration_guide_url,
+                endpoint: integration_guide_endpoint,
+                token: @revealed_token
+              ) %><% end %>
           <p class="text-xs text-app-muted">
-            Ready to run as-is — the key above is already in the command, nothing to substitute.
+            Paste it into your coding agent. The key is already in it, so it works as pasted — which
+            is true only while this page is on screen. Reading it yourself instead:
+            <%= link_to "the integration guide", integration_guide_path, class: "underline" %>.
           </p>
         </div>
 
-        <%# Only what is shipped today: a Bearer-authenticated `GET /api/v1/repository`, and the
-            connection stat on this page that reports whether it ever authenticated. Nothing here
-            promises a capability the API does not have yet. %>
-        <div class="space-y-2">
-          <p class="section-label text-app-content-secondary">Next steps</p>
-          <ol class="list-decimal space-y-1 pl-5 text-xs text-app-muted">
-            <li>
-              Store the key in CI as a secret — a GitHub Actions repository secret named
-              <code>SPECGUARD_API_KEY</code>, for example. Do not commit it: SpecGuard cannot show
-              this value again; regenerate the key to mint a replacement.
-            </li>
-            <li>
-              Point your client at <code>GET <%= api_v1_repository_url %></code> and send the secret
-              as <code>Authorization: Bearer $SPECGUARD_API_KEY</code>.
-            </li>
-            <li>
-              Come back here to check it worked: once any request authenticates, "Connection" in
-              <a href="#connect" class="underline">Connect this repository</a> below reads
-              "Connected" and names how long ago the last request arrived.
-            </li>
-          </ol>
+        <%# The auth check, kept and demoted. It was the whole of what this panel taught about
+            using the key, under the heading "Try it now", directly above a list of next steps that
+            never mentioned the write endpoint — so it read as the integration. It is not: it is one
+            request that proves a credential authenticates and sends SpecGuard nothing. Retitled and
+            labelled as exactly that, it is still the fastest way to tell a mistyped key from a
+            misconfigured endpoint, which is worth keeping at the one moment the value is on screen.
+
+            Its own `copy-text` scope, on the same rule as the block above. %>
+        <div class="space-y-1" data-controller="copy-text">
+          <p class="section-label text-app-content-secondary">Or just check the key works</p>
+          <%= render UI::CopyableCodeComponent.new do %>curl -H "Authorization: Bearer <%= @revealed_token %>" <%= api_v1_repository_url %><% end %>
+          <p class="text-xs text-app-muted">
+            Ready to run as-is — the key above is already in the command, nothing to substitute. This
+            is a connectivity check and not the integration: it reads, it sends nothing, and a
+            <code>200</code> from it means the credential is good and nothing more.
+          </p>
         </div>
       </div>
     <% end %>

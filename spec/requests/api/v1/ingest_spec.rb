@@ -542,6 +542,26 @@ RSpec.describe "POST /api/v1/ingest", type: :request do
                                               "annotated_ratio" => nil)
     end
 
+    # The discriminator between "this REQUEST carried no specs" and "the RUN has no specs". Only
+    # the second is what `null` reports, because `RunRecorder#recompute_totals` re-derives the
+    # run's counts as a SUM over every shard rather than from the payload in hand — so an empty
+    # shard arriving on a run that already has examples gets a NUMBER, and the example above gets
+    # its `null` from the run being empty, not from its own `specs: []`.
+    #
+    # Worth pinning rather than inferring: the public integration guide documents when a client
+    # must parse this field as nullable, and stating the rule per-request instead of per-run sends
+    # a sharded reporter looking for a `null` it will never see.
+    it "reports a number, not null, for an empty shard of a run that has specs" do
+      ingest(ingest_payload(commit_sha: "deadbee", ci_run_id: "gha-42", shard_id: "1",
+                            specs: [unannotated_spec(line_number: 1), unannotated_spec(line_number: 2)]))
+
+      ingest(ingest_payload(commit_sha: "deadbee", ci_run_id: "gha-42", shard_id: "2", specs: []))
+
+      expect(response).to have_http_status(:accepted)
+      expect(response.parsed_body).to include("total_specs" => 2, "annotated_specs" => 0,
+                                              "annotated_ratio" => 0.0)
+    end
+
     # The two endpoints serving this field lived in two request specs that cannot see each other,
     # and they answered the same run `0.0` and `null` respectively for as long as that was true.
     # A single `TestRun#annotated_fraction` is what makes them agree; this reads BOTH bodies in one
@@ -774,6 +794,25 @@ RSpec.describe "POST /api/v1/ingest", type: :request do
       expect(TestRun.count).to eq(0)
     end
 
+    # `label` is `[file_path, line_number].compact.join(":")`, so it has FOUR forms, not the two a
+    # reader would guess from the neighbours above: both coordinates, file alone, line alone, and
+    # neither. The two partial forms are the ones worth pinning, because they are what a reporter
+    # under development actually produces — omitting `line_number` is the first-run mistake — and
+    # because the line-only form renders a BARE INTEGER where a reader scanning for a path expects
+    # one. The public integration guide documents these forms; an example each is what stops that
+    # documentation drifting from `Payload#label`.
+    it "names a spec by whichever coordinate it has when it has only one" do
+      ingest(ingest_payload(specs: [annotated_spec(file_path: "spec/c_spec.rb").except(:line_number)]))
+
+      expect(response.parsed_body["details"])
+        .to contain_exactly("specs[0] spec/c_spec.rb: line_number is required and must be a positive integer")
+
+      ingest(ingest_payload(specs: [annotated_spec(line_number: 9).except(:file_path)]))
+
+      expect(response.parsed_body["details"])
+        .to contain_exactly("specs[0] 9: file_path is required and must be a non-empty string")
+    end
+
     it "rejects a spec with no file_path" do
       ingest(ingest_payload(specs: [annotated_spec.except(:file_path)]))
 
@@ -978,18 +1017,33 @@ RSpec.describe "POST /api/v1/ingest", type: :request do
       expect(TestRun.last.test_run_shards.sole.shard_id).to be_nil
     end
 
+    # One of the two exceptions to "`details` carries every failure found": `Payload#validate`
+    # RETURNS on a non-object body rather than falling through to the six field validators, so this
+    # response carries exactly ONE entry, and it names no field because there is no field to name
+    # when the body itself is the wrong shape. (The other is an unparseable body, refused above
+    # `Payload` entirely — see "rejects a body that is not JSON at all" below.)
+    #
+    # `contain_exactly` rather than `include` is the point of the example: it is what fails if the
+    # early return is dropped and the field validators start piling on entries about a body that
+    # was never readable.
     it "rejects a JSON body that is not an object" do
       ingest([ingest_payload].to_json)
 
       expect(response).to have_http_status(:bad_request)
       expect(response.parsed_body["message"]).to include("JSON object")
+      expect(response.parsed_body["details"]).to contain_exactly("the request body must be a JSON object")
     end
 
+    # The second field-less refusal, and the one a client hits before `Payload` is ever reached — a
+    # truncated upload, a half-flushed buffer. Like the non-object case it answers with exactly one
+    # entry naming no field, which is the pair the integration guide documents as the exceptions to
+    # `details` being a per-field list.
     it "rejects a body that is not JSON at all, in the API's own error shape" do
       ingest("{ not json")
 
       expect(response).to have_http_status(:bad_request)
       expect(response.parsed_body["error"]).to eq("bad_request")
+      expect(response.parsed_body["details"]).to contain_exactly("The request body could not be parsed as JSON.")
       expect(TestRun.count).to eq(0)
     end
   end

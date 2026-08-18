@@ -416,8 +416,8 @@ RSpec.describe "Repository run anchor", type: :request do
 
       get repository_path(repository, commit_sha: older.commit_sha)
 
-      expect(panel_text("connect")).to include("Connected")
-      expect(panel_text("connect")).not_to include("Deliveries refused")
+      expect(panel_text("connection-indicator")).to include("Connected")
+      expect(panel_text("connection-indicator")).not_to include("Deliveries refused")
     end
 
     # The other half, so the example above cannot pass by the verdict having been disabled: the same
@@ -428,7 +428,7 @@ RSpec.describe "Repository run anchor", type: :request do
 
       get repository_path(repository, commit_sha: older.commit_sha)
 
-      expect(panel_text("connect")).to include("Deliveries refused")
+      expect(panel_text("connection-indicator")).to include("Deliveries refused")
     end
   end
 

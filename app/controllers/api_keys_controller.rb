@@ -3,6 +3,19 @@
 class ApiKeysController < ApplicationController
   before_action :require_authentication
 
+  # Where both reveal paths redirect: the id of the panel `repositories/_revealed_token` renders.
+  #
+  # A fragment rather than nothing, because a correct render is not enough. `repositories#show` is a
+  # tall template and both controls that reach this class — the mint form and each row's rotate
+  # button — sit near the bottom of it, while the reveal renders near the top. Landing on the page
+  # with the previous scroll position intact means the person who pressed the button sees nothing
+  # happen, and the value is shown exactly once.
+  #
+  # It is one of two mechanisms and covers the ones the other cannot: a browser with JavaScript off,
+  # and Turbo's own anchor handling on an ordinary advance visit.
+  # `scroll_into_view_controller.js` covers the case where Turbo restores the prior scroll instead.
+  REVEAL_ANCHOR = "revealed-key"
+
   # Reveal-once: the raw token is put in the flash for exactly the redirect that follows, and is
   # never persisted anywhere. Only the SHA-256 digest reaches the database.
   def create
@@ -10,7 +23,7 @@ class ApiKeysController < ApplicationController
     api_key = repository.api_keys.create!(name: api_key_name, created_by_user: current_user)
 
     reveal(api_key)
-    redirect_to repository_path(repository), notice: "API key created. Copy it now — it is shown only once."
+    redirect_to reveal_path(repository), notice: "API key created. Copy it now — it is shown only once."
   end
 
   # The recovery path for a key whose plaintext is gone: mint a new token onto the same row. There
@@ -31,7 +44,7 @@ class ApiKeysController < ApplicationController
     # Not folded into `reveal`: it is what distinguishes the two callers, and it is read to decide
     # whether the panel warns that something just stopped working.
     flash[:revealed_api_key_regenerated] = true
-    redirect_to repository_path(repository),
+    redirect_to reveal_path(repository),
                 notice: "API key regenerated. The previous token has stopped working — copy the new one now, " \
                         "it is shown only once."
   end
@@ -44,6 +57,14 @@ class ApiKeysController < ApplicationController
   end
 
   private
+
+  # The repository page, anchored on the reveal panel. Shared by both reveal paths rather than
+  # written twice, on the same rule `reveal` itself follows: mint and rotate are one flow wearing
+  # two verbs, and the one that is only correct on one of them is the bug this ticket fixed.
+  #
+  # `#destroy` deliberately does NOT use it — revoking a key reveals nothing, so there is no panel
+  # to land on and the fragment would point at an element that is not rendered.
+  def reveal_path(repository) = repository_path(repository, anchor: REVEAL_ANCHOR)
 
   # Read once, by `RepositoriesController#show`, on the redirect that follows.
   def reveal(api_key)
