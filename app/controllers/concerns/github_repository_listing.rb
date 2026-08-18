@@ -23,7 +23,8 @@ module GithubRepositoryListing
 
   included do
     helper_method :github_listing, :github_listing_error, :github_listing_error_message,
-                  :github_listing_incomplete?, :github_installation_needed?
+                  :github_listing_incomplete?, :github_installation_needed?,
+                  :github_visible_listing, :github_withheld_count
   end
 
   private
@@ -49,6 +50,32 @@ module GithubRepositoryListing
     return nil if github_sources.registrable.empty? && github_sources.error
 
     github_sources.listing
+  end
+
+  # Everything the viewer can SEE across their installations, administered or not — what
+  # `github_listing` narrows before it hands the picker anything. It is NOT a second source a
+  # picker may be built from: every repository in it that is missing from `github_listing` is one
+  # registration would refuse.
+  #
+  # It exists because the difference between the two is the only honest account a page can give of
+  # its own length. An organization member with view access to thirty repositories and admin on
+  # three is the ordinary case, not the exotic one, and a page that shows them three and says
+  # nothing is a page they will read as broken.
+  #
+  # `nil` in exactly the situations `github_listing` is nil, so a caller cannot accidentally use it
+  # to render something on a page that has nothing to render.
+  def github_visible_listing
+    return nil if github_listing.nil?
+
+    github_sources.visible_listing
+  end
+
+  # How many repositories the viewer can reach but may not register, for the sentence that says so.
+  # Zero — not nil — when there is nothing to explain, including when there is no listing at all.
+  def github_withheld_count
+    return 0 if github_listing.nil?
+
+    github_sources.withheld_count
   end
 
   # The verdict status that stopped the listing being the whole story, or `nil` when nothing did.

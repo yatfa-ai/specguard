@@ -6,13 +6,18 @@
 #   GithubOrganizations.from(listing)          # => Array<GithubOrganizations::Org>
 #   GithubOrganizations.find(listing, "acme")  # => Org, or nil
 #
+# The listing it takes is the VISIBLE one — everything the viewer can reach across their
+# installations, administered or not (`InstallationRepositories::Sources#visible_listing`) — and not
+# the narrowed one the single-repository picker is built from. It needs both halves: what may be
+# registered is what it offers, and what may not is what it has to account for.
+#
 # ## Why this reads the listing rather than GitHub's org endpoints
 #
-# The listing is already exactly the right set, because `InstallationRepositories` has narrowed it
-# before this sees it: what arrives is the repositories that are in one of this viewer's
-# installations AND that GitHub names this viewer an administrator of. Each carries its
-# `owner.type`, so grouping by owner yields the organizations this viewer can register from — for no
-# extra round trip, and without the App needing any permission beyond the Metadata it has.
+# The listing is already the right raw material, because `InstallationRepositories` has narrowed it
+# to this viewer's installations before this sees it, and each repository carries both its
+# `owner.type` and this viewer's own `permissions.admin`. So grouping by owner yields the
+# organizations this viewer can register from AND the count of what is being withheld from them —
+# for no extra round trip, and without the App needing any permission beyond the Metadata it has.
 #
 # `GET /orgs/:org/repos` would be worse on every axis that matters here: another endpoint, one call
 # per organization plus a page walk inside each, and a SUPERSET rather than the right set — it lists
@@ -20,17 +25,22 @@
 #
 # ## What "an organization you can register from" means here
 #
-# It means: an organization with at least one repository in this viewer's installation. That is not
-# a claim about anyone's org role, and it deliberately is not — an org owner still cannot register a
+# It means: an organization with at least one repository that is in this viewer's installation AND
+# that GitHub names this viewer an administrator of. Both halves, because either alone is a
+# different and wrong page — installation alone offers an organization's read-only members fifty
+# repositories the write will refuse, and administration alone would offer repositories nobody ever
+# gave SpecGuard, which is the squatting gap this slice exists to close.
+#
+# That is deliberately NOT a claim about anybody's org role. An org owner still cannot register a
 # repository nobody installed the App on, and somebody who administers exactly one repository can
 # register exactly that one. The honest question is the one that decides the outcome, and it has
-# already been decided upstream — by the installation for the repository, and by
-# `permissions.admin` for the person.
+# already been decided upstream — by the installation for the repository, and by `permissions.admin`
+# for the person.
 #
-# An organization with nothing in the installation does not appear at all, because it cannot: it
-# contributes no repositories to group. There is no "withheld" count any more and its absence is the
-# point — the OAuth listing returned everything the user could see and had to explain why most of it
-# was not on offer, where an installation contains only what was chosen.
+# An organization with nothing registerable does not appear at all — the same choice the
+# single-repository picker makes, and for the same reason: offering it is offering a click that can
+# only end in an empty list. What was withheld from an organization that DOES appear is counted
+# rather than hidden, so a short list is never a mysterious one.
 #
 # ## Personal repositories are out
 #
@@ -39,15 +49,28 @@
 # same machinery pointed at a different set and is left for whoever asks for it, rather than
 # smuggled in under a page that says "organization".
 class GithubOrganizations
-  # One organization and the repositories of its that are in this viewer's installation — which is
-  # to say, all of the ones they can register.
+  # One organization and every repository of its this viewer can see.
+  #
+  # Holds ALL of them, not only the registerable ones, because the two counts are what make the
+  # picker honest: `administered` is what may be selected, and `withheld_count` is how the page says
+  # why the list is shorter than the organization is.
   #
   # Nothing here is memoised, deliberately: a `Data` instance is frozen, so an `||=` on an ivar
   # raises rather than caching. The lists are tens of entries and are read a handful of times per
   # render, so recomputing is the cheaper of the two mistakes available.
   Org = Data.define(:login, :repos) do
-    def count = repos.length
-    def any? = repos.any?
+    # Registerable, in the picker's order. Sorted case-insensitively by name so the list reads
+    # alphabetically rather than in GitHub's ASCII order, where `Zebra` sorts before `apple`.
+    def administered = repos.select(&:admin?).sort_by { |repo| repo.full_name.downcase }
+
+    def administered_count = administered.length
+
+    # Repositories of this organization the viewer can see but cannot register. Stated as a count
+    # rather than listed: naming them is a list of things you may not have, which is noise on a page
+    # about what you may register.
+    def withheld_count = repos.length - administered_count
+
+    def any_administered? = administered.any?
   end
 
   class << self
@@ -63,6 +86,7 @@ class GithubOrganizations
              .select(&:organization?)
              .group_by(&:owner)
              .map { |login, repos| Org.new(login: login, repos: repos) }
+             .select(&:any_administered?)
              .sort_by { |org| org.login.downcase }
     end
 

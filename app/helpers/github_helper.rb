@@ -104,16 +104,47 @@ module GithubHelper
 
   # Beneath the field, because each of these changes what an *absent* repository means, and a picker
   # that silently omits things is a picker people stop trusting.
-  def repository_picker_hint(listing)
+  #
+  # `withheld:` is how many repositories this viewer can reach but is not an administrator of — the
+  # ordinary position of every read-only member of every organization that installs the App, and the
+  # single most likely reason a reader's repository is not in the list. Defaulted rather than
+  # required only because a caller with no sources cannot know it; every real caller passes it.
+  def repository_picker_hint(listing, withheld: 0)
     sentences = ["These are the repositories the SpecGuard GitHub App is installed on that GitHub " \
                  "lists you as an administrator of. Add more from your GitHub settings."]
+
+    sentences << withheld_repositories_sentence(withheld)
 
     if listing.truncated?
       sentences << "Showing the first #{GithubApi::MAX_PAGES * GithubApi::PER_PAGE} repositories " \
                    "GitHub returned."
     end
 
-    sentences.join(" ")
+    sentences.compact.join(" ")
+  end
+
+  # "3 connected repositories you do not administer are not listed." — the sentence that keeps a
+  # short list from being a mysterious one, and `nil` when nothing was withheld.
+  #
+  # One definition for the four places that say it (the single-repository picker's hint and its
+  # nothing-to-offer empty state, the organization card, the organization's repository list). It is
+  # the same fact each time, and four copies is four chances for one of them to disagree about the
+  # verb — which is exactly the kind of drift that makes a reader wonder whether they mean different
+  # things.
+  #
+  # It says "connected" as well as "you do not administer" because BOTH conditions are load-bearing
+  # and a reader who is told only one will fix the wrong thing: these are repositories already in
+  # the installation, so installing the App again on them changes nothing, and the way to register
+  # one is for somebody who administers it to do so.
+  #
+  # Composed as one String rather than assembled across ERB lines, deliberately: interpolating a
+  # `pluralize` mid-sentence in a template puts a newline inside the sentence, which reads fine in a
+  # browser and is invisible to anything matching on the text.
+  def withheld_repositories_sentence(count)
+    return nil unless count.to_i.positive?
+
+    "#{pluralize(count, 'connected repository', plural: 'connected repositories')} you do not " \
+      "administer #{count == 1 ? 'is' : 'are'} not listed."
   end
 
   private

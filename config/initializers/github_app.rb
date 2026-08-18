@@ -30,12 +30,22 @@
 #     user carrying a `code` and the setup URL when it returns them without one; pointing both at
 #     the same action means there is one place that reads what came back rather than two that can
 #     disagree.
+#
+#     Setting only the Setup URL is the mis-provisioning to watch for, because it FAILS QUIETLY:
+#     installing works, and reconnecting does not. `authorization_url` below sends the user to
+#     `github.com/login/oauth/authorize`, and GitHub returns from there to the **Callback URL** and
+#     never to the Setup URL. The user's credential lives only in their session and `reset_session`
+#     fires on sign-in, so every returning user meets the Reconnect button on their first page load
+#     of every session — with the Callback URL unset, that button leaves the site and cannot come
+#     back. No spec can catch this: the App exists only in production.
 #   - **"Request user authorization (OAuth) during installation"** must be ON. It is what makes
-#     GitHub send a `code` alongside `installation_id`, and that code is the ONLY thing that proves
-#     the person arriving is entitled to the installation they arrived carrying — and the only way
-#     SpecGuard ever obtains a credential that speaks for the user rather than for the App.
-#     `GithubAppUserAuthorization` states that argument in full; the callback fails closed when no
-#     code arrives.
+#     GitHub send a `code` alongside `installation_id`, and that code is the only way SpecGuard ever
+#     obtains a credential that speaks for the user rather than for the App. It is NOT on its own
+#     proof that the person arriving is entitled to the installation they arrived carrying — the
+#     callback is a GET, so a code obtained in somebody else's browser can be planted on a signed-in
+#     victim. What makes it proof is the code redeemed AND the resulting token bound to the
+#     signed-in identity with `GET /user`; `GithubAppUserAuthorization` states that argument in full,
+#     and the callback fails closed when either half is missing.
 #
 # ## Credentials
 #

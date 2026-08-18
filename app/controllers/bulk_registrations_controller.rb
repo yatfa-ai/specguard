@@ -63,8 +63,13 @@ class BulkRegistrationsController < ApplicationController
 
   # Every organization this viewer can register something from, derived from the listing rather than
   # from GitHub's org endpoints — see `GithubOrganizations` for why, and what that costs.
+  #
+  # Built from `github_visible_listing` rather than `github_listing`: the narrowed listing has
+  # already dropped what this viewer cannot administer, and dropping it before grouping is what
+  # leaves the page unable to say how much of an organization it is not showing. `GithubOrganizations`
+  # applies the same bar itself, per organization, and keeps the difference.
   def organizations
-    @organizations ||= GithubOrganizations.from(github_listing)
+    @organizations ||= GithubOrganizations.from(github_visible_listing)
   end
 
   # The organization being picked from, or `nil` when none has been chosen yet — which is also the
@@ -74,7 +79,7 @@ class BulkRegistrationsController < ApplicationController
   def organization
     return @organization if defined?(@organization)
 
-    @organization = GithubOrganizations.find(github_listing, params[:organization])
+    @organization = GithubOrganizations.find(github_visible_listing, params[:organization])
   end
 
   # Which of the organization's repositories are already registered here, so the picker can say so

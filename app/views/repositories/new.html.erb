@@ -9,7 +9,7 @@
   <%= render UI::PageHeaderComponent.new(
         title: "Register a repository",
         subtitle: "Pick one of your connected GitHub repositories. SpecGuard checks with GitHub " \
-                  "that the App is installed on it before registering."
+                  "that the App is installed on it and that you administer it before registering."
       ) do |header| %>
     <% header.with_actions do %>
       <%# The reciprocal of the link the bulk page carries back to here. Someone who arrived to

@@ -6,7 +6,8 @@
     lands here rather than in a half-filled form. %>
 <div class="space-y-3">
   <p class="text-sm text-app-content-secondary">
-    Organizations with repositories the SpecGuard GitHub App is installed on.
+    Organizations with repositories the SpecGuard GitHub App is installed on that GitHub lists you
+    as an administrator of.
   </p>
 
   <div class="grid gap-3 md:grid-cols-2">
@@ -15,9 +16,15 @@
         <div class="flex items-start justify-between gap-3">
           <%= render UI::HeadingComponent.new(level: 3, class: "text-app-content min-w-0 break-words") { org.login } %>
           <%= render UI::BadgeComponent.new(tone: :success, class: "shrink-0") do %>
-            <%= pluralize(org.count, "repository", plural: "repositories") %>
+            <%= pluralize(org.administered_count, "repository", plural: "repositories") %>
           <% end %>
         </div>
+        <%# Stated per organization rather than once for the page, because it is a fact about THIS
+            organization: the reader who knows acme has thirty repositories connected needs to know
+            why three are on offer, and the answer is different for every card. %>
+        <% if (withheld = withheld_repositories_sentence(org.withheld_count)) %>
+          <p class="mt-1 text-xs text-app-muted"><%= withheld %></p>
+        <% end %>
       <% end %>
     <% end %>
   </div>

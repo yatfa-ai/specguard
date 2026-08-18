@@ -2,13 +2,15 @@
 
     locals: organization (a GithubOrganizations::Org)
 
-    Every row here is a repository the SpecGuard GitHub App is installed on. Nothing on this page is
-    a gate: the tick boxes are client-controlled, so `BulkRegistration` re-asks GitHub about every
-    submitted name before it saves anything. What the page is responsible for is not offering a
-    click that can only fail — which is why already-registered rows are shown but not selectable. %>
-<% installed = organization.repos %>
-<% registerable = installed.reject { |repo| already_registered?(repo.full_name) } %>
-<% already = installed.length - registerable.length %>
+    Every row here is a repository the SpecGuard GitHub App is installed on AND that GitHub lists
+    this viewer as an administrator of. Nothing on this page is a gate: the tick boxes are
+    client-controlled, so `BulkRegistration` re-asks GitHub about every submitted name before it
+    saves anything. What the page is responsible for is not offering a click that can only fail —
+    which is why already-registered rows are shown but not selectable, and why the connected
+    repositories this viewer does not administer are counted rather than listed. %>
+<% administered = organization.administered %>
+<% registerable = administered.reject { |repo| already_registered?(repo.full_name) } %>
+<% already = administered.length - registerable.length %>
 
 <div class="space-y-4">
   <div class="flex flex-wrap items-center justify-between gap-2">
@@ -17,10 +19,11 @@
       <p class="mt-1 text-sm text-app-content-secondary">
         <%# Each of these is composed as one string rather than assembled across ERB lines: a
             newline inside a sentence renders fine and is invisible to anything reading the text. %>
-        <%= pluralize(installed.length, "repository", plural: "repositories") %> connected.
+        <%= pluralize(administered.length, "repository", plural: "repositories") %> you administer.
         <% if already.positive? %>
           <%= "#{already == 1 ? 'One is' : "#{already} are"} already registered and cannot be registered again." %>
         <% end %>
+        <%= withheld_repositories_sentence(organization.withheld_count) %>
       </p>
     </div>
     <%= render UI::ButtonComponent.new(variant: :ghost, size: :sm, href: bulk_repositories_path) do %>
@@ -29,12 +32,12 @@
   </div>
 
   <% if registerable.empty? %>
-    <%# Every connected repository here is already registered. That is a success, not an
+    <%# Everything this viewer administers here is already registered. That is a success, not an
         empty state to apologise for, so it says so and points at the list rather than at a form
         that could do nothing. %>
     <%= render UI::EmptyStateComponent.new(
           title: "Nothing left to register",
-          description: "Every connected repository in #{organization.login} is already " \
+          description: "Every repository you administer in #{organization.login} is already " \
                        "registered in SpecGuard."
         ) do %>
       <%= render UI::ButtonComponent.new(variant: :primary, href: repositories_path) { "Back to repositories" } %>
@@ -87,7 +90,7 @@
       </div>
 
       <ul class="mt-2 max-h-96 divide-y divide-app-border-light overflow-y-auto">
-        <% installed.each_with_index do |repo, index| %>
+        <% administered.each_with_index do |repo, index| %>
           <% taken = already_registered?(repo.full_name) %>
           <li class="py-2"
               data-bulk-picker-target="row"

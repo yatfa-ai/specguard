@@ -101,6 +101,26 @@ RSpec.describe InstallationRepositories do
       expect(result.listing.repos.map(&:full_name)).to eq(%w[acme/api])
     end
 
+    # The other half of the same fact, and the one a picker needs in order to account for its own
+    # length: what was withheld is counted and still reachable, rather than dropped. A page that
+    # shows one of three connected repositories and says nothing reads as broken.
+    it "keeps what it withheld, so a picker can say how much it is not showing" do
+      stub_github(repos: [github_repo("acme/api"), github_repo("acme/readonly", admin: false),
+                          github_repo("acme/vault", admin: false)])
+
+      result = sources
+
+      expect(result.withheld_count).to eq(2)
+      expect(result.visible_listing.repos.map(&:full_name))
+        .to eq(%w[acme/api acme/readonly acme/vault])
+    end
+
+    it "counts nothing as withheld when the user administers everything they can reach" do
+      stub_github(repos: [github_repo("acme/api")])
+
+      expect(sources.withheld_count).to eq(0)
+    end
+
     # Two admins of the same organization legitimately reach the same repositories through
     # different installations, and an organization installation and a personal one can both reach a
     # fork. The picker must offer it once.
@@ -221,22 +241,27 @@ RSpec.describe InstallationRepositories do
     # installation, user B holds a row for the SAME installation — which GitHub hands to any member
     # of the organization — and B's read is made with B's credential, so B sees what B administers
     # and nothing else. Under an App-credential read both users saw the identical fifty rows.
+    #
+    # ONE fake, keyed on the token, deliberately. Re-stubbing between the two calls would produce
+    # the same two verdicts against a `sources` that hard-coded a constant credential — which is
+    # precisely the regression this example exists to catch, so it has to be the reader that decides
+    # the answer and not the setup.
     it "answers per user when two users hold the same installation" do
       owner = create_user(github_uid: "1001", github_handle: "owner", installation_id: 9001)
       member = create_user(github_uid: "2002", github_handle: "member", installation_id: 9001)
 
-      stub_github_per_installation do |_id|
-        FakeGithubApi.new(repos: [github_repo("acme/billing"), github_repo("acme/docs")])
+      stub_github_per_credential do |token, installation_id|
+        raise "expected the shared installation, got #{installation_id}" unless installation_id == 9001
+
+        FakeGithubApi.new(repos: [github_repo("acme/billing", admin: token == "ghu_owner"),
+                                  github_repo("acme/docs", admin: token == "ghu_owner")])
       end
+
       expect(described_class.verify(user: owner, full_name: "acme/billing",
                                     user_token: "ghu_owner")).to be_verified
 
       # Same installation, same repositories, different reader — GitHub answers the member with
       # their own permissions, and `acme/billing` is not one they administer.
-      stub_github_per_installation do |_id|
-        FakeGithubApi.new(repos: [github_repo("acme/billing", admin: false),
-                                  github_repo("acme/docs", admin: false)])
-      end
       verdict = described_class.verify(user: member, full_name: "acme/billing", user_token: "ghu_member")
 
       expect(verdict).not_to be_verified

@@ -122,41 +122,42 @@ dashboard never hands over anything about their repositories. Connecting reposit
 separate mechanism entirely: installing the **SpecGuard GitHub App** and choosing repositories in
 GitHub's own picker.
 
-That installation is what closes the squatting gap, and it is a stronger proof than the one it
-replaced. Only somebody who administers a repository can install an App on it, so a repository
-being in your installation *is* GitHub's statement that it is yours to register — there is no
-permission field to read. `InstallationRepositories` re-asks GitHub server-side on every write of
-`github_full_name` (registration and rename both), and it fails closed, including when GitHub is
-unreachable.
+That installation is half of what closes the squatting gap, and only half. Only somebody who
+administers a repository can install an App on it, so a repository being in an installation is
+GitHub's statement that it was deliberately handed to SpecGuard by *somebody* — but not that the
+person looking at the list is that somebody. GitHub shows an organization's installation to every
+member of the organization. So SpecGuard asks two questions and needs both answered yes: the
+repository is in one of **your** installations, and GitHub names **you** an administrator of it.
+
+Both are settled in one round trip, with your own credential rather than the App's, and neither is
+inferred from the other. `InstallationRepositories` states the argument in full and is the only
+place that decides it; it re-asks GitHub server-side on every write of `github_full_name`
+(registration and rename both), and it fails closed, including when GitHub is unreachable.
 
 This replaced an OAuth `repo` grant — GitHub's "Full control of private repositories", read **and
 write**, across everything you and your organizations could reach — which existed only to read one
-boolean off `GET /repos/:owner/:repo`. The App asks for **Metadata: read-only** and nothing else.
+boolean off `GET /repos/:owner/:repo`. That same boolean now rides along on a listing the App's
+**Metadata: read-only** grant already answers, which is the whole of what the grant buys.
 `Contents: read` is deliberately not requested: nothing here reads repository code, and adding a
 permission later forces re-consent on every existing installation.
 
 **Nothing repository-reaching is persisted.** There is no token column and no encryption to
-configure. What is stored is one public numeric installation id (`github_installations`); the
-credential SpecGuard actually reads GitHub with is an installation access token minted on demand
-from the App's private key and discarded within the hour (`GithubAppCredentials`). A database dump
-carries no credentials.
+configure. What is stored is one public numeric installation id (`github_installations`). The
+credential SpecGuard reads GitHub with is a short-lived *user*-to-server token that lives in your
+session and goes when the session does — SpecGuard holds no App private key at all, because an
+App-wide credential cannot answer a question about one particular person. A database dump carries
+no credentials.
 
-Five values identify the App, none of them committed:
+Three values identify the App, none of them committed — `GITHUB_APP_SLUG`, `GITHUB_APP_CLIENT_ID`
+and `GITHUB_APP_CLIENT_SECRET`, via the environment or under `github_app:` in encrypted
+credentials. Three settings on the App itself on github.com are load-bearing and cannot be
+asserted from here — in particular its **Callback URL** and its **Setup URL** must *both* point at
+`<host>/github/installation/callback`, and provisioning only the Setup URL leaves reconnecting
+broken while installing appears to work.
 
-```sh
-export GITHUB_APP_ID=123456
-export GITHUB_APP_SLUG=specguard                # the app's URL name, for the install link
-export GITHUB_APP_PRIVATE_KEY="$(cat key.pem)"
-export GITHUB_APP_CLIENT_ID=Iv1....             # the App's own OAuth client, for the
-export GITHUB_APP_CLIENT_SECRET=...             #   install-time code exchange
-```
-
-or under `github_app:` in encrypted credentials. Two settings on the App itself are load-bearing
-and cannot be asserted from here: its **Setup URL** must be `<host>/github/installation/callback`,
-and **"Request user authorization (OAuth) during installation"** must be on — that is what makes
-GitHub send a `code` alongside `installation_id`, and the code is the only thing proving the person
-arriving at the setup URL is entitled to the installation they arrived carrying. See
-`config/initializers/github_app.rb`.
+**`config/initializers/github_app.rb` is the authority on all six**, with the reasoning for each.
+Provision the App from that file rather than from this paragraph, which exists only to tell you the
+file is there.
 
 With none of it set the app still boots and the whole suite still runs: `configured?` reports the
 absence and the connect UI explains what is missing rather than bouncing you to a github.com URL
@@ -164,8 +165,8 @@ built from placeholders. **Development and test never need a real App** — a de
 connected repositories seeds `GithubInstallation` rows from the console.
 
 Specs never reach api.github.com either: `spec/support/github_api.rb` installs a deterministic
-fake through `GithubApi.factory`, the same public seam production code swaps, and no spec needs an
-App id, a private key or a minted token.
+fake through `GithubApi.factory`, the same public seam production code swaps, and no spec needs a
+real App or a real GitHub token.
 
 ### API keys (CI/agent auth)
 

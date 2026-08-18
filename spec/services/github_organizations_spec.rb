@@ -40,15 +40,36 @@ RSpec.describe GithubOrganizations do
       expect(described_class.from(listing([unknown]))).to be_empty
     end
 
-    # An organization with nothing in the installation cannot appear, because it contributes no
-    # repositories to group — there is nothing left to filter and nothing to explain away.
-    it "offers every organization the installation reaches, and counts what it holds" do
-      orgs = described_class.from(listing([github_repo("acme/api"), github_repo("acme/legacy"),
+    # The two counts a card is built from, and the reason `Org` holds the unfiltered set: the badge
+    # is what may be selected, and the sentence under it is why the organization is bigger than that.
+    it "counts what may be registered and what is being withheld, per organization" do
+      orgs = described_class.from(listing([github_repo("acme/api"), github_repo("acme/legacy", admin: false),
                                            github_repo("beta/thing")]))
 
       expect(orgs.map(&:login)).to eq(%w[acme beta])
-      expect(orgs.map(&:count)).to eq([2, 1])
-      expect(orgs.map(&:any?)).to all(be(true))
+      expect(orgs.map(&:administered_count)).to eq([1, 1])
+      expect(orgs.map(&:withheld_count)).to eq([1, 0])
+      expect(orgs.map(&:any_administered?)).to all(be(true))
+    end
+
+    # An organization the viewer administers nothing in is not offered at all — a card leading to an
+    # empty picker is a click that can only disappoint. It is the ONE case where something is hidden
+    # rather than counted, because there is no card left to hang the count on.
+    it "leaves out an organization the viewer administers nothing in" do
+      orgs = described_class.from(listing([github_repo("acme/api"),
+                                           github_repo("beta/thing", admin: false)]))
+
+      expect(orgs.map(&:login)).to eq(%w[acme])
+    end
+
+    # `administered` re-sorts case-insensitively where `repos` does not, because it is the picker's
+    # own order rather than the listing's.
+    it "offers an organization's administered repositories alphabetically, case-insensitively" do
+      org = described_class.from(listing([github_repo("acme/zebra"), github_repo("acme/Apple"),
+                                          github_repo("acme/hidden", admin: false)])).first
+
+      expect(org.administered.map(&:full_name)).to eq(%w[acme/Apple acme/zebra])
+      expect(org.withheld_count).to eq(1)
     end
 
     it "orders organizations alphabetically, case-insensitively" do

@@ -9,8 +9,8 @@
   <%= render UI::PageHeaderComponent.new(
         title: "Register an organization's repositories",
         subtitle: "Pick a GitHub organization and register its repositories in one action. " \
-                  "SpecGuard checks with GitHub that the App is installed on each one, exactly as " \
-                  "it does for a single repository."
+                  "SpecGuard checks with GitHub that the App is installed on each one and that " \
+                  "you administer it, exactly as it does for a single repository."
       ) do |header| %>
     <% header.with_actions do %>
       <%= render UI::ButtonComponent.new(variant: :ghost, href: new_repository_path) { "Register one repository" } %>
@@ -35,18 +35,18 @@
         <%= github_install_button return_to: bulk_repositories_path %>
       <% end %>
     <% elsif github_authorization_needed? %>
-    <%# The App IS installed; this session just has no credential to read it with. A different
-        missing thing and so a different button — sending them through the repository picker again
-        would be asking them to re-answer a question they have already answered. %>
-    <%= render UI::EmptyStateComponent.new(
-          title: "Reconnect to GitHub",
-          description: "SpecGuard asks GitHub which of your connected repositories you administer, " \
-                       "and needs your permission to do that again in this browser session. " \
-                       "Reconnecting takes you to GitHub and straight back."
-        ) do %>
-      <%= github_authorize_button return_to: bulk_repositories_path %>
-    <% end %>
-  <% elsif github_listing.nil? %>
+      <%# The App IS installed; this session just has no credential to read it with. A different
+          missing thing and so a different button — sending them through the repository picker again
+          would be asking them to re-answer a question they have already answered. %>
+      <%= render UI::EmptyStateComponent.new(
+            title: "Reconnect to GitHub",
+            description: "SpecGuard asks GitHub which of your connected repositories you administer, " \
+                         "and needs your permission to do that again in this browser session. " \
+                         "Reconnecting takes you to GitHub and straight back."
+          ) do %>
+        <%= github_authorize_button return_to: bulk_repositories_path %>
+      <% end %>
+    <% elsif github_listing.nil? %>
       <%# Two different reasons land here and they must not read the same: GitHub being down is
           waitable, GitHub *refusing* is not. `github_listing_error_message` is nil only for the
           genuine outage, which is the one case "try again shortly" is true of. %>
@@ -65,13 +65,15 @@
         <%= render UI::ButtonComponent.new(variant: :ghost, href: repositories_path) { "Back" } %>
       </div>
     <% elsif organizations.empty? %>
-      <%# The installation covers repositories, but none of them belongs to an organization — they
-          are all in personal namespaces. Said plainly rather than rendered as an empty chooser: the
-          fix is to register repositories one at a time, and this page cannot help. %>
+      <%# The installation covers repositories, but none of them is an organization repository this
+          viewer administers — they are all in personal namespaces, or all owned by organizations
+          where somebody else does the administering. Said plainly rather than rendered as an empty
+          chooser: neither case is fixed on this page. %>
       <%= render UI::EmptyStateComponent.new(
             title: "No organizations to register from",
-            description: "The SpecGuard GitHub App is not installed on any organization's " \
-                         "repositories. Personal repositories are registered one at a time."
+            description: "GitHub does not list you as an administrator of any organization " \
+                         "repository the SpecGuard GitHub App is installed on. Personal " \
+                         "repositories are registered one at a time."
           ) do %>
         <%= render UI::ButtonComponent.new(variant: :primary, href: new_repository_path) { "Register one repository" } %>
       <% end %>

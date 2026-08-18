@@ -70,17 +70,33 @@
       <%= render UI::ButtonComponent.new(variant: :ghost, href: cancel_href) { "Back" } %>
     </div>
   <% elsif choices.blank? %>
-    <%# The App is installed and covers no repositories — the user completed the flow and selected
-        nothing, or has since deselected everything. The fix is on GitHub, so the button goes back
-        there rather than offering a field that has nothing to offer. %>
-    <% form_return_to = repository.persisted? ? edit_repository_path(repository) : new_repository_path %>
-    <%= render UI::EmptyStateComponent.new(
-          title: "No repositories connected yet",
-          description: "The SpecGuard GitHub App is installed, but no repositories are selected " \
-                       "for it. Choose some on GitHub and they will appear here."
-        ) do %>
-      <%= github_install_button "Choose repositories on GitHub", return_to: form_return_to %>
-      <%= render UI::ButtonComponent.new(variant: :ghost, href: cancel_href) { "Back" } %>
+    <% if github_withheld_count.positive? %>
+      <%# The installation DOES cover repositories and this viewer administers none of them — the
+          ordinary position of a read-only member of an organization that installed the App. Told
+          apart from the branch below deliberately: sending them to GitHub's picker would be sending
+          them to fix something that is not broken, and what is actually in their way is not theirs
+          to change. %>
+      <%= render UI::EmptyStateComponent.new(
+            title: "Nothing here is yours to register",
+            description: "#{withheld_repositories_sentence(github_withheld_count)} Registering a " \
+                         "repository takes GitHub listing you as an administrator of it. Ask an " \
+                         "administrator of the one you want to register it."
+          ) do %>
+        <%= render UI::ButtonComponent.new(variant: :primary, href: cancel_href) { "Back" } %>
+      <% end %>
+    <% else %>
+      <%# The App is installed and covers no repositories at all — the user completed the flow and
+          selected nothing, or has since deselected everything. The fix IS on GitHub here, so the
+          button goes back there rather than offering a field that has nothing to offer. %>
+      <% form_return_to = repository.persisted? ? edit_repository_path(repository) : new_repository_path %>
+      <%= render UI::EmptyStateComponent.new(
+            title: "No repositories connected yet",
+            description: "The SpecGuard GitHub App is installed, but no repositories are selected " \
+                         "for it. Choose some on GitHub and they will appear here."
+          ) do %>
+        <%= github_install_button "Choose repositories on GitHub", return_to: form_return_to %>
+        <%= render UI::ButtonComponent.new(variant: :ghost, href: cancel_href) { "Back" } %>
+      <% end %>
     <% end %>
   <% else %>
     <% if github_listing_incomplete? %>
@@ -109,7 +125,7 @@
         <%= form.field :github_full_name, as: :select, label: "GitHub repository", full: true,
                        choices: choices,
                        include_blank: "Select a repository…",
-                       hint: repository_picker_hint(github_listing),
+                       hint: repository_picker_hint(github_listing, withheld: github_withheld_count),
                        data: { repository_picker_target: "select" } %>
       </div>
 

@@ -120,6 +120,19 @@ class InstallationRepositories
     # The picker's view of this: a plain `GithubApi::Listing`, so every view and helper that renders
     # a repository list keeps taking the one type regardless of how many installations fed it.
     def listing = GithubApi::Listing.new(repos: registrable, truncated: truncated)
+
+    # The same type again, over EVERYTHING this user reached rather than only what they may
+    # register. Not an alternative source for a picker — offering one of these is offering a click
+    # that can only end in `:not_administered` — but the only thing that can account for the
+    # difference between the two. A page that shows five of an organization's thirty repositories
+    # and says nothing about the other twenty-five is indistinguishable, to its reader, from a page
+    # that is broken.
+    def visible_listing = GithubApi::Listing.new(repos: repos, truncated: truncated)
+
+    # How many repositories this user can see across their installations but is not an
+    # administrator of — the count the pages above word as a sentence. Zero for the ordinary case
+    # of somebody who administers everything they were given.
+    def withheld_count = repos.length - registrable.length
   end
 
   class << self

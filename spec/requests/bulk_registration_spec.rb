@@ -68,6 +68,31 @@ RSpec.describe "Bulk organization registration", type: :request do
       expect(response.body).to include("No organizations to register from")
     end
 
+    # The card's badge counts what the reader may act on, and the sentence under it accounts for the
+    # rest. Per card rather than per page, because the answer differs for every organization: `acme`
+    # is mostly theirs and `beta` is mostly not.
+    it "counts what each organization offers, and says what it is holding back" do
+      stub_github(repos: [github_repo("acme/api"), github_repo("acme/legacy", admin: false),
+                          github_repo("acme/vault", admin: false), github_repo("beta/thing")])
+
+      get bulk_repositories_path
+
+      expect(response.body).to include("1 repository")
+      expect(response.body).to include("2 connected repositories you do not administer are not listed.")
+    end
+
+    # An organization the viewer administers nothing in is the one thing that is hidden rather than
+    # counted — there is no card to hang a count on, and a card leading to an empty picker is worse
+    # than no card.
+    it "leaves out an organization the viewer administers nothing in" do
+      stub_github(repos: [github_repo("acme/api"), github_repo("beta/thing", admin: false)])
+
+      get bulk_repositories_path
+
+      expect(response.body).to include("acme")
+      expect(response.body).not_to include("/repositories/bulk?organization=beta")
+    end
+
     # The listing cap is GLOBAL, so truncation can hide a whole organization rather than some of
     # one organization's repositories — a different and worse failure than a short list.
     it "says the organization list may be incomplete when GitHub's listing was truncated" do
@@ -91,18 +116,27 @@ RSpec.describe "Bulk organization registration", type: :request do
       expect(response.body).not_to include("beta/elsewhere")
     end
 
-    # Every row is offered, and that is the point rather than an omission: an installation contains
-    # only repositories somebody who administers them selected, so there is nothing in it this user
-    # may not register. The picker's count is therefore the whole of the organization's connected
-    # set, with no withheld remainder to explain away.
-    it "offers every connected repository in the organization, withholding none" do
-      stub_github(repos: [github_repo("acme/api"), github_repo("acme/legacy")])
+    # The page has to account for its own length. A member of `acme` who administers one of its two
+    # connected repositories is offered one — and is told, in the same breath, that the other is
+    # connected and simply not theirs to register. Without that sentence "my repository is not in
+    # the list" is indistinguishable from "SpecGuard is broken".
+    it "offers only what the viewer administers, and says how much it is withholding" do
+      stub_github(repos: [github_repo("acme/api"), github_repo("acme/legacy", admin: false)])
 
       choose_organization("acme")
 
       expect(response.body).to include("acme/api")
-      expect(response.body).to include("acme/legacy")
-      expect(response.body).to include("2 repositories connected.")
+      expect(response.body).to include("1 repository you administer.")
+      expect(response.body).to include("1 connected repository you do not administer is not listed.")
+    end
+
+    # And it stays quiet when there is nothing to account for, which is the ordinary case.
+    it "says nothing about withheld repositories when none was withheld" do
+      stub_github(repos: [github_repo("acme/api"), github_repo("acme/legacy")])
+
+      choose_organization("acme")
+
+      expect(response.body).to include("2 repositories you administer.")
       expect(response.body).not_to include("do not administer")
     end
 
@@ -136,7 +170,7 @@ RSpec.describe "Bulk organization registration", type: :request do
 
       expect(response).to have_http_status(:ok)
       expect(response.body)
-        .to include("Organizations with repositories the SpecGuard GitHub App is installed on.")
+        .to include("Organizations with repositories the SpecGuard GitHub App is installed on")
     end
   end
 

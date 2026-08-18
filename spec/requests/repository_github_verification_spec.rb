@@ -271,11 +271,8 @@ RSpec.describe "Installation-verified repository registration", type: :request d
       expect(response.body).not_to include('placeholder="org/repo"')
     end
 
-    # Nothing is withheld, and the picker says where the list comes from instead of apologising for
-    # its length. The old page had to explain why most of what GitHub returned was not on offer —
-    # `/user/repos` listed every repository the user had any relationship with. An installation
-    # contains only what somebody deliberately selected, so the offered set and the registerable set
-    # are the same set.
+    # Nothing is withheld here, and the picker says where the list comes from instead of
+    # apologising for its length.
     it "offers everything in the installation, and says where the list comes from" do
       stub_github(repos: [github_repo("acme/billing-service"), github_repo("acme/checkout")])
 
@@ -285,6 +282,22 @@ RSpec.describe "Installation-verified repository registration", type: :request d
       expect(response.body).to include("acme/checkout")
       expect(response.body).to include("These are the repositories the SpecGuard GitHub App is installed on")
       expect(response.body).not_to include("you do not administer")
+    end
+
+    # And when something IS withheld the picker accounts for it. This is the ordinary position of a
+    # read-only member of an organization that installed the App: the repository they came looking
+    # for is genuinely connected, and is genuinely not theirs to register — two facts a bare short
+    # list cannot tell them apart from a broken page.
+    it "counts the connected repositories the viewer may not register" do
+      stub_github(repos: [github_repo("acme/billing-service"),
+                          github_repo("acme/legacy", admin: false),
+                          github_repo("acme/vault", admin: false)])
+
+      get new_repository_path
+
+      expect(response.body).to include("acme/billing-service")
+      expect(response.body).not_to include("acme/legacy")
+      expect(response.body).to include("2 connected repositories you do not administer are not listed.")
     end
 
     it "marks a private repository as private in the list" do
@@ -357,6 +370,22 @@ RSpec.describe "Installation-verified repository registration", type: :request d
       get new_repository_path
 
       expect(response.body).to include("No repositories connected yet")
+      expect(response.body).not_to include("<select")
+    end
+
+    # And a THIRD empty page, which is not the one above: the installation covers plenty and this
+    # viewer administers none of it. "No repositories connected yet" would be a false statement to
+    # make to them, and the button it carries goes to a picker that would fix nothing — the thing in
+    # their way is somebody else's admin rights.
+    it "distinguishes an installation that covers nothing this viewer administers" do
+      stub_github(repos: [github_repo("acme/api", admin: false),
+                          github_repo("acme/web", admin: false)])
+
+      get new_repository_path
+
+      expect(response.body).to include("Nothing here is yours to register")
+      expect(response.body).to include("2 connected repositories you do not administer are not listed.")
+      expect(response.body).not_to include("No repositories connected yet")
       expect(response.body).not_to include("<select")
     end
 

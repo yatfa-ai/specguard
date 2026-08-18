@@ -123,6 +123,18 @@ module GithubApiHelpers
     GithubApi.factory = ->(token, installation_id) { block.call(installation_id).credentialed(token, installation_id) }
   end
 
+  # A different fake per CREDENTIAL, for the specs about two users holding the same installation.
+  # The block receives `(token, installation_id)` and returns a `FakeGithubApi`.
+  #
+  # Distinct from `stub_github_per_installation`, and the distinction is the whole point of those
+  # specs: a fake keyed only on the installation id answers both users identically, so a spec built
+  # on one can only demonstrate two different answers by being re-stubbed between them — which
+  # passes just as happily against a hard-coded App credential, the exact regression it is named to
+  # prevent. Keying on the token means the two answers come from the two readers.
+  def stub_github_per_credential(&block)
+    GithubApi.factory = ->(token, installation_id) { block.call(token, installation_id).credentialed(token, installation_id) }
+  end
+
   # `admin` defaults to TRUE so that every spec written before administration was checked keeps
   # describing a user who can register what they can see. A spec about the organization member who
   # cannot says `admin: false`, which is the whole of the distinction this fixture carries.
