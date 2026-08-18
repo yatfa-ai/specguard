@@ -312,7 +312,10 @@ RSpec.describe "Regenerating an API key", type: :request do
 
       post regenerate_repository_api_key_path(repository, api_key)
 
-      expect(response).to redirect_to(repository_path(repository))
+      # Anchored on the reveal panel — see `ApiKeysController::REVEAL_ANCHOR`. A rotation that lands
+      # on the page with the previous scroll intact shows the holder nothing, and the value is shown
+      # exactly once.
+      expect(response).to redirect_to(repository_path(repository, anchor: "revealed-key"))
       expect(ApiKey.authenticate(retired)).to be_nil
     end
 

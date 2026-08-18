@@ -16,6 +16,14 @@
         Sign in to register a repository and mint an API key.
       </p>
     <% end %>
+
+    <%# Outside the `signed_in?` split on purpose, and it is the only nav item that is. The guide
+        needs no credential to be useful — the linter it documents needs neither key nor endpoint —
+        and a visitor deciding whether to adopt SpecGuard at all should be able to read what wiring
+        it up actually costs before signing in. %>
+    <p class="section-label px-2 pt-4 pb-2 text-app-content-secondary">Docs</p>
+    <%= link_to "Integration guide", integration_guide_path,
+                class: "block rounded-md px-2 py-1.5 text-sm text-app-content-secondary hover:bg-app-neutral-surface hover:text-app-content" %>
   </nav>
 
   <div class="border-t border-app-border p-3">

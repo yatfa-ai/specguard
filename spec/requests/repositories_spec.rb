@@ -43,9 +43,11 @@ RSpec.describe "Repository registration and API keys", type: :request do
     get repository_path(repository)
     expect(response.body).not_to include(raw_token)
 
-    # ...but what the key is *for* must survive the flash, with a placeholder, never a secret.
-    expect(response.body).to include("Connect this repository")
-    expect(response.body).to include("&lt;token&gt;")
+    # ...but what the key is *for* must survive the flash, naming the secret and never a value.
+    # The persistent panel cannot inline a token — only a digest is stored — so what it carries is
+    # the same agent prompt with the CI secret's NAME where the reveal put the credential itself.
+    expect(response.body).to include("Wire this repository up")
+    expect(response.body).to include("read it from the CI secret named SPECGUARD_API_KEY")
     expect(response.body).not_to match(/sgk_[A-Za-z0-9_-]{20,}/)
   end
 
@@ -64,37 +66,68 @@ RSpec.describe "Repository registration and API keys", type: :request do
     # ...and it really is the credential — the same value the API will accept, not a look-alike.
     expect(ApiKey.last.token_digest).to eq(ApiKey.digest(raw_token))
 
-    # Next steps, tied to what is shipped: the endpoint, the Bearer header, and the connection
-    # stat on this page that reports whether it ever authenticated.
-    expect(response.body).to include("Next steps")
-    expect(response.body).to include("Authorization: Bearer $SPECGUARD_API_KEY")
+    # ...and the curl is no longer presented AS the integration. That is what the prompt beside it
+    # is for, and at the reveal moment it too is complete: the real token is inlined, so it works
+    # exactly as pasted. Both halves are asserted, because a prompt that lost the credential would
+    # still contain every other line of this block.
+    expect(response.body).to include("Wire the repository up")
+    expect(response.body).to include("Read #{integration_guide_url}")
+    expect(response.body).to include("API key:     #{raw_token}")
+    expect(response.body).to include("Store it as a CI secret named SPECGUARD_API_KEY")
 
-    # The reload case still has to be served, so the placeholder form survives alongside it.
-    expect(response.body).to include("&lt;token&gt;")
+    # And the auth check says what it is, so a reader who runs it and gets a 200 does not conclude
+    # the project is wired up.
+    expect(page_text).to include("This is a connectivity check and not the integration")
   end
 
-  it "shows the endpoint and a copyable curl snippet with no flash present" do
+  # What replaced "Connect this repository". The panel that stood here taught the READ endpoint —
+  # `GET /api/v1/repository` under the heading "Endpoint", and a curl against it under "Try it" —
+  # which sends SpecGuard nothing. A reader who followed it got a 200 and no telemetry, and nothing
+  # on the page mentioned the write endpoint, the client gem, the linter or the annotation protocol.
+  #
+  # The negatives are as load-bearing as the positives: this example fails if the auth-check curl
+  # comes back to this surface wearing new copy.
+  it "hands over a copy-paste agent prompt, not an auth-check curl, with no flash present" do
     repository = create_repository(user: @user)
     repository.api_keys.create!(name: "CI")
 
     get repository_path(repository)
 
-    expect(response.body).to include("Connect this repository")
-    expect(response.body).to include("GET #{api_v1_repository_url}")
-    expect(response.body).to include(%(curl -H "Authorization: Bearer &lt;token&gt;" #{api_v1_repository_url}))
+    expect(response.body).to include("Wire this repository up")
+    # The three things the guide cannot know and this panel must therefore say.
+    expect(response.body).to include("Repository:  #{repository.github_full_name}")
+    expect(response.body).to include("Read #{integration_guide_url}")
+    expect(response.body).to include("read it from the CI secret named SPECGUARD_API_KEY")
+
+    expect(response.body).not_to include("Connect this repository")
+    expect(response.body).not_to include(%(curl -H "Authorization: Bearer &lt;token&gt;" #{api_v1_repository_url}))
   end
 
-  it "points at minting a key instead of a placeholder curl when the repository has none" do
+  # The guide is the whole of the documentation this panel delegates to, so the pointer to it has to
+  # be there for a reader who is not handing anything to an agent — including one who cannot mint a
+  # credential and therefore never sees the prompt at all.
+  it "links to the integration guide whether or not the repository has a key" do
+    with_key = create_repository(user: @user, github_full_name: "acme/with-key")
+    with_key.api_keys.create!(name: "CI")
+    without_key = create_repository(user: @user, github_full_name: "acme/without-key")
+
+    get repository_path(with_key)
+    expect(response.body).to include(%(href="#{integration_guide_path}"))
+
+    get repository_path(without_key)
+    expect(response.body).to include(%(href="#{integration_guide_path}"))
+  end
+
+  it "points at minting a key instead of a prompt for a credential that does not exist when the repository has none" do
     repository = create_repository(user: @user)
 
     get repository_path(repository)
 
-    # A command whose only possible outcome is a 401, told to substitute a key that was never
-    # minted, is not something to show. The endpoint itself still is.
+    # A prompt telling an agent to read a CI secret nobody has created is an instruction whose only
+    # possible outcome is a 401. The pointer to minting one is what this branch owes the reader.
     expect(repository.api_keys).to be_empty
-    expect(response.body).to include("Connect this repository")
-    expect(response.body).to include("GET #{api_v1_repository_url}")
-    expect(response.body).not_to include(%(curl -H "Authorization: Bearer &lt;token&gt;"))
+    expect(response.body).to include("Wire this repository up")
+    expect(response.body).not_to include("read it from the CI secret named SPECGUARD_API_KEY")
 
     # The opening sentence is shared with the branch a member without `keys.manage` gets, so it
     # cannot tell the two apart on its own. What this branch owes the reader is the POINTER — the
@@ -155,8 +188,8 @@ RSpec.describe "Repository registration and API keys", type: :request do
   # delivery 401s, and a 401 resolves no repository and writes no row, so nothing in the rejection
   # figures can see it. This stat can, because it need not observe the 401: it owns the row and
   # stamped the instant the token was retired.
-  describe "the Connection stat after a rotation" do
-    def connect_panel = Capybara.string(response.body).find("#connect")
+  describe "the connection indicator after a rotation" do
+    def connect_panel = Capybara.string(response.body).find("#connection-indicator")
 
     # Collapsed for the reason the rejected-deliveries spec states: these sentences are assembled
     # across several ERB lines, so an assertion against a literal space would pin the indentation.

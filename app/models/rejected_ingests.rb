@@ -1,14 +1,14 @@
 # frozen_string_literal: true
 
 # The deliveries this repository's CI made that the endpoint REFUSED, together with the one thing
-# the connection stat has to know about them.
+# the connection indicator has to know about them.
 #
-# == Why the list and the stat verdict are one object
+# == Why the list and the indicator's verdict are one object
 #
-# The "Connection" stat on the Connect panel and the "Rejected deliveries" panel below it are two
+# The connection indicator in the repository page header and the "Rejected deliveries" panel are two
 # claims about the same fact, and before this they could not disagree because only one of them
 # existed. `Api::BaseController#authenticate_api_key!` stamps `api_keys.last_used_at` on the way IN,
-# so a delivery that is then refused for its payload records a use — and the stat, which reads
+# so a delivery that is then refused for its payload records a use — and the indicator, which reads
 # exactly that column, rendered `Connected` in success tone over a pipeline whose every run was
 # being thrown away. Holding the verdict beside the rows it is a verdict about is what stops the
 # headline and the list under it describing different states of the same repository; `SlowestExamples`
@@ -33,8 +33,8 @@
 #   a suite being partly thrown away — but it is a consequence worth naming rather than a claim
 #   that every accepted byte is accounted for.
 # * **A refusal ages out.** `IngestRejection::REPOSITORY_RETENTION_ROWS` bounds the table, so a
-#   repository that was refused and then went silent forever eventually loses the row and the stat
-#   returns to `Connected`. It is reporting what it can still see. {#bounded?} discloses the OTHER
+#   repository that was refused and then went silent forever eventually loses the row and the
+#   indicator returns to `Connected`. It is reporting what it can still see. {#bounded?} discloses the OTHER
 #   bound — the panel's own `limit`, which bites five times sooner — and it says so only when that
 #   limit actually left a refusal off the list.
 #
@@ -77,7 +77,7 @@ class RejectedIngests
   # aggregate — so the time the stat reports and the time at the top of the panel are the same row.
   def last_rejection_at = rows.first&.occurred_at
 
-  # Whether the connection stat may still read healthy. See the class comment for the rule and for
+  # Whether the connection indicator may still read healthy. See the class comment for the rule and for
   # both of its stated bounds.
   #
   # `nil` on the accepted side is not "no comparison" — it is a repository that has been refused and

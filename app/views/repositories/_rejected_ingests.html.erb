@@ -4,12 +4,13 @@
         before it existed, that event left no platform-side record at all: `render_bad_request`
         renders JSON and returns, and nothing was written.
 
-        The reason that mattered is one line up the page. `authenticate_api_key!` stamps
+        The reason that mattered is at the top of the page. `authenticate_api_key!` stamps
         `api_keys.last_used_at` on the way IN, so a refused delivery still records a use, and the
-        Connect panel's "Connection" stat reads exactly that column. A repository whose every run
-        was being refused therefore rendered `Connected`, in success tone, with a fresh "last
+        connection indicator in the page header reads exactly that column. A repository whose every
+        run was being refused therefore rendered `Connected`, in success tone, with a fresh "last
         request" hint — three affirmative healthy signals over a pipeline that was 100% failing.
-        The stat now consults `@rejected_ingests` too; this panel is the detail behind that verdict.
+        The indicator now consults `@rejected_ingests` too; this panel is the detail behind that
+        verdict.
 
         Rendered ALWAYS, including when there is nothing to list, and not gated on
         `@latest_test_run` the way the per-example panels are. Two reasons, and neither is symmetry
@@ -19,7 +20,7 @@
           case where every delivery it ever made was refused, which is exactly when the reader
           needs this list.
         * "No delivery has been refused" is a POSITIVE finding, and it is the one this page could
-          not previously make. The Connection stat above now depends on these rows, so a panel that
+          not previously make. The connection indicator now depends on these rows, so a panel that
           vanished when the news was good would leave the reader unable to tell "nothing was
           refused" from "SpecGuard does not track that". No other panel on this page says anything
           about refusals, so this empty state is not a milder restatement of one that already

@@ -10,6 +10,16 @@
         title: @repository.github_full_name,
         subtitle: "Registered #{time_ago_in_words(@repository.created_at)} ago."
       ) do |header| %>
+    <%# The connection indicator, in the header's own content slot rather than in a panel. It is the
+        compact remainder of what "Connect this repository" used to carry, and it lives OUTSIDE the
+        block that replaced that panel on purpose: the wiring instructions are a thing you act on
+        once, while connection state is a thing you glance at on every visit, and pinning it to the
+        page title is what makes it glanceable without giving it a panel's worth of room.
+
+        Before `header.with_actions`, so it renders in the left-hand column beside the repository
+        name rather than in the action bar — this is a reading, not a control. %>
+    <%= render "repositories/connection_indicator" %>
+
     <% header.with_actions do %>
       <%# A shared repository is reachable by members, so every control here is gated on the same
           capability the controller will demand. Rendering one the viewer does not hold could only
@@ -46,41 +56,41 @@
 <%= render "repositories/revealed_token" -%>
 
   <%# Asked ONCE for the whole page and passed down, not re-asked per panel: two panels branch on
-      it (the connect panel's "Try it" below, and the API keys table).
+      it (the wire-up panel below, and the API keys table).
 
       Cost, precisely: nothing, for either viewer class. `@api_keys` is an Array — the controller
-      materialises it with `to_a` because the Connection stat derives two figures and the stranded
-      set from those same rows — so this is `Array#any?`, not a SELECT, however many panels ask.
-      It reads like a query and is not one, which is the only reason worth restating that it is
-      still asked once here rather than inline in both panels.
+      materialises it with `to_a` because the connection indicator derives two figures and the
+      stranded set from those same rows — so this is `Array#any?`, not a SELECT, however many
+      panels ask. It reads like a query and is not one, which is the only reason worth restating
+      that it is still asked once here rather than inline in both panels.
 
       SPGD-614 repriced this paragraph rather than editing around it. It used to describe `.any?`
       on an UNLOADED relation, where the question really was a round trip, and it priced a
       view-only member as paying "one SELECT it did not before". Both halves of that are now wrong,
       and in the same direction: the relation is loaded before the view sees it, and the load
       displaced BOTH the `SELECT 1` this line used to cost and the `api_keys.maximum(:last_used_at)`
-      the Connection stat used to run. Measured on one fixture (two keys, two distinct creators), a
+      the connection indicator's own figure used to run. Measured on one fixture (two keys, two distinct creators), a
       view-only member's page went 12 queries to 11 and a `keys.manage` viewer's 14 to 12 — fewer,
       not more, for both. The preload that would otherwise have made the member's figure a wash is
       bought inside the `keys.manage` gate only; the controller carries that table in full. %>
   <% has_api_keys = @api_keys.any? %>
 
-<%= render "repositories/connect_this_repository", has_api_keys: has_api_keys -%>
+<%= render "repositories/wire_up_this_repository", has_api_keys: has_api_keys -%>
 
   <%# The API keys panel is a `keys.manage` surface end to end: both of its controls (mint, revoke)
       demand the permission, and the table itself is credential metadata — key names, token hints,
       and when each key last authenticated. So a member without `keys.manage` gets neither.
 
       That is the deliberate line on this page: controls and credential metadata are gated, the
-      endpoint documentation and connection-health stat above are not. A `view` member legitimately
-      needs to know whether CI is reaching this repository.
+      wiring instructions and the connection indicator in the page header are not. A `view` member
+      legitimately needs to know whether CI is reaching this repository.
 
-      That line moved slightly, deliberately: the connect panel's "Try it" now branches on whether
-      a key EXISTS, so a view member reading it learns that one bit — previously confined to this
-      gated panel. It is the weakest fact about a key (that there is one, not its name, hint, or
-      last use), the Connection stat beside it already implies a version of it, and withholding it
-      would mean showing a member a placeholder command for a credential nobody has yet. The owner
-      holds every capability, so their page is unchanged. %>
+      That line moved slightly, deliberately: the wire-up panel branches on whether a key EXISTS, so
+      a view member reading it learns that one bit — previously confined to this gated panel. It is
+      the weakest fact about a key (that there is one, not its name, hint, or last use), the
+      connection indicator already implies a version of it, and withholding it would mean offering a
+      member instructions that presuppose a credential nobody has yet. The owner holds every
+      capability, so their page is unchanged. %>
   <% manage_keys = repository_policy.can?(:keys_manage) %>
 
   <div class="grid gap-4 lg:grid-cols-3">
@@ -92,8 +102,9 @@
         suite has 3 tests or 20,000 — no per-spec aggregation.
 
         Outside the `manage_keys` gate on purpose, and it must stay there: this is the same class of
-        information as the connection-health stat above. A `view` member legitimately needs to know
-        how much of the suite SpecGuard can actually see, and nothing here is credential metadata. %>
+        information as the connection indicator in the page header. A `view` member legitimately
+        needs to know how much of the suite SpecGuard can actually see, and nothing here is
+        credential metadata. %>
     <%= render UI::PanelComponent.new(title: "Overview", id: "overview",
                                       class: manage_keys ? "lg:col-span-1" : "lg:col-span-3") do %>
       <div class="space-y-4">

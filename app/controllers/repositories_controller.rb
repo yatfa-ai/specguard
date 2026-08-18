@@ -98,7 +98,7 @@ class RepositoriesController < ApplicationController
     #                                  `has_api_keys` used to cost on an unloaded relation; the
     #                                  table's own SELECT and its preload are what remain.
     #   view-only member    12 -> 11   drops the same two and adds only the keys SELECT, which it
-    #                                  now needs for the Connection stat. The preload is the one
+    #                                  now needs for the connection indicator. The preload is the one
     #                                  it does NOT buy, and skipping it is the whole difference
     #                                  between this and 12 -> 12, i.e. a join fetched and thrown
     #                                  away.
@@ -111,7 +111,7 @@ class RepositoriesController < ApplicationController
     # The keys whose `last_used_at` was stamped by a token that no longer exists: rotated, with
     # nothing having authenticated since. `ApiKey#rotated_and_unused?` carries the rule and both of
     # its nil cases. Read by the key list, which must not print an inherited "last used" age, and
-    # by the Connection stat below.
+    # by the connection indicator in the page header.
     @rotated_unused_api_keys = @api_keys.select(&:rotated_and_unused?)
     # DID ANYTHING EVER AUTHENTICATE — the newest use across every key, whichever token stamped it.
     # `nil` means no key has ever been used at all, which is the only question this can answer and
@@ -171,7 +171,7 @@ class RepositoriesController < ApplicationController
     @run_anchor_run = @run_anchor_request && @repository.latest_test_run_for_commit(@run_anchor_request)
     @latest_test_run = @run_anchor_run || newest_test_run
     # The refused half of the same delivery stream the run above is the accepted half of, and the
-    # verdict the Connect panel's "Connection" stat needs in order to stop being wrong.
+    # verdict the page header's connection indicator needs in order to stop being wrong.
     #
     # `@last_api_request_at` above is stamped by `Api::BaseController#authenticate_api_key!` on the
     # way IN, so it moves for a delivery that is then refused for its payload — which is how a
