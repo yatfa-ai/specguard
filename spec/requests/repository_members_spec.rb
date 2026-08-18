@@ -906,18 +906,11 @@ RSpec.describe "Repository members", type: :request do
 
     # Every api_keys SELECT the members page issues. The page touches no other key data, so this is
     # exactly the count the badge costs — one grouped query for the whole table, never one per row.
-    # Same predicate as `queries_against` in spec/support/query_capture.rb, but bound to the one
-    # table this page's badge can move, so the name says what the example is about at every call.
-    def api_key_queries
-      queries = []
-      subscriber = ActiveSupport::Notifications.subscribe("sql.active_record") do |_, _, _, _, payload|
-        queries << payload[:sql] if payload[:name] != "SCHEMA" && payload[:sql].to_s.include?("api_keys")
-      end
-      yield
-      queries
-    ensure
-      ActiveSupport::Notifications.unsubscribe(subscriber)
-    end
+    # Bound to the one table this page's badge can move, so the name says what the example is about
+    # at every call. The rule it watches by is not restated here — `queries_against` in
+    # spec/support/query_capture.rb states it once, and that file's header says why a second copy of
+    # a subscriber is worse than none.
+    def api_key_queries(&) = queries_against("api_keys", &)
 
     it "shows each member's live key count, and asks for it in one grouped query" do
       repository.api_keys.create!(name: "CI — main", created_by_user: colleague)
