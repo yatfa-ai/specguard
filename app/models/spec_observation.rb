@@ -536,11 +536,14 @@ class SpecObservation < ApplicationRecord
 
   # == 💰 WHAT THIS COSTS PER ROW, MEASURED — because it replaced a `status` comparison
   #
-  # Every read below used to test one indexed enum column and now evaluates a regex, and the regex
-  # is spelled once per FILTERed aggregate: four times a row in `.unannotated_directories_in`, three
-  # in `.unannotated_in` and in `.reading_counts_in`. Postgres does not common-subexpression these,
-  # so the multiplier is real. Stated rather than left to be discovered, on the same rule the reads
-  # here already follow for their read COUNTS.
+  # Every read below used to test one indexed enum column and now evaluates a regex, and the regex is
+  # spelled once per place that names it: four times a row in `.unannotated_directories_in` and three
+  # in `.reading_counts_in`, each of those an aggregate, and three in `.unannotated_in` — where only
+  # TWO are aggregates and the third is the ORDER BY key, which is a per-row expression no index can
+  # supply and therefore a cost with a different remedy. That read's own comment decomposes its
+  # figure for exactly that reason. Postgres does not common-subexpression any of them, so the
+  # multiplier is real. Stated rather than left to be discovered, on the same rule the reads here
+  # already follow for their read COUNTS.
   #
   # Measured on this branch against the containerised Postgres, on ONE run of 35,000 rows — the
   # design point the ticket opens with — with `EXPLAIN (ANALYZE, TIMING OFF)`, best of nine, the
@@ -1089,12 +1092,68 @@ class SpecObservation < ApplicationRecord
   # One statement, bounded by the size of ONE RUN and issued only when the parameter was sent. Rides
   # `index_spec_observations_on_test_run_id`: there is no `(test_run_id, status)` index and this read
   # does not want one — `status` is two values over a whole table, which is the shape an index serves
-  # worst, and the run narrow is what makes the read affordable. The ORDER BY leads on
-  # `spec_file_path`, which `index_spec_observations_on_test_run_id_and_spec_file_path` DOES lead on
-  # after the run, so the planner may take the sort from that index or read the narrow one and sort the
-  # rows; both are bounded by the run rather than by the suite, and the certification in
-  # `spec/models/spec_observation_spec.rb` asserts what actually matters — one run reached through an
-  # index rather than every run's rows walked.
+  # worst, and the run narrow is what makes the read affordable. The certification in
+  # `spec/models/spec_observation_spec.rb` asserts what actually matters and nothing wider — ONE RUN
+  # REACHED THROUGH AN INDEX rather than every run's rows walked — which is a claim about the WHERE,
+  # and the WHERE is untouched by everything below.
+  #
+  # ⚠️ THE SORT IS EXPLICIT AND UNCONDITIONAL, AND THE ORDERING BELOW IS WHAT MADE IT SO. This
+  # paragraph used to add that the ORDER BY leads on `spec_file_path`, which
+  # `index_spec_observations_on_test_run_id_and_spec_file_path` DOES lead on after the run, "so the
+  # planner may take the sort from that index or read the narrow one and sort the rows". That was
+  # true of this read until SPGD-711, and the reading term falsified it in the same commit that left
+  # the sentence standing: the leading term is now `(READING_EXPRESSION = 'derived')`, a per-row
+  # expression no index expresses, so the sort cannot come from an index and every plan carries a
+  # `Sort` node over the run's unannotated rows.
+  #
+  # Established rather than asserted, with `enable_sort = off` so the planner would take an ordered
+  # path if one were reachable at all: the pre-SPGD-711 shape plans as an `Index Scan using
+  # index_spec_observations_on_test_run_id_and_spec_file_path` under an `Incremental Sort`
+  # (`Presorted Key: spec_file_path`); this one still plans a `Sort` on the expression. There is no
+  # ordered path left to offer a reader.
+  #
+  # 💰 WHAT THAT COSTS, MEASURED, because the alternative is arguing about it. Same method as the
+  # table at {READING_EXPRESSION} — `EXPLAIN (ANALYZE, TIMING OFF)`, ActiveRecord query cache off,
+  # best of eleven — on one 35,000-row all-unannotated run seeded for the purpose, with `jit` off
+  # and the sequential and bitmap paths disabled so all five rows are the SAME access method and
+  # only the ordering and the projection move:
+  #
+  # | ORDER BY / projection                                | plan               | measured |
+  # |------------------------------------------------------|--------------------|----------|
+  # | pre-711: `spec_file_path` first, `COUNT(*) OVER ()`  | `Sort`             |  40.8 ms |
+  # | …the same, with `enable_sort = off`                  | `Incremental Sort` |  28.6 ms |
+  # | `(status = 'annotated')` first — free per row        | `Sort`             |  44.8 ms |
+  # | the reading first, `COUNT(*) OVER ()`                | `Sort`             | 118.0 ms |
+  # | as shipped: the reading first, both reading windows  | `Sort`             | 253.0 ms |
+  #
+  # Three separate quantities, and they are nowhere near the same size.
+  #
+  # THE EXTRA SORT KEY costs ~4 ms — 40.8 → 44.8, holding the projection fixed and putting a
+  # per-row-FREE expression in the lead, which changes the plan's shape and nothing else. It stays
+  # that small because the `Sort` is a `top-N heapsort` bounded by `LIMIT 100` (111 kB at 35,000
+  # rows) rather than a full sort of the population.
+  #
+  # THE FORGONE INDEX ORDER is the 40.8 → 28.6 gap: ~12 ms, and it is a COUNTERFACTUAL rather than a
+  # regression, because the planner declined that path unaided even while it was reachable — 40.8 ms
+  # is what this read was ACTUALLY getting. What the reading term removed is an option, not the plan.
+  #
+  # THE REGEX is the rest, and it dominates both by an order of magnitude: ~70 ms an evaluation
+  # (44.8 → 118.0 for the sort key, 118.0 → 253.0 for the two windows), which is ~2 µs a row —
+  # the figure that table states, arrived at from a different direction.
+  #
+  # So `.unannotated_in`'s row in that table is a REGEX cost carrying single-digit milliseconds of
+  # ordering, and the remedy for the large part is the fence that section names and declines — not
+  # an index, which cannot help a per-row expression at all. The absolutes here sit above that
+  # table's because this is a different seeded run and a forced access method; the DECOMPOSITION is
+  # what this block is for, and its per-evaluation figure reproduces the one measured there.
+  #
+  # ⭐ AND THE SCAN WAS NEVER EARLY-TERMINABLE, before SPGD-711 or after — worth stating because
+  # "the LIMIT can no longer stop the scan early" is the natural inference from the paragraph above
+  # and it is not true. `COUNT(*) OVER ()` in {UNANNOTATED_POPULATION_COUNTS} must consume the whole
+  # narrowed population before the first row can be emitted, so both shapes read every unannotated
+  # row of the run (`actual rows=35000` under the `WindowAgg` on each) and the cap bounds what is
+  # RETURNED rather than what is read. The cap was never the thing keeping this read affordable; the
+  # run narrow is, which is what the certification pins.
   #
   # NEITHER NARROWING COSTS THE READ ANYTHING, and they do not cost it the same way. `spec_file`
   # narrows on the second column of `index_spec_observations_on_test_run_id_and_spec_file_path`, so

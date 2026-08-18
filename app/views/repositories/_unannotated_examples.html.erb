@@ -142,14 +142,36 @@
                 cannot describe a different slice from the list, and the unreadable rows are at the
                 HEAD of the list by the read's own ordering — so on a cut page they are the ones a
                 reader is looking at rather than the ones past the cap. %>
-            SpecGuard reads <%= number_with_delimiter(@unannotated_examples.derived_count) %>
-            of them from the test's own description — shown in the last column, and a weaker reading
-            than an <code>@intent</code>: no preconditions, and a layer inferred from the directory
-            rather than declared.
-            <% if @unannotated_examples.unreadable_count.positive? %>
+            <%# THREE BRANCHES AND NOT A SENTENCE PLUS A QUALIFIER, on the Overview's precedent
+                two panels up. `show.html.erb` branches the same claim on `derived.positive?` and
+                says why: where nothing was derived, "SpecGuard reads N of them from the test's own
+                description" describes an EMPTY SET, "shown in the last column" points at a column
+                showing the opposite, and the caveat after it warns a reader about the weakness of a
+                reading NOTHING on the page rests on — while "the other M" and "those are listed
+                first" are both said of a population that is the whole list. That branch is not
+                exotic here: narrow to `spec/requests` and the ordinary `POST /api/v1/ingest rejects
+                a malformed body` shape lands in it, which is `DerivedIntent`'s own canonical
+                unreadable example. Each branch is written out whole rather than assembled from a
+                shared clause, on this caption's existing rule — see the truncated/untruncated
+                pair above, where a shared clause would let an edit meant for one land on both. %>
+            <% if @unannotated_examples.derived_count.zero? %>
+              SpecGuard reads none of them from the test's own description either — the last column
+              says so row by row. These are the tests it genuinely cannot see: not merely tests
+              without an <code>@intent</code>, but tests whose description does not give it an
+              entity, an action and a behavior.
+            <% elsif @unannotated_examples.unreadable_count.positive? %>
+              SpecGuard reads <%= number_with_delimiter(@unannotated_examples.derived_count) %>
+              of them from the test's own description — shown in the last column, and a weaker
+              reading than an <code>@intent</code>: no preconditions, and a layer inferred from the
+              directory rather than declared.
               The other <%= number_with_delimiter(@unannotated_examples.unreadable_count) %>
               it cannot read at all, and those are listed first.
             <% else %>
+              SpecGuard reads all <%= number_with_delimiter(@unannotated_examples.derived_count) %>
+              <%= "example".pluralize(@unannotated_examples.derived_count) %> here from the test's
+              own description — shown in the last column, and a weaker reading than an
+              <code>@intent</code>: no preconditions, and a layer inferred from the directory rather
+              than declared.
               There is none here it cannot read at all.
             <% end %>
             <%# Counted off THIS RUN's per-example rows. The Overview's figure is a subtraction over

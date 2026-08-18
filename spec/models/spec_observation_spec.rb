@@ -590,10 +590,15 @@ RSpec.describe SpecObservation do
       # asserts — one run reached through an index rather than every run's rows walked — and the
       # `status` predicate then filters the rows already read.
       #
-      # The ORDER BY leads on `spec_file_path`, which `index_spec_observations_on_test_run_id_and_spec_file_path`
-      # DOES lead on after the run, so the planner is free to take the sort from that index or to read
-      # the narrower one and sort afterwards; both are bounded by the RUN. The matcher tolerates
-      # either for that reason, exactly as it tolerates the two access methods its own comment names.
+      # THE ORDERING IS NOT PART OF WHAT THIS ASSERTS, and since SPGD-711 it cannot be. The ORDER BY
+      # leads on `(READING_EXPRESSION = 'derived')`, a per-row expression no index expresses, so the
+      # sort can never come from an index and every plan carries a `Sort` node — established with
+      # `enable_sort = off` in `SpecObservation.unannotated_in`'s own comment, which also measures
+      # what that costs. The matcher tolerates either index because either can serve the WHERE, which
+      # is the whole of the claim: one run reached through an index, bounded by the RUN. It is
+      # deliberately not widened to the plan's sort — a certification that pinned the ORDERING would
+      # have gone red on a planner's cost estimate rather than on a read that stopped being
+      # run-bounded, and the two access methods its own comment names are tolerated for that reason.
       #
       # Captured off the wire rather than EXPLAINed from a hand-written copy, for the reason the two
       # examples above give: the predicate alone is not the read the block makes, which adds a

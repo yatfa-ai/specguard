@@ -671,5 +671,45 @@ RSpec.describe "Repository unannotated examples", type: :request do
       expect(basis_line).to have_text("There is none here it cannot read at all", normalize_ws: true)
       expect(rows.size).to eq(1)
     end
+
+    # ⭐ THE THIRD BRANCH, and it is an ordinary one rather than an exotic state. `spec/requests` is a
+    # normal area to narrow to, and the `VERB /path does something` shape that lives there is the
+    # canonical description `DerivedIntent` reads NOTHING out of — so an area whose unannotated
+    # examples are ALL unreadable is what a reader meets on the first repository they open, not a
+    # contrived fixture.
+    #
+    # Before this branch existed the caption made four claims about an empty set in one breath: it
+    # counted a derived reading of zero, pointed at "the last column" for a reading not in it,
+    # warned about what a derived reading LACKS when the page rested on none, and then said "the
+    # other 2 ... are listed first" of a population that was the whole list. The Overview panel's
+    # version of this sentence was branched on `derived.positive?` for exactly these reasons; this
+    # is the same correction at the grain below it, which is why the negative assertions here are
+    # per-clause rather than one `have_no_text` on the sentence as a whole.
+    it "says it read nothing here, without a derived-reading caveat, where it read nothing" do
+      repository = create_repository(user: @user)
+      ingest(repository,
+             [unannotated_spec(file_path: "spec/requests/ingest_spec.rb", line_number: 12,
+                               name: "POST /api/v1/ingest rejects a malformed body"),
+              unannotated_spec(file_path: "spec/requests/ingest_spec.rb", line_number: 40,
+                               name: "POST /api/v1/ingest accepts a well-formed one")])
+
+      get repository_path(repository, spec_directory: "spec/requests")
+
+      expect(rows.size).to eq(2)
+      expect(row_readings.uniq)
+        .to eq(["Nothing — no @intent, and the description does not give an entity, an action and a behavior."])
+      expect(basis_line)
+        .to have_text("SpecGuard reads none of them from the test's own description", normalize_ws: true)
+      # The four claims that used to be made here about nothing at all.
+      expect(basis_line).to have_no_text("shown in the last column")
+      expect(basis_line).to have_no_text("no preconditions")
+      expect(basis_line).to have_no_text("The other")
+      expect(basis_line).to have_no_text("listed first")
+      # ⭐ AND THIS IS THE ONE PLACE THE "cannot see" WORDING IS TRUE, so it is the one place the
+      # panel says it. The example above asserts the panel does NOT say it of a mixed area, which is
+      # the correction SPGD-711 exists for; that assertion means nothing unless the wording still
+      # reaches the population it was always accurate about.
+      expect(basis_line).to have_text("These are the tests it genuinely cannot see", normalize_ws: true)
+    end
   end
 end
