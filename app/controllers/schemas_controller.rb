@@ -4,7 +4,7 @@
 #
 # This is a CONVENIENCE MIRROR, not a second source of truth. The canonical document — and the
 # address the schema's own `$id` names — lives in the vendor-neutral `open-test-intent` repository,
-# pinned to its immutable `schema-v1` tag. What this endpoint adds is that a reader of SpecGuard's
+# pinned to its `schema-v1.0` tag. What this endpoint adds is that a reader of SpecGuard's
 # own documentation can fetch the contract from the domain they are already on.
 #
 # It serves `OpenTestIntent.raw_document`, the vendored file's bytes verbatim, so "byte-identical to

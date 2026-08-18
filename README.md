@@ -196,10 +196,10 @@ GET /schemas/open-test-intent.v1.json
 
 It is a **convenience mirror**, byte-identical to the canonical document. The canonical copy — and
 the address the schema's own `$id` names — lives in the vendor-neutral `open-test-intent`
-repository, pinned to its immutable `schema-v1` tag:
+repository, pinned to its `schema-v1.0` tag:
 
 ```
-https://raw.githubusercontent.com/yatfa-ai/open-test-intent/schema-v1/schemas/open-test-intent.v1.json
+https://raw.githubusercontent.com/yatfa-ai/open-test-intent/schema-v1.0/schemas/open-test-intent.v1.json
 ```
 
 `vendor/schemas/open-test-intent.v1.json` is this app's vendored copy of those same bytes, pinned to

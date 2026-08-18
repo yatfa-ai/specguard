@@ -42,7 +42,7 @@ RSpec.describe "GET /schemas/open-test-intent.v1.json", type: :request do
     get "/schemas/open-test-intent.v1.json"
 
     expect(JSON.parse(response.body)["$id"])
-      .to eq("https://raw.githubusercontent.com/yatfa-ai/open-test-intent/schema-v1/schemas/open-test-intent.v1.json")
+      .to eq("https://raw.githubusercontent.com/yatfa-ai/open-test-intent/schema-v1.0/schemas/open-test-intent.v1.json")
   end
 
   # `format: false` on the route. Without it Rails' optional `(.:format)` segment answers here too,
