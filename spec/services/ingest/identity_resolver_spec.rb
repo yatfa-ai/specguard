@@ -1586,16 +1586,40 @@ RSpec.describe Ingest::IdentityResolver do
       #
       # Asserted against `LexicalEmbeddingProvider`'s answer for each row's OWN text rather than against a
       # fixture, so what has to line up is the provider's real output. Compared within a tolerance
-      # because pgvector stores four-byte floats and Ruby's are eight — an exact `eq` would fail on
-      # the storage round trip rather than on the pairing.
+      # because `spec_identities.embedding` is `halfvec(1024)` — pgvector's TWO-byte float, IEEE
+      # half, an 11-bit significand — and Ruby's Floats are float8, so a round trip rounds to about
+      # three significant decimal digits. Every component of a unit-normalised embedding is at most
+      # 1 in magnitude, so the round trip moves any one of them by at most 2**-11 ≈ 4.9e-4, and
+      # `1e-3` is the next round number above that. The same bound for the same reason as
+      # `spec/models/embedding_cache_entry_spec.rb`. Until 2026-08-17 this column was `vector(1536)`
+      # — four-byte floats — and the bound here was `1e-5`; the migration to `halfvec` made the
+      # substrate four orders of magnitude coarser and the old bound stale.
       EmbeddingGenerator.provider = batching_provider
       first = ingest(new_page, ci_run_id: "run-1")
 
-      repository.spec_identities.each do |identity|
+      identities = repository.spec_identities.to_a
+      # Pinned before the loops so neither of them is vacuously green on an empty page.
+      expect(identities.size).to eq(5)
+
+      identities.each do |identity|
         own = LexicalEmbeddingProvider.call(identity.text)
         drift = own.zip(identity.embedding.to_a).map { |mine, stored| (mine - stored).abs }.max
 
-        expect(drift).to be < 1e-5
+        expect(drift).to be < 1e-3
+      end
+
+      # ⭐ And the bound still BITES — the half of this that a tolerance loosened until green would
+      # have quietly retired while leaving the guard looking present. Each row is re-checked against
+      # its NEIGHBOUR's text, which is exactly the off-by-one page shift the example exists to
+      # catch, and that comparison has to FAIL the very same assertion. It fails by a wide margin:
+      # quantisation moves a component by ~5e-5 here, while a different text's vector differs from
+      # this one by ~0.35 per component — so `1e-3` sits ~20x above the noise and ~350x below the
+      # signal, and there is room for neither to be mistaken for the other.
+      identities.zip(identities.rotate(1)).each do |identity, neighbour|
+        theirs = LexicalEmbeddingProvider.call(neighbour.text)
+        drift = theirs.zip(identity.embedding.to_a).map { |mine, stored| (mine - stored).abs }.max
+
+        expect(drift).to be > 1e-3
       end
 
       # And the consequence that mis-pairing would have on the product: run 2's text differs from
@@ -2325,13 +2349,32 @@ RSpec.describe Ingest::IdentityResolver do
       expect(identity_by_file(second).values).to match_array(shared_page.pluck(:name))
 
       # And the vectors themselves agree with what the provider would have returned, within the
-      # four-byte float the column stores — the same tolerance the order-contract example uses, and
-      # for the same reason.
-      other_repository.spec_identities.each do |identity|
+      # TWO-byte float the column stores — the same `1e-3` the order-contract example uses, and for
+      # the same reason: `halfvec(1024)` is IEEE half, an 11-bit significand, so a round trip moves
+      # a unit-normalised component by at most 2**-11 ≈ 4.9e-4. (Until 2026-08-17 the column was
+      # `vector(1536)` and this read `1e-5`; the bound moved with the substrate, not with the
+      # failure.)
+      identities = other_repository.spec_identities.to_a
+      # Pinned before the loops so neither of them is vacuously green on an empty page.
+      expect(identities.size).to eq(5)
+
+      identities.each do |identity|
         own = LexicalEmbeddingProvider.call(identity.text)
         drift = own.zip(identity.embedding.to_a).map { |mine, stored| (mine - stored).abs }.max
 
-        expect(drift).to be < 1e-5
+        expect(drift).to be < 1e-3
+      end
+
+      # ⭐ And the bound still BITES, for the mis-KEYED cache the same way the order-contract example
+      # asserts it for the mis-PAIRED page: a cache that served a valid vector under the wrong key
+      # completes the resolve silently, and only the vector can see it. Re-checked against a
+      # NEIGHBOUR's text, which must fail the identical assertion — a tolerance widened past that
+      # margin would have retired this check while leaving it on the page.
+      identities.zip(identities.rotate(1)).each do |identity, neighbour|
+        theirs = LexicalEmbeddingProvider.call(neighbour.text)
+        drift = theirs.zip(identity.embedding.to_a).map { |mine, stored| (mine - stored).abs }.max
+
+        expect(drift).to be > 1e-3
       end
     end
   end

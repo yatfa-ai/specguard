@@ -104,8 +104,14 @@ RSpec.describe Ingest::EmbeddingCachePruner do
       found = EmbeddingCacheEntry.vectors_for(fingerprint, kept)
       expect(found.keys).to match_array(kept)
       # And the vector still round-trips, so what survived is an entry rather than a husk of one.
+      # Within the TWO-byte float the `halfvec(1024)` column stores — IEEE half, an 11-bit
+      # significand — against Ruby's float8: a round trip moves a component of magnitude at most 1
+      # by at most 2**-11 ≈ 4.9e-4, and this fixture's largest is 6/7. The same `1e-3` for the same
+      # reason as `spec/models/embedding_cache_entry_spec.rb` and the two identity-resolver
+      # examples. Until 2026-08-17 the column was `vector(1536)` and this bound was `1e-6`; the
+      # migration to `halfvec` made the substrate four orders of magnitude coarser.
       drift = vector.zip(found.fetch(kept.first)).map { |mine, stored| (mine - stored).abs }.max
-      expect(drift).to be < 1e-6
+      expect(drift).to be < 1e-3
     end
 
     it "does not delete an expired entry that has since been REVIVED by a re-embed" do
