@@ -225,8 +225,13 @@
               Read by <code>specguard-lint</code> rather than by the formatter. Point it at a
               <code>validate-intent</code> binary to check annotations with the canonical Go
               validator instead of the gem's vendored Ruby copy; unset (or blank, which means
-              deliberately off) keeps the Ruby path. <code>--require-validator</code> turns a missing
-              or unusable binary into a failure rather than a silent fallback.
+              deliberately off) keeps the Ruby path. A binary that is named but missing, not a file
+              or not executable is already a hard exit 2 on its own. What
+              <code>--require-validator</code> adds is the case that was silent — the Ruby path
+              taken because no binary was ever asked for, which otherwise passes and leaves only a
+              stderr line to say so. Give the flag in CI and that becomes an exit 2, whether the
+              variable never arrived (a mistyped name, a step that did not run) or arrived blank;
+              asking for the binary and switching it off in the same breath is refused too.
             </td>
           </tr>
         <% end %>
@@ -411,14 +416,29 @@ specguard-lint: checked 3 @intent annotations, 1 malformed</pre>
         <p class="text-xs text-app-muted">
           The count of files comes before the findings, and the count of annotations after them. The
           first line names which validator did the work and is written to <strong
-          class="text-app-content">stderr</strong>, not stdout — every run emits it, so redirect
-          stderr if you are capturing output for a report.
+          class="text-app-content">stderr</strong>, not stdout — so redirect stderr if you are
+          capturing output for a report. It is printed once the validator has been resolved, which
+          means a run that dies before that point does not emit it: <code>--version</code> and
+          <code>--help</code>, an unrecognised flag, and a <code>SPECGUARD_VALIDATE_INTENT</code>
+          naming a binary that cannot be used all produce their message and nothing else. Treat the
+          line as "this is what validated the run", not as a header every invocation prints.
         </p>
         <%= render UI::DefListComponent.new(rows: [
               ["Exit 0", "Every annotation found is valid — or there were none"],
-              ["Exit 1", "At least one annotation is malformed"],
-              ["Exit 2", "The linter could not do its job — bad flags, an unloadable schema, or --changed outside a git repository"]
+              ["Exit 1", "At least one annotation is malformed — the only code that is a verdict about your annotations"],
+              ["Exit 2", "The linter could not do its job, and reached no verdict at all"]
             ]) %>
+        <p class="text-xs text-app-muted">
+          Exit 2 is the broad one, and it is a category rather than a list: bad flags, an unloadable
+          schema, <code>--changed</code> outside a git repository or combined with explicit files or
+          unable to resolve its diff base, a validator binary that is missing, unusable or disagrees
+          with the gem about the schema, an unmet <code>--require-validator</code>, and any
+          unexpected internal error — the linter maps its own bugs here too, so that exit 1 keeps
+          meaning one thing. The rule to wire CI against is the distinction, not the enumeration:
+          <strong class="text-app-content">1 is a verdict about your annotations, 2 is the tool
+          reporting it never reached one.</strong> Never treat a 2 as a pass, and never read it as a
+          finding — the message on stderr says which case it was.
+        </p>
         <p class="text-xs text-app-muted">
           A <em>missing</em> annotation is never a failure. Adoption is opt-in and gradual, so the
           linter only ever objects to an annotation that is there and wrong. <code>--json</code>
@@ -678,8 +698,10 @@ specguard-lint: checked 3 @intent annotations, 1 malformed</pre>
               slice. <code>annotated_ratio</code> is a 0–1 fraction, or <code>null</code> when the
               run has no examples at all: a run of nothing has no share to report, and
               <code>0.0</code> there would be indistinguishable from a measured zero share of a
-              suite that does have tests. If you post <code>specs: []</code> — which is accepted —
-              this is the shape you get back, so parse the field as nullable.
+              suite that does have tests. The null follows the run's total, not your payload —
+              posting <code>specs: []</code> is accepted, and returns <code>null</code> only when it
+              leaves the run still empty. Send an empty shard to a run whose other shards reported
+              examples and you get their number back. Parse the field as nullable either way.
               <code>embedding_status</code> is <code>"queued"</code> when identity resolution was
               scheduled and <code>"pending"</code> when there was nothing to schedule.
             </td>
@@ -692,10 +714,17 @@ specguard-lint: checked 3 @intent annotations, 1 malformed</pre>
               <strong class="text-app-content">every</strong> failure found, not just the first —
               <code>message</code> repeats the first one. A single bad example can produce several
               entries, because each field is checked independently. Entries about an example are
-              prefixed <code>specs[i]</code> and carry its file and line when it has them, falling
-              back to the bare index when it does not; entries about the envelope itself name the
-              field and carry no index at all. Refusals are also listed on your repository's page,
-              so a pipeline that is 400ing is visible in the app and not only in your CI log.
+              prefixed <code>specs[i]</code> and then named by whichever coordinates the entry
+              actually has: <code>specs[0] spec/order_spec.rb:9:</code> with both,
+              <code>specs[0] spec/order_spec.rb:</code> with only a path,
+              <code>specs[0] 9:</code> — a bare line number, not a path — with only a line, and
+              <code>specs[0]:</code> with neither. The partial forms are not curiosities; omitting
+              <code>line_number</code> is the mistake a new reporter makes first. Entries about the
+              envelope name the offending field instead. The one exception to all of it: a body that
+              is not a JSON object at all is refused with the single entry
+              <code>the request body must be a JSON object</code>, which names no field, because
+              nothing further was read. Refusals are also listed on your repository's page, so a
+              pipeline that is 400ing is visible in the app and not only in your CI log.
             </td>
           </tr>
           <tr>
@@ -797,13 +826,15 @@ specguard-lint: checked 3 @intent annotations, 1 malformed</pre>
       <%= render UI::AlertComponent.new(tone: :neutral, title: "If a run is refused, the endpoint tells you exactly why") do %>
         <p class="mt-1">
           A <code>400</code> lists every problem it found in <code>details</code>. Entries about an
-          example are prefixed with its index in <code>specs</code> and carry its file and line when
-          it has them — <code>specs[3] spec/models/order_spec.rb:9: …</code> — and fall back to a
-          bare <code>specs[3]</code> when the entry is malformed enough not to have any, which is
-          the case a new reporter hits first. Entries about the envelope name the offending field
-          instead. One bad example can yield several entries. Build against that rather than against
-          guesswork: post a two-example run by hand with <code>curl</code> first, read what comes
-          back, and only then wire the reporter in.
+          example are prefixed with its index in <code>specs</code> and then named by whatever
+          coordinates that entry has — <code>specs[3] spec/models/order_spec.rb:9: …</code> with
+          both, and, when one is missing, the other alone: <code>specs[3] spec/models/order_spec.rb:
+          …</code> or a bare <code>specs[3] 9: …</code>. An entry malformed enough to have neither
+          falls back to <code>specs[3]</code> on its own. Dropping <code>line_number</code> is the
+          case a new reporter hits first, so expect the path-only form early. Entries about the
+          envelope name the offending field instead. One bad example can yield several entries.
+          Build against that rather than against guesswork: post a two-example run by hand with
+          <code>curl</code> first, read what comes back, and only then wire the reporter in.
         </p>
       <% end %>
     </div>
