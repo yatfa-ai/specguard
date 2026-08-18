@@ -4,7 +4,8 @@
 # granted under GitHub's `repo` scope — "Full control of private repositories", read and write, on
 # every repository the user and their organizations could reach — in order to read one boolean off
 # `GET /repos/:owner/:repo`. Repository access is now a GitHub App installation, whose credential is
-# minted on demand and never persisted (`GithubAppCredentials`), so nothing writes or reads these.
+# the viewer's own short-lived user-to-server token, held in their session and never in a column,
+# so nothing writes or reads these.
 #
 # ## No migration path, deliberately
 #

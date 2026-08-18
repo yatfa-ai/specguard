@@ -12,9 +12,10 @@ module Builders
   # `installation_id: nil` for that user — the state everybody is in between signing in and first
   # connecting something — or call `uninstall_github_app` on one that already has it.
   #
-  # No token, and there is nothing to pass one as. Repository access is an installation whose
-  # credential is minted on demand and never persisted (`GithubAppCredentials`), so a user row holds
-  # no credential at all any more.
+  # No token, and there is nothing to pass one as. The credential repository reads are made with is
+  # the viewer's own, held in their session for the length of it (`GithubUserSession`), so a user
+  # row holds no credential at all any more. A non-request spec passes one to
+  # `InstallationRepositories` directly.
   def create_user(github_uid: "1001", github_handle: "octocat", installation_id: 5001)
     User.create!(github_uid: github_uid, github_handle: github_handle).tap do |user|
       GithubInstallation.record(user: user, installation_id: installation_id, account_login: "acme") if installation_id

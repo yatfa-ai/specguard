@@ -48,6 +48,14 @@ RSpec.describe GithubAppUserAuthorization do
     http_response(Net::HTTPOK, body: body)
   end
 
+  # `GET /user` — GitHub's answer to "whose token is this". Every journey through `authorize` makes
+  # this call before it reads anything, so it and the exchange travel together as `opening`.
+  def identity_response(id = 1001)
+    http_response(Net::HTTPOK, body: { "id" => id, "login" => "octocat" }.to_json)
+  end
+
+  def opening(uid = 1001) = [exchange_response, identity_response(uid)]
+
   def installation_payload(id, login: "acme")
     { "id" => id, "account" => { "login" => login } }
   end
@@ -66,28 +74,29 @@ RSpec.describe GithubAppUserAuthorization do
                                                     client_secret: "s3cret")
   end
 
-  describe ".installations" do
+  describe ".authorize" do
     # Two hosts, deliberately: the exchange happens on github.com, which is where OAuth lives, and
     # the read happens on api.github.com. A single-host client would silently post the App's client
     # secret to the wrong one.
     it "exchanges the code on github.com and then reads the API with the token it got back" do
-      fake = with_responses(exchange_response, installations_response([installation_payload(5001)]))
+      fake = with_responses(*opening, installations_response([installation_payload(5001)]))
 
-      described_class.installations(code: "abc123")
+      described_class.authorize(code: "abc123", github_uid: "1001")
 
-      exchange, read = fake.requests
+      exchange, identity, read = fake.requests
       expect(exchange).to be_a(Net::HTTP::Post)
       expect(exchange.uri.host).to eq("github.com")
       expect(exchange.uri.path).to eq("/login/oauth/access_token")
+      expect(identity.uri.path).to eq("/user")
       expect(read).to be_a(Net::HTTP::Get)
       expect(read.uri.host).to eq("api.github.com")
       expect(read.uri.path).to eq("/user/installations")
     end
 
     it "posts the App's own client credentials alongside the code" do
-      fake = with_responses(exchange_response, installations_response([]))
+      fake = with_responses(*opening, installations_response([]))
 
-      described_class.installations(code: "abc123")
+      described_class.authorize(code: "abc123", github_uid: "1001")
 
       form = Rack::Utils.parse_query(fake.requests.first.body)
       expect(form).to eq("client_id" => "Iv1.client", "client_secret" => "s3cret", "code" => "abc123")
@@ -97,9 +106,9 @@ RSpec.describe GithubAppUserAuthorization do
     # The exchanged token is what makes the answer trustworthy: GitHub is being asked "what does
     # THIS person hold", and it can only answer that if the request carries the person's own token.
     it "reads the installations as the user, not as the App" do
-      fake = with_responses(exchange_response, installations_response([]))
+      fake = with_responses(*opening, installations_response([]))
 
-      described_class.installations(code: "abc123")
+      described_class.authorize(code: "abc123", github_uid: "1001")
 
       read = fake.requests.last
       expect(read["Authorization"]).to eq("Bearer ghu_user_token")
@@ -108,11 +117,11 @@ RSpec.describe GithubAppUserAuthorization do
     end
 
     it "returns what GitHub says the user holds, naming each connected account" do
-      with_responses(exchange_response,
+      with_responses(*opening,
                      installations_response([installation_payload(5001, login: "acme"),
                                              installation_payload(6002, login: "octocat")]))
 
-      installations = described_class.installations(code: "abc123")
+      installations = described_class.authorize(code: "abc123", github_uid: "1001").installations
 
       expect(installations.map(&:installation_id)).to eq([5001, 6002])
       expect(installations.map(&:account_login)).to eq(%w[acme octocat])
@@ -122,18 +131,18 @@ RSpec.describe GithubAppUserAuthorization do
     # "GitHub did not say" rather than a reason to fail or to invent a name — `display_name` on the
     # row falls back to the id for exactly this.
     it "reads a missing account login as withheld rather than inventing one" do
-      with_responses(exchange_response, installations_response([{ "id" => 5001 }]))
+      with_responses(*opening, installations_response([{ "id" => 5001 }]))
 
-      expect(described_class.installations(code: "abc123").first.account_login).to be_nil
+      expect(described_class.authorize(code: "abc123", github_uid: "1001").installations.first.account_login).to be_nil
     end
 
     # A user who authorized the App but selected no repositories — or who cancelled out of the
     # picker — legitimately holds nothing. Treating that as a failure would show an error page to
     # somebody who did nothing wrong.
     it "treats an empty list as a real answer rather than a failure" do
-      with_responses(exchange_response, installations_response([]))
+      with_responses(*opening, installations_response([]))
 
-      expect(described_class.installations(code: "abc123")).to eq([])
+      expect(described_class.authorize(code: "abc123", github_uid: "1001").installations).to eq([])
     end
   end
 
@@ -149,7 +158,7 @@ RSpec.describe GithubAppUserAuthorization do
       fake = with_responses(exchange_response({ "error" => "bad_verification_code",
                                                 "error_description" => "The code passed is incorrect or expired." }.to_json))
 
-      expect { described_class.installations(code: "invented") }
+      expect { described_class.authorize(code: "invented", github_uid: "1001") }
         .to raise_error(GithubApi::Unauthorized, /bad_verification_code/)
 
       # And it stops there: no user token was obtained, so nothing was read as that user.
@@ -159,7 +168,7 @@ RSpec.describe GithubAppUserAuthorization do
     it "refuses a 200 that carries neither an error nor a token" do
       fake = with_responses(exchange_response({ "token_type" => "bearer" }.to_json))
 
-      expect { described_class.installations(code: "abc123") }
+      expect { described_class.authorize(code: "abc123", github_uid: "1001") }
         .to raise_error(GithubApi::Unauthorized, /no access token/)
       expect(fake.requests.length).to eq(1)
     end
@@ -167,7 +176,7 @@ RSpec.describe GithubAppUserAuthorization do
     it "refuses an empty access token" do
       fake = with_responses(exchange_response({ "access_token" => "" }.to_json))
 
-      expect { described_class.installations(code: "abc123") }
+      expect { described_class.authorize(code: "abc123", github_uid: "1001") }
         .to raise_error(GithubApi::Unauthorized, /no access token/)
       expect(fake.requests.length).to eq(1)
     end
@@ -178,7 +187,7 @@ RSpec.describe GithubAppUserAuthorization do
       it "refuses #{value.inspect} without asking GitHub anything" do
         fake = with_responses
 
-        expect { described_class.installations(code: value) }
+        expect { described_class.authorize(code: value, github_uid: "1001") }
           .to raise_error(GithubApi::Unauthorized, /no authorization code/)
         expect(fake.requests).to be_empty
       end
@@ -192,30 +201,107 @@ RSpec.describe GithubAppUserAuthorization do
     allow(SpecGuard::GithubApp).to receive(:configured?).and_return(false)
     fake = with_responses
 
-    expect { described_class.installations(code: "abc123") }
-      .to raise_error(GithubAppCredentials::NotConfigured, /not configured/)
+    expect { described_class.authorize(code: "abc123", github_uid: "1001") }
+      .to raise_error(GithubApi::NotConfigured, /not configured/)
     expect(fake.requests).to be_empty
   end
 
-  # The token exists for the length of one method call. It is the one credential in the app that
-  # speaks for a *person*, so the public surface has to be incapable of handing it out — not merely
-  # in the habit of not doing so.
-  it "never hands the user token back to the caller" do
-    with_responses(exchange_response, installations_response([installation_payload(5001)]))
+  # The token is RETURNED, and that is a deliberate reversal of an earlier draft which discarded it
+  # after one call on the principle that a credential should not outlive its usefulness. It turned
+  # out to be useful for longer: it is the only credential that can answer "which of these
+  # repositories does this user administer", so the caller keeps it — in the user's session, for the
+  # length of that session, and nowhere else. What must not happen is it reaching a database column,
+  # which is `GithubUserSession`'s claim to hold rather than this one's.
+  it "returns the credential the caller will read repositories with" do
+    with_responses(*opening, installations_response([installation_payload(5001)]))
 
-    installations = described_class.installations(code: "abc123")
+    authorization = described_class.authorize(code: "abc123", github_uid: "1001")
 
-    expect(installations).to all(be_a(described_class::Installation))
+    expect(authorization.token).to eq("ghu_user_token")
+    expect(authorization.installations).to all(be_a(described_class::Installation))
     expect(described_class::Installation.members).to eq(%i[installation_id account_login])
-    expect(installations.map(&:to_h).to_s).not_to include("ghu_user_token")
-    expect(described_class).not_to respond_to(:exchange)
+  end
+
+  # Expiry is treated as arriving a minute early, so a token that runs out while a request is in
+  # flight is read as expired BEFORE it is used rather than after GitHub rejects it.
+  it "reports GitHub's own expiry, brought forward for the flight time" do
+    with_responses(exchange_response({ "access_token" => "ghu_user_token", "expires_in" => 28_800 }.to_json),
+                   identity_response, installations_response([]))
+
+    expect(described_class.authorize(code: "abc123", github_uid: "1001").expires_at)
+      .to be_within(5.seconds).of(Time.current + 28_800.seconds - 60.seconds)
+  end
+
+  # An App with "expire user authorization tokens" turned OFF returns no `expires_in` at all, and
+  # the token then never expires on GitHub's side. Holding one in a session for a week by omission
+  # is not a decision anybody would have made on purpose, so an hour is assumed and the cost of
+  # being wrong is one invisible redirect.
+  it "assumes an hour when GitHub names no expiry" do
+    with_responses(*opening, installations_response([]))
+
+    expect(described_class.authorize(code: "abc123", github_uid: "1001").expires_at)
+      .to be_within(5.seconds).of(Time.current + described_class::DEFAULT_TTL - 60.seconds)
+  end
+
+  # THE reason `authorize` takes a `github_uid` at all. The callback is a GET, so Rails applies no
+  # CSRF check and `state` is a return path rather than a nonce — a signed-in user can be MADE to
+  # arrive carrying a code an attacker minted in their own browser for their own GitHub account and
+  # left unredeemed. Without this the exchange succeeds and the victim's session is handed a
+  # credential, and installations, belonging to somebody else.
+  describe "binding the authorization to the signed-in identity" do
+    it "asks GitHub whose token it just received, with that token" do
+      fake = with_responses(*opening, installations_response([]))
+
+      described_class.authorize(code: "abc123", github_uid: "1001")
+
+      identity = fake.requests[1]
+      expect(identity.uri.path).to eq("/user")
+      expect(identity["Authorization"]).to eq("Bearer ghu_user_token")
+    end
+
+    # The planted-code attack, refused. Everything about the code is valid — it exchanges, it yields
+    # a real token, that token reaches real installations — and it belongs to somebody else.
+    it "refuses a code minted for a different GitHub account, before reading anything" do
+      fake = with_responses(exchange_response, identity_response(999_999),
+                            installations_response([installation_payload(5001)]))
+
+      expect { described_class.authorize(code: "abc123", github_uid: "1001") }
+        .to raise_error(GithubApi::Unauthorized, /different account/)
+
+      # And it stopped there: the installations were never read, so nothing about the attacker's
+      # account was even fetched, let alone recorded.
+      expect(fake.requests.length).to eq(2)
+    end
+
+    # "GitHub did not say who this is" is not "GitHub said it is you". The whole point of the call is
+    # to be told.
+    it "refuses when GitHub names no account at all" do
+      with_responses(exchange_response, http_response(Net::HTTPOK, body: {}.to_json),
+                     installations_response([]))
+
+      expect { described_class.authorize(code: "abc123", github_uid: "1001") }
+        .to raise_error(GithubApi::Unauthorized, /different account/)
+    end
+
+    # A caller cannot forget the binding: there is no default, and a blank one is refused before
+    # GitHub is asked anything.
+    it "refuses without a signed-in identity to bind to, without asking GitHub anything" do
+      fake = with_responses
+
+      [nil, "", "  "].each do |value|
+        expect { described_class.authorize(code: "abc123", github_uid: value) }
+          .to raise_error(GithubApi::Unauthorized, /No signed-in identity/)
+      end
+
+      expect(fake.requests).to be_empty
+    end
   end
 
   describe "walking the pages" do
     it "asks for the largest page GitHub allows, starting at the first" do
-      fake = with_responses(exchange_response, installations_response([]))
+      fake = with_responses(*opening, installations_response([]))
 
-      described_class.installations(code: "abc123")
+      described_class.authorize(code: "abc123", github_uid: "1001")
 
       query = Rack::Utils.parse_query(fake.requests.last.uri.query)
       expect(query["per_page"]).to eq(described_class::PER_PAGE.to_s)
@@ -225,18 +311,18 @@ RSpec.describe GithubAppUserAuthorization do
     # A short page is GitHub saying "that was the last one", so a second request would be a wasted
     # round trip on every trip through the installation flow.
     it "stops at the first short page" do
-      fake = with_responses(exchange_response, installations_response([installation_payload(5001)]))
+      fake = with_responses(*opening, installations_response([installation_payload(5001)]))
 
-      expect(described_class.installations(code: "abc123").map(&:installation_id)).to eq([5001])
-      expect(fake.requests.length).to eq(2)
+      expect(described_class.authorize(code: "abc123", github_uid: "1001").installations.map(&:installation_id)).to eq([5001])
+      expect(fake.requests.length).to eq(3)
     end
 
     it "follows pages while each one comes back full" do
-      fake = with_responses(exchange_response,
+      fake = with_responses(*opening,
                             installations_response(full_page(0)),
                             installations_response([installation_payload(999)]))
 
-      installations = described_class.installations(code: "abc123")
+      installations = described_class.authorize(code: "abc123", github_uid: "1001").installations
 
       expect(installations.length).to eq(described_class::PER_PAGE + 1)
       expect(installations.last.installation_id).to eq(999)
@@ -247,20 +333,20 @@ RSpec.describe GithubAppUserAuthorization do
     # response that keeps claiming to be full cannot spin the request forever.
     it "stops at the page ceiling rather than walking forever" do
       responses = Array.new(described_class::MAX_PAGES) { |page| installations_response(full_page(page * 100)) }
-      fake = with_responses(exchange_response, *responses)
+      fake = with_responses(*opening, *responses)
 
-      described_class.installations(code: "abc123")
+      described_class.authorize(code: "abc123", github_uid: "1001")
 
-      expect(fake.requests.length).to eq(described_class::MAX_PAGES + 1)
+      expect(fake.requests.length).to eq(described_class::MAX_PAGES + 2)
     end
 
     # A body of an unexpected shape ends the walk rather than raising a NoMethodError several frames
     # up in the controller.
     it "treats a body that is not the promised object as an empty page" do
-      fake = with_responses(exchange_response, http_response(Net::HTTPOK, body: { "total_count" => 0 }.to_json))
+      fake = with_responses(*opening, http_response(Net::HTTPOK, body: { "total_count" => 0 }.to_json))
 
-      expect(described_class.installations(code: "abc123")).to eq([])
-      expect(fake.requests.length).to eq(2)
+      expect(described_class.authorize(code: "abc123", github_uid: "1001").installations).to eq([])
+      expect(fake.requests.length).to eq(3)
     end
   end
 
@@ -268,22 +354,22 @@ RSpec.describe GithubAppUserAuthorization do
     # The result is used to write rows against a unique index. A duplicate would be an avoidable
     # failure halfway through recording, over something GitHub is entitled to repeat across pages.
     it "de-duplicates by installation id" do
-      with_responses(exchange_response,
+      with_responses(*opening,
                      installations_response([installation_payload(5001, login: "acme"),
                                              installation_payload(5001, login: "acme"),
                                              installation_payload(6002, login: "octocat")]))
 
-      expect(described_class.installations(code: "abc123").map(&:installation_id)).to eq([5001, 6002])
+      expect(described_class.authorize(code: "abc123", github_uid: "1001").installations.map(&:installation_id)).to eq([5001, 6002])
     end
 
     # An id that is not a positive number is not an installation, and `GithubInstallation.record`
     # would refuse it anyway — dropping it here means the caller's list is entirely recordable.
     it "drops entries whose id is not a positive number" do
-      with_responses(exchange_response,
+      with_responses(*opening,
                      installations_response([{ "id" => 0 }, { "id" => -1 }, { "id" => nil },
                                              { "id" => "not-a-number" }, installation_payload(5001)]))
 
-      expect(described_class.installations(code: "abc123").map(&:installation_id)).to eq([5001])
+      expect(described_class.authorize(code: "abc123", github_uid: "1001").installations.map(&:installation_id)).to eq([5001])
     end
   end
 
@@ -297,13 +383,13 @@ RSpec.describe GithubAppUserAuthorization do
       it "turns #{code} on the code exchange into #{error_class.name}" do
         with_responses(http_response(http_class, code: code))
 
-        expect { described_class.installations(code: "abc123") }.to raise_error(error_class)
+        expect { described_class.authorize(code: "abc123", github_uid: "1001") }.to raise_error(error_class)
       end
 
-      it "turns #{code} on the installations read into #{error_class.name}" do
+      it "turns #{code} on the identity read into #{error_class.name}" do
         with_responses(exchange_response, http_response(http_class, code: code))
 
-        expect { described_class.installations(code: "abc123") }.to raise_error(error_class)
+        expect { described_class.authorize(code: "abc123", github_uid: "1001") }.to raise_error(error_class)
       end
     end
 
@@ -312,14 +398,14 @@ RSpec.describe GithubAppUserAuthorization do
     it "wraps a transport failure rather than letting it escape" do
       allow(Net::HTTP).to receive(:start).and_raise(Errno::ECONNREFUSED)
 
-      expect { described_class.installations(code: "abc123") }
+      expect { described_class.authorize(code: "abc123", github_uid: "1001") }
         .to raise_error(GithubApi::Unavailable, /GitHub request failed/)
     end
 
     it "wraps a body that is not the JSON GitHub promised" do
       with_responses(http_response(Net::HTTPOK, body: "<html>maintenance</html>"))
 
-      expect { described_class.installations(code: "abc123") }
+      expect { described_class.authorize(code: "abc123", github_uid: "1001") }
         .to raise_error(GithubApi::Unavailable, /not JSON/)
     end
 
@@ -328,7 +414,7 @@ RSpec.describe GithubAppUserAuthorization do
     it "does not mistake a bare JSON scalar for an exchange payload" do
       with_responses(http_response(Net::HTTPOK, body: '"unexpected"'))
 
-      expect { described_class.installations(code: "abc123") }
+      expect { described_class.authorize(code: "abc123", github_uid: "1001") }
         .to raise_error(GithubApi::Unauthorized, /no access token/)
     end
   end

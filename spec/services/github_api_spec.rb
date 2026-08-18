@@ -34,16 +34,18 @@ RSpec.describe GithubApi do
     response
   end
 
-  def repo_payload(full_name, private: false, archived: false, owner_type: "Organization")
+  def repo_payload(full_name, private: false, archived: false, owner_type: "Organization", admin: true)
     { "full_name" => full_name, "private" => private, "archived" => archived,
-      "owner" => { "login" => full_name.split("/").first, "type" => owner_type } }
+      "owner" => { "login" => full_name.split("/").first, "type" => owner_type },
+      "permissions" => { "admin" => admin, "push" => admin, "pull" => true } }
   end
 
-  # `GET /installation/repositories` answers with an OBJECT rather than the bare array the
-  # user-token endpoint it replaces returned. Wrapping it here, in the one file that speaks the wire
-  # format, is what stops every other spec having to know that.
+  # `GET /user/installations/:id/repositories` answers with an OBJECT rather than a bare array.
+  # Wrapping it here, in the one file that speaks the wire format, is what stops every other spec
+  # having to know that.
   def repositories_payload(payloads)
-    { "total_count" => payloads.length, "repositories" => payloads }.to_json
+    { "total_count" => payloads.length, "repository_selection" => "selected",
+      "repositories" => payloads }.to_json
   end
 
   def with_responses(*responses)
@@ -53,58 +55,50 @@ RSpec.describe GithubApi do
   end
 
   # The suite-wide fake is installed for every example (spec/support/github_api.rb); this file is
-  # about the real client, so it is built directly rather than through `GithubApi.for_installation`.
-  # A bare String stands in for the credential — the client accepts either that or an object
-  # answering `#token`, and the minting half is `GithubAppCredentials`' own spec to pin.
-  subject(:client) { described_class.new("ghs_installation_token") }
+  # about the real client, so it is built directly rather than through `GithubApi.for_user`.
+  subject(:client) { described_class.new("ghu_user_token", 4242) }
 
-  describe "#repository" do
-    # Reaching a repository at all is the answer: an installation credential can only see what the
-    # installation covers, so a `Repo` coming back IS "yes, this is registerable". There is no
-    # permission field to read, which is the whole of what this slice changed.
-    it "reports a repository the installation covers" do
-      with_responses(http_response(Net::HTTPOK, body: repo_payload("acme/billing", private: true).to_json))
+  describe "reading a repository" do
+    # `admin` is the field the whole slice turns on: it is the user's OWN permission, and it is what
+    # separates "somebody gave SpecGuard this repository" from "you may register it".
+    it "reports what GitHub says about the repository AND about this user's access to it" do
+      with_responses(http_response(Net::HTTPOK, body: repositories_payload(
+        [repo_payload("acme/billing", private: true, admin: true)]
+      )))
 
-      repo = client.repository("acme/billing")
+      repo = client.repositories.repos.first
 
       expect(repo.full_name).to eq("acme/billing")
       expect(repo).to be_private
       expect(repo).to be_organization
+      expect(repo).to be_admin
     end
 
     # Absent fields are read as "GitHub did not say" rather than invented. `private?` and
-    # `archived?` are false — both are claims the payload has to make — and `organization?` is
-    # false, which withholds rather than guessing a namespace's kind.
+    # `archived?` are false — both are claims the payload has to make — `organization?` is false,
+    # which withholds rather than guessing a namespace's kind, and `admin?` is false, which FAILS
+    # CLOSED: a payload with no permissions hash must not read as an administrator.
     it "reads absent fields as withheld rather than inventing them" do
-      with_responses(http_response(Net::HTTPOK, body: { "full_name" => "acme/billing" }.to_json))
+      with_responses(http_response(Net::HTTPOK,
+                                   body: repositories_payload([{ "full_name" => "acme/billing" }])))
 
-      repo = client.repository("acme/billing")
+      repo = client.repositories.repos.first
 
       expect(repo).not_to be_private
       expect(repo).not_to be_archived
       expect(repo).not_to be_organization
+      expect(repo).not_to be_admin
     end
 
-    it "authenticates as the installation and pins the API version" do
-      fake = with_responses(http_response(Net::HTTPOK, body: repo_payload("acme/billing").to_json))
+    it "authenticates as the user and pins the API version" do
+      fake = with_responses(http_response(Net::HTTPOK, body: repositories_payload([])))
 
-      client.repository("acme/billing")
+      client.repositories
 
       request = fake.requests.first
-      expect(request["Authorization"]).to eq("Bearer ghs_installation_token")
+      expect(request["Authorization"]).to eq("Bearer ghu_user_token")
       expect(request["Accept"]).to eq("application/vnd.github+json")
       expect(request["X-GitHub-Api-Version"]).to eq("2022-11-28")
-      expect(request.path).to eq("/repos/acme/billing")
-    end
-
-    # The value reaches this method straight off a form field. A segment carrying its own `/` must
-    # not become a path separator and address a different endpoint.
-    it "escapes each path segment so a crafted name cannot reach another endpoint" do
-      fake = with_responses(http_response(Net::HTTPOK, body: repo_payload("a/b").to_json))
-
-      client.repository("acme/billing/../../user")
-
-      expect(fake.requests.first.path).to eq("/repos/acme/billing%2F..%2F..%2Fuser")
     end
   end
 
@@ -118,7 +112,7 @@ RSpec.describe GithubApi do
       it "turns #{http_class.name.demodulize} into #{error_class.name}" do
         with_responses(http_response(http_class, code: "500"))
 
-        expect { client.repository("acme/billing") }.to raise_error(error_class)
+        expect { client.repositories }.to raise_error(error_class)
       end
     end
 
@@ -129,19 +123,19 @@ RSpec.describe GithubApi do
       with_responses(http_response(Net::HTTPForbidden, code: "403",
                                    headers: { "x-ratelimit-remaining" => "0" }))
 
-      expect { client.repository("acme/billing") }
+      expect { client.repositories }
         .to raise_error(GithubApi::Forbidden, /rate limit/) { |e| expect(e.reason).to eq(:rate_limited) }
     end
 
     # An SSO header is no longer a reason of its own, and this pins that it is not quietly treated
-    # as one: SAML SSO authorization is a property of a USER token, and an installation is
-    # authorized by the organization that installed it. A 403 carrying the header is an ordinary
-    # refusal here, not a "get your org to approve SpecGuard" the user can do nothing with.
+    # as one: a user-to-server token reaches an organization through that organization's own
+    # installation rather than through a SAML authorization of its own. A 403 carrying the header is
+    # an ordinary refusal here, not a "get your org to approve SpecGuard" nobody can act on.
     it "reports a 403 that names no cause as a plain refusal" do
       with_responses(http_response(Net::HTTPForbidden, code: "403",
                                    headers: { "x-github-sso" => "required; organizations=abc" }))
 
-      expect { client.repository("acme/billing") }
+      expect { client.repositories }
         .to raise_error(GithubApi::Forbidden) { |e| expect(e.reason).to eq(:refused) }
     end
 
@@ -152,7 +146,7 @@ RSpec.describe GithubApi do
                                    headers: { "x-ratelimit-remaining" => "0",
                                               "x-github-sso" => "required; organizations=abc" }))
 
-      expect { client.repository("acme/billing") }
+      expect { client.repositories }
         .to raise_error(GithubApi::Forbidden) { |e| expect(e.reason).to eq(:rate_limited) }
     end
 
@@ -161,29 +155,31 @@ RSpec.describe GithubApi do
     it "wraps a transport failure rather than letting it escape" do
       allow(Net::HTTP).to receive(:start).and_raise(Errno::ECONNREFUSED)
 
-      expect { client.repository("acme/billing") }
+      expect { client.repositories }
         .to raise_error(GithubApi::Unavailable, /GitHub request failed/)
     end
 
     it "wraps a body that is not the JSON GitHub promised" do
       with_responses(http_response(Net::HTTPOK, body: "<html>maintenance</html>"))
 
-      expect { client.repository("acme/billing") }
+      expect { client.repositories }
         .to raise_error(GithubApi::Unavailable, /not JSON/)
     end
   end
 
   describe "#repositories" do
-    # The installation endpoint, not `/user/repos`. That is the substance of the change rather than
-    # a detail: `/user/repos` returned everything the user could reach and needed the `repo` scope
-    # to do it, where this returns exactly what somebody deliberately installed the App on.
-    it "reads the installation's own repositories" do
+    # THE endpoint, and the substance of the whole fix. Not `/user/repos`, which returned everything
+    # the user could reach and needed the `repo` scope to do it; and not `/installation/repositories`,
+    # which answers for the App and so answers identically for every member of an organization. This
+    # one is scoped to the installation AND to the caller, which is what makes both conditions
+    # checkable from one response.
+    it "reads the installation's repositories AS THIS USER" do
       fake = with_responses(http_response(Net::HTTPOK, body: repositories_payload([repo_payload("acme/billing")])))
 
       client.repositories
 
       request = fake.requests.first
-      expect(request.uri.path).to eq("/installation/repositories")
+      expect(request.uri.path).to eq("/user/installations/4242/repositories")
 
       query = Rack::Utils.parse_query(request.uri.query)
       expect(query["per_page"]).to eq(GithubApi::PER_PAGE.to_s)
@@ -237,8 +233,8 @@ RSpec.describe GithubApi do
     end
 
     # The cap is a bound on one page render, not a claim about anyone's installation — so it is
-    # reported rather than applied silently. The picker says so, and `InstallationRepositories` asks
-    # GitHub about a name individually rather than refusing it for a property of our own page walk.
+    # reported rather than applied silently. The picker says so, and `InstallationRepositories`
+    # refuses an absent name rather than reading our own page walk as GitHub's verdict.
     it "reports truncation when the page cap is reached" do
       full_page = Array.new(GithubApi::PER_PAGE) { |i| repo_payload("acme/repo-#{i}") }
       responses = Array.new(GithubApi::MAX_PAGES) { http_response(Net::HTTPOK, body: repositories_payload(full_page)) }
@@ -251,54 +247,33 @@ RSpec.describe GithubApi do
     end
   end
 
-  describe ".for_installation" do
-    it "binds a client to the installation, taking a record or a bare id" do
-      described_class.factory = ->(credential) { credential.installation_id }
+  describe ".for_user" do
+    it "binds a client to the user's credential and one installation, taking a record or a bare id" do
+      described_class.factory = ->(token, installation_id) { [token, installation_id] }
       installation = create_user.github_installations.first
 
-      expect(described_class.for_installation(installation)).to eq(installation.installation_id)
-      expect(described_class.for_installation(4242)).to eq(4242)
+      expect(described_class.for_user("ghu_t", installation)).to eq(["ghu_t", installation.installation_id])
+      expect(described_class.for_user("ghu_t", 4242)).to eq(["ghu_t", 4242])
     end
 
-    # "Has not installed the App yet" is an ordinary state of the world on every page that offers to
-    # install it, not an exception.
-    it "returns nil rather than raising when there is no installation to bind" do
-      expect(described_class.for_installation(nil)).to be_nil
-      expect(described_class.for_installation(0)).to be_nil
+    # Both are ordinary states of the world on a page that offers to fix them — no installation yet,
+    # or a session with no credential — rather than exceptions.
+    it "returns nil rather than raising when there is nothing to read with" do
+      expect(described_class.for_user("ghu_t", nil)).to be_nil
+      expect(described_class.for_user("ghu_t", 0)).to be_nil
+      expect(described_class.for_user(nil, 4242)).to be_nil
+      expect(described_class.for_user("  ", 4242)).to be_nil
     end
 
-    # The credential is resolved on the first REQUEST, not when the client is built. A controller
-    # builds one on paths that may never call GitHub, and minting is itself a round trip — so a page
-    # that renders without asking GitHub anything must not have paid for a token.
-    it "does not mint a token until the client is actually used" do
-      # The suite installs the fake through this same seam, so it has to be stood down for the two
-      # examples that are about the REAL client's credential handling.
+    # Building a client costs nothing and reaches nobody: a controller builds one on paths that may
+    # never call GitHub, and it must not have paid for a round trip to find that out.
+    it "does not call GitHub until the client is actually used" do
       described_class.factory = nil
-      allow(GithubAppCredentials).to receive(:installation_token).and_return("ghs_minted")
+      allow(Net::HTTP).to receive(:start)
 
-      client = described_class.for_installation(4242)
-      expect(GithubAppCredentials).not_to have_received(:installation_token)
+      described_class.for_user("ghu_t", 4242)
 
-      fake = with_responses(http_response(Net::HTTPOK, body: repositories_payload([])))
-      client.repositories
-
-      expect(GithubAppCredentials).to have_received(:installation_token).with(4242).once
-      expect(fake.requests.first["Authorization"]).to eq("Bearer ghs_minted")
-    end
-
-    # One client, one mint, however many pages it walks.
-    it "mints once for a client that walks several pages" do
-      described_class.factory = nil
-      allow(GithubAppCredentials).to receive(:installation_token).and_return("ghs_minted")
-      full_page = Array.new(GithubApi::PER_PAGE) { |i| repo_payload("acme/repo-#{i}") }
-      with_responses(
-        http_response(Net::HTTPOK, body: repositories_payload(full_page)),
-        http_response(Net::HTTPOK, body: repositories_payload([repo_payload("acme/last")]))
-      )
-
-      described_class.for_installation(4242).repositories
-
-      expect(GithubAppCredentials).to have_received(:installation_token).once
+      expect(Net::HTTP).not_to have_received(:start)
     end
   end
 end

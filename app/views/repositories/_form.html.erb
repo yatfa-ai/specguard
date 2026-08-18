@@ -36,6 +36,20 @@
         ) do %>
       <%= github_install_button return_to: form_return_to %>
     <% end %>
+  <% elsif github_authorization_needed? %>
+    <%# The App IS installed; this session just has no credential to read it with. A different
+        missing thing and so a different button — sending them through the repository picker again
+        would be asking them to re-answer a question they have already answered. `return_to` is
+        passed for the reason the branch above states in full. %>
+    <% form_return_to = repository.persisted? ? edit_repository_path(repository) : new_repository_path %>
+    <%= render UI::EmptyStateComponent.new(
+          title: "Reconnect to GitHub",
+          description: "SpecGuard asks GitHub which of your connected repositories you administer, " \
+                       "and needs your permission to do that again in this browser session. " \
+                       "Reconnecting takes you to GitHub and straight back."
+        ) do %>
+      <%= github_authorize_button return_to: form_return_to %>
+    <% end %>
   <% elsif github_listing.nil? %>
     <%# Nothing to pick from and nothing the user can fix by typing, so the form is withheld rather
         than shown empty. Two different reasons land here and they must not read the same: GitHub

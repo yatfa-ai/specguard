@@ -49,8 +49,7 @@ module GithubHelper
   def github_app_unconfigured_notice
     render UI::AlertComponent.new(tone: :warning, title: "The SpecGuard GitHub App is not configured") do
       tag.span(safe_join([
-        "Set ", tag.code("GITHUB_APP_ID"), ", ", tag.code("GITHUB_APP_SLUG"), ", ",
-        tag.code("GITHUB_APP_PRIVATE_KEY"), ", ", tag.code("GITHUB_APP_CLIENT_ID"), " and ",
+        "Set ", tag.code("GITHUB_APP_SLUG"), ", ", tag.code("GITHUB_APP_CLIENT_ID"), " and ",
         tag.code("GITHUB_APP_CLIENT_SECRET"), " (or the ", tag.code("github_app"),
         " credentials) and restart the app. See ", tag.code("config/initializers/github_app.rb"), "."
       ]))
@@ -63,18 +62,31 @@ module GithubHelper
   def github_installation_disclosure
     "SpecGuard connects repositories through a GitHub App. You choose which repositories it is " \
       "installed on, in GitHub's own picker, and it asks for read-only access to their metadata — " \
-      "not their code. Only someone who administers a repository can install it, which is how " \
-      "SpecGuard knows a repository is yours to register. You can change the selection or uninstall " \
-      "it at any time from your GitHub settings."
+      "not their code. You can register the ones GitHub lists you as an administrator of. You can " \
+      "change the selection or uninstall it at any time from your GitHub settings."
+  end
+
+  # The other button, for the other missing thing. The App is installed and this session simply has
+  # no credential to read it with — so this asks GitHub for one and asks for nothing else. For
+  # anyone who has authorized the App before, GitHub renders no screen: they leave and come back.
+  #
+  # Deliberately worded as reconnecting rather than as an error. Nothing is broken and nothing the
+  # user did caused it; a session ended, which is the most ordinary thing that can happen to one.
+  def github_authorize_button(label = "Reconnect to GitHub", return_to: nil, variant: :primary)
+    return github_app_unconfigured_notice unless SpecGuard::GithubApp.configured?
+
+    button_to label, github_installation_authorize_path(return_to: return_to || request.fullpath),
+              form: { data: { turbo: false } },
+              class: UI::ButtonComponent.classes(variant: variant)
   end
 
   # What the picker offers: exactly the repositories in the user's installation(s).
   #
-  # There is no filtering left to do here, and its absence is the point of this slice. The old
-  # picker withheld repositories the user could see but did not administer — a distinction the
-  # OAuth listing forced on it, because `GET /user/repos` returned every repository the user had any
-  # relationship with. An installation contains only what somebody who administers those
-  # repositories deliberately selected, so everything in it is registerable and nothing is withheld.
+  # There is no filtering left to do HERE, and that is a statement about this method rather than
+  # about the policy: `InstallationRepositories::Sources#listing` has already dropped everything the
+  # viewer does not administer, so a listing that reaches a view is registerable in full. Deciding
+  # it there rather than here is what keeps the offered set and the accepted set the same object —
+  # a picker that offers what the write will refuse is worse than no picker.
   #
   # A persisted name is prepended when GitHub's list does not contain it, which is the rename form's
   # case: a repository registered before the installation changed, or one past the listing cap, must
@@ -93,8 +105,8 @@ module GithubHelper
   # Beneath the field, because each of these changes what an *absent* repository means, and a picker
   # that silently omits things is a picker people stop trusting.
   def repository_picker_hint(listing)
-    sentences = ["These are the repositories the SpecGuard GitHub App is installed on. " \
-                 "Add more from your GitHub settings."]
+    sentences = ["These are the repositories the SpecGuard GitHub App is installed on that GitHub " \
+                 "lists you as an administrator of. Add more from your GitHub settings."]
 
     if listing.truncated?
       sentences << "Showing the first #{GithubApi::MAX_PAGES * GithubApi::PER_PAGE} repositories " \

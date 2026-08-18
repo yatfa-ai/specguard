@@ -12,8 +12,7 @@ RSpec.describe SpecGuard::GithubApp do
   # ENV is process-wide and these examples set values a later example would inherit, so each one
   # gets a clean slate rather than depending on the order it ran in.
   around do |example|
-    keys = %w[GITHUB_APP_ID GITHUB_APP_SLUG GITHUB_APP_PRIVATE_KEY
-              GITHUB_APP_CLIENT_ID GITHUB_APP_CLIENT_SECRET]
+    keys = %w[GITHUB_APP_SLUG GITHUB_APP_CLIENT_ID GITHUB_APP_CLIENT_SECRET]
     saved = keys.to_h { |key| [key, ENV.fetch(key, nil)] }
     keys.each { |key| ENV.delete(key) }
 
@@ -27,8 +26,7 @@ RSpec.describe SpecGuard::GithubApp do
   end
 
   def configure_all
-    configure(id: "123456", slug: "specguard", private_key: "-----BEGIN KEY-----",
-              client_id: "Iv1.abc", client_secret: "shhh")
+    configure(slug: "specguard", client_id: "Iv1.abc", client_secret: "shhh")
   end
 
   describe ".configured?" do
@@ -38,44 +36,22 @@ RSpec.describe SpecGuard::GithubApp do
       expect(described_class).not_to be_configured
     end
 
-    it "is true once all five values are present" do
+    it "is true once all three values are present" do
       configure_all
 
       expect(described_class).to be_configured
     end
 
     # Reporting "configured" on a subset would move the failure from a sentence on the connect page
-    # to a 500 halfway through the flow — the install link needs the slug, the callback needs the
-    # client pair, and reading repositories needs the app id and private key.
-    %i[id slug private_key client_id client_secret].each do |missing|
+    # to a 500 halfway through the flow — the install and authorize links need the slug, and reading
+    # anything at all needs the client pair to exchange the code that comes back.
+    %i[slug client_id client_secret].each do |missing|
       it "is false when #{missing} alone is missing" do
         configure_all
         ENV.delete("GITHUB_APP_#{missing.to_s.upcase}")
 
         expect(described_class).not_to be_configured
       end
-    end
-  end
-
-  describe ".private_key" do
-    it "returns the PEM as given when it carries real newlines" do
-      pem = "-----BEGIN KEY-----\nabc\n-----END KEY-----"
-      configure(private_key: pem)
-
-      expect(described_class.private_key).to eq(pem)
-    end
-
-    # A private key routed through a secrets manager or a CI variable frequently arrives with its
-    # newlines escaped. Left alone, it fails inside OpenSSL with a message that says nothing about
-    # line endings — a key that differs from the real one only in how it was transported.
-    it "restores newlines escaped as \\n on the way through a secrets manager" do
-      configure(private_key: '-----BEGIN KEY-----\nabc\n-----END KEY-----')
-
-      expect(described_class.private_key).to eq("-----BEGIN KEY-----\nabc\n-----END KEY-----")
-    end
-
-    it "reports the placeholder when nothing is set" do
-      expect(described_class.private_key).to eq(described_class::PLACEHOLDER)
     end
   end
 
@@ -112,6 +88,41 @@ RSpec.describe SpecGuard::GithubApp do
 
       expect(described_class.installation_url)
         .to eq("https://github.com/apps/evil%2F..%2F..%2Fsettings/installations/new")
+    end
+  end
+
+  # The smaller of the two ways out. It asks GitHub only for a credential that speaks for the
+  # signed-in user, and for anyone who has authorized the App before GitHub renders no screen at all
+  # — which is what makes it usable as the answer to "this session has nothing to read with".
+  describe ".authorization_url" do
+    it "points at GitHub's user-authorization endpoint for the App's own client" do
+      configure(client_id: "Iv1.abc")
+
+      expect(described_class.authorization_url)
+        .to eq("https://github.com/login/oauth/authorize?client_id=Iv1.abc")
+    end
+
+    it "carries a return path through GitHub's state parameter, encoded" do
+      configure(client_id: "Iv1.abc")
+
+      expect(described_class.authorization_url(state: "/repositories/new"))
+        .to eq("https://github.com/login/oauth/authorize?client_id=Iv1.abc&state=%2Frepositories%2Fnew")
+    end
+
+    it "omits the parameter entirely when there is nothing to carry" do
+      configure(client_id: "Iv1.abc")
+
+      expect(described_class.authorization_url(state: nil)).not_to include("state")
+      expect(described_class.authorization_url(state: "")).not_to include("state")
+    end
+
+    # The App's OAuth client, NOT the sign-in App's. They are separate registrations on github.com
+    # and mixing them up fails in a way that takes sign-in with it.
+    it "uses the App's own client id rather than the sign-in App's" do
+      configure(client_id: "Iv1.app")
+      allow(SpecGuard::GithubOauth).to receive(:client_id).and_return("sign-in-client")
+
+      expect(described_class.authorization_url).to include("client_id=Iv1.app")
     end
   end
 end

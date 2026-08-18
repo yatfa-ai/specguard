@@ -2,25 +2,29 @@
 
 # Which GitHub App installations a user reached SpecGuard through.
 #
-# An installation is the whole of the ownership proof: only somebody who administers a repository
-# can install a GitHub App on it, so a repository's presence in a user's installation is GitHub's
-# own statement that this user may register it. That replaces the `permissions.admin` read the
-# OAuth `repo` scope existed to make.
+# A row here is HALF the ownership proof, and the half that is about the repository rather than
+# about the person. Only somebody who administers a repository can install a GitHub App on it, so a
+# repository's presence in an installation is GitHub's statement that SOMEBODY with administrative
+# rights handed it to SpecGuard. It is not a statement about whoever is reading the row: GitHub
+# shows an organization's installation to every member of that organization. The other half — does
+# THIS user administer THIS repository — is read live, per user, with that user's own credential
+# (`InstallationRepositories`), and both halves must hold before anything is registered.
 #
 # ## What is stored, and what deliberately is not
 #
-# Only `installation_id` — a public numeric identifier, not a secret. The credential SpecGuard
-# actually reads GitHub with is an installation access token minted on demand from the App's
-# private key and discarded within the hour (`GithubAppCredentials`), so there is no token column
-# here and no encryption to configure. `account_login` rides along purely so the UI can name the
-# account a user connected without a GitHub round trip.
+# Only `installation_id` — a public numeric identifier, not a secret, and not usable as one. The
+# credential SpecGuard reads GitHub with is the viewer's own short-lived user-to-server token,
+# which lives in their session and never in this database. So there is no token column here and no
+# encryption to configure. `account_login` rides along purely so the UI can name the account a user
+# connected without a GitHub round trip.
 #
 # ## Why the id is not unique on its own
 #
-# One installation can legitimately be reached by several users: two admins of the same
-# organization each install (or re-visit) the App and each get a row pointing at the same
-# installation. The uniqueness that matters is per user, so a second visit updates one row rather
-# than growing a new one on every trip through the setup URL.
+# One installation is legitimately reached by many users: every member of an organization can see
+# that organization's installation, and each gets a row pointing at the same id. The uniqueness that
+# matters is per user, so a second visit updates one row rather than growing a new one on every trip
+# through the callback. Two users holding the same id is the NORMAL case, not a collision — and it
+# is exactly why the row cannot be read as permission.
 #
 # `installation_id` is a bigint because GitHub's ids are already past the 32-bit range.
 class CreateGithubInstallations < ActiveRecord::Migration[8.1]

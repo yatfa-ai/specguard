@@ -11,16 +11,20 @@ require "rails_helper"
 # mostly about the arithmetic of the result: what was registered, what was skipped, and whether the
 # two still add up to what was submitted.
 #
-# Ownership here is membership of the user's GitHub App installation — see
-# `InstallationRepositories` — so the repositories named in `stub_github(repos: […])` are not
-# scenery: they ARE the set that may be registered. Only somebody who administers a repository can
-# put it in an installation, so a name outside the list is a name nobody handed to this user, and
-# the fake refuses it exactly as GitHub's installation credential would.
+# Ownership here takes two things — the repository is in one of the user's GitHub App installations
+# AND GitHub names this user an administrator of it (see `InstallationRepositories`) — so the
+# repositories named in `stub_github(repos: […])` are not scenery: they ARE the set that may be
+# registered, and `github_repo(…, admin: false)` is the one a user can see and cannot register.
+# A name outside the list is a name nobody handed to SpecGuard, and the fake refuses it exactly as
+# GitHub would refuse a read made with this user's own credential.
 RSpec.describe BulkRegistration do
   let(:user) { create_user }
 
-  def register(*names)
-    described_class.call(user: user, full_names: names.flatten)
+  # `user_token` is what the ownership question is asked WITH — a credential that speaks for this
+  # user rather than for the App — so a batch is not registerable without one. The
+  # `not_authorized:` shape is a spec about a session that has none.
+  def register(*names, user_token: "ghu_octocat")
+    described_class.call(user: user, full_names: names.flatten, user_token: user_token)
   end
 
   def outcome_for(result, full_name)
@@ -169,16 +173,41 @@ RSpec.describe BulkRegistration do
       expect(@result.skipped.map(&:status)).to eq(%i[unavailable unavailable])
     end
 
-    # GitHub rejecting the App's OWN credentials is an operator's problem — a wrong App id, a wrong
-    # private key — and nothing the user can act on, so it fails closed as an outage does. It must
-    # not read as "install the App": this user already has, and installing it again fixes nothing.
-    it "registers nothing when GitHub rejects the App's credentials" do
+    # A token GitHub rejects mid-batch is a session that has run out, not an outage and not a
+    # missing installation: this user has installed the App and installing it again fixes nothing.
+    # It fails closed, and the summary offers the button that does fix it.
+    it "registers nothing when GitHub rejects the user's credential" do
       stub_github(unauthorized: true)
 
       expect { @result = register("acme/api") }.not_to change(Repository, :count)
 
-      expect(@result.skipped.first.status).to eq(:unavailable)
+      expect(@result.skipped.first.status).to eq(:not_authorized)
+      expect(@result).to be_authorize
       expect(@result).not_to be_install
+    end
+
+    # The same refusal one step earlier, and the ordinary one: a returning user's first batch of the
+    # session, before anything has asked GitHub who they are. Nothing is registered on a question
+    # that was never actually asked.
+    it "registers nothing when the session holds no credential at all" do
+      expect { @result = register("acme/api", user_token: nil) }.not_to change(Repository, :count)
+
+      expect(@result.skipped.first.status).to eq(:not_authorized)
+      expect(@result).to be_authorize
+    end
+
+    # The gap the audit found, at the layer that carries it. A bulk submission is checkboxes the
+    # browser controls, so a name the picker never offered can arrive here — and "in the
+    # installation" is not the same as "yours". A read-only member of an organization can see every
+    # repository their employer connected; none of them is theirs to register.
+    it "refuses a repository in the installation that this user does not administer" do
+      stub_github(repos: [github_repo("acme/api"), github_repo("acme/vault", admin: false)])
+
+      expect { @result = register("acme/api", "acme/vault") }.to change(Repository, :count).by(1)
+
+      expect(@result.registered.map(&:full_name)).to eq(%w[acme/api])
+      expect(@result.skipped.map(&:status)).to eq(%i[not_administered])
+      expect(@result.skipped.first.sentence).to include("does not list you as an administrator")
     end
 
     it "registers nothing when the user has not installed the App" do

@@ -35,6 +35,20 @@
         <%= github_install_button return_to: bulk_repositories_path %>
       <% end %>
     <% end %>
+  <% elsif github_authorization_needed? %>
+    <%# The same shape one step along: nothing is wrong with the installation, the session just had
+        no credential to ask GitHub with, so every name came back unanswered. Reads the result's own
+        `authorize?` through the same seam. %>
+    <%= render UI::PanelComponent.new(class: "mt-4") do %>
+      <%= render UI::EmptyStateComponent.new(
+            title: "Reconnect to GitHub",
+            description: "SpecGuard needs your permission to ask GitHub which of your connected " \
+                         "repositories you administer. Reconnecting takes you to GitHub and " \
+                         "straight back, and you can submit this batch again."
+          ) do %>
+        <%= github_authorize_button return_to: bulk_repositories_path %>
+      <% end %>
+    <% end %>
   <% end %>
 
   <% if @result.any_registered? %>

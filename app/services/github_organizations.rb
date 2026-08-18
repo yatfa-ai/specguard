@@ -8,10 +8,11 @@
 #
 # ## Why this reads the listing rather than GitHub's org endpoints
 #
-# The listing is already exactly the right set. `GET /installation/repositories` returns the
-# repositories somebody who administers them deliberately handed to SpecGuard, each carrying its
-# `owner.type`, so grouping it by owner yields the organizations this viewer can register from —
-# for one round trip, and without the App needing any permission beyond the Metadata it has.
+# The listing is already exactly the right set, because `InstallationRepositories` has narrowed it
+# before this sees it: what arrives is the repositories that are in one of this viewer's
+# installations AND that GitHub names this viewer an administrator of. Each carries its
+# `owner.type`, so grouping by owner yields the organizations this viewer can register from — for no
+# extra round trip, and without the App needing any permission beyond the Metadata it has.
 #
 # `GET /orgs/:org/repos` would be worse on every axis that matters here: another endpoint, one call
 # per organization plus a page walk inside each, and a SUPERSET rather than the right set — it lists
@@ -22,8 +23,9 @@
 # It means: an organization with at least one repository in this viewer's installation. That is not
 # a claim about anyone's org role, and it deliberately is not — an org owner still cannot register a
 # repository nobody installed the App on, and somebody who administers exactly one repository can
-# register exactly that one. The honest question is the one that decides the outcome, and here it
-# is answered by the installation itself.
+# register exactly that one. The honest question is the one that decides the outcome, and it has
+# already been decided upstream — by the installation for the repository, and by
+# `permissions.admin` for the person.
 #
 # An organization with nothing in the installation does not appear at all, because it cannot: it
 # contributes no repositories to group. There is no "withheld" count any more and its absence is the

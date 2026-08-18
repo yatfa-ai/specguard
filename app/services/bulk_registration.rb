@@ -45,10 +45,10 @@ class BulkRegistration
   # scheduling out. What the number has to be big enough for is a real organization registered in
   # one go; what it has to be small enough for is a single request, since this does N saves inline.
   #
-  # It is also the thing that bounds `InstallationRepositories.verify_batch`'s per-name fallback: absent a
-  # cap, a submission naming a thousand repositories not in a truncated listing would be a thousand
-  # GitHub round trips. Enforced by the caller (`BulkRegistrationsController#create`), which refuses
-  # an oversized submission rather than silently registering a prefix of it.
+  # It bounds the SAVES, not the GitHub reads: `InstallationRepositories.verify_batch` answers every
+  # name from one listing per installation however many names arrive, and has no per-name fallback
+  # that could fan out behind it. Enforced by the caller (`BulkRegistrationsController#create`),
+  # which refuses an oversized submission rather than silently registering a prefix of it.
   MAX_BATCH = 100
 
   # `is already registered in SpecGuard.` and friends are written as PREDICATES, so a caller renders
@@ -80,16 +80,18 @@ class BulkRegistration
   # The order skip reasons are shown in: what the user expected and can ignore first, what they may
   # want to act on next, then the transient and the systemic. A reason with nothing in it is not
   # rendered, so this is an ordering, not a list of headings.
-  SKIP_ORDER = %i[already_registered not_in_installation invalid not_installed rate_limited
-                  unavailable].freeze
+  SKIP_ORDER = %i[already_registered not_administered not_in_installation invalid not_installed
+                  not_authorized rate_limited unavailable].freeze
 
   # What each skip reason is called in the summary. The heading names the CATEGORY; the per-row
   # sentence carries the explanation, so these stay short enough to scan.
   SKIP_LABELS = {
     already_registered: "Already registered",
+    not_administered: "You are not an administrator",
     not_in_installation: "Not connected to the SpecGuard GitHub App",
     invalid: "Not a valid repository name",
     not_installed: "SpecGuard GitHub App not installed",
+    not_authorized: "SpecGuard needs to ask GitHub about you again",
     rate_limited: "GitHub rate limit reached",
     unavailable: "GitHub could not be reached"
   }.freeze
@@ -119,6 +121,11 @@ class BulkRegistration
     # the summary can offer the install button. Mirrors `InstallationRepositories::Verdict#install?`,
     # and `GithubRepositoryListing#github_installation_needed?` asks either for the capability.
     def install? = skipped.any? { |outcome| outcome.status == :not_installed }
+
+    # The other skip a button resolves, and a different button: this session had no credential to
+    # ask GitHub with. Mirrors `InstallationRepositories::Verdict#authorize?`, which
+    # `GithubRepositoryListing#github_authorization_needed?` asks either of for the capability.
+    def authorize? = skipped.any? { |outcome| outcome.status == :not_authorized }
   end
 
   def self.call(...) = new(...).call
@@ -142,8 +149,14 @@ class BulkRegistration
                      .uniq(&:downcase)
   end
 
-  def initialize(user:, full_names:)
+  # `user_token` is the viewer's own GitHub credential, held in their session
+  # (`GithubUserSession`). It is required to answer the ownership question at all: what a user may
+  # register is what they administer, and only a credential that speaks for THEM can report that.
+  # A batch submitted without one is refused name by name with `:not_authorized` rather than
+  # registered, which is the fail-closed reading.
+  def initialize(user:, full_names:, user_token: nil)
     @user = user
+    @user_token = user_token
     @names = self.class.normalized_names(full_names)
   end
 
@@ -160,7 +173,7 @@ class BulkRegistration
 
   private
 
-  attr_reader :user, :names
+  attr_reader :user, :names, :user_token
 
   # One repository in flight. A mutable Struct rather than a `Data` precisely because it IS mutated
   # — three passes decide it, and each has to be able to record its answer without rebuilding the
@@ -210,10 +223,17 @@ class BulkRegistration
     pending = candidates.select(&:undecided?)
     return if pending.empty?
 
-    verdicts = InstallationRepositories.verify_batch(user: user, full_names: pending.map(&:full_name))
+    verdicts = InstallationRepositories.verify_batch(user: user, user_token: user_token,
+                                                    full_names: pending.map(&:full_name))
 
     pending.zip(verdicts).each do |candidate, verdict|
-      next if verdict.nil? || verdict.verified?
+      # A MISSING verdict refuses rather than falls through. `verify_batch` answers one verdict per
+      # non-blank name and every pending candidate has a validated name, so a nil should be
+      # unreachable — but "should be unreachable" is the wrong thing to rest a registration on, and
+      # the failure it would produce is a repository saved without GitHub having been asked about it
+      # at all. `InstallationRepositories.verify` defaults the same way for the same reason.
+      next candidate.refuse(:unavailable, InstallationRepositories::MESSAGES[:unavailable]) if verdict.nil?
+      next if verdict.verified?
 
       candidate.refuse(verdict.status, verdict.message)
     end

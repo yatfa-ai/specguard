@@ -54,7 +54,8 @@ class BulkRegistrationsController < ApplicationController
     return render_refusal(nothing_selected_message) if @full_names.empty?
     return render_refusal(too_many_message) if @full_names.length > BulkRegistration::MAX_BATCH
 
-    @result = BulkRegistration.call(user: current_user, full_names: @full_names)
+    @result = BulkRegistration.call(user: current_user, user_token: github_user_token,
+                                    full_names: @full_names)
     render :create
   end
 

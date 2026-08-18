@@ -1,10 +1,10 @@
 # frozen_string_literal: true
 
-# Connecting repositories: sending a user to GitHub to install the SpecGuard App, and recording
-# what they came back with.
+# Connecting repositories: sending a user to GitHub, and recording what they came back with.
 #
-#   POST /github/installation           → off to GitHub's installation flow
-#   GET  /github/installation/callback  → GitHub's Setup URL, where they land afterwards
+#   POST /github/installation            → off to GitHub's installation flow
+#   POST /github/installation/authorize  → off to GitHub for a fresh credential, and nothing else
+#   GET  /github/installation/callback   → where they land afterwards, either way
 #
 # ## The picker is GitHub's, not ours
 #
@@ -13,6 +13,15 @@
 # configuration on github.com. None of that is built here, mirrored here, or asserted from here —
 # a copy in this repository could only ever disagree with the authority.
 #
+# ## Two ways out, one way back
+#
+# `create` asks GitHub the big question — which repositories may SpecGuard see — and `authorize`
+# asks only "are you still you". They are separate because their costs to the user are separate: the
+# first walks them through a repository picker and should happen when they mean it, while the second
+# is what a new browser session needs before it can read anything and renders no screen at all for
+# somebody who has already authorized the App. Both come back to the same callback, because what has
+# to happen on the way back is identical.
+#
 # ## The callback trusts the code, never the id
 #
 # GitHub returns the user carrying `?installation_id=N`, and that is a query string on a GET: anyone
@@ -20,17 +29,30 @@
 # every repository in somebody else's installation, which is the squatting gap this slice closes,
 # reopened at a wider gauge.
 #
-# So the id is a claim. What settles it is the `code` GitHub sends alongside — issued to this
-# browser, single-use, worthless to anyone who did not just complete the flow — which
+# So the id is a claim. What settles it is the `code` GitHub sends alongside, which
 # `GithubAppUserAuthorization` exchanges for GitHub's own answer to "which installations does this
 # user hold". That answer is what gets recorded, and the `installation_id` parameter is never read.
+#
+# The code is not taken on trust either. This action is a GET, so Rails applies no CSRF check and
+# `state` is a return path rather than a nonce — which means a signed-in user can be MADE to arrive
+# here carrying a code an attacker minted for the attacker's own GitHub account. So the exchange is
+# bound to the signed-in identity: `current_user.github_uid` is passed in, GitHub is asked whose
+# token came back, and a mismatch is refused. Without that, a victim's session would be handed a
+# credential and installations belonging to somebody else.
+#
+# The exchange also yields the credential every later read is made with, which is kept in the
+# session for as long as the session lasts and nowhere else at all — see `GithubUserSession`.
 #
 # Every installation GitHub reports is recorded, not only the one just created. A user who
 # administers two organizations reaches both in one trip, and asking them to run the flow again per
 # organization would be asking them to repeat a journey GitHub has already answered in full.
+# Recording an installation is not by itself permission to register what is in it: what this user
+# may register is decided by reading that installation AS THEM, every time, in
+# `InstallationRepositories`.
 class GithubInstallationsController < ApplicationController
   # The return path round-trips through GitHub's `state`, so it comes back as user-controlled input.
   include SafeReturnPath
+  include GithubUserSession
 
   before_action :require_authentication
   before_action :require_configured_app
@@ -45,8 +67,19 @@ class GithubInstallationsController < ApplicationController
                 allow_other_host: true
   end
 
-  # GitHub's Setup URL. Reached after an install, and again after every reconfigure — the flow is
-  # idempotent on GitHub's side and is idempotent here (see `GithubInstallation.record`).
+  # Off to GitHub for a credential and nothing more — no picker, no consent screen for anyone who
+  # has authorized the App before, just a redirect out and a redirect back.
+  #
+  # POST and CSRF-protected for the same reason `create` is, even though the outcome is far smaller:
+  # a third party should not be able to bounce a signed-in user off this site at all.
+  def authorize
+    redirect_to SpecGuard::GithubApp.authorization_url(state: return_path_param),
+                allow_other_host: true
+  end
+
+  # Where GitHub sends the user back to — the App's callback URL after an authorization, and its
+  # setup URL after an install or a reconfigure. Both are this action, because the response to both
+  # is the same: exchange the code, keep the credential, record what GitHub says this user holds.
   #
   # `require_authentication` guards it, which means somebody who installs the App from GitHub
   # directly rather than from a SpecGuard page — from the App's own listing, say — lands here with
@@ -59,13 +92,16 @@ class GithubInstallationsController < ApplicationController
   # response to both is identical: ask GitHub what this user holds now, and record that. Reading it
   # would be reading our own guess about what changed instead of GitHub's statement of what is.
   def callback
-    installations = GithubAppUserAuthorization.installations(code: params[:code])
-    recorded = record(installations)
+    authorization = GithubAppUserAuthorization.authorize(code: params[:code],
+                                                        github_uid: current_user.github_uid)
+    store_github_user_token(authorization.token, expires_at: authorization.expires_at)
+    recorded = record(authorization.installations)
 
     redirect_to destination, notice: connected_notice(recorded)
   rescue GithubApi::Error => e
-    # Failing closed: nothing is recorded, so a user whose exchange failed is exactly as connected
-    # as they were before — which is the only safe reading of "GitHub would not confirm this".
+    # Failing closed: nothing is recorded and no credential is kept, so a user whose exchange failed
+    # is exactly as connected as they were before — which is the only safe reading of "GitHub would
+    # not confirm this".
     Rails.logger.warn("[GithubInstallations] callback: #{e.class}: #{e.message}")
 
     redirect_to destination, alert: connection_failed_alert

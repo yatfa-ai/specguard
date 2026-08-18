@@ -25,14 +25,22 @@ Rails.application.routes.draw do
   # --- Repository access: GitHub App installation --------------------------------
   # Connecting repositories is installing the SpecGuard GitHub App on them and picking them in
   # GitHub's own picker. POST going out (CSRF-protected, so nobody else can start the flow for a
-  # signed-in user); GET coming back, because the callback is GitHub's Setup URL and GitHub
-  # redirects a browser to it.
+  # signed-in user); GET coming back, because GitHub redirects a browser to it.
   #
-  # The callback path is configured on the App itself on github.com. Renaming it here without
-  # changing it there sends every returning user to a 404 with no error anywhere.
-  post "/github/installation",          to: "github_installations#create",   as: :github_installation
-  get  "/github/installation/callback", to: "github_installations#callback",
-                                        as: :github_installation_callback
+  # `authorize` is the smaller of the two ways out: it asks GitHub only for a credential that speaks
+  # for the signed-in user, which every session needs before it can read anything and which a user
+  # who has already authorized the App is granted without seeing a screen. It is what the reconnect
+  # button posts to, and it exists so that needing a credential does not walk somebody through the
+  # repository picker again.
+  #
+  # The callback path is configured on the App itself on github.com — as BOTH its callback URL and
+  # its setup URL, which is why one action serves both journeys. Renaming it here without changing
+  # it there sends every returning user to a 404 with no error anywhere.
+  post "/github/installation",           to: "github_installations#create",    as: :github_installation
+  post "/github/installation/authorize", to: "github_installations#authorize",
+                                         as: :github_installation_authorize
+  get  "/github/installation/callback",  to: "github_installations#callback",
+                                         as: :github_installation_callback
 
   # --- Dashboard ----------------------------------------------------------------
   resources :repositories, only: %i[index new create show edit update destroy] do

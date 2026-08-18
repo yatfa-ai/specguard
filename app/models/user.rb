@@ -76,15 +76,16 @@ class User < ApplicationRecord
                                             foreign_key: :granted_by_user_id,
                                             dependent: :nullify, inverse_of: :granted_by_user
 
-  # The GitHub App installations this user reached SpecGuard through — and, because only an
-  # administrator of a repository can install an App on it, the whole of their claim to register
-  # anything (`InstallationRepositories`).
+  # The GitHub App installations this user reached SpecGuard through — where there is something for
+  # them to read, not yet a claim to any of it. What they may register is settled by reading those
+  # installations with this user's OWN credential and requiring GitHub to name them an
+  # administrator (`InstallationRepositories`).
   #
   # `:destroy`, unlike the two associations above, and the asymmetry is the same argument they
   # make: a `GithubInstallation` row is nobody else's data. It holds one public numeric id and no
-  # credential — the token SpecGuard reads GitHub with is minted on demand and never persisted
-  # (`GithubAppCredentials`) — so destroying it takes nothing away from a colleague and leaves no
-  # orphan. It also cannot keep a user undestroyable for a reason they cannot see: connecting
+  # credential — the token SpecGuard reads GitHub with is the viewer's own, and lives in their
+  # session (`GithubUserSession`) — so destroying it takes nothing away from a colleague and leaves
+  # no orphan. It also cannot keep a user undestroyable for a reason they cannot see: connecting
   # GitHub is not the sort of act that should quietly become irreversible.
   has_many :github_installations, dependent: :destroy
 

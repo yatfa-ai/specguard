@@ -6,25 +6,39 @@ require "uri"
 
 # The GitHub REST client — the app's only way to ask GitHub a question.
 #
-# It authenticates as a GitHub App *installation* and answers exactly two questions, because those
-# are the two that installation-backed registration rests on:
+# It authenticates as a PERSON, with that person's own short-lived user-to-server token, and answers
+# exactly one question:
 #
-#   client = GithubApi.for_installation(installation)
-#   client.repositories          # => GithubApi::Listing, what this installation covers
-#   client.repository("acme/x")  # => GithubApi::Repo,    is that one of them (404 when it is not)
+#   client = GithubApi.for_user(token, installation)
+#   client.repositories   # => GithubApi::Listing — which repositories in that installation THIS
+#                         #    user can reach, and what their own access to each one is
 #
-# Nothing here reads a permission level, and nothing here decides who may register what. The
-# question "may this user register this repository" is answered by the repository being IN the
-# installation at all — only an administrator of a repository can install an App on it — and
-# `InstallationRepositories` is where that is decided. Keeping the decision out of the client is
-# deliberate: it is then testable without a network, and the client has no policy in it to drift.
+# ## Why the user's credential and not the App's
+#
+# An installation access token speaks for the App. It can list everything the installation reaches,
+# and it says nothing whatever about the person asking — so a plain organization member, who can
+# SEE their organization's installation but administers none of it, would read back every
+# repository in it. That is exactly the squatting gap this slice exists to close, so the credential
+# that cannot distinguish those two people is not used at all: SpecGuard holds no App private key
+# and mints no installation token.
+#
+# `GET /user/installations/:id/repositories` asks the question that actually matters, and asks it
+# of a credential that can only answer for one person. It is installation-scoped, so a repository
+# nobody handed to SpecGuard is not in it; and it reports the caller's OWN permissions on each
+# repository, which is what `InstallationRepositories` reads to require administration rather than
+# mere visibility. Neither half is sufficient alone and both are enforced.
+#
+# Nothing here decides who may register what — the client reports what GitHub said and
+# `InstallationRepositories` holds the policy. Keeping the decision out of the client is deliberate:
+# it is then testable without a network, and the client has no policy in it to drift.
 #
 # ## The credential
 #
-# An installation access token, minted on demand from the App's private key and never persisted
-# (`GithubAppCredentials`). It is resolved LAZILY — on the first request the client actually makes —
-# so a page that renders without asking GitHub anything never mints one, and the swap seam below
-# never needs an App private key to stand in for this.
+# A user-to-server token, obtained from the `code` GitHub sends back from the install or
+# authorization flow (`GithubAppUserAuthorization`), held for the browser session and never written
+# to the database. Its reach is the App's declared permissions (Metadata: read-only) intersected
+# with the user's own access — it cannot write anything and cannot read code. It is emphatically not
+# the OAuth `repo` scope this slice removed.
 #
 # ## Errors
 #
@@ -32,29 +46,27 @@ require "uri"
 # one of its four subclasses. Callers rescue one class and never see a `Net::HTTP` or `JSON`
 # exception. The subclasses exist because each means something different to a *user*:
 #
-#   Unauthorized  401 — GitHub rejected the App's own credentials. Unlike the user token this
-#                       replaced, that is an operator's problem (wrong App id or private key), not
-#                       something the user can fix by re-authorizing.
+#   Unauthorized  401 — GitHub rejected the token. It has expired or been revoked, and the fix is
+#                       to authorize again, which is a thing the user can actually do.
 #   Forbidden     403 — the credential is valid but may not do this. Carries a `reason`; see below.
-#   NotFound      404 — no such repository *in this installation*. GitHub answers 404 rather than
-#                       403 for anything the credential cannot see, so this does NOT mean "does not
-#                       exist" and must never be reported as such. It is also what an uninstalled
+#   NotFound      404 — no such installation *for this user*. GitHub answers 404 rather than 403 for
+#                       anything the credential cannot see, so this does NOT mean "does not exist"
+#                       and must never be reported as such. It is also what an uninstalled
 #                       installation looks like.
 #   Unavailable         transport failure, timeout, 5xx, or a body that is not the JSON promised.
 #
 # ## Raw HTTP rather than Octokit
 #
-# Two endpoints, no GraphQL, and — since the credential is minted by `GithubAppCredentials` rather
-# than by a gem — nothing Octokit would be carrying the weight of. It would be a dependency, a
-# version to track and a security surface for two GETs.
+# One endpoint, no GraphQL, and no credential machinery to inherit. Octokit would be a dependency, a
+# version to track and a security surface for a single GET.
 #
 # ## Test seam
 #
 # `GithubApi.factory` is the seam, in the shape and for the reason `EmbeddingGenerator.provider`
 # documents: the suite installs a deterministic fake rather than stubbing HTTP, so no spec depends
-# on the wire format, none of them reach the network, and none of them needs App credentials.
+# on the wire format, none of them reach the network, and none of them needs a GitHub token.
 #
-#   GithubApi.factory = ->(credential) { FakeGithub.new(...) }
+#   GithubApi.factory = ->(*) { FakeGithub.new(...) }
 #   GithubApi.factory = nil   # back to the real client
 class GithubApi
   Error = Class.new(StandardError)
@@ -62,18 +74,25 @@ class GithubApi
   NotFound = Class.new(Error)
   Unavailable = Class.new(Error)
 
+  # Raised when the SpecGuard GitHub App has no credentials on this instance. An `Unavailable`
+  # rather than a class of its own so every caller's existing rescue already fails CLOSED on it: an
+  # unconfigured instance registers nothing rather than everything. It lives here, with the rest of
+  # the family, because `config/initializers/github_app.rb` is loaded before the autoloader can
+  # resolve anything and cannot define a subclass of a class in `app/`.
+  NotConfigured = Class.new(Unavailable)
+
   # 403, with which of the two reachable 403s it was. `reason` is one of:
   #
-  #   :rate_limited  GitHub's hourly budget for this installation is spent. Genuinely transient —
+  #   :rate_limited  GitHub's hourly budget for this credential is spent. Genuinely transient —
   #                  this is the one 403 for which "try again shortly" is true.
   #   :refused       GitHub declined for any other reason. Not actionable by the user, and not
   #                  waitable either, so it is reported rather than dressed up as a retry.
   #
   # The `:sso_required` and `:insufficient_scope` reasons this used to distinguish are gone with the
-  # user token they were written for. SAML SSO authorization is a property of a *user* token — an
-  # installation is authorized by the organization that installed it — and a scope is not something
-  # an installation has. Neither branch could be triggered any more, and a branch that cannot be
-  # reached is a branch nobody can find out is wrong.
+  # `repo` grant they were written for. A user-to-server token for a GitHub App carries no scopes to
+  # be insufficient, and it reaches an organization by way of that organization's own installation
+  # rather than by a SAML authorization of its own. Neither branch could be triggered any more, and
+  # a branch that cannot be reached is a branch nobody can find out is wrong.
   class Forbidden < Error
     attr_reader :reason
 
@@ -89,24 +108,36 @@ class GithubApi
   # answer, and the registration page wants the whole list.
   PER_PAGE = 100
 
-  # A ceiling on `repositories`, not a promise about anyone's installation. Someone who selected
-  # more than this many repositories would otherwise turn one page render into 10+ sequential
-  # GitHub round trips. The list is a picker, and a picker that takes a minute to appear is not one.
+  # A ceiling on `repositories`, not a promise about anyone's installation. Someone who reached more
+  # than this many repositories through one installation would otherwise turn one page render into
+  # 10+ sequential GitHub round trips. The list is a picker, and a picker that takes a minute to
+  # appear is not one.
   #
   # It bites less than it did under the OAuth listing, which enumerated every repository the user
-  # could reach: an installation contains only what somebody deliberately selected. It still bites,
-  # so `repositories` reports truncation and `InstallationRepositories` asks GitHub about a name
-  # individually rather than refusing it for a property of our own page walk.
+  # could reach: this is bounded twice over, by what somebody deliberately selected for the
+  # installation and by what this user can see of it. It still bites, so `repositories` reports
+  # truncation and `InstallationRepositories` refuses rather than guessing when it is set.
   MAX_PAGES = 10
 
   OPEN_TIMEOUT = 5
   READ_TIMEOUT = 10
 
-  # One repository as GitHub describes it to this installation.
+  # One repository as GitHub describes it TO THIS USER.
   #
-  # There is no `admin` field, and its absence is the point of this slice: the permission level was
-  # read to decide whether a user could register a repository, and that question is now settled by
-  # the repository being in the installation at all. A `Repo` that reaches a caller is registerable.
+  # `admin` is the user's own permission on the repository, off GitHub's `permissions` hash — and it
+  # is back, having briefly been removed along with the OAuth grant that used to buy it. Removing it
+  # was the error this replaces: presence in an installation proves somebody with administrative
+  # rights handed the repository to SpecGuard, not that the person reading the list is that
+  # somebody. Any organization member can see their organization's installation.
+  #
+  # What changed is not that the admin bar came back but what it costs: it used to be read off
+  # `GET /repos/:owner/:repo` over `repo` — GitHub's full control of private repositories, read and
+  # write, across everything the user could reach — and it now rides along on a listing the App's
+  # Metadata: read-only grant already answers.
+  #
+  # It defaults to FALSE, which is the fail-closed default and matters: a payload with no
+  # `permissions` hash (an older API version, a shape that changed) reads as "not an administrator"
+  # and the repository is not offered, rather than reading as one and being offered to everybody.
   #
   # `owner_type` is GitHub's own `owner.type` — `"Organization"` or `"User"` — and it is the one
   # field that distinguishes an organization's repository from a personal one. Bulk registration
@@ -116,11 +147,12 @@ class GithubApi
   # not say" — because `Repo.new` call sites outside this file are tests and a required field would
   # make every one of them describe an owner it does not care about; `organization?` reads a nil as
   # "not an organization", which withholds rather than invents.
-  Repo = Data.define(:full_name, :private, :archived, :owner_type) do
-    def initialize(owner_type: nil, **) = super
+  Repo = Data.define(:full_name, :private, :archived, :owner_type, :admin) do
+    def initialize(owner_type: nil, admin: false, **) = super
 
     def private? = private
     def archived? = archived
+    def admin? = admin
     def organization? = owner_type == "Organization"
 
     # The owner segment of `full_name` — the GitHub account the repository lives under. A
@@ -132,7 +164,8 @@ class GithubApi
         full_name: payload["full_name"].to_s,
         private: payload["private"] == true,
         archived: payload["archived"] == true,
-        owner_type: payload.dig("owner", "type")
+        owner_type: payload.dig("owner", "type"),
+        admin: payload.dig("permissions", "admin") == true
       )
     end
   end
@@ -144,54 +177,41 @@ class GithubApi
     def any? = repos.any?
   end
 
-  # Resolves an installation access token the first time the client actually needs one, and reuses
-  # it for the rest of the client's life.
-  #
-  # Lazy rather than eager because a controller builds a client on paths that may never call
-  # GitHub, and minting is a round trip. Held per client rather than looked up per request so a
-  # listing that walks ten pages mints once.
-  class InstallationCredential
-    attr_reader :installation_id
-
-    def initialize(installation_id)
-      @installation_id = installation_id
-    end
-
-    def token = @token ||= GithubAppCredentials.installation_token(installation_id)
-  end
-
   class << self
     attr_writer :factory
 
     # Resolved on every call rather than memoized, so a reload in development never leaves a stale
     # autoloaded class behind — the same rule `EmbeddingGenerator.provider` states.
-    def factory = @factory || ->(credential) { new(credential) }
+    def factory = @factory || ->(token, installation_id) { new(token, installation_id) }
 
-    # A client authenticated as this installation, or `nil` when there is none to authenticate as.
+    # A client that reads one installation AS THIS USER, or `nil` when there is nothing to read
+    # with.
     #
-    # Returns nil rather than raising because "this user has not installed the App yet" is an
-    # ordinary state of the world on every page that offers to install it, not an exception.
+    # Returns nil rather than raising because both of its reasons are ordinary states of the world
+    # on a page that offers to fix them: the user has not installed the App, or this session holds
+    # no user credential and one must be fetched. Neither is an exception.
     #
-    # Takes a `GithubInstallation` or a bare id, so a caller that has only the number — a callback
-    # confirming what it was just handed — does not have to load a row to use it.
-    def for_installation(installation)
+    # Takes a `GithubInstallation` or a bare id, so a caller that has only the number does not have
+    # to load a row to use it.
+    def for_user(token, installation)
+      return nil if token.blank?
+
       id = installation.respond_to?(:installation_id) ? installation.installation_id : installation
       id = id.to_i
       return nil unless id.positive?
 
-      factory.call(InstallationCredential.new(id))
+      factory.call(token, id)
     end
   end
 
-  # Takes a credential object (`InstallationCredential`) or a bare token String. The String form is
-  # for specs and the console; nothing on a request path uses it.
-  def initialize(credential)
-    @credential = credential
+  def initialize(token, installation_id)
+    @token = token
+    @installation_id = installation_id
   end
 
-  # Every repository in this installation — which is to say, exactly the ones somebody who
-  # administers them chose to give SpecGuard. Sorted by full name so the picker is stable between
-  # renders rather than reordered by GitHub's push activity.
+  # Which repositories in this installation the authenticated USER can reach, with their own access
+  # to each one. Sorted by full name so the picker is stable between renders rather than reordered
+  # by GitHub's push activity.
   #
   # Returns a `Listing`, not an Array, so a caller cannot read a truncated list as a complete one.
   #
@@ -214,28 +234,23 @@ class GithubApi
     Listing.new(repos: repos.sort_by { |repo| repo.full_name.downcase }, truncated: truncated)
   end
 
-  # One repository, when this installation covers it. Raises `NotFound` when it does not — which,
-  # per the note above, covers "no such repository", "private and not shared with this App", and
-  # "not selected in this installation" alike. All three are the same answer to the only question
-  # asked here, and none of them is a registration.
-  def repository(full_name)
-    Repo.from(get("/repos/#{path_segment(full_name)}"))
-  end
-
   private
 
-  attr_reader :credential
+  attr_reader :token, :installation_id
 
-  def access_token = credential.respond_to?(:token) ? credential.token : credential
-
-  # `GET /installation/repositories` answers with an OBJECT — `{total_count:, repositories: […]}` —
-  # where the user-token endpoint this replaces answered with a bare array. Unwrapped here rather
-  # than at the call site so `repositories` still reads as a page walk, and defaulted to `[]` so a
-  # body of an unexpected shape ends the walk instead of raising a NoMethodError several frames up.
+  # `GET /user/installations/:id/repositories` answers with an OBJECT —
+  # `{total_count:, repository_selection:, repositories: […]}` — where the user-token endpoint this
+  # replaces answered with a bare array. Unwrapped here rather than at the call site so
+  # `repositories` still reads as a page walk, and defaulted to `[]` so a body of an unexpected
+  # shape ends the walk instead of raising a NoMethodError several frames up.
   def page_of_repositories(page)
-    payload = get("/installation/repositories", per_page: PER_PAGE, page: page)
+    payload = get("/user/installations/#{installation_id}/repositories", per_page: PER_PAGE, page: page)
 
-    Array(payload.is_a?(Hash) ? payload["repositories"] : payload)
+    # Defaulted to `[]` so a body of an unexpected shape ends the walk, and filtered to Hashes so a
+    # body of the RIGHT shape carrying the wrong contents — `{"repositories": [1, 2]}` — ends it too
+    # rather than raising a NoMethodError out of `Repo.from`. `sources` promises never to raise, and
+    # that promise cannot rest on GitHub's JSON being well-formed.
+    Array(payload.is_a?(Hash) ? payload["repositories"] : payload).grep(Hash)
   end
 
   def get(path, **query)
@@ -247,7 +262,7 @@ class GithubApi
 
   def perform(uri)
     request = Net::HTTP::Get.new(uri)
-    request["Authorization"] = "Bearer #{access_token}"
+    request["Authorization"] = "Bearer #{token}"
     request["Accept"] = "application/vnd.github+json"
     request["X-GitHub-Api-Version"] = "2022-11-28"
     request["User-Agent"] = "SpecGuard"
@@ -256,11 +271,6 @@ class GithubApi
                                             open_timeout: OPEN_TIMEOUT, read_timeout: READ_TIMEOUT) do |http|
       http.request(request)
     end
-  rescue GithubApi::Error
-    # `access_token` is resolved inside this block and mints through `GithubAppCredentials`, which
-    # raises this family. Without this the broad rescue below would relabel "the App is not
-    # configured" or "that installation is gone" as "GitHub could not be reached".
-    raise
   rescue StandardError => e
     # Deliberately broad: Net::HTTP raises a dozen unrelated ancestors (Errno::*, OpenSSL,
     # Net::OpenTimeout, SocketError) and enumerating them is a list that goes stale silently.
@@ -271,15 +281,19 @@ class GithubApi
   def parse(response)
     case response
     when Net::HTTPSuccess then decode(response.body)
-    when Net::HTTPUnauthorized then raise Unauthorized, "GitHub rejected the SpecGuard App credentials."
+    when Net::HTTPUnauthorized then raise Unauthorized, "GitHub rejected the authorization."
     when Net::HTTPForbidden then raise forbidden_error(response)
-    when Net::HTTPNotFound then raise NotFound, "GitHub has no such repository in this installation."
+    when Net::HTTPNotFound then raise NotFound, "GitHub has no such installation for this user."
     else raise Unavailable, "GitHub responded #{response.code}."
     end
   end
 
+  # A bare JSON scalar — `null`, `"maintenance"`, `7` — parses without error and is not a document.
+  # Read as an empty object rather than handed on, so a caller's `dig` does not become the first
+  # thing to notice.
   def decode(body)
-    JSON.parse(body.to_s)
+    parsed = JSON.parse(body.to_s)
+    parsed.is_a?(Hash) || parsed.is_a?(Array) ? parsed : {}
   rescue JSON::ParserError => e
     raise Unavailable, "GitHub returned a body that is not JSON: #{e.message}"
   end
@@ -293,12 +307,5 @@ class GithubApi
     else
       Forbidden.new("GitHub refused the request.", reason: :refused)
     end
-  end
-
-  # `org/repo` reaches a URL path. Each segment is escaped independently so a `/` inside one cannot
-  # become a path separator — the value arrives from a form field, and the model's format
-  # validation runs *after* this in `#update`'s case, not before.
-  def path_segment(full_name)
-    full_name.to_s.split("/", 2).map { |segment| ERB::Util.url_encode(segment) }.join("/")
   end
 end

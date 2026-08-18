@@ -30,8 +30,10 @@ module SpecGuard
     # repositories" — requested the first time someone registered a repository, in order to read
     # one boolean off `GET /repos/:owner/:repo`. It is gone, along with the column that held the
     # token it bought. Repository access is a GitHub App installation now
-    # (`SpecGuard::GithubApp`), which proves more and asks for far less: an installation's
-    # membership is itself the ownership statement, and the App requests Metadata: read-only.
+    # (`SpecGuard::GithubApp`), which asks for far less and proves at least as much: the App
+    # requests Metadata: read-only, and what it buys — a repository's presence in one of the user's
+    # installations AND GitHub naming that user an administrator of it — is read from one response
+    # to `GET /user/installations/:id/repositories`. See `InstallationRepositories`.
     #
     # NOTHING should reintroduce a scope here. The token this issues is not stored, and there is
     # nothing left in the app that would read one.

@@ -2,10 +2,14 @@
 
 require "rails_helper"
 
-# The row that says "this person reached SpecGuard through that installation" — the whole of the
-# ownership proof, since only an administrator of a repository can install an App on it. It holds
-# one public numeric id and no credential, so what there is to pin here is not storage but
-# discipline: `record` is called from a setup URL a person can edit and revisit at will, and every
+# The row that says "this person reached SpecGuard through that installation" — half of the
+# ownership proof and not the half about the person. It says a repository was handed to SpecGuard by
+# SOMEBODY with administrative rights; every member of an organization can see that organization's
+# installation, so it says nothing about who is holding the row. The other half is read live, per
+# user (`InstallationRepositories`).
+#
+# It holds one public numeric id and no credential, so what there is to pin here is not storage but
+# discipline: `record` is called from a callback a person can edit and revisit at will, and every
 # example below is about one of the ways that arrives.
 RSpec.describe GithubInstallation do
   # `create_user` connects an installation by default (id 5001, account "acme"), because almost

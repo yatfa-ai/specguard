@@ -34,7 +34,19 @@
           ) do %>
         <%= github_install_button return_to: bulk_repositories_path %>
       <% end %>
-    <% elsif github_listing.nil? %>
+    <% elsif github_authorization_needed? %>
+    <%# The App IS installed; this session just has no credential to read it with. A different
+        missing thing and so a different button — sending them through the repository picker again
+        would be asking them to re-answer a question they have already answered. %>
+    <%= render UI::EmptyStateComponent.new(
+          title: "Reconnect to GitHub",
+          description: "SpecGuard asks GitHub which of your connected repositories you administer, " \
+                       "and needs your permission to do that again in this browser session. " \
+                       "Reconnecting takes you to GitHub and straight back."
+        ) do %>
+      <%= github_authorize_button return_to: bulk_repositories_path %>
+    <% end %>
+  <% elsif github_listing.nil? %>
       <%# Two different reasons land here and they must not read the same: GitHub being down is
           waitable, GitHub *refusing* is not. `github_listing_error_message` is nil only for the
           genuine outage, which is the one case "try again shortly" is true of. %>

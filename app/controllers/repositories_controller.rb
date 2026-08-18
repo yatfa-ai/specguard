@@ -942,6 +942,7 @@ class RepositoriesController < ApplicationController
     # `InstallationRepositories.verify_batch`. It is the same live GitHub answer either way; what it
     # saves is fetching it twice on the one path that needs it twice.
     @github_verdict = InstallationRepositories.verify(user: current_user,
+                                                      user_token: github_user_token,
                                                       full_name: repository.github_full_name,
                                                       sources: github_sources)
     return true if @github_verdict.verified?

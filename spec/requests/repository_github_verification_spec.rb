@@ -12,11 +12,17 @@ require "rails_helper"
 # every example below that pins the create path has a rename twin. A guard on one action only would
 # have moved the gap one route over and read as closed.
 #
-# What ANSWERS the question changed with SPGD-424 and the gap did not reopen: it was
-# `permissions.admin` read over an OAuth `repo` grant, and it is now membership of a GitHub App
-# installation. Only somebody who administers a repository can install the App on it, so a
-# repository being in the user's installation is GitHub's own statement that it is theirs to
-# register — and a repository outside it cannot be registered however the name arrives.
+# What ANSWERS the question changed with SPGD-424 and the gap did not reopen. It was
+# `permissions.admin` read over an OAuth `repo` grant — GitHub's full control of private
+# repositories, asked for in order to read one boolean. It is now TWO conditions read from one
+# response to `GET /user/installations/:id/repositories`, made with the user's own short-lived
+# credential: the repository is in one of this user's App installations, AND GitHub reports this
+# user as an administrator of it.
+#
+# Both are load-bearing and each has its own example below. Installation membership alone is not
+# enough, because GitHub shows an organization's installation to every member of that organization
+# — so a read-only member could otherwise register everything their employer connected. The admin
+# bar is the same bar the OAuth path had, now bought with Metadata: read-only instead.
 RSpec.describe "Installation-verified repository registration", type: :request do
   before { @user = sign_in_via_github }
 
@@ -49,7 +55,32 @@ RSpec.describe "Installation-verified repository registration", type: :request d
       expect(response.body).to include("is not one of the repositories the SpecGuard GitHub App is installed on")
     end
 
-    # "Does not exist" and "exists and is not yours" are ONE answer from an installation credential,
+    # THE OTHER example, and the one this file did not have when the gap was reopened. The
+    # repository IS in the installation — somebody who administers it did connect it — and this
+    # user is not that somebody. That is the position of every read-only member of every
+    # organization that installs the App, and under an installation-token read they could register
+    # all of it.
+    it "refuses a repository in the installation that this user does not administer" do
+      stub_github(repos: [github_repo("acme/billing-service"), github_repo("acme/vault", admin: false)])
+
+      expect { register("acme/vault") }.not_to change(Repository, :count)
+
+      expect(response).to have_http_status(:unprocessable_content)
+      expect(response.body).to include("does not list you as an administrator")
+    end
+
+    # And it is not merely refused at the write — it is never offered. The picker and the gate are
+    # built from the same object, so a page cannot show something the POST would turn down.
+    it "does not offer a repository this user only has read access to" do
+      stub_github(repos: [github_repo("acme/billing-service"), github_repo("acme/vault", admin: false)])
+
+      get new_repository_path
+
+      expect(response.body).to include("acme/billing-service")
+      expect(response.body).not_to include("acme/vault")
+    end
+
+    # "Does not exist" and "exists and is not yours" are ONE answer from this credential,
     # which cannot see outside its own installation — and that is a feature rather than a loss of
     # detail: the old path told a stranger whether a private repository existed by answering
     # `:not_found` for an invented name and `:not_admin` for a real one.
@@ -70,7 +101,7 @@ RSpec.describe "Installation-verified repository registration", type: :request d
       expect { register("acme/billing-service") }.not_to change(Repository, :count)
 
       expect(response).to have_http_status(:unprocessable_content)
-      expect(response.body).to include("GitHub did not answer")
+      expect(response.body).to include("could not read your full repository list")
     end
 
     it "refuses when the App is not installed, and offers to install it" do
@@ -106,7 +137,7 @@ RSpec.describe "Installation-verified repository registration", type: :request d
       expect { register("acme/billing-service") }.not_to change(Repository, :count)
 
       expect(response).to have_http_status(:unprocessable_content)
-      expect(response.body).to include("GitHub did not answer")
+      expect(response.body).to include("could not read your full repository list")
     end
 
     it "names the rate limit rather than reporting it as an outage" do
@@ -223,7 +254,7 @@ RSpec.describe "Installation-verified repository registration", type: :request d
 
       expect(response).to have_http_status(:unprocessable_content)
       expect(repository.reload.github_full_name).to eq("acme/billing-service")
-      expect(response.body).to include("GitHub did not answer")
+      expect(response.body).to include("could not read your full repository list")
     end
   end
 
@@ -334,8 +365,7 @@ RSpec.describe "Installation-verified repository registration", type: :request d
     # rather than letting "my repository is not here" read as "SpecGuard is broken".
     it "renders the picker and says so when one installation could not be read" do
       add_github_installation(@user, installation_id: 6002)
-      allow(GithubApi).to receive(:for_installation) do |installation|
-        id = installation.respond_to?(:installation_id) ? installation.installation_id : installation
+      stub_github_per_installation do |id|
         FakeGithubApi.new(**(id == 6002 ? { unavailable: true } : { repos: [github_repo("acme/api")] }))
       end
 
@@ -443,6 +473,49 @@ RSpec.describe "Installation-verified repository registration", type: :request d
       expect(response).to have_http_status(:unprocessable_content)
       expect(response.body).to include('value="acme/legacy-tracker"')
       expect(response.body).not_to include('value="ghost/repo"')
+    end
+  end
+
+  # The scenario the audit named, at the level it actually bites.
+  #
+  # GitHub hands an organization's installation to EVERY member of that organization — `GET
+  # /user/installations` grants it at `:read`, which plain membership gives — so two users
+  # legitimately hold a row for the same installation id. Reading that installation with a
+  # credential that speaks for the APP answers both of them identically, which is how a read-only
+  # member came to be offered fifty repositories they cannot even see on github.com. Reading it with
+  # a credential that speaks for the PERSON cannot: GitHub answers each of them about their own
+  # access.
+  #
+  # So this is one installation, one repository, two sessions, and two different answers.
+  describe "two users holding the same installation" do
+    it "answers each of them with their own access, not the App's" do
+      # The fake keys off the credential, which is the whole claim: the same installation id, read
+      # with two different tokens, comes back differently.
+      GithubApi.factory = lambda { |token, installation_id|
+        raise "expected the shared installation, got #{installation_id}" unless installation_id == 4242
+
+        FakeGithubApi.new(repos: [github_repo("acme/vault", admin: token == "ghu_owner")])
+      }
+
+      sign_in_via_github(uid: "3003", info: { nickname: "owner" }, installation: false)
+      authorize_github_app(installations: [[4242, "acme"]], token: "ghu_owner")
+
+      get new_repository_path
+      expect(response.body).to include("acme/vault")
+
+      delete sign_out_path
+
+      sign_in_via_github(uid: "4004", info: { nickname: "member" }, installation: false)
+      authorize_github_app(installations: [[4242, "acme"]], token: "ghu_member")
+
+      # Not offered...
+      get new_repository_path
+      expect(response.body).not_to include("acme/vault")
+
+      # ...and not registerable by naming it at the endpoint either, which is the move that matters.
+      expect { register("acme/vault") }.not_to change(Repository, :count)
+      expect(response).to have_http_status(:unprocessable_content)
+      expect(response.body).to include("does not list you as an administrator")
     end
   end
 end
