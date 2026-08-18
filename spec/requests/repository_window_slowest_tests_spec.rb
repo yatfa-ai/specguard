@@ -118,11 +118,35 @@ RSpec.describe "Repository window slowest tests", type: :request do
   # A repository whose branch window holds `runs` runs of that suite, stamped back in time so the
   # trajectory window this panel shares orders them the way CI produced them rather than by whatever
   # order the fixture inserted them in.
+  #
+  # ⚠️ The shas differ IN THEIR FIRST SEVEN CHARACTERS, and that is load-bearing rather than
+  # cosmetic. The caption names the anchor as `commit_sha.first(7)`, so a fixture whose runs share a
+  # seven-character prefix renders the same string whichever run the panel picked — and the one
+  # example asserting the ⭐ partition ("the newest run decided WHICH tests are ranked") would pass
+  # just as green with the partition inverted to the oldest. `run#{index}sha…` keeps the ordinal
+  # inside the abbreviated form, so that assertion can distinguish the anchor from its neighbours
+  # and therefore can fail.
   def window_repository(runs: 4, github_full_name: "acme/billing-service", **options)
     repository = create_repository(user: @user, github_full_name: github_full_name)
     runs.times do |index|
-      ingest(repository, window_specs(index), commit_sha: "window#{format("%07d", index)}",
+      ingest(repository, window_specs(index), commit_sha: "run#{index}sha#{format("%07d", index)}",
                                               at: (30 - index).days.ago, **options)
+    end
+    repository
+  end
+
+  # A window whose anchor ran more tests than the panel ranks at once — the only shape in which
+  # `#truncated?` is true, and so the only one in which the cap's clauses and the lead sentence's
+  # hedge are rendered at all.
+  def capped_repository
+    repository = create_repository(user: @user)
+    2.times do |index|
+      specs = (1..14).map do |i|
+        example_spec(name: "Ledger step #{i} settles the balance", duration: i.to_f,
+                     file_path: "spec/models/ledger_spec.rb", line_number: i)
+      end
+      ingest(repository, specs, commit_sha: "cap#{index}sha#{format("%07d", index)}",
+                                at: (30 - index).days.ago)
     end
     repository
   end
@@ -297,8 +321,11 @@ RSpec.describe "Repository window slowest tests", type: :request do
     it "names the run that decided which tests are ranked" do
       get repository_path(window_repository)
 
-      expect(basis_line).to have_text("decided by window0, the newest run in this window",
+      # `run3sha` is the LAST of the fixture's four runs and the abbreviation of no other one of
+      # them, so this fails if the anchor is ever taken from either end of the window but the newest.
+      expect(basis_line).to have_text("decided by run3sha, the newest run in this window",
                                       normalize_ws: true)
+      expect(basis_line).to have_no_text("run0sha")
     end
 
     # The population the ranking covers, stated as a fraction off `SpecObservation.coverage_fraction`
@@ -362,25 +389,61 @@ RSpec.describe "Repository window slowest tests", type: :request do
     # duration in the anchor run while the list is then ordered on the window total, so a test that
     # is cheap today and was expensive across the window falls through it.
     it "discloses the cap and the two different orderings it sits between" do
+      get repository_path(capped_repository)
+
+      expect(rows.size).to eq(SpecObservation::SLOWEST_LIMIT)
+      expect(basis_line).to have_text("14 durable tests that run resolved — more than this panel " \
+                                      "ranks at once — so the 10 slowest OF THOSE were the ones " \
+                                      "whose window history was summed, and the other 4 are not " \
+                                      "represented above", normalize_ws: true)
+      expect(basis_line).to have_text("a test that is cheap today and was expensive across the " \
+                                      "window falls through it", normalize_ws: true)
+    end
+
+    # And the superlative the cap has withdrawn is withdrawn in the lead sentence too, rather than
+    # asserted there and taken back below: under truncation the ordering that CHOSE these rows is
+    # the anchor run's, so "The 10 tests that cost this suite the most" is the one thing this list
+    # is not.
+    it "does not claim the capped list is the window's most expensive tests" do
+      get repository_path(capped_repository)
+
+      expect(basis_line).to have_text("10 of the tests that cost this suite the most wall clock " \
+                                      "across the last 2 runs on main", normalize_ws: true)
+      expect(basis_line).to have_no_text("The 10 tests that cost this suite")
+    end
+
+    # ⭐ The one paragraph in which the two exclusion clauses are rendered SIDE BY SIDE, and the
+    # reason the truncation clause names its population rather than saying "tests ran in that run".
+    # `#candidate_count` is drawn from `.slowest_identity_candidates_in`, which cannot see an
+    # unresolved row at all — so the sentence declining to call those rows tests and the sentence
+    # counting the anchor's population are talking about numbers that differ by exactly them, and a
+    # figure claiming to count everything that RAN would contradict its own neighbour by 2.
+    it "counts the anchor's resolved tests, not its rows, where both exclusions apply at once" do
       repository = create_repository(user: @user)
       2.times do |index|
-        specs = (1..14).map do |i|
+        named = (1..14).map do |i|
           example_spec(name: "Ledger step #{i} settles the balance", duration: i.to_f,
                        file_path: "spec/models/ledger_spec.rb", line_number: i)
         end
-        ingest(repository, specs, commit_sha: "capped#{format("%08d", index)}",
-                                  at: (30 - index).days.ago)
+        anonymous = (1..2).map do |i|
+          example_spec(name: nil, duration: 0.4, file_path: "spec/models/anon_spec.rb",
+                       line_number: i)
+        end
+        ingest(repository, named + anonymous,
+               commit_sha: "both#{index}sha#{format("%07d", index)}", at: (30 - index).days.ago)
       end
 
       get repository_path(repository)
 
-      expect(rows.size).to eq(SpecObservation::SLOWEST_LIMIT)
-      expect(basis_line).to have_text("14 tests ran in that run — more than this panel ranks at " \
-                                      "once — so the 10 slowest OF THAT RUN were the ones whose " \
-                                      "window history was summed, and the other 4 are not " \
-                                      "represented above", normalize_ws: true)
-      expect(basis_line).to have_text("a test that is cheap today and was expensive across the " \
-                                      "window falls through it", normalize_ws: true)
+      expect(basis_line).to have_text("2 rows that run recorded have not been matched to a " \
+                                      "durable test yet and are not in this ranking",
+                                      normalize_ws: true)
+      # 14, not the 16 rows the run wrote: the two clauses of one paragraph agree on what an
+      # unmatched row is instead of one of them folding it back in as a test.
+      expect(basis_line).to have_text("14 durable tests that run resolved — more than this panel " \
+                                      "ranks at once", normalize_ws: true)
+      expect(basis_line).to have_no_text("16")
+      expect(basis_line).to have_no_text("tests ran in that run")
     end
   end
 

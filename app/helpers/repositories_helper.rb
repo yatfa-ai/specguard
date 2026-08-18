@@ -867,11 +867,22 @@ module RepositoriesHelper
   # single worst run, both are rendered side by side in the table below, and only one of them
   # decided the order. A reader scanning the "Slowest single run" column down a list ordered on the
   # other one needs to have been told.
+  #
+  # And the superlative is WITHDRAWN in the one state where it is false. Under the cap this list is
+  # not the window's most expensive tests — it is the anchor run's slowest, re-totalled over the
+  # window — so a lead reading "The 10 tests that cost this suite the most" would be a claim the
+  # truncation clause then takes back two sentences later. A partitive ("10 of the tests that…")
+  # says the same thing about the same rows without ever asserting the closure the cap denies.
   def slowest_tests_window_sentence(slowest)
     tests = "#{number_with_delimiter(slowest.rows.size)} #{"test".pluralize(slowest.rows.size)}"
     runs = "#{number_with_delimiter(slowest.run_count)} #{"run".pluralize(slowest.run_count)}"
+    opening = if slowest.truncated?
+                "#{number_with_delimiter(slowest.rows.size)} of the tests"
+              else
+                "The #{tests}"
+              end
 
-    "The #{tests} that cost this suite the most wall clock across the last " \
+    "#{opening} that cost this suite the most wall clock across the last " \
       "#{runs}#{window_branch_clause(slowest)}, ordered on that window TOTAL — not on any single " \
       "run of it."
   end
@@ -1040,9 +1051,10 @@ module RepositoriesHelper
   # named no branch, so the panel is not rendered without one — but a sentence that would read
   # "the last 30 runs on " if that ever changed is worse than one that simply says less.
   #
-  # Shared by all three panels drawn on that window — the outcome panel, the area-movement one and
-  # its no-baseline states — for the reason every seam on this page is shared: two spellings of
-  # "on main" is two things that agree today with no structural reason to keep agreeing.
+  # Shared by all four panels drawn on that window — the outcome panel, the area-movement one, its
+  # no-baseline states and the window-grain slowest-tests ranking — for the reason every seam on
+  # this page is shared: two spellings of "on main" is two things that agree today with no
+  # structural reason to keep agreeing.
   def window_branch_clause(panel)
     panel.branch.presence ? " on #{panel.branch}" : ""
   end
@@ -1372,14 +1384,24 @@ module RepositoriesHelper
   # inherent to narrowing before aggregating, which is what makes the whole read affordable
   # (`SlowestTests` carries the arithmetic), and it is a fact about the list a reader cannot recover
   # from any row of it.
+  #
+  # ⚠️ It counts DURABLE TESTS THE ANCHOR RESOLVED, and says so, rather than reaching for "tests
+  # that ran". `#candidate_count` comes off `.slowest_identity_candidates_in`, which is
+  # `where.not(spec_identity_id: nil).group(:spec_identity_id)` — it cannot see the unresolved rows
+  # AT ALL, and those are exactly what `#slowest_tests_unresolved_clause` declines to call tests one
+  # clause earlier in the same paragraph. Where an anchor is both truncated and partly unresolved
+  # the two clauses render side by side, so a figure that quietly folded the unmatched rows back in
+  # would contradict its own neighbour by the width of them. `SlowestTests#recorded_count` draws
+  # that line in as many words, and `#unstable_tests_truncation_clause` keeps it the same way by
+  # naming its grouping key and its predicate instead of the word "tests".
   def slowest_tests_truncation_clause(slowest)
     return nil unless slowest.truncated?
 
     unexamined = slowest.unexamined_count
 
-    "#{number_with_delimiter(slowest.candidate_count)} tests ran in that run — more than this " \
-      "panel ranks at once — so the #{number_with_delimiter(slowest.rows.size)} slowest OF THAT " \
-      "RUN were the ones whose window history was summed, and the other " \
+    "#{number_with_delimiter(slowest.candidate_count)} durable tests that run resolved — more " \
+      "than this panel ranks at once — so the #{number_with_delimiter(slowest.rows.size)} " \
+      "slowest OF THOSE were the ones whose window history was summed, and the other " \
       "#{number_with_delimiter(unexamined)} #{unexamined == 1 ? "is" : "are"} not represented " \
       "above. The cap is applied on that run's durations and the list is then ordered on the " \
       "window total, so a test that is cheap today and was expensive across the window falls " \
