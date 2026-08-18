@@ -45,8 +45,16 @@ module Ingest
   #
   # It under-selects rather than over-selects: a bucket whose only expired rows hang off runs
   # inside a set of N that is itself sparsely populated is not picked. That is the right direction
-  # for opportunistic work — it never spends an ingest's ceiling on a bucket that turns out to have
-  # nothing, and the rows it declines are reached the moment the bucket grows past the rule again.
+  # for opportunistic work — it never spends an ingest's ceiling on a bucket that turns out to
+  # have nothing.
+  #
+  # ⚠️ What it declines is reached again only for a LIVE bucket, the moment that bucket grows past
+  # the rule. A merged `feature/*` one — the population this class exists for — never grows again
+  # by definition. So a quiet bucket holding expired rows across `<= BRANCH_RETENTION_RUNS`
+  # row-bearing runs (sparse histories: runs recorded with no examples, runs predating the
+  # observation recorder) is out of reach PERMANENTLY, not until it grows. That is a second honest
+  # remainder alongside the stopped-ingesting-altogether one above, and the same shape as it:
+  # small, static, and named here rather than papered over.
   #
   # == The probe is bounded, and by WHAT is the part worth stating
   #
@@ -59,10 +67,31 @@ module Ingest
   # `test_run_id`, and never for a repository other than this one.
   #
   # The honest worst case is the converged one — every bucket already at the rule, so nothing
-  # short-circuits the scan and it walks this repository's index range to the end. That is bounded
-  # by the repository's own run count and by nothing about the size of either table, and it is the
-  # cheap direction of the two: on a converged repository most of those runs hold no rows at all,
-  # so the `EXISTS` that dominates the cost is a negative index probe.
+  # short-circuits the scan and it walks this repository's index range to the end and finds
+  # nothing. That is bounded by the repository's own run count and by nothing about the size of
+  # either table.
+  #
+  # ⚠️ It is also the EXPENSIVE direction per row, and the seeded `EXPLAIN` on this change says
+  # so: 7,140 of the 9,520 scanned runs PASS the semi-join. That is not a fixture accident, it is
+  # what convergence MEANS — the rule retains `BRANCH_RETENTION_RUNS` runs per bucket WITH their
+  # rows and empties only what is beyond them, so the passing count is exactly
+  # `quiet_buckets * BRANCH_RETENTION_RUNS` and the fraction of probes coming back NEGATIVE is
+  # `1 - BRANCH_RETENTION_RUNS / runs_per_bucket`. That fraction SHRINKS on the short merged
+  # `feature/*` buckets this class exists to visit. So the `EXISTS` is predominantly a POSITIVE
+  # index probe, and the measured cost is 19 ms for 9,520 runs at 75% of them qualifying — which
+  # is affordable on its own terms and does not need a cheaper story than the one that is true.
+  # (`Heap Fetches: 7140` on that plan is partly an unvacuumed visibility map, but it is also one
+  # heap touch per QUALIFYING row — the same 75%.)
+  #
+  # ⚠️ Extrapolated to the repository named at the top of this comment, which is the one this
+  # class was built for: 46,000 runs is ~4.8x the seeded range, so its converged steady state
+  # costs on the order of 90 ms of probe. PER INVOCATION, which is per SHARD — a four-shard run
+  # pays it four times, ~370 ms, for housekeeping the client did not ask for and on which it will
+  # usually find nothing. That is the cost of SUCCESS: this class drives a repository into the
+  # state where its own probe is most expensive and least productive. Judged affordable against an
+  # ingest that is already a multi-statement write, and it is the price of having no scheduler —
+  # but 90 ms is the figure to quote for that repository, not the seeded 19 ms, and this is the
+  # first number to re-measure if this path ever gets tight.
   #
   # Ordering by `branch` rather than by "oldest first" is deliberate. Oldest-first would need
   # `MIN(created_at)` across every group before it could pick one, which forfeits the
@@ -70,6 +99,16 @@ module Ingest
   # converged one. Branch order is the order the index already has, and it costs nothing. Which
   # bucket goes first is not a property worth paying for: every candidate is over the rule, so any
   # of them is progress, and the ones not picked are picked by the next delivery.
+  #
+  # On the literal wording of "selection makes progress across buckets": `LIMIT 1` in branch order
+  # re-selects the SAME bucket on successive ingests until it falls under the rule, which at this
+  # ceiling can take several deliveries, while another bucket is still over it. Within-bucket
+  # progress precedes across-bucket progress. That is still convergence, and it is not the failure
+  # the requirement is aimed at — that one is finding 2's stall, where selection re-picks a bucket
+  # it has ALREADY emptied and advances never. The predicate rules it out from both ends: a
+  # selected bucket is guaranteed to yield at least one delete, so every invocation moves M down,
+  # and a bucket that reaches the rule leaves the candidate set for good. The ordering is a queue
+  # discipline, not a liveness property.
   #
   # == Bounded per invocation, on its own ceiling
   #

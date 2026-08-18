@@ -166,12 +166,19 @@ module Ingest
     # that sibling guards a CACHE and logs at `warn` because nothing is wrong; `spec_observations`
     # is the product's data, so a drain that keeps failing means the table is outgrowing its rule
     # on every bucket but the live one. That belongs in the error reporter, not in a log line.
+    #
+    # The report's SHAPE follows {Ingest::RejectionRecorder}`#report`, the only other
+    # `Rails.error.report` call on this path: default `source`, and the emitter named in
+    # `context[:component]`. `source` is a subscriber-FILTERING key in Rails' reporter rather than
+    # a label, so setting a bespoke one on one of two sibling call sites is how a subscriber
+    # scoped to the default silently drops half of them.
     def drain_quiet_bucket(run)
       Ingest::QuietBucketPruner.drain(run)
     rescue StandardError => e
       Rails.error.report(
-        e, handled: true, severity: :warning, source: "specguard.ingest",
-        context: { repository_id: run.repository_id, run_id: run.id, branch: run.branch }
+        e, handled: true, severity: :warning,
+        context: { repository_id: run.repository_id, run_id: run.id, branch: run.branch,
+                   component: "Ingest::QuietBucketPruner" }
       )
       nil
     end

@@ -1691,13 +1691,29 @@ RSpec.describe "POST /api/v1/ingest", type: :request do
 
       it "answers the quiet half's failure with an unchanged 202 and an error report" do
         allow(Ingest::QuietBucketPruner).to receive(:drain).and_raise(*timeout)
-        expect(Rails.error).to receive(:report)
-          .with(instance_of(ActiveRecord::StatementInvalid), hash_including(handled: true, severity: :warning))
+        # Captured and asserted afterwards rather than matched inline: one of the assertions is a
+        # NEGATIVE on the argument list, and raising that from inside a `.with` block re-enters
+        # the reporter being stubbed and buries the diagnostic in its own re-report.
+        reported = nil
+        allow(Rails.error).to receive(:report) { |error, **options| reported = [error, options] }
 
         expect { ingest(ingest_payload(branch: "main")) }.to change(TestRun, :count).by(1)
 
         expect(response).to have_http_status(:accepted)
         expect(response.parsed_body["test_run_id"]).to eq(TestRun.last.id)
+
+        # The SHAPE of the report, not merely that one happened. `source` is a subscriber-FILTERING
+        # key in Rails' reporter rather than a label, so this call leaves it at its default and
+        # names the emitter in `context[:component]` — matching `Ingest::RejectionRecorder#report`,
+        # the only other reporter call on this path. A bespoke `source` on one of two siblings is
+        # how a subscriber scoped to the default silently drops half of them, which stays invisible
+        # right up until these reports are the thing someone is looking for.
+        error, options = reported
+        expect(error).to be_a(ActiveRecord::StatementInvalid)
+        expect(options).to include(handled: true, severity: :warning)
+        expect(options).not_to have_key(:source)
+        expect(options[:context]).to include(component: "Ingest::QuietBucketPruner",
+                                             repository_id: Repository.last.id)
       end
 
       it "still fails the ingest when the current-branch half raises" do
@@ -1726,22 +1742,49 @@ RSpec.describe "POST /api/v1/ingest", type: :request do
     # Transaction DEPTH is what discriminates here and a spy on call order would not: under
     # transactional tests the example's own transaction is non-joinable, so `RunRecorder`'s block
     # opens a savepoint and everything inside it runs one level deeper than everything outside.
-    it "prunes outside the transaction that recorded the run" do
-      depths = {}
+    #
+    # ⚠️ BOTH halves of the rule are pinned, not just the original one. The quiet half is the
+    # newer call and the more tempting one to fold inward — it is opportunistic work with no
+    # ordering constraint of its own, so nothing about reading `#record` suggests its placement
+    # matters. It carries the same deadlock exposure for the same reason. Without the second wrap,
+    # moving `drain_quiet_bucket` inside the transaction leaves the whole suite green.
+    #
+    # ⚠️ And on BOTH ingest paths, which is the gap this example had before the quiet half existed
+    # and which is worth stating plainly: `ingest_payload` carries no `ci_run_id`, so it lands on
+    # `#record_unsharded_run`. The single-payload version of this example therefore guarded only
+    # the UNSHARDED path — while the incident it cites, 8 concurrent shards with 6 of 8 lost to
+    # `PG::TRDeadlockDetected`, is a property of the SHARDED one, whose `run.lock!` is the lock in
+    # question. `#record_unsharded_run` takes no such lock at all, so the path with the real
+    # exposure was the path with no pin. Both are parametrised here; each was verified to fail by
+    # moving its own call inside its own transaction.
+    {
+      "unsharded" => {},
+      "sharded" => { ci_run_id: "gha-42", shard_id: "1" }
+    }.each do |path, extra|
+      it "prunes outside the transaction that recorded the run — #{path}" do
+        depths = {}
 
-      allow(Ingest::ObservationRecorder).to receive(:record).and_wrap_original do |original, *args, **options|
-        depths[:record] = ActiveRecord::Base.connection.open_transactions
-        original.call(*args, **options)
+        allow(Ingest::ObservationRecorder).to receive(:record).and_wrap_original do |original, *args, **options|
+          depths[:record] = ActiveRecord::Base.connection.open_transactions
+          original.call(*args, **options)
+        end
+        allow(Ingest::ObservationPruner).to receive(:prune).and_wrap_original do |original, *args|
+          depths[:prune] = ActiveRecord::Base.connection.open_transactions
+          original.call(*args)
+        end
+        allow(Ingest::QuietBucketPruner).to receive(:drain).and_wrap_original do |original, *args|
+          depths[:drain] = ActiveRecord::Base.connection.open_transactions
+          original.call(*args)
+        end
+
+        ingest(ingest_payload(branch: "main", **extra))
+
+        expect(depths[:prune]).to be < depths[:record]
+        expect(depths[:prune]).to eq(ActiveRecord::Base.connection.open_transactions)
+
+        expect(depths[:drain]).to be < depths[:record]
+        expect(depths[:drain]).to eq(ActiveRecord::Base.connection.open_transactions)
       end
-      allow(Ingest::ObservationPruner).to receive(:prune).and_wrap_original do |original, *args|
-        depths[:prune] = ActiveRecord::Base.connection.open_transactions
-        original.call(*args)
-      end
-
-      ingest(ingest_payload(branch: "main"))
-
-      expect(depths[:prune]).to be < depths[:record]
-      expect(depths[:prune]).to eq(ActiveRecord::Base.connection.open_transactions)
     end
 
     # A query budget on the ingest path. `count_queries` comes from spec/support/query_capture.rb,
