@@ -376,13 +376,15 @@ class RepositoriesController < ApplicationController
     @spec_directory_durations = SpecDirectoryDurations.for(@latest_test_run) if @latest_test_run
     # The SAME grain as the line above and a different AXIS, which is why it is a second read rather
     # than a column on that one. That rollup ranks areas by WALL CLOCK and its coverage figure is
-    # TIMING coverage; this one ranks them by how many of their examples SpecGuard cannot see. An
+    # TIMING coverage; this one ranks them by how many of their examples carry no `@intent`. An
     # area of four hundred fast unannotated examples heads this list and appears nowhere near the
     # head of that one, so neither is derivable from the other.
     #
-    # The Overview panel at the top of this page already prints the run's invisible count — a
+    # The Overview panel at the top of this page already prints the run's annotation debt — a
     # subtraction, `total_specs_count - annotated_specs_count` — and a subtraction is the whole
-    # answer it can give: a five-figure count of tests the reader is handed no route to any of. The
+    # answer it can give: a five-figure count of tests the reader is handed no route to any of. That
+    # is a count of tests nobody has annotated, which is not a count of tests SpecGuard holds
+    # nothing about — every one of them was recorded with its description and both paths. The
     # API has served the ranked, scoped worklist behind that figure since SPGD-591/608/623; this is
     # the same rows on the page the owner actually opens.
     #
@@ -475,10 +477,12 @@ class RepositoriesController < ApplicationController
       @spec_directory_files = SpecDirectoryFiles.for(@latest_test_run, @spec_directory_request)
     end
     # THE LAST RUNG OF THE ANNOTATION LADDER, and the one this page never had: not WHICH AREAS carry
-    # the run's annotation debt but WHICH TESTS. The Overview panel prints "Not visible to
-    # SpecGuard" as `total_specs_count - annotated_specs_count` and says *"SpecGuard cannot see the
-    # other N tests"*; `@unannotated_directories` above ranks the areas that count is concentrated
-    # in. Neither names a test. Until this, acting on the panel this page had just handed the owner
+    # the run's annotation debt but WHICH TESTS. The Overview panel prints that debt at run grain as
+    # `total_specs_count - annotated_specs_count`; `@unannotated_directories` above ranks the areas
+    # it is concentrated in. Neither names a test — which is the gap this closes. Neither is a count
+    # of tests SpecGuard holds nothing about, either: an unannotated example is recorded with its
+    # description, both paths, its duration and its outcome, and what it lacks is an authored
+    # `@intent`. Until this, acting on the panel this page had just handed the owner
     # meant leaving the product for `GET /api/v1/repository?unannotated_examples=1&spec_directory=…`
     # with an API key.
     #
