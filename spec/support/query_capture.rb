@@ -52,6 +52,61 @@ module QueryCapture
 
   # One rule, two readings, so a change to what counts as a query cannot drift between them.
   def count_queries(&) = executed_sql(&).size
+
+  # A FOURTH RULE, and it is neither of the two above: it keeps the FIRST matching statement rather
+  # than a list, and it runs the block under `unprepared_statement` so the captured SQL carries its
+  # literals — `EXPLAIN` cannot be handed a `$1`. Nothing here counts anything; the statement is
+  # captured in order to be planned.
+  #
+  # Captured off the wire rather than EXPLAINed from a hand-written copy of the query: a copy is a
+  # second definition of the read, free to drift from the one the code actually makes. This is what
+  # a read whose projection is not on the relation — a `pluck` of aggregates, with no `to_sql`
+  # worth EXPLAINing — has to use.
+  #
+  # `table` is passed rather than defaulted for the same reason `queries_against(table)` takes one:
+  # a default here would be one caller's table baked into a globally-included support file.
+  def captured_sql(table, &)
+    captured = nil
+    subscriber = ActiveSupport::Notifications.subscribe("sql.active_record") do |_, _, _, _, payload|
+      captured ||= payload[:sql] if payload[:name] != "SCHEMA" &&
+                                    payload[:sql].to_s.include?(table)
+    end
+    ActiveRecord::Base.connection.unprepared_statement(&)
+
+    captured
+  ensure
+    ActiveSupport::Notifications.unsubscribe(subscriber)
+  end
+
+  def plan_for_actual_sql(table, &)
+    ActiveRecord::Base.connection.select_values("EXPLAIN #{captured_sql(table, &)}").join("\n")
+  end
+
+  # How many rows of `table` the read ACTUALLY touched, off `EXPLAIN (ANALYZE)` — the only spelling
+  # of this assertion that measures the query rather than restating the SQL. Rows removed by a
+  # filter are counted too: a plan that reached ten times as many rows and threw them away has not
+  # been bounded, whatever it returned.
+  #
+  # Only nodes carrying a `Relation Name` are counted, so a bitmap's index node and its heap node
+  # are not the same rows twice — the index node names an index and no relation.
+  def rows_touched(table, &)
+    plan = ActiveRecord::Base.connection.select_value(
+      "EXPLAIN (ANALYZE, FORMAT JSON) #{captured_sql(table, &)}"
+    )
+    plan = JSON.parse(plan) if plan.is_a?(String)
+
+    total = 0
+    walk = lambda do |node|
+      if node["Relation Name"] == table
+        total += (node["Actual Rows"].to_i + node["Rows Removed by Filter"].to_i) *
+                 [node["Actual Loops"].to_i, 1].max
+      end
+      Array(node["Plans"]).each { |child| walk.call(child) }
+    end
+    walk.call(plan.first["Plan"])
+
+    total
+  end
 end
 
 RSpec.configure do |config|
