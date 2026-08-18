@@ -958,13 +958,23 @@ module RepositoriesHelper
   # Counted in ROWS, deliberately, and worded that way. An unnamed row is precisely a row this
   # panel cannot say is a test, so reporting a number of "tests" here would be the same identity
   # claim the exclusion exists to decline.
+  #
+  # The second clause states the rule about the rows this window actually holds, so it counts with
+  # the first. At one row there is no pair to be unequal and nothing to pool it with, so the reason
+  # is the one that still holds of a single null: it cannot be matched to ITSELF across runs.
   def unstable_tests_unnamed_clause(unstable)
     return nil unless unstable.unnamed_count.positive?
 
+    one = unstable.unnamed_count == 1
+    reason = if one
+               "a null description is not known to be one test with itself across runs, so it is"
+             else
+               "two of those are not known to be one test, so they are"
+             end
+
     "#{number_with_delimiter(unstable.unnamed_count)} " \
-      "#{"row".pluralize(unstable.unnamed_count)} in this window carried no description; two of " \
-      "those are not known to be one test, so they are excluded from the matching rather than " \
-      "pooled into one."
+      "#{"row".pluralize(unstable.unnamed_count)} in this window carried no description; " \
+      "#{reason} excluded from the matching rather than pooled into #{one ? "a test" : "one"}."
   end
 
   # The cap, disclosed only when it bit — and stated as what was KEPT rather than as a bare number

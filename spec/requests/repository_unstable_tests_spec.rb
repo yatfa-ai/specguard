@@ -407,6 +407,47 @@ RSpec.describe "Repository unstable tests", type: :request do
       expect(basis_line).to have_no_text("3 tests")
     end
 
+    # One unnamed row is an ordinary window: `unnamed_row_count_in` is a plain count with no floor,
+    # and `comparable?` is a predicate over RUNS, so a window can be comparable while holding a
+    # single null-name row. The sentence counts it and then states the rule ABOUT IT — "two of
+    # those" would quantify over a population this window does not have, and "pooled into one" is
+    # vacuous when there is nothing to pool.
+    def single_unnamed_window
+      repository = create_repository(user: @user)
+      3.times do |index|
+        examples = [example_spec(name: "Invoice finalize locks the line items",
+                                 outcome: index == 1 ? "failed" : "passed")]
+        if index.zero?
+          examples << example_spec(name: nil, outcome: "failed", line_number: 9,
+                                   file_path: "spec/models/ledger_spec.rb")
+        end
+        ingest(repository, examples,
+               commit_sha: "run#{format("%010d", index)}", at: (30 - index).days.ago)
+      end
+      repository
+    end
+
+    it "states the exclusion in the singular when exactly one row carried no description" do
+      get repository_path(single_unnamed_window)
+
+      expect(row_names).to eq(["Invoice finalize locks the line items"])
+      expect(basis_line).to have_text("1 row in this window carried no description",
+                                      normalize_ws: true)
+      expect(basis_line).to have_text(
+        "a null description is not known to be one test with itself across runs, so it is " \
+        "excluded from the matching rather than pooled into a test", normalize_ws: true
+      )
+    end
+
+    # The defect this pins: a hardcoded numeral in the second clause that does not derive from the
+    # count in the first, so the sentence counted 1 and quantified over 2 in one breath.
+    it "never quantifies over two rows when only one carried no description" do
+      get repository_path(single_unnamed_window)
+
+      expect(basis_line).to have_no_text("two of those")
+      expect(basis_line).to have_no_text("1 rows")
+    end
+
     # The clause is about THIS window and appears only when there is something to say. "0 rows
     # carried no description" is a sentence about arithmetic.
     it "says nothing about unnamed rows when every row carried a description" do
