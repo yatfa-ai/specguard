@@ -22,14 +22,14 @@ module Ingest
   # caller happens to be holding. An invocation from ANY repository's resolve reaches EVERY expired
   # row this deployment owns, whichever ingest wrote it.
   #
-  # ⚠️ **{Ingest::ObservationPruner}'s branch caveat is FALSE HERE and must not be carried over.**
-  # That class is handed a run and reaches only the rows of that run's branch, so a branch stops
-  # converging the moment it stops receiving runs and merged `feature/*` history is frozen out of
-  # its reach by construction. That shape needs a per-bucket qualifier and this one has no bucket:
-  # there is no population of this table that some ingest is not walking down, because there is no
-  # partition of it that an invocation cannot see. A reader who inherits the sibling's caveat will
-  # believe this table has a frozen tail, and it does not. The convergence argument the template
-  # makes for live branches only, this class makes for the whole table.
+  # ⚠️ **The sibling rule's BUCKET STRUCTURE must not be carried over.** {Ingest::ObservationPruner}
+  # is handed a run and reaches only the rows of that run's branch, so it needs a second pass —
+  # {Ingest::QuietBucketPruner} — whose whole job is picking a bucket no run in hand belongs to and
+  # proving that the pick advances. This class needs no such pass and must not grow one: it has no
+  # bucket at all, so an invocation from ANY repository's resolve already sees every expired row
+  # this deployment owns. A reader who inherits the sibling's two-half shape will go looking for
+  # the partition this one is missing, and there is none to find. What that pair achieves for a
+  # repository across successive ingests, one invocation here achieves for the whole table.
   #
   # What still bounds it is TRAFFIC, not reach: a deployment that stops ingesting entirely stops
   # pruning, because the trigger is the next resolve. That is the same trade the trigger paragraph

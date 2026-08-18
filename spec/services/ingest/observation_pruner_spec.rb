@@ -111,13 +111,24 @@ RSpec.describe Ingest::ObservationPruner do
       expect(observation_counts(features)).to all(eq(1))
     end
 
-    # The protection above read from the other side, where it is a LIMITATION rather than a
-    # guarantee: `main`'s two runs past the window keep their rows through a prune on
-    # `feature/x`, because no invocation reaches a branch other than the one it was handed. Since
-    # the only caller is the write path, a branch stops being pruned at all the moment it stops
-    # receiving runs — this rule bounds growth on LIVE branches and leaves a merged branch's
-    # history frozen where it stands. `Ingest::ObservationPruner`'s class comment says so at
-    # length; this is the executable half of that sentence.
+    # The protection above read from the other side: `main`'s two runs past the window keep their
+    # rows through a prune on `feature/x`, because no invocation of THIS class reaches a branch
+    # other than the one it was handed. That single-bucket reach is the contract, and it is why
+    # the rule needs a second pass rather than a wider one here.
+    #
+    # ⚠️ **This example is the reason {Ingest::QuietBucketPruner} is a separate entry point.**
+    # `main` and `feature/x` are the same repository (`let(:repository)` is file-level) and with
+    # the retention stubbed to 3, `main` genuinely has two expired runs — so a drain-one-quiet-
+    # bucket change folded INTO `.prune` would select `main` and this example would go red. It is
+    # left passing unchanged, deliberately: `.prune` still means "bound the bucket I was handed",
+    # and the quiet half is its own class with its own caller and its own failure policy. That
+    # separation is also forced from the other direction, since the two halves must be independently
+    # rescuable — see the asymmetry pinned in spec/requests/api/v1/ingest_spec.rb.
+    #
+    # The frozen-tail consequence this comment used to draw is no longer the codebase's position:
+    # a branch that stops receiving runs is now drained by the ingests still arriving on the
+    # repository's live branches. What stays true is the sentence this example actually asserts —
+    # `.prune` alone reaches one bucket. See spec/services/ingest/quiet_bucket_pruner_spec.rb.
     it "bounds the branch the run is on and no other" do
       main = history(branch: "main", count: 5)
       feature = history(branch: "feature/x", count: 5, from: 90.days.ago)
