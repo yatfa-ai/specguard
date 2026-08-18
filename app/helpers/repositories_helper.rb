@@ -40,12 +40,17 @@ module RepositoriesHelper
   #   set   — pass a value (`spec_file: file.path`)
   #   clear — pass an explicit `nil` (`spec_file: nil`); `repository_path` drops nil params
   #
-  # `asks.merge(overrides)` and specifically NOT `asks.merge(overrides.compact)`. Every "Close"
-  # button clears its own ask by passing nil, and compacting the OVERRIDES drops that nil before it
-  # can override anything — the reader's current ask survives the merge and every one of those
-  # buttons becomes a no-op that navigates to the page it is already on. That is the precise
-  # inversion of the defect this exists to make impossible. A nil in `overrides` is a decision, not
-  # an absence.
+  # `asks.merge(overrides)` and specifically NOT `asks.merge(overrides.compact)`. Every CLEARING
+  # gesture on the page — the "Close" buttons and "Show the newest run" — clears its own ask by
+  # passing nil, and compacting the OVERRIDES drops that nil before it can override anything: the
+  # reader's current ask survives the merge and every one of them becomes a no-op that navigates to
+  # the page it is already on. That is the precise inversion of the defect this exists to make
+  # impossible. A nil in `overrides` is a decision, not an absence.
+  #
+  # Named rather than counted, deliberately. `git grep -n "<ask>: nil" -- app/views` is the roll, and
+  # it keeps growing — the run anchor got its way back, and every drill-in added since has brought
+  # its own way out — so a figure here would be a stale casualty count in the one comment someone
+  # reads to decide whether a "tidying" `.compact` is safe.
   #
   # Compacting the merged RESULT is merely pointless rather than harmful (`repository_path` already
   # omits nil params), but it reads as though nils were unwanted here, which is the belief that leads
@@ -55,12 +60,19 @@ module RepositoriesHelper
   # of the asks, and one of them ("Close file") chooses its anchor from what else is open.
   #
   # The asks are read from the raw REQUEST ivars, never from a resolved object — `branch` is
-  # `@trajectory_branch_request` and not the run the fallback settled on, so a link reproduces what
-  # the reader asked for rather than what they got. A site that wants a resolved value passes it as
-  # an override instead (the area-files table names `@spec_directory_files.path`, its own panel's
-  # subject, rather than leaning on that ivar and the request agreeing).
+  # `@trajectory_branch_request` and not the run the fallback settled on, and `commit_sha` is
+  # `@run_anchor_request` and not the run it resolved to, so a link reproduces what the reader asked
+  # for rather than what they got. A site that wants a resolved value passes it as an override
+  # instead (the area-files table names `@spec_directory_files.path`, its own panel's subject, rather
+  # than leaning on that ivar and the request agreeing).
+  #
+  # `commit_sha` is the one ask here that RE-ANCHORS rather than narrows — it names which run every
+  # panel describes, where the others pick a series or open a panel of the run already chosen — and
+  # it is in this hash for exactly the reason they are: a gesture aimed at one ask must not close the
+  # others as a side effect. Opening an area is not a request to jump back to the newest run.
   def drill_down_path(repository, anchor:, **overrides)
     asks = { branch: @trajectory_branch_request,
+             commit_sha: @run_anchor_request,
              spec_file: @spec_file_request,
              spec_directory: @spec_directory_request,
              repeated_description: @repeated_description_request,
@@ -256,13 +268,15 @@ module RepositoriesHelper
   #
   # The cut wording says "these #{n}" and NOT "the #{n} SpecGuard walked to". The count is a count of
   # this list, and this list is not the walk's output: `Repository#branch_histories` UNIONs the
-  # bounded walk with the PINNED branch outside `:branch_limit` (`app/models/repository.rb:255-259`),
-  # which is the same fact `trajectory_walk_cut?` uses `>=` for. On a cut repository the branch being
-  # drawn is routinely in this list *because the walk never reached it* — pin `main` on a repository
-  # of `feature/*` and it arrives behind every one of them — so naming the size as the walked figure
-  # is off by the pins, in the one branch of this method written to not overclaim. A bare count
-  # claims nothing about provenance and is true however a row got here; the bound the reader
-  # actually needs is carried by the clause after it, which is unconditionally true.
+  # bounded walk with the PINNED branch outside `:branch_limit` (the `candidate` CTE of
+  # `BRANCH_HISTORY_SQL`, whose `SELECT pin FROM unnest(ARRAY[:pinned_branches]…)` arm sits outside
+  # the subquery carrying the `LIMIT :branch_limit`), which is the same fact `trajectory_walk_cut?`
+  # uses `>=` for. On a cut repository the branch being drawn is routinely in this list *because the
+  # walk never reached it* — pin `main` on a repository of `feature/*` and it arrives behind every
+  # one of them — so naming the size as the walked figure is off by the pins, in the one branch of
+  # this method written to not overclaim. A bare count claims nothing about provenance and is true
+  # however a row got here; the bound the reader actually needs is carried by the clause after it,
+  # which is unconditionally true.
   #
   # The ORDERING claim is the one that has to be earned. "The branches with the most history are
   # listed first" is true of the branches the WALK REACHED, and the walk is alphabetical — so on a
@@ -304,11 +318,15 @@ module RepositoriesHelper
   # ever appears next to a substitution it is describing.
   #
   # The asked-for name is truncated: it is unvalidated URL input, and a branch name is a short
-  # thing. Escaping is ERB's, which is why this returns a plain String and not `html_safe` markup.
+  # thing. `escape: false` because the escaping is ERB's, done once at the render — `truncate`
+  # defaults to escaping its input and returning a `SafeBuffer`, and interpolating that into a plain
+  # String yields an unsafe String carrying already-escaped content, which ERB then escapes a second
+  # time (`?branch=a%26b` printing `a&amp;b` on the page). Returning raw text and letting the view
+  # escape it keeps one escape at one seam, which is what this returning a plain String is for.
   def trajectory_branch_fallback_notice(requested, trajectory)
     return nil if requested.blank? || trajectory.branch == requested
 
-    asked = truncate(requested, length: 60)
+    asked = truncate(requested, length: 60, escape: false)
 
     if trajectory.branch.blank?
       return "SpecGuard has no runs on #{asked}. The latest run named no branch, so there is " \
@@ -317,6 +335,85 @@ module RepositoriesHelper
 
     "SpecGuard has no runs on #{asked}, so this panel is drawn on #{trajectory.branch} — the " \
       "branch of the repository's latest run — instead."
+  end
+
+  # == The run every panel on this page is anchored on
+
+  # WHICH RUN this page is describing, said out loud whenever `?commit_sha=` named one — the web's
+  # counterpart to the `run_anchor` block `Api::V1::RepositoriesController#serialized_run_anchor`
+  # serializes on every call.
+  #
+  # `nil` on the ordinary no-ask page, which is the whole of the difference between this and the
+  # API's block. A JSON client reads its anchor out of a field and pays nothing for one it did not
+  # ask about; a reader pays for every sentence on the page, and "this page is anchored on the run
+  # that reported most recently" under a panel already headed "Measured on abc1234" is a sentence
+  # that teaches a reader to skim the ones that matter.
+  #
+  # BOTH answers to an ask are stated, and they must not be able to render the same. The resolved
+  # one is not decoration: the anchor is invisible from the figures themselves — every panel is
+  # correctly labelled with the run it drew, and correctly labelled is exactly how a page pinned to
+  # a three-week-old commit reads to someone who arrived by a link. The fallback one is the defect
+  # this feature exists to close, and the reason it cannot be left silent is the one the JSON
+  # endpoint gives about the same substitution: without it the URL names a sha, the page describes
+  # a different run, and nothing anywhere says the ask was not honoured.
+  #
+  # Decided on WHETHER THE ASK RESOLVED — `anchored` is the row `?commit_sha=` found, or nil — and
+  # never by comparing two shas. That is `serialized_run_anchor`'s rule (`resolved:` is read off the
+  # finder, not off an equality) and it is what stops the disclosure and the choice it discloses from
+  # coming apart: a repository can hold two runs of one commit, and the sha a reader asked for is
+  # then equal to the sha they were served on a page that resolved their ask exactly.
+  #
+  # Both branches return a plain String and not `html_safe` markup, so escaping is ERB's — the same
+  # stance `#trajectory_branch_fallback_notice` takes one ask over, and it matters here because the
+  # fallback branch prints back a sha nobody validated.
+  def run_anchor_notice(requested, anchored, shown)
+    return nil if requested.blank?
+    return run_anchor_fallback_sentence(requested, shown) if anchored.nil?
+
+    "This page is anchored on #{anchored.commit_sha.first(7)} — the run this URL names — rather " \
+      "than on whichever run reported most recently. Every panel describing a single run describes " \
+      "that one. “Recent runs” and “Suite growth” are histories rather than rows, so they are not " \
+      "re-anchored: the run named here need not be the newest one below."
+  end
+
+  # What the anchor means FOR THE "RECENT RUNS" LIST — the panel's half of the same disclosure
+  # `#run_anchor_notice` makes in the Overview.
+  #
+  # ⭐ THE SECOND STATEMENT ABOUT ONE CHOICE, and it is computed from the same two facts the choice
+  # itself is: the resolved run (never the raw ask) and the rows actually rendered. That is the rule
+  # `#run_anchor_notice` states above and the reason it is repeated here rather than assumed: a
+  # caption gated on the ASK claims the URL's run is the marked one on a page that fell back and
+  # marked nothing, which is the Overview flatly contradicted one panel below by the sentence meant
+  # to close exactly that gap. `RequestedCommitShaParam` names the shape — "the fallback would then
+  # serve the newest run while `run_anchor` claimed a request had been made."
+  #
+  # THREE states because the reader is in one of three positions, and only the first is the state a
+  # single unconditional sentence describes:
+  #
+  # * **Resolved, and in the window** — there is a marked row, so the caption says the marked row is
+  #   the one every panel above describes and warns it need not be the top one.
+  # * **Resolved, but behind the panel's bound** — `@recent_test_runs` is capped at ten rows, and an
+  #   anchored run outside that window is simply not here to mark. The reader still needs to know
+  #   their ask was honoured, so the sentence says which run holds the page AND that no row is
+  #   marked; sending them hunting for a mark that was never rendered is the failure mode.
+  # * **Fell back** — SILENT. The Overview already said the sha resolved to nothing and named the
+  #   substitute, and there is no marking here to explain. A second telling would restate a fact the
+  #   reader has read one panel up, in a panel that has nothing to add to it.
+  #
+  # `listed` is passed in rather than read off `@recent_test_runs`, so the membership test and the
+  # `aria-current` marking in the view cannot come to be asked of two different collections — the
+  # same reason `anchored` is the row rather than a sha.
+  def recent_runs_anchor_note(anchored, listed)
+    return nil if anchored.nil?
+
+    if listed.any? { |test_run| test_run.id == anchored.id }
+      return "This page is anchored on a run the URL named, so the marked row here is the one " \
+             "every panel above describes — and it is not necessarily the newest."
+    end
+
+    "This page is anchored on #{anchored.commit_sha.first(7)} — the run the URL named, which every " \
+      "panel above describes. It is not among the most recent runs listed here, so no row below is " \
+      "marked."
   end
 
   # == The "Slowest tests" panel's outcome sentence
@@ -998,7 +1095,155 @@ module RepositoriesHelper
       "commit touched.#{spec_directory_window_growth_unmeasured_clause(growth)}"
   end
 
+  # == The "Slowest tests across the window" panel's sentences
+  #
+  # The repository-grain sibling of the per-run "Slowest tests" panel's caption, and it has one
+  # sentence that panel structurally cannot write: a matching rule. One run's ranking matches
+  # nothing, so it has nothing to disclose about how two rows became one test; this one groups on
+  # `spec_identity_id` and every row here may be a history assembled across a move and a reword.
+
+  # What the list IS, over what window, ordered on what — before anything else, because a ranked
+  # list whose ordering is unstated is read as "the worst of everything" and this one is neither.
+  #
+  # The ORDERING is named rather than assumed. Every other duration panel on this page ranks one
+  # run, where "slowest" has exactly one meaning; here there are two, the window total and the
+  # single worst run, both are rendered side by side in the table below, and only one of them
+  # decided the order. A reader scanning the "Slowest single run" column down a list ordered on the
+  # other one needs to have been told.
+  #
+  # And the superlative is WITHDRAWN in the one state where it is false. Under the cap this list is
+  # not the window's most expensive tests — it is the anchor run's slowest, re-totalled over the
+  # window — so a lead reading "The 10 tests that cost this suite the most" would be a claim the
+  # truncation clause then takes back two sentences later. A partitive ("10 of the tests that…")
+  # says the same thing about the same rows without ever asserting the closure the cap denies.
+  def slowest_tests_window_sentence(slowest)
+    tests = "#{number_with_delimiter(slowest.rows.size)} #{"test".pluralize(slowest.rows.size)}"
+    runs = "#{number_with_delimiter(slowest.run_count)} #{"run".pluralize(slowest.run_count)}"
+    opening = if slowest.truncated?
+                "#{number_with_delimiter(slowest.rows.size)} of the tests"
+              else
+                "The #{tests}"
+              end
+
+    "#{opening} that cost this suite the most wall clock across the last " \
+      "#{runs}#{window_branch_clause(slowest)}, ordered on that window TOTAL — not on any single " \
+      "run of it."
+  end
+
+  # The matching rule, on the panel rather than in the code, for the reason the sibling panel above
+  # states its own: it is the one thing here that is a DECISION rather than a measurement, and its
+  # consequences are ones a reader can only check against their own repository if they are told it.
+  #
+  # And the rule here is the OPPOSITE of its neighbour's. `#unstable_tests_matching_sentence` — the
+  # "Tests whose outcome changed" panel further up the page — matches on the description alone and
+  # says so: a moved test keeps its history there and a renamed one starts a new one. This panel
+  # matches on the durable identity, so BOTH survive, and a reader carrying the other panel's rule
+  # down the page would misread every row that discloses a move or a reword below. Two panels on
+  # one page with two different matching rules is exactly the drift a shared sentence would hide,
+  # so each states its own.
+  def slowest_tests_matching_sentence
+    "Tests are matched across those runs by the durable identity SpecGuard resolved for them — " \
+      "not by file, not by line and not by description, since all three move under a test that " \
+      "did not change. So a test that MOVED keeps its history here, and so does one that was " \
+      "reworded; where either happened, the row below says so."
+  end
+
+  # ⭐ The partition, named. WHICH tests are on this list was decided by one run — the newest in the
+  # window — and the window then supplied their history, so a test deleted halfway through is
+  # absent however slow it was while it lived.
+  #
+  # It cannot be recovered from the rows: nothing in a list of ten tests tells a reader which
+  # eleventh is missing, and "the slowest tests in this repository" is precisely the reading this
+  # sentence exists to narrow. The run is NAMED rather than described, so a reader who thinks a
+  # test should be here can go and look at the run that decided it was not.
+  def slowest_tests_anchor_sentence(slowest)
+    "Which tests are ranked was decided by #{slowest.anchor_run.commit_sha.first(7)}, the newest " \
+      "run in this window: a test that run did not report is not in the suite being asked about " \
+      "and is not here, however long it took while it existed."
+  end
+
+  # How much of the ranked population carried a timing — the same three-state sentence the per-run
+  # panel writes one grain down, over this panel's own denominator.
+  #
+  # The denominator is the anchor's RESOLVED rows and never its recorded ones, because the rows it
+  # could not identify are a separate exclusion with a separate sentence (`#slowest_tests_
+  # exclusion_sentence`), and folding the two together would report a timing gap for rows that were
+  # dropped before timing was ever asked about. `SlowestTests#coverage_label` holds that pairing so
+  # this sentence cannot state a fraction whose halves came from two different populations.
+  def slowest_tests_coverage_sentence(slowest)
+    if slowest.complete?
+      return "Every one of the #{number_with_delimiter(slowest.resolved_count)} " \
+             "#{"row".pluralize(slowest.resolved_count)} that run resolved to a durable test " \
+             "reported a duration, so the ranking covers the whole of what it identified."
+    end
+
+    "Ranked over the #{slowest.coverage_label} rows that run resolved to a durable test that " \
+      "reported a duration; #{number_with_delimiter(slowest.untimed_count)} reported none. A test " \
+      "that never ran has no duration to report, so a missing timing is a faithful record rather " \
+      "than a gap — and it is why a row here can read \"not reported\" instead of 0.00s."
+  end
+
+  # The two silences: rows the anchor wrote that could not be identified, and candidates the cap
+  # never examined. Both are facts about the population the ranking was drawn from rather than notes
+  # about it, and both are rendered only where they are TRUE of this window — a clause reading "0
+  # rows carried no durable identity" is a sentence about arithmetic.
+  def slowest_tests_exclusion_sentence(slowest)
+    [slowest_tests_unresolved_clause(slowest), slowest_tests_truncation_clause(slowest)]
+      .compact.join(" ").presence
+  end
+
+  # ⭐ Why an empty ranking is not "nothing in this suite is slow" — the panel's *Vacuous Green*
+  # refusal, and the state a reader meets for the seconds after every single ingest.
+  #
+  # `Ingest::IdentityResolutionJob` runs out of band, so the newest run's rows land identified by
+  # nothing at all and are matched to durable tests a moment later. Rendered as an empty list that
+  # is "nobody has told us yet" wearing the spelling of "everything is fast", and the two are
+  # indistinguishable in every other way — which is the whole reason `SlowestTests` separates
+  # `#recorded?` from `#resolved?` rather than serving one `#any?`.
+  #
+  # The row count is stated because it is what makes the sentence checkable: a reader told that
+  # 4,900 rows are waiting can see that their run arrived and that only the matching is outstanding.
+  def slowest_tests_unresolved_description(slowest)
+    rows = "#{number_with_delimiter(slowest.recorded_count)} " \
+           "#{"row".pluralize(slowest.recorded_count)}"
+
+    "#{slowest.anchor_run.commit_sha.first(7)}, the newest run in this window, recorded #{rows} " \
+      "and not one of them has been matched to a durable test yet. That matching runs just after a " \
+      "run lands rather than during it, so this is the ordinary state for the moments after an " \
+      "ingest and it clears on its own. It is reported as what it is: no ranking has been made " \
+      "here, which is a different fact from a suite in which nothing is slow."
+  end
+
   private
+
+  # Said when the reader named a run SpecGuard has none of, and the page anchored on another one.
+  #
+  # Two states, because they are two different facts about this repository and only one of them is
+  # about the sha. A repository with runs substituted its newest one and the sentence names it, so
+  # the reader can see which run they are actually reading; a repository with NO runs substituted
+  # nothing at all, and telling that reader the page "is anchored on — instead" would name an empty
+  # string where a commit should be. It is the same split `#trajectory_branch_fallback_notice` makes
+  # for a trajectory whose fallback branch is itself blank.
+  #
+  # The asked-for sha is truncated, and this is the only place on the page that echoes it back: it
+  # is unvalidated URL input, and `test_runs.commit_sha` is a plain `string` column written from
+  # whatever CI reported — short form and long form both — so there is no length this could rely on.
+  #
+  # `escape: false` for the reason `#trajectory_branch_fallback_notice` gives over the same idiom:
+  # this returns a plain String precisely so that ERB escapes it, once, at the render. `truncate`
+  # escaping first would put a `SafeBuffer` of already-escaped text inside a String that is not
+  # itself safe, and the echoed sha would reach the page escaped twice.
+  def run_anchor_fallback_sentence(requested, shown)
+    asked = truncate(requested, length: 60, escape: false)
+
+    if shown.nil?
+      return "SpecGuard has no run for #{asked}, and no run at all on this repository yet — so " \
+             "there is nothing here anchored on it."
+    end
+
+    "SpecGuard has no run for #{asked}, so this page is anchored on " \
+      "#{shown.commit_sha.first(7)} — the run that reported most recently — instead."
+  end
 
   # "2 earlier runs in this window on main" — the noun phrase both no-baseline branches count with,
   # written once so the two of them cannot drift into describing the same window differently. The
@@ -1049,9 +1294,10 @@ module RepositoriesHelper
   # named no branch, so the panel is not rendered without one — but a sentence that would read
   # "the last 30 runs on " if that ever changed is worse than one that simply says less.
   #
-  # Shared by all three panels drawn on that window — the outcome panel, the area-movement one and
-  # its no-baseline states — for the reason every seam on this page is shared: two spellings of
-  # "on main" is two things that agree today with no structural reason to keep agreeing.
+  # Shared by all four panels drawn on that window — the outcome panel, the area-movement one, its
+  # no-baseline states and the window-grain slowest-tests ranking — for the reason every seam on
+  # this page is shared: two spellings of "on main" is two things that agree today with no
+  # structural reason to keep agreeing.
   def window_branch_clause(panel)
     panel.branch.presence ? " on #{panel.branch}" : ""
   end
@@ -1075,13 +1321,23 @@ module RepositoriesHelper
   # Counted in ROWS, deliberately, and worded that way. An unnamed row is precisely a row this
   # panel cannot say is a test, so reporting a number of "tests" here would be the same identity
   # claim the exclusion exists to decline.
+  #
+  # The second clause states the rule about the rows this window actually holds, so it counts with
+  # the first. At one row there is no pair to be unequal and nothing to pool it with, so the reason
+  # is the one that still holds of a single null: it cannot be matched to ITSELF across runs.
   def unstable_tests_unnamed_clause(unstable)
     return nil unless unstable.unnamed_count.positive?
 
+    one = unstable.unnamed_count == 1
+    reason = if one
+               "a null description is not known to be one test with itself across runs, so it is"
+             else
+               "two of those are not known to be one test, so they are"
+             end
+
     "#{number_with_delimiter(unstable.unnamed_count)} " \
-      "#{"row".pluralize(unstable.unnamed_count)} in this window carried no description; two of " \
-      "those are not known to be one test, so they are excluded from the matching rather than " \
-      "pooled into one."
+      "#{"row".pluralize(unstable.unnamed_count)} in this window carried no description; " \
+      "#{reason} excluded from the matching rather than pooled into #{one ? "a test" : "one"}."
   end
 
   # The cap, disclosed only when it bit — and stated as what was KEPT rather than as a bare number
@@ -1307,9 +1563,9 @@ module RepositoriesHelper
   # the thing it words is a column, and the chart holds the floats rather than the rows, so the
   # value is wrapped in an unsaved run to ask it. That is deliberately the awkward half: the
   # alternative is calling `humanized_seconds`, which is private and STAYS private (see the comment
-  # on `TestRun#shard_distribution_labels`, which states the rule), and a fourth spelling of seconds
-  # on a page that already prints three is precisely the drift `duration_label`'s own comment exists
-  # to prevent.
+  # on `TestRun#shard_distribution_labels`, which states the rule), and a spelling of seconds that
+  # bypassed the seam, on a page that already words this column through it, is precisely the drift
+  # `duration_label`'s own comment exists to prevent.
   #
   # Two things about that `TestRun.new` that are not visible from here:
   #
@@ -1336,5 +1592,62 @@ module RepositoriesHelper
   #   keep paying for a row here.
   def trajectory_runtime_formatter
     ->(value) { TestRun.new(duration_seconds: value).duration_label }
+  end
+
+  # Rows the anchor run wrote that the ranking could not attribute to any test, counted and stated.
+  # A row with no durable identity is precisely a row this panel cannot say WHICH test it belongs
+  # to, so it cannot be summed into one and cannot be listed as one — and excluding it silently
+  # would make the list a claim about the run made from part of it, with nothing saying which part.
+  #
+  # Counted in ROWS, deliberately, and worded that way, for `#unstable_tests_unnamed_clause`'s
+  # reason at its own grain: reporting a number of "tests" for rows whose test is unknown would be
+  # the identity claim the exclusion exists to decline.
+  #
+  # This clause and the `:unresolved` state above are the same fact at two sizes — some of the
+  # anchor's rows unmatched, or all of them — which is why the wording of both names the matching
+  # rather than the row.
+  def slowest_tests_unresolved_clause(slowest)
+    return nil unless slowest.excluded_unresolved_rows?
+
+    count = slowest.unresolved_count
+    "#{number_with_delimiter(count)} #{"row".pluralize(count)} that run recorded " \
+      "#{count == 1 ? "has" : "have"} not been matched to a durable test yet and " \
+      "#{count == 1 ? "is" : "are"} not in this ranking; that matching runs just after a run " \
+      "lands rather than during it."
+  end
+
+  # ⭐ The cap, disclosed only where it bit — and disclosed as TWO facts rather than one, because
+  # this panel narrows on one ordering and then ranks on another.
+  #
+  # The sibling clause one panel up (`#unstable_tests_truncation_clause`) has only the first half to
+  # state: which end of the candidate list survived. Here the cap is applied on each test's duration
+  # in the ANCHOR RUN and the surviving list is then ordered on its WINDOW TOTAL, so the two
+  # orderings are different and a test can be excluded by one while it would have led the other — a
+  # test that is cheap today and has a long expensive history is exactly that shape. That is
+  # inherent to narrowing before aggregating, which is what makes the whole read affordable
+  # (`SlowestTests` carries the arithmetic), and it is a fact about the list a reader cannot recover
+  # from any row of it.
+  #
+  # ⚠️ It counts DURABLE TESTS THE ANCHOR RESOLVED, and says so, rather than reaching for "tests
+  # that ran". `#candidate_count` comes off `.slowest_identity_candidates_in`, which is
+  # `where.not(spec_identity_id: nil).group(:spec_identity_id)` — it cannot see the unresolved rows
+  # AT ALL, and those are exactly what `#slowest_tests_unresolved_clause` declines to call tests one
+  # clause earlier in the same paragraph. Where an anchor is both truncated and partly unresolved
+  # the two clauses render side by side, so a figure that quietly folded the unmatched rows back in
+  # would contradict its own neighbour by the width of them. `SlowestTests#recorded_count` draws
+  # that line in as many words, and `#unstable_tests_truncation_clause` keeps it the same way by
+  # naming its grouping key and its predicate instead of the word "tests".
+  def slowest_tests_truncation_clause(slowest)
+    return nil unless slowest.truncated?
+
+    unexamined = slowest.unexamined_count
+
+    "#{number_with_delimiter(slowest.candidate_count)} durable tests that run resolved — more " \
+      "than this panel ranks at once — so the #{number_with_delimiter(slowest.rows.size)} " \
+      "slowest OF THOSE were the ones whose window history was summed, and the other " \
+      "#{number_with_delimiter(unexamined)} #{unexamined == 1 ? "is" : "are"} not represented " \
+      "above. The cap is applied on that run's durations and the list is then ordered on the " \
+      "window total, so a test that is cheap today and was expensive across the window falls " \
+      "through it."
   end
 end

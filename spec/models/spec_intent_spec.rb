@@ -44,11 +44,11 @@ RSpec.describe SpecIntent do
     expect(intent.errors[:layer]).to be_present
   end
 
-  it "stores a 1536-dimension embedding and finds neighbours through it" do
-    intent = create_spec_intent(repository: repository, embedding: Array.new(1536) { 0.1 })
+  it "stores a 1024-dimension embedding and finds neighbours through it" do
+    intent = create_spec_intent(repository: repository, embedding: Array.new(1024) { 0.1 })
 
-    expect(intent.reload.embedding.size).to eq(1536)
-    expect(described_class.nearest_neighbors(:embedding, Array.new(1536) { 0.1 }, distance: "cosine"))
+    expect(intent.reload.embedding.size).to eq(1024)
+    expect(described_class.nearest_neighbors(:embedding, Array.new(1024) { 0.1 }, distance: "cosine"))
       .to include(intent)
   end
 

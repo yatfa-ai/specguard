@@ -1,0 +1,226 @@
+    <%# == One spec file, opened
+        The rung BELOW the panel above, and the first surface here that narrows to a file rather
+        than grouping by one. Every ranking on this page is a capped ten — ten examples, ten files,
+        ten directories, ten moved areas — so a reader on a 20,000-example suite could learn that
+        `spec/models/order_spec.rb` cost six minutes across three hundred examples and had no way
+        whatever to learn WHICH three hundred. This panel is that way, and it opens off the row
+        that stated the total.
+
+        Rendered only when a file was ASKED for, and the read is taken only then: a page nobody
+        asked a file of costs exactly what it cost before this existed.
+
+        An EQUALITY predicate on `(test_run_id, spec_file_path)`, which is the composite index the
+        by-file rollup's own plan certification says exists for this read and nothing else. A
+        SUBTREE — "every example under `spec/models/`" — is a prefix predicate, wants a
+        `text_pattern_ops` index and therefore a migration, and is deliberately not this panel.
+
+        The list carries the file's UNTIMED examples, where every ranking above excludes theirs.
+        They are the file's population: a reader looking at one file is owed its rows, and a list
+        that dropped them would disagree with the count printed above it. That is why the ordering
+        is `NULLS LAST` — see `SpecObservation.in_file`, where plain `DESC` would head a list
+        captioned "slowest first" with the examples that never ran.
+
+        Same visibility rule and same gate as the panels above: read-only suite telemetry on
+        `current_repository(:view)`, outside `manage_keys`, and nothing here widens that. %>
+    <% if @spec_file_examples %>
+      <%= render UI::PanelComponent.new(title: "Examples in this spec file", id: "spec-file-examples",
+                                        class: "lg:col-span-3") do |panel| %>
+        <% panel.with_actions do %>
+          <%# The way back OUT. This panel is reached by a link and there is no other control that
+              removes the parameter, so without this the only exit is editing the URL — and the
+              reader who most needs the drill-down is the one least likely to want to do that. It
+              anchors back at the panel the file was picked from, so closing a file returns the
+              reader where they opened it rather than at the top of a long page.
+
+              Through `drill_down_path`, and `spec_file: nil` is the whole gesture: this is one of
+              the controls that CLEAR an ask, so it names that ask explicitly rather than
+              omitting it — under the carry-by-default rule an omission would mean "keep the file
+              open" and this button would do nothing.
+
+              Every other ask rides through, and the panel it anchors at follows the area rather
+              than being fixed. A file reached through the area drill-down was NOT picked from
+              "Heaviest spec files" — that panel's capped ten is precisely where such a file is
+              not — so dropping the area here would close the middle rung on the way back and land
+              the reader at a list their file is absent from. This is the same invariant "Close
+              directory" keeps in the other direction: closing a file is not a request to close the
+              area, exactly as closing an area is not a request to close the file. An open
+              DESCRIPTION rides through on that same rule — a reader who opened a file from one of
+              its member rows must land back on the list they were working through. %>
+          <%= render UI::ButtonComponent.new(
+                variant: :ghost,
+                href: drill_down_path(@repository, spec_file: nil,
+                                      anchor: @spec_directory_request ? "spec-directory-files" : "spec-file-durations")
+              ) { "Close file" } %>
+        <% end %>
+        <% if @spec_file_examples.recorded? %>
+          <%# What the list IS, before the list — the same discipline as the panels above, with one
+              axis they do not have. Theirs are rankings and every row in them is timed; this one
+              lists a file's untimed examples too, so on a file that reported no timing there is a
+              list and no ranking at all. `RepositoriesHelper#spec_file_examples_scope_sentence`
+              holds both axes, because "the 50 slowest of 340" is false on such a file and it is
+              the sentence a reader would act on.
+
+              Every figure is counted off THIS FILE'S ROWS in the same read that returned the list
+              — `SpecObservation::FILE_POPULATION_COUNTS` is two windows on that one query — and
+              never off `TestRun#total_specs_count` on the Overview panel, which is re-derived by
+              SUM over shard reports and can legitimately differ. %>
+          <p class="text-xs text-app-muted mb-3" id="spec-file-examples-basis">
+            <span class="font-mono text-app-content-secondary"><%= @spec_file_examples.path %></span>
+            — <%= spec_file_examples_scope_sentence(@spec_file_examples) %>
+            <% if @spec_file_examples.complete? %>
+              <%# Completeness is a claim about the file's TIMING, and it has to be spent on the
+                  population the page actually holds. `#complete?` is `timed_count ==
+                  recorded_count` — both windows counted before the cap — so it is true of a
+                  50-row page of a 340-example file, where "the list covers the whole of what this
+                  run recorded here" is false and contradicts the scope sentence immediately
+                  before it inside one paragraph. A fully-timed run over a file past the cap is
+                  this panel's ORDINARY shape, not an edge of it.
+
+                  Both siblings state the true version and this one has to match them: the
+                  "Slowest tests" panel says the RANKING covers what it reported, and the rollup
+                  above says each TOTAL covers its file — a claim about the population the head
+                  was drawn from, and a per-row claim, each of which survives truncation. What
+                  does not survive it is a claim about the rows on the page. %>
+              <% if @spec_file_examples.truncated? %>
+                Every one of the
+                <%= number_with_delimiter(@spec_file_examples.recorded_count) %> reported a
+                duration, so the ranking these
+                <%= number_with_delimiter(@spec_file_examples.rows.size) %> were drawn from covers
+                the whole of what this run recorded here — the cap is all that keeps the rest off
+                this page.
+              <% else %>
+                Every one of them reported a duration, so the list covers the whole of what this
+                run recorded here.
+              <% end %>
+            <% elsif @spec_file_examples.any_timed? %>
+              <%# The coverage fraction through `SpecFileExamples#coverage_label`, which is
+                  `SpecFileDurations::Row#coverage_label` fixed for this panel — so the file's row
+                  in the rollup above and the file opened out of it state the same coverage in the
+                  same spelling rather than in two prose inventions that agree today.
+
+                  The sentence after it BRANCHES, and the branch is the point. "The other 300
+                  reported none and sit at the END of the list" is true only while the list holds
+                  all of them; on a truncated file whose timed rows ran out before the cap did, ten
+                  of those three hundred are at the end of the list and two hundred and ninety are
+                  not on the page at all. Said unconditionally, that sentence asserts a whole
+                  population is visible on exactly the files where most of it is not — and this
+                  panel's own rule is that a caption is a claim ABOUT the list.
+
+                  There are three branches and not two because the cap can also stop before it
+                  reaches the untimed rows at all — a file with more timed examples than the limit
+                  shows none of them — and "0 of those are at the END of this list" is then a
+                  sentence about arithmetic rather than about this run. The same reason
+                  `#slowest_examples_outcome_breakdown` gives for dropping its own remainder
+                  clause when that is zero. %>
+              Durations here cover <%= @spec_file_examples.coverage_label %> — the same fraction
+              the row for this file states in the panel above.
+              <% if @spec_file_examples.untimed_omitted_count.zero? %>
+                The other <%= number_with_delimiter(@spec_file_examples.untimed_count) %> reported
+                none and sit at the END of the list rather than at the head of it.
+              <% elsif @spec_file_examples.lists_untimed? %>
+                The other <%= number_with_delimiter(@spec_file_examples.untimed_count) %> reported
+                none:
+                <%= number_with_delimiter(@spec_file_examples.shown_untimed_count) %> of those are
+                at the END of this list rather than at the head of it, and the remaining
+                <%= number_with_delimiter(@spec_file_examples.untimed_omitted_count) %> are not on
+                this page at all.
+              <% else %>
+                The other <%= number_with_delimiter(@spec_file_examples.untimed_count) %> reported
+                none, and the cap was reached before the list got to any of them — none are on
+                this page at all.
+              <% end %>
+              An example that never ran has no duration to report, so a missing timing is a
+              faithful record rather than a gap — and it is not a zero.
+            <% end %>
+            <%# The two paths, said once, where a reader meets the column that shows them. This
+                panel is keyed on the INCLUDING file, so an example a shared example group defines
+                elsewhere is listed here — correctly, because this file is what ran it — and the
+                line under its name is its own file and line rather than this one's. Without this
+                sentence that line looks like a mistake on exactly the rows where it is the whole
+                point. %>
+            Each row names where it is DEFINED, which for an example coming from a shared example
+            group is a different file from this one — this list is what this file RAN.
+            Counted off the rows this run wrote here, which is a different figure from the suite
+            size on the Overview panel above and may legitimately differ from it.
+          </p>
+          <%= render UI::TableComponent.new(columns: ["Test", "Duration", "Outcome"],
+                                            describedby: "spec-file-examples-basis") do %>
+            <% @spec_file_examples.rows.each do |observation| %>
+              <tr>
+                <td class="px-3 py-2 text-app-content">
+                  <%# Through the same two seams the "Slowest tests" panel renders a row through,
+                      so one example cannot be named one way in a ranking and another way in its
+                      own file: `#label` falls back to the location for a producer that sent no
+                      name, and the location line below is rendered only when there IS a name, so
+                      a row wearing the fallback does not wear it twice.
+
+                      `#location_label` is `file_path` + `line_number` — the DEFINITION site, and
+                      specifically not `spec_file_path` + `line_number`, which for a shared example
+                      group would pair two halves from different files. It is the reason this panel
+                      shows the column at all: keyed on the including file, this list contains rows
+                      defined somewhere else, and the reader has to be able to go and find them.
+
+                      So the coordinate is a LINK to that definition site, through
+                      `Repository#github_blob_url` and against the sha of the run this page is
+                      anchored to — the same composition and the same new-tab convention the
+                      "Unannotated examples" panel introduced. Whichever of the two lines carries
+                      the coordinate carries the link; a nameless row wears it as its entire
+                      identity, and "go and find them" is not something a reader can do with text.
+
+                      ZERO NEW QUERIES: `@repository` and `@latest_test_run` are both loaded before
+                      this partial renders — `@spec_file_examples` is assigned only under
+                      `@latest_test_run` — and `#github_blob_url` is string composition. %>
+                  <% definition_site_url = @repository.github_blob_url(observation.file_path,
+                                                                       observation.line_number,
+                                                                       @latest_test_run.commit_sha) %>
+                  <% if observation.name.present? %>
+                    <%= observation.label %>
+                    <span class="block font-mono text-xs text-app-muted">
+                      <%= link_to observation.location_label, definition_site_url,
+                                  class: "underline underline-offset-2 decoration-app-border-light " \
+                                         "text-app-content hover:decoration-app-content",
+                                  target: "_blank", rel: "noopener noreferrer" %>
+                    </span>
+                  <% else %>
+                    <%= link_to observation.label, definition_site_url,
+                                class: "underline underline-offset-2 decoration-app-border-light " \
+                                       "text-app-content hover:decoration-app-content",
+                                target: "_blank", rel: "noopener noreferrer" %>
+                  <% end %>
+                </td>
+                <td class="px-3 py-2 text-app-content tabular-nums">
+                  <%# Through `SpecObservation#duration_label`, this table's one formatting seam and
+                      the same one the panels above render through — so an untimed row here reads
+                      "not reported" rather than "0.00s", which is the whole reason those rows are
+                      allowed to be in this list at all. %>
+                  <%= observation.duration_label %>
+                </td>
+                <td class="px-3 py-2">
+                  <%# What CI said happened, through `#outcome_label` and `#outcome_tone` — the pair
+                      that keeps a nil out of the colour a pass wears. Load-bearing on THIS panel
+                      more than on the ranking above: a file's untimed rows are listed here, and an
+                      example that never ran is exactly the row whose outcome a reader has come to
+                      find. %>
+                  <%= render UI::BadgeComponent.new(tone: observation.outcome_tone) do %>
+                    <%= observation.outcome_label %>
+                  <% end %>
+                </td>
+              </tr>
+            <% end %>
+          <% end %>
+        <% else %>
+          <%# The run recorded nothing for the path that was asked for. An ordinary answer and not
+              an error: `?spec_file=` is a URL a reader types, edits and bookmarks, so a deleted
+              file, a renamed one and a typo all arrive here. It names the path back — an empty
+              state without a subject is a sentence about nothing — and points at the panel that
+              lists what this run DID record, which is the one place the correct spelling exists. %>
+          <%= render UI::EmptyStateComponent.new(
+                title: "No examples for this file",
+                description: "This run recorded no examples in #{@spec_file_examples.path}. It " \
+                             "may have been renamed or deleted since, or never have run in this " \
+                             "run at all — the “Heaviest spec files” panel above lists the files " \
+                             "this run did record."
+              ) %>
+        <% end %>
+      <% end %>
+    <% end %>

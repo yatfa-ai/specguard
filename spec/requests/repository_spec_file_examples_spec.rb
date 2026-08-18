@@ -47,6 +47,16 @@ RSpec.describe "Repository spec file examples", type: :request do
 
   def row_names = rows.map { |row| row[:name] }
 
+  # The definition-site link — the row's only anchor, on BOTH label branches: a named row wears it
+  # on the location line under the name and a nameless one wears the coordinate AS the name, so a
+  # cell-wide read finds the same element either way and an example does not have to know which
+  # branch built the row.
+  def definition_links = panel.all("tbody tr").map { |row| row.all("td").first.find("a") }
+
+  def definition_hrefs = definition_links.map { |link| link[:href] }
+
+  def blob(sha, path, line) = "https://github.com/acme/billing-service/blob/#{sha}/#{path}#L#{line}"
+
   # The example's NAME, without the definition-site line rendered under it. The two share one cell,
   # so a whole-cell read would turn every ordering assertion in this file into an assertion about
   # paths as well — and the fallback row, where the name IS the location, has no span at all.
@@ -284,6 +294,99 @@ RSpec.describe "Repository spec file examples", type: :request do
       get repository_path(shared_group_run, spec_file: ORDER_SPEC)
 
       expect(basis_line).to have_text("Each row names where it is DEFINED", normalize_ws: true)
+    end
+
+    # The row the link exists to serve, on the panel that exists to serve it: this list is keyed on
+    # the INCLUDING file, so it contains rows defined somewhere the reader has not opened and cannot
+    # reach from here. The href is built from the definition site the cell prints, never from the
+    # `?spec_file=` ask the panel was opened by.
+    it "links the coordinate to the file it is DEFINED in, not the file this panel is keyed on" do
+      get repository_path(shared_group_run, spec_file: ORDER_SPEC)
+
+      expect(definition_hrefs.first)
+        .to eq(blob("feedfacecafe0001", "spec/support/shared_examples.rb", 7))
+      expect(definition_hrefs.first).not_to include(ORDER_SPEC)
+    end
+  end
+
+  # The coordinate as a DESTINATION rather than as text, through the seam
+  # spec/requests/repository_unannotated_examples_spec.rb pins on the panel that introduced it.
+  # This panel's own comment states the reason it prints the column at all — keyed on the including
+  # file, the list contains rows defined somewhere else "and the reader has to be able to go and
+  # find them" — which is not something a reader can do with a string.
+  describe "the definition site as a link" do
+    it "links each listed row's coordinate to that line on GitHub" do
+      get repository_path(two_file_run, spec_file: ORDER_SPEC)
+
+      expect(definition_hrefs).to eq([blob("feedfacecafe0001", ORDER_SPEC, 2),
+                                      blob("feedfacecafe0001", ORDER_SPEC, 1),
+                                      blob("feedfacecafe0001", ORDER_SPEC, 3)])
+      # The link text is the coordinate the panel already printed, not a second control on the row.
+      expect(definition_links.map { |link| link.text.strip })
+        .to eq(["#{ORDER_SPEC}:2", "#{ORDER_SPEC}:1", "#{ORDER_SPEC}:3"])
+    end
+
+    # BOTH LABEL BRANCHES. `#label` is `name.presence || location_label`, so a row from a producer
+    # that sent no name wears the coordinate AS its name and renders through the other site
+    # entirely — and this panel's comment says both branches go through the same two seams the
+    # ranking above does, so both have to be navigable or the panels disagree about one example.
+    it "links the coordinate on a row that wears it as its name" do
+      repository = create_repository(user: @user)
+      ingest(repository, [example_spec(file_path: ORDER_SPEC, duration: 1.0, line_number: 42,
+                                       name: nil)])
+
+      get repository_path(repository, spec_file: ORDER_SPEC)
+
+      expect(row_names).to eq(["#{ORDER_SPEC}:42"])
+      expect(definition_hrefs).to eq([blob("feedfacecafe0001", ORDER_SPEC, 42)])
+      # And NOT TWICE: the fallback already IS the coordinate, so there is no location line under it
+      # to link as well, and the cell holds exactly one anchor.
+      expect(panel.first("tbody tr").all("td").first.all("span")).to be_empty
+      expect(definition_links.size).to eq(1)
+    end
+
+    # THE ANCHORED RUN'S SHA, not `main` and not the newest run. `file_path`/`line_number` are a
+    # last known path rather than an identity (SPGD-114), so a page anchored on an older run via
+    # `?commit_sha=` must link into THAT run's tree rather than at whatever has since drifted onto
+    # the line.
+    it "pins the link to the run the page is anchored on rather than the newest one" do
+      repository = create_repository(user: @user)
+      ingest(repository, [example_spec(file_path: ORDER_SPEC, duration: 1.0, line_number: 2,
+                                       name: "Order refuses a negative quantity")],
+             commit_sha: "aaaa1111bbbb2222")
+      ingest(repository, [example_spec(file_path: ORDER_SPEC, duration: 1.0, line_number: 2,
+                                       name: "Order refuses a negative quantity")],
+             commit_sha: "cccc3333dddd4444")
+
+      get repository_path(repository, spec_file: ORDER_SPEC, commit_sha: "aaaa1111bbbb2222")
+
+      expect(definition_hrefs).to eq([blob("aaaa1111bbbb2222", ORDER_SPEC, 2)])
+      expect(definition_hrefs.first).not_to include("cccc3333dddd4444")
+    end
+
+    # The pairing that stops the assertion above from passing on a page that simply had one run.
+    it "links at the newest run's sha when no anchor was asked for" do
+      repository = create_repository(user: @user)
+      ingest(repository, [example_spec(file_path: ORDER_SPEC, duration: 1.0, line_number: 2,
+                                       name: "Order refuses a negative quantity")],
+             commit_sha: "aaaa1111bbbb2222")
+      ingest(repository, [example_spec(file_path: ORDER_SPEC, duration: 1.0, line_number: 2,
+                                       name: "Order refuses a negative quantity")],
+             commit_sha: "cccc3333dddd4444")
+
+      get repository_path(repository, spec_file: ORDER_SPEC)
+
+      expect(definition_hrefs).to eq([blob("cccc3333dddd4444", ORDER_SPEC, 2)])
+    end
+
+    # A NEW TAB, the convention the "Unannotated tests here" panel introduced deliberately for the
+    # app's first link that leaves it. The reader is mid-list on a file they narrowed to, and `rel`
+    # is written out rather than left to the browsers that imply it.
+    it "opens the file in a new tab, leaving the list where the reader had it" do
+      get repository_path(two_file_run, spec_file: ORDER_SPEC)
+
+      expect(definition_links.map { |link| link[:target] }.uniq).to eq(["_blank"])
+      expect(definition_links.map { |link| link[:rel] }.uniq).to eq(["noopener noreferrer"])
     end
   end
 
@@ -575,11 +678,37 @@ RSpec.describe "Repository spec file examples", type: :request do
       # because the grouping excludes them in its WHERE clause — counting the rows that carry none.
       # Neither is a per-file read and neither moves with a file being open, which is why the
       # drill-down's own delta below is still exactly one.
-      expect(large_queries.size).to eq(8)
+      # RECOUNTED AT 9 by SPGD-649, which added the "Where the unannotated tests are" panel: ONE
+      # further read of the same run's rows, grouped by AREA on the ANNOTATION axis. Like the two
+      # above it is not a per-file read and does not move with a file being open, which is why the
+      # drill-down's own delta below is still exactly one.
+      # RECOUNTED AT 10 by SPGD-658, which added "Unannotated tests here" — and this one is NOT like
+      # the three above it: it is a PER-FILE read, opened by this same `?spec_file=` ask, so opening
+      # a file now costs TWO narrowed reads rather than one. The delta below moves with it, and both
+      # figures are stated rather than left to the equality, because an equality alone is satisfied
+      # by two pages that regressed together.
+      # RECOUNTED AT 11 by SPGD-728, which added the "Slowest tests across the window" panel:
+      # ONE further read, and it is that panel's GATING PROBE — the row/unresolved-row count over
+      # the newest run of the branch window, asked before either of the two steps behind it. The
+      # fixtures in this file never run `Ingest::IdentityResolver`, which is what an ingest endpoint
+      # answers `202` and enqueues a job for, so every row here carries a NULL `spec_identity_id`,
+      # the gate reports nothing resolved and the panel stops: one read, not three. A page whose
+      # window HAS been resolved pays three, and that budget — a gate, a capped candidate step over
+      # one run, and a composition over those candidates only — is asserted in
+      # spec/requests/repository_window_slowest_tests_spec.rb. The added read moves with neither
+      # the size of the suite nor the length of the window, since it counts one run's rows.
+      # It is not a per-file read and does not move with a file being open, which is why the
+      # drill-down's own delta below is still exactly two.
+      expect(large_queries.size).to eq(11)
     end
 
     # The whole drill-down is off the default page's budget. A reader who never opens a file pays
     # exactly what they paid before this panel existed.
+    #
+    # TWO reads now sit behind the `?spec_file=` gate rather than one — SPGD-658's per-example
+    # annotation worklist reads the same ask — so the delta is 2. Both sides are pinned absolutely
+    # as well as differenced: a page that stopped taking BOTH narrowed reads would still satisfy the
+    # subtraction, and 8 is the figure that says the unopened page did not move.
     it "asks nothing of the table when no file was asked for" do
       repository = repository_with(200, name: "acme/unopened-suite")
 
@@ -588,8 +717,8 @@ RSpec.describe "Repository spec file examples", type: :request do
       end
       unopened = queries_against("spec_observations") { get repository_path(repository) }
 
-      expect(unopened.size).to eq(opened.size - 1)
-      expect(unopened.size).to eq(7)
+      expect(unopened.size).to eq(opened.size - 2)
+      expect(unopened.size).to eq(9)
     end
   end
 end

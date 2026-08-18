@@ -37,8 +37,13 @@ module Ingest
   #
   # == A repeated id inside one payload is a different event, handled a different way
   #
-  # `example_id` arrives **unvalidated**: `Ingest::Payload` checks `file_path`, `line_number`,
-  # `status` and `intent`, and nothing else. A payload repeating an id would make Postgres raise
+  # `example_id` arrives **unvalidated**: `Ingest::Payload` validates the other per-example fields
+  # (see `#validate_spec`) and never looks at the id. STATED AS A RULE, NOT AS A LIST OF FIELD
+  # NAMES, on purpose: this sentence used to enumerate the validated fields and then foreclose the
+  # rest, which was accurate when written and false as soon as the next validator landed — one
+  # arrives in `validate_spec` without this class being re-read, and a closed enumeration here
+  # then denies a check that exists. The load-bearing claim is the id's exemption, and no
+  # validator added over there can change it. A payload repeating an id would make Postgres raise
   # `ON CONFLICT DO UPDATE command cannot affect row a second time` and take the whole ingest down
   # with a 500, so the repeat is collapsed **in Ruby**, first occurrence winning, before the
   # statement is built. Deliberately not left to `DO UPDATE`: two rows in one payload are a

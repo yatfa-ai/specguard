@@ -106,18 +106,6 @@ RSpec.describe "GET /api/v1/repository — directory_runtime_growth", type: :req
 
   def row_at(block, path) = block["rows"].find { |row| row["path"] == path }
 
-  # Every string these blocks serve, at any depth — the assertion surface for "operands, never the
-  # labels". Walked rather than listed key by key, so a label-shaped value added to a row or to a
-  # block later is caught by the same example rather than by nobody.
-  def strings_in(value)
-    case value
-    when Hash then value.values.flat_map { |inner| strings_in(inner) }
-    when Array then value.flat_map { |inner| strings_in(inner) }
-    when String then [value]
-    else []
-    end
-  end
-
   # ⭐ CRITERION 1 — A PLAIN `GET` WITH NO PARAMETERS CARRIES THE BLOCK.
   describe "a plain unparameterised request" do
     before { adjacent_runs }

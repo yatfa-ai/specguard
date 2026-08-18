@@ -378,7 +378,7 @@ class SpecObservation < ApplicationRecord
   SPEC_DIRECTORY_FILE_RUNTIME_GROWTH_LIMIT = 30
 
   # How many repeated-DESCRIPTION groups the redundancy ranking returns. Its own constant, by the
-  # rule the seven above it obey, and the population it ranks is unlike any of theirs: not files,
+  # rule the constants above obey, and the population it ranks is unlike any of theirs: not files,
   # not areas, not examples, but the DESCRIPTIONS that more than one example of one run recorded.
   # That population is a small and lumpy fraction of a suite — one built without table-driven loops
   # or shared example groups has none at all, and one built around them can have hundreds — so it
@@ -394,7 +394,7 @@ class SpecObservation < ApplicationRecord
   REPEATED_DESCRIPTIONS_LIMIT = 10
 
   # How many EXAMPLES a single repeated description's drill-down returns. Its own constant, by the
-  # rule the eight above it obey, and it caps the same KIND of thing `FILE_EXAMPLES_LIMIT` and
+  # rule the constants above obey, and it caps the same KIND of thing `FILE_EXAMPLES_LIMIT` and
   # `SPEC_DIRECTORY_FILES_LIMIT` cap — a LISTING of one already-picked row's contents, not a ranking
   # of a whole run — which is exactly why sharing either would look harmless and would not be.
   #
@@ -412,6 +412,55 @@ class SpecObservation < ApplicationRecord
   # reports the figure back to the reader and a sentence explaining a list's length must not be able
   # to disagree with it.
   REPEATED_DESCRIPTION_EXAMPLES_LIMIT = 25
+
+  # How many of one run's UNANNOTATED examples the annotation drill-in returns. Its own constant, by
+  # the rule every `_LIMIT` above obeys, and it is the one on this list whose population is not a
+  # slice of a run at all.
+  #
+  # ⭐ IT IS THE FIRST CAP HERE WHOSE POPULATION IS ROUTINELY THE WHOLE RUN, which is why it is
+  # neither `FILE_EXAMPLES_LIMIT` nor `REPEATED_DESCRIPTION_EXAMPLES_LIMIT` under another name. Those
+  # two cap a LISTING of one already-picked row's contents — one file's examples, one description's
+  # members — and both populations are bounded by something a person wrote out. This one is every
+  # example of the run that carries no annotation, and on the repository this block exists for — one
+  # that has just installed the gem and been told to raise its annotation coverage — that is EVERY
+  # ROW OF THE RUN: 20,000 at the roadmap's design point, on day one, by definition. The cap is
+  # therefore not disclosing the tail of a small population, it is cutting a large one, and the two
+  # constants above were sized against the opposite case.
+  #
+  # ONE HUNDRED, and the number is chosen for what the reader DOES with the list rather than for how
+  # long it is. This is a worklist — the rows are opened, annotated and re-delivered, after which the
+  # ask returns the next hundred — so the figure that matters is a batch somebody can actually work
+  # through in one sitting, not a fraction that would let the page be mistaken for the whole answer.
+  # It sits ABOVE `FILE_EXAMPLES_LIMIT` because a file's fifty are usually that file's WHOLE story
+  # and these hundred essentially never are, and well BELOW "send them all", because
+  # `recorded_count` beside the rows is what states the real size and a 20,000-row JSON body states
+  # it far worse.
+  #
+  # Named, like all of them, because the block reports the figure back to the client and a number
+  # explaining a list's length must not be able to disagree with it.
+  UNANNOTATED_EXAMPLES_LIMIT = 100
+
+  # How many code AREAS the annotation-debt ranking returns. Its own constant, by the rule every
+  # `_LIMIT` above obeys and NOT a reuse of `HEAVIEST_DIRECTORIES_LIMIT`, which is the tempting one:
+  # that constant caps a list of the same population — one run's directories — which is exactly why
+  # sharing it would look harmless and would not be.
+  #
+  # The two rank that population by INDEPENDENT quantities, the way `MOVED_DIRECTORIES_LIMIT` and
+  # `RETIMED_DIRECTORIES_LIMIT` do one comparison over. `HEAVIEST_DIRECTORIES_LIMIT` ranks areas by
+  # WALL CLOCK; this ranks them by how many of their examples nobody has annotated. An area of four
+  # hundred fast unannotated examples is the top of this list and nowhere near the top of that one,
+  # and a slow, fully-annotated area is the reverse — so a suite that wants ten areas by cost has no
+  # reason to want ten areas by annotation debt, and one number standing for both would make that a
+  # single edit nobody meant to make.
+  #
+  # TEN rather than `UNANNOTATED_EXAMPLES_LIMIT`'s hundred, and the difference is the KIND of list
+  # rather than the grain. That constant caps a WORKLIST — rows to be opened, annotated and
+  # re-delivered, sized for a batch somebody works through in one sitting. This is a RANKING: it
+  # exists to name where the debt is concentrated so a reader can pick an area and re-ask under
+  # `?spec_directory=`, and a reader who cannot pick from ten areas is not helped by eighty. It sits
+  # with the rankings at ten for that reason, and `directory_count` beside the rows is what states
+  # the real population — the same division of labour every capped ranking here ships.
+  UNANNOTATED_DIRECTORIES_LIMIT = 10
 
   # What the drill-down's caption has to say ABOUT the rows under it, counted in the SAME read that
   # returns them — `COUNT(*) OVER ()` and `COUNT(duration_seconds) OVER ()`, which count non-nulls.
@@ -451,6 +500,32 @@ class SpecObservation < ApplicationRecord
   DESCRIPTION_POPULATION_COUNTS = "COUNT(*) OVER () AS description_recorded_count, " \
                                   "COUNT(duration_seconds) OVER () AS description_timed_count"
 
+  # What the ANNOTATION drill-in has to say about the rows under it, counted in the same read that
+  # returns them — and its OWN constant, on the rule the two pairs above state and
+  # `UNSTABLE_TEST_RUN_POPULATION_COUNTS` states again: the aliases are read back as record
+  # ATTRIBUTES by name, so a shared alias would have one block reading another block's population
+  # under its own name. Here that would be worse than ill-fitting, it would be the one falsehood this
+  # block cannot ship: `file_recorded_count` on these rows would report the run's UNANNOTATED
+  # population under a name claiming a file's, on the only block whose count a client is invited to
+  # reconcile against `total_specs - annotated_specs`.
+  #
+  # ⭐ ONE FIGURE, NOT TWO, and the omission is the point rather than an economy. Every sibling pair
+  # carries a second window disclosing COVERAGE of the column its rows are ranked by —
+  # `COUNT(duration_seconds)` for the two that rank by time, `COUNT(outcome)` for the one read for
+  # outcomes. This block ranks by nothing and serves neither column: its rows are `name`,
+  # `spec_file_path`, `file_path` and `line_number`, which is a file-navigable worklist, and
+  # `line_number` is `null: false` while `file_path` is too — so there is no nullable served column
+  # for a coverage figure to be ABOUT. A `COUNT(duration_seconds)` here would disclose the coverage of
+  # a column the block does not serve, which is a number a client could only misuse.
+  #
+  # Windows are evaluated after the WHERE and before the LIMIT, so the figure covers the whole
+  # UNANNOTATED population however few rows come back: the cap is disclosed against what the run
+  # actually holds rather than against itself. Riding on the listed rows rather than taken as a second
+  # aggregate, for the reason `FILE_POPULATION_COUNTS` gives — this list excludes nothing WITHIN the
+  # population it selects, so the population the count describes is exactly the population the window
+  # sees.
+  UNANNOTATED_POPULATION_COUNTS = "COUNT(*) OVER () AS unannotated_recorded_count"
+
   # **The retention rule.** How many runs OF ONE BRANCH keep their rows; everything older than the
   # Nth most recent run on that branch is deleted by {Ingest::ObservationPruner} after the ingest
   # that made it the N+1th. Until this constant existed, history here was retained by *omission* —
@@ -472,7 +547,7 @@ class SpecObservation < ApplicationRecord
   # So the retention is a MULTIPLE of the floor and not the floor — twice it, which leaves a
   # whole window of slack between the deepest read and the first deletion.
   #
-  # And it is its own constant rather than a reference at every call site, by the rule the six
+  # And it is its own constant rather than a reference at every call site, by the rule the
   # `_LIMIT`s above already obey: `TRAJECTORY_LIMIT` bounds how far a CHART is DRAWN, this bounds
   # how far the DATA is KEPT. They move for different reasons — a panel showing fifty points is a
   # display decision, keeping fifty runs of 20,000 rows per branch is a storage one — and one
@@ -762,6 +837,188 @@ class SpecObservation < ApplicationRecord
       .limit(limit)
   end
 
+  # ONE run's UNANNOTATED examples — the rows behind the subtraction the dashboard prints as *"SpecGuard
+  # cannot see the other N tests"*, and the one ranking on this endpoint that had no rung under it.
+  #
+  # The third sibling of `.in_file` and `.with_description` and deliberately shaped like them, because
+  # it is the same kind of read one axis over: those narrow a run to the rows of a FILE and to the rows
+  # carrying one NAME, and this narrows it to the rows carrying one STATUS. What makes it different is
+  # what it drills out of — not a ranking of the run's rows but a COUNT PAIR on the run itself,
+  # `total_specs_count` and `annotated_specs_count`, which is a subtraction and names nothing.
+  #
+  # == It agrees with the headline BY CONSTRUCTION, which is the whole reason it reads this column
+  #
+  # `Ingest::Payload#annotated_specs` is `@specs.reject { |spec| spec["status"] == "unannotated" }` and
+  # its size is `annotated_specs_count`; `Ingest::ObservationRecorder#attributes` writes that same
+  # `spec["status"]` onto every row it inserts. So `total_specs_count - annotated_specs_count` and a
+  # `WHERE status = 'unannotated'` over the run's rows are the SAME PREDICATE evaluated twice — one
+  # derivation, not two that agree today. That is the property this file demands of a count and its
+  # list everywhere else, and it is why no new column, no counter and no migration came with this read.
+  #
+  # ⚠️ THE WORD IS `Ingest::Payload`'S, NOT THIS MODEL'S, and it is safe to compare against literally
+  # only because that class validates it: `Ingest::Payload::STATUSES` is `%w[annotated unannotated]`,
+  # which is what makes "not unannotated" the same set as "annotated" — the payload's own comment says
+  # so at `#annotated_specs`. A third status added there would need this read revisited in the same
+  # commit; nothing here can detect one, and `spec/requests/api/v1/repository_unannotated_examples_spec.rb`
+  # reconciles this count against the run's two counters so the pair cannot drift silently.
+  #
+  # It is deliberately NOT spelled as `where.not(status: "annotated")`, which selects the same rows
+  # today and would stop doing so the moment a third status existed — and would stop by silently
+  # ADOPTING it into a list captioned "unannotated" rather than by going red.
+  #
+  # == The ordering is FILE-NAVIGABLE, not a ranking
+  #
+  # The two siblings sort by `duration_seconds DESC NULLS LAST`, because a reader arriving at them has
+  # come to find what a file or a description COSTS. Nobody arrives here for that: this is a worklist of
+  # tests to go and annotate, and duration is not merely a different axis but a misleading one — an
+  # unannotated example is disproportionately likely to be untimed (a test that never ran is one way an
+  # example goes unannotated), so a by-duration order would put the rows a reader can act on LEAST at
+  # the head under a `NULLS LAST` tail nobody reaches.
+  #
+  # `spec_file_path`, then `line_number`, then `id`: the order somebody would open the files in, so the
+  # rows of one file arrive together and in the order they sit in it. Every one of the three is total
+  # where the two before it tie, so the same run returns the same page twice — which the cap makes
+  # load-bearing rather than tidy, since a reader annotating the first hundred and asking again must
+  # not be handed a re-shuffled hundred. `line_number` is `null: false`, so nothing in the middle term
+  # can be NULL; `spec_file_path` is nullable BY SCHEMA and cannot be in practice, because
+  # `Ingest::ObservationRecorder#attributes` falls back to the `null: false` `file_path` — and where
+  # Postgres sorts a NULL under a plain `ASC` (last) is the survivable direction either way.
+  #
+  # == The population may be NARROWED to one file or one area, on the ladder's own two parameters
+  #
+  # Whole-run is the ask's default and not its only shape. A worklist with exactly one order and no
+  # way to choose a place in it hands a team adopting SpecGuard the alphabetically-first hundred of
+  # the WHOLE suite, and the only route to the module they are actually touching is to annotate every
+  # alphabetically-earlier example first — a hundred at a time, each batch costing a CI run and a
+  # re-ingest. Nothing was lost that way; the reader simply could not start where the work is, which
+  # is the one thing a worklist is for.
+  #
+  # So `spec_file` and `spec_directory` narrow it, and they are THE PREDICATES THIS FILE ALREADY
+  # OWNS rather than two new ones. `spec_file` is `.in_file`'s `where(spec_file_path: …)` verbatim;
+  # `spec_directory` is `.files_in_directory`'s `DIRECTORY_EXPRESSION = ?` verbatim, which is the
+  # IMMEDIATE PARENT of the including file compared for EQUALITY and NEVER a prefix `LIKE` — the rule
+  # `.file_growth_between` and `.file_runtime_growth_between` each state in full, and the one a reader
+  # widening this to "the whole subtree" would be inventing a fifth directory semantics to break.
+  # `spec/models/orders` is its own area, not part of `spec/models`.
+  #
+  # BOTH TOGETHER ARE AND-ED, AND THERE IS NO PRECEDENCE RULE. The two parameters are read
+  # independently everywhere else on the endpoint that sends them and open two independent blocks, so
+  # a "narrower rung wins" rule would be a concept invented for this one read and remembered nowhere
+  # else. AND-ing needs no rule at all: a contradictory pair returns no rows, which is an honest
+  # empty intersection rather than one parameter having been silently dropped.
+  #
+  # Neither narrowing distinguishes "that path does not exist" from "that path is fully annotated",
+  # and neither should — `SpecFileExamples` answers an unknown path with the empty block rather than
+  # an error or a prefix match, and a caller that needs the two apart has them for free in the
+  # sibling block the same request opens. See `serialized_unannotated_examples`, which says so.
+  #
+  # == Query cost
+  #
+  # One statement, bounded by the size of ONE RUN and issued only when the parameter was sent. Rides
+  # `index_spec_observations_on_test_run_id`: there is no `(test_run_id, status)` index and this read
+  # does not want one — `status` is two values over a whole table, which is the shape an index serves
+  # worst, and the run narrow is what makes the read affordable. The ORDER BY leads on
+  # `spec_file_path`, which `index_spec_observations_on_test_run_id_and_spec_file_path` DOES lead on
+  # after the run, so the planner may take the sort from that index or read the narrow one and sort the
+  # rows; both are bounded by the run rather than by the suite, and the certification in
+  # `spec/models/spec_observation_spec.rb` asserts what actually matters — one run reached through an
+  # index rather than every run's rows walked.
+  #
+  # NEITHER NARROWING COSTS THE READ ANYTHING, and they do not cost it the same way. `spec_file`
+  # narrows on the second column of `index_spec_observations_on_test_run_id_and_spec_file_path`, so
+  # it is strictly CHEAPER than the whole-run read above. `spec_directory` is an expression
+  # predicate and buys no index — it is the run-bounded scan `.files_in_directory` already ships,
+  # bounded by the run rather than by the suite, which is the same bound the un-narrowed read has.
+  # So the certification covers all three reads and asserts the one thing that has to stay true of
+  # each: one run reached through an index rather than every run's rows walked.
+  #
+  # The projection carries `UNANNOTATED_POPULATION_COUNTS`, so a caller gets the unannotated
+  # population off the same read as the rows — and the window rides the WHERE, so a narrowed read
+  # counts the narrowed population for free rather than needing a second aggregate to describe what
+  # it returned. That figure is an ATTRIBUTE of the returned records rather than a separate value,
+  # which makes this relation one to load and read — `UnannotatedExamples` is its one caller —
+  # rather than one to count or paginate further.
+  def self.unannotated_in(test_run, limit: UNANNOTATED_EXAMPLES_LIMIT, spec_file: nil,
+                          spec_directory: nil)
+    scope = where(test_run_id: test_run.id, status: "unannotated")
+    scope = scope.where(spec_file_path: spec_file) if spec_file
+    scope = scope.where(sanitize_sql_array(["#{DIRECTORY_EXPRESSION} = ?", spec_directory])) if spec_directory
+
+    scope
+      .select(Arel.sql("spec_observations.*, #{UNANNOTATED_POPULATION_COUNTS}"))
+      .order(:spec_file_path, :line_number, :id)
+      .limit(limit)
+  end
+
+  # WHERE ONE RUN'S ANNOTATION DEBT IS, rolled up by code AREA — the ranking the worklist above never
+  # had, and the rung that makes `.unannotated_in`'s narrowing reachable.
+  #
+  # `.unannotated_in` orders FILE-NAVIGABLY and says so: it is a worklist, not a ranking, and its own
+  # comment states that nobody arrives at it to find what something COSTS. `?spec_file=` and
+  # `?spec_directory=` then let a caller start where the work is — but only a caller who ALREADY KNOWS
+  # which area to name. Nothing in the response said. The three area/file rollups this endpoint serves
+  # rank by DURATION and their `coverage_label` is `coverage_fraction(timed_count, recorded_count)`,
+  # which is TIMING coverage — so an agent told to raise a repository's annotation coverage had a
+  # headline integer, a hundred alphabetical rows, and no way to choose. This read is the missing rung:
+  # it names the areas the debt is concentrated in, and each one is a `?spec_directory=` away.
+  #
+  # == It is `.directory_durations_in` with a different ranked quantity, deliberately
+  #
+  # Same GROUP BY on `DIRECTORY_EXPRESSION`, same `where(test_run_id:)` narrow, same `COUNT(*) OVER ()`
+  # riding back to disclose the population the cap cut. What differs is what it ranks by, which is why
+  # it is a sibling rather than a parameter on that read: an area's wall clock and an area's unannotated
+  # count are independent quantities, and folding a second ranking into one method would make every
+  # caller of the first pay for a column it does not read.
+  #
+  # == `COUNT(*) FILTER (WHERE status = 'unannotated')`, and the predicate is spelled VERBATIM
+  #
+  # NEVER `where.not(status: 'annotated')`, for the reason `.unannotated_in` argues in full above: the
+  # negated form selects the same rows today and would stop doing so the moment a third status existed
+  # — and would stop by silently ADOPTING it into a ranking captioned "unannotated" rather than by
+  # going red. The rule is the same one grain up, and it is easier to break here, where the predicate
+  # sits inside an aggregate rather than in a WHERE a reader scans first.
+  #
+  # A FILTERed aggregate rather than a `where(status:)` narrow on the whole read, and that is the
+  # load-bearing shape of this method rather than a spelling preference. Narrowing the read would give
+  # each group a `recorded_count` of its own UNANNOTATED rows — which is `unannotated_count` again
+  # under a second name, a fraction that is 100% on every row. The denominator a reader needs is the
+  # area's WHOLE population, so the WHERE stays open at the run and the predicate rides the aggregate.
+  # It also keeps a fully-annotated area OUT of the ranking without dropping it from the count of areas
+  # the run touched: a zero-debt area sorts last by construction and the cap removes it, while
+  # `directory_count` still describes every area — the ranking is of debt, the disclosure is of the run.
+  #
+  # == The ordering, and why both terms are needed
+  #
+  # `unannotated_count DESC` is the ranking; `#{DIRECTORY_EXPRESSION} ASC` is a TOTAL tiebreak, so two
+  # areas carrying the same debt come back in the same order on two identical asks. The cap makes that
+  # load-bearing rather than tidy — a reader comparing this ranking across two requests must not be
+  # handed a re-shuffled tail, which is the same argument `.unannotated_in` makes for its third sort
+  # term. No `NULLS LAST` clause and none wanted: `COUNT` returns 0 where `SUM` returns NULL, so unlike
+  # `.directory_durations_in` this read has no null-ranked rows to keep off the head.
+  #
+  # == Query cost
+  #
+  # One grouped aggregate over ONE RUN, issued only when the parameter was sent. NO NEW INDEX, for the
+  # reason `.directory_durations_in` states at length: it groups on an EXPRESSION and narrows on a
+  # COLUMN, and only the second decides the access path — `where(test_run_id:)` is served by
+  # `index_spec_observations_on_test_run_id` and the aggregation sits on top of that scan either way.
+  # There is deliberately no `(test_run_id, status)` index and this read does not want one; `status` is
+  # two values over a whole table, which is the shape an index serves worst, and the FILTER is applied
+  # to rows the group has already touched. Certified in `spec/models/spec_observation_spec.rb` on the
+  # one thing that has to stay true — one run reached through an index rather than every run's rows
+  # walked.
+  def self.unannotated_directories_in(test_run, limit: UNANNOTATED_DIRECTORIES_LIMIT)
+    where(test_run_id: test_run.id)
+      .group(Arel.sql(DIRECTORY_EXPRESSION))
+      .order(Arel.sql("COUNT(*) FILTER (WHERE status = 'unannotated') DESC"),
+             Arel.sql("#{DIRECTORY_EXPRESSION} ASC"))
+      .limit(limit)
+      .pluck(Arel.sql(DIRECTORY_EXPRESSION),
+             Arel.sql("COUNT(*) FILTER (WHERE status = 'unannotated')"),
+             Arel.sql("COUNT(*)"),
+             Arel.sql("COUNT(*) OVER ()"))
+  end
+
   # How many distinct descriptions one narrowing may hand the composition step below.
   #
   # A catastrophe valve, not a display limit. The candidate step asks for the descriptions that
@@ -1039,6 +1296,232 @@ class SpecObservation < ApplicationRecord
       .order(Arel.sql(sanitize_sql_array(["array_position(ARRAY[?]::bigint[], test_run_id)", run_ids])),
              id: :asc)
       .limit(limit)
+  end
+
+  # Whether ONE run's examples carry a durable identity at all, and how many of them do not — the
+  # two facts a read grouped over `spec_identities` has to establish before anything it returns can
+  # be read.
+  #
+  # The `spec_identities` grain's counterpart of `.description_presence_in`, and here for the same
+  # reason that one exists: {NearDuplicateClusters} can only see examples that reached an identity,
+  # and it excludes the rest *structurally* rather than in a WHERE clause — an observation with no
+  # `spec_identity_id` is in no cluster because there is nothing to cluster it BY. No window over
+  # that read could ever have counted them.
+  #
+  # `unresolved_count` is this grain's "rows with no resolvable text". {Ingest::IdentityResolver}
+  # leaves exactly two kinds of row behind: one whose {Ingest::SpecSignal} is `:none`, which has no
+  # text to embed and therefore no identity to have, and one whose embedding failed, which is left
+  # unresolved on purpose so a later run can try again. Both are invisible to a cluster read, and a
+  # panel that examined the resolved nine tenths of a suite and said nothing about the other tenth
+  # is a claim about a population it did not read.
+  #
+  # `recorded_count` is what tells an empty cluster list apart from an empty suite. A repository
+  # that ingested nothing and a repository whose every test reads differently from every other
+  # produce the identical empty ranking, and rendering "nothing here is repeated" over the first is
+  # *Vacuous Green* — "nobody told us" wearing the spelling of "there is no redundancy".
+  #
+  # == Scoped to the run, because the figures it is a caption FOR are
+  #
+  # {NearDuplicateClusters} weighs its clusters in one run's examples, so these two must be counted
+  # over that same run's rows or the caption is a fraction whose halves were measured over different
+  # populations — which is the property that object claims for itself. Repository-wide, the second
+  # figure is also monotonic in a way it must not be: SPGD-367 leaves a failed embed's
+  # `spec_identity_id` NULL forever, so a suite whose every current test resolves cleanly would go
+  # on reporting a growing count of exclusions from runs long past.
+  #
+  # One aggregate rather than two round trips, for the reason `.coverage_in` gives: a caption
+  # fetched separately from the list it describes is a claim with no structural reason to keep
+  # agreeing with it.
+  #
+  # @return [Hash{Symbol=>Integer}] `recorded_count` and `unresolved_count`, both counted in rows.
+  def self.identity_presence_in(test_run)
+    counts = where(test_run_id: test_run.id).pick(
+      Arel.sql("COUNT(*)"),
+      Arel.sql("COUNT(*) FILTER (WHERE spec_identity_id IS NULL)")
+    )
+
+    { recorded_count: counts[0].to_i, unresolved_count: counts[1].to_i }
+  end
+
+  # Step one of two: WHICH durable tests a repository-grain ranking is going to be about — the
+  # slowest identities of ONE run, with the coverage of the population they were ranked out of
+  # riding back beside them.
+  #
+  # **The first read in this application to group on `spec_identity_id`**, and the reason the column
+  # stopped being written-and-never-aggregated. `.slowest_in` above answers "the slowest examples in
+  # this run" and stays on the near side of the model's own boundary in as many words; this is the
+  # step that crosses it, and {SlowestTests} is what carries the crossing.
+  #
+  # == Why the candidates come from ONE run and not from the window
+  #
+  # The naive spelling of "the slowest tests in this repository" groups the whole window by identity,
+  # which is 600,000 rows aggregated per page load at the 20,000-example design point — the arithmetic
+  # `.unstable_candidates_in` states for its own grain and refuses. So the narrowing happens first and
+  # it happens here: ONE RUN's rows, reached through an index that leads with `test_run_id`, grouped
+  # and capped. The window is only ever aggregated over the identities this step hands back.
+  #
+  # WHICH `test_run_id` index is left to Postgres, and the measured answer is not the one this
+  # comment first claimed. `index_spec_observations_on_test_run_id_and_duration_seconds` is the
+  # obvious candidate and the planner does not take it: the aggregate has to visit the heap for
+  # `spec_identity_id` either way, so the wider index buys a whole-run grouping nothing and the
+  # narrower `(test_run_id, outcome)` bitmap was measured to price better. `.file_durations_in`'s own
+  # plan assertion documents exactly this — *"what matters for this criterion is that one run is read
+  # through an index rather than by walking every run's rows"* — and the certification here asserts
+  # that and not a cost tiebreak the planner is entitled to revisit.
+
+  #
+  # Anchoring on the newest run is a PARTITION AND NOT AN OVERSIGHT, and {SlowestTests} states it
+  # rather than leaving it to be discovered: a test absent from the newest run — deleted, renamed
+  # past its own identity, or simply not selected — is not in the suite being asked about, and a
+  # ranking that resurrected it would be answering a question about a suite that no longer exists.
+  #
+  # == Untimed identities are KEPT, and the ordering is what makes that safe
+  #
+  # `.slowest_in` excludes untimed rows in SQL and its comment says why that exclusion is
+  # load-bearing: `duration_seconds: :desc` is NULLS FIRST in Postgres, so a naive ordering heads a
+  # list captioned "slowest" with the examples that did not run. That argument bounds an exclusion
+  # for a read of RAW ROWS. This one aggregates, and `.file_durations_in` states the rule for that
+  # shape instead: *"dropping untimed rows changes each surviving group's own POPULATION"* — an
+  # identity carried by four examples of which two went untimed would report a total understating by
+  # half and say nothing about it. So nothing is dropped, `NULLS LAST` disarms the hazard the
+  # exclusion existed for, and every group carries `COUNT(*)` beside `COUNT(duration_seconds)` so the
+  # surface states what it summed over. An identity nothing timed sorts last and renders as "not
+  # reported" through `.humanized_duration`, never as a zero.
+  #
+  # == The two ride-alongs, and why they are windows over aggregates
+  #
+  # `COUNT(*) OVER ()` counts candidate IDENTITIES — evaluated after `GROUP BY` and before `LIMIT`,
+  # so it counts all of them however few are returned. That is the truncation disclosure
+  # `.unstable_candidates_in` documents and `SlowestTests#truncated?` reports.
+  #
+  # `SUM(COUNT(duration_seconds)) OVER ()` is a window over an aggregate, which reads oddly and is
+  # the point: it re-totals the per-identity timed counts back up to the RUN, so the numerator of the
+  # coverage fraction the caption states is measured over the very rows this ranking was drawn from,
+  # in the same round trip. Fetched separately it would be a figure with no structural reason to keep
+  # agreeing with the list — the rule `SlowestExamples` states for its own caption.
+  #
+  # ⚠️ Its DENOMINATOR is deliberately NOT fetched here, and that absence is the correction of a
+  # defect rather than an omission. This read once carried a `SUM(COUNT(*)) OVER ()` beside it to
+  # count the run's resolved rows, and its comment claimed that was "never a second measurement" of
+  # what `.identity_presence_in` counts. It was exactly that: this read's `WHERE spec_identity_id IS
+  # NOT NULL` and that gate's `recorded_count - unresolved_count` are the SAME PREDICATE over the SAME
+  # population, computed twice in two statements with no transaction around them. An ingest landing
+  # between the two let a surface render "7 rows recorded, 1 excluded" beside "5 of 6 timed" — three
+  # figures from two snapshots that do not add up, on an object whose whole claim is that its list and
+  # its captions are one read. So the population is measured ONCE, at the gate, and {SlowestTests}
+  # threads that figure through as the denominator. One measurement cannot disagree with itself.
+  #
+  # @param test_run [TestRun] the ANCHOR — normally the newest run of the window.
+  # @return [Array<Array>] `[spec_identity_id, candidate_count, timed_count]` per kept identity,
+  #   where the last two are the same figures on every row.
+  def self.slowest_identity_candidates_in(test_run, limit: SLOWEST_LIMIT)
+    where(test_run_id: test_run.id)
+      .where.not(spec_identity_id: nil)
+      .group(:spec_identity_id)
+      .order(Arel.sql("SUM(duration_seconds) DESC NULLS LAST"), Arel.sql("spec_identity_id ASC"))
+      .limit(limit)
+      .pluck(Arel.sql("spec_identity_id"),
+             Arel.sql("COUNT(*) OVER ()"),
+             Arel.sql("SUM(COUNT(duration_seconds)) OVER ()"))
+  end
+
+  # Everything a repository-grain ranking has to say about ONE durable test across the window, as
+  # one grouped aggregate over the candidates only — ordered, named, and kept in one constant for
+  # the reason `COVERAGE_COUNTS` and `UNSTABLE_COMPOSITION` are: the names are what the caller
+  # destructures and the expressions are what a plan assertion EXPLAINs.
+  #
+  # `total_seconds` is THE MOVED-TEST GUARANTEE made arithmetic. The grouping key is the identity,
+  # so a test that changed `file_path`/`line_number` between two runs of the window is one group and
+  # both runs' durations land in one sum — which is the whole of what slice 1 settled cross-run
+  # identity FOR. Grouped on the coordinate it would be two rows halving one test's history, and
+  # grouped on `name` a rename would do the same; `UnstableTests` groups on `name` deliberately and
+  # for a different question, and that choice is not disturbed here.
+  #
+  # `recorded_count` beside `timed_count` for `.file_durations_in`'s reason, restated one grain over:
+  # `SUM` skips NULLs silently, so a group summing four of its nine rows must say so or the total is
+  # a measurement over a population the reader cannot see.
+  #
+  # `run_count` beside `recorded_count` is the pair `UNSTABLE_COMPOSITION` needs for its own key and
+  # needs here too, though it separates something different. An identity is not a key within a single
+  # run — {NearDuplicateClusters} states this about `spec_identities` at length: a three-example
+  # table-driven loop, a shared example group, or two verbatim-identical tests are ONE identity and
+  # several examples per run, because the unique `(repository_id, text_digest)` and the resolver's
+  # cosine-1.0 match agree on one row for identical text. So `COUNT(*) > COUNT(DISTINCT test_run_id)`
+  # is what tells "ran in twelve runs" from "ran three times in each of four", and a total read
+  # without it is a wall clock the reader cannot attribute.
+  #
+  # `slowest_seconds` beside the sum for the same reason at the other end: 60 seconds is one minute-
+  # long test or sixty one-second runs of a cheap one, and the ranking's ordering cannot tell them
+  # apart. `MAX` costs nothing over rows already grouped and separates them.
+  #
+  # `names` and `file_paths` are `ARRAY_AGG(DISTINCT …) FILTER (WHERE … IS NOT NULL)` for
+  # `UNSTABLE_COMPOSITION`'s reason — a null must never arrive as a nil element inside an array the
+  # surface iterates — and they are what makes the identity legible at all. Nothing here joins
+  # `spec_identities`: the descriptions and paths the window actually recorded are what a reader
+  # recognises, and a group wearing two of either is the move or the rename this grouping exists to
+  # survive, disclosed rather than smoothed over.
+  IDENTITY_DURATION_COMPOSITION = {
+    total_seconds: "SUM(duration_seconds)",
+    recorded_count: "COUNT(*)",
+    timed_count: "COUNT(duration_seconds)",
+    run_count: "COUNT(DISTINCT test_run_id)",
+    slowest_seconds: "MAX(duration_seconds)",
+    names: "ARRAY_AGG(DISTINCT name) FILTER (WHERE name IS NOT NULL)",
+    file_paths: "ARRAY_AGG(DISTINCT spec_file_path) FILTER (WHERE spec_file_path IS NOT NULL)"
+  }.freeze
+
+  # Step two of two: how each candidate identity behaved across the whole window — over the
+  # candidates only, which is what keeps this off the window's rows.
+  #
+  # == What it costs, MEASURED rather than assumed
+  #
+  # EXPLAIN (ANALYZE) over ten candidates, a six-run window and twenty runs of history, 300 rows per
+  # run — the seed the certification in `spec/models/spec_observation_spec.rb` runs on:
+  #
+  #     Bitmap Index Scan on index_spec_observations_on_spec_identity_id   rows=200
+  #     Bitmap Heap Scan   Filter: (test_run_id = ANY (…))                 rows=60, removed=140
+  #
+  # So the honest bound is **candidates × the runs those identities appear in AT ALL**, and not
+  # candidates × the window — the index is on `spec_identity_id` ALONE, so the window predicate is a
+  # FILTER applied after the fetch rather than an index condition that narrows it. 200 rows against
+  # the window's 1,800, and against a whole-window group-by's 1,800; the ratio widens with the suite,
+  # because the number this read follows is the candidate count and the number the naive spelling
+  # follows is the row count.
+  #
+  # That leaves it bounded by RETENTION rather than by the window, which is a bound and worth naming
+  # as one: `BRANCH_RETENTION_RUNS` above caps a branch's history at 60 runs, so a candidate's rows
+  # are capped whatever window is asked for. It is also why the certification pins the bound by
+  # SHRINKING THE CANDIDATE LIST and measuring again rather than by asserting one number — what has
+  # to stay true is that the work follows the candidates, and a single ceiling would pass just as
+  # happily on a read that had stopped being narrowed at all.
+  #
+  # A composite `(spec_identity_id, test_run_id)` index would turn that filter into an index
+  # condition, and is deliberately NOT added: this ticket ships no migration, the measured read is
+  # already three orders of magnitude off the shape it replaces at the design point, and an index
+  # added on an argument rather than on a profile is the kind this table already carries two of.
+  #
+  # NO `repository_id` PREDICATE, and the omission is deliberate rather than an oversight of its
+  # sibling's care. `.outcome_composition_in` scopes by repository because `repository_id` is the
+  # LEADING COLUMN of the index it rides and there is no index on `name` without it. The index here
+  # is on `spec_identity_id` alone, so a repository predicate buys this read no index and risks
+  # costing it the one it needs — the planner would be offered
+  # `index_spec_observations_on_repository_id` as an alternative to the identity index this bound
+  # depends on. Tenancy is carried by the arguments instead, and structurally: a `spec_identity` is
+  # `repository_id`-scoped and unique on `(repository_id, text_digest)`, so ids handed back by
+  # `.slowest_identity_candidates_in` for a run of this repository are this repository's — which is
+  # why {SlowestTests} validates that the run belongs to the repository, on {NearDuplicateClusters}'
+  # precedent, rather than re-deriving the tenant here.
+  #
+  # @return [Array<Array>] `[spec_identity_id, *IDENTITY_DURATION_COMPOSITION.values]`, in that
+  #   order. Unordered between groups — the ranking is {SlowestTests}', which sorts on the summed
+  #   wall clock the sibling reads sort on and by their `NULLS LAST` rule.
+  def self.identity_duration_composition_in(run_ids:, spec_identity_ids:)
+    return [] if run_ids.empty? || spec_identity_ids.empty?
+
+    where(test_run_id: run_ids, spec_identity_id: spec_identity_ids)
+      .group(:spec_identity_id)
+      .pluck(Arel.sql("spec_identity_id"),
+             *IDENTITY_DURATION_COMPOSITION.values.map { |sql| Arel.sql(sql) })
   end
 
   # Where ONE run's wall clock went, rolled up by DIRECTORY — the rung directly above the rollup
@@ -1764,6 +2247,31 @@ class SpecObservation < ApplicationRecord
 
     format("%.2fs", seconds)
   end
+
+  # How much of a population a figure was measured over, rendered — the one seam every single-sided
+  # `#coverage_label` is spelled through, whether the population is one file's examples, one area's
+  # files or one run's repeated descriptions, so no two of those grains can state the same coverage
+  # in two prose inventions that agree today.
+  #
+  # Single-sided is the boundary, and it is worth saying where it stops rather than leaving the next
+  # reader to find the edge with a grep. `SpecDirectoryRuntimeGrowth::Row#coverage_label` states two
+  # populations in one string — "12 of 40 → 14 of 41" — because a comparison between two runs is only
+  # readable when BOTH sides say what they were summed over, and it renders on the same page as the
+  # areas panel that does come through here. That is a different sentence rather than this one said
+  # twice, so it is built where it is read and is deliberately not spelled through this seam. A seam
+  # that claimed it anyway would be the thing this one exists to retire: a promise kept by hand.
+  #
+  # Always the fraction and never the bare numerator. "12" in a column of "12 of 40" reads as
+  # twelve of something unstated: the denominator is the point of the column, and a fully timed
+  # population has to be visibly complete rather than merely unremarked.
+  #
+  # Both operands are PASSED rather than read off the receiver, and that is the load-bearing part
+  # of this signature. The callers do not agree on what to count — a row supplies its own window,
+  # while `RepeatedDescriptions` supplies the repeated subset's totals, which are a different
+  # population from the `#recorded_count` that same object exposes to decide whether an empty
+  # ranking means anything. A seam that reached for those names itself would render one of these
+  # captions off the wrong pair of figures, silently and in the correct format.
+  def self.coverage_fraction(timed, recorded) = "#{timed} of #{recorded}"
 
   # What CI said happened to this example, rendered — and NOTHING this application decided.
   # SpecGuard does not run tests; it reports what a client sent, which makes this a stability

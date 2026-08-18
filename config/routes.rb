@@ -1,6 +1,18 @@
 Rails.application.routes.draw do
   root "pages#home"
 
+  # The public integration guide (SPGD-705). Deliberately outside every authentication gate, and
+  # that is the requirement rather than an oversight: its intended reader is as often an AI coding
+  # agent handed nothing but this URL as it is a person, and such an agent has no session and
+  # cannot acquire one. It documents the two `api/v1` routes declared below and promises nothing
+  # beyond them, so there is nothing on it a signed-out reader must not see.
+  #
+  # `/docs/…` rather than a bare `/integrate` so the next document has an obvious home; the named
+  # helper is `integration_guide_path`, which is what the repository page's agent-prompt block
+  # builds its URL from — the prompt is only correct because it points at this page, so the two
+  # must not be able to drift apart through a hand-written string.
+  get "docs/integrate", to: "pages#integrate", as: :integration_guide
+
   # --- Human auth: GitHub OAuth -------------------------------------------------
   post  "/auth/github",          to: "sessions#passthru", as: :github_auth
   get   "/auth/github/callback", to: "sessions#create"
@@ -46,6 +58,19 @@ Rails.application.routes.draw do
       post "ingest", to: "ingests#create"
     end
   end
+
+  # --- The protocol contract, downloadable ---------------------------------------
+  # A convenience mirror of the OpenTestIntent v1 schema, served unauthenticated so anyone reading
+  # the docs can fetch what their annotations are validated against. The canonical copy lives in the
+  # vendor-neutral `open-test-intent` repository, which is what the schema's `$id` names; this is a
+  # second address for the same bytes, not a second source of truth.
+  #
+  # `format: false` because the `.v1.json` in the path is part of the schema's FILENAME, not a
+  # format request. Left on, Rails' optional `(.:format)` segment would make `/schemas/
+  # open-test-intent.v1` answer too, advertising an address whose name no longer says which
+  # version it returns.
+  get "/schemas/open-test-intent.v1.json", to: "schemas#open_test_intent_v1",
+                                           as: :open_test_intent_schema, format: false
 
   get "up", to: "rails/health#show", as: :rails_health_check
 end

@@ -24,7 +24,8 @@
 # only on shape: the DRILL-INS are ONE MORE EACH, and they are the grains whose count depends
 # on what the CLIENT ASKED rather than on what the window holds — no `?spec_file=`, no read of that
 # file's examples; no `?repeated_description=`, no read of that group's members; no
-# `?unstable_test=`, no read of that test's run-by-run sequence; and no
+# `?unstable_test=`, no read of that test's run-by-run sequence; no `?unannotated_examples=`, no read
+# of the run's unannotated population; and no
 # `?spec_directory=`, no read of that area at any of the THREE grains one ask now opens — its files
 # by wall clock, their example-count movement, and their runtime movement. Every gate is decided
 # before any read, so an unasked
@@ -148,6 +149,30 @@
 # The alias is the only match here whose uniqueness is guaranteed BY A RULE WRITTEN BESIDE THE SQL,
 # and it is now the guarantee three of the thirteen grains stand on.
 #
+# == The EIGHTH arrival, where the alias family's guarantee is joined by a second one
+#
+# The drill-in into ONE run's UNANNOTATED examples is matched on `AS unannotated_recorded_count`, the
+# fourth member of the alias family above, and it inherits that family's guarantee for the fourth
+# time: `SpecObservation::UNANNOTATED_POPULATION_COUNTS` is its own constant PRECISELY so it cannot
+# share an alias with any other window on this table, and its comment states the sharpest version of
+# the rule yet — a `file_recorded_count` on these rows would report the run's unannotated population
+# under a name claiming one FILE's, on the only block whose count a client is invited to reconcile
+# against a headline figure.
+#
+# It is ALSO the first arrival whose read could have been matched on its PREDICATE without an
+# accident: `"status" = 'unannotated'` is issued by no other read of this table, because no other read
+# looks at that column at all. That option is not taken, and the reason is the one this file has given
+# three times for rejecting an ORDER BY — the uniqueness would rest on an observation about today's
+# call sites rather than on a rule written beside the SQL, and the day a second reader of `status`
+# arrives (an annotated-side listing is the obvious one) it would end silently. The alias family's
+# guarantee does not have that property, which is why it is the one used.
+#
+# ⚠️ ITS ORDER BY IS THE ONE PATTERN HERE THAT WOULD HAVE COLLIDED. `.unannotated_in` orders on
+# `spec_file_path` — a QUOTED column reference, since it needs no SQL literal — which is the same
+# column the by-file grouping matches on, and `GROUP BY "spec_observations"."spec_file_path"` is not
+# what an ORDER BY emits, so the two do not in fact meet. That near miss is recorded rather than
+# relied on: it is exactly the shape the three TIGHTENINGS above each discovered by being wrong first.
+#
 # == The growth grain has TWO READERS, and no pattern can separate them
 #
 # `growth_grain_reads` is the one accessor here that does not answer "did block X read". Both growth
@@ -246,9 +271,31 @@ module ObservationGrainReads
   # than the total, which is exactly the defect `classified_observation_reads` exists to catch.
   RUNTIME_GROWTH_ORDER = /ORDER BY ABS\(SUM\(duration_seconds\) FILTER \(WHERE test_run_id = /
 
+  # The area-grain ANNOTATION-DEBT ranking — `SpecObservation.unannotated_directories_in`, the ONE
+  # read on this table that ranks a run's areas by how many of their examples carry no annotation.
+  #
+  # ⭐ AN ORDER BY, AND FOR THE REASON `GROWTH_ORDER` AND `RUNTIME_GROWTH_ORDER` ARE ONES rather than
+  # in spite of the three paragraphs above that reject an ORDER BY match. Those three reject an
+  # ordering that separates two reads BY ACCIDENT — Arel's quoting, or which of two reads happened to
+  # need a `NULLS LAST` literal. This one separates them by the QUANTITY THEY RANK, which is the
+  # difference the two reads actually have and the only one they can have: this read shares the AREA
+  # GROUPING with `.directory_durations_in` and `.directory_growth_between`, and that expression is
+  # `DIRECTORY_EXPRESSION`, deliberately one definition, because the API and the panel must not
+  # disagree about what a directory is. It cannot be un-shared, so — exactly as the area/growth split
+  # already is — the grain is separated on what it orders by.
+  #
+  # `COUNT(*) FILTER (WHERE status = 'unannotated')` is issued by no other read of this table. The
+  # near neighbour is `.unannotated_in`, which spells the same predicate in a WHERE and emits
+  # `AS unannotated_recorded_count` besides, so the two cannot meet: a WHERE clause is not an ORDER BY
+  # and grain 13 matches on an alias this read does not select. Nothing here is a residual definition
+  # — an unclassified read still belongs to no list and is caught by the total, on this file's rule.
+  UNANNOTATED_DEBT_ORDER = /ORDER BY COUNT\(\*\) FILTER \(WHERE status = 'unannotated'\) DESC/
+
   # `[area, file, example, description, flakiness, growth, directory_files, file_examples,
   # repeated_description_examples, directory_file_growth, runtime_growth,
-  # directory_file_runtime_growth, unstable_test_runs]` — the thirteen grains, each an array of the
+  # directory_file_runtime_growth, unstable_test_runs, unannotated_examples,
+  # unannotated_directories]` — the fifteen grains,
+  # each an array of the
   # statements matched. The single-run grains come first, in the order `serialized_latest_run` serves
   # them, and the two CROSS-RUN grains after them in the order `show` serves them — so a
   # destructuring caller reads the endpoint's own shape, and a caller written before a grain was
@@ -280,7 +327,9 @@ module ObservationGrainReads
      reads.grep(GROWTH_ORDER).grep(AREA_PREDICATE),
      reads.grep(RUNTIME_GROWTH_ORDER).grep_v(AREA_PREDICATE),
      reads.grep(RUNTIME_GROWTH_ORDER).grep(AREA_PREDICATE),
-     reads.grep(/AS unstable_test_recorded_count/)]
+     reads.grep(/AS unstable_test_recorded_count/),
+     reads.grep(/AS unannotated_recorded_count/),
+     reads.grep(UNANNOTATED_DEBT_ORDER)]
   end
 
   # `UnstableTests.for`'s four reads, in the order it issues them: the gating outcome-reporting
@@ -310,6 +359,8 @@ module ObservationGrainReads
   def runtime_growth_grain_reads(&) = observation_reads_by_grain(&)[10]
   def directory_file_runtime_growth_grain_reads(&) = observation_reads_by_grain(&)[11]
   def unstable_test_runs_grain_reads(&) = observation_reads_by_grain(&)[12]
+  def unannotated_examples_grain_reads(&) = observation_reads_by_grain(&)[13]
+  def unannotated_directories_grain_reads(&) = observation_reads_by_grain(&)[14]
 end
 
 RSpec.configure do |config|

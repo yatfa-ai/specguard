@@ -58,9 +58,9 @@
 # first rather than a shape to be tidied away.
 class UnstableTests
   # @param runs [Array<TestRun>] the window, ALREADY LOADED — the same rows the "Suite growth"
-  #   panel is drawn on, handed in rather than re-queried. Two panels that fetched "the last thirty
-  #   runs on this branch" separately would be two windows that agree today, and this one's
-  #   captions name the other one's branch.
+  #   panel is drawn on, handed in rather than re-queried. Every panel that fetched "the last thirty
+  #   runs on this branch" separately would be its own window, agreeing today with no structural
+  #   reason to keep agreeing, and this one's captions name the others' branch.
   def self.for(repository, runs, branch: nil)
     run_ids = runs.map(&:id)
     reporting = SpecObservation.window_outcome_reporting(run_ids)
@@ -147,8 +147,10 @@ class UnstableTests
   # this must therefore sit behind a `comparable?` guard or handle the nil.
   # `RepositoriesHelper#unstable_tests_unnamed_clause` is the former, and the guard is over its
   # CALLER rather than over it: it is reached only through `#unstable_tests_exclusion_sentence`,
-  # which `show.html.erb:3680` renders inside `if @unstable_tests.comparable?`. The API serializer
-  # (`repositories_controller.rb:1376`) is the latter — it serves the nil through as `null`.
+  # which the repository page renders inside the `<% if @unstable_tests.comparable? %>` branch of its
+  # "Tests whose outcome changed" panel (`id: "unstable-tests"`). The API serializer
+  # (`Api::V1::RepositoriesController#serialized_unstable_tests`, which emits the `unnamed_count:`
+  # key) is the latter — it serves the nil through as `null`.
   attr_reader :unnamed_count
 
   # Whether this window has any per-example grain AT ALL — the question that decides whether the

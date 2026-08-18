@@ -1,0 +1,80 @@
+  <%# == Connection state, as an indicator rather than an essay (SPGD-705)
+      ==========================================================================================
+
+      This is what survives of the "Connect this repository" panel's Connection stat: the same four
+      states, the same order, the same reasoning about which one wins — and one clause each instead
+      of a `UI::StatComponent` plus three paragraphs of prose about HTTP status codes.
+
+      What was dropped was dropped because it was explaining, in words, a table that sits further
+      down this same page. "Rejected deliveries" lists every refused delivery with its reason; a
+      panel above it teaching the reader to distinguish a 401 from a 400 by reasoning about which
+      one stamps `last_used_at` was a manual for a surface the reader can simply look at. The
+      refusing state links straight to it instead.
+
+      == The four states, and why they are in this order
+
+      Each of the first three is a strictly more specific condition than the one after it, so the
+      order is not a preference — reversing any adjacent pair would report the vaguer answer for a
+      repository the page can say something exact about.
+
+      1. REFUSING. `@last_api_request_at` is `api_keys.last_used_at`, stamped by
+         `Api::BaseController#authenticate_api_key!` on the way IN, before the payload is looked at.
+         So it answers "did anything authenticate" and nothing else, and read alone it produced this
+         product's own vacuous green: a repository whose every run was refused for its payload read
+         "Connected", in success tone, over a pipeline throwing away 100% of its work. A delivery
+         being refused HAS authenticated, so this state implies the next one and must precede it.
+         `:error` rather than `:warning` because work is being destroyed, not merely absent.
+
+      2. CONNECTED. `@last_live_api_request_at` is the same figure restricted to keys still carrying
+         the token that stamped them. Restricted, because `regenerate!` retires a token with no
+         grace window and deliberately leaves `last_used_at` standing (it is the key's history), so
+         the unrestricted figure reports an age belonging to a credential that no longer exists.
+
+      3. ROTATED, NOT YET IN USE. Reached only when something authenticated but nothing live did —
+         i.e. every key that ever authenticated has since been rotated. Dated from the OLDEST
+         rotation in the set, which is the only date true of all of them at once: the NEWEST would
+         make "nothing has authenticated since <date>" read most reassuringly on the one indicator
+         that exists to stop reading reassuringly, and would date a five-day-dead pipeline at one
+         minute whenever a second key was rotated just now.
+
+      4. NOT CONNECTED YET. Nothing has ever authenticated. `:neutral`, not `:warning`: a repository
+         registered a minute ago has nothing wrong with it, and this is the only one of the four
+         that is an ordinary starting condition rather than a fault.
+
+      Ungated, like its predecessor and like the Overview and Rejected-deliveries panels: a member
+      with `view` alone legitimately needs to know whether CI is reaching this repository, and
+      nothing here is credential metadata — no key name, no hint, no token. %>
+  <div class="flex flex-wrap items-center gap-2" id="connection-indicator">
+    <% if @rejected_ingests.refusing? %>
+      <%= render UI::BadgeComponent.new(tone: :error) { "Deliveries refused" } %>
+      <span class="text-xs text-app-muted">
+        Last refused <%= time_ago_in_words(@rejected_ingests.last_rejection_at) %> ago — the key
+        works, the payload did not. See
+        <a href="#rejected-ingests" class="underline">Rejected deliveries</a>.
+      </span>
+    <% elsif @last_live_api_request_at.present? %>
+      <%= render UI::BadgeComponent.new(tone: :success) { "Connected" } %>
+      <span class="text-xs text-app-muted">
+        Last request <%= time_ago_in_words(@last_live_api_request_at) %> ago.
+      </span>
+    <% elsif @last_api_request_at.present? %>
+      <%# `rotations` cannot be empty here: something authenticated and nothing live did, so the key
+          holding that use is stranded, and a stranded key has a `rotated_at`. %>
+      <% rotations = @rotated_unused_api_keys.filter_map(&:rotated_at).sort %>
+      <%= render UI::BadgeComponent.new(tone: :warning) { "Key rotated, not yet in use" } %>
+      <span class="text-xs text-app-muted">
+        <% if rotations.one? %>
+          Nothing has authenticated since the key was regenerated
+          <%= time_ago_in_words(rotations.first) %> ago — the replacement token has not reached CI.
+          Update it wherever the old one was stored.
+        <% else %>
+          <%= rotations.size %> keys have been regenerated with nothing authenticating since; the
+          oldest was regenerated <%= time_ago_in_words(rotations.first) %> ago — the replacement
+          tokens have not reached CI. Update them wherever the old ones were stored.
+        <% end %>
+      </span>
+    <% else %>
+      <%= render UI::BadgeComponent.new(tone: :neutral) { "Not connected yet" } %>
+      <span class="text-xs text-app-muted">No API key has been used.</span>
+    <% end %>
+  </div>

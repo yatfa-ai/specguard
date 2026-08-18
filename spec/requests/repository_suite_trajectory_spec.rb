@@ -902,11 +902,12 @@ RSpec.describe "Repository suite-size trajectory", type: :request do
       # NOTE: the sentence says "these 11" and NOT "the 11 SpecGuard walked to". The walk reached
       # TEN here — `BRANCH_HISTORY_LIMIT` is stubbed to 10 and the walk is alphabetical, so it gets
       # `feature/000`…`feature/009` and stops. `main` is the eleventh and it is in this list because
-      # it was PINNED, outside `:branch_limit` (`app/models/repository.rb:255-259`) — i.e. it is here
-      # precisely because the walk never reached it, which is the same fact `trajectory_walk_cut?`
-      # needs `>=` for. A provenance claim over this count is off by the pins in exactly the branch
-      # written to not overclaim; the bare count is true however a row arrived. Do not reach for
-      # "walked to" when rewording this again.
+      # it was PINNED, outside `:branch_limit` (the `candidate` CTE of `BRANCH_HISTORY_SQL`, whose
+      # `SELECT pin FROM unnest(ARRAY[:pinned_branches]…)` arm sits outside the subquery carrying
+      # the `LIMIT :branch_limit`) — i.e. it is here precisely because the walk never reached it,
+      # which is the same fact `trajectory_walk_cut?` needs `>=` for. A provenance claim over this
+      # count is off by the pins in exactly the branch written to not overclaim; the bare count is
+      # true however a row arrived. Do not reach for "walked to" when rewording this again.
       expect(trajectory_panel.find("#suite-trajectory-branches-basis")).to have_text(
         "At least 3 further branches have runs and are not in the row above. The branch menu names " \
         "these 11, and cannot offer one the walk never reached. The branches with " \
@@ -933,6 +934,37 @@ RSpec.describe "Repository suite-size trajectory", type: :request do
       expect(trajectory_panel.find("#suite-trajectory-branch-fallback")).to have_text(
         "SpecGuard has no runs on feature/deleted, so this panel is drawn on feature/x", normalize_ws: true
       )
+    end
+
+    # ⭐ The echoed branch name is the one unvalidated value this panel prints back, and it reaches
+    # the reader escaped EXACTLY ONCE. This was a live, user-visible defect in
+    # `trajectory_branch_fallback_notice` for the whole of its life, and it survived every reading
+    # of that helper for one reason: NO EXAMPLE ASSERTED THE PROPERTY. `truncate` defaults to
+    # escaping its input and returning a `SafeBuffer`; interpolating that into a plain String yields
+    # a String that is not itself safe but already holds escaped text, and ERB escapes it a second
+    # time — so `?branch=a%26b` printed `a&amp;b` at the reader.
+    #
+    # Every other example in this describe asks for `feature/deleted` or `feature/gone`, branch
+    # names with nothing escapable in them, so they pass identically with `escape: false` present or
+    # removed. That is exactly the state that let the bug ship, and removing the option now reads as
+    # tidying away a redundant argument. This example is what makes it not redundant.
+    #
+    # Both halves asserted, because the fix MOVED an escape rather than adding one: the name renders
+    # as the reader typed it AND the raw body carries no live markup. The twin over the sha echo on
+    # the same page is `spec/requests/repository_run_anchor_spec.rb`, "echoes an unvalidated sha
+    # escaped exactly once, and never as markup" — the two idioms are identical and are pinned
+    # identically.
+    it "echoes an unvalidated branch name escaped exactly once, and never as markup" do
+      repository = repository_anchored_on_a_feature_branch
+
+      get repository_path(repository, branch: "a&b<script>x</script>")
+
+      expect(response).to have_http_status(:ok)
+      expect(trajectory_panel.find("#suite-trajectory-branch-fallback")).to have_text(
+        "SpecGuard has no runs on a&b<script>x</script>, so this panel is drawn on feature/x",
+        normalize_ws: true
+      )
+      expect(response.body).not_to include("<script>x</script>")
     end
 
     it "treats a blank branch as no ask at all, and says nothing about a fallback that did not happen" do
@@ -1187,6 +1219,8 @@ RSpec.describe "Repository suite-size trajectory", type: :request do
     # most of their vocabulary, and a panel-level matcher would read one for the other.
     def runtime_basis = trajectory_panel.find("#suite-trajectory-runtime-basis")
 
+    def runtime_summary = trajectory_panel.find("#suite-trajectory-runtime-chart-summary")
+
     def runtime_rows
       runtime_chart.all("details table tbody tr", visible: :all).map do |row|
         row.all("td", visible: :all).map { |cell| cell.text(:all).strip }
@@ -1218,6 +1252,37 @@ RSpec.describe "Repository suite-size trajectory", type: :request do
       expect(plotted_labels).to eq(%w[aaaaaaa bbbbbbb ccccccc])
     end
 
+    # The text alternative IS the chart for a reader who cannot see the line, so it needs the same
+    # preconditions the plot is given. The summary paragraph above the disclosure states which
+    # branch, how many runs, that the axis does not start at zero, and — here — that a point is the
+    # slowest single shard rather than machine time. A sighted reader passes that paragraph on the
+    # way down to the rows; a reader landing on the table by navigation gets the header row and
+    # bare numbers with none of it unless the table names it.
+    #
+    # Asserted on BOTH charts of one page, because the association is derived from the caller's
+    # `id:`: two instances resolving to one summary would describe each chart with the other's
+    # sentence, and a single-chart assertion cannot see that.
+    it "points each chart's table at that chart's own summary" do
+      repository = create_repository(user: @user)
+      timed_run(repository, "aaaaaaa1111", seconds: 40.2, total: 1_000, at: 2.days.ago)
+      timed_run(repository, "ccccccc3333", seconds: 74.25, total: 1_047, at: 1.hour.ago)
+
+      get repository_path(repository)
+
+      # `visible: :all` because both tables sit in a collapsed `<details>`.
+      size_table = chart.find("details table", visible: :all)
+      runtime_table = runtime_chart.find("details table", visible: :all)
+      expect(size_table[:"aria-describedby"]).to eq("suite-trajectory-chart-summary")
+      expect(runtime_table[:"aria-describedby"]).to eq("suite-trajectory-runtime-chart-summary")
+      # Each id has to resolve, or the attribute is a reference to nothing — which announces exactly
+      # as much as having no attribute while looking, in the markup, like the defect is fixed.
+      expect(chart_summary[:id]).to eq(size_table[:"aria-describedby"])
+      expect(runtime_summary[:id]).to eq(runtime_table[:"aria-describedby"])
+      # And they resolve to two DIFFERENT sentences, which is the whole reason the seam is
+      # per-instance rather than a constant.
+      expect(chart_summary.text).not_to eq(runtime_summary.text)
+    end
+
     # Criterion 3: markers are durations and never "74 tests" — which is exactly what the component
     # announced before it stopped naming the unit.
     it "announces every marker as a duration and never as a count of tests" do
@@ -1238,9 +1303,9 @@ RSpec.describe "Repository suite-size trajectory", type: :request do
 
     # Criterion 3 again, at the seam rather than at the output. `TestRun#duration_label` is the one
     # place this column is worded — "the same float cannot render two ways on one page" — and the
-    # chart is the third reader. `74.25` reaching the page as `74.25s` or `74.3 s` would be a fourth
-    # spelling; it renders as `1m 14s` because it went through the same method the Recent-runs cell
-    # does.
+    # chart words it through there like every other surface that shows it. `74.25` reaching the page
+    # as `74.25s` or `74.3 s` would be a spelling this column does not have; it renders as `1m 14s`
+    # because it went through the same method the Recent-runs cell does.
     it "words its figures through the one formatter this column has" do
       repository = create_repository(user: @user)
       timed_run(repository, "aaaaaaa1111", seconds: 40.2, at: 2.days.ago)

@@ -1,0 +1,200 @@
+    <%# == The slowest tests of the latest run
+        The first surface SpecGuard renders off `spec_observations`. Every other panel on this page
+        is about runs or about SHARDS: the Overview can say a slice ran long and cannot say which
+        test made it, because until these rows landed there was nothing that knew.
+
+        ONE run — the same run the Overview names — and deliberately not the repository's history.
+        `SpecObservation#example_id` is RSpec's positional id and explicitly not stable across
+        refactors, so a ranking that spanned runs would be comparing rows that are not known to be
+        the same test. The model draws that boundary; this panel stays on the near side of it. It
+        rolls nothing up at all — neither by file nor by directory — because a ranking of
+        individual examples answers a different question from either: outliers, not concentration.
+        Both rollups now exist, in the two panels below this one, and neither is derivable from
+        this list.
+
+        Rendered only when the run WROTE example rows. A run ingested before those rows existed, or
+        one whose client sends no per-example detail, has no per-test grain to disclose — and an
+        empty panel on every such run would read as a finding about the suite when it is a fact
+        about the payload. Where rows exist and none carried a timing, the panel renders and says
+        so: that IS a fact about the run.
+
+        Outside the `manage_keys` gate, like the Overview, Suite growth and Recent runs — read-only
+        suite telemetry, nothing credential and nothing actionable. %>
+    <% if @slowest_examples&.recorded? %>
+      <%= render UI::PanelComponent.new(title: "Slowest tests", id: "slowest-examples",
+                                        class: "lg:col-span-3") do %>
+        <% if @slowest_examples.any? %>
+          <%# What the list covers, stated before it rather than left to be inferred from its
+              length. A ranked list is read as "the worst of everything" unless it says what
+              everything was, and the two runs this panel most has to keep apart — one where every
+              example reported a duration and one where a tenth of them did not — print an
+              identical ten rows.
+
+              Every figure here is counted off THIS RUN'S ROWS in `spec_observations`, never off
+              `TestRun#total_specs_count` on the Overview panel above. That count is re-derived by
+              SUM over shard reports and the two can legitimately differ, so borrowing it would put
+              a denominator from one measurement under a numerator from another. `SlowestExamples`
+              carries the argument, and holds the list and these figures together so the sentence
+              cannot end up describing a different row set from the one below it. %>
+          <p class="text-xs text-app-muted mb-3" id="slowest-examples-basis">
+            The <%= @slowest_examples.rows.size %>
+            slowest <%= "test".pluralize(@slowest_examples.rows.size) %> of the run named above,
+            slowest first.
+            <% if @slowest_examples.complete? %>
+              Every one of the <%= number_with_delimiter(@slowest_examples.recorded_count) %>
+              <%= "example".pluralize(@slowest_examples.recorded_count) %> this run recorded
+              reported a duration, so the ranking covers the whole of what it reported.
+            <% else %>
+              Ranked over the <%= number_with_delimiter(@slowest_examples.timed_count) %> of
+              <%= number_with_delimiter(@slowest_examples.recorded_count) %> examples this run
+              recorded that reported a duration;
+              <%= number_with_delimiter(@slowest_examples.untimed_count) %> reported none and
+              stayed out of the ranking rather than sorting to the head of it. An example that
+              never ran has no duration to report, so a missing timing is a faithful record rather
+              than a gap — and a row with nothing to compare cannot be the slowest of anything.
+            <% end %>
+            <%# What the run REPORTED, beside what it measured. The ranking above is ordered on
+                duration alone and deliberately is not filtered by outcome — a failed example that
+                burned sixty seconds before blowing up spent that time and belongs in a list of
+                where the suite's wall clock went. What the page must not do is let it sit at the
+                head of that list indistinguishable from the most expensive PASSING test, and this
+                sentence plus the Outcome column below are the two halves of telling them apart.
+
+                Counted off the same rows in the same round trip as the timing figures above —
+                `SpecObservation::COVERAGE_COUNTS` is one SELECT — so the two sentences cannot end
+                up describing different row sets. `RepositoriesHelper#slowest_examples_outcome_sentence`
+                carries why `failed` and `pending` are counted by name, why the remainder is not
+                called a pass, and why a run of nil outcomes is not reported as zero failures. %>
+            <%= slowest_examples_outcome_sentence(@slowest_examples) %>
+            Counted off the rows this run wrote here, which is a different figure from the suite
+            size on the Overview panel and may legitimately differ from it.
+          </p>
+          <%= render UI::TableComponent.new(columns: ["Test", "Duration", "Outcome"],
+                                            describedby: "slowest-examples-basis") do %>
+            <% @slowest_examples.rows.each do |observation| %>
+              <tr>
+                <td class="px-3 py-2 text-app-content">
+                  <%# `name` is nullable — `Ingest::ObservationRecorder` stores a nil for a producer
+                      that sends none — and a blank cell in a ranked list is a row the reader can
+                      neither identify nor go and find. `SpecObservation#label` falls back to the
+                      definition site for exactly that row.
+
+                      The location line below is therefore rendered only when there IS a name to
+                      locate: the fallback already IS the location, and a row wearing it must not
+                      be made to wear it twice.
+
+                      Whichever of the two carries the coordinate carries the LINK to it, through
+                      `Repository#github_blob_url` and against the sha of the run this page is
+                      anchored to — the same composition and the same new-tab convention the
+                      "Unannotated examples" panel introduced. A nameless row wears the coordinate
+                      as its entire identity, so leaving that branch unlinked would leave exactly
+                      the rows that most need to be findable pointing nowhere.
+
+                      ZERO NEW QUERIES: `@repository` and `@latest_test_run` are both loaded before
+                      this partial renders — `@slowest_examples` is assigned only under
+                      `@latest_test_run` — and `#github_blob_url` is string composition. %>
+                  <% definition_site_url = @repository.github_blob_url(observation.file_path,
+                                                                       observation.line_number,
+                                                                       @latest_test_run.commit_sha) %>
+                  <% if observation.name.present? %>
+                    <%= observation.label %>
+                    <span class="block font-mono text-xs text-app-muted">
+                      <%= link_to observation.location_label, definition_site_url,
+                                  class: "underline underline-offset-2 decoration-app-border-light " \
+                                         "text-app-content hover:decoration-app-content",
+                                  target: "_blank", rel: "noopener noreferrer" %>
+                    </span>
+                  <% else %>
+                    <%= link_to observation.label, definition_site_url,
+                                class: "underline underline-offset-2 decoration-app-border-light " \
+                                       "text-app-content hover:decoration-app-content",
+                                target: "_blank", rel: "noopener noreferrer" %>
+                  <% end %>
+                  <%# The file that RAN the example, and the link that stops these rows dead-ending.
+                      This panel is the page's entry point to per-test data, every row on it is an
+                      outlier, and the reader's next question — is this ONE test slow or is the whole
+                      file — already has a panel one rung down. It was reachable from every other
+                      per-example listing on this page and not from this one.
+
+                      The coordinate above is not a substitute for this link and cannot be used as a
+                      manual one. `#location_label` is `file_path` + `line_number` — the DEFINITION
+                      site — while the `?spec_file=` drill-in is keyed on `spec_file_path` through
+                      `SpecObservation.in_file`. For a shared example group those are two different
+                      files, so such a row prints a `spec/support/` path while the file that would
+                      open is one this cell never named. That is also why the two are never printed
+                      as one pair.
+
+                      Its OWN `.present?` guard rather than riding the `name` condition above: that
+                      one asks whether the label already IS the location, which is a question about
+                      a different coordinate. For an ordinary example the two lines read similarly,
+                      and that is accepted for the reason the sibling panel accepts it — they are
+                      two facts, and the case where they differ is the case that matters.
+
+                      `spec_file_path` is NULLABLE in the schema — `Ingest::ObservationRecorder`
+                      populates it by falling back to `file_path`, but the column does not promise it
+                      — so a row that has none says so rather than rendering a link to nowhere.
+
+                      Through `drill_down_path`, so opening a file from here does not close a branch,
+                      an area or a description the reader opened separately. %>
+                  <% if observation.spec_file_path.present? %>
+                    <span class="block font-mono text-xs text-app-muted">
+                      <%= link_to observation.spec_file_path,
+                                  drill_down_path(@repository, spec_file: observation.spec_file_path,
+                                                  anchor: "spec-file-examples"),
+                                  class: "underline underline-offset-2 decoration-app-border-light " \
+                                         "text-app-content hover:decoration-app-content",
+                                  aria: { current: observation.spec_file_path == @spec_file_request ? "true" : nil } %>
+                    </span>
+                  <% else %>
+                    <span class="block font-mono text-xs text-app-muted">not reported</span>
+                  <% end %>
+                </td>
+                <td class="px-3 py-2 text-app-content tabular-nums">
+                  <%# Through `SpecObservation#duration_label`, which is this column's one
+                      formatting seam and carries why a per-example figure is not rendered at the
+                      tenth-of-a-second the run and shard figures on this page use. %>
+                  <%= observation.duration_label %>
+                </td>
+                <td class="px-3 py-2">
+                  <%# What CI reported for this example, through `SpecObservation#outcome_label`
+                      and `#outcome_tone` — the pair that keeps a nil out of the colour a pass
+                      wears. A row whose client sent no outcome reads "not reported" in the neutral
+                      tone; only the three names the producer is known to send are given a colour,
+                      because a green badge over an unvalidated string would be this page asserting
+                      a pass it was never told about.
+
+                      The badge, rather than bare text, is what makes the distinction survive a
+                      reader scanning the column: this list is READ down its rows, and "failed"
+                      set in the same ink as "passed" is a difference nobody scanning finds. %>
+                  <%= render UI::BadgeComponent.new(tone: observation.outcome_tone) do %>
+                    <%= observation.outcome_label %>
+                  <% end %>
+                </td>
+              </tr>
+            <% end %>
+          <% end %>
+        <% else %>
+          <%# Rows exist and not one of them was timed. Not a list of zeroes and not a hidden panel:
+              a zero would be this surface inventing the measurement it is missing, and hiding it
+              would file "this run reported no timings" under "this run reported no tests".
+
+              The outcome sentence appears HERE TOO, and that is a decision rather than an
+              oversight. There is no ranking in this branch and so no Outcome column — but the
+              composition is a fact about the rows, not about the ranking, and "nothing was timed"
+              says nothing whatever about how those examples ended. This is precisely the run shape
+              where the outcome is the only thing left to report: a delivery that carried no
+              durations and four failures would otherwise render as an empty state and disclose
+              nothing at all. Same sentence, same helper, so this branch and the caption above
+              cannot quote different failure counts for the same rows. %>
+          <%= render UI::EmptyStateComponent.new(
+                title: "No timings on this run",
+                description: "This run recorded " \
+                             "#{number_with_delimiter(@slowest_examples.recorded_count)} " \
+                             "#{'example'.pluralize(@slowest_examples.recorded_count)} and a " \
+                             "duration for none of them, so there is nothing to rank. An example " \
+                             "that never ran reports no duration. " \
+                             "#{slowest_examples_outcome_sentence(@slowest_examples)}"
+              ) %>
+        <% end %>
+      <% end %>
+    <% end %>

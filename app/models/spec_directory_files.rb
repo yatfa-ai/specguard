@@ -115,10 +115,61 @@ class SpecDirectoryFiles
   # population is areas and here is files.
   def truncated? = file_count > rows.size
 
-  # How much of the AREA the listed durations cover, always as a fraction and never as a bare count
-  # — the spelling `SpecDirectoryDurations::Row#coverage_label` fixed for the panel this drills out
-  # of, so the same claim about the same area reads the same way on both.
-  def coverage_label = "#{timed_count} of #{recorded_count}"
+  # == The ORDER axis, counted over the PAGE
+  #
+  # Every figure above is counted over the AREA and before the cap, which is exactly what makes each
+  # of them true of the area. These are counted over the ROWS THIS PANEL RENDERS instead, and they
+  # exist because "heaviest first" is not a claim about the area at all — it is a claim about the
+  # order of the list a reader is looking at.
+  #
+  # `#any_timed?` cannot decide that claim, and it is the wrong scope to try with. ONE timed example
+  # anywhere in the area makes it true, while `SpecObservation.files_in_directory` orders by
+  # `SUM(duration_seconds) DESC NULLS LAST` — so every file whose examples all went untimed carries
+  # a NULL total and sorts to the tail. An area with one timed example and forty files therefore
+  # renders one ranked row above thirty-nine the same page spells "not reported", under a caption
+  # promising the whole list was ranked. The two axes are not independent where they MEET, which is
+  # the argument `RepositoriesHelper#spec_file_examples_scope_sentence` makes one rung down for why
+  # that grain needs five sentences and not four; there the two populations are a file's examples,
+  # here they are an area's files.
+  #
+  # Counted off the rows on hand rather than inferred from the ordering: `NULLS LAST` does mean a
+  # listed unranked file implies every ranked one is listed, but a fold over rows already in memory
+  # costs the same, takes no query — `Row#timed_count` rides back on the one aggregate — and stays
+  # right if that ordering is ever revisited.
+  #
+  # These are PAGE figures and are named as page figures, so they cannot be read as the area's.
+  # Nothing here touches the coverage question: `#recorded_count`, `#timed_count`, `#coverage_label`
+  # and `#complete?` stay counted over the whole area before the cap, and the deliberate absence
+  # documented at `Row` below is about that question and is unchanged by these.
+  def shown_timed_count = rows.count { |row| row.timed_count.positive? }
+
+  def shown_untimed_count = rows.size - shown_timed_count
+
+  # This page ends in files nothing ranked. The predicate that decides whether "heaviest first" is a
+  # description of the list or a false claim about it: those tail rows are not the heaviest of
+  # anything, they are the lowest-path rows of a population no duration ordered, and the panel
+  # prints "not reported" in their own duration cell while the caption above would say they were
+  # ranked.
+  def lists_untimed? = shown_untimed_count.positive?
+
+  # The area's files that reported no duration at all — the population the unranked tail is a sample
+  # of — and how many of them the cap left off the page entirely.
+  #
+  # Derived rather than read off a window, and true only where `#lists_untimed?`, which is the only
+  # place either is read. A listed unranked file means the ranked ones ran out before the cap did,
+  # so under that predicate `#shown_timed_count` IS the area's count of ranked files and every file
+  # the cap dropped is an unranked one. Where nothing unranked is listed, the area's unranked files
+  # are a population this read cannot see and neither figure is asked for — the caption reaches both
+  # only through the branch `#lists_untimed?` guards.
+  def untimed_file_count = file_count - shown_timed_count
+
+  def untimed_omitted_count = file_count - rows.size
+
+  # How much of the AREA the listed durations cover — through the same seam the other single-sided
+  # coverage fractions are spelled through, so this caption and the `SpecDirectoryDurations::Row` for
+  # the panel it drills out of make the same claim about the same area in one spelling rather than in
+  # two prose inventions that agree today.
+  def coverage_label = SpecObservation.coverage_fraction(timed_count, recorded_count)
 
   # One spec file's share of one area's wall clock, and what that share was measured over. The same
   # four fields `SpecFileDurations::Row` carries, because it is the same claim about the same grain
@@ -141,9 +192,10 @@ class SpecDirectoryFiles
     # the cell, and is spelled by this seam rather than tested for here.
     def duration_label = SpecObservation.humanized_duration(total_seconds)
 
-    # How much of the file this total covers, always as a fraction and never as a bare count. "40"
-    # in a column of "12 of 40" reads as forty of something unstated; the denominator is the point
-    # of the column, and a complete file has to be visibly complete rather than merely unannotated.
-    def coverage_label = "#{timed_count} of #{recorded_count}"
+    # How much of the file this total covers — through the same seam the other single-sided coverage
+    # fractions are spelled through, so a complete file is visibly complete rather than merely
+    # unannotated, and this row cannot disagree with the area caption above it about how the
+    # fraction is worded.
+    def coverage_label = SpecObservation.coverage_fraction(timed_count, recorded_count)
   end
 end

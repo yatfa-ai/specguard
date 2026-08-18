@@ -102,18 +102,6 @@ RSpec.describe "GET /api/v1/repository — directory_growth", type: :request do
 
   def row_at(block, path) = block["rows"].find { |row| row["path"] == path }
 
-  # Every string this block serves, at any depth — the assertion surface for "operands, never the
-  # labels". Walked rather than listed key by key, so a label-shaped value added to a row or to the
-  # block later is caught by the same example rather than by nobody.
-  def strings_in(value)
-    case value
-    when Hash then value.values.flat_map { |inner| strings_in(inner) }
-    when Array then value.flat_map { |inner| strings_in(inner) }
-    when String then [value]
-    else []
-    end
-  end
-
   describe "a branch-scoped window whose two ends recorded different areas" do
     before { asymmetric_window }
 

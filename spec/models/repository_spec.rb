@@ -32,6 +32,60 @@ RSpec.describe Repository do
     expect(duplicate).not_to be_valid
   end
 
+  describe "#github_blob_url" do
+    # The one seam every "go and look" link on the dashboard composes through. `#github_url` names
+    # the repository; this names a LINE, which is the grain every per-example surface prints and
+    # until now could not open.
+    it "composes a line-anchored blob URL at the ref it was given" do
+      repository = create_repository(github_full_name: "acme/billing-service")
+
+      expect(repository.github_blob_url("spec/models/order_spec.rb", 30, "feedfacecafe0001"))
+        .to eq("https://github.com/acme/billing-service/blob/feedfacecafe0001/spec/models/order_spec.rb#L30")
+    end
+
+    # The ref is the CALLER's, and there is no default — a coordinate is only true against the tree
+    # it was recorded from (`file_path`/`line_number` are a last known path, not an identity), so
+    # pinning to a sha and pinning to `main` are different links and the caller has to say which.
+    it "pins to whatever ref the caller names rather than to a branch of its own" do
+      repository = create_repository(github_full_name: "acme/billing-service")
+
+      expect(repository.github_blob_url("spec/models/order_spec.rb", 30, "0ff10e"))
+        .to include("/blob/0ff10e/")
+      expect(repository.github_blob_url("spec/models/order_spec.rb", 30, "main"))
+        .to include("/blob/main/")
+    end
+
+    # Escaped SEGMENT-WISE: the separators are structure and everything else in a segment is not.
+    # A whole-string `url_encode` would collapse the path into one escaped filename GitHub cannot
+    # resolve, and no escaping at all would let a `#` in a filename terminate the path and swallow
+    # the line anchor.
+    it "escapes each path segment without escaping the separators" do
+      repository = create_repository(github_full_name: "acme/billing-service")
+
+      url = repository.github_blob_url("spec/models/order #2_spec.rb", 7, "abc123")
+
+      expect(url).to eq("https://github.com/acme/billing-service/blob/abc123/spec/models/order%20%232_spec.rb#L7")
+    end
+
+    # The same rule on the ref, for the same reason: a sha needs no escaping, but a ref is a
+    # caller's string and a branch name legitimately carries slashes that must stay separators.
+    it "keeps the slashes in a branch-shaped ref" do
+      repository = create_repository(github_full_name: "acme/billing-service")
+
+      expect(repository.github_blob_url("spec/models/order_spec.rb", 3, "feature/deep links"))
+        .to include("/blob/feature/deep%20links/spec/models/order_spec.rb#L3")
+    end
+
+    # It COMPOSES and asks GitHub nothing — no probe, no existence check, and so no query and no
+    # network call on a hundred-row worklist. An unpushed sha or a path deleted since answers 404,
+    # which is GitHub telling the truth rather than something to guard here.
+    it "issues no query" do
+      repository = create_repository(github_full_name: "acme/billing-service")
+
+      expect(count_queries { repository.github_blob_url("spec/models/order_spec.rb", 1, "abc") }).to eq(0)
+    end
+  end
+
   describe "#latest_test_run" do
     # The anchor every suite figure on the Overview panel and the API's `latest_run` block is read
     # off, so what "latest" means is pinned here directly rather than inferred through a figure
@@ -612,6 +666,78 @@ RSpec.describe Repository do
 
       expect(count_queries { expect(repository.latest_test_run_on_branch(nil)).to be_nil }).to eq(0)
       expect(count_queries { expect(repository.latest_test_run_on_branch("")).to be_nil }).to eq(0)
+    end
+  end
+
+  describe "#latest_test_run_for_commit" do
+    def run(repository, commit, branch: "main", total: 100, at: 1.hour.ago)
+      repository.test_runs.create!(commit_sha: commit, branch: branch, total_specs_count: total,
+                                   created_at: at)
+    end
+
+    it "answers with the run on that sha, not the newest run in the repository" do
+      repository = create_repository
+      run(repository, "older0", at: 2.days.ago)
+      run(repository, "middle", at: 1.day.ago)
+      run(repository, "newest", at: 1.minute.ago)
+
+      expect(repository.latest_test_run_for_commit("older0").commit_sha).to eq("older0")
+      expect(repository.latest_test_run.commit_sha).to eq("newest")
+    end
+
+    # A sha is NOT unique in `test_runs` — the only unique index is
+    # `(repository_id, ci_run_id) WHERE ci_run_id IS NOT NULL` — so a CI re-run of one commit is a
+    # second row and "the run for this sha" has more than one answer. The NEWEST is the answer, on
+    # the ordering every other reader of this history sorts by.
+    it "answers with the newest of several runs on one sha" do
+      repository = create_repository
+      run(repository, "rerun0", at: 2.days.ago, total: 10)
+      run(repository, "rerun0", at: 1.minute.ago, total: 20)
+
+      expect(repository.latest_test_run_for_commit("rerun0").total_specs_count).to eq(20)
+    end
+
+    # The same tie-break the two siblings use, and the half a `created_at`-only ordering would leave
+    # to the database's discretion: two runs of one sha ingested in the same instant are exactly what
+    # a re-run under a parallel CI matrix produces.
+    it "breaks a same-instant tie by id, the way the rest of this history is ordered" do
+      repository = create_repository
+      at = 1.hour.ago
+      first = run(repository, "tied00", at: at, total: 10)
+      second = run(repository, "tied00", at: at, total: 20)
+
+      expect(second.id).to be > first.id
+      expect(repository.latest_test_run_for_commit("tied00").total_specs_count).to eq(20)
+    end
+
+    it "ignores another repository's run on the same sha" do
+      repository = create_repository
+      other = create_repository(user: create_user(github_uid: "2003", github_handle: "octo"),
+                                github_full_name: "acme/ledger")
+      run(other, "shared")
+
+      expect(repository.latest_test_run_for_commit("shared")).to be_nil
+    end
+
+    # An unrecognised sha is an ordinary thing for a reader to arrive with — a stale bookmark, a
+    # pruned run, a commit whose CI never reported — and it is the caller's job to fall back, which
+    # `Api::V1::RepositoriesController#latest_test_run` does while disclosing it on `run_anchor`.
+    it "has no run for a sha it has never seen" do
+      repository = create_repository
+      run(repository, "trunk0")
+
+      expect(repository.latest_test_run_for_commit("deadbe")).to be_nil
+    end
+
+    # A blank sha is not a sha. `commit_sha` is NOT NULL and `TestRun` validates its presence, so
+    # `WHERE commit_sha = ''` is a guaranteed-empty read — answered without a query at all, so a
+    # caller holding an empty `?commit_sha=` pays nothing for the fallback.
+    it "refuses a blank sha outright, and asks the database nothing" do
+      repository = create_repository
+      run(repository, "trunk0")
+
+      expect(count_queries { expect(repository.latest_test_run_for_commit(nil)).to be_nil }).to eq(0)
+      expect(count_queries { expect(repository.latest_test_run_for_commit("")).to be_nil }).to eq(0)
     end
   end
 

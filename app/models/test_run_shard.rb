@@ -11,7 +11,7 @@
 # `shard_id` is the client's name for the process within the run (`TEST_ENV_NUMBER`,
 # `CI_NODE_INDEX`, `SPECGUARD_SHARD_ID`, …) and is unique per `TestRun` when present. It is
 # nullable, and a nil is an *anonymous* slice: counted, but not recognisable on redelivery. See
-# the migration and `Ingest::RunRecorder#record_contribution` for what that costs.
+# the migration and `Ingest::RunRecorder#upsert_shard` for what that costs.
 #
 # Only runs with a `ci_run_id` have these rows. An unnamed run — a laptop `bundle exec rspec` — is
 # still one POST and one `TestRun` with nothing to fold, exactly as before.

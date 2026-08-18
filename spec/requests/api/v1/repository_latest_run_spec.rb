@@ -156,6 +156,26 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
         # `repository_repeated_description_examples_spec.rb`, where that pair is asserted side by
         # side.
         "repeated_description_examples" => nil,
+        # And the drill-in into the run's UNANNOTATED examples, null for the same request-shaped
+        # reason as the three keys above it: this request sent no `?unannotated_examples=`. It is
+        # the fourth of the client's asks and the only one that opens a POPULATION rather than a
+        # pick — the three above open one area, one file and one sentence, each the rows behind a
+        # LINE of a ranking, and this opens the rows behind `total_specs` MINUS `annotated_specs`,
+        # two keys at the top of this very block. Its empty ANSWER is the sharpest on the block: a
+        # present block with `rows: []` and `recorded_count: 0`, which is not an absence but the
+        # state the metric exists to REACH; see `repository_unannotated_examples_spec.rb`, where
+        # that pair is asserted side by side.
+        "unannotated_examples" => nil,
+        # And the RANKING above that worklist, null for the same reason and from the SAME ask —
+        # `unannotated_directories` rides `?unannotated_examples=` rather than a parameter of its
+        # own, so the two keys are absent and present together. It is the rung that makes the
+        # narrowing usable: the worklist is ordered file-navigably, and every other area rollup on
+        # this block ranks by DURATION with a `coverage_label` that is TIMING coverage, so nothing
+        # here could tell a client WHICH area to go and ask about. Unlike its sibling it stays
+        # WHOLE-RUN under `?spec_file=` / `?spec_directory=` — the one deliberate scope disagreement
+        # inside a single block on this endpoint; see `repository_unannotated_examples_spec.rb`,
+        # where both halves are asserted together.
+        "unannotated_directories" => nil,
         "suite_size_measured" => true,
         "ingested_at" => test_run.created_at.iso8601
       )
@@ -198,13 +218,16 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
     # `contain_exactly` is what makes it bidirectional; `have_key` per block would catch neither.
     it "serves exactly the top-level keys this contract pins" do
       expect(get_repository.keys)
-        .to contain_exactly("repository", "api_key", "latest_run", "history_window", "history",
-                            "unstable_tests_window", "unstable_tests", "directory_growth_window",
-                            "directory_growth", "directory_run_growth_window",
-                            "directory_run_growth", "directory_runtime_growth_window",
-                            "directory_runtime_growth", "directory_run_file_growth_window",
-                            "directory_run_file_growth", "directory_runtime_file_growth_window",
-                            "directory_runtime_file_growth", "branches_window", "branches")
+        .to contain_exactly("repository", "api_key", "delivery_health", "credential_health",
+                            "run_anchor", "latest_run",
+                            "history_window", "history",
+                            "unstable_tests_window", "unstable_tests",
+                            "directory_growth_window", "directory_growth",
+                            "directory_run_growth_window", "directory_run_growth",
+                            "directory_runtime_growth_window", "directory_runtime_growth",
+                            "directory_run_file_growth_window", "directory_run_file_growth",
+                            "directory_runtime_file_growth_window", "directory_runtime_file_growth",
+                            "branches_window", "branches")
     end
 
     it "scopes latest_run to the key's own repository" do
@@ -474,7 +497,9 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
                             "annotated_ratio", "duration_seconds", "shards", "spec_files",
                             "spec_directories", "slowest_examples", "repeated_descriptions",
                             "spec_directory_files", "spec_file_examples",
-                            "repeated_description_examples", "suite_size_measured",
+                            "repeated_description_examples", "unannotated_examples",
+                            "unannotated_directories",
+                            "suite_size_measured",
                             "ingested_at")
     end
 
@@ -2246,6 +2271,14 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
         # And null because it asked for no description either, on the same rule and for the same
         # reason as the two above it.
         "repeated_description_examples" => nil,
+        # And null because it asked for no unannotated listing either. The same rule as the three
+        # above it, arrived at from the other side: this key's `null` is a fact about the REQUEST,
+        # and the empty answer it must never be confused with — a fully-annotated run — is a present
+        # block with `recorded_count: 0`.
+        "unannotated_examples" => nil,
+        # And the ranking above it, null from the SAME ask rather than one of its own — the two
+        # annotation keys share `?unannotated_examples=` and are therefore absent together.
+        "unannotated_directories" => nil,
         "suite_size_measured" => true,
         "ingested_at" => third.created_at.iso8601
       )
@@ -2514,13 +2547,16 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
       body = get_repository(query: { branch: "main" })
 
       expect(body.keys)
-        .to contain_exactly("repository", "api_key", "latest_run", "history_window", "history",
-                            "unstable_tests_window", "unstable_tests", "directory_growth_window",
-                            "directory_growth", "directory_run_growth_window",
-                            "directory_run_growth", "directory_runtime_growth_window",
-                            "directory_runtime_growth", "directory_run_file_growth_window",
-                            "directory_run_file_growth", "directory_runtime_file_growth_window",
-                            "directory_runtime_file_growth", "branches_window", "branches")
+        .to contain_exactly("repository", "api_key", "delivery_health", "credential_health",
+                            "run_anchor", "latest_run",
+                            "history_window", "history",
+                            "unstable_tests_window", "unstable_tests",
+                            "directory_growth_window", "directory_growth",
+                            "directory_run_growth_window", "directory_run_growth",
+                            "directory_runtime_growth_window", "directory_runtime_growth",
+                            "directory_run_file_growth_window", "directory_run_file_growth",
+                            "directory_runtime_file_growth_window", "directory_runtime_file_growth",
+                            "branches_window", "branches")
       expect(body["history"].first.keys).to contain_exactly(
         "commit_sha", "branch", "total_specs", "annotated_specs", "annotated_ratio",
         "duration_seconds", "shard_count", "timed_shard_count", "suite_size_measured", "ingested_at"
@@ -2591,6 +2627,370 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
       end).to eq(rows.map do |row|
         row.values_at("commit_sha", "branch", "total_specs_count", "annotated_specs_count")
       end)
+    end
+  end
+
+  # NAMING THE RUN WITH `?commit_sha=` — the one parameter on this endpoint that re-anchors rather
+  # than narrows, and the counterpart to the block above rather than a variant of it. `?branch=` asks
+  # about a SERIES and leaves `latest_run` exactly where it was (the block above pins that, and
+  # deliberately); this asks WHICH RUN, and everything hanging off the anchor moves with it.
+  #
+  # The coherence property is what these examples are really for. `Api::V1::RepositoriesController`
+  # re-anchors ONE memo, and every run-grain block reads through it, so the failure worth pinning is
+  # not "does `latest_run` move" but "does anything fail to move with it" — a response serving
+  # `latest_run` on the named sha beside a growth window anchored on a different one would be
+  # internally inconsistent in a way no single-block assertion catches.
+  describe "naming the run with ?commit_sha=" do
+    # Three runs on three shas, OLDEST NAMED. Deliberately not the newest and not the second: the
+    # target must be a row the endpoint would never have picked by itself, so an implementation that
+    # ignored the parameter entirely — or that read it and then fell back — is red rather than
+    # accidentally green. All three carry different suite figures for the same reason.
+    #
+    # One branch throughout, so `previous_test_run_on_branch` has an honest baseline to find for the
+    # named run: the growth-window agreement example below needs the anchor to have a predecessor,
+    # and a branch-per-run fixture would serve `no_previous_run` and pass vacuously.
+    def three_run_history
+      first = create_test_run(repository: repository, commit_sha: "aaa000000001", branch: "main",
+                              total_specs_count: 10, annotated_specs_count: 2, duration_seconds: 1.5)
+      second = create_test_run(repository: repository, commit_sha: "bbb000000002", branch: "main",
+                               total_specs_count: 20, annotated_specs_count: 8, duration_seconds: 2.5)
+      third = create_test_run(repository: repository, commit_sha: "ccc000000003", branch: "main",
+                              total_specs_count: 30, annotated_specs_count: 15, duration_seconds: 3.5)
+
+      [first, second, third]
+    end
+
+    # AC1's headline, stated against `latest_run` itself before the rollups below narrow in on the
+    # blocks that hang off it. Asserted as a WHOLE-BLOCK comparison against the default call's, so
+    # this cannot pass by the sha moving while the figures beside it stayed on the newest run — the
+    # exact half-re-anchored shape the single-memo design exists to prevent.
+    it "anchors latest_run on the named run rather than on the newest" do
+      first, _second, third = three_run_history
+
+      default = get_repository
+      named = get_repository(query: { commit_sha: first.commit_sha })
+
+      expect(response).to have_http_status(:ok)
+      expect(default["latest_run"]).to include("commit_sha" => third.commit_sha,
+                                               "total_specs" => 30, "annotated_specs" => 15,
+                                               "duration_seconds" => 3.5)
+      expect(named["latest_run"]).to include("commit_sha" => first.commit_sha,
+                                             "total_specs" => 10, "annotated_specs" => 2,
+                                             "annotated_ratio" => 0.2, "duration_seconds" => 1.5)
+    end
+
+    # AC1's other half — THE FIVE ROLLUPS AND THE THREE DRILL-INS, every block that hangs off the
+    # anchor, asserted in ONE response so "they all describe the same run" is a property of the body
+    # rather than of eight separate requests.
+    #
+    # The fixture gives the two runs DIFFERENT rows at every grain, which is what makes each
+    # assertion discriminating: the named run's file, area, slowest example and repeated description
+    # are all absent from the newest run, so a block that failed to re-anchor serves the newest run's
+    # rows and is red on its own name rather than merely on a count.
+    it "re-anchors all five rollups and all three drill-ins onto the named run" do
+      named_run = create_test_run(repository: repository, commit_sha: "old000000001", branch: "main",
+                                  total_specs_count: 2, duration_seconds: 9.0)
+      2.times do |line|
+        observe(named_run, path: "spec/legacy/audit_spec.rb", duration: 4.0 + line, line_number: line,
+                           name: "audits the ledger")
+      end
+      newest = create_test_run(repository: repository, commit_sha: "new000000002", branch: "main",
+                               total_specs_count: 1, duration_seconds: 1.0)
+      observe(newest, path: "spec/models/order_spec.rb", duration: 0.5, line_number: 1,
+                      name: "totals the order")
+
+      body = get_repository(query: { commit_sha: named_run.commit_sha,
+                                     spec_directory: "spec/legacy",
+                                     spec_file: "spec/legacy/audit_spec.rb",
+                                     repeated_description: "audits the ledger" })
+      block = body["latest_run"]
+
+      expect(block["commit_sha"]).to eq(named_run.commit_sha)
+      # The by-file and by-area rollups, ranking the named run's rows and not the newest run's.
+      expect(block["spec_files"]["rows"].map { |row| row["path"] })
+        .to eq(["spec/legacy/audit_spec.rb"])
+      expect(block["spec_directories"]["rows"].map { |row| row["path"] }).to eq(["spec/legacy"])
+      # The per-example ranking and the by-description ranking, likewise.
+      expect(block["slowest_examples"]["rows"].map { |row| row["name"] })
+        .to all(eq("audits the ledger"))
+      expect(block["repeated_descriptions"]["rows"].map { |row| row["name"] })
+        .to eq(["audits the ledger"])
+      # The three drill-ins, each opened by its own parameter ON the re-anchored run. A drill-in that
+      # read the newest run would find no rows for these asks and serve an empty panel.
+      expect(block["spec_directory_files"]["rows"].map { |row| row["path"] })
+        .to eq(["spec/legacy/audit_spec.rb"])
+      expect(block["spec_file_examples"]["rows"].map { |row| row["name"] })
+        .to all(eq("audits the ledger"))
+      expect(block["repeated_description_examples"]["rows"].map { |row| row["name"] })
+        .to all(eq("audits the ledger"))
+      # The fifth rollup. Null here because this fixture's run has one part — the KEY's presence is
+      # what is asserted, on the same rule the block itself follows.
+      expect(block).to have_key("shards")
+    end
+
+    # `shards` re-anchored, on its own fixture because the rollup example above cannot reach it: a
+    # sharded run needs `test_run_shards` rows, and a run that has them is exactly the run the naive
+    # fixture does not build. Named run sharded, newest run not — so a block reading the newest run
+    # serves `null` and is red rather than merely differently-shaped.
+    #
+    # Written locally rather than reusing the `sharded_run` helper the shard block upstairs defines:
+    # RSpec scopes a `def` to its own example group, so that one is INVISIBLE here — the same
+    # scoping fact the note at the top of this file records about `observation_reads`. This needs
+    # only the two rows and none of that helper's `settled:` machinery, since nothing below asks for
+    # the decomposition.
+    def two_shard_run(commit_sha:)
+      run = repository.test_runs.create!(commit_sha: commit_sha, ci_run_id: "gha-#{commit_sha}",
+                                         total_specs_count: 20, annotated_specs_count: 5,
+                                         duration_seconds: 45.0)
+      [30.0, 45.0].each_with_index do |seconds, index|
+        run.test_run_shards.create!(shard_id: (index + 1).to_s, total_specs_count: 10,
+                                    annotated_specs_count: 2, duration_seconds: seconds)
+      end
+      run
+    end
+
+    it "re-anchors shards onto the named run" do
+      sharded = two_shard_run(commit_sha: "shard0000001")
+      create_test_run(repository: repository, commit_sha: "plain0000002")
+
+      expect(get_repository["latest_run"]["shards"]).to be_nil
+      expect(get_repository(query: { commit_sha: sharded.commit_sha })["latest_run"]["shards"])
+        .to include("count" => 2)
+    end
+
+    # AC1's disclosure half: the block that says which run was described and why.
+    it "discloses a resolved ask on run_anchor" do
+      first, = three_run_history
+
+      body = get_repository(query: { commit_sha: first.commit_sha })
+
+      expect(body["run_anchor"]).to eq(
+        "source" => "requested",
+        "requested_commit_sha" => first.commit_sha,
+        "resolved" => true,
+        "commit_sha" => first.commit_sha,
+        "branch" => "main"
+      )
+    end
+
+    # AC2. A default call is what it was, plus this one key — and `source`/`resolved` say so without
+    # inventing an ask. `resolved` is TRUE here and that is the deliberate reading: it is false in
+    # exactly one case, a client that named a sha and is not being served it, so an
+    # `unless resolved` warning does not fire on every unparameterised GET.
+    it "discloses the default anchor when no run was named" do
+      _first, _second, third = three_run_history
+
+      expect(get_repository["run_anchor"]).to eq(
+        "source" => "default",
+        "requested_commit_sha" => nil,
+        "resolved" => true,
+        "commit_sha" => third.commit_sha,
+        "branch" => "main"
+      )
+    end
+
+    # AC3. Not a 404 and not an empty block: the newest run, and a disclosure that the ask was made
+    # and missed. Both halves are asserted, because either alone is passable by a broken
+    # implementation — serving the newest run silently would satisfy the first, and a block reporting
+    # `resolved: false` beside a nulled `latest_run` would satisfy the second.
+    #
+    # THE RAW ASK IS ASSERTED PRESENT, and it is the load-bearing key here: it is the only place in
+    # the body that still holds what the client typed, so without it a fallback is indistinguishable
+    # from the client's own bug.
+    it "falls back to the newest run and says so when the named sha has no run" do
+      _first, _second, third = three_run_history
+
+      body = get_repository(query: { commit_sha: "deadbeefdead" })
+
+      expect(response).to have_http_status(:ok)
+      expect(body["run_anchor"]).to eq(
+        "source" => "requested",
+        "requested_commit_sha" => "deadbeefdead",
+        "resolved" => false,
+        "commit_sha" => third.commit_sha,
+        "branch" => "main"
+      )
+      expect(body["latest_run"]).to include("commit_sha" => third.commit_sha, "total_specs" => 30)
+    end
+
+    # AC3, the repository-with-no-runs corner the example above cannot reach. `run_anchor` is a
+    # statement about the REQUEST and is present on every response; `latest_run` is the key that goes
+    # null for "CI has never reported". The two facts are separable and the block must not conflate
+    # them — `resolved: false` here is about the ask, and `commit_sha: null` about there being
+    # nothing to fall back to.
+    it "keeps run_anchor present on a repository CI has never reported to" do
+      body = get_repository(query: { commit_sha: "deadbeefdead" })
+
+      expect(response).to have_http_status(:ok)
+      expect(body["latest_run"]).to be_nil
+      expect(body["run_anchor"]).to eq(
+        "source" => "requested",
+        "requested_commit_sha" => "deadbeefdead",
+        "resolved" => false,
+        "commit_sha" => nil,
+        "branch" => nil
+      )
+    end
+
+    # AC4. A sha is NOT unique in `test_runs` — the only unique index is
+    # `(repository_id, ci_run_id) WHERE ci_run_id IS NOT NULL` — so a CI re-run of one commit is a
+    # second row and "the run for this sha" has more than one answer.
+    # `Repository#latest_test_run_for_commit` picks the same one every other newest-run reader on
+    # that model picks, and this pins WHICH.
+    #
+    # Two runs at the SAME INSTANT, so the `created_at` half of the ordering cannot separate them and
+    # the tie-break — the id, which is the ingest sequence — is the only thing that can. A finder
+    # ordering on `created_at` alone would pass or fail here at the database's discretion, which is
+    # the shape this example exists to forbid.
+    it "resolves two runs on one sha to the newer, broken by ingest sequence" do
+      instant = 1.hour.ago
+      older = create_test_run(repository: repository, commit_sha: "twice0000001", branch: "main",
+                              total_specs_count: 11, created_at: instant)
+      newer = create_test_run(repository: repository, commit_sha: "twice0000001", branch: "main",
+                              total_specs_count: 22, created_at: instant)
+
+      expect(newer.id).to be > older.id
+      expect(newer.created_at).to eq(older.created_at)
+
+      body = get_repository(query: { commit_sha: "twice0000001" })
+
+      expect(body["latest_run"]).to include("commit_sha" => "twice0000001", "total_specs" => 22)
+      expect(body["run_anchor"]).to include("resolved" => true)
+    end
+
+    # AC6, and the property the single-memo design exists for. Every block that names the run it is
+    # anchored on must name THE SAME run — asserted by reading the anchor out of four independent
+    # places in one body and requiring them equal, rather than by restating the fixture's sha four
+    # times, so a partial re-anchor cannot pass by the expectation drifting with it.
+    #
+    # `previous_test_run` follows the anchor without a change of its own: it is already "the newest
+    # run strictly older than THIS one, on THIS one's branch". The baseline is asserted to be the
+    # named run's PREDECESSOR and not the newest run's, which is the half that would silently stay
+    # put if the growth blocks read `Repository#latest_test_run` directly.
+    it "keeps every anchored block naming the same run under an explicit ask" do
+      first, second, _third = three_run_history
+
+      body = get_repository(query: { commit_sha: second.commit_sha })
+      anchors = [
+        body["run_anchor"]["commit_sha"],
+        body["latest_run"]["commit_sha"],
+        body["directory_run_growth_window"]["anchor_commit_sha"],
+        body["directory_runtime_growth_window"]["anchor_commit_sha"]
+      ]
+
+      expect(anchors).to all(eq(second.commit_sha))
+      # The baseline moved with the anchor: `first` is the run before `second`, not the run before
+      # the newest one (which would be `second` itself).
+      expect(body["directory_run_growth_window"]["baseline_commit_sha"]).to eq(first.commit_sha)
+      expect(body["directory_runtime_growth_window"]["baseline_commit_sha"]).to eq(first.commit_sha)
+    end
+
+    # `history` is NOT re-anchored, and the `history[0] == latest_run` identity is NOT expected to
+    # hold under an explicit ask. Stated as an expectation rather than left as an unremarked property
+    # of the fixture, so a later slice that "fixes" the mismatch by narrowing `history` to the named
+    # run has to argue with this example — and so a client reading `run_anchor` learns why the two
+    # disagree rather than filing it as a bug.
+    it "leaves history where it was, and lets latest_run differ from history[0]" do
+      first, _second, third = three_run_history
+
+      named = get_repository(query: { commit_sha: first.commit_sha })
+
+      expect(named["history"].map { |row| row["commit_sha"] })
+        .to eq(get_repository["history"].map { |row| row["commit_sha"] })
+      expect(named["history"].first["commit_sha"]).to eq(third.commit_sha)
+      expect(named["latest_run"]["commit_sha"]).to eq(first.commit_sha)
+      expect(named["run_anchor"]).to include("source" => "requested", "resolved" => true)
+    end
+
+    # AC5, first half. `?commit_sha=` is "no ask", not `WHERE commit_sha = ''` — the column is NOT
+    # NULL and `TestRun` validates its presence, so a blank matches nothing and an implementation
+    # that queried on it would fall back while `run_anchor` claimed a request had been made.
+    it "reads a blank commit_sha as no ask rather than as an empty query" do
+      _first, _second, third = three_run_history
+
+      body = get_repository(query: { commit_sha: "" })
+
+      expect(body["latest_run"]).to include("commit_sha" => third.commit_sha)
+      expect(body["run_anchor"]).to eq(
+        "source" => "default",
+        "requested_commit_sha" => nil,
+        "resolved" => true,
+        "commit_sha" => third.commit_sha,
+        "branch" => "main"
+      )
+    end
+
+    # AC5, second half. The three shapes a query string can legally parse into that are not a sha are
+    # listed ONCE, in `spec/support/shared_examples/malformed_commit_sha_param.rb`, against the guard
+    # they all land on (`RequestedCommitShaParam#requested_commit_sha`). What is local here is how
+    # THIS surface says it dropped the ask.
+    #
+    # The disclosure is asserted alongside the anchor, and that is the half a bare 200 would miss: a
+    # guard that dropped the ask but left `run_anchor` claiming one would be a response asserting it
+    # had honoured a request it ignored — the failure the block was added to prevent, arriving
+    # through the door the block was added by.
+    describe "a commit-sha parameter that is not a sha" do
+      def expect_commit_sha_param_treated_as_no_ask(query)
+        _first, _second, third = three_run_history
+
+        body = get_repository(query: query)
+
+        expect(response).to have_http_status(:ok)
+        expect(body["latest_run"]).to include("commit_sha" => third.commit_sha)
+        expect(body["run_anchor"]).to include("source" => "default", "requested_commit_sha" => nil,
+                                              "resolved" => true, "commit_sha" => third.commit_sha)
+      end
+
+      it_behaves_like "a surface that treats a malformed commit-sha parameter as no ask"
+
+      # The positive-path example the shared examples' own doc comment requires to sit beside them: a
+      # guard that swallowed EVERY value would answer 200 on all three malformed shapes too, and
+      # nothing above separates "the guard rejects non-Strings" from "the parameter does nothing".
+      it "honours a commit_sha that IS a string" do
+        first, = three_run_history
+
+        expect(get_repository(query: { commit_sha: first.commit_sha })["latest_run"])
+          .to include("commit_sha" => first.commit_sha)
+      end
+    end
+
+    # `?commit_sha=` and `?branch=` are independent asks and compose without either overriding the
+    # other — the run-grain half anchors on the named run while `history` narrows to the named
+    # branch. Worth pinning because the two parameters are the only ones here that select ROWS rather
+    # than open panels, and an implementation that let the branch predicate reach the anchor finder
+    # would silently fail to resolve a sha whose run is on another branch.
+    it "composes with ?branch= without either ask overriding the other" do
+      feature = create_test_run(repository: repository, commit_sha: "feat00000001",
+                                branch: "feature/x", total_specs_count: 5)
+      main_run = create_test_run(repository: repository, commit_sha: "main00000002", branch: "main",
+                                 total_specs_count: 50)
+
+      body = get_repository(query: { commit_sha: feature.commit_sha, branch: "main" })
+
+      expect(body["latest_run"]).to include("commit_sha" => feature.commit_sha, "total_specs" => 5)
+      expect(body["run_anchor"]).to include("source" => "requested", "resolved" => true,
+                                            "branch" => "feature/x")
+      expect(body["history"].map { |row| row["commit_sha"] }).to eq([main_run.commit_sha])
+      expect(body["history_window"]).to include("branch_scope" => "single_branch", "branch" => "main")
+    end
+
+    # The anchor finder costs ONE read, and only when a sha was actually named. Bounded because it
+    # sits on the critical path of every run-grain block — it is resolved before `latest_run`, the
+    # rollups, the drill-ins and both growth windows — so a second lookup here is a second lookup for
+    # the whole response, and a lookup on a DEFAULT call is one every unparameterised GET pays for
+    # nothing. `requested_test_run` and `latest_test_run` both memoize across the nil; this is what
+    # says so from the outside.
+    it "reads the named run once, and reads nothing extra when no sha was named" do
+      first, = three_run_history
+
+      # Matched on the WHERE clause rather than on a `LIMIT 1` literal: the finder binds its limit,
+      # so the emitted SQL carries `LIMIT $3` and a literal match would count zero and pass
+      # vacuously. `commit_sha` appears in no other predicate this endpoint issues.
+      by_sha = ->(sql) { sql.include?(%("test_runs"."commit_sha" = )) }
+
+      expect(executed_sql { get_repository(query: { commit_sha: first.commit_sha }) }.count(&by_sha))
+        .to eq(1)
+      expect(executed_sql { get_repository }.count(&by_sha)).to eq(0)
     end
   end
 

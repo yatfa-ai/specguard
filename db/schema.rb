@@ -10,7 +10,7 @@
 #
 # It's strongly recommended that you check this file into your version control system.
 
-ActiveRecord::Schema[8.1].define(version: 2026_08_14_120000) do
+ActiveRecord::Schema[8.1].define(version: 2026_08_17_120000) do
   # These are extensions that must be enabled in order to support this database
   enable_extension "pg_catalog.plpgsql"
   enable_extension "vector"
@@ -21,6 +21,7 @@ ActiveRecord::Schema[8.1].define(version: 2026_08_14_120000) do
     t.datetime "last_used_at"
     t.string "name", default: "Default CI Key"
     t.bigint "repository_id", null: false
+    t.datetime "rotated_at"
     t.string "token_digest", null: false
     t.datetime "updated_at", null: false
     t.index ["created_by_user_id"], name: "index_api_keys_on_created_by_user_id"
@@ -30,12 +31,21 @@ ActiveRecord::Schema[8.1].define(version: 2026_08_14_120000) do
 
   create_table "embedding_cache_entries", force: :cascade do |t|
     t.datetime "created_at", null: false
-    t.vector "embedding", limit: 1536, null: false
+    t.halfvec "embedding", limit: 1024, null: false
     t.string "provider_fingerprint", null: false
     t.string "text_digest", limit: 64, null: false
     t.datetime "updated_at", null: false
     t.index ["provider_fingerprint", "text_digest"], name: "index_embedding_cache_entries_on_key", unique: true
     t.index ["updated_at"], name: "index_embedding_cache_entries_on_updated_at"
+  end
+
+  create_table "ingest_rejections", force: :cascade do |t|
+    t.jsonb "details", default: [], null: false
+    t.datetime "occurred_at", null: false
+    t.bigint "repository_id", null: false
+    t.integer "total_reasons_count", default: 0, null: false
+    t.string "user_agent"
+    t.index ["repository_id", "occurred_at", "id"], name: "index_ingest_rejections_on_repository_and_recency", order: { occurred_at: :desc, id: :desc }
   end
 
   create_table "repositories", force: :cascade do |t|
@@ -183,7 +193,7 @@ ActiveRecord::Schema[8.1].define(version: 2026_08_14_120000) do
 
   create_table "spec_identities", force: :cascade do |t|
     t.datetime "created_at", null: false
-    t.vector "embedding", limit: 1536, null: false
+    t.halfvec "embedding", limit: 1024, null: false
     t.string "file_path", null: false
     t.bigint "last_seen_test_run_id"
     t.integer "line_number", null: false
@@ -192,7 +202,7 @@ ActiveRecord::Schema[8.1].define(version: 2026_08_14_120000) do
     t.text "text", null: false
     t.string "text_digest", limit: 64, null: false
     t.datetime "updated_at", null: false
-    t.index ["embedding"], name: "index_spec_identities_on_embedding", opclass: :vector_cosine_ops, using: :hnsw
+    t.index ["embedding"], name: "index_spec_identities_on_embedding", opclass: :halfvec_cosine_ops, using: :hnsw
     t.index ["last_seen_test_run_id"], name: "index_spec_identities_on_last_seen_test_run_id"
     t.index ["repository_id", "text_digest"], name: "index_spec_identities_on_text", unique: true
     t.index ["repository_id"], name: "index_spec_identities_on_repository_id"
@@ -202,7 +212,7 @@ ActiveRecord::Schema[8.1].define(version: 2026_08_14_120000) do
     t.string "action", null: false
     t.text "behavior", null: false
     t.datetime "created_at", null: false
-    t.vector "embedding", limit: 1536
+    t.halfvec "embedding", limit: 1024
     t.string "entity", null: false
     t.string "file_path", null: false
     t.string "layer", null: false
@@ -212,7 +222,7 @@ ActiveRecord::Schema[8.1].define(version: 2026_08_14_120000) do
     t.bigint "test_run_id"
     t.datetime "updated_at", null: false
     t.index ["action"], name: "index_spec_intents_on_action"
-    t.index ["embedding"], name: "index_spec_intents_on_embedding", opclass: :vector_cosine_ops, using: :hnsw
+    t.index ["embedding"], name: "index_spec_intents_on_embedding", opclass: :halfvec_cosine_ops, using: :hnsw
     t.index ["entity"], name: "index_spec_intents_on_entity"
     t.index ["repository_id", "entity", "action"], name: "index_spec_intents_on_repository_id_and_entity_and_action"
     t.index ["repository_id", "file_path", "line_number"], name: "index_spec_intents_on_location", unique: true
@@ -277,6 +287,7 @@ ActiveRecord::Schema[8.1].define(version: 2026_08_14_120000) do
     t.datetime "updated_at", null: false
     t.index ["repository_id", "branch", "created_at", "id"], name: "index_test_runs_on_repository_id_and_branch_and_created_at"
     t.index ["repository_id", "ci_run_id"], name: "index_test_runs_on_repository_id_and_ci_run_id", unique: true, where: "(ci_run_id IS NOT NULL)"
+    t.index ["repository_id", "commit_sha", "created_at", "id"], name: "index_test_runs_on_repository_id_and_commit_sha"
     t.index ["repository_id"], name: "index_test_runs_on_repository_id"
   end
 
@@ -297,6 +308,7 @@ ActiveRecord::Schema[8.1].define(version: 2026_08_14_120000) do
 
   add_foreign_key "api_keys", "repositories"
   add_foreign_key "api_keys", "users", column: "created_by_user_id"
+  add_foreign_key "ingest_rejections", "repositories"
   add_foreign_key "repositories", "users"
   add_foreign_key "repository_memberships", "repositories"
   add_foreign_key "repository_memberships", "users"

@@ -305,8 +305,25 @@ RSpec.describe "Repository heaviest spec files", type: :request do
       # description, which that grouping excludes in its WHERE clause and therefore cannot count for
       # itself. Only the first of the two is a `GROUP BY`, which is why the grouping tally below
       # moves to three rather than four: the presence count is a plain aggregate over one run.
-      expect(large_queries.size).to eq(7)
-      expect(large_queries.count { |sql| sql.include?("GROUP BY") }).to eq(3)
+      # RECOUNTED AT 8 by SPGD-649, which added the "Where the unannotated tests are" panel: ONE
+      # further read, the same run's rows grouped by AREA on the ANNOTATION axis rather than on the
+      # wall clock the by-directory rollup ranks them by. It IS a `GROUP BY`, so the grouping tally
+      # below moves with it — from three to four — where SPGD-344's presence count did not.
+      # RECOUNTED AT 9 by SPGD-728, which added the "Slowest tests across the window" panel:
+      # ONE further read, and it is that panel's GATING PROBE — the row/unresolved-row count over
+      # the newest run of the branch window, asked before either of the two steps behind it. The
+      # fixtures in this file never run `Ingest::IdentityResolver`, which is what an ingest endpoint
+      # answers `202` and enqueues a job for, so every row here carries a NULL `spec_identity_id`,
+      # the gate reports nothing resolved and the panel stops: one read, not three. A page whose
+      # window HAS been resolved pays three, and that budget — a gate, a capped candidate step over
+      # one run, and a composition over those candidates only — is asserted in
+      # spec/requests/repository_window_slowest_tests_spec.rb. The added read moves with neither
+      # the size of the suite nor the length of the window, since it counts one run's rows.
+      # The grouping tally below does NOT move with it: the gate is a plain two-column aggregate
+      # over one run with no `GROUP BY` at all, which is exactly what makes it cheap enough to ask
+      # before deciding whether to ask anything else.
+      expect(large_queries.size).to eq(9)
+      expect(large_queries.count { |sql| sql.include?("GROUP BY") }).to eq(4)
     end
   end
 
@@ -318,7 +335,13 @@ RSpec.describe "Repository heaviest spec files", type: :request do
   # by directory" is exactly the sentence a reader would take as a standing prohibition.
   describe "the carve-outs the panels above state" do
     it "no longer tells its authors the page rolls nothing up by file or by directory" do
-      source = Rails.root.join("app/views/repositories/show.html.erb").read
+      # SPGD-527 split `show.html.erb` into per-panel partials, so "the page's source" is no longer
+      # one file. The NEGATIVES read the whole of it — the template plus every partial it renders —
+      # because a stale carve-out is a standing instruction to its authors wherever in the page it
+      # is written, and narrowing this read to the two panels below would stop noticing one
+      # reintroduced anywhere else.
+      views  = Rails.root.join("app/views/repositories")
+      source = Dir[views.join("*.html.erb")].sort.map { |f| File.read(f) }.join("\n")
 
       expect(source).not_to include("rolls nothing up by file or directory")
       expect(source).not_to include("rolls nothing up by directory")
@@ -328,22 +351,27 @@ RSpec.describe "Repository heaviest spec files", type: :request do
       expect(source).not_to include("needs its own migration")
       # Every negative above is satisfied by a source string that simply no longer contains the
       # panels, so each one is anchored to the replacement truth it gave way to, IN THE PANEL THAT
-      # CARRIED IT. A read that stops reaching a panel then fails here instead of passing that
-      # panel's negatives vacuously.
-      #
+      # CARRIED IT — and those anchors are read from the specific partial that must carry them, not
+      # from the union above. A read that stops reaching a panel then fails here instead of passing
+      # that panel's negatives vacuously.
+      slowest_tests       = views.join("_slowest_tests.html.erb").read
+      heaviest_spec_files = views.join("_heaviest_spec_files.html.erb").read
+
       # The two by-directory carve-outs were retired from the "Slowest tests" preamble, and the
       # sentence that corrects them stands there:
-      expect(source).to include("Both rollups now exist, in the two panels below this one")
+      expect(slowest_tests).to include("Both rollups now exist, in the two panels below this one")
       # The migration deferral was retired one panel down, from the "Heaviest spec files" preamble,
       # and its replacement is the sentence naming that index as the thing the comment ONCE said a
       # subtree rollup waited on:
-      expect(source).to include("subtree rollup was waiting on governs a prefix PREDICATE")
-      # Both of those live in panel PREAMBLES — comments ABOVE the render — so neither would notice
-      # the panel BODY being extracted into a partial out from under them, which is the likeliest
-      # way this read stops reaching the panel this file is named for (3700 lines, no partials, and
-      # `_form.html.erb` already an idiom in this directory). This id is inside that body, and is
-      # the only assertion here that reaches it.
-      expect(source).to include(%(id="spec-file-durations-basis"))
+      expect(heaviest_spec_files).to include("subtree rollup was waiting on governs a prefix PREDICATE")
+      # Both of those live in panel PREAMBLES — comments ABOVE the render. SPGD-441 added this id
+      # because a preamble would not notice the panel BODY being extracted into a partial out from
+      # under it, which was the likeliest way this read stops reaching the panel this file is named
+      # for. That extraction has since happened (SPGD-527), and the guard did its job: it failed,
+      # and was repointed rather than weakened. The preamble and the body travelled together into
+      # `_heaviest_spec_files.html.erb`, so this stays a BODY-reaching assertion — it must keep
+      # naming the partial that carries the panel body, never a preamble-only read.
+      expect(heaviest_spec_files).to include(%(id="spec-file-durations-basis"))
     end
   end
 end

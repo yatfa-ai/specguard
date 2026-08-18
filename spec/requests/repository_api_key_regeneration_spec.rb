@@ -101,6 +101,24 @@ RSpec.describe "Regenerating an API key", type: :request do
       expect(response.body).to include(api_key.token_hint)
       expect(response.body).not_to include(retired_hint)
     end
+
+    it "dates the rotation, without disturbing the use the retired token stamped" do
+      api_key = repository.api_keys.create!(name: "CI")
+      api_key.touch_last_used!
+      stamped = api_key.reload.last_used_at
+
+      post regenerate_repository_api_key_path(repository, api_key)
+
+      reloaded = api_key.reload
+      # The row may never carry a replacement token beside a use stamped by its predecessor with
+      # nothing recording that. This is the fact every surface below reads.
+      expect(reloaded.rotated_at).to be_present
+      expect(reloaded.rotated_at).to be > stamped
+      # And SPGD-352's decision under guard through the real path as well: the use is preserved
+      # byte for byte, not nulled and not backdated.
+      expect(reloaded.last_used_at).to eq(stamped)
+      expect(reloaded).to be_rotated_and_unused
+    end
   end
 
   describe "the reveal panel" do
@@ -218,6 +236,10 @@ RSpec.describe "Regenerating an API key", type: :request do
   end
 
   describe "the key list" do
+    def last_used_cell(name)
+      Capybara.string(response.body).find("#api-keys table tbody tr", text: name).all("td")[4].text.squish
+    end
+
     it "offers a Regenerate control alongside Revoke, warning that the current token dies" do
       api_key = repository.api_keys.create!(name: "CI")
 
@@ -229,6 +251,49 @@ RSpec.describe "Regenerating an API key", type: :request do
       expect(row).to have_button("Revoke")
       expect(row.find("form[action='#{regenerate_repository_api_key_path(repository, api_key)}']")["data-turbo-confirm"])
         .to include("token stops working immediately")
+    end
+
+    it "stops attributing the retired token's use to the replacement" do
+      rotated = repository.api_keys.create!(name: "Rotated")
+      rotated.touch_last_used!
+      # The control, in the same table and on the same render: identical use, never rotated. Its
+      # cell is what this row USED to read, so an implementation that changed the cell for every
+      # key — or that changed none of them — fails on one of the two assertions below.
+      untouched = repository.api_keys.create!(name: "Untouched")
+      untouched.touch_last_used!
+
+      post regenerate_repository_api_key_path(repository, rotated)
+      follow_redirect!
+
+      expect(rotated.reload).to be_rotated_and_unused
+      expect(last_used_cell("Rotated")).to eq("not used since rotation, less than a minute ago")
+      expect(last_used_cell("Untouched")).to eq("less than a minute ago")
+    end
+
+    it "says a key rotated before it ever authenticated is unused since the rotation, not 'never'" do
+      never_used = repository.api_keys.create!(name: "Fresh")
+
+      post regenerate_repository_api_key_path(repository, never_used)
+      follow_redirect!
+
+      # "never" is true and useless here — it says nothing about why, and the panel's own heuristic
+      # reads it as "the request was never sent". The rotation is the newest thing that happened.
+      expect(never_used.reload).to be_rotated_and_unused
+      expect(last_used_cell("Fresh")).to include("not used since rotation")
+      expect(last_used_cell("Fresh")).not_to eq("never")
+    end
+
+    it "returns the cell to a plain age the moment the replacement authenticates" do
+      api_key = repository.api_keys.create!(name: "CI")
+      api_key.regenerate!
+
+      api_key.touch_last_used!
+      get repository_path(repository)
+
+      # One request, no window to expire: the history stopped being misattributed, it was not
+      # destroyed, and the cell goes back to reporting it.
+      expect(api_key.reload).not_to be_rotated_and_unused
+      expect(last_used_cell("CI")).to eq("less than a minute ago")
     end
   end
 
@@ -247,7 +312,10 @@ RSpec.describe "Regenerating an API key", type: :request do
 
       post regenerate_repository_api_key_path(repository, api_key)
 
-      expect(response).to redirect_to(repository_path(repository))
+      # Anchored on the reveal panel — see `ApiKeysController::REVEAL_ANCHOR`. A rotation that lands
+      # on the page with the previous scroll intact shows the holder nothing, and the value is shown
+      # exactly once.
+      expect(response).to redirect_to(repository_path(repository, anchor: "revealed-key"))
       expect(ApiKey.authenticate(retired)).to be_nil
     end
 

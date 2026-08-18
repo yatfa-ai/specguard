@@ -52,6 +52,17 @@ RSpec.describe "Repository repeated description examples", type: :request do
 
   def ran_in_paths = rows.map { |row| row[:ran_in] }
 
+  # The two links a row can carry, told apart by their COLUMN and never by their text: the drill-in
+  # names the including file and the definition site names that file plus a `:line`, so a text
+  # filter matches both and, on an ordinary row, cannot say which it got.
+  def ran_in_link(row) = row.all("td").first.find("a")
+
+  def definition_links = panel.all("tbody tr").map { |row| row.all("td")[1].find("a") }
+
+  def definition_hrefs = definition_links.map { |link| link[:href] }
+
+  def blob(sha, path, line) = "https://github.com/acme/billing-service/blob/#{sha}/#{path}#L#{line}"
+
   def ingest(repository, specs, commit_sha: "feedfacecafe0001", **attrs)
     Ingest::RunRecorder.record(
       repository,
@@ -264,7 +275,7 @@ RSpec.describe "Repository repeated description examples", type: :request do
     it "links each row's file into the spec-file drill-down" do
       get repository_path(two_group_run, repeated_description: looped)
 
-      href = panel.first("tbody tr").find("a", text: order_spec)[:href]
+      href = ran_in_link(panel.first("tbody tr"))[:href]
 
       expect(href).to include("spec_file=#{CGI.escape(order_spec)}")
       expect(href).to include("#spec-file-examples")
@@ -275,7 +286,7 @@ RSpec.describe "Repository repeated description examples", type: :request do
     it "carries the open description through that link" do
       get repository_path(two_group_run, repeated_description: looped)
 
-      expect(panel.first("tbody tr").find("a", text: order_spec)[:href])
+      expect(ran_in_link(panel.first("tbody tr"))[:href])
         .to include("repeated_description=#{CGI.escape(looped)}")
     end
 
@@ -359,6 +370,100 @@ RSpec.describe "Repository repeated description examples", type: :request do
 
       expect(basis_line).to have_text("Each row names both the file that RAN it and the file and " \
                                       "line where it is DEFINED", normalize_ws: true)
+    end
+
+    # The link inherits the same constraint the column does: `file_path` is the one place the group
+    # is defined, and both rows point there rather than at line 7 of the two different files that
+    # ran them.
+    it "links both rows to the one place the group is defined" do
+      get repository_path(shared_group_run, repeated_description: looped)
+
+      expect(definition_hrefs)
+        .to eq([blob("feedfacecafe0001", "spec/support/shared_examples.rb", 7),
+                blob("feedfacecafe0001", "spec/support/shared_examples.rb", 7)])
+      expect(definition_hrefs.first).not_to include(order_spec)
+    end
+  end
+
+  # The coordinate as a DESTINATION rather than as text, through the seam
+  # spec/requests/repository_unannotated_examples_spec.rb pins on the panel that introduced it.
+  # This column's own comment states why it is the one that has to be navigable: both its halves
+  # are NOT NULL, "so this one always names the row even where the one beside it cannot" — and on
+  # the row where the one beside it cannot, an unlinked coordinate leaves the reader a row they can
+  # read and nothing they can do.
+  describe "the definition site as a link" do
+    it "links each listed row's coordinate to that line on GitHub" do
+      get repository_path(two_group_run, repeated_description: looped)
+
+      expect(definition_hrefs).to eq([blob("feedfacecafe0001", order_spec, 1),
+                                      blob("feedfacecafe0001", order_spec, 2),
+                                      blob("feedfacecafe0001", refund_spec, 3)])
+      # The link text is the coordinate the column already printed, not a second control on the row.
+      expect(definition_links.map { |link| link.text.strip })
+        .to eq(["#{order_spec}:1", "#{order_spec}:2", "#{refund_spec}:3"])
+    end
+
+    # THE ROW THIS EXISTS FOR. `spec_file_path` is nullable, so the column beside this one renders
+    # the literal "not reported" and offers nothing to follow; the definition site is the row's only
+    # identity AND now its only way out. Both halves of the cell are asserted together, because a
+    # change that linked this coordinate by reaching for `spec_file_path` would satisfy neither.
+    it "still links the coordinate on a row that has no including file to name" do
+      repository = two_group_run
+      SpecObservation.where(name: looped, line_number: 3).update_all(spec_file_path: nil)
+
+      get repository_path(repository, repeated_description: looped)
+
+      expect(ran_in_paths.last).to eq("not reported")
+      expect(panel.all("tbody tr").last.all("td").first).to have_no_css("a")
+      expect(definition_hrefs.last).to eq(blob("feedfacecafe0001", refund_spec, 3))
+    end
+
+    # THE ANCHORED RUN'S SHA, not `main` and not the newest run. `file_path`/`line_number` are a
+    # last known path rather than an identity (SPGD-114), so a page anchored on an older run via
+    # `?commit_sha=` must link into THAT run's tree rather than at whatever has since drifted onto
+    # the line.
+    it "pins the link to the run the page is anchored on rather than the newest one" do
+      repository = create_repository(user: @user)
+      ingest(repository, [example_spec(name: looped, duration: 4.0, line_number: 1),
+                          example_spec(name: looped, duration: 1.5, line_number: 2)],
+             commit_sha: "aaaa1111bbbb2222")
+      ingest(repository, [example_spec(name: looped, duration: 4.0, line_number: 1),
+                          example_spec(name: looped, duration: 1.5, line_number: 2)],
+             commit_sha: "cccc3333dddd4444")
+
+      get repository_path(repository, repeated_description: looped,
+                                      commit_sha: "aaaa1111bbbb2222")
+
+      expect(definition_hrefs).to eq([blob("aaaa1111bbbb2222", order_spec, 1),
+                                      blob("aaaa1111bbbb2222", order_spec, 2)])
+      expect(definition_hrefs.join(" ")).not_to include("cccc3333dddd4444")
+    end
+
+    # The pairing that stops the assertion above from passing on a page that simply had one run.
+    it "links at the newest run's sha when no anchor was asked for" do
+      repository = create_repository(user: @user)
+      ingest(repository, [example_spec(name: looped, duration: 4.0, line_number: 1),
+                          example_spec(name: looped, duration: 1.5, line_number: 2)],
+             commit_sha: "aaaa1111bbbb2222")
+      ingest(repository, [example_spec(name: looped, duration: 4.0, line_number: 1),
+                          example_spec(name: looped, duration: 1.5, line_number: 2)],
+             commit_sha: "cccc3333dddd4444")
+
+      get repository_path(repository, repeated_description: looped)
+
+      expect(definition_hrefs).to eq([blob("cccc3333dddd4444", order_spec, 1),
+                                      blob("cccc3333dddd4444", order_spec, 2)])
+    end
+
+    # A NEW TAB, the convention the "Unannotated tests here" panel introduced deliberately for the
+    # app's first link that leaves it. The drill-in in the column beside it stays in the tab, which
+    # is why this reads the two apart rather than asserting over every anchor in the row.
+    it "opens the file in a new tab, leaving the list where the reader had it" do
+      get repository_path(two_group_run, repeated_description: looped)
+
+      expect(definition_links.map { |link| link[:target] }.uniq).to eq(["_blank"])
+      expect(definition_links.map { |link| link[:rel] }.uniq).to eq(["noopener noreferrer"])
+      expect(ran_in_link(panel.first("tbody tr"))[:target]).to be_nil
     end
   end
 
@@ -569,7 +674,23 @@ RSpec.describe "Repository repeated description examples", type: :request do
       # count of rows carrying no description) and ONE for this panel. The list and both figures in
       # its caption come back on that one read: the counts are windows on it rather than a second
       # aggregate.
-      expect(large_queries.size).to eq(8)
+      # RECOUNTED AT 9 by SPGD-649, which added the "Where the unannotated tests are" panel: ONE
+      # further read of the same run's rows, grouped by AREA on the ANNOTATION axis — a different
+      # axis from the by-directory rollup already counted here, which ranks that identical
+      # population by wall clock. It is not a per-description read and does not move with a
+      # description being open, which is why the drill-down's own delta below is still exactly one.
+      # RECOUNTED AT 10 by SPGD-728, which added the "Slowest tests across the window" panel:
+      # ONE further read, and it is that panel's GATING PROBE — the row/unresolved-row count over
+      # the newest run of the branch window, asked before either of the two steps behind it. The
+      # fixtures in this file never run `Ingest::IdentityResolver`, which is what an ingest endpoint
+      # answers `202` and enqueues a job for, so every row here carries a NULL `spec_identity_id`,
+      # the gate reports nothing resolved and the panel stops: one read, not three. A page whose
+      # window HAS been resolved pays three, and that budget — a gate, a capped candidate step over
+      # one run, and a composition over those candidates only — is asserted in
+      # spec/requests/repository_window_slowest_tests_spec.rb. The added read moves with neither
+      # the size of the suite nor the length of the window, since it counts one run's rows.
+      # It is not a per-description read either, so the drill-down's own delta below stays one.
+      expect(large_queries.size).to eq(10)
     end
 
     # The whole drill-down is off the default page's budget. A reader who never opens a description
@@ -583,7 +704,7 @@ RSpec.describe "Repository repeated description examples", type: :request do
       unopened = queries_against("spec_observations") { get repository_path(repository) }
 
       expect(unopened.size).to eq(opened.size - 1)
-      expect(unopened.size).to eq(7)
+      expect(unopened.size).to eq(9)
     end
   end
 end

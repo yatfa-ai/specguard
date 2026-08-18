@@ -13,13 +13,15 @@ RSpec.describe EmbeddingCacheEntry do
       found = described_class.vectors_for(fingerprint, ["a stored text", "never embedded"])
 
       expect(found.keys).to eq(["a stored text"])
-      # Within the four-byte float the `vector` column stores, not exactly: `vector(1536)` is
-      # float4 per element and Ruby's Floats are float8, so a round trip rounds. That is not a
-      # difference between the cached path and the fresh one — `spec_identities.embedding` is the
-      # same column type, so the fresh vector is rounded identically the moment it is stored — but
-      # it does mean an `eq` here would fail on the substrate rather than on the cache.
+      # Within the two-byte float the `halfvec` column stores, not exactly: `halfvec(1024)` is IEEE
+      # half precision per element and Ruby's Floats are float8, so a round trip rounds — to about
+      # three significant decimal digits, four orders of magnitude coarser than the `vector(1536)`
+      # this column held until 2026-08-17. That is not a difference between the cached path and the
+      # fresh one — `spec_identities.embedding` is the same column type, so the fresh vector is
+      # rounded identically the moment it is stored — but it does mean an `eq` here would fail on
+      # the substrate rather than on the cache.
       drift = vector.zip(found.fetch("a stored text")).map { |mine, stored| (mine - stored).abs }.max
-      expect(drift).to be < 1e-6
+      expect(drift).to be < 1e-3
     end
 
     it "partitions entries by fingerprint, so a moved fingerprint cannot read the old ones" do

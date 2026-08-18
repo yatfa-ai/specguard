@@ -13,7 +13,7 @@ require "rails_helper"
 # afterwards, which is the property a caller can actually observe and the one a cache-destroying
 # implementation would fail.
 RSpec.describe Ingest::EmbeddingCachePruner do
-  # One deterministic vector, at the column's real width. `vector(1536)` is float4 per element, so a
+  # One deterministic vector, at the column's real width. `vector(1024)` is float4 per element, so a
   # round trip rounds — irrelevant to every assertion here, which are about WHICH ROWS exist, but
   # the width matters INDIRECTLY, and not the way this comment used to say. It does not make the
   # ROW ~6KB: the column is stored out of line, so the heap tuple is a 168-byte stub. What the width
@@ -104,8 +104,30 @@ RSpec.describe Ingest::EmbeddingCachePruner do
       found = EmbeddingCacheEntry.vectors_for(fingerprint, kept)
       expect(found.keys).to match_array(kept)
       # And the vector still round-trips, so what survived is an entry rather than a husk of one.
-      drift = vector.zip(found.fetch(kept.first)).map { |mine, stored| (mine - stored).abs }.max
-      expect(drift).to be < 1e-6
+      # Within the TWO-byte float the `halfvec(1024)` column stores — IEEE half, an 11-bit
+      # significand — against Ruby's float8: a round trip moves a component of magnitude at most 1
+      # by at most 2**-11 ≈ 4.9e-4, and this fixture's largest is 6/7. The same `1e-3` for the same
+      # reason as `spec/models/embedding_cache_entry_spec.rb` and the two identity-resolver
+      # examples. Until 2026-08-17 the column was `vector(1536)` and this bound was `1e-6`; the
+      # migration to `halfvec` made the substrate four orders of magnitude coarser.
+      #
+      # Bound to one name, asserted in one comparison, for the reason the identity-resolver
+      # examples set out: this number moved three orders of magnitude in that migration, and a
+      # separate "and a husk fails it" assertion alongside would not have stopped the next such
+      # move, because loosening the one that had gone red leaves the other green.
+      round_trip_tolerance = 1e-3
+
+      round_trip = vector.zip(found.fetch(kept.first)).map { |mine, stored| (mine - stored).abs }.max
+      # A husk — a row that survived the sweep with its vector zeroed — is what the round trip is
+      # being distinguished FROM, so it is the far side of the same bound. Compared in Ruby rather
+      # than built in the database: the point is the DISCRIMINATING POWER of the tolerance, not
+      # that the pruner can produce a husk, and 6/7 is this fixture's largest component.
+      husk_drift = vector.map(&:abs).max
+
+      # ⭐ The tolerance lives strictly between what a real round trip costs and what a husk would,
+      # and says so once. Measured: the round trip is ~2.1e-4 and the husk is 0.857, so `1e-3`
+      # clears the noise by ~5x and sits ~860x under the signal.
+      expect(round_trip_tolerance).to be_between(round_trip, husk_drift).exclusive
     end
 
     it "does not delete an expired entry that has since been REVIVED by a re-embed" do
@@ -150,7 +172,7 @@ RSpec.describe Ingest::EmbeddingCachePruner do
   describe "convergence across invocations" do
     # The ceiling is a bound on ONE invocation, so what it buys is convergence rather than
     # completeness. Stubbed small because the shipped ceiling is 10,000 rows and a fixture of that
-    # many 1536-dimension vectors would be ~81MB of spec — the constants are the mechanism and the
+    # many 1024-dimension vectors would be ~81MB of spec — the constants are the mechanism and the
     # numbers are not.
     before do
       stub_const("#{described_class}::DELETE_BATCH_SIZE", 2)

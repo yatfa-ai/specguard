@@ -101,18 +101,6 @@ RSpec.describe "GET /api/v1/repository — directory_runtime_file_growth", type:
 
   def row_at(block, path) = block["rows"].find { |row| row["path"] == path }
 
-  # Every string these blocks serve, at any depth — the assertion surface for "operands, never the
-  # labels". Walked rather than listed key by key, so a label-shaped value added to a row or to a
-  # block later is caught by the same example rather than by nobody.
-  def strings_in(value)
-    case value
-    when Hash then value.values.flat_map { |inner| strings_in(inner) }
-    when Array then value.flat_map { |inner| strings_in(inner) }
-    when String then [value]
-    else []
-    end
-  end
-
   describe "an area named under ?spec_directory=" do
     before { adjacent_runs }
 
@@ -545,10 +533,11 @@ RSpec.describe "GET /api/v1/repository — directory_runtime_file_growth", type:
 
       grains = observation_reads_by_grain { get_repository(key: api_key, query: query) }
 
-      # The trailing zero is the flakiness drill-in's grain: this fixture sends no `?unstable_test=`
-      # — and no `?branch=` either — so it reads nothing, which is exactly the claim its own file
-      # makes about it from the other side.
-      expect(grains.map(&:length)).to eq([1, 1, 2, 2, 0, 1, 1, 0, 0, 1, 1, 1, 0])
+      # The three trailing zeros are the drill-in grains this fixture never opens: the flakiness one —
+      # it sends no `?unstable_test=`, and no `?branch=` either — and the annotation WORKLIST and the
+      # annotation RANKING, which share one gate and take no `?unannotated_examples=`. Each reads
+      # nothing, which is exactly the claim its own file makes about it from the other side.
+      expect(grains.map(&:length)).to eq([1, 1, 2, 2, 0, 1, 1, 0, 0, 1, 1, 1, 0, 0, 0])
       expect(observation_reads { get_repository(key: api_key, query: query) }.length)
         .to eq(classified_observation_reads { get_repository(key: api_key, query: query) })
       # And the three neighbouring growth grains are each a different statement from this one.

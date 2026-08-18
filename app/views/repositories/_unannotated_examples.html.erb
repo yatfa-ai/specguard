@@ -1,0 +1,272 @@
+    <%# == The unannotated tests THEMSELVES, for the place the reader picked
+        The last rung of the ladder the Overview panel opens and "Where the unannotated tests are"
+        narrows. That panel prints "Not visible to SpecGuard" as `total_specs_count -
+        annotated_specs_count` and says *"SpecGuard cannot see the other N tests"*; the ranking above
+        names the AREAS that count is concentrated in. Neither names a TEST, and until this panel the
+        only route to one was `GET /api/v1/repository?unannotated_examples=1&spec_directory=…` with
+        an API key — a route off the product, for the reader the product had just handed a worklist
+        to.
+
+        Rendered only when a narrowing was ASKED for, and the read is taken only then. The model's
+        narrowings are OPTIONAL and whole-run is a complete ask on the JSON endpoint; this surface
+        deliberately does not take it, for the reason the controller states: a hundred rows of debt
+        nobody asked for is the Overview's subtraction again at length.
+
+        NO NEW PARAMETER. It rides `?spec_directory=` and `?spec_file=`, so one ask opens EVERY
+        panel that reads it, each answering in its own grain over the same area. `show.html.erb`
+        states the rule at "Areas that grew or shrank": that is how `drill_down_path` composes asks,
+        and it is not a collision to be fixed by minting a second parameter.
+
+        NO "Close" BUTTON, and its absence is a decision rather than an omission. The three panels
+        that carry one each OWN an ask, and closing it is the gesture that dismisses them. This panel
+        owns neither of the asks it rides: a "Close" here would have to clear `?spec_directory=`,
+        which would close the two panels that ask belongs to as a side effect — the precise inversion
+        of the carry-through rule `RepositoriesHelper#drill_down_path` exists to keep ("closing an
+        area is not a request to close the file", and in every other direction). The reader dismisses
+        this panel with the Close button of the panel that owns the ask, which is where they set it.
+
+        It PRESENTS and does not judge — the rule `UnannotatedExamples` and `UnannotatedDirectories`
+        both state, and it governs this partial too: rows, and never a fraction, a threshold or a
+        colour-coded verdict on one of them.
+
+        Same visibility rule and same gate as the panels around it: read-only suite telemetry on
+        `current_repository(:view)`, outside `manage_keys`, and nothing here widens that. %>
+    <% if @unannotated_examples %>
+      <%# What this population was narrowed BY, as the object holds it — read off the panel's own
+          subject rather than off the request ivars, the discipline the area→file link one panel over
+          already keeps. Both may be present, in which case the read AND-ed them (see
+          `SpecObservation.unannotated_in`, where the absence of a precedence rule is argued), and
+          every sentence below has to describe the intersection rather than either half. %>
+      <% narrowings = [@unannotated_examples.spec_file, @unannotated_examples.spec_directory].compact %>
+      <%= render UI::PanelComponent.new(title: "Unannotated tests here", id: "unannotated-examples",
+                                        class: "lg:col-span-3") do %>
+        <% if narrowings.size > 1 %>
+          <%# WHAT THE READ NARROWED BY, hoisted OUT of the caption below and above the branch,
+              because it is a disclosure about the POPULATION rather than a claim about the list —
+              SPGD-363's rule, and this is the branch that proves it. Two asks are AND-ed and neither
+              wins (`SpecObservation.unannotated_in` refuses a precedence rule), so a file outside
+              that area returns NOTHING — and the state a reader then meets is the empty one, where a
+              caption living inside the rows-present branch has already vanished. Told only that
+              there is "nothing unannotated" in two paths that each hold plenty, they would read a
+              rendering bug; the honest answer is that the intersection is empty. %>
+          <p class="text-xs text-app-muted mb-3">
+            Both asks narrow this list and a row must match each of them, so a file outside that area
+            is an empty intersection rather than one of the two having been dropped.
+          </p>
+        <% end %>
+        <% if @unannotated_examples.rows.any? %>
+          <%# THE CAP, folded in the view rather than asked of the object. `UnannotatedExamples`
+              refuses a `truncated?` and says why: a predicate no surface calls is a claim nothing has
+              ever checked, and it may only arrive WITH the spec that runs it against an empty and a
+              capped read. Its class comment names the alternative in as many words — *"`recorded_count
+              > rows.size` is a client's sentence to write"* — and this is the client. Both operands
+              are the object's own integers off one read, and this asks only which is larger; the same
+              shape "Where the unannotated tests are" folds `carries_debt` in, one grain up. %>
+          <% truncated = @unannotated_examples.recorded_count > @unannotated_examples.rows.size %>
+
+          <%# What the list IS, before the list — the discipline every panel on this page keeps. Every
+              figure is counted off THE SAME READ that returned the rows: the population count rides
+              back as a window (`SpecObservation::UNANNOTATED_POPULATION_COUNTS`) and the window is
+              evaluated after the WHERE, so it describes the NARROWED population rather than the run,
+              and a caption cannot come to describe a different row set from the table under it. %>
+          <p class="text-xs text-app-muted mb-3" id="unannotated-examples-basis">
+            <%# The subject, named before anything is claimed about it. An empty state without a
+                subject is a sentence about nothing, and so is a caption — "all 3 examples this run
+                recorded here" is not a fact until "here" has been said. %>
+            <% if @unannotated_examples.spec_file %>
+              <span class="font-mono text-app-content-secondary"><%= @unannotated_examples.spec_file %></span>
+            <% end %>
+            <% if narrowings.size > 1 %>and<% end %>
+            <% if @unannotated_examples.spec_directory %>
+              <span class="font-mono text-app-content-secondary"><%= @unannotated_examples.spec_directory %></span>
+            <% end %>
+            —
+            <%# The cap, disclosed whether or not anything was cut, for the reason every capped list
+                here states: `rows.size` cannot state the population — it IS the truncated figure — so
+                a list whose length happens to equal a limit the reader cannot see reads as the whole
+                story. The two sentences are written out rather than assembled, because the untruncated
+                one is a claim about the whole of what was recorded and the truncated one is a claim
+                about a head, and a shared clause would let an edit meant for one land on both.
+
+                "In the order you would open them" and never "worst first": this read RANKS NOTHING —
+                `SpecObservation.unannotated_in` orders by `spec_file_path`, then `line_number`, then
+                `id`, and says in full that it is a worklist rather than a ranking. A caption promising
+                an order nothing measured is the defect `#spec_file_examples_scope_sentence` is five
+                sentences long to avoid. %>
+            <% if truncated %>
+              The first <%= number_with_delimiter(@unannotated_examples.rows.size) %> of the
+              <%= number_with_delimiter(@unannotated_examples.recorded_count) %> examples this run
+              recorded here without an <code>@intent</code>, in the order you would open them — by
+              spec file, then by line.
+              <%# The population the read DROPPED, which is the one disclosure that would survive
+                  every branch of this caption if the other branches could reach it (they cannot: an
+                  uncut list dropped nothing, and an empty read has nothing to drop). Stated as what
+                  is missing rather than as a bare limit, because a reader who annotates these and
+                  re-delivers is exactly the reader the remainder is a fact about. %>
+              The other
+              <%= number_with_delimiter(@unannotated_examples.recorded_count - @unannotated_examples.rows.size) %>
+              are not on this page: this is a worklist capped at
+              <%= number_with_delimiter(SpecObservation::UNANNOTATED_EXAMPLES_LIMIT) %>, so it is the
+              head of what is unannotated here and not the whole of it.
+            <% else %>
+              All <%= number_with_delimiter(@unannotated_examples.recorded_count) %>
+              <%= "example".pluralize(@unannotated_examples.recorded_count) %> this run recorded here
+              without an <code>@intent</code>, in the order you would open them — by spec file, then
+              by line.
+            <% end %>
+            <%# The two paths, said once, where a reader meets the column that shows them — the same
+                sentence "Examples in this spec file" carries, and needed more here: that panel is
+                keyed on one including file, and this list spans files and is ORDERED by the one that
+                RAN each example, so the column a reader sorts by and the coordinate they go and open
+                are two different files on exactly the rows a shared example group produced. %>
+            Each row names the spec file that RAN the example, and under the name where it is
+            DEFINED — the same file for every ordinary example, and a different one for an example a
+            shared example group defines elsewhere.
+            <%# Named, not scored. `UnannotatedDirectories` refuses a fraction one grain up and says
+                why; at THIS grain the temptation is a verdict on the row rather than a percentage
+                over it, and the refusal is the same one. %>
+            Named and not scored: nothing here says whether a test ought to carry an
+            <code>@intent</code>, only that this run recorded it without one.
+            <%# Counted off THIS RUN's per-example rows. The Overview's figure is a subtraction over
+                the run's own counters, and while both sides read the same `status` the payload wrote,
+                the two populations are not guaranteed identical — and this list is narrowed on top of
+                that. So the figures here are not promised to add up to the headline, and saying so is
+                cheaper than a reader discovering it with a calculator. %>
+            Counted off the per-example rows this run reported, which is a different population from
+            the suite size on the Overview panel above and may legitimately differ from it.
+          </p>
+
+          <%= render UI::TableComponent.new(columns: ["Test", "Spec file"],
+                                            describedby: "unannotated-examples-basis") do %>
+            <% @unannotated_examples.rows.each do |observation| %>
+              <tr>
+                <td class="px-3 py-2 text-app-content">
+                  <%# Through the same two seams every per-example list on this page renders a row
+                      through, so one example cannot be named one way in a ranking and another way in
+                      the worklist: `#label` falls back to the location for a producer that sent no
+                      name, and the location line below is rendered only when there IS a name, so a
+                      row wearing the fallback does not wear it twice.
+
+                      `#location_label` is `file_path` + `line_number` — the DEFINITION site — and
+                      specifically NOT `spec_file_path` + `line_number`, which for a shared example
+                      group pairs two halves from different files and points at whatever happens to
+                      sit on that line of the including one. On this panel that would send a reader
+                      to annotate a test that is not there.
+
+                      THE COORDINATE IS A LINK, and it is a link on BOTH branches. The reader's next
+                      action here is singular and known — open that file at that line and write an
+                      `@intent` — and this is the one panel on the page whose whole purpose is to
+                      hand them that action. A row from a producer that sent no name WEARS the
+                      coordinate as its label, so linking only the location line below would leave
+                      inert exactly the rows `#label` exists for: the ones a reader "can neither
+                      identify nor go and find".
+
+                      PINNED TO `@latest_test_run.commit_sha` AND NOT TO `main`. That is the run this
+                      panel's rows were read off — the reader's anchor, so a page opened on an older
+                      run via `?commit_sha=` links into THAT run's tree. `file_path`/`line_number`
+                      are a last known path rather than an identity (SPGD-114): a coordinate is
+                      accurate against the tree it was recorded from and no other, and linking at
+                      `main` would send the reader to whatever has since drifted onto line 412.
+                      `commit_sha` is `null: false`, and this partial renders only where
+                      `@latest_test_run` exists, so there is no nil branch and no fallback ref.
+
+                      Built off `file_path` and never `spec_file_path` — the same constraint
+                      `#location_label` is written to above, inherited exactly rather than restated:
+                      the link is that method's two halves, not the row's sort column. The "Spec
+                      file" cell beside this one keeps rendering `spec_file_path` and is not a link.
+
+                      A run whose sha was never pushed produces a link GitHub answers 404 to. That is
+                      GitHub telling the truth about an unpushed commit, on the same sha this page
+                      already prints in "Recent runs" — and this panel PRESENTS and does not judge,
+                      so there is no guard, no probe and no conditional rendering.
+
+                      NEW TAB, introduced here deliberately — the app has had no external-link
+                      convention because until now it had no link that leaves it. This one does, and
+                      the reader is mid-worklist: annotating a test and losing a hundred-row list
+                      narrowed by two asks would make the panel worse to use the more of it you work
+                      through. `rel` is written out rather than left to the browsers that imply it.
+
+                      ZERO NEW QUERIES: `@repository` and `@latest_test_run` are both already loaded
+                      by the time this partial renders, and `#github_blob_url` is string composition
+                      that asks GitHub nothing. %>
+                  <% definition_site_url = @repository.github_blob_url(observation.file_path,
+                                                                       observation.line_number,
+                                                                       @latest_test_run.commit_sha) %>
+                  <% if observation.name.present? %>
+                    <%= observation.label %>
+                    <span class="block font-mono text-xs text-app-muted">
+                      <%= link_to observation.location_label, definition_site_url,
+                                  class: "underline underline-offset-2 decoration-app-border-light " \
+                                         "text-app-content hover:decoration-app-content",
+                                  target: "_blank", rel: "noopener noreferrer" %>
+                    </span>
+                  <% else %>
+                    <%= link_to observation.label, definition_site_url,
+                                class: "underline underline-offset-2 decoration-app-border-light " \
+                                       "text-app-content hover:decoration-app-content",
+                                target: "_blank", rel: "noopener noreferrer" %>
+                  <% end %>
+                </td>
+                <td class="px-3 py-2 font-mono text-xs text-app-content-secondary">
+                  <%# The file that RAN it, which is the column this list is ordered by — shown
+                      because a worklist whose sort key is invisible reads as unordered, and because
+                      it is the file the reader opens to reach the example even when the definition
+                      site above sits somewhere else. %>
+                  <%= observation.spec_file_path %>
+                </td>
+              </tr>
+            <% end %>
+          <% end %>
+        <% elsif @unannotated_directories&.recorded? %>
+          <%# NOTHING CAME BACK FROM A RUN THAT DID WRITE PER-EXAMPLE ROWS — the good news, and the
+              state the whole metric exists to reach. `UnannotatedExamples` says so: a fully-annotated
+              read is the SUCCESS case rather than the exotic one, and the surface says "nothing left"
+              rather than erroring on it.
+
+              Decided off `@unannotated_directories#recorded?` and NOT off a second query. That object
+              is already on this page whenever there is a run, its `recorded?` answers exactly "did
+              this run write per-example rows at all", and it was counted off a read the page has
+              already paid for. `UnannotatedExamples` deliberately cannot answer it — its own comment
+              points a client at the sibling block for the same reason — so asking it would mean either
+              a predicate on that object with no way to tell the two states apart, or a query bought
+              to learn something the page already knows.
+
+              WHAT THIS STATE CANNOT SEPARATE, said out loud rather than left for the reader to
+              discover: a place whose every example carries an intent and a place this run recorded
+              NOTHING in produce the same empty list. The model refuses to tell them apart here and
+              says where a client can. Claiming only the first would be *Vacuous Green* at the grain of
+              an empty state — "nothing to check" wearing the spelling of "everything passed" — so the
+              description states the finding AND the other reading, and points at the panel that
+              settles it. That panel is on this page by construction: `?spec_directory=` renders "Spec
+              files in this directory" and `?spec_file=` renders "Examples in this spec file", under
+              the same guard this one is rendered under. %>
+          <%= render UI::EmptyStateComponent.new(
+                title: "Nothing unannotated here",
+                description: "This run recorded no example without an @intent in " \
+                             "#{narrowings.to_sentence}. Every example it did record there carries " \
+                             "one — and so does a place it recorded nothing in at all, since a " \
+                             "population of no examples has no unannotated ones either, and this " \
+                             "list cannot tell those two apart. The " \
+                             "#{@unannotated_examples.spec_directory ? "“Spec files in this directory”" : "“Examples in this spec file”"} " \
+                             "panel, open on the same ask, names what this run actually recorded there."
+              ) %>
+        <% else %>
+          <%# A run with no per-example rows AT ALL — ingested before those rows existed, or from a
+              client that sends only totals. The same pair "Where the unannotated tests are" keeps
+              apart one grain up, and the one thing this state may not do is read as the state above
+              it: "nobody sent the detail" and "nothing is unannotated" are the same empty table and
+              opposite news.
+
+              The panel stays rather than disappearing, because the reader asked for this list and an
+              absent panel is a third indistinguishable thing on a page where the Overview may be
+              printing a five-figure invisible count at the same time. %>
+          <%= render UI::EmptyStateComponent.new(
+                title: "No per-example detail on this run",
+                description: "This run reported suite totals without the per-example rows SpecGuard " \
+                             "names tests from, so there is nothing to list for " \
+                             "#{narrowings.to_sentence} — not that everything there is annotated. " \
+                             "Any count on the Overview above is taken from the run's own totals."
+              ) %>
+        <% end %>
+      <% end %>
+    <% end %>

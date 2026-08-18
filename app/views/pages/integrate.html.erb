@@ -1,0 +1,896 @@
+<% content_for :title, "Integration guide · SpecGuard" %>
+
+<%# == The public integration guide (SPGD-705)
+    ================================================================================================
+
+    WHO THIS PAGE IS FOR, and why that decides its shape.
+
+    Its reader is either a person who has just registered a repository and minted a key, or — more
+    often, and this is the case the page is built around — an AI coding agent handed nothing but
+    this URL by the prompt block on that repository's page. That agent has no session, cannot sign
+    in, and cannot open the server's source. So:
+
+      * it renders for a signed-out visitor, under no authentication gate at all;
+      * it is complete. A reader must never have to open `Ingest::Payload` to learn a field name,
+        and must never have to guess at a constraint. Every field of the envelope and of a spec
+        entry is on this page, with its type, whether it is required, and — for the conditional
+        ones — the condition;
+      * it documents the endpoint as it actually behaves. Where this page and the server disagree,
+        THIS PAGE IS WRONG. The worked payload below is not illustrative prose: it is a fixture
+        (`IntegrationGuideHelper::EXAMPLE_PAYLOAD`) that `spec/requests/integration_guide_spec.rb`
+        reads back off this rendered HTML and POSTs to `/api/v1/ingest`, so the document is checked
+        against the endpoint rather than against a copy of itself.
+
+    WHY RUBY IS FIRST AND WHY IT IS NOT THE WHOLE PAGE. There is a shipped Ruby client and there is
+    no client for anything else, so Ruby/RSpec is genuinely the shortest path and is presented as
+    it. But nothing in the ingest path is Ruby-specific: `file_path` is validated as a non-empty
+    string with no `_spec.rb` suffix and no `spec/` prefix rule anywhere, and the annotation
+    protocol states outright that nothing in its schema assumes RSpec or Minitest. A pytest or jest
+    reporter emitting the right JSON is accepted today. So the wire contract is published in full,
+    and the worked payload is deliberately a PYTHON suite — an example whose every path ended in
+    `_spec.rb` would teach by illustration the opposite of what the prose says.
+
+    WHAT IT DOES NOT DO. It promises no capability the API does not currently have. There are
+    exactly two routes under `api/v1` (`get "repository"`, `post "ingest"`), and this page names
+    those two and nothing else. The JSON Schema is reproduced here rather than linked at its `$id`,
+    because that `$id` names a host this app is not served from and routing it is separate work.
+%>
+
+<% endpoint = integration_guide_endpoint %>
+
+<%= render UI::PageComponent.new do %>
+  <%= render UI::PageHeaderComponent.new(
+        title: "Integration guide",
+        subtitle: "Send your suite's runs to SpecGuard — from Ruby, or from any language that can POST JSON."
+      ) %>
+
+  <%= render UI::PanelComponent.new(title: "Start here", id: "start-here") do %>
+    <div class="space-y-4">
+      <p class="text-sm text-app-content-secondary">
+        SpecGuard learns about your suite from <strong class="text-app-content">runs your CI posts to
+        it</strong>. One process posts one run; a sharded suite posts once per shard and SpecGuard
+        folds those back into a single run. Nothing is scraped, polled or cloned — if a run was not
+        posted, SpecGuard cannot see it.
+      </p>
+
+      <%= render UI::DefListComponent.new(rows: [
+            ["You need an endpoint", endpoint],
+            ["You need an API key", "Mint one on your repository's page"],
+            ["You need a reporter", "The Ruby gem, or ~50 lines in your own language"]
+          ]) %>
+
+      <%# The read endpoint is on this page ONLY as a connectivity check and as the machine-readable
+          read-back. It is emphatically not the integration, and until this guide existed it was the
+          only thing the product's own UI showed anybody — a curl against `GET /api/v1/repository`,
+          presented where wiring instructions should have been. Naming both endpoints with what each
+          is FOR is what stops that reading recurring. %>
+      <div class="space-y-2">
+        <p class="section-label text-app-content-secondary">The two endpoints</p>
+        <%= render UI::TableComponent.new(columns: ["Endpoint", "What it is for"]) do %>
+          <tr>
+            <td class="px-3 py-2 font-mono text-xs break-all text-app-content">POST <%= endpoint %>/api/v1/ingest</td>
+            <td class="px-3 py-2 text-app-content-secondary">
+              The integration. One CI run in, one <code>202</code> back. Everything on this page is
+              ultimately about this request.
+            </td>
+          </tr>
+          <tr>
+            <td class="px-3 py-2 font-mono text-xs break-all text-app-content">GET <%= endpoint %>/api/v1/repository</td>
+            <td class="px-3 py-2 text-app-content-secondary">
+              Reading back what SpecGuard has stored, and — because it answers <code>401</code>
+              without a valid key and <code>200</code> with one — a one-line check that a credential
+              works. It sends SpecGuard nothing.
+            </td>
+          </tr>
+        <% end %>
+      </div>
+
+      <%= render UI::AlertComponent.new(tone: :neutral, title: "Annotations are optional, and always were") do %>
+        <p class="mt-1">
+          A run in which <em>no</em> test is annotated is valid, is accepted, and is worth posting:
+          per-test durations, suite growth, the heaviest files and directories and the slowest tests
+          are all computed from runs alone. Annotations (<a href="#annotations" class="underline">below</a>)
+          add declared intent on top. Adopt them a file at a time — SpecGuard reports the share of
+          your suite that carries one, and never refuses a run for lacking them.
+        </p>
+      <% end %>
+    </div>
+  <% end %>
+
+  <%= render UI::PanelComponent.new(title: "Ruby and RSpec", id: "ruby") do %>
+    <div class="space-y-5">
+      <p class="text-sm text-app-content-secondary">
+        The shortest path: a shipped client gem adds an RSpec formatter that collects every example
+        and posts the run. It never fails your build — a delivery that is refused, times out or
+        cannot connect writes one line to stderr and lets the suite's own exit code stand.
+      </p>
+
+      <div class="space-y-2" data-controller="copy-text">
+        <p class="section-label text-app-content-secondary">1. Install the gem</p>
+        <%= render UI::CopyableCodeComponent.new(multiline: true) do %><%= integration_guide_gemfile_snippet %><% end %>
+      </div>
+
+      <div class="space-y-2" data-controller="copy-text">
+        <p class="section-label text-app-content-secondary">2. Register the formatter</p>
+        <%= render UI::CopyableCodeComponent.new(multiline: true) do %><%= integration_guide_rspec_config_snippet %><% end %>
+      </div>
+
+      <div class="space-y-2" data-controller="copy-text">
+        <p class="section-label text-app-content-secondary">…or register it in <code>.rspec</code></p>
+        <%= render UI::CopyableCodeComponent.new(multiline: true) do %><%= integration_guide_dot_rspec_snippet %><% end %>
+        <p class="text-xs text-app-muted">
+          The <code>--require</code> line is not optional. RSpec resolves <code>--format</code>
+          against constants that are already loaded, and it cannot guess this one's path.
+        </p>
+      </div>
+
+      <div class="space-y-2" data-controller="copy-text">
+        <p class="section-label text-app-content-secondary">3. Point it at SpecGuard in CI</p>
+        <%= render UI::CopyableCodeComponent.new(multiline: true) do %><%= integration_guide_github_actions_snippet(endpoint) %><% end %>
+        <p class="text-xs text-app-muted">
+          Store the key as a CI secret — never in the repository. SpecGuard holds only a digest and
+          cannot show you an existing key again; if it is lost, regenerate it.
+        </p>
+      </div>
+
+      <%# The credential is the switch, and that is worth stating rather than leaving to be
+          discovered: a reader who runs the suite on their laptop and sees no run in SpecGuard is
+          otherwise looking at a silent success. %>
+      <%= render UI::AlertComponent.new(tone: :neutral, title: "With no API key set, the run is written to a file") do %>
+        <p class="mt-1">
+          <code>SPECGUARD_API_KEY</code> is the switch. Unset, the formatter appends the run to
+          <code>log/test_results.jsonl</code> — one whole run per line, the same JSON it
+          would have posted — and posts nothing. That is also the fallback when a delivery fails, so
+          a run survives a network blip. <code>bundle exec specguard-ingest
+          log/test_results.jsonl</code> replays those lines to the endpoint afterwards. (On the wire
+          a body of 256 KiB or more is gzipped, so a large run's request is compressed even though
+          the file's line is not. <code>rspec --dry-run</code> writes nothing at all — there is no
+          run to record.)
+        </p>
+      <% end %>
+
+      <div class="space-y-2">
+        <p class="section-label text-app-content-secondary">Every variable the gem reads</p>
+        <%= render UI::TableComponent.new(columns: ["Variable", "Default", "What it sets"]) do %>
+          <tr>
+            <td class="px-3 py-2 font-mono text-xs text-app-content">SPECGUARD_ENDPOINT</td>
+            <td class="px-3 py-2 text-xs text-app-muted">none</td>
+            <td class="px-3 py-2 text-app-content-secondary">
+              Scheme and host only — <code><%= endpoint %></code>. The <code>/api/v1/ingest</code>
+              path is the platform's, not a setting. There is deliberately no default: SpecGuard is
+              self-hostable, so a guessed address would mean posting your test names to whatever
+              answers at it.
+            </td>
+          </tr>
+          <tr>
+            <td class="px-3 py-2 font-mono text-xs text-app-content">SPECGUARD_API_KEY</td>
+            <td class="px-3 py-2 text-xs text-app-muted">none</td>
+            <td class="px-3 py-2 text-app-content-secondary">The repository's key. Present means "deliver over HTTP".</td>
+          </tr>
+          <tr>
+            <td class="px-3 py-2 font-mono text-xs text-app-content">SPECGUARD_TIMEOUT</td>
+            <td class="px-3 py-2 text-xs text-app-muted">10</td>
+            <td class="px-3 py-2 text-app-content-secondary">
+              Seconds, applied to connect, read and write. There are no retries — a retry doubles the
+              worst case for telemetry that is allowed to be lost.
+            </td>
+          </tr>
+          <tr>
+            <td class="px-3 py-2 font-mono text-xs text-app-content">SPECGUARD_COMMIT_SHA</td>
+            <td class="px-3 py-2 text-xs text-app-muted">CI, then git</td>
+            <td class="px-3 py-2 text-app-content-secondary">
+              Falls back to <code>GITHUB_SHA</code>, <code>CI_COMMIT_SHA</code>,
+              <code>CIRCLE_SHA1</code>, <code>BUILDKITE_COMMIT</code>, <code>GIT_COMMIT</code>, then
+              <code>git rev-parse HEAD</code>. Set it only if none of those is right.
+            </td>
+          </tr>
+          <tr>
+            <td class="px-3 py-2 font-mono text-xs text-app-content">SPECGUARD_BRANCH</td>
+            <td class="px-3 py-2 text-xs text-app-muted">CI, then git</td>
+            <td class="px-3 py-2 text-app-content-secondary">
+              Falls back to <code>GITHUB_REF_NAME</code>, <code>CI_COMMIT_REF_NAME</code>,
+              <code>CIRCLE_BRANCH</code>, <code>BUILDKITE_BRANCH</code>, <code>GIT_BRANCH</code>,
+              then <code>git symbolic-ref</code>. A detached checkout reports no
+              branch rather than the string <code>HEAD</code>.
+            </td>
+          </tr>
+          <tr>
+            <td class="px-3 py-2 font-mono text-xs text-app-content">SPECGUARD_RUN_ID</td>
+            <td class="px-3 py-2 text-xs text-app-muted">CI</td>
+            <td class="px-3 py-2 text-app-content-secondary">
+              The build id every shard of one run shares — <code>GITHUB_RUN_ID</code>,
+              <code>CI_PIPELINE_ID</code>, <code>CIRCLE_WORKFLOW_ID</code>,
+              <code>BUILDKITE_BUILD_ID</code>, <code>BUILD_TAG</code>. Sent as
+              <code>ci_run_id</code>.
+            </td>
+          </tr>
+          <tr>
+            <td class="px-3 py-2 font-mono text-xs text-app-content">SPECGUARD_SHARD_ID</td>
+            <td class="px-3 py-2 text-xs text-app-muted">CI</td>
+            <td class="px-3 py-2 text-app-content-secondary">
+              Which slice of that build this process is — <code>TEST_ENV_NUMBER</code>,
+              <code>CI_NODE_INDEX</code>, <code>CIRCLE_NODE_INDEX</code>,
+              <code>BUILDKITE_PARALLEL_JOB</code>. See the note below.
+            </td>
+          </tr>
+          <tr>
+            <td class="px-3 py-2 font-mono text-xs text-app-content">SPECGUARD_OUTPUT_PATH</td>
+            <td class="px-3 py-2 text-xs text-app-muted">log/test_results.jsonl</td>
+            <td class="px-3 py-2 text-app-content-secondary">Where a run goes when it is not delivered.</td>
+          </tr>
+          <tr>
+            <td class="px-3 py-2 font-mono text-xs text-app-content">SPECGUARD_VALIDATE_INTENT</td>
+            <td class="px-3 py-2 text-xs text-app-muted">unset</td>
+            <td class="px-3 py-2 text-app-content-secondary">
+              Read by <code>specguard-lint</code> rather than by the formatter. Point it at a
+              <code>validate-intent</code> binary to check annotations with the canonical Go
+              validator instead of the gem's vendored Ruby copy; unset (or blank, which means
+              deliberately off) keeps the Ruby path. A binary that is named but missing, not a file
+              or not executable is already a hard exit 2 on its own. What
+              <code>--require-validator</code> adds is the case that was silent — the Ruby path
+              taken because no binary was ever asked for, which otherwise passes and leaves only a
+              stderr line to say so. Give the flag in CI and that becomes an exit 2, whether the
+              variable never arrived (a mistyped name, a step that did not run) or arrived blank;
+              asking for the binary and switching it off in the same breath is refused too.
+            </td>
+          </tr>
+        <% end %>
+      </div>
+
+      <div class="space-y-2" data-controller="copy-text">
+        <p class="section-label text-app-content-secondary">If you shard with a GitHub Actions matrix</p>
+        <%= render UI::CopyableCodeComponent.new(multiline: true) do %><%= integration_guide_sharded_actions_snippet %><% end %>
+        <p class="text-xs text-app-muted">
+          GitHub Actions exports no per-leg index — <code>GITHUB_JOB</code> is identical across every
+          leg — so a matrix-sharded suite has to name its shards itself. Under
+          <code>parallel_tests</code>, or Knapsack via <code>CI_NODE_INDEX</code>, the gem picks the
+          index up on its own and you need nothing here. Knapsack <em>Pro</em> is the exception: it
+          exports <code>KNAPSACK_PRO_CI_NODE_INDEX</code>, which the gem does not read, so set
+          <code>SPECGUARD_SHARD_ID</code> from it yourself. Why it matters is
+          <a href="#sharding" class="underline">below</a>.
+        </p>
+      </div>
+    </div>
+  <% end %>
+
+  <%= render UI::PanelComponent.new(title: "Intent annotations", id: "annotations") do %>
+    <div class="space-y-5">
+      <p class="text-sm text-app-content-secondary">
+        An annotation is one comment line declaring what a test is <em>for</em>. It follows the
+        <strong class="text-app-content">OpenTestIntent v1</strong> protocol, which is
+        vendor-neutral and language-agnostic: nothing in it assumes RSpec, Minitest or a particular
+        language, and the comment marker is whatever your language already uses.
+      </p>
+
+      <div class="space-y-2">
+        <p class="section-label text-app-content-secondary">The shape</p>
+        <pre class="overflow-x-auto rounded-md border border-app-border-light bg-app-surface-raised px-3 py-2 font-mono text-xs text-app-content"># @intent: { entity: "Order", action: "checkout", behavior: "returns 402 payment required on expired card", layer: "request" }
+it "rejects checkout on an expired card" do
+  # ...
+end</pre>
+        <p class="text-xs text-app-muted">
+          A single comment line, immediately above the test or on the same line, beginning
+          <code>@intent:</code> and followed by one JSON object. Keys may be unquoted, strings may
+          use single quotes, whitespace is free and a trailing comma is tolerated — the three forms
+          below are all the same annotation.
+        </p>
+      </div>
+
+      <div class="space-y-2">
+        <p class="section-label text-app-content-secondary">Equivalent forms</p>
+        <pre class="overflow-x-auto rounded-md border border-app-border-light bg-app-surface-raised px-3 py-2 font-mono text-xs text-app-content"># @intent: { "entity": "Order", "action": "checkout", "behavior": "returns 402 payment required on expired card", "layer": "request" }
+# @intent: { entity: 'Order', action: 'checkout', behavior: 'returns 402 payment required on expired card', layer: 'request' }
+# @intent: {entity:"Order",action:"checkout",behavior:"returns 402 payment required on expired card",layer:"request"}</pre>
+      </div>
+
+      <div class="space-y-2">
+        <p class="section-label text-app-content-secondary">The fields</p>
+        <%= render UI::TableComponent.new(columns: ["Field", "Type", "Required", "Constraint", "What it is"]) do %>
+          <tr>
+            <td class="px-3 py-2 font-mono text-xs text-app-content">entity</td>
+            <td class="px-3 py-2 text-xs text-app-muted">string</td>
+            <td class="px-3 py-2 text-xs text-app-content">yes</td>
+            <td class="px-3 py-2 text-xs text-app-muted">2 characters or more</td>
+            <td class="px-3 py-2 text-app-content-secondary">
+              The subject under test, as a domain noun — <code>Order</code>, not
+              <code>OrdersController</code>. Keep it stable; renaming it fragments history.
+            </td>
+          </tr>
+          <tr>
+            <td class="px-3 py-2 font-mono text-xs text-app-content">action</td>
+            <td class="px-3 py-2 text-xs text-app-muted">string</td>
+            <td class="px-3 py-2 text-xs text-app-content">yes</td>
+            <td class="px-3 py-2 text-xs text-app-muted">2 characters or more</td>
+            <td class="px-3 py-2 text-app-content-secondary">The operation or scenario — <code>checkout</code>, <code>apply_discount</code>.</td>
+          </tr>
+          <tr>
+            <td class="px-3 py-2 font-mono text-xs text-app-content">behavior</td>
+            <td class="px-3 py-2 text-xs text-app-muted">string</td>
+            <td class="px-3 py-2 text-xs text-app-content">yes</td>
+            <td class="px-3 py-2 text-xs text-app-muted">15 characters or more</td>
+            <td class="px-3 py-2 text-app-content-secondary">
+              One plain sentence naming the expected outcome. The minimum length is there because
+              "works" and "is valid" carry no meaning to compare against.
+            </td>
+          </tr>
+          <tr>
+            <td class="px-3 py-2 font-mono text-xs text-app-content">layer</td>
+            <td class="px-3 py-2 text-xs text-app-muted">string</td>
+            <td class="px-3 py-2 text-xs text-app-content">yes</td>
+            <td class="px-3 py-2 text-xs text-app-muted">
+              <code>unit</code>, <code>integration</code>, <code>request</code>, <code>system</code>
+            </td>
+            <td class="px-3 py-2 text-app-content-secondary">
+              The test's level, and the axis duplication lives across. Be honest: a model spec is
+              <code>unit</code>, a full-stack spec hitting a route and the database is
+              <code>request</code>, a browser-driving spec is <code>system</code>.
+            </td>
+          </tr>
+          <tr>
+            <td class="px-3 py-2 font-mono text-xs text-app-content">preconditions</td>
+            <td class="px-3 py-2 text-xs text-app-muted">array of string</td>
+            <td class="px-3 py-2 text-xs text-app-muted">no</td>
+            <td class="px-3 py-2 text-xs text-app-muted">—</td>
+            <td class="px-3 py-2 text-app-content-secondary">Named setup assumptions, for humans and future tooling.</td>
+          </tr>
+        <% end %>
+        <p class="text-xs text-app-muted">
+          No other key is allowed. The schema sets <code>additionalProperties: false</code>
+          deliberately, so a typo like <code>entiity</code> is rejected rather than silently dropped.
+          Be aware of where that rejection surfaces, though: <code>specguard-lint</code> and the
+          ingest endpoint both name it, but the <strong class="text-app-content">formatter reports a
+          malformed annotation as <code>"status": "unannotated"</code></strong> — the same thing it
+          sends for a test that has no annotation at all. That is deliberate. The wire has only two
+          statuses, and the formatter is bound never to fail your build, so its options are to
+          downgrade the one annotation or to 400 the entire run and lose telemetry for every other
+          example in it. It downgrades. The consequence for you is that a typo'd annotation is
+          invisible in the app — it just looks unannotated — which is exactly why
+          <a href="#lint" class="underline">the linter</a> exists and why it is worth running in CI.
+        </p>
+      </div>
+
+      <div class="space-y-2">
+        <p class="section-label text-app-content-secondary">In other languages</p>
+        <p class="text-xs text-app-muted">
+          The marker and the object are identical; only the host language's comment syntax changes.
+        </p>
+        <pre class="overflow-x-auto rounded-md border border-app-border-light bg-app-surface-raised px-3 py-2 font-mono text-xs text-app-content"># tests/test_checkout_service.py  (pytest)
+# @intent: { entity: 'CheckoutService', action: 'checkout', behavior: 'rejects the transaction on an expired card and emits a payment_failed event', layer: 'unit', preconditions: ['card is on file', 'card is expired'] }
+def test_rejects_expired_card(expired_card):
+    with pytest.raises(CheckoutService.PaymentDeclined):
+        CheckoutService(card=expired_card).checkout()</pre>
+        <pre class="overflow-x-auto rounded-md border border-app-border-light bg-app-surface-raised px-3 py-2 font-mono text-xs text-app-content">// spec/system/checkout_flow.spec.js  (jest / playwright)
+describe("expired-card checkout flow", () => {
+  // @intent: { entity: "Order", action: "checkout", behavior: "shows a payment error card and keeps the cart intact when the saved card is expired", layer: "system" }
+  it("keeps the cart intact", async () => {
+    await page.click("#checkout");
+    await expect(page.locator(".cart")).toHaveCount(1);
+  });
+});</pre>
+      </div>
+
+      <%# The single most likely wrong assumption a reader can leave with, so it is stated as its
+          own block rather than as a clause: SpecGuard never sees your source. The annotation is
+          extracted by whatever runs the suite and arrives as the `intent` object on the wire. A
+          reporter that does not extract annotations still produces perfectly good runs; it simply
+          sends `"status": "unannotated"` for everything. %>
+      <%= render UI::AlertComponent.new(tone: :neutral, title: "SpecGuard never reads your source") do %>
+        <p class="mt-1">
+          Nothing clones or parses your repository. Your reporter reads the annotation off the line
+          above the test, or off the test's own line, and sends it as the <code>intent</code> object described in
+          <a href="#wire" class="underline">the wire contract</a>; the endpoint validates that object
+          against the schema above and stores it. A reporter that does no extraction at all is still
+          a complete integration — it sends <code>"status": "unannotated"</code> for every example.
+        </p>
+      <% end %>
+    </div>
+  <% end %>
+
+  <%= render UI::PanelComponent.new(title: "The linter — before your first run", id: "lint") do %>
+    <div class="space-y-4">
+      <%# Placed BEFORE the wire contract on purpose. It is the only thing on this page that needs
+          neither a key nor an endpoint nor a deployment, so it is the fastest route from "I have
+          registered a repository" to something useful — and it is usable by a project that has not
+          decided whether to adopt SpecGuard at all. %>
+      <p class="text-sm text-app-content-secondary">
+        <code>specguard-lint</code> ships in the same gem and needs
+        <strong class="text-app-content">no endpoint and no API key</strong>. It reads
+        <code>@intent:</code> annotations out of your spec files, normalizes them and validates them
+        against the schema above. It is the fastest way to get value out of SpecGuard before a first
+        run has ever been posted.
+      </p>
+
+      <div class="space-y-2" data-controller="copy-text">
+        <%= render UI::CopyableCodeComponent.new(multiline: true) do %>bundle exec specguard-lint --changed   # CI mode: only files in the current diff
+bundle exec specguard-lint             # one-off audit: every *_spec.rb
+bundle exec specguard-lint spec/models/order_spec.rb<% end %>
+      </div>
+
+      <div class="space-y-2">
+        <p class="section-label text-app-content-secondary">What it prints, and what it exits</p>
+        <pre class="overflow-x-auto rounded-md border border-app-border-light bg-app-surface-raised px-3 py-2 font-mono text-xs text-app-content">specguard-lint: validated in Ruby (SPECGUARD_VALIDATE_INTENT is unset)
+specguard-lint: checked 12 spec files
+FAIL  spec/models/order_spec.rb:9
+        -&gt; &lt;root&gt;: missing required property 'entity'
+specguard-lint: checked 3 @intent annotations, 1 malformed</pre>
+        <p class="text-xs text-app-muted">
+          The count of files comes before the findings, and the count of annotations after them. The
+          first line names which validator did the work and is written to <strong
+          class="text-app-content">stderr</strong>, not stdout — so redirect stderr if you are
+          capturing output for a report. It is printed once the validator has been resolved, which
+          means a run that dies before that point does not emit it: <code>--version</code> and
+          <code>--help</code>, an unrecognised flag, and a <code>SPECGUARD_VALIDATE_INTENT</code>
+          naming a binary that cannot be used all produce their message and nothing else. Treat the
+          line as "this is what validated the run", not as a header every invocation prints.
+        </p>
+        <%= render UI::DefListComponent.new(rows: [
+              ["Exit 0", "Every annotation found is valid — or there were none"],
+              ["Exit 1", "At least one annotation is malformed — the only code that is a verdict about your annotations"],
+              ["Exit 2", "The linter could not do its job, and reached no verdict at all"]
+            ]) %>
+        <p class="text-xs text-app-muted">
+          Exit 2 is the broad one, and it is a category rather than a list: bad flags, an unloadable
+          schema, <code>--changed</code> outside a git repository or combined with explicit files or
+          unable to resolve its diff base, a validator binary that is missing, unusable or disagrees
+          with the gem about the schema, an unmet <code>--require-validator</code>, and any
+          unexpected internal error — the linter maps its own bugs here too, so that exit 1 keeps
+          meaning one thing. The rule to wire CI against is the distinction, not the enumeration:
+          <strong class="text-app-content">1 is a verdict about your annotations, 2 is the tool
+          reporting it never reached one.</strong> Never treat a 2 as a pass, and never read it as a
+          finding — the message on stderr says which case it was.
+        </p>
+        <p class="text-xs text-app-muted">
+          A <em>missing</em> annotation is never a failure. Adoption is opt-in and gradual, so the
+          linter only ever objects to an annotation that is there and wrong. <code>--json</code>
+          emits the same findings as one machine-readable document, which is what an agent should
+          use.
+        </p>
+      </div>
+    </div>
+  <% end %>
+
+  <%= render UI::PanelComponent.new(title: "The ingest wire contract", id: "wire") do %>
+    <div class="space-y-6">
+      <p class="text-sm text-app-content-secondary">
+        Everything below is what the endpoint actually accepts. If your language has no SpecGuard
+        client, this section is the whole integration: collect one entry per test, assemble the
+        envelope, POST it once.
+      </p>
+
+      <div class="space-y-2">
+        <p class="section-label text-app-content-secondary">The request</p>
+        <%= render UI::DefListComponent.new(rows: [
+              ["Method and URL", "POST #{endpoint}/api/v1/ingest"],
+              ["Authorization", "Bearer &lt;your API key&gt;".html_safe],
+              ["Content-Type", "application/json"],
+              ["Content-Encoding", "gzip (optional)"]
+            ]) %>
+        <p class="text-xs text-app-muted">
+          The body must be a JSON <em>object</em>. An array, a bare string or a number is refused
+          with <code>the request body must be a JSON object</code>, and a body that will not parse
+          at all is refused with <code>The request body could not be parsed as JSON.</code> Unknown
+          top-level keys are ignored rather than rejected — with one exception: a key literally named
+          <code>_json</code> is refused, because that is the name Rails gives a non-object body it
+          has wrapped, and the endpoint cannot tell the two apart.
+        </p>
+      </div>
+
+      <div class="space-y-2">
+        <p class="section-label text-app-content-secondary">The envelope</p>
+        <%= render UI::TableComponent.new(columns: ["Field", "Type", "Required", "Rule"]) do %>
+          <tr>
+            <td class="px-3 py-2 font-mono text-xs text-app-content">commit_sha</td>
+            <td class="px-3 py-2 text-xs text-app-muted">string</td>
+            <td class="px-3 py-2 text-xs text-app-content">yes</td>
+            <td class="px-3 py-2 text-app-content-secondary">
+              Must be a non-empty string once whitespace is stripped. Required: without it the whole
+              POST comes back <code>400</code> and every example in it is discarded. (<code>specs</code>
+              is required too, and an ill-typed <code>branch</code>, <code>ci_run_id</code>,
+              <code>shard_id</code> or <code>duration_seconds</code> refuses the run just as firmly —
+              validation is all-or-nothing, never partial.) It is free-form — SpecGuard does not
+              check it against your git history.
+            </td>
+          </tr>
+          <tr>
+            <td class="px-3 py-2 font-mono text-xs text-app-content">branch</td>
+            <td class="px-3 py-2 text-xs text-app-muted">string or null</td>
+            <td class="px-3 py-2 text-xs text-app-muted">no</td>
+            <td class="px-3 py-2 text-app-content-secondary">
+              A string when present. Omit it or send <code>null</code> when there is no branch — a
+              detached checkout has none, and that is stored and rendered as "not reported" rather
+              than guessed at.
+            </td>
+          </tr>
+          <tr>
+            <td class="px-3 py-2 font-mono text-xs text-app-content">ci_run_id</td>
+            <td class="px-3 py-2 text-xs text-app-muted">string or null</td>
+            <td class="px-3 py-2 text-xs text-app-muted">no</td>
+            <td class="px-3 py-2 text-app-content-secondary">
+              Your CI provider's id for the <em>build</em>, shared by every shard of it. Must be a
+              <strong class="text-app-content">string</strong> — a JSON number is refused rather
+              than coerced, because <code>12345</code> and <code>"12345"</code> keying the same build
+              would split one run in two. Omit it and this run is its own run.
+            </td>
+          </tr>
+          <tr>
+            <td class="px-3 py-2 font-mono text-xs text-app-content">shard_id</td>
+            <td class="px-3 py-2 text-xs text-app-muted">string or null</td>
+            <td class="px-3 py-2 text-xs text-app-muted">no</td>
+            <td class="px-3 py-2 text-app-content-secondary">
+              Which slice of that build this request is. A string, for the same reason —
+              <code>0</code> and <code>"0"</code> must not name different shards. Only has to be
+              unique within one run.
+            </td>
+          </tr>
+          <tr>
+            <td class="px-3 py-2 font-mono text-xs text-app-content">duration_seconds</td>
+            <td class="px-3 py-2 text-xs text-app-muted">number or null</td>
+            <td class="px-3 py-2 text-xs text-app-muted">no</td>
+            <td class="px-3 py-2 text-app-content-secondary">The whole run's wall clock. Must not be negative.</td>
+          </tr>
+          <tr>
+            <td class="px-3 py-2 font-mono text-xs text-app-content">specs</td>
+            <td class="px-3 py-2 text-xs text-app-muted">array</td>
+            <td class="px-3 py-2 text-xs text-app-content">yes</td>
+            <td class="px-3 py-2 text-app-content-secondary">
+              One object per example — every example, annotated or not. An empty array is accepted.
+              Fields below.
+            </td>
+          </tr>
+        <% end %>
+        <p class="text-xs text-app-muted">
+          There is no <code>total_specs_count</code> to send. The run's totals are
+          <em>derived</em> from <code>specs</code>; a count supplied by the client is ignored,
+          because it is the denominator of the headline metric and nobody could check it.
+        </p>
+      </div>
+
+      <div class="space-y-2">
+        <p class="section-label text-app-content-secondary">Each entry in <code>specs</code></p>
+        <%= render UI::TableComponent.new(columns: ["Field", "Type", "Required", "Rule"]) do %>
+          <tr>
+            <td class="px-3 py-2 font-mono text-xs text-app-content">file_path</td>
+            <td class="px-3 py-2 text-xs text-app-muted">string</td>
+            <td class="px-3 py-2 text-xs text-app-content">yes</td>
+            <td class="px-3 py-2 text-app-content-secondary">
+              Where the test is <em>defined</em>, relative to your project root. Non-empty, and
+              nothing more: there is no <code>_spec.rb</code> suffix rule and no <code>spec/</code>
+              prefix rule anywhere in the server.
+              <code>tests/test_checkout.py</code> and <code>src/cart.test.ts</code> are as valid as
+              <code>spec/models/order_spec.rb</code>. Directory rollups are computed by splitting
+              this string, so use forward slashes.
+            </td>
+          </tr>
+          <tr>
+            <td class="px-3 py-2 font-mono text-xs text-app-content">line_number</td>
+            <td class="px-3 py-2 text-xs text-app-muted">integer</td>
+            <td class="px-3 py-2 text-xs text-app-content">yes</td>
+            <td class="px-3 py-2 text-app-content-secondary">
+              Must be a positive integer. Together with <code>file_path</code> this is the
+              definition site, and the line an annotation is read from.
+            </td>
+          </tr>
+          <tr>
+            <td class="px-3 py-2 font-mono text-xs text-app-content">status</td>
+            <td class="px-3 py-2 text-xs text-app-muted">string</td>
+            <td class="px-3 py-2 text-xs text-app-content">yes</td>
+            <td class="px-3 py-2 text-app-content-secondary">
+              Exactly <code>"annotated"</code> or <code>"unannotated"</code>. Send it on
+              <em>every</em> entry: a missing one is not a gap, it is one validation error per
+              example and a <code>400</code> for the whole run.
+            </td>
+          </tr>
+          <tr>
+            <td class="px-3 py-2 font-mono text-xs text-app-content">intent</td>
+            <td class="px-3 py-2 text-xs text-app-muted">object or null</td>
+            <td class="px-3 py-2 text-xs text-app-warning">conditional</td>
+            <td class="px-3 py-2 text-app-content-secondary">
+              <strong class="text-app-content">Required when <code>status</code> is
+              <code>"annotated"</code></strong>, and validated against the OpenTestIntent schema
+              <a href="#annotations" class="underline">above</a>.
+              <strong class="text-app-content">Must be absent or <code>null</code> when
+              <code>status</code> is <code>"unannotated"</code></strong> — an unannotated entry
+              carrying an intent is refused rather than silently dropped, because dropping it would
+              lose an annotation its author believed they had shipped.
+            </td>
+          </tr>
+          <tr>
+            <td class="px-3 py-2 font-mono text-xs text-app-content">name</td>
+            <td class="px-3 py-2 text-xs text-app-muted">string</td>
+            <td class="px-3 py-2 text-xs text-app-warning">conditional</td>
+            <td class="px-3 py-2 text-app-content-secondary">
+              The example's full human description — in RSpec terms, the composed
+              describe/context/it. <strong class="text-app-content">Required when the entry carries
+              no <code>intent</code></strong>; when present it must be a non-empty string, whether or
+              not there is also an intent. Send it always. It is the only text describing a test in a
+              suite that annotates nothing, and an entry with neither can be counted and nothing else.
+            </td>
+          </tr>
+          <tr>
+            <td class="px-3 py-2 font-mono text-xs text-app-content">duration</td>
+            <td class="px-3 py-2 text-xs text-app-muted">number or null</td>
+            <td class="px-3 py-2 text-xs text-app-muted">no</td>
+            <td class="px-3 py-2 text-app-content-secondary">
+              Seconds, for this one example. Must not be negative. <code>null</code> is a faithful
+              record for an example that never ran; it is not the same as <code>0</code>, which
+              enters the slowest-test and per-file aggregates as a real measurement.
+            </td>
+          </tr>
+          <tr>
+            <td class="px-3 py-2 font-mono text-xs text-app-content">id</td>
+            <td class="px-3 py-2 text-xs text-app-muted">string</td>
+            <td class="px-3 py-2 text-xs text-app-muted">no, but send it</td>
+            <td class="px-3 py-2 text-app-content-secondary">
+              This example's identity <em>within this run</em>, unique across the whole run. It is
+              the key a re-delivery is reconciled on, so it is what makes re-running a shard replace
+              its previous numbers instead of doubling them. Unique per example rather than per
+              coordinate — a table-driven loop puts N examples on one line, and a shared helper puts
+              several files' examples on one coordinate, so <code>file_path:line_number</code> is the
+              coordinate of the <em>code</em> and cannot key a measurement.
+            </td>
+          </tr>
+          <tr>
+            <td class="px-3 py-2 font-mono text-xs text-app-content">spec_file_path</td>
+            <td class="px-3 py-2 text-xs text-app-muted">string</td>
+            <td class="px-3 py-2 text-xs text-app-muted">no, but send it</td>
+            <td class="px-3 py-2 text-app-content-secondary">
+              The file that <em>ran</em> this example, which differs from <code>file_path</code> only
+              when the test is defined in a shared helper. This is what per-file and per-directory
+              time is aggregated by, so sending it is the difference between "this suite file costs
+              4s" and every shared example's cost being attributed to the helper. Omitted, it falls
+              back to <code>file_path</code>.
+            </td>
+          </tr>
+          <tr>
+            <td class="px-3 py-2 font-mono text-xs text-app-content">outcome</td>
+            <td class="px-3 py-2 text-xs text-app-muted">string</td>
+            <td class="px-3 py-2 text-xs text-app-muted">no, but send it</td>
+            <td class="px-3 py-2 text-app-content-secondary">
+              What happened — the Ruby client sends <code>passed</code>, <code>failed</code> or
+              <code>pending</code>. Free text, echoed back verbatim and never interpreted, so any
+              vocabulary your runner uses is accepted. Use one consistently.
+            </td>
+          </tr>
+        <% end %>
+
+        <%# The three "no, but send it" rows are the ones a reader could not have discovered from
+            the endpoint's own error messages — nothing is ever refused for their absence, so a
+            reporter built by probing the API would omit all three and quietly lose per-example
+            identity, per-file attribution and outcomes. Naming them as a group is the point; a
+            reader who skims the table still meets them here. %>
+        <%= render UI::AlertComponent.new(tone: :warning, title: "Three fields you are never told you are missing") do %>
+          <p class="mt-1">
+            <code>id</code>, <code>spec_file_path</code> and <code>outcome</code> are not validated.
+            A payload omitting all three is accepted with a <code>202</code> and looks completely
+            healthy — and quietly gives up per-example identity across re-deliveries, correct
+            per-file time attribution, and pass/fail history. They are the fields you cannot learn
+            about by probing the endpoint, which is why they are called out rather than left in the
+            table. Send all three.
+          </p>
+        <% end %>
+      </div>
+
+      <%# The fixture. `id` on the WRAPPER rather than on the <code> element, because the Copy
+          button is a sibling inside it and the verification spec wants the block, not the button. %>
+      <div class="space-y-2" data-controller="copy-text" id="<%= IntegrationGuideHelper::EXAMPLE_PAYLOAD_ELEMENT_ID %>">
+        <p class="section-label text-app-content-secondary">A complete, accepted request body</p>
+        <%= render UI::CopyableCodeComponent.new(multiline: true) do %><%= integration_guide_example_payload %><% end %>
+        <p class="text-xs text-app-muted">
+          One annotated example and one unannotated one, from a Python suite — because nothing here
+          is Ruby-specific. This exact document is posted to the live endpoint by SpecGuard's own
+          test suite, so it is the contract rather than an illustration of it.
+        </p>
+      </div>
+
+      <div class="space-y-2" data-controller="copy-text">
+        <p class="section-label text-app-content-secondary">Posting it</p>
+        <%= render UI::CopyableCodeComponent.new(multiline: true) do %><%= integration_guide_curl_snippet(endpoint) %><% end %>
+      </div>
+
+      <div class="space-y-2">
+        <p class="section-label text-app-content-secondary">What comes back</p>
+        <%= render UI::TableComponent.new(columns: ["Status", "Body", "Meaning"]) do %>
+          <tr>
+            <td class="px-3 py-2 font-mono text-xs text-app-content">202</td>
+            <td class="px-3 py-2 font-mono text-xs text-app-content-secondary break-all">{"test_run_id":…,"total_specs":2,"annotated_specs":1,"annotated_ratio":0.5,"embedding_status":"queued"}</td>
+            <td class="px-3 py-2 text-app-content-secondary">
+              Stored. The counts are the whole run's — every shard so far, not just this request's
+              slice. <code>annotated_ratio</code> is a 0–1 fraction, or <code>null</code> when the
+              run has no examples at all: a run of nothing has no share to report, and
+              <code>0.0</code> there would be indistinguishable from a measured zero share of a
+              suite that does have tests. The null follows the run's total, not your payload —
+              posting <code>specs: []</code> is accepted, and returns <code>null</code> only when it
+              leaves the run still empty. Send an empty shard to a run whose other shards reported
+              examples and you get their number back. Parse the field as nullable either way.
+              <code>embedding_status</code> is <code>"queued"</code> when identity resolution was
+              scheduled and <code>"pending"</code> when there was nothing to schedule.
+            </td>
+          </tr>
+          <tr>
+            <td class="px-3 py-2 font-mono text-xs text-app-content">400</td>
+            <td class="px-3 py-2 font-mono text-xs text-app-content-secondary break-all">{"error":"bad_request","message":"…","details":["…"]}</td>
+            <td class="px-3 py-2 text-app-content-secondary">
+              Refused, and nothing was stored. <code>details</code> carries
+              <strong class="text-app-content">every</strong> failure found, not just the first —
+              <code>message</code> repeats the first one. A single bad example can produce several
+              entries, because each field is checked independently. Entries about an example are
+              prefixed <code>specs[i]</code> and then named by whichever coordinates the entry
+              actually has: <code>specs[0] spec/order_spec.rb:9:</code> with both,
+              <code>specs[0] spec/order_spec.rb:</code> with only a path,
+              <code>specs[0] 9:</code> — a bare line number, not a path — with only a line, and
+              <code>specs[0]:</code> with neither. The partial forms are not curiosities; omitting
+              <code>line_number</code> is the mistake a new reporter makes first. Entries about the
+              envelope name the offending field instead. The exceptions are the two refusals that
+              happen before any field is looked at: a body that is not JSON at all
+              (<code>The request body could not be parsed as JSON.</code>) and a body that parses
+              to something other than an object (<code>the request body must be a JSON object</code>).
+              Each is refused with that one entry alone, naming no field, because nothing further
+              was read. Refusals are also listed on your repository's page, so a
+              pipeline that is 400ing is visible in the app and not only in your CI log.
+            </td>
+          </tr>
+          <tr>
+            <td class="px-3 py-2 font-mono text-xs text-app-content">401</td>
+            <td class="px-3 py-2 font-mono text-xs text-app-content-secondary break-all">{"error":"unauthorized","message":"A valid Bearer API key is required."}</td>
+            <td class="px-3 py-2 text-app-content-secondary">
+              The key was missing, malformed, revoked or rotated. No detail about which, and nothing
+              is recorded against the repository — there is no repository to record it against.
+            </td>
+          </tr>
+        <% end %>
+      </div>
+
+      <div class="space-y-2">
+        <p class="section-label text-app-content-secondary">Compression</p>
+        <p class="text-sm text-app-content-secondary">
+          Send <code>Content-Encoding: gzip</code> and gzip the body; the endpoint inflates it and
+          reads it as ordinary JSON. <code>Content-Type</code> still describes the body
+          <em>inside</em> the encoding, so it stays <code>application/json</code>. This is worth
+          doing for a large suite — a 20,000-example run is around 7 MiB identity-encoded and about
+          0.33 MiB gzipped, which is the difference between a run that cannot be written inside a
+          10-second timeout on a slow link and one that can. The inflated body is capped at 64 MiB,
+          and only the first gzip member is read, so concatenated streams silently lose everything
+          after the first.
+        </p>
+      </div>
+
+      <div class="space-y-3" id="sharding">
+        <p class="section-label text-app-content-secondary">Sharded suites</p>
+        <p class="text-sm text-app-content-secondary">
+          Nobody runs a 20,000-example suite in one process. Each shard posts its own slice, and
+          SpecGuard folds them into one run keyed on <code>ci_run_id</code>. The run's totals are
+          re-derived from the slices after every delivery rather than accumulated, which is what
+          makes the whole thing idempotent — but only if you name the parts:
+        </p>
+        <%= render UI::DefListComponent.new(rows: [
+              ["Same ci_run_id, distinct shard_id", "One run. A shard that reports twice replaces itself."],
+              ["Same ci_run_id, no shard_id", "One run, but a re-delivered slice is counted twice."],
+              ["No ci_run_id", "Every POST is its own run."]
+            ]) %>
+        <p class="text-xs text-app-muted">
+          Provider run ids deliberately survive a re-run — GitHub's <code>GITHUB_RUN_ID</code> does
+          not change when you re-run a workflow — which is what lets "re-run failed jobs" land a
+          retried shard back on the run it belongs to instead of forming a new, partial one. Pair it
+          with a <code>shard_id</code> and durations behave too: the run's wall clock is the
+          <em>maximum</em> across shards, not the sum, because four eight-minute shards took eight
+          minutes and not thirty-two.
+        </p>
+      </div>
+    </div>
+  <% end %>
+
+  <%= render UI::PanelComponent.new(title: "Writing a reporter for another language", id: "other-languages") do %>
+    <div class="space-y-4">
+      <p class="text-sm text-app-content-secondary">
+        There is no packaged client for pytest, jest, Go's <code>testing</code> or anything else
+        today. There does not need to be: the contract above is the whole interface, and a reporter
+        is a hook that collects a few fields per test and one HTTP POST at the end. Everything
+        SpecGuard shows — per-test duration, suite growth, the heaviest files and directories,
+        repeated descriptions — is computed from exactly those fields and is not Ruby-aware.
+      </p>
+
+      <div class="space-y-2">
+        <p class="section-label text-app-content-secondary">The checklist</p>
+        <ol class="list-decimal space-y-2 pl-5 text-sm text-app-content-secondary">
+          <li>
+            Hook whatever your framework calls "a test finished" — pytest's
+            <code>pytest_runtest_logreport</code>, jest's custom reporter
+            <code>onTestCaseResult</code>, Go's <code>-json</code> output.
+          </li>
+          <li>
+            Per test, record: the defining file and line, a run-unique <code>id</code>, the file that
+            ran it, the full description as <code>name</code>, the duration in seconds, and the
+            outcome.
+          </li>
+          <li>
+            Optionally read the <code>@intent:</code> comment on the line above the test, or
+            trailing on the test's own line — both are legal. If you
+            find one, parse it and send <code>"status": "annotated"</code> with the object; if not,
+            send <code>"status": "unannotated"</code> and no intent. Start without this — an
+            unannotated suite is a complete, useful integration.
+          </li>
+          <li>
+            At the end of the process, assemble the envelope and POST it once, with the key as a
+            Bearer token. One process, one request.
+          </li>
+          <li>
+            If your suite is sharded, set <code>ci_run_id</code> from your CI provider's build id and
+            <code>shard_id</code> from the slice index. Post once per shard.
+          </li>
+          <li>
+            Never fail the build over telemetry. Treat every error, timeout and non-2xx as "log one
+            line and move on" — and consider writing the body to a file so a failed delivery can be
+            replayed rather than lost.
+          </li>
+        </ol>
+      </div>
+
+      <%= render UI::AlertComponent.new(tone: :neutral, title: "If a run is refused, the endpoint tells you exactly why") do %>
+        <p class="mt-1">
+          A <code>400</code> lists every problem it found in <code>details</code>. Entries about an
+          example are prefixed with its index in <code>specs</code> and then named by whatever
+          coordinates that entry has — <code>specs[3] spec/models/order_spec.rb:9: …</code> with
+          both, and, when one is missing, the other alone: <code>specs[3] spec/models/order_spec.rb:
+          …</code> or a bare <code>specs[3] 9: …</code>. An entry malformed enough to have neither
+          falls back to <code>specs[3]</code> on its own. Dropping <code>line_number</code> is the
+          case a new reporter hits first, so expect the path-only form early. Entries about the
+          envelope name the offending field instead. One bad example can yield several entries.
+          Build against that rather than against guesswork: post a two-example run by hand with
+          <code>curl</code> first, read what comes back, and only then wire the reporter in.
+        </p>
+      <% end %>
+    </div>
+  <% end %>
+
+  <%= render UI::PanelComponent.new(title: "The MCP bridge, for coding agents", id: "mcp") do %>
+    <div class="space-y-4">
+      <%# Described honestly as bootstrap-stage. It is real and it works, and it installs from a
+          source checkout because it is not published to a package registry — so anything here that
+          implied `npx specguard-mcp` would be a promise the project cannot keep. %>
+      <p class="text-sm text-app-content-secondary">
+        <code>specguard-mcp</code> is a small MCP server that gives an AI coding agent direct access
+        to two things: your repository's SpecGuard overview, and the annotation linter. It reuses
+        <code>SPECGUARD_ENDPOINT</code> and <code>SPECGUARD_API_KEY</code> — the same two variables
+        the gem uses — so a repository that is already reporting runs is already configured for it.
+      </p>
+
+      <%= render UI::AlertComponent.new(tone: :warning, title: "Bootstrap-stage: install from a checkout") do %>
+        <p class="mt-1">
+          It is not on npm. You clone it and build it yourself, and you point your MCP client at the
+          built file by absolute path. That is a deliberate statement of where it is, not a step
+          that is about to get shorter.
+        </p>
+      <% end %>
+
+      <div class="space-y-2" data-controller="copy-text">
+        <p class="section-label text-app-content-secondary">Build it</p>
+        <%= render UI::CopyableCodeComponent.new(multiline: true) do %><%= integration_guide_mcp_install_snippet %><% end %>
+      </div>
+
+      <div class="space-y-2" data-controller="copy-text">
+        <p class="section-label text-app-content-secondary">Register it with your agent</p>
+        <%= render UI::CopyableCodeComponent.new(multiline: true) do %><%= integration_guide_mcp_config_snippet(endpoint) %><% end %>
+      </div>
+
+      <div class="space-y-2">
+        <p class="section-label text-app-content-secondary">What it exposes</p>
+        <%= render UI::TableComponent.new(columns: ["Tool", "What it does"]) do %>
+          <tr>
+            <td class="px-3 py-2 font-mono text-xs text-app-content">lint_intent_annotations</td>
+            <td class="px-3 py-2 text-app-content-secondary">
+              Runs your project's own <code>specguard-lint</code> and returns the findings. Needs no
+              endpoint and no key.
+            </td>
+          </tr>
+          <tr>
+            <td class="px-3 py-2 font-mono text-xs text-app-content">get_repository_overview</td>
+            <td class="px-3 py-2 text-app-content-secondary">
+              The repository's latest run, heaviest files and directories, slowest examples, repeated
+              descriptions and run history — the dashboard, without a browser. Needs both variables.
+            </td>
+          </tr>
+        <% end %>
+      </div>
+    </div>
+  <% end %>
+<% end %>

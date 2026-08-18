@@ -407,6 +407,47 @@ RSpec.describe "Repository unstable tests", type: :request do
       expect(basis_line).to have_no_text("3 tests")
     end
 
+    # One unnamed row is an ordinary window: `unnamed_row_count_in` is a plain count with no floor,
+    # and `comparable?` is a predicate over RUNS, so a window can be comparable while holding a
+    # single null-name row. The sentence counts it and then states the rule ABOUT IT — "two of
+    # those" would quantify over a population this window does not have, and "pooled into one" is
+    # vacuous when there is nothing to pool.
+    def single_unnamed_window
+      repository = create_repository(user: @user)
+      3.times do |index|
+        examples = [example_spec(name: "Invoice finalize locks the line items",
+                                 outcome: index == 1 ? "failed" : "passed")]
+        if index.zero?
+          examples << example_spec(name: nil, outcome: "failed", line_number: 9,
+                                   file_path: "spec/models/ledger_spec.rb")
+        end
+        ingest(repository, examples,
+               commit_sha: "run#{format("%010d", index)}", at: (30 - index).days.ago)
+      end
+      repository
+    end
+
+    it "states the exclusion in the singular when exactly one row carried no description" do
+      get repository_path(single_unnamed_window)
+
+      expect(row_names).to eq(["Invoice finalize locks the line items"])
+      expect(basis_line).to have_text("1 row in this window carried no description",
+                                      normalize_ws: true)
+      expect(basis_line).to have_text(
+        "a null description is not known to be one test with itself across runs, so it is " \
+        "excluded from the matching rather than pooled into a test", normalize_ws: true
+      )
+    end
+
+    # The defect this pins: a hardcoded numeral in the second clause that does not derive from the
+    # count in the first, so the sentence counted 1 and quantified over 2 in one breath.
+    it "never quantifies over two rows when only one carried no description" do
+      get repository_path(single_unnamed_window)
+
+      expect(basis_line).to have_no_text("two of those")
+      expect(basis_line).to have_no_text("1 rows")
+    end
+
     # The clause is about THIS window and appears only when there is something to say. "0 rows
     # carried no description" is a sentence about arithmetic.
     it "says nothing about unnamed rows when every row carried a description" do
@@ -716,6 +757,38 @@ RSpec.describe "Repository unstable tests", type: :request do
     # spec/requests/repository_spec_directory_window_growth_spec.rb. Both fixtures below hold more
     # than two runs on the branch, so that read names a different pair from the last-push one and is
     # a real round trip on each of them rather than a query-cache repeat.
+    #
+    # RECOUNTED AT 14 by SPGD-649, which added the "Where the unannotated tests are" panel: ONE
+    # further read of this table, the same run's rows grouped by AREA on the ANNOTATION axis. It is
+    # the eighth neighbour, and it is the one the enumeration above does not carry — that sentence
+    # is left at thirteen because thirteen is what it correctly said at its own moment, and this
+    # line is where the fourteenth is accounted for. Restated at the new total: TEN of the fourteen
+    # belong to panels this slice did not write, and the four this example pins for THIS panel are
+    # unchanged, which is the half the assertion is here to hold still. The added read moves with
+    # neither the length of the window nor how red it went, since it reads the latest run's rows
+    # only, and it is not the by-duration rollup counted above under another name: that one groups
+    # the identical population and ranks it by wall clock, so neither ranking can be read off the
+    # other. Its own budget is pinned in
+    # spec/requests/repository_unannotated_directories_spec.rb.
+    # RECOUNTED AT 15 by SPGD-728, which added the "Slowest tests across the window" panel: ONE
+    # further read of this table, and it is that panel's GATING PROBE — the row count and the
+    # unresolved-row count over the newest run of THIS SAME WINDOW, asked before either of the two
+    # steps behind it. It is the ninth neighbour, and it is the only one of them drawn on this
+    # panel's own window rather than on the latest run alone.
+    #
+    # ONE and not three, and the reason is worth being exact about because it is a property of the
+    # fixtures rather than of the panel. Nothing in this file runs `Ingest::IdentityResolver` — the
+    # job the ingest endpoint enqueues after answering `202` — so every row these fixtures write
+    # carries a NULL `spec_identity_id`, the gate reports nothing resolved, and the panel stops
+    # there and says so rather than rendering an empty ranking. A window whose runs HAVE been
+    # resolved pays three: the gate, a capped candidate step over the newest run, and a composition
+    # over those candidates only. Both figures are asserted in
+    # spec/requests/repository_window_slowest_tests_spec.rb.
+    #
+    # Restated at the new total: ELEVEN of the fifteen belong to panels this slice did not write,
+    # and the four this example pins for THIS panel are unchanged, which is the half the assertion
+    # is here to hold still. The added read moves with neither the length of the window nor the
+    # size of the suite, since it counts one run's rows.
     it "costs the same four reads at 30 runs of 200 examples as at 3 runs of 3" do
       small = create_repository(user: @user, github_full_name: "acme/small-suite")
       3.times do |index|
@@ -742,7 +815,7 @@ RSpec.describe "Repository unstable tests", type: :request do
       # panels would be equal and worthless.
       expect(rows.size).to eq(4)
       expect(large_queries.size).to eq(small_queries.size)
-      expect(large_queries.size).to eq(13)
+      expect(large_queries.size).to eq(15)
     end
 
     # The candidate narrowing is what makes the composition affordable, and its `IN` list is capped
@@ -757,7 +830,7 @@ RSpec.describe "Repository unstable tests", type: :request do
         ingest(repository, specs, commit_sha: "red#{format("%011d", index)}", at: (30 - index).days.ago)
       end
 
-      expect(queries_against("spec_observations") { get repository_path(repository) }.size).to eq(13)
+      expect(queries_against("spec_observations") { get repository_path(repository) }.size).to eq(15)
     end
 
     # The gate is what it says it is: a window that cannot be compared asks nothing past the probe
@@ -767,15 +840,24 @@ RSpec.describe "Repository unstable tests", type: :request do
 
       queries = queries_against("spec_observations") { get repository_path(repository) }
 
-      # Nine of these belong to the panels above, which read the latest run (and, for the three
-      # by-area comparisons, an earlier one) regardless; the tenth is this panel's gating probe,
-      # and there is no eleventh. The window comparison is among the nine and not among what the
+      # TEN of these belong to the panels above, which read the latest run (and, for the three
+      # by-area comparisons, an earlier one) regardless — the tenth being the single-run annotation
+      # rollup SPGD-649 added, which reads the latest run whatever the window says; the eleventh is
+      # this panel's gating probe. The window comparison is among the ten and not among what the
       # gate withholds: its own gate is about SIZES and is satisfied here, where this panel's is
       # about OUTCOMES and is not — two windows of the same runs, two different questions to refuse.
-      expect(queries.size).to eq(10)
+      #
+      # The TWELFTH is SPGD-728's, and it is a THIRD gate over this same window asked about a third
+      # thing: whether the newest run's rows have been matched to durable tests yet. It withholds
+      # its own two steps here for its own reason — these fixtures never run the resolver, so
+      # nothing is matched — which is why one further read is all it adds. Three panels drawn on one
+      # window, each asking one cheap question first and each refusing a different thing, is the
+      # shape this example exists to hold: what must not appear is a FOURTH read taken before any
+      # gate said yes.
+      expect(queries.size).to eq(12)
       # What the gate withholds is a grouping by description over the WINDOW — the candidate
       # narrowing and the composition that follows it, both of which narrow `test_run_id` to a LIST
-      # of runs. The single-run `GROUP BY name` among the nine belongs to the "Descriptions this run
+      # of runs. The single-run `GROUP BY name` among the ten belongs to the "Descriptions this run
       # recorded more than once" panel and is not this one's: it asks about one run's rows, needs no
       # outcome to have been reported, and is therefore not something an incomparable window has any
       # reason to withhold. Discriminated on the window narrow rather than on the grouping alone,

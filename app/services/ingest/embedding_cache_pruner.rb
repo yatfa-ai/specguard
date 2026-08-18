@@ -22,14 +22,14 @@ module Ingest
   # caller happens to be holding. An invocation from ANY repository's resolve reaches EVERY expired
   # row this deployment owns, whichever ingest wrote it.
   #
-  # ⚠️ **{Ingest::ObservationPruner}'s branch caveat is FALSE HERE and must not be carried over.**
-  # That class is handed a run and reaches only the rows of that run's branch, so a branch stops
-  # converging the moment it stops receiving runs and merged `feature/*` history is frozen out of
-  # its reach by construction. That shape needs a per-bucket qualifier and this one has no bucket:
-  # there is no population of this table that some ingest is not walking down, because there is no
-  # partition of it that an invocation cannot see. A reader who inherits the sibling's caveat will
-  # believe this table has a frozen tail, and it does not. The convergence argument the template
-  # makes for live branches only, this class makes for the whole table.
+  # ⚠️ **The sibling rule's BUCKET STRUCTURE must not be carried over.** {Ingest::ObservationPruner}
+  # is handed a run and reaches only the rows of that run's branch, so it needs a second pass —
+  # {Ingest::QuietBucketPruner} — whose whole job is picking a bucket no run in hand belongs to and
+  # proving that the pick advances. This class needs no such pass and must not grow one: it has no
+  # bucket at all, so an invocation from ANY repository's resolve already sees every expired row
+  # this deployment owns. A reader who inherits the sibling's two-half shape will go looking for
+  # the partition this one is missing, and there is none to find. What that pair achieves for a
+  # repository across successive ingests, one invocation here achieves for the whole table.
   #
   # What still bounds it is TRAFFIC, not reach: a deployment that stops ingesting entirely stops
   # pruning, because the trigger is the next resolve. That is the same trade the trigger paragraph
@@ -63,8 +63,10 @@ module Ingest
   # the path that causes the growth. That is the same rule that puts {Ingest::ObservationPruner} at
   # {Ingest::RunRecorder}, applied to a different table rather than copied to the same call site:
   # `RunRecorder` writes `spec_observations` and writes nothing here, and an ingest under a provider
-  # that publishes no fingerprint — which is every provider this repository ships except
-  # `OpenAIProvider` — grows this table not at all while still going through it in full.
+  # that publishes no fingerprint — the suite's stub, and anything else installed through the swap
+  # seam — grows this table not at all while still going through it in full. The shipped
+  # `EmbeddingGenerator::VoyageProvider` does publish one, so on a real deployment this table grows
+  # and this pruner is the thing that bounds it.
   #
   # The resolve is also already OFF the ingest transaction, by construction rather than by
   # arrangement: it runs in {Ingest::IdentityResolutionJob}. At the `RunRecorder` seam this work
@@ -168,14 +170,23 @@ module Ingest
     #
     # == Where a row actually lives, MEASURED rather than inferred from the column width
     #
+    # ⚠️ **Measured on `vector(1536)`, which this table no longer uses.** The 2026-08-17 migration
+    # moved `embedding` to `halfvec(1024)` — 2 bytes per element rather than 4, and 1024 of them
+    # rather than 1536, so the datum is 2,052 bytes where it was 6,148. It is still past
+    # `TOAST_TUPLE_THRESHOLD` and still stored out of line, so the SHAPE of everything below holds
+    # and the batch size does not have to move; the figures do. Roughly a third of the TOAST, about
+    # two chunks per row rather than four, and a heap tuple unchanged at 168 bytes because the
+    # pointer that replaces the vector is the same 18 bytes either way. **Re-measure before quoting
+    # a number from here.**
+    #
     # `vector(1536)` is 1536 float4s — 6,148 bytes with its header — which is far past
     # `TOAST_TUPLE_THRESHOLD`, so the column is stored OUT OF LINE. On `embedding_cache_entries`,
     # `pg_attribute.attstorage` for `embedding` is `e` (EXTERNAL: out-of-line and NOT compressed)
     # and `pg_class.reltoastrelid` is populated. What remains in the heap is a stub — `id`, two
     # timestamps, `text_digest`, `provider_fingerprint`, and an 18-byte TOAST pointer.
     #
-    # Measured on a faithful reproduction of this table (identical DDL and `attstorage`, the
-    # production `openai:text-embedding-3-small` fingerprint, a real 64-char digest), at exactly
+    # Measured on a faithful reproduction of that table (identical DDL and `attstorage`, the
+    # then-production `openai:text-embedding-3-small` fingerprint, a real 64-char digest), at exactly
     # this batch size, after `VACUUM ANALYZE`:
     #
     #   heap tuple           168 bytes exactly (`pageinspect.heap_page_items.lp_len`)

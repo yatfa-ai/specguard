@@ -254,6 +254,185 @@ RSpec.describe SpecObservation do
       end
     end
 
+    # The read whose grain is the run's ANNOTATION STATUS — the slice behind the dashboard's
+    # *"SpecGuard cannot see the other N tests"*, and the only read on this model that looks at
+    # `status` at all.
+    #
+    # `seed` above writes every row `unannotated`, which is the faithful default (a suite mid-adoption
+    # is mostly unannotated, and the ingest fixtures say so) and is exactly the fixture that would
+    # certify nothing here: a predicate that had been dropped altogether returns the same 500 rows.
+    # So these examples ANNOTATE part of the seeded run explicitly, and every assertion is about what
+    # the predicate leaves behind.
+    describe "the examples one run recorded without an annotation" do
+      before { seed(run) }
+
+      # Flips seeded rows to `annotated`, which is the only status `Ingest::Payload::STATUSES` admits
+      # beside the one this read selects — the fact that makes "not unannotated" the same set as
+      # "annotated" and lets the API reconcile this list against `total_specs - annotated_specs`.
+      def annotate(count)
+        run.spec_observations.order(:id).limit(count).update_all(status: "annotated")
+      end
+
+      it "returns the run's unannotated rows and no annotated one" do
+        annotate(3)
+        rows = described_class.unannotated_in(run, limit: rows_per_run).to_a
+
+        expect(rows.size).to eq(rows_per_run - 3)
+        expect(rows.map(&:status).uniq).to eq(["unannotated"])
+        expect(rows.map(&:test_run_id).uniq).to eq([run.id])
+      end
+
+      # The window is counted after the WHERE and before the LIMIT, so it describes the run's whole
+      # unannotated population rather than the page — which is the figure the API serves as
+      # `recorded_count` and invites a client to reconcile against the run's counters.
+      it "counts the whole unannotated population on every row of a capped page" do
+        annotate(100)
+        rows = described_class.unannotated_in(run, limit: 10).to_a
+
+        expect(rows.size).to eq(10)
+        expect(rows.map { it["unannotated_recorded_count"] }.uniq).to eq([rows_per_run - 100])
+      end
+
+      # File-navigable, and a total order at every term — which the cap makes load-bearing rather
+      # than tidy: a reader annotating one page and asking again must be walking a list, not
+      # re-rolling one. `seed` writes `line_number` ascending across 25 files, so a read that had
+      # kept insertion order would come back in `id` order and disagree here.
+      it "orders by file, then line, then id, the same way twice" do
+        first = described_class.unannotated_in(run, limit: 40).to_a
+        second = described_class.unannotated_in(run, limit: 40).to_a
+
+        expect(first.map { [it.spec_file_path, it.line_number, it.id] })
+          .to eq(first.map { [it.spec_file_path, it.line_number, it.id] }.sort)
+        expect(first.map(&:id)).to eq(second.map(&:id))
+        expect(first.map(&:spec_file_path).uniq.size).to be > 1
+      end
+
+      # A fully-annotated run is the state the metric exists to REACH, so it is an ordinary empty
+      # read rather than an error — and the window has no row to ride on, which is why the caller's
+      # count is a `to_i` over nil rather than an assumption that one row came back.
+      it "returns nothing for a run whose every example is annotated" do
+        annotate(rows_per_run)
+
+        expect(described_class.unannotated_in(run).to_a).to be_empty
+      end
+
+      # Scoped to ONE run, asserted rather than assumed: the whole point of the API block is that it
+      # describes the run `run_anchor` names, and a read that had narrowed on `status` alone would
+      # return the other run's rows too and still look right on a single-run fixture.
+      it "narrows to the run it was handed and not to the repository" do
+        other = create_test_run(repository: repository, commit_sha: "feedfacecafebabf")
+        seed(other)
+
+        expect(described_class.unannotated_in(other, limit: rows_per_run).map(&:test_run_id).uniq)
+          .to eq([other.id])
+      end
+
+      # == Where in the run the worklist STARTS
+      #
+      # The read's default is the whole run in one order, capped — which is a worklist nobody can
+      # choose a place in. These examples are about the two narrowings that let a reader start where
+      # the work is, and each is asserted against the seeded run's OTHER rows rather than only against
+      # its own: a predicate that had been dropped returns a superset that still looks like a list of
+      # unannotated examples.
+      describe "narrowed to one file or one area" do
+        # `seed` writes `spec/d#{i % 5}/f#{i % 25}_spec.rb`, so a file number and its directory number
+        # are congruent mod 5 — `f3` lives in `d3`, alongside `f8`, `f13`, `f18` and `f23`.
+        let(:one_file) { "spec/d3/f3_spec.rb" }
+        let(:one_area) { "spec/d3" }
+
+        it "returns one file's unannotated rows and no other file's" do
+          annotate(3)
+          rows = described_class.unannotated_in(run, limit: rows_per_run, spec_file: one_file).to_a
+
+          expect(rows).to be_present
+          expect(rows.map(&:spec_file_path).uniq).to eq([one_file])
+          expect(rows.map(&:status).uniq).to eq(["unannotated"])
+          # And the run holds more unannotated rows than that, so the narrow is a predicate doing
+          # work rather than a fixture that has only one file in it.
+          expect(described_class.unannotated_in(run, limit: rows_per_run).size).to be > rows.size
+        end
+
+        it "counts the FILE's unannotated population rather than the run's" do
+          in_file = run.spec_observations.where(spec_file_path: one_file).count
+          rows = described_class.unannotated_in(run, limit: 5, spec_file: one_file).to_a
+
+          expect(rows.size).to eq(5)
+          expect(rows.map { it["unannotated_recorded_count"] }.uniq).to eq([in_file])
+          expect(in_file).to be < rows_per_run
+        end
+
+        it "returns one area's unannotated rows and no other area's" do
+          rows = described_class.unannotated_in(run, limit: rows_per_run, spec_directory: one_area).to_a
+
+          expect(rows.map(&:spec_file_path).uniq.sort)
+            .to eq(["spec/d3/f13_spec.rb", "spec/d3/f18_spec.rb", "spec/d3/f23_spec.rb",
+                    "spec/d3/f3_spec.rb", "spec/d3/f8_spec.rb"])
+          expect(rows.map { it["unannotated_recorded_count"] }.uniq).to eq([rows.size])
+        end
+
+        # ⭐ THE PREFIX TRAP, and the reason this example inserts its own rows. `DIRECTORY_EXPRESSION`
+        # is the IMMEDIATE PARENT of the including file compared for EQUALITY — `spec/d3/nested` is
+        # its own area, not part of `spec/d3` — and a `LIKE 'spec/d3%'` written to make "the whole
+        # subtree" work would be a fifth directory semantics on this table. The seeded run is flat, so
+        # nothing in it could tell an equality from a prefix; a subdirectory has to exist for the
+        # assertion to mean anything.
+        it "excludes a SUBDIRECTORY's rows, because an area is the immediate parent and not a prefix" do
+          nested = "spec/d3/nested/deep_spec.rb"
+          now = Time.current
+          described_class.insert_all([{ test_run_id: run.id, repository_id: run.repository_id,
+                                        example_id: "./#{nested}[1:1]", spec_file_path: nested,
+                                        file_path: nested, line_number: 1, name: "nested example",
+                                        duration_seconds: 0.1, outcome: "passed",
+                                        status: "unannotated", created_at: now, updated_at: now }])
+
+          paths = described_class.unannotated_in(run, limit: rows_per_run, spec_directory: one_area)
+                                 .map(&:spec_file_path)
+
+          expect(paths).not_to include(nested)
+          # And the row IS in the run and IS unannotated, so its absence above is the equality doing
+          # work rather than the insert having failed.
+          expect(described_class.unannotated_in(run, limit: rows_per_run, spec_directory: "spec/d3/nested")
+                                .map(&:spec_file_path)).to eq([nested])
+        end
+
+        # Both narrowings AND, with no precedence rule between them: a coherent pair is the
+        # intersection, which for a file inside the area it names is the file.
+        it "intersects the two when both are given" do
+          rows = described_class.unannotated_in(run, limit: rows_per_run, spec_file: one_file,
+                                                     spec_directory: one_area).to_a
+
+          expect(rows.map(&:spec_file_path).uniq).to eq([one_file])
+          expect(rows.size)
+            .to eq(described_class.unannotated_in(run, limit: rows_per_run, spec_file: one_file).size)
+        end
+
+        # And a contradictory pair is an honest empty intersection rather than one of the two being
+        # silently dropped — which is what a precedence rule would have made it.
+        it "returns nothing when the file named is not in the area named" do
+          rows = described_class.unannotated_in(run, limit: rows_per_run, spec_file: one_file,
+                                                     spec_directory: "spec/d1").to_a
+
+          expect(rows).to be_empty
+        end
+
+        # An unknown path is an ordinary empty read at this grain, exactly as it is one rung up: no
+        # error, and specifically no prefix match onto the neighbour it was nearly spelled as.
+        it "answers a path this run recorded nothing for with no rows" do
+          expect(described_class.unannotated_in(run, spec_file: "spec/d3/f3_spec.rbx").to_a).to be_empty
+          expect(described_class.unannotated_in(run, spec_directory: "spec/d").to_a).to be_empty
+        end
+
+        # The narrow does not loosen the run bound: a second run's rows at the same path stay out.
+        it "still narrows to the run it was handed" do
+          other = create_test_run(repository: repository, commit_sha: "feedfacecafebabf")
+          seed(other)
+
+          expect(described_class.unannotated_in(other, limit: rows_per_run, spec_file: one_file)
+                                .map(&:test_run_id).uniq).to eq([other.id])
+        end
+      end
+    end
+
     # The only examples that need a populated table: a planner given three rows sequentially scans
     # everything, and an EXPLAIN assertion over that would say nothing about the indexes at all. At
     # twenty runs a single run is ~5% of the table, so "use the index" is a decision rather than a
@@ -292,24 +471,6 @@ RSpec.describe SpecObservation do
       # `ActiveRecord::Relation#explain`, whose proxy renders the plan only when inspected.
       def plan_for(relation)
         ActiveRecord::Base.connection.select_values("EXPLAIN #{relation.to_sql}").join("\n")
-      end
-
-      # The plan for whatever SQL the block causes to be run against this table — for a read whose
-      # projection is not on the relation (a `pluck` of aggregates) and therefore has no `to_sql`
-      # worth EXPLAINing.
-      # Not a query counter, so none of the shared helpers in spec/support/query_capture.rb fit: it
-      # keeps the FIRST matching statement to feed EXPLAIN, and must run under
-      # `unprepared_statement` so the captured SQL carries its literals.
-      def plan_for_actual_sql
-        captured = nil
-        subscriber = ActiveSupport::Notifications.subscribe("sql.active_record") do |_, _, _, _, payload|
-          captured ||= payload[:sql] if payload[:name] != "SCHEMA" && payload[:sql].to_s.include?("spec_observations")
-        end
-        ActiveRecord::Base.connection.unprepared_statement { yield }
-
-        ActiveRecord::Base.connection.select_values("EXPLAIN #{captured}").join("\n")
-      ensure
-        ActiveSupport::Notifications.unsubscribe(subscriber)
       end
 
       it "reads the slowest examples off the by-duration index" do
@@ -367,7 +528,7 @@ RSpec.describe SpecObservation do
       # PREFIX predicate, which is what a `text_pattern_ops` index serves and this read issues none
       # of. That is what let the panel ship with no migration.
       it "reads the panel's one-file drill-down off the by-file index" do
-        plan = plan_for_actual_sql { described_class.in_file(run, "spec/d3/f3_spec.rb").to_a }
+        plan = plan_for_actual_sql("spec_observations") { described_class.in_file(run, "spec/d3/f3_spec.rb").to_a }
 
         expect(plan).to include("index_spec_observations_on_test_run_id_and_spec_file_path")
         expect(plan).not_to match(/Seq Scan on spec_observations/)
@@ -395,9 +556,65 @@ RSpec.describe SpecObservation do
       # example above gives: the predicate alone is not the read the panel makes, which adds a
       # projection, an ordering and a cap on top of it.
       it "reads the panel's one-description drill-down off an index rather than scanning the table" do
-        plan = plan_for_actual_sql { described_class.with_description(run, "example 3").to_a }
+        plan = plan_for_actual_sql("spec_observations") { described_class.with_description(run, "example 3").to_a }
 
         expect(plan).to match(INDEXED_BY_RUN)
+        expect(plan).not_to match(/Seq Scan on spec_observations/)
+      end
+
+      # The same certification for the ANNOTATION drill-in, and the assertion is deliberately the
+      # SHARED `INDEXED_BY_RUN` matcher rather than a named index — which is the finding this example
+      # carries.
+      #
+      # There is no `(test_run_id, status)` index and this read does not want one: `status` is two
+      # values over the whole table, which is the shape an index serves worst, and it is the RUN
+      # narrow that makes the read affordable. What has to stay true at the design point is what this
+      # asserts — one run reached through an index rather than every run's rows walked — and the
+      # `status` predicate then filters the rows already read.
+      #
+      # The ORDER BY leads on `spec_file_path`, which `index_spec_observations_on_test_run_id_and_spec_file_path`
+      # DOES lead on after the run, so the planner is free to take the sort from that index or to read
+      # the narrower one and sort afterwards; both are bounded by the RUN. The matcher tolerates
+      # either for that reason, exactly as it tolerates the two access methods its own comment names.
+      #
+      # Captured off the wire rather than EXPLAINed from a hand-written copy, for the reason the two
+      # examples above give: the predicate alone is not the read the block makes, which adds a
+      # projection, an ordering and a cap on top of it.
+      it "reads the run's unannotated examples off an index rather than scanning the table" do
+        plan = plan_for_actual_sql("spec_observations") { described_class.unannotated_in(run).to_a }
+
+        expect(plan).to match(/#{INDEXED_BY_RUN.source}|index_spec_observations_on_test_run_id_and_spec_file_path/)
+        expect(plan).not_to match(/Seq Scan on spec_observations/)
+      end
+
+      # THE SAME CERTIFICATION FOR THE TWO NARROWED SHAPES OF THAT READ, and they are two examples
+      # rather than one because they buy different things and could fail apart.
+      #
+      # `spec_file` narrows on the SECOND COLUMN of
+      # `index_spec_observations_on_test_run_id_and_spec_file_path`, so it is strictly cheaper than the
+      # un-narrowed read above and the planner has a composite index to reach for. `spec_directory` is
+      # an EXPRESSION predicate over a column no index expresses that way, so it buys nothing and is
+      # the run-bounded scan `.files_in_directory` already ships — which is the point: the bound that
+      # has to hold at the 20,000-example design point is the RUN, and it is the run narrow that
+      # supplies it in both cases. The assertion is therefore the same one, and it is the shared
+      # matcher rather than a named index for the reason the example above gives.
+      #
+      # Captured off the wire rather than EXPLAINed from a hand-written copy, on this section's rule:
+      # a narrowing added to the model and not to the certification would leave the certification
+      # measuring a statement the endpoint no longer makes.
+      it "reads ONE FILE's unannotated examples off an index rather than scanning the table" do
+        plan = plan_for_actual_sql("spec_observations") do
+          described_class.unannotated_in(run, spec_file: "spec/d3/f3_spec.rb").to_a
+        end
+
+        expect(plan).to match(/#{INDEXED_BY_RUN.source}|index_spec_observations_on_test_run_id_and_spec_file_path/)
+        expect(plan).not_to match(/Seq Scan on spec_observations/)
+      end
+
+      it "reads ONE AREA's unannotated examples off an index rather than scanning the table" do
+        plan = plan_for_actual_sql("spec_observations") { described_class.unannotated_in(run, spec_directory: "spec/d3").to_a }
+
+        expect(plan).to match(/#{INDEXED_BY_RUN.source}|index_spec_observations_on_test_run_id_and_spec_file_path/)
         expect(plan).not_to match(/Seq Scan on spec_observations/)
       end
 
@@ -411,7 +628,7 @@ RSpec.describe SpecObservation do
       # output — one row per file, not per example — so what has to stay true at the design point is
       # that one run's rows are still reached through an index rather than by walking every run's.
       it "reads the panel's by-file rollup off an index rather than scanning the table" do
-        plan = plan_for_actual_sql { described_class.file_durations_in(run) }
+        plan = plan_for_actual_sql("spec_observations") { described_class.file_durations_in(run) }
 
         expect(plan).to match(INDEXED_BY_RUN)
         expect(plan).not_to match(/Seq Scan on spec_observations/)
@@ -430,10 +647,41 @@ RSpec.describe SpecObservation do
       # sent the slice to a migration had the premise been wrong, so it is the one that must run
       # against a real planner with real statistics at the 20-run seed.
       it "reads the panel's by-directory rollup off an index rather than scanning the table" do
-        plan = plan_for_actual_sql { described_class.directory_durations_in(run) }
+        plan = plan_for_actual_sql("spec_observations") { described_class.directory_durations_in(run) }
 
         expect(plan).to match(INDEXED_BY_RUN)
         expect(plan).not_to match(/Seq Scan on spec_observations/)
+      end
+
+      # The SAME certification for the annotation-debt ranking, and the reason no migration came with
+      # IT either. It groups on the same expression and narrows on the same column, and only the
+      # second decides the access path — so the claim that had to be MEASURED rather than inherited is
+      # that adding a `FILTER`ed aggregate over `status` does not change it.
+      #
+      # THE INDEX THIS READ DOES NOT WANT IS THE ONE IT LOOKS LIKE IT WANTS. A `(test_run_id, status)`
+      # index is the obvious response to a new predicate on `status`, and it would buy this nothing:
+      # `status` is two values over the whole table — the shape an index serves worst — and the
+      # predicate here is applied to rows the GROUP BY has already had to touch. `where(test_run_id:)`
+      # is served by `index_spec_observations_on_test_run_id` and the aggregation sits on top of that
+      # scan either way. This is the example that would have sent the slice to a migration had that
+      # been wrong, so it runs against a real planner with real statistics at the 20-run seed.
+      it "reads the annotation-debt ranking off an index rather than scanning the table" do
+        plan = plan_for_actual_sql("spec_observations") { described_class.unannotated_directories_in(run) }
+
+        expect(plan).to match(INDEXED_BY_RUN)
+        expect(plan).not_to match(/Seq Scan on spec_observations/)
+      end
+
+      # And it HASH-aggregates, where its by-duration sibling is forced into a sort by the
+      # `COUNT(DISTINCT name)` beside it. A plain `COUNT(*) FILTER (...)` does not disqualify hashed
+      # aggregation, so this read does NOT pay the sibling's price — the measured difference that
+      # makes "one grouped aggregate, no new index" a claim about this read rather than a hope
+      # borrowed from the one above it. An edit that adds a `DISTINCT` aggregate here reddens this.
+      it "hash-aggregates the debt ranking, paying none of the sibling's sort" do
+        plan = plan_for_actual_sql("spec_observations") { described_class.unannotated_directories_in(run) }
+
+        expect(plan).to include("HashAggregate")
+        expect(plan).not_to include("GroupAggregate")
       end
 
       # The AGGREGATION STRATEGY, which is a different fact from the access path and was being
@@ -458,7 +706,7 @@ RSpec.describe SpecObservation do
       # would pass on that one too, which is exactly the indiscriminate assertion this example
       # exists to stop being.
       it "pays for the distinct-description count with a sort, and says so in the plan" do
-        plan = plan_for_actual_sql { described_class.directory_durations_in(run) }
+        plan = plan_for_actual_sql("spec_observations") { described_class.directory_durations_in(run) }
 
         expect(plan).to include("GroupAggregate")
         expect(plan).to match(/Sort Key: .*substring.*, name/)
@@ -500,7 +748,7 @@ RSpec.describe SpecObservation do
       # strategy IS forced rather than chosen, it is pinned: see the by-directory rollup above,
       # whose `DISTINCT` aggregate rules hashing out and whose sort is asserted for that reason.
       it "reads the panel's one-directory drill-down off an index rather than scanning the table" do
-        plan = plan_for_actual_sql { described_class.files_in_directory(run, "spec/d3") }
+        plan = plan_for_actual_sql("spec_observations") { described_class.files_in_directory(run, "spec/d3") }
 
         expect(plan).to match(INDEXED_BY_RUN)
         expect(plan).not_to match(/Seq Scan on spec_observations/)
@@ -546,7 +794,7 @@ RSpec.describe SpecObservation do
       # above are certified at.
       it "reads the panel's two-run by-area comparison off an index rather than scanning the table" do
         previous_run = repository.test_runs.where.not(id: run.id).first
-        plan = plan_for_actual_sql { described_class.directory_growth_between(run, previous_run) }
+        plan = plan_for_actual_sql("spec_observations") { described_class.directory_growth_between(run, previous_run) }
 
         expect(plan).to match(INDEXED_OR_COVERED_BY_RUN)
         expect(plan).not_to match(/Seq Scan on spec_observations/)
@@ -567,7 +815,7 @@ RSpec.describe SpecObservation do
       # wider one here would accept a plan this read cannot have.
       it "reads the panel's two-run by-area RUNTIME comparison off an index rather than scanning" do
         previous_run = repository.test_runs.where.not(id: run.id).first
-        plan = plan_for_actual_sql { described_class.directory_runtime_growth_between(run, previous_run) }
+        plan = plan_for_actual_sql("spec_observations") { described_class.directory_runtime_growth_between(run, previous_run) }
 
         expect(plan).to match(INDEXED_BY_RUN)
         expect(plan).not_to match(/Seq Scan on spec_observations/)
@@ -594,7 +842,7 @@ RSpec.describe SpecObservation do
       # it picks.
       it "reads the panel's two-run one-area comparison off an index rather than scanning the table" do
         previous_run = repository.test_runs.where.not(id: run.id).first
-        plan = plan_for_actual_sql { described_class.file_growth_between(run, previous_run, "spec/d3") }
+        plan = plan_for_actual_sql("spec_observations") { described_class.file_growth_between(run, previous_run, "spec/d3") }
 
         expect(plan).to match(INDEXED_OR_COVERED_BY_RUN)
         expect(plan).not_to match(/Seq Scan on spec_observations/)
@@ -613,7 +861,7 @@ RSpec.describe SpecObservation do
       # precisely the false-ACCEPT a query count would also give.
       it "reads the two-run one-area RUNTIME comparison off an index rather than scanning" do
         previous_run = repository.test_runs.where.not(id: run.id).first
-        plan = plan_for_actual_sql do
+        plan = plan_for_actual_sql("spec_observations") do
           described_class.file_runtime_growth_between(run, previous_run, "spec/d3")
         end
 
@@ -663,7 +911,7 @@ RSpec.describe SpecObservation do
       # query — the same tradeoff `.directory_durations_in` carries, which is why this asserts the
       # shared matcher rather than the widened `INDEXED_OR_COVERED_BY_RUN` beside it.
       it "reads the panel's repeated-description ranking off an index rather than scanning" do
-        plan = plan_for_actual_sql { described_class.repeated_descriptions_in(run) }
+        plan = plan_for_actual_sql("spec_observations") { described_class.repeated_descriptions_in(run) }
 
         expect(plan).to match(INDEXED_BY_RUN)
         expect(plan).not_to match(/Seq Scan on spec_observations/)
@@ -675,7 +923,7 @@ RSpec.describe SpecObservation do
       # and a plan assertion on the ranking alone would say nothing about the query that produces
       # the caption beside it.
       it "counts the run's described and undescribed rows off an index rather than scanning" do
-        plan = plan_for_actual_sql { described_class.description_presence_in(run) }
+        plan = plan_for_actual_sql("spec_observations") { described_class.description_presence_in(run) }
 
         expect(plan).to match(INDEXED_BY_RUN)
         expect(plan).not_to match(/Seq Scan on spec_observations/)
@@ -880,28 +1128,12 @@ RSpec.describe SpecObservation do
 
       before { ActiveRecord::Base.connection.execute("ANALYZE spec_observations") }
 
-      # The plan for the SQL each read ACTUALLY runs, captured off the wire rather than EXPLAINed
-      # from a hand-written copy — a copy is a second definition of the query that can drift from
-      # the one the panel makes. `unprepared_statement` inlines the binds, because `EXPLAIN` cannot
-      # be handed a `$1`.
-      def plan_for_actual_sql
-        captured = nil
-        subscriber = ActiveSupport::Notifications.subscribe("sql.active_record") do |_, _, _, _, payload|
-          captured ||= payload[:sql] if payload[:name] != "SCHEMA" && payload[:sql].to_s.include?("spec_observations")
-        end
-        ActiveRecord::Base.connection.unprepared_statement { yield }
-
-        ActiveRecord::Base.connection.select_values("EXPLAIN #{captured}").join("\n")
-      ensure
-        ActiveSupport::Notifications.unsubscribe(subscriber)
-      end
-
       # Observed: two index probes per run of the window, both off a `test_run_id` index, neither
       # of them touching a row past the one that answers it. The point of the lateral is that the
       # cost follows the window's LENGTH and not the suite's size — the aggregate spelling of this
       # question reads every row in the window to produce two integers.
       it "probes the window's runs through an index rather than reading the window" do
-        plan = plan_for_actual_sql { described_class.window_outcome_reporting(window_ids) }
+        plan = plan_for_actual_sql("spec_observations") { described_class.window_outcome_reporting(window_ids) }
 
         expect(plan).to match(/#{SCAN} index_spec_observations_on_test_run_id\w*/)
         expect(plan).not_to match(/Seq Scan on spec_observations/)
@@ -912,7 +1144,7 @@ RSpec.describe SpecObservation do
       # failed' list a later slice will want". This is that read, and the narrowing it makes
       # possible is what keeps the composition below off the whole window.
       it "narrows to the window's failures off the by-outcome index" do
-        plan = plan_for_actual_sql { described_class.unstable_candidates_in(window_ids) }
+        plan = plan_for_actual_sql("spec_observations") { described_class.unstable_candidates_in(window_ids) }
 
         expect(plan).to include("index_spec_observations_on_test_run_id_and_outcome")
         expect(plan).to match(SCAN)
@@ -924,7 +1156,7 @@ RSpec.describe SpecObservation do
       # repository as well as by window — without that column there is no index on `name` to walk
       # and the grouping falls back to reading the runs whole.
       it "composes the candidates off the by-name index rather than scanning the table" do
-        plan = plan_for_actual_sql do
+        plan = plan_for_actual_sql("spec_observations") do
           described_class.outcome_composition_in(repository_id: repository.id, run_ids: window_ids,
                                                  names: ["example 7", "example 13"])
         end
@@ -937,7 +1169,7 @@ RSpec.describe SpecObservation do
       # A btree indexes its nulls, so `name IS NULL` is a range of that same index and the count
       # costs what the unnamed rows cost rather than what the window does.
       it "counts the unnamed rows off the by-name index too" do
-        plan = plan_for_actual_sql do
+        plan = plan_for_actual_sql("spec_observations") do
           described_class.unnamed_row_count_in(repository_id: repository.id, run_ids: window_ids)
         end
 
@@ -953,7 +1185,7 @@ RSpec.describe SpecObservation do
       # against the 6,000 the window holds — which is what makes this read constant in the size of
       # the suite rather than merely cheaper than the window.
       it "reads one description's run sequence off the by-name index rather than scanning" do
-        plan = plan_for_actual_sql do
+        plan = plan_for_actual_sql("spec_observations") do
           described_class.outcome_sequence_in(repository_id: repository.id, run_ids: window_ids,
                                               name: "example 7").to_a
         end
@@ -961,6 +1193,322 @@ RSpec.describe SpecObservation do
         expect(plan).to include("index_spec_observations_on_repository_id_and_name")
         expect(plan).to match(SCAN)
         expect(plan).not_to match(/Seq Scan on spec_observations/)
+      end
+    end
+  end
+
+  # The reads that span runs AND group on the durable identity — the first two in this application
+  # to aggregate `spec_identity_id` at all. The block above spans runs while grouping on `name`,
+  # which is a different key answering a different question and is not disturbed by these; what
+  # these add is the one thing that key cannot survive, which is a test being renamed or moved.
+  # What they return is asserted here, and what {SlowestTests} makes of them is
+  # spec/models/slowest_tests_spec.rb.
+  describe "the questions a repository's runtime history has to answer" do
+    let(:rows_per_run) { 300 }
+    let(:repository) { create_repository }
+    # Twenty runs in the table and six of them in the window, so "read the window through an index"
+    # is a decision the planner makes rather than a foregone conclusion — the sibling blocks seed
+    # twenty for the same reason.
+    let(:runs) { (1..20).map { |i| create_test_run(repository: repository, commit_sha: "sha#{i}") } }
+    # OLDEST FIRST, as `Repository#suite_size_trajectory` hands its window over, so `.last` is the
+    # newest run and the anchor everything here is partitioned by.
+    let(:window) { runs.first(6) }
+    let(:window_ids) { window.map(&:id) }
+    let(:anchor) { window.last }
+    let(:identity_ids) { seed_identities }
+
+    # THE MOVED TEST. Example 3 sits in one file for the window's first three runs and in another
+    # for its last three, with a different line number on each side — the exact edit
+    # `SpecObservation`'s class comment records `example_id` and the `file_path:line_number`
+    # coordinate as unstable across, and the one this grouping key exists to survive.
+    MOVED_EXAMPLE = 3
+
+    # One vector, reused across every identity, built once. Nothing in either read under test
+    # touches `embedding` — the resolution that produced these rows is `Ingest::IdentityResolver`'s
+    # and is asserted there — so three hundred distinct vectors would be three hundred thousand
+    # random floats bought for nothing.
+    def seed_identities
+      now = Time.current
+      vector = EmbeddingGenerator.call("one vector, reused")
+      SpecIdentity.insert_all(
+        (1..rows_per_run).map do |index|
+          { repository_id: repository.id, text: "identity #{index}",
+            text_digest: SpecIdentity.digest_for("identity #{index}"), signal_source: "name",
+            embedding: vector, file_path: "spec/f#{index % 15}_spec.rb", line_number: index,
+            created_at: now, updated_at: now }
+        end
+      )
+
+      SpecIdentity.where(repository: repository).order(:id).pluck(:id)
+    end
+
+    # Example 1 is the slowest, example 2 the next, and so on down — a total, stable order with no
+    # ties at the head, so "the ten slowest" is a fact about the seed rather than about the planner.
+    # Every fiftieth example is UNTIMED and every hundredth is UNRESOLVED, which are the two
+    # exclusions these reads have to state rather than swallow.
+    def duration_for(index)
+      return nil if (index % 50).zero? && !(index % 100).zero?
+
+      100.0 / index
+    end
+
+    def identity_for(index)
+      (index % 100).zero? ? nil : identity_ids[index - 1]
+    end
+
+    def path_for(index, run_index)
+      return run_index < 3 ? "spec/before_spec.rb" : "spec/after_spec.rb" if index == MOVED_EXAMPLE
+
+      "spec/f#{index % 15}_spec.rb"
+    end
+
+    def line_for(index, run_index)
+      return run_index < 3 ? 10 : 400 if index == MOVED_EXAMPLE
+
+      index
+    end
+
+    def seed(test_run, run_index)
+      now = Time.current
+      rows = (1..rows_per_run).map do |index|
+        {
+          test_run_id: test_run.id, repository_id: repository.id,
+          example_id: "./spec/f#{index % 15}_spec.rb[1:#{index}]",
+          spec_file_path: path_for(index, run_index), file_path: path_for(index, run_index),
+          line_number: line_for(index, run_index), name: "example #{index}",
+          duration_seconds: duration_for(index), outcome: "passed",
+          status: "unannotated", spec_identity_id: identity_for(index),
+          created_at: now, updated_at: now
+        }
+      end
+
+      SpecObservation.insert_all(rows)
+    end
+
+    before { runs.each_with_index { |test_run, index| seed(test_run, index) } }
+
+    describe "what they return" do
+      # The ranking the candidate step exists for: one run's slowest identities, capped, in a total
+      # order. Ten identities, and they are examples 1 through 10 because the seed's durations fall
+      # away monotonically from example 1.
+      it "names the anchor run's slowest identities, slowest first" do
+        candidates = described_class.slowest_identity_candidates_in(anchor)
+
+        expect(candidates.map(&:first)).to eq(identity_ids.first(10))
+      end
+
+      # The count rides back on every row, evaluated after the GROUP BY and before the LIMIT, so it
+      # counts every identity the run holds however few are returned. 297 and not 300: the three
+      # unresolved rows are not an identity and never become a group.
+      it "rides the anchor's whole identity count back on every row, before the cap" do
+        candidates = described_class.slowest_identity_candidates_in(anchor)
+
+        expect(candidates.map { |tuple| tuple[1] }).to all(eq(297))
+        expect(candidates.length).to eq(10)
+      end
+
+      # The NUMERATOR of the coverage fraction, re-totalled back up to the run by a window over an
+      # aggregate — in the same round trip as the ranking, which is what makes the caption a claim
+      # about THIS list. 294: the run's 297 resolved rows less the three nothing timed.
+      it "rides the ranked population's timed-row count back on every row" do
+        candidates = described_class.slowest_identity_candidates_in(anchor)
+
+        expect(candidates.map { |tuple| tuple[2].to_i }).to all(eq(294))
+      end
+
+      # ⭐ And the DENOMINATOR is deliberately absent, which is a defect this read once had. It
+      # carried a `SUM(COUNT(*)) OVER ()` counting the run's resolved rows — the same predicate over
+      # the same population `.identity_presence_in` already counts as `recorded_count -
+      # unresolved_count`, measured a second time in a second statement. Two snapshots, no
+      # transaction between them, and a caption that could be caught rendering figures that do not
+      # add up. The tuple is three wide because that population is measured ONCE, at the gate, and
+      # `SlowestTests` threads it through.
+      it "does not re-count the resolved population the gate already measured" do
+        candidates = described_class.slowest_identity_candidates_in(anchor)
+        gate = described_class.identity_presence_in(anchor)
+
+        expect(candidates.map(&:length)).to all(eq(3))
+        expect(gate[:recorded_count] - gate[:unresolved_count]).to eq(297)
+      end
+
+      it "keeps the slowest end of the list when the cap bites" do
+        candidates = described_class.slowest_identity_candidates_in(anchor, limit: 3)
+
+        expect(candidates.map(&:first)).to eq(identity_ids.first(3))
+        expect(candidates.map { |tuple| tuple[1] }).to all(eq(297))
+      end
+
+      # A row with no durable identity cannot be matched to itself across runs, so it never becomes
+      # a group — the same refusal `.unstable_candidates_in` makes for a null `name`, at the key
+      # this read groups on.
+      it "never groups the unresolved rows into an identity of their own" do
+        expect(described_class.slowest_identity_candidates_in(anchor, limit: 300).map(&:first))
+          .to all(be_present)
+      end
+
+      # ⭐ Untimed identities are KEPT and sort LAST. `duration_seconds: :desc` is NULLS FIRST in
+      # Postgres, so the ordering — not an exclusion — is what keeps a list captioned "slowest" from
+      # being headed by tests nothing timed. Dropping them instead would change each surviving
+      # group's population, which is the trap `.file_durations_in` documents for aggregates.
+      it "sorts the identities nothing timed to the very end rather than dropping them" do
+        candidates = described_class.slowest_identity_candidates_in(anchor, limit: 300)
+        untimed = [50, 150, 250].map { |index| identity_ids[index - 1] }
+
+        expect(candidates.map(&:first).last(3)).to match_array(untimed)
+        expect(candidates.length).to eq(297)
+      end
+
+      # ⭐ THE MOVED-TEST GUARANTEE, asserted directly and at the grain that makes it. Example 3
+      # changed both halves of the `file_path:line_number` coordinate midway through the window, and
+      # it comes back as ONE group whose total is every run's duration summed — six runs of the same
+      # test rather than two histories of three.
+      it "sums a moved test's runs into one row rather than splitting it at the move" do
+        moved = identity_ids[MOVED_EXAMPLE - 1]
+
+        composed = described_class.identity_duration_composition_in(
+          run_ids: window_ids, spec_identity_ids: [moved]
+        )
+
+        expect(composed.length).to eq(1)
+        identity_id, total_seconds, recorded, timed, run_count, slowest, names, files = composed.first
+        expect(identity_id).to eq(moved)
+        expect(total_seconds).to be_within(0.0001).of(6 * (100.0 / MOVED_EXAMPLE))
+        expect([recorded, timed, run_count]).to eq([6, 6, 6])
+        expect(slowest).to be_within(0.0001).of(100.0 / MOVED_EXAMPLE)
+        expect(names).to eq(["example #{MOVED_EXAMPLE}"])
+        # Both sides of the move, disclosed rather than smoothed over — a history spanning two files
+        # is a fact about where the reader has to go looking.
+        expect(files.sort).to eq(["spec/after_spec.rb", "spec/before_spec.rb"])
+      end
+
+      it "composes each candidate over the whole window" do
+        composed = described_class.identity_duration_composition_in(
+          run_ids: window_ids, spec_identity_ids: [identity_ids[6]]
+        )
+
+        # identity, total, recorded, timed, runs, slowest, names, files —
+        # `SpecObservation::IDENTITY_DURATION_COMPOSITION`'s order, which the caller destructures by.
+        _id, total_seconds, recorded, timed, run_count, slowest, names, files = composed.first
+        expect(total_seconds).to be_within(0.0001).of(6 * (100.0 / 7))
+        expect([recorded, timed, run_count]).to eq([6, 6, 6])
+        expect(slowest).to be_within(0.0001).of(100.0 / 7)
+        expect([names, files]).to eq([["example 7"], ["spec/f7_spec.rb"]])
+      end
+
+      # Bounded to the window, never to the repository's whole history — the fourteen runs outside
+      # it hold the same identities and must not be summed into these figures.
+      it "counts only the runs of the window it was given" do
+        composed = described_class.identity_duration_composition_in(
+          run_ids: window_ids.first(2), spec_identity_ids: [identity_ids[6]]
+        )
+
+        _id, total_seconds, recorded, timed, run_count, * = composed.first
+        expect(total_seconds).to be_within(0.0001).of(2 * (100.0 / 7))
+        expect([recorded, timed, run_count]).to eq([2, 2, 2])
+      end
+
+      # An identity every row of which went untimed sums to SQL NULL rather than to zero, and the
+      # counts beside it are what let a surface say "not reported" instead of inventing a `0.00s`.
+      it "reports a nil total, never a zero, for a test nothing timed" do
+        composed = described_class.identity_duration_composition_in(
+          run_ids: window_ids, spec_identity_ids: [identity_ids[49]]
+        )
+
+        _id, total_seconds, recorded, timed, run_count, slowest, * = composed.first
+        expect(total_seconds).to be_nil
+        expect(slowest).to be_nil
+        expect([recorded, timed, run_count]).to eq([6, 0, 6])
+      end
+
+      it "answers for a window of no runs, and for no candidates, without asking anything" do
+        expect(count_queries do
+          expect(described_class.identity_duration_composition_in(
+            run_ids: [], spec_identity_ids: identity_ids.first(3)
+          )).to be_empty
+          expect(described_class.identity_duration_composition_in(
+            run_ids: window_ids, spec_identity_ids: []
+          )).to be_empty
+        end).to eq(0)
+      end
+    end
+
+    # The bound the whole two-step shape exists for, measured rather than asserted. The naive
+    # spelling of this question groups the window whole — 1,800 rows on this seed, 600,000 at the
+    # roadmap's design point — and what these examples pin is that the composition reads on the
+    # order of `candidates × window runs` instead.
+    describe "the plan Postgres chooses for each of them" do
+      SCAN_NODE = /(?:Index Only Scan using|Index Scan using|Bitmap Index Scan on)/
+
+      before { ActiveRecord::Base.connection.execute("ANALYZE spec_observations") }
+
+      # One run's rows through an index that LEADS WITH `test_run_id`, rather than by walking every
+      # run's — `SLOWEST_LIMIT` identities out of one run, never an aggregate over the window.
+      #
+      # `INDEXED_BY_RUN` is the shared matcher defined ~1,000 lines above, in the per-run duration
+      # block; constants defined inside an example group land at top level, so it is reachable here.
+      # Named rather than left to be discovered, because a constant reused across two distant blocks
+      # is a coupling a reader has no local sign of — and because its comment there is where the
+      # argument for matching a SHAPE instead of an index name is made in full.
+      #
+      # WHICH of those indexes is left to Postgres, for the reason `INDEXED_BY_RUN` above documents
+      # at length and which was confirmed here by measurement: the wider
+      # `(test_run_id, duration_seconds)` is the obvious guess and the planner does not take it,
+      # since the aggregate visits the heap for `spec_identity_id` either way and the narrower
+      # `(test_run_id, outcome)` bitmap prices better. Pinning the guess would pin a cost tiebreak
+      # that has no bearing on this criterion. What has a bearing is the `Seq Scan` refusal beside
+      # it: unscope this read from its run and the plan walks every run's rows, whichever index it
+      # had before.
+      it "narrows to the anchor run's slowest identities through a by-run index" do
+        plan = plan_for_actual_sql("spec_observations") { described_class.slowest_identity_candidates_in(anchor) }
+
+        expect(plan).to match(INDEXED_BY_RUN)
+        expect(plan).not_to match(/Seq Scan on spec_observations/)
+      end
+
+      # ⭐ `index_spec_observations_on_spec_identity_id` — the index the schema has carried since
+      # slice 1 with no cross-run reader. This is that reader, and no index was added for it.
+      it "composes the candidates off the by-identity index rather than scanning the table" do
+        plan = plan_for_actual_sql("spec_observations") do
+          described_class.identity_duration_composition_in(
+            run_ids: window_ids, spec_identity_ids: identity_ids.first(10)
+          )
+        end
+
+        expect(plan).to include("index_spec_observations_on_spec_identity_id")
+        expect(plan).to match(SCAN_NODE)
+        expect(plan).not_to match(/Seq Scan on spec_observations/)
+      end
+
+      # ⭐ THE BOUND, MEASURED — and measured by SHRINKING THE CANDIDATE LIST rather than by naming
+      # one ceiling, because what has to stay true is that the work follows the CANDIDATES. A single
+      # ceiling passes just as happily on a read that has stopped being narrowed at all; three
+      # candidates costing a third of what ten cost, over the same window, cannot.
+      #
+      # The measured plan is a bitmap index scan on `spec_identity_id` fetching
+      # `candidates × runs those identities appear in`, with the window applied as a FILTER on top —
+      # 200 rows for ten candidates over twenty runs of history, of which 60 survive. So the honest
+      # ceiling is written against the runs in the TABLE and not against the window's six, and the
+      # read is bounded by `BRANCH_RETENTION_RUNS` rather than by how wide a window is asked for.
+      # See `.identity_duration_composition_in`, which carries the plan and the arithmetic.
+      it "reads on the order of the candidate count, not of the window" do
+        composed = lambda do |count|
+          rows_touched("spec_observations") do
+            described_class.identity_duration_composition_in(
+              run_ids: window_ids, spec_identity_ids: identity_ids.first(count)
+            )
+          end
+        end
+
+        ten = composed.call(10)
+        three = composed.call(3)
+
+        expect(ten).to be <= 10 * runs.size * 2
+        expect(three).to be <= 3 * runs.size * 2
+        # The window it is scoped to holds thirty times what the read touches, which is the whole of
+        # what the two-step shape buys — and the ratio widens with the suite, because this read
+        # follows the candidate count while a whole-window group-by follows the row count.
+        expect(SpecObservation.where(test_run_id: window_ids).count).to eq(1800)
+        expect(ten).to be < 1800 / 5
       end
     end
   end
@@ -1467,6 +2015,187 @@ RSpec.describe SpecObservation do
 
       it "reads no directories for a run that recorded nothing" do
         expect(described_class.directory_durations_in(run)).to eq([])
+      end
+    end
+
+    # The SAME grouping as the read above, ranked by a different quantity — one run's areas by how
+    # many of their examples carry no annotation. The rung `.unannotated_in`'s worklist never had:
+    # that read is ordered file-navigably and says so, and `?spec_directory=` narrows it for a caller
+    # who already knows which area to name. This is the read that tells them.
+    describe ".unannotated_directories_in" do
+      # The whole claim, and the assertion that separates this from `.directory_durations_in`
+      # relabelled: the two rank the same areas in DIFFERENT ORDERS on the same rows. `spec/system`
+      # is the heaviest area by wall clock here and carries no debt at all; `spec/models` is the
+      # lightest and leads this ranking. A read that had ordered by `SUM(duration_seconds)`, or by
+      # `COUNT(*)`, produces a different first row.
+      it "ranks areas by unannotated count, against each area's whole population" do
+        observe(run, duration: 0.1, line_number: 1, status: "unannotated",
+                     spec_file_path: "spec/models/order_spec.rb")
+        observe(run, duration: 0.1, line_number: 2, status: "unannotated",
+                     spec_file_path: "spec/models/refund_spec.rb")
+        observe(run, duration: 0.1, line_number: 3, status: "annotated",
+                     spec_file_path: "spec/models/invoice_spec.rb")
+        observe(run, duration: 0.1, line_number: 4, status: "unannotated",
+                     spec_file_path: "spec/requests/checkout_spec.rb")
+        observe(run, duration: 90.0, line_number: 5, status: "annotated",
+                     spec_file_path: "spec/system/smoke_spec.rb")
+
+        expect(described_class.unannotated_directories_in(run)).to eq(
+          [["spec/models", 2, 3, 3],
+           ["spec/requests", 1, 1, 3],
+           ["spec/system", 0, 1, 3]]
+        )
+        # The by-wall-clock rollup over the SAME rows leads with the area this one ranks last, which
+        # is the difference that makes this its own read rather than a column on that one.
+        expect(described_class.directory_durations_in(run).first.first).to eq("spec/system")
+      end
+
+      # The third element is the AREA'S WHOLE POPULATION, not its unannotated rows again. The
+      # predicate rides the AGGREGATE and the WHERE stays open at the run — a read that had narrowed
+      # `where(status: "unannotated")` instead returns `[..., 2, 2, ...]` here, a denominator equal to
+      # its numerator on every row and no operand at all. This is the example that fails it.
+      it "counts each area's whole population as the denominator, not its unannotated rows twice" do
+        observe(run, duration: 0.1, line_number: 1, status: "unannotated",
+                     spec_file_path: "spec/models/order_spec.rb")
+        observe(run, duration: 0.1, line_number: 2, status: "annotated",
+                     spec_file_path: "spec/models/order_spec.rb")
+        observe(run, duration: 0.1, line_number: 3, status: "annotated",
+                     spec_file_path: "spec/models/refund_spec.rb")
+
+        expect(described_class.unannotated_directories_in(run)).to eq([["spec/models", 1, 3, 1]])
+      end
+
+      # A fully-annotated area is a ROW carrying a zero and sorted last, never an omission. It is the
+      # state the metric exists to reach, and dropping it would make `COUNT(*) OVER ()` describe a
+      # different population from the one `.directory_durations_in` discloses under the same name.
+      it "keeps a fully-annotated area in the ranking, at the bottom, with a zero" do
+        observe(run, duration: 0.1, line_number: 1, status: "annotated",
+                     spec_file_path: "spec/models/order_spec.rb")
+        observe(run, duration: 0.1, line_number: 2, status: "unannotated",
+                     spec_file_path: "spec/requests/checkout_spec.rb")
+
+        expect(described_class.unannotated_directories_in(run)).to eq(
+          [["spec/requests", 1, 1, 2], ["spec/models", 0, 1, 2]]
+        )
+      end
+
+      # `status` is compared to the literal `'unannotated'`, never `!= 'annotated'`. The negated form
+      # selects the same rows today and would silently ADOPT a third status into a ranking captioned
+      # "unannotated" rather than going red — the rule `.unannotated_in` argues one grain down, pinned
+      # here because the predicate sits inside an aggregate where a reader scans for it last.
+      #
+      # The column is NOT NULL and `Ingest::Payload::STATUSES` is the two words, so a third status
+      # cannot be written through the app. It is written straight to the row here for exactly that
+      # reason: this example is a guard against a FUTURE vocabulary, and the only way to state it is
+      # to build the row the app cannot yet produce.
+      it "counts the literal 'unannotated' rather than everything that is not 'annotated'" do
+        observe(run, duration: 0.1, line_number: 1, status: "unannotated",
+                     spec_file_path: "spec/models/order_spec.rb")
+        observe(run, duration: 0.1, line_number: 2, status: "skipped",
+                     spec_file_path: "spec/models/refund_spec.rb")
+
+        # The skipped row is in the DENOMINATOR — it is one of the area's examples — and is not
+        # counted as debt. `where.not(status: "annotated")` reports `2` for the numerator here.
+        expect(described_class.unannotated_directories_in(run)).to eq([["spec/models", 1, 2, 1]])
+      end
+
+      # The tiebreak is TOTAL, so two identical asks return the same order. `unannotated_count DESC`
+      # alone leaves ties to the planner, and the cap makes that load-bearing rather than tidy — a
+      # client comparing this ranking across two requests must not read a re-shuffle as a change in
+      # the suite.
+      it "breaks a tie on the directory expression, ascending" do
+        observe(run, duration: 0.1, line_number: 1, status: "unannotated",
+                     spec_file_path: "spec/zebra/z_spec.rb")
+        observe(run, duration: 0.1, line_number: 2, status: "unannotated",
+                     spec_file_path: "spec/alpha/a_spec.rb")
+        observe(run, duration: 0.1, line_number: 3, status: "unannotated",
+                     spec_file_path: "spec/middle/m_spec.rb")
+
+        expect(described_class.unannotated_directories_in(run).map(&:first))
+          .to eq(["spec/alpha", "spec/middle", "spec/zebra"])
+      end
+
+      # The IMMEDIATE parent compared for EQUALITY, never a prefix: `spec/models/orders` is its own
+      # area and its debt does not roll into `spec/models`. Inherited by construction from
+      # `DIRECTORY_EXPRESSION` rather than by a predicate — which is why it is pinned. Nobody can
+      # break this with a bad `LIKE`; they would break it by "fixing" the map into a subtree rollup,
+      # which reads as the tidier answer and is a fifth directory semantics on this table.
+      it "groups on the immediate parent, so a nested area's debt does not roll into its ancestor" do
+        observe(run, duration: 0.1, line_number: 1, status: "unannotated",
+                     spec_file_path: "spec/models/order_spec.rb")
+        observe(run, duration: 0.1, line_number: 2, status: "unannotated",
+                     spec_file_path: "spec/models/orders/refund_spec.rb")
+        observe(run, duration: 0.1, line_number: 3, status: "unannotated",
+                     spec_file_path: "spec/models/orders/discount_spec.rb")
+
+        expect(described_class.unannotated_directories_in(run)).to eq(
+          [["spec/models/orders", 2, 2, 2], ["spec/models", 1, 1, 2]]
+        )
+      end
+
+      # A spec file at the repository root has no parent segment to capture and the expression comes
+      # back SQL NULL for it. `DIRECTORY_EXPRESSION` coalesces it to `.` — what `Pathname#dirname`
+      # calls that directory — so the row is a named area a client can hand straight back to
+      # `?spec_directory=`, rather than an unnamed key it can only look at.
+      it "names the repository root `.` rather than grouping the run's root specs under a null" do
+        observe(run, duration: 0.1, line_number: 1, status: "unannotated",
+                     spec_file_path: "smoke_spec.rb")
+        observe(run, duration: 0.1, line_number: 2, status: "unannotated",
+                     spec_file_path: "spec/models/order_spec.rb")
+
+        expect(described_class.unannotated_directories_in(run))
+          .to eq([[".", 1, 1, 2], ["spec/models", 1, 1, 2]])
+      end
+
+      # Grouped by the area that RAN the example, so a shared example group's debt lands on each
+      # including area rather than on `spec/support` — the rule `Ingest::ObservationRecorder` writes
+      # `spec_file_path` for. Getting this backwards sends a reader to a `spec/support/` helper to
+      # annotate tests that are not in it, which is the same failure the worklist's own row shape
+      # guards against one grain down.
+      it "attributes a shared example group's debt to the area that included it" do
+        observe(run, duration: 0.1, line_number: 4, status: "unannotated",
+                     file_path: "spec/support/shared_examples.rb",
+                     spec_file_path: "spec/models/order_spec.rb",
+                     example_id: "./spec/models/order_spec.rb[1:1:1]")
+
+        directories = described_class.unannotated_directories_in(run)
+
+        expect(directories).to eq([["spec/models", 1, 1, 1]])
+        expect(directories.map(&:first)).not_to include("spec/support")
+      end
+
+      # The window discloses the population the CAP cut, counted after the WHERE and before the
+      # LIMIT — so it counts the areas the RUN touched rather than the rows that fit on the page. The
+      # figure a caption is built from, and the reason a truncated list cannot wear the shape of a
+      # complete one.
+      it "discloses how many areas the run touched, on every row, past the cap" do
+        6.times do |index|
+          observe(run, duration: 0.1, line_number: index + 1, status: "unannotated",
+                       spec_file_path: "spec/area_#{index}/thing_spec.rb")
+        end
+
+        directories = described_class.unannotated_directories_in(run, limit: 2)
+
+        expect(directories.length).to eq(2)
+        expect(directories.map(&:last)).to eq([6, 6])
+      end
+
+      # One run, never the repository's history — the same narrow every read on this endpoint takes,
+      # and the one that makes the aggregate affordable.
+      it "counts one run's areas rather than every run's" do
+        other = create_test_run(repository: repository, commit_sha: "b" * 40)
+        observe(run, duration: 0.1, line_number: 1, status: "unannotated",
+                     spec_file_path: "spec/models/order_spec.rb")
+        observe(other, duration: 0.1, line_number: 2, status: "unannotated",
+                      spec_file_path: "spec/requests/checkout_spec.rb")
+
+        expect(described_class.unannotated_directories_in(run)).to eq([["spec/models", 1, 1, 1]])
+        expect(described_class.unannotated_directories_in(other))
+          .to eq([["spec/requests", 1, 1, 1]])
+      end
+
+      it "reads no directories for a run that recorded nothing" do
+        expect(described_class.unannotated_directories_in(run)).to eq([])
       end
     end
 

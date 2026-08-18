@@ -1,0 +1,88 @@
+    <% if manage_keys %>
+      <%# `id` is the deep-link target for the "N API keys minted" badge on the members page: that
+          badge exists to send the owner straight to the levers on each key below — Regenerate, to
+          rotate a token that leaked or went missing, and Revoke, to retire the key outright. %>
+      <%= render UI::PanelComponent.new(title: "API keys", id: "api-keys", class: "lg:col-span-2") do |panel| %>
+        <% panel.with_actions do %>
+          <%# Inline (not .form-grid) on purpose: this lives in a panel header, so it stays one row. %>
+          <%= form_with url: repository_api_keys_path(@repository), scope: :api_key,
+                        class: "flex items-end gap-2" do |form| %>
+            <%= form.field :name, label: "Name", placeholder: "CI — main" %>
+            <%= form.submit_button "New API key", size: :sm %>
+          <% end %>
+        <% end %>
+
+        <% if has_api_keys %>
+          <%= render UI::TableComponent.new(columns: ["Name", "Key", "Created by", "Created", "Last used", ""]) do %>
+            <% @api_keys.each do |api_key| %>
+              <tr>
+                <td class="px-3 py-2"><%= api_key.name %></td>
+                <td class="px-3 py-2 font-mono text-xs text-app-content-secondary"><%= api_key.token_hint %></td>
+                <td class="px-3 py-2 text-app-content-secondary">
+                  <%# Keys minted before attribution existed, or whose creator was deleted, read "Unknown". %>
+                  <% creator = api_key.created_by_user %>
+                  <div class="flex flex-wrap items-center gap-2">
+                    <span><%= creator&.display_name || "Unknown" %></span>
+                    <%# The durable half of the warning the members page gives at the moment of
+                        revocation: revoking a membership does not revoke the keys that member
+                        minted, so this row still authenticates. Warning tone, matching what the
+                        members page chose for the same fact — nothing is broken, and the owner may
+                        well want the key to survive; what they must not do is mistake it for a
+                        current colleague's. Renders only for a viewer who also holds
+                        `members.manage` — see RepositoriesController#access_holder_ids. %>
+                    <% if former_member?(creator) %>
+                      <%= render UI::BadgeComponent.new(
+                            tone: :warning,
+                            title: "#{creator.display_name} no longer has access to this repository, " \
+                                   "but this key still authenticates until it is revoked."
+                          ) { "no longer has access" } %>
+                    <% end %>
+                  </div>
+                </td>
+                <td class="px-3 py-2 text-app-content-secondary tabular-nums">
+                  <%= time_ago_in_words(api_key.created_at) %> ago
+                </td>
+                <td class="px-3 py-2 text-app-content-secondary tabular-nums">
+                  <%# `last_used_at` survives a rotation on purpose (SPGD-352: it is the key's
+                      history), so on a rotated key this cell was printing an age stamped by the
+                      token the rotation retired — a "last used 2 minutes ago" beside a credential
+                      that stopped existing 2 minutes ago, on the one row that is supposed to say
+                      whether this key is working. The history is not destroyed here either; it
+                      stops being misattributed, and the cell reports the rotation instead, which
+                      is the newest thing that actually happened to this key. Covers the never-used
+                      case too — a key rotated before it ever authenticated is rotated-and-unused,
+                      and reading "never" would say nothing about why. %>
+                  <% if api_key.rotated_and_unused? %>
+                    not used since rotation, <%= time_ago_in_words(api_key.rotated_at) %> ago
+                  <% else %>
+                    <%= api_key.last_used_at ? "#{time_ago_in_words(api_key.last_used_at)} ago" : "never" %>
+                  <% end %>
+                </td>
+                <td class="px-3 py-2 text-right">
+                  <div class="flex items-center justify-end gap-2">
+                    <%# The recovery path for a lost key. Warning tone, not danger: unlike Revoke
+                        this leaves the row, its name and its attribution standing — what it
+                        destroys is the token, which the confirm dialog says outright because
+                        nothing on this page can undo it. %>
+                    <%= button_to "Regenerate", regenerate_repository_api_key_path(@repository, api_key),
+                                  method: :post,
+                                  class: UI::ButtonComponent.classes(variant: :warning, size: :xs),
+                                  form: { data: { turbo_confirm: "Regenerate #{api_key.name}? Its current " \
+                                                                 "token stops working immediately, and the " \
+                                                                 "replacement is shown only once." } } %>
+                    <%= button_to "Revoke", repository_api_key_path(@repository, api_key), method: :delete,
+                                  class: UI::ButtonComponent.classes(variant: :danger, size: :xs),
+                                  form: { data: { turbo_confirm: "Revoke #{api_key.name}?" } } %>
+                  </div>
+                </td>
+              </tr>
+            <% end %>
+          <% end %>
+        <% else %>
+          <%= render UI::EmptyStateComponent.new(
+                title: "No API keys",
+                description: "CI and agents need a key to reach the SpecGuard API."
+              ) %>
+        <% end %>
+      <% end %>
+    <% end %>

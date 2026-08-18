@@ -437,6 +437,86 @@ RSpec.describe "POST /api/v1/ingest", type: :request do
     end
   end
 
+  # The other half of the same shape, sixty lines further down `Ingest::RunRecorder` and read here
+  # next to its twin on purpose: the run identity above has a partial unique index and a rescue,
+  # and so does the *shard* identity — `#upsert_shard` reads a shard row before it writes one, and
+  # a retried job overlapping the original is two deliveries of the same shard reaching that write
+  # together. The loser meets `index_test_run_shards_on_test_run_id_and_shard_id`.
+  #
+  # Driven through the recorder for the reason the group above gives, and faked the way
+  # `spec/support/uniqueness_race.rb` describes: what is stubbed is only the *timing* of the
+  # lookup. `find_or_initialize_by` is allowed to run for real at a moment when the row genuinely
+  # does not exist, the winner's delivery lands immediately afterwards, and the write, the index,
+  # the rescue and the recompute are all the production path. Nothing fabricates the exception —
+  # a stubbed `and_raise` would pass over whether this write can survive a real conflict at all
+  # (see `#upsert_shard`'s savepoint), which is the question the example exists to answer. The cap
+  # example above uses `and_raise` deliberately, for a collision that by construction never
+  # resolves; this one must not.
+  describe "two deliveries of the same shard racing each other" do
+    let(:attributes) do
+      { ci_run_id: "gha-42", commit_sha: "deadbee", duration_seconds: 30.0,
+        total_specs_count: 3, annotated_specs_count: 1 }
+    end
+    let(:recorder) { Ingest::RunRecorder.new(repository, attributes, shard_id: "shard-1") }
+
+    # The winner reports the same shard through the recorder rather than by hand, so the row the
+    # loser collides with is one production actually writes, and so the run it belongs to has the
+    # slices a run with a `ci_run_id` is required to have.
+    def land_the_winner
+      Ingest::RunRecorder.record(repository,
+                                 attributes.merge(total_specs_count: 5, annotated_specs_count: 2,
+                                                  duration_seconds: 40.0),
+                                 shard_id: "shard-1")
+    end
+
+    # Wrapped rather than replaced, and re-applied on every call, because `run.lock!` reloads the
+    # run and drops its association cache — the proxy the write goes through is not the one that
+    # existed when the run was found.
+    def fake_the_lookup_timing(run, &landing)
+      allow(run).to receive(:test_run_shards).and_wrap_original do |original_shards|
+        original_shards.call.tap do |shards|
+          allow(shards).to receive(:find_or_initialize_by).and_wrap_original do |original, *args|
+            original.call(*args).tap { landing.call }
+          end
+        end
+      end
+    end
+
+    it "overwrites the winner's row rather than raising when both deliveries write at once" do
+      winner = nil
+      raced = false
+
+      allow(recorder).to receive(:find_or_create_run).and_wrap_original do |original|
+        original.call.tap do |run|
+          fake_the_lookup_timing(run) do
+            next if raced
+
+            raced = true
+            winner = land_the_winner
+          end
+        end
+      end
+
+      run = nil
+      expect { run = recorder.record }.not_to raise_error
+
+      # One row, not two: the index refused the loser's insert instead of letting it split this
+      # slice's counts across a pair of rows the SUM would then double.
+      expect(raced).to be(true)
+      expect(TestRun.sole.id).to eq(winner.id)
+      expect(TestRun.sole.test_run_shards.count).to eq(1)
+
+      # Last writer wins, which is the declared semantic for a shard reporting twice. The loser
+      # arrived second, so its 3/1/30.0 is what the surviving row holds and what the run's
+      # recomputed totals report — not the winner's 5/2/40.0, and not the two of them added.
+      expect(TestRun.sole.test_run_shards.sole)
+        .to have_attributes(shard_id: "shard-1", total_specs_count: 3, annotated_specs_count: 1,
+                            duration_seconds: 30.0)
+      expect(run).to have_attributes(total_specs_count: 3, annotated_specs_count: 1,
+                                     duration_seconds: 30.0)
+    end
+  end
+
   # Missing annotations are never an ingestion failure — only malformed ones are. Adoption of the
   # protocol has to be opt-in and gradual, so a suite that annotates nothing still reports.
   describe "a run with no annotations" do
@@ -460,6 +540,26 @@ RSpec.describe "POST /api/v1/ingest", type: :request do
       expect(response).to have_http_status(:accepted)
       expect(response.parsed_body).to include("total_specs" => 0, "annotated_specs" => 0,
                                               "annotated_ratio" => nil)
+    end
+
+    # The discriminator between "this REQUEST carried no specs" and "the RUN has no specs". Only
+    # the second is what `null` reports, because `RunRecorder#recompute_totals` re-derives the
+    # run's counts as a SUM over every shard rather than from the payload in hand — so an empty
+    # shard arriving on a run that already has examples gets a NUMBER, and the example above gets
+    # its `null` from the run being empty, not from its own `specs: []`.
+    #
+    # Worth pinning rather than inferring: the public integration guide documents when a client
+    # must parse this field as nullable, and stating the rule per-request instead of per-run sends
+    # a sharded reporter looking for a `null` it will never see.
+    it "reports a number, not null, for an empty shard of a run that has specs" do
+      ingest(ingest_payload(commit_sha: "deadbee", ci_run_id: "gha-42", shard_id: "1",
+                            specs: [unannotated_spec(line_number: 1), unannotated_spec(line_number: 2)]))
+
+      ingest(ingest_payload(commit_sha: "deadbee", ci_run_id: "gha-42", shard_id: "2", specs: []))
+
+      expect(response).to have_http_status(:accepted)
+      expect(response.parsed_body).to include("total_specs" => 2, "annotated_specs" => 0,
+                                              "annotated_ratio" => 0.0)
     end
 
     # The two endpoints serving this field lived in two request specs that cannot see each other,
@@ -694,6 +794,25 @@ RSpec.describe "POST /api/v1/ingest", type: :request do
       expect(TestRun.count).to eq(0)
     end
 
+    # `label` is `[file_path, line_number].compact.join(":")`, so it has FOUR forms, not the two a
+    # reader would guess from the neighbours above: both coordinates, file alone, line alone, and
+    # neither. The two partial forms are the ones worth pinning, because they are what a reporter
+    # under development actually produces — omitting `line_number` is the first-run mistake — and
+    # because the line-only form renders a BARE INTEGER where a reader scanning for a path expects
+    # one. The public integration guide documents these forms; an example each is what stops that
+    # documentation drifting from `Payload#label`.
+    it "names a spec by whichever coordinate it has when it has only one" do
+      ingest(ingest_payload(specs: [annotated_spec(file_path: "spec/c_spec.rb").except(:line_number)]))
+
+      expect(response.parsed_body["details"])
+        .to contain_exactly("specs[0] spec/c_spec.rb: line_number is required and must be a positive integer")
+
+      ingest(ingest_payload(specs: [annotated_spec(line_number: 9).except(:file_path)]))
+
+      expect(response.parsed_body["details"])
+        .to contain_exactly("specs[0] 9: file_path is required and must be a non-empty string")
+    end
+
     it "rejects a spec with no file_path" do
       ingest(ingest_payload(specs: [annotated_spec.except(:file_path)]))
 
@@ -721,6 +840,111 @@ RSpec.describe "POST /api/v1/ingest", type: :request do
 
       expect(response).to have_http_status(:bad_request)
       expect(response.parsed_body["message"]).to include("must be null")
+    end
+
+    # Per-example `duration`, the envelope's `duration_seconds` one grain down. It reaches a
+    # `t.float` column through `upsert_all`, whose cast is a bare `to_f` — so before this validator
+    # a Hash raised `NoMethodError` inside `Ingest::RunRecorder`'s transaction (a 500 from an
+    # endpoint whose whole contract is a collected 400), and `"abc"`/`true`/`"-3"` became `0.0`,
+    # `1.0` and `-3.0`: not nil, therefore `timed`, therefore counted and summed and ranked as
+    # genuine measurements. `outcome` is deliberately left unvalidated beside it because it is
+    # echoed verbatim; `duration` is arithmetic.
+    #
+    # Not reachable from the shipped RSpec formatter, which always sends a Float. The population is
+    # the one the envelope validators already exist for: third-party and non-Ruby producers.
+    describe "a spec's own duration" do
+      # The branch that used to 500. Asserted as a *status* rather than as "no exception", because
+      # `NoMethodError` escaping the transaction is exactly what produced the 500.
+      it "answers 400, not 500, for a Hash duration, and persists nothing" do
+        ingest(ingest_payload(specs: [unannotated_spec(file_path: "spec/models/user_spec.rb",
+                                                       line_number: 40,
+                                                       duration: { seconds: 1, nanos: 5 })]))
+
+        expect(response).to have_http_status(:bad_request)
+        expect(response.parsed_body["message"]).to include("spec/models/user_spec.rb:40",
+                                                          "duration must be a non-negative number")
+        expect(TestRun.count).to eq(0)
+        expect(SpecObservation.count).to eq(0)
+      end
+
+      it "rejects an Array duration" do
+        ingest(ingest_payload(specs: [unannotated_spec(duration: [1.5])]))
+
+        expect(response).to have_http_status(:bad_request)
+        expect(response.parsed_body["message"]).to include("duration must be a non-negative number")
+        expect(TestRun.count).to eq(0)
+      end
+
+      # `"1.5"` is the plausible one — a producer that stringified its numbers — and `to_f` would
+      # have accepted it silently. `"abc"` and `true` are the ones that fabricate 0.0 and 1.0.
+      it "rejects a String duration even when it looks like a number" do
+        ["1.5", "abc", "-3"].each do |value|
+          ingest(ingest_payload(specs: [unannotated_spec(duration: value)]))
+
+          expect(response).to have_http_status(:bad_request)
+          expect(response.parsed_body["message"]).to include("duration must be a non-negative number")
+        end
+
+        expect(SpecObservation.count).to eq(0)
+      end
+
+      it "rejects a boolean duration, which would otherwise be recorded as 1.0" do
+        ingest(ingest_payload(specs: [unannotated_spec(duration: true)]))
+
+        expect(response).to have_http_status(:bad_request)
+        expect(response.parsed_body["message"]).to include("duration must be a non-negative number")
+        expect(SpecObservation.count).to eq(0)
+      end
+
+      # The same rule the envelope applies at the run grain, applied at the grain the run is
+      # composed of — a negative timing is not a measurement at either.
+      it "rejects a negative duration, matching duration_seconds' rule one level up" do
+        ingest(ingest_payload(specs: [unannotated_spec(duration: -0.5)]))
+
+        expect(response).to have_http_status(:bad_request)
+        expect(response.parsed_body["message"]).to include("duration must be a non-negative number")
+        expect(SpecObservation.count).to eq(0)
+      end
+
+      # The refusal now runs through `payload.valid? == false`, so it takes the whole 400 path —
+      # including the rejection row SPGD-563 writes there. Before this change the request 500'd and
+      # left no record at all, so the refusal was invisible to the observability built for it.
+      it "leaves an IngestRejection row behind, as every other refusal does" do
+        expect { ingest(ingest_payload(specs: [unannotated_spec(duration: { seconds: 1 })])) }
+          .to change(IngestRejection, :count).by(1)
+
+        expect(IngestRejection.last.details).to eq(response.parsed_body["details"])
+      end
+
+      # "Collected rather than raised" has to hold for this field too, or a client with one bad
+      # duration fixes it and discovers the next error on the following round trip.
+      it "does not suppress the other specs' errors" do
+        ingest(ingest_payload(specs: [unannotated_spec(line_number: 1, duration: "abc"),
+                                      unannotated_spec(line_number: 2, name: ""),
+                                      unannotated_spec(line_number: 0)]))
+
+        details = response.parsed_body["details"]
+
+        expect(response).to have_http_status(:bad_request)
+        expect(details.size).to eq(3)
+        expect(details.grep(/duration/).size).to eq(1)
+        expect(details.grep(/name/).size).to eq(1)
+        expect(details.grep(/line_number/).size).to eq(1)
+      end
+
+      # The accepted shapes, unchanged from `main`: the formatter's Float, an Integer, a zero, and
+      # the nil the client sends for an example that never ran.
+      it "still accepts nil and any non-negative Integer or Float" do
+        ingest(ingest_payload(specs: [unannotated_spec(file_path: "spec/a_spec.rb", line_number: 1, duration: 0.42),
+                                      unannotated_spec(file_path: "spec/b_spec.rb", line_number: 2, duration: 0),
+                                      unannotated_spec(file_path: "spec/c_spec.rb", line_number: 3, duration: 7),
+                                      unannotated_spec(file_path: "spec/d_spec.rb", line_number: 4, duration: nil)]))
+
+        expect(response).to have_http_status(:accepted)
+        expect(TestRun.sole.spec_observations.pluck(:file_path, :duration_seconds)).to match_array(
+          [["spec/a_spec.rb", 0.42], ["spec/b_spec.rb", 0.0], ["spec/c_spec.rb", 7.0], ["spec/d_spec.rb", nil]]
+        )
+      end
     end
 
     it "rejects a negative duration_seconds" do
@@ -793,18 +1017,33 @@ RSpec.describe "POST /api/v1/ingest", type: :request do
       expect(TestRun.last.test_run_shards.sole.shard_id).to be_nil
     end
 
+    # One of the two exceptions to "`details` carries every failure found": `Payload#validate`
+    # RETURNS on a non-object body rather than falling through to the six field validators, so this
+    # response carries exactly ONE entry, and it names no field because there is no field to name
+    # when the body itself is the wrong shape. (The other is an unparseable body, refused above
+    # `Payload` entirely — see "rejects a body that is not JSON at all" below.)
+    #
+    # `contain_exactly` rather than `include` is the point of the example: it is what fails if the
+    # early return is dropped and the field validators start piling on entries about a body that
+    # was never readable.
     it "rejects a JSON body that is not an object" do
       ingest([ingest_payload].to_json)
 
       expect(response).to have_http_status(:bad_request)
       expect(response.parsed_body["message"]).to include("JSON object")
+      expect(response.parsed_body["details"]).to contain_exactly("the request body must be a JSON object")
     end
 
+    # The second field-less refusal, and the one a client hits before `Payload` is ever reached — a
+    # truncated upload, a half-flushed buffer. Like the non-object case it answers with exactly one
+    # entry naming no field, which is the pair the integration guide documents as the exceptions to
+    # `details` being a per-field list.
     it "rejects a body that is not JSON at all, in the API's own error shape" do
       ingest("{ not json")
 
       expect(response).to have_http_status(:bad_request)
       expect(response.parsed_body["error"]).to eq("bad_request")
+      expect(response.parsed_body["details"]).to contain_exactly("The request body could not be parsed as JSON.")
       expect(TestRun.count).to eq(0)
     end
   end
@@ -887,6 +1126,37 @@ RSpec.describe "POST /api/v1/ingest", type: :request do
 
       expect(response).to have_http_status(:bad_request)
       expect(response.parsed_body["message"]).to include("duration_seconds")
+    end
+
+    # The hazard the middleware's own comment declares deliberate, made legible at the level a
+    # reader cares about it: `lib/middleware/gzip_request_body.rb:53-57` — "`Zlib.gzip(a) +
+    # Zlib.gzip(b)` inflates to `a` alone and the request succeeds… if one ever appears, this is
+    # the line to revisit". This example is that line appearing. It pins today's answer, it does
+    # not endorse it; if it fails, that comment is what to revisit.
+    #
+    # The two members carry *different* spec counts so the recorded run says which one landed. A
+    # status-only assertion would be vacuous here — 202 is also what a correct implementation that
+    # read both members would answer — so the count is the whole claim: a client that concatenated
+    # two gzip streams has half its run recorded as a complete run, and nothing anywhere says so.
+    # `delivery_health` is structurally blind to it because the request *succeeded*: there is no
+    # rejection row to find.
+    it "records only the first member of a concatenated gzip body, and still answers 202" do
+      first = ingest_payload(
+        commit_sha: "0000000f1a",
+        specs: Array.new(2) { |i| annotated_spec(file_path: "spec/models/first#{i}_spec.rb", line_number: i + 1) }
+      )
+      second = ingest_payload(
+        commit_sha: "0000000f1b",
+        specs: Array.new(5) { |i| annotated_spec(file_path: "spec/models/second#{i}_spec.rb", line_number: i + 1) }
+      )
+
+      ingest(Zlib.gzip(first.to_json) + Zlib.gzip(second.to_json),
+             headers: { "Content-Encoding" => "gzip" })
+
+      expect(response).to have_http_status(:accepted)
+      expect(TestRun.sole.total_specs_count).to eq(2)
+      expect(TestRun.sole.commit_sha).to eq("0000000f1a")
+      expect(response.parsed_body["total_specs"]).to eq(2)
     end
 
     describe "when the body is not the gzip it claims to be" do
@@ -1357,6 +1627,112 @@ RSpec.describe "POST /api/v1/ingest", type: :request do
       expect(anonymous.spec_observations.count).to eq(1)
     end
 
+    # ⭐ The other half of the rule, end to end through a real POST. `feature/gone` is merged: it
+    # will never receive another delivery, so `Ingest::ObservationPruner` — which only ever bounds
+    # the bucket of the run it is handed — could not reach it, and its history sat outside the one
+    # rule bounding this table for as long as the repository lived. An ingest on `main` drains it.
+    #
+    # Built directly rather than by POSTing to `feature/gone`, and that is not a shortcut: the
+    # current-branch half leaves a live branch sitting EXACTLY at the rule, so no sequence of
+    # deliveries to a branch can put that branch over it. A bucket over the rule is by construction
+    # one whose rows predate the rule reaching it, which is the population this half exists for.
+    def quiet_history(branch:, count:)
+      (0...count).map do |index|
+        run = create_test_run(repository: repository, branch: branch, total_specs_count: 1,
+                              created_at: 100.days.ago + index.minutes)
+        run.spec_observations.create!(repository: repository, file_path: "spec/gone_spec.rb",
+                                      line_number: 1, status: "unannotated")
+        run
+      end
+    end
+
+    it "drains a branch the repository has stopped writing to entirely" do
+      quiet = quiet_history(branch: "feature/gone", count: 5)
+
+      ingest_on("main", name: "a")
+
+      expect(quiet.map { |run| run.spec_observations.count }).to eq([0, 0, 0, 1, 1])
+    end
+
+    it "leaves a second repository's quiet branch alone" do
+      elsewhere = create_repository(user: create_user(github_uid: "3003", github_handle: "third"),
+                                    github_full_name: "acme/third-service")
+      theirs = (0...5).map do |index|
+        run = create_test_run(repository: elsewhere, branch: "feature/gone", total_specs_count: 1,
+                              created_at: 100.days.ago + index.minutes)
+        run.spec_observations.create!(repository: elsewhere, file_path: "spec/gone_spec.rb",
+                                      line_number: 1, status: "unannotated")
+        run
+      end
+
+      ingest_on("main", name: "a")
+
+      expect(theirs.map { |run| run.spec_observations.count }).to all(eq(1))
+    end
+
+    # ⚠️ **The two halves of the rule fail DIFFERENTLY, and both sides are pinned here so the
+    # asymmetry cannot rot into symmetry.** Either example passing alone proves nothing: "the
+    # ingest survives a prune failure" is satisfied by rescuing both, and "a prune failure fails
+    # the ingest" is satisfied by rescuing neither. It is the PAIR that says which is which.
+    #
+    # The reasoning, which is a policy choice rather than a default either way:
+    #
+    #   * `Ingest::ObservationPruner` bounds the rows THIS delivery just wrote. Its persistent
+    #     failure mode is the table having outgrown the one rule bounding it, which is the last
+    #     thing that should fail invisibly — and an ingest is idempotent, so the client's retry
+    #     costs a duplicate delivery of a slice that replaces itself. It fails the request.
+    #   * `Ingest::QuietBucketPruner` works on rows an OLDER delivery wrote, on a branch this
+    #     client may have nothing to do with. Billing a caller a 500 for that would convert
+    #     opportunistic housekeeping into an outage on a request whose data already committed.
+    #     It answers 202 and goes to `Rails.error.report` — loud in the reporter, silent in the
+    #     response.
+    describe "how each half of the rule fails" do
+      let(:timeout) { [ActiveRecord::StatementInvalid, "canceling statement due to statement timeout"] }
+
+      it "answers the quiet half's failure with an unchanged 202 and an error report" do
+        allow(Ingest::QuietBucketPruner).to receive(:drain).and_raise(*timeout)
+        # Captured and asserted afterwards rather than matched inline: one of the assertions is a
+        # NEGATIVE on the argument list, and raising that from inside a `.with` block re-enters
+        # the reporter being stubbed and buries the diagnostic in its own re-report.
+        reported = nil
+        allow(Rails.error).to receive(:report) { |error, **options| reported = [error, options] }
+
+        expect { ingest(ingest_payload(branch: "main")) }.to change(TestRun, :count).by(1)
+
+        expect(response).to have_http_status(:accepted)
+        expect(response.parsed_body["test_run_id"]).to eq(TestRun.last.id)
+
+        # The SHAPE of the report, not merely that one happened. `source` is a subscriber-FILTERING
+        # key in Rails' reporter rather than a label, so this call leaves it at its default and
+        # names the emitter in `context[:component]` — matching `Ingest::RejectionRecorder#report`,
+        # the only other reporter call on this path. A bespoke `source` on one of two siblings is
+        # how a subscriber scoped to the default silently drops half of them, which stays invisible
+        # right up until these reports are the thing someone is looking for.
+        error, options = reported
+        expect(error).to be_a(ActiveRecord::StatementInvalid)
+        expect(options).to include(handled: true, severity: :warning)
+        expect(options).not_to have_key(:source)
+        expect(options[:context]).to include(component: "Ingest::QuietBucketPruner",
+                                             repository_id: Repository.last.id)
+      end
+
+      it "still fails the ingest when the current-branch half raises" do
+        allow(Ingest::ObservationPruner).to receive(:prune).and_raise(*timeout)
+
+        expect { ingest(ingest_payload(branch: "main")) }.to raise_error(ActiveRecord::StatementInvalid)
+      end
+
+      # The half that raises is the half that is contained, and no wider: a failure in the quiet
+      # half must not swallow one in its sibling, which would be the asymmetry collapsing the other
+      # way — into a rescue around both.
+      it "does not let the quiet half's rescue cover the current-branch half" do
+        allow(Ingest::ObservationPruner).to receive(:prune).and_raise(*timeout)
+        allow(Ingest::QuietBucketPruner).to receive(:drain).and_return(0)
+
+        expect { ingest(ingest_payload(branch: "main")) }.to raise_error(ActiveRecord::StatementInvalid)
+      end
+    end
+
     # ⚠️ The prune must run AFTER the ingest transaction commits, never inside it.
     # `Ingest::RunRecorder#record` holds `run.lock!` across its whole insert-and-recompute, and
     # the length of that hold is measured and load-bearing — 8 concurrent shards, 6 of 8 lost to
@@ -1366,55 +1742,88 @@ RSpec.describe "POST /api/v1/ingest", type: :request do
     # Transaction DEPTH is what discriminates here and a spy on call order would not: under
     # transactional tests the example's own transaction is non-joinable, so `RunRecorder`'s block
     # opens a savepoint and everything inside it runs one level deeper than everything outside.
-    it "prunes outside the transaction that recorded the run" do
-      depths = {}
+    #
+    # ⚠️ BOTH halves of the rule are pinned, not just the original one. The quiet half is the
+    # newer call and the more tempting one to fold inward — it is opportunistic work with no
+    # ordering constraint of its own, so nothing about reading `#record` suggests its placement
+    # matters. It carries the same deadlock exposure for the same reason. Without the second wrap,
+    # moving `drain_quiet_bucket` inside the transaction leaves the whole suite green.
+    #
+    # ⚠️ And on BOTH ingest paths, which is the gap this example had before the quiet half existed
+    # and which is worth stating plainly: `ingest_payload` carries no `ci_run_id`, so it lands on
+    # `#record_unsharded_run`. The single-payload version of this example therefore guarded only
+    # the UNSHARDED path — while the incident it cites, 8 concurrent shards with 6 of 8 lost to
+    # `PG::TRDeadlockDetected`, is a property of the SHARDED one, whose `run.lock!` is the lock in
+    # question. `#record_unsharded_run` takes no such lock at all, so the path with the real
+    # exposure was the path with no pin. Both are parametrised here; each was verified to fail by
+    # moving its own call inside its own transaction.
+    {
+      "unsharded" => {},
+      "sharded" => { ci_run_id: "gha-42", shard_id: "1" }
+    }.each do |path, extra|
+      it "prunes outside the transaction that recorded the run — #{path}" do
+        depths = {}
 
-      allow(Ingest::ObservationRecorder).to receive(:record).and_wrap_original do |original, *args, **options|
-        depths[:record] = ActiveRecord::Base.connection.open_transactions
-        original.call(*args, **options)
+        allow(Ingest::ObservationRecorder).to receive(:record).and_wrap_original do |original, *args, **options|
+          depths[:record] = ActiveRecord::Base.connection.open_transactions
+          original.call(*args, **options)
+        end
+        allow(Ingest::ObservationPruner).to receive(:prune).and_wrap_original do |original, *args|
+          depths[:prune] = ActiveRecord::Base.connection.open_transactions
+          original.call(*args)
+        end
+        allow(Ingest::QuietBucketPruner).to receive(:drain).and_wrap_original do |original, *args|
+          depths[:drain] = ActiveRecord::Base.connection.open_transactions
+          original.call(*args)
+        end
+
+        ingest(ingest_payload(branch: "main", **extra))
+
+        expect(depths[:prune]).to be < depths[:record]
+        expect(depths[:prune]).to eq(ActiveRecord::Base.connection.open_transactions)
+
+        expect(depths[:drain]).to be < depths[:record]
+        expect(depths[:drain]).to eq(ActiveRecord::Base.connection.open_transactions)
       end
-      allow(Ingest::ObservationPruner).to receive(:prune).and_wrap_original do |original, *args|
-        depths[:prune] = ActiveRecord::Base.connection.open_transactions
-        original.call(*args)
-      end
-
-      ingest(ingest_payload(branch: "main"))
-
-      expect(depths[:prune]).to be < depths[:record]
-      expect(depths[:prune]).to eq(ActiveRecord::Base.connection.open_transactions)
     end
 
-    # A query budget on the ingest path — ADDED here rather than updated, because this file had
-    # none. `count_queries` comes from spec/support/query_capture.rb, the same subscriber the
-    # dashboard's page budgets use.
+    # A query budget on the ingest path. `count_queries` comes from spec/support/query_capture.rb,
+    # the same subscriber the dashboard's page budgets use.
     #
-    # Pinned as ABSOLUTES and in a pair, so the prune's own statements are ATTRIBUTED rather than
-    # silently absorbed into a single total that could hide any number of them. The difference
-    # between the two figures is exactly one statement, and it is the prune's:
+    # Pinned as ABSOLUTES and in a pair, so the retention rule's own statements are ATTRIBUTED
+    # rather than silently absorbed into a single total that could hide any number of them. Both
+    # halves of the rule are in these figures, and they cost differently:
     #
-    #   * a branch that has not yet filled its window costs ONE — the boundary lookup, which comes
-    #     back empty and issues no delete at all;
-    #   * a branch at its window costs TWO — the boundary lookup plus one bounded delete, which
-    #     comes back short and stops the loop rather than spending the rest of the ceiling.
+    #   * `Ingest::QuietBucketPruner`'s selection probe is ONE statement on EVERY ingest, in both
+    #     figures below. On these fixtures it comes back empty — there is one branch and it is the
+    #     one being written to — so it issues no boundary lookup and no delete. That flat one is
+    #     the price of the quiet half being unconditional, and it is what the pair is here to keep
+    #     visible: if this ever starts scaling with the number of buckets, these numbers move.
+    #   * `Ingest::ObservationPruner` costs ONE more on a branch that has not yet filled its
+    #     window — the boundary lookup, which comes back empty and issues no delete at all;
+    #   * and TWO more on a branch at its window — that boundary lookup plus one bounded delete,
+    #     which comes back short and stops the loop rather than spending the rest of the ceiling.
     #
-    # Neither figure follows the size of the backlog: the ceiling on the delete statements is
-    # `Ingest::ObservationPruner::MAX_BATCHES_PER_INGEST`, and it is asserted directly against a
-    # backlog several times its size in the pruner's own spec.
+    # The difference between the two figures is exactly that one delete. Neither figure follows the
+    # size of the backlog: the ceilings on the delete statements are
+    # `Ingest::ObservationPruner::MAX_BATCHES_PER_INGEST` and
+    # `Ingest::QuietBucketPruner::MAX_BATCHES_PER_INGEST`, each asserted directly against a backlog
+    # several times its size in the two pruners' own specs.
     describe "what one ingest costs" do
       # The repository and its key are lazy `let`s, so touching them here keeps their inserts out
       # of the counted block — otherwise the first measurement counts the fixture rather than the
       # request.
       before { api_key }
 
-      it "spends a fixed budget, of which the prune is one statement on an unfilled window" do
-        expect(count_queries { ingest(ingest_payload(branch: "main")) }).to eq(7)
+      it "spends a fixed budget, of which the rule is two statements on an unfilled window" do
+        expect(count_queries { ingest(ingest_payload(branch: "main")) }).to eq(8)
       end
 
       it "spends exactly one more once the window is full and a run falls out of it" do
         ingest(ingest_payload(branch: "main"))
         ingest(ingest_payload(branch: "main"))
 
-        expect(count_queries { ingest(ingest_payload(branch: "main")) }).to eq(8)
+        expect(count_queries { ingest(ingest_payload(branch: "main")) }).to eq(9)
       end
     end
   end

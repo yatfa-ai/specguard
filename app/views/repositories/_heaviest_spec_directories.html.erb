@@ -1,0 +1,218 @@
+    <%# == Where this run's wall clock went, by directory
+        The rung directly above the panel above, off the same rows of the same run, and NOT
+        derivable from it. That ranking is by FILE and ten rows long: a directory holding forty
+        files at two seconds each is eighty seconds of the run with not one of its files near the
+        head of it. Concentration re-concentrates at every rung — which is why each rung is summed
+        rather than read off the one below — and this panel asks the question the reader usually
+        arrives with: which AREA of this suite carries the time.
+
+        Grouped on the immediate parent of the INCLUDING file (`spec_file_path`), so a shared
+        example group's time lands on the area that ran it rather than on `spec/support` — the same
+        rule the two panels above obey, one rung up. Every row sits at the same depth as its own
+        file, so the areas partition the run rather than nesting inside one another and the totals
+        sum to it. Depth selection and drill-down trees are a different question and not this one.
+
+        NOT the shard rollup on the Overview panel. `TestRun#shard_durations` splits the same run by
+        CI partition and its own comment is explicit that a shard is not a code area: RSpec/Knapsack
+        partitions are arbitrary with respect to directory structure, so "which partition ran long"
+        and "which area costs" are two questions and this is the second.
+
+        ONE run, like the panels above, and for the same reason: `example_id` is positional and not
+        stable across refactors, so anything spanning runs would be comparing rows not known to be
+        the same tests.
+
+        Same visibility rule as the panels above — rendered when the run WROTE example rows, and a
+        run with rows but no timings renders and says so. Outside the `manage_keys` gate: read-only
+        suite telemetry, nothing credential and nothing actionable. %>
+    <% if @spec_directory_durations&.recorded? %>
+      <%= render UI::PanelComponent.new(title: "Heaviest spec directories", id: "spec-directory-durations",
+                                        class: "lg:col-span-3") do %>
+        <% if @spec_directory_durations.any_timed? %>
+          <%# What the totals COVER, before the totals themselves — the argument the panel above
+              makes, where it costs more. `SUM` skips a missing timing silently, and an area is a
+              bigger population than a file, so an area whose examples were half untimed prints a
+              total covering half of it that is indistinguishable, as a number, from a complete one.
+              The per-area coverage column is the answer, and this paragraph is what tells a reader
+              the column is a denominator rather than decoration.
+
+              Every figure is counted off THIS RUN'S ROWS, never off `TestRun#total_specs_count` on
+              the Overview panel above — that count is re-derived by SUM over shard reports and the
+              two can legitimately differ. `SpecDirectoryDurations` carries the argument and holds
+              the rows and their coverage together, so this sentence cannot end up describing a
+              different row set from the one below it. %>
+          <p class="text-xs text-app-muted mb-3" id="spec-directory-durations-basis">
+            <%# The list is CAPPED, so its own length says nothing about how much of the run it
+                covers — the same lie by omission the coverage column refuses one grain down, which
+                is why the total is stated whether or not anything was cut. It costs no extra
+                query: the count rides back on the same grouped aggregate. %>
+            <% if @spec_directory_durations.truncated? %>
+              The <%= number_with_delimiter(@spec_directory_durations.rows.size) %> heaviest of the
+              <%= number_with_delimiter(@spec_directory_durations.directory_count) %> directories
+              the run named above recorded, heaviest first
+            <% else %>
+              All <%= number_with_delimiter(@spec_directory_durations.directory_count) %>
+              <%= "directory".pluralize(@spec_directory_durations.directory_count) %> the run named
+              above recorded, heaviest first
+            <% end %>
+            — every example's duration summed onto the directory holding the file that ran it, so a
+            shared example group counts against the area including it rather than against the one
+            defining it. Each area is the immediate parent of its own files, so these totals sit
+            side by side rather than inside one another.
+            <% if @spec_directory_durations.complete? %>
+              Every example in every directory listed reported a duration, so each total covers the
+              whole of its area.
+            <% else %>
+              The "Examples timed" column is what each total was summed over: an area whose examples
+              did not all report a duration has a total covering only the ones that did, and an area
+              that reported none has no total to state rather than a zero. An example that never ran
+              has no duration to report, so a missing timing is a faithful record rather than a gap.
+            <% end %>
+            Counted off the rows this run wrote here, which is a different figure from the suite
+            size on the Overview panel above and may legitimately differ from it. It is also not the
+            shard split on that panel: a CI partition is not a code area.
+            <%# What the THIRD column was counted over, on the same terms as the second — and the
+                sentence that stops the new figure being read as a verdict.
+
+                `COUNT(DISTINCT name)` skips a missing description exactly as `SUM` skips a missing
+                timing, and inverted it costs more than anything else on this page: an area whose
+                producer sent no descriptions would print zero distinct behaviors against its whole
+                example count, which is the strongest over-coverage reading available here and is
+                made of silence. So the column is a fraction over the NAMED rows, the excluded rows
+                are printed beside it, and an area with none says so.
+
+                Every sentence here is a claim about the areas LISTED, never about the run — the
+                list is capped at ten and the sentence one paragraph up says so out loud ("the 10
+                heaviest of the 13 directories"). `#any_named?` and `#fully_named?` fold over those
+                ten rows, so a run whose only described area sits below the cap would make a
+                run-scoped sentence here false while both predicates are correct. The predicates are
+                list-scoped by construction and the prose has to be too, which is the rule
+                `SpecDirectoryDurations` states about itself: a caption is a claim ABOUT the list. %>
+            <% if @spec_directory_durations.any_named? %>
+              The "Distinct descriptions" column is how many distinct descriptions each area's
+              examples carry, counted over the examples that reported one.
+              <% if @spec_directory_durations.fully_named? %>
+                Every example in every directory listed reported a description, so each count covers
+                the whole of its area.
+              <% else %>
+                Examples that reported no description are counted separately beside it rather than
+                folded in, and an area that reported none has no descriptions to count rather than
+                zero distinct behaviors.
+              <% end %>
+              Several examples sharing a description is equally a suite testing one behavior many
+              ways and an ordinary table-driven loop or shared example group, so this is a ratio to
+              review rather than a judgement about the area.
+            <% else %>
+              The "Distinct descriptions" column has nothing to state about the directories listed
+              here: not one of their examples reported a description, so there is nothing to count
+              distinct rather than nothing distinct to count.
+            <% end %>
+          </p>
+          <%# "Distinct descriptions" LAST, in the order the area-grain reading is said in: this
+              area carries N examples ("Examples timed"), costs this much wall clock ("Total
+              duration"), for this many distinct behaviors. %>
+          <%= render UI::TableComponent.new(columns: ["Directory", "Examples timed", "Total duration",
+                                                      "Distinct descriptions"],
+                                            describedby: "spec-directory-durations-basis") do %>
+            <% @spec_directory_durations.rows.each do |directory| %>
+              <tr>
+                <td class="px-3 py-2 font-mono text-xs text-app-content">
+                  <%# The way INTO the area, and the rung that was missing. Every ranking on this
+                      page is a capped ten, and this one is the LEAST escapable of them: the by-file
+                      panel above is also ten rows long, so an area that is heavy because it holds
+                      forty ordinary files has not one of its files in that list — its rows were
+                      reachable from nowhere at all. The path was already being rendered, so the
+                      drill-down costs no query to offer, only the one it takes when a reader asks.
+
+                      `?spec_directory=`, following the `?spec_file=` precedent directly above and
+                      the `?branch=` one before it rather than a nested route: a directory path
+                      contains `/` and makes a poor route segment, and the panel and its drill-down
+                      read one run on one page.
+
+                      Through `drill_down_path`: every OTHER ask rides through and only
+                      `spec_directory` is set here. That includes an OPEN FILE, which this link
+                      dropped from the day it was written — `?spec_file=` had shipped the day
+                      before — while "Close directory" below carried the file back the other way,
+                      so opening an area destroyed what closing one preserved. The rule is stated
+                      once in the helper now rather than re-decided in forty hand-written
+                      arguments, which is how that asymmetry survived a later edit to this very
+                      list that ADDED a different ask without noticing the missing one.
+
+                      `aria-current` on the open area, because this is a list of choices with one of
+                      them taken and the panel below is a long way down the page. %>
+                  <%= link_to directory.path,
+                              drill_down_path(@repository, spec_directory: directory.path,
+                                              anchor: "spec-directory-files"),
+                              class: "underline underline-offset-2 decoration-app-border-light " \
+                                     "text-app-content hover:decoration-app-content",
+                              aria: { current: directory.path == @spec_directory_request ? "true" : nil } %>
+                </td>
+                <td class="px-3 py-2 text-app-content-secondary tabular-nums">
+                  <%# Always a fraction, never a bare count: the denominator is the point of the
+                      column, and a complete area has to be visibly complete rather than merely
+                      unremarked. %>
+                  <%= directory.coverage_label %>
+                </td>
+                <td class="px-3 py-2 text-app-content tabular-nums">
+                  <%# Through `SpecObservation.humanized_duration`, the same seam the per-example
+                      and per-file columns above render through — so no two grains on this page can
+                      disagree about how a duration is spelled, and an area that measured nothing
+                      says "not reported" rather than wearing the spelling of a zero. %>
+                  <%= directory.duration_label %>
+                </td>
+                <td class="px-3 py-2 text-app-content-secondary tabular-nums">
+                  <%# The third figure of the area-grain reading, and the one that must never be a
+                      bare number. A fraction over the rows the count could SEE, because
+                      `COUNT(DISTINCT name)` skips the rows it could not, and "no descriptions"
+                      rather than "0" for an area none of whose examples reported one — a zero
+                      there is this surface inventing the most redundant area on the page out of a
+                      producer's silence.
+
+                      The excluded rows are printed beside the fraction wherever the fraction is
+                      printed, the way every coverage figure on this page carries its own
+                      denominator rather than deferring to a caption a reader may not be looking
+                      at.
+
+                      SPELLED LIKE THE FRACTION IT ANNOTATES — no `number_with_delimiter`, and that
+                      is a decision rather than an omission. The two halves of this cell are one
+                      sentence, and delimiting only the second reads "40 of 20000 (1,234 unnamed)"
+                      at the design point: one cell disagreeing with itself about what a number
+                      looks like. The fraction's spelling is `Row#distinct_description_label`'s,
+                      which is `#coverage_label`'s, which is the spelling of the "Examples timed"
+                      cell one column over and of the same fraction at every other grain on this
+                      page — so the alternative is not "delimit this span" but "re-spell every
+                      coverage fraction the panels share", which is a change to all of them and is
+                      deliberately not smuggled in behind a new column. Delimiters on this page mark
+                      CAPTION PROSE, where a figure stands alone in a sentence; every other
+                      `number_with_delimiter` in this file is in a basis line or a summary string. %>
+                  <%= directory.distinct_description_label %>
+                  <% if directory.named? && directory.excluded_unnamed_rows? %>
+                    <span class="text-app-muted">
+                      (<%= directory.unnamed_count %> unnamed)
+                    </span>
+                  <% end %>
+                </td>
+              </tr>
+            <% end %>
+          <% end %>
+        <% else %>
+          <%# Directories exist and not one of their examples was timed. Every group's SUM is NULL,
+              so there is a list of areas and no ranking — and a column of "not reported" under a
+              heading promising "heaviest first" would be a ranking of nothing. Not zeroes, for the
+              reason the panels above give: a zero is this surface inventing the measurement it is
+              missing.
+
+              Stated in DIRECTORIES, where the panel above states the same absence in files. Not a
+              stylistic choice: `directory_count` is counted before the `LIMIT` and is exact,
+              whereas summing `recorded_count` over the rows on hand would total a capped ten of
+              them and print a suite-wide-looking figure covering part of the run. %>
+          <%= render UI::EmptyStateComponent.new(
+                title: "No timings on this run",
+                description: "This run recorded examples in " \
+                             "#{number_with_delimiter(@spec_directory_durations.directory_count)} " \
+                             "#{'directory'.pluralize(@spec_directory_durations.directory_count)} " \
+                             "and a duration for none of them, so there is no wall clock to " \
+                             "attribute to any area. An example that never ran reports no duration."
+              ) %>
+        <% end %>
+      <% end %>
+    <% end %>

@@ -73,13 +73,23 @@ class SpecIdentity < ApplicationRecord
   # == What the number is derived from
   #
   # The behaviour this slice exists for does not depend on the threshold at all: a test that moved
-  # ten lines has *identical* text, `EmbeddingGenerator::LocalProvider` is a pure function of that
+  # ten lines has *identical* text, the embedding is a pure function of that
   # text, and neither path nor line number is a feature of it — so the move scores exactly 1.0. The
   # threshold's whole job is to bound how far from identical a match may be.
   #
-  # Measured on the shipped provider (`ruby -r./app/services/embedding_generator -e` over
-  # representative pairs; re-derivable in seconds, which is why the pairs are named rather than the
-  # numbers merely asserted):
+  # ⚠️ **The bands below were measured on the feature-hashing provider this application shipped
+  # until 2026-08-17, and they do not describe `EmbeddingGenerator::VoyageProvider`.** They are kept
+  # because they are what this constant was chosen from and deleting them would leave 0.95 looking
+  # arbitrary — not because they are still evidence for it. A lexical embedder and a semantic one
+  # disagree most sharply on exactly the row that decides this number: *"the same behaviour
+  # reworded"* scores 0.62 under hashing, which is why 0.95 could refuse it as a rename, and a
+  # semantic model is built to score that pair HIGH. **This constant is uncalibrated for the current
+  # provider and re-deriving it is open work.** Until it is re-measured, expect renames to be
+  # absorbed into the existing identity rather than starting a new history — the failure mode this
+  # comment's last paragraph calls the permanent, history-corrupting one.
+  #
+  # Measured on the RETIRED lexical provider (now `LexicalEmbeddingProvider`, kept in
+  # `spec/support/lexical_embeddings.rb` for the resolution specs), over representative pairs:
   #
   #   same text, differing only in whitespace/punctuation   1.00   ← must match
   #   a corrected typo                                      0.95
@@ -95,17 +105,6 @@ class SpecIdentity < ApplicationRecord
   # corrupts both histories, while one set too high starts a new history for a trivially edited test
   # — which is what the settled model prescribes for a rename anyway. The failure modes are not
   # symmetric, so the threshold is not centred.
-  #
-  # == Why hash collisions do not move it
-  #
-  # SPGD-252 measured `LocalProvider` over a full census of all 199,990,000 pairs of 20,000 real
-  # RSpec example names from one repository (discourse@`f3c568c`), comparing the shipped 1536-bucket
-  # vector against the same features in a collision-free unbounded space. Mean |hashed − exact|
-  # cosine error **0.0196**; the largest overstatement anywhere in the census **+0.274**; at cosine
-  # ≥ 0.88, **119** false matches (1 in 1.68 million) — and **zero** of them, at every threshold
-  # from 0.75 to 0.95, involved a pair the collision-free algorithm scores as unrelated. Every false
-  # match was a near-miss nudged across the line, never an invented resemblance. Hashing is not what
-  # decides this number; the bands above are.
   MATCH_SIMILARITY = 0.95
 
   # What `nearest_neighbors(threshold:)` wants, which is a cosine *distance* — `1 - similarity`.
@@ -236,6 +235,48 @@ class SpecIdentity < ApplicationRecord
       "THEN excluded.#{column} ELSE spec_identities.#{column} END"
   end.join(", ").freeze
 
+  # What one `<=>` actually costs the planner, and the reason `.near_duplicate_pairs_in` sets it.
+  #
+  # **Necessary, and on its own not sufficient** — it is one of the two corrections that together
+  # get the HNSW index chosen; the other is the literal tenant bind argued at
+  # `.near_duplicate_pairs_in`, which carries the 2×2 measurement showing each is load-bearing.
+  # Read that table before touching either: with the corrected price alone the read still takes
+  # 66.6s on the sort plan, which is why a sweep of this value over four orders of magnitude was
+  # observed to leave the plan unmoved at every setting.
+  #
+  # The planner is not being stupid; it is being told a false price. `cpu_operator_cost` defaults to
+  # 0.0025 — "the cost of processing one operator or function call" — calibrated so that 1.0 is one
+  # sequential page read, and it is charged once per `<=>`. But `<=>` on this column is 1,536
+  # multiply-accumulates and two square roots, not one comparison. Under the default the sort path's
+  # 3,000 distance calls are priced at 7.5 while the HNSW descent's own overhead is priced honestly,
+  # so the wrong plan wins on paper and loses by an order of magnitude in practice.
+  #
+  # So the statement states the real price: the default, times the number of dimensions the operator
+  # actually walks. **Derived from `EmbeddingGenerator::DIMENSIONS`** rather than written as 2.56, so
+  # a future change of embedding width re-prices the operator instead of leaving a stale literal
+  # behind. It is a correction to an input, not a thumb on the scale — every plan the planner
+  # compares is re-priced by the same true fact, and the sort path loses because it really does call
+  # the operator three thousand times more often. That "not a thumb on the scale" is also why it
+  # cannot work alone: an honest price applied to a dishonest row count is still a wrong answer, and
+  # re-pricing both paths equally cannot flip a comparison. Correcting the count is what makes the
+  # correction bite.
+  #
+  # == What this is NOT
+  #
+  # Not `hnsw.ef_search`, not `hnsw.iterative_scan`, and not a recall decision of any kind. Those
+  # decide how HARD the index looks and are handed to **SPGD-72** by name at {Ingest::IdentityResolver#nearest};
+  # nothing here touches them, and this setting changes only WHICH plan is chosen, never what a
+  # chosen plan returns. Left alone, the recall question stays exactly where that method put it.
+  #
+  # Not `enable_sort = off` or any other `enable_*` switch either, and deliberately. Those assert
+  # that the planner is wrong; these two corrections assert that it was misinformed, and then inform
+  # it. The distinction is not stylistic: a disabled node stays disabled for every relation in the
+  # statement — including the outer `ORDER BY`, which has no index to fall back on — and it keeps
+  # forcing the index long after the repository has shrunk to a size where scanning really is
+  # cheaper. A corrected price and a corrected count leave the planner free to make that call, and
+  # on a small tenant it correctly still declines the index.
+  VECTOR_OPERATOR_COST = 0.0025 * EmbeddingGenerator::DIMENSIONS
+
   belongs_to :repository
   # The run that last observed this test. Optional because the FK nulls rather than cascades.
   belongs_to :last_seen_test_run, class_name: "TestRun", optional: true
@@ -256,6 +297,238 @@ class SpecIdentity < ApplicationRecord
   # rather than on `text` because `text` is unbounded and a btree entry over ~2704 bytes is rejected
   # outright — a long `full_description` would turn the race this key exists to survive into a 500.
   def self.digest_for(text) = Digest::SHA256.hexdigest(text.to_s)
+
+  # Every pair of tests in ONE repository whose texts read alike enough to be worth a human's
+  # attention — each row an EDGE, together with what the seed end weighed in ONE run, in examples
+  # and wall clock. {NearDuplicateClusters} owns the threshold, the neighbour cap, the run and the
+  # grouping; this method owns only the statement, which is the sibling arrangement
+  # `SpecObservation`'s grouped reads and `RepeatedDescriptions` already use.
+  #
+  # == Why this is one statement and not `nearest_neighbors` in a loop
+  #
+  # {Ingest::IdentityResolver#nearest} is the call shape for ONE probe vector, and `neighbor`'s
+  # scope can only ever be that: it builds an `ORDER BY embedding <=> $1` around a vector handed in
+  # from Ruby. Asking it for every identity in a repository is one round trip per test — 20,000 of
+  # them at the design point, per page view — which is the shape SPGD-369 rules out by name. A
+  # `LATERAL` join asks the same question of every row inside a single statement, so the round trips
+  # are constant in the size of the suite while the work per row stays capped at `neighbours`. The
+  # operator and the distance convention are `neighbor`'s own (`<=>` is pgvector cosine distance,
+  # `1 - similarity`), so the two reads cannot disagree about what a cosine means.
+  #
+  # **Never all-pairs.** 20,000 identities is 199,990,000 pairs — the exact census SPGD-252
+  # measured, and it took a forked 16-worker sweep to get through a corpus a *tenth* that size. The
+  # inner `ORDER BY … LIMIT` is what the HNSW index answers, so each row costs an approximate
+  # descent rather than a scan of its siblings.
+  #
+  # == The two filters inside the LATERAL, and why neither is a `WHERE` outside it
+  #
+  # `signal_source` partitions the search rather than filtering its result. An intent-derived text
+  # is a joined triple (`"{entity} {action} {behavior}"`) and a name-derived one is human prose;
+  # {Ingest::SpecSignal} is explicit that *"they are not the same evidence"*, and a cosine taken
+  # across the two genres compares vocabulary conventions as much as content. Partitioning inside
+  # the subquery means a name-derived test's ten candidates are ten *name-derived* candidates —
+  # filtering afterwards would spend the cap on rows that can never qualify and quietly under-report
+  # the smaller partition.
+  #
+  # ⭐ `repository_id` is the tenant boundary, and it is bound as a LITERAL — `n.repository_id = ?`,
+  # the same repository the outer `WHERE` already pins — rather than correlated as
+  # `n.repository_id = a.repository_id`. Similarity does not get to cross tenants here for the same
+  # reason it does not in `#nearest`; the two spellings say that identically, and were verified to
+  # return byte-identical result sets. The correlated one reads better and is the one to reach for.
+  # **It was measured to cost the plan**, so the worse-reading spelling is the one that ships, and
+  # the reason is written down here because a later reader will otherwise "tidy" it back.
+  #
+  # A correlated `n.repository_id = a.repository_id` hides the VALUE from the planner. Inside a
+  # LATERAL it cannot know which tenant `a` will hand over — equivalence-class propagation does not
+  # cross the subquery boundary, so the outer `a.repository_id = 7` never reaches the inner scan —
+  # and it falls back to `1/ndistinct(repository_id)`. On a table of 13,200 identities across 122
+  # repositories that estimates **113 sibling rows against an actual 2,999**: a 26× underestimate,
+  # which is what makes sorting the siblings look cheaper than descending the index. Bound as a
+  # literal, the planner reads that one value's own statistics and estimates 3,142 — and chooses
+  # the index.
+  #
+  # ⭐ This and {VECTOR_OPERATOR_COST} are each necessary and neither is sufficient. Measured on the
+  # identical statement over identical rows, 3,000 identities in the target tenant:
+  #
+  #   correlated tenant + default price ....... sort plan, 64.8s
+  #   correlated tenant + corrected price ..... sort plan, 66.6s
+  #   literal tenant    + default price ....... sort plan, 65.8s
+  #   literal tenant    + corrected price ..... HNSW,       5.7s
+  #
+  # The bottom two rows are why a cost sweep alone can never fix this, and the diagonal is why
+  # either fix alone reads as a failure: a price is only meaningful multiplied by a count, and the
+  # count was wrong by 26×. Raising the price while the count stays wrong re-prices the HNSW path
+  # by the same factor, so the comparison never flips however far it is pushed. Correcting the
+  # count while the price stays wrong leaves 2,999 cosine distances valued at 7.5 in total, which
+  # is still cheaper on paper than any index descent. Only both together make the planner's
+  # arithmetic match the machine's.
+  #
+  # == The weight join, which is the whole point of the read
+  #
+  # `(repository_id, text_digest)` is UNIQUE (db/schema.rb), so **every exact duplicate in a suite
+  # is already collapsed onto one identity row before this statement runs** — see the "Where that
+  # separation stops" section above, which hands exactly this consequence to this slice. A
+  # three-example table-driven loop sharing one description is ONE row here. Counting identity rows
+  # would therefore report a suite's most-repeated tests as its least-repeated ones.
+  #
+  # So the seed's weight is re-expanded through `spec_observations.spec_identity_id` — served by
+  # `index_spec_observations_on_spec_identity_id` — into the examples that actually resolved to it
+  # and the wall clock they actually cost. **Do not "simplify" this join away**: without it the
+  # object is blind to precisely the duplicates the shipped `RepeatedDescriptions` panel reports.
+  #
+  # == ⭐ And the weight join is scoped to ONE run, which the `<=>` above deliberately is not
+  #
+  # The two halves of this statement have two different grains ON PURPOSE, and the asymmetry is the
+  # correction rather than an inconsistency. WHICH texts read alike is a question about the
+  # repository — an identity outlives the run that observed it, which is what makes suite-wide
+  # clustering reachable here and nowhere else. HOW MUCH those texts weigh is a question about a
+  # suite, and a suite is a run.
+  #
+  # Unscoped, this subquery counts one row per *(test × every run it was ever observed in)*, so
+  # every figure it feeds grows with how often the repository has ingested rather than with what its
+  # suite contains. The same three-example loop reports 3 after one ingest and 30 after ten, and the
+  # ranking one rung up — cumulative wall clock — would order clusters by *(per-run cost × runs
+  # ingested)*, so a cheap cluster outranks an expensive one once it has enough history behind it.
+  # A number that is only correct on a repository that ingested exactly once is not a number this
+  # object may print.
+  #
+  # It is also the convention of the table being joined. Every aggregate on {SpecObservation} takes
+  # a `test_run` or a list of run ids, and its single exemption, `.directory_growth_between`, states
+  # why it is allowed to span runs: it *"pairs none"* — it counts each run's rows separately and
+  # subtracts two integers. Pooling several runs' rows into one `COUNT(*)` and one `SUM` is neither
+  # the convention nor the exemption, and `example_count` already means "examples in a run"
+  # everywhere else in this model.
+  #
+  # A member the run never observed therefore weighs 0 rather than being dropped: a test that was
+  # deleted, renamed, or simply not selected still keeps its identity row, and it is still part of
+  # the group that reads alike. {NearDuplicateClusters::Cluster#unobserved_members?} is where that
+  # is said out loud.
+  #
+  # Only the SEED end of each edge carries weight, and that is sufficient rather than a gap: cosine
+  # is symmetric, so an identity close enough to be someone's neighbour is itself a seed with at
+  # least one qualifying neighbour of its own, and therefore appears in this result with its own
+  # weight row. `LEFT JOIN … ON TRUE` because the aggregate subquery yields one row unconditionally
+  # — an identity the run did not observe comes back as `0` examples, which is a fact about that
+  # run rather than a row to drop.
+  #
+  # == What a missed neighbour costs here, which is not what it costs on ingest
+  #
+  # `#nearest` explains at length that HNSW applies `repository_id` *after* the index scan, so a
+  # small tenant's true nearest neighbour can fall outside the `hnsw.ef_search` candidates. There it
+  # splits a history in two. Here it merely under-reports a cluster: a group of four presented as a
+  # group of three, on a panel that is already explicit about presenting rather than concluding.
+  # Different exposure, same measurement — and that measurement is **SPGD-72's**, not this read's.
+  #
+  # == The plan is corrected, not forced, and it takes both corrections
+  #
+  # Postgres will not choose the HNSW index for this shape on its own. It is wrong about two
+  # separate things at once: it prices `<=>` as one ordinary operator call, and inside the LATERAL
+  # it cannot see which tenant it is counting, so it estimates 113 siblings where there are 2,999.
+  # Believing that fetching a repository's every identity and sorting them by distance is cheap, it
+  # does exactly that — the all-pairs join this read exists to avoid, measured at 64.8s against
+  # 5.7s for the same rows. {VECTOR_OPERATOR_COST} corrects the price and the literal tenant bind
+  # corrects the count; the 2×2 measurement showing that neither alone moves the plan is in the
+  # filters section above, and the price's own argument is at the constant.
+  #
+  # @param neighbours [Integer] the per-row cap, `k`. Bounded work per row is what makes the
+  #   statement's cost linear rather than quadratic; the cost is that an identity with more than `k`
+  #   near neighbours has some of its edges dropped. {NearDuplicateClusters} counts the rows that
+  #   hit the cap and says so rather than letting the truncation pass for a finding.
+  # @param similarity [Float] cosine floor, inclusive. Converted to the `<=>` distance here so the
+  #   comparison lands in SQL rather than being re-derived in Ruby over every returned row.
+  # @param run_id [Integer, nil] the run the WEIGHT columns are measured in — never the clustering,
+  #   which spans runs. `nil` is a repository that has ingested nothing yet: `o.test_run_id = NULL`
+  #   is unknown for every row, so every identity comes back at 0 examples, which is the honest
+  #   weight of a suite nobody has reported.
+  # @return [Array<Array>] `[id, text, signal_source, file_path, line_number, example_count,
+  #   total_seconds, timed_count, neighbour_id, similarity]` per edge. `total_seconds` is nil for an
+  #   identity none of whose examples in that run were timed, and `example_count` is 0 for one the
+  #   run did not observe.
+  def self.near_duplicate_pairs_in(repository, similarity:, neighbours:, run_id:)
+    sql = sanitize_sql_array([ <<~SQL, repository.id, neighbours, run_id, repository.id, 1 - similarity ])
+      SELECT a.id, a.text, a.signal_source, a.file_path, a.line_number,
+             w.example_count, w.total_seconds, w.timed_count,
+             b.neighbour_id, 1 - b.distance AS similarity
+      FROM spec_identities a
+      CROSS JOIN LATERAL (
+        SELECT n.id AS neighbour_id, n.embedding <=> a.embedding AS distance
+        FROM spec_identities n
+        WHERE n.repository_id = ?
+          AND n.signal_source = a.signal_source
+          AND n.id <> a.id
+        ORDER BY n.embedding <=> a.embedding
+        LIMIT ?
+      ) b
+      LEFT JOIN LATERAL (
+        SELECT COUNT(*) AS example_count,
+               SUM(o.duration_seconds) AS total_seconds,
+               COUNT(o.duration_seconds) AS timed_count
+        FROM spec_observations o
+        WHERE o.spec_identity_id = a.id
+          AND o.test_run_id = ?
+      ) w ON TRUE
+      WHERE a.repository_id = ?
+        AND b.distance <= ?
+      ORDER BY a.id, b.distance, b.neighbour_id
+    SQL
+
+    # A transaction of its own, because the corrected price is transaction-scoped and outside one
+    # Postgres would discard it — the read would silently revert to the plan that takes 69 seconds.
+    # Read-only, so it costs a BEGIN/COMMIT pair and nothing else.
+    #
+    # == And the price is restored, because the scope is narrower than it looks
+    #
+    # `SET LOCAL` binds to the TRANSACTION, not to the block that issued it, and
+    # `ActiveRecord::Base.transaction` JOINS an ambient transaction rather than opening its own. So
+    # a caller that wraps this read in a transaction of theirs would carry `cpu_operator_cost = 2.56`
+    # into every statement they ran afterwards — re-pricing queries that have no 1024-dimension
+    # operator anywhere in them, from a method they called for its return value. `requires_new:` is
+    # not the fix either: a savepoint is not a new transaction as far as a GUC is concerned.
+    #
+    # So the previous value is read first and put back after, through `set_config(…, true)` — the
+    # function spelling of `SET LOCAL`, which takes the value as a bind instead of as string
+    # interpolation and does not warn when there is no transaction to be local to. The restore is on
+    # the success path only, and that is sufficient rather than an oversight: a statement that
+    # raised has aborted the transaction, and an aborted transaction can only be rolled back, which
+    # discards the setting outright.
+    previous_cost = connection.select_value("SHOW cpu_operator_cost")
+
+    transaction do
+      set_operator_cost(VECTOR_OPERATOR_COST)
+      rows = connection.select_all(sql).cast_values
+      set_operator_cost(previous_cost)
+      rows
+    end
+  end
+
+  # `SET LOCAL` as a function call, so the value binds instead of interpolating.
+  def self.set_operator_cost(value)
+    connection.execute(sanitize_sql_array([ "SELECT set_config('cpu_operator_cost', ?, true)", value.to_s ]))
+  end
+  private_class_method :set_operator_cost
+
+  # How many identities this repository holds, and how they split across the two signal sources —
+  # the denominator every coverage figure {NearDuplicateClusters} states is a fraction OF.
+  #
+  # A second round trip, and it has to be. The pair read above returns only identities that HAVE a
+  # near neighbour, so no window over it could ever count the ones that do not — and "no test in
+  # this suite reads like another" and "this suite has three tests in it" produce the identical
+  # empty list. Verbatim the argument `.description_presence_in` gives for its own extra read.
+  #
+  # Split by source because the partition is real: a repository that is 4,000 name-derived
+  # identities and 12 intent-derived ones has two populations of very different confidence, and a
+  # single "12 of 4,012 clustered" hides which of the two was searched.
+  #
+  # @return [Hash{Symbol=>Integer}] `identity_count`, `intent_count`, `name_count`.
+  def self.clusterable_population_in(repository)
+    counts = where(repository_id: repository.id).pick(
+      Arel.sql("COUNT(*)"),
+      Arel.sql("COUNT(*) FILTER (WHERE signal_source = 'intent')"),
+      Arel.sql("COUNT(*) FILTER (WHERE signal_source = 'name')")
+    )
+
+    { identity_count: counts[0].to_i, intent_count: counts[1].to_i, name_count: counts[2].to_i }
+  end
 
   # @return [true] the text came from a declared `@intent` triple.
   def from_intent? = signal_source == "intent"

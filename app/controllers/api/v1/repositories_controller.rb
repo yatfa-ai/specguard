@@ -78,6 +78,58 @@ class Api::V1::RepositoriesController < Api::BaseController
   # `RequestedUnstableTestParam`, which holds that reasoning in full.
   include RequestedUnstableTestParam
 
+  # `?unannotated_examples=` read as a request for the run's unannotated examples — the only
+  # `Requested*Param` this controller reads that carries NO VALUE.
+  #
+  # The parameters above it all name a WHICH — which branch, which area, which file, which
+  # description, which test — because each opens the rows behind a LINE of a ranking the client had
+  # already read. This one opens a POPULATION: the figure it drills out of is a subtraction on the run
+  # itself (`total_specs_count - annotated_specs_count`), which has no rows and therefore no keys, so
+  # there is exactly one answer the client can be asking for and nothing for the parameter to carry.
+  # The predicate spelling — `requested_unannotated_examples?` rather than a `requested_*` reader — is
+  # what says that at the call site.
+  #
+  # NOT included by `RepositoriesController`, like `?unstable_test=` and unlike the other five, and
+  # that is a fact about the surfaces rather than an omission: the dashboard opens this subtraction
+  # only through the per-example drill-in `445cb7f` added, which rides the existing
+  # `?spec_file=`/`?spec_directory=` asks and takes no parameter of its own, so there is still no
+  # second reader of THIS parameter to share a guard with. When one arrives it includes this module
+  # rather than re-deriving the guard, which is the whole reason the guard lives in a module at all.
+  #
+  # It reaches no SQL comparison at all, which makes the hazard the MIRROR of the value-carrying
+  # parameters rather than a weaker version of it. Theirs is a silent wrong answer: an Array becomes
+  # an `IN` list, which answers about several things under a caption naming one for the parameters
+  # above, and for `?commit_sha=` below re-anchors the whole response — the widest wrong answer this
+  # endpoint can give, as its own block grades it. This one's is a silent EXTRA answer, because all
+  # three malformed shapes are truthy in Ruby and an unguarded `.present?` would open a hundred-row
+  # block on a query string nobody meant to send. See `RequestedUnannotatedExamplesParam`, which
+  # holds that reasoning in full, including why `?unannotated_examples=false` is an ask like any
+  # other.
+  include RequestedUnannotatedExamplesParam
+
+  # `?commit_sha=` read as a commit sha, to name WHICH RUN this endpoint describes — the only
+  # `Requested*Param` here that re-anchors rather than narrows. Every parameter above leaves the
+  # anchor alone: `?branch=` narrows a history, the drill-in parameters open one area, one file or
+  # one description OF the run `latest_test_run` had already picked, `?unstable_test=` opens a WINDOW
+  # across runs rather than a run, and `?unannotated_examples=` opens a POPULATION inside the run
+  # already picked. This one picks it, which is why it is read in exactly ONE place — the
+  # `latest_test_run` memo below — and every block hanging off that memo re-anchors without reading
+  # the parameter at all.
+  #
+  # INCLUDED by `RepositoriesController` as well, unlike `?unstable_test=` and
+  # `?unannotated_examples=`. This comment used to hold the commission open, against a human page
+  # that anchored every panel on the repository's newest run; `e569554` redeemed it, and the page
+  # now takes `?commit_sha=` and anchors on the run it names. The comment beside that controller's
+  # own include quotes the commission this block once carried and answers "This is that reader."
+  #
+  # It reaches `where(commit_sha: …)` on a plain string column, which is the same silent hazard
+  # `?spec_file=` documents — an Array does not raise, it becomes an `IN` list — and at THIS position
+  # the wrong answer is the widest one the endpoint can give: an `IN` list would anchor on whichever
+  # of several unrelated commits sorted newest, and every rollup, every drill-in and both growth
+  # windows would then describe that run under a `run_anchor` naming the sha the client asked for.
+  # See `RequestedCommitShaParam`, which holds that reasoning in full.
+  include RequestedCommitShaParam
+
   # The bound on `history` below. Ten rows is ten rows whether the suite holds three tests or
   # twenty thousand — `Repository#recent_test_runs` argues that in its own comment — so this is a
   # bound and not the first page of a pagination contract there is no cursor to continue.
@@ -107,8 +159,81 @@ class Api::V1::RepositoriesController < Api::BaseController
       },
       api_key: {
         name: current_api_key.name,
-        last_used_at: current_api_key.last_used_at&.iso8601
+        # ⚠️ THIS ANSWERS "DID ANYTHING AUTHENTICATE", AND THAT IS THE ONLY QUESTION IT CAN ANSWER.
+        # It must not be read as evidence that anything was ACCEPTED.
+        #
+        # `Api::BaseController#authenticate_api_key!` stamps this column on the way IN, before
+        # `Api::V1::IngestsController` has looked at the payload — so a delivery refused for its
+        # body moves it exactly as far as a delivery that ingested cleanly. A repository whose every
+        # run is being thrown away therefore serves a `last_used_at` of "two minutes ago" beside a
+        # `latest_run` that is days old, and the freshest figure in the body is the one affirmatively
+        # contradicting the staleness of every other one. `repositories#show` served the same
+        # contradiction as a `Connected` stat until SPGD-563 corrected it; this is the same
+        # correction at the agent surface.
+        #
+        # `acceptance_reported_by` names the key that answers what this one cannot, rather than
+        # leaving a client to discover the distinction by being misled by it once.
+        last_used_at: current_api_key.last_used_at&.iso8601,
+        acceptance_reported_by: "delivery_health",
+        # WHEN THIS KEY WAS LAST REGENERATED, or `null` if it never has been. `regenerate!` retires
+        # the previous token with no grace window and deliberately leaves `last_used_at` standing
+        # (it is the key's history), so a rotation is the one event that can make the timestamp
+        # above describe a credential that no longer exists.
+        #
+        # ⚠️ IT CANNOT TELL YOU THAT *THIS* KEY IS THE UNUSED ONE, and no field on this block could.
+        # `Api::BaseController#authenticate_api_key!` stamps `last_used_at` on the way in, so by the
+        # time this body is built the key that requested it has authenticated BY DEFINITION —
+        # "rotated and not used since" is false for the requester on every response this endpoint
+        # will ever serve. A field for it here would be a constant dressed as a finding.
+        #
+        # The state is real and it is REPOSITORY-scoped: it is a sibling key, holding a token some
+        # other pipeline has not picked up, that a client reaching this endpoint can still learn
+        # about — because reaching it at all proves the client's own key works.
+        # `credential_health` answers it, on the same convention `acceptance_reported_by` follows
+        # above: name the key that answers what this one cannot, rather than leaving a client to
+        # discover the distinction by being misled by it once.
+        rotated_at: current_api_key.rotated_at&.iso8601,
+        rotation_reported_by: "credential_health"
       },
+      # WHETHER THIS REPOSITORY'S DELIVERIES ARE BEING ACCEPTED — the verdict `api_key.last_used_at`
+      # above cannot give, and the one every run-grain figure below silently depends on.
+      #
+      # Beside `run_anchor` and deliberately NOT inside `latest_run`, on that block's own membership
+      # rule stated at `unstable_tests`: `latest_run` is single-run facts by construction, and this
+      # is a statement about a WINDOW OF DELIVERIES — several of them, most of which produced no run
+      # at all. It sits directly under `api_key` because that is the claim it corrects.
+      #
+      # SERVED ON EVERY RESPONSE, including when nothing was refused and including on a repository
+      # that has never had a run accepted — the reasoning `RepositoriesController#show` gives at its
+      # `@rejected_ingests = RejectedIngests.for(...)` load for loading the panel unconditionally
+      # rather than gating it on `@latest_test_run`. A repository with no accepted run is not the
+      # empty case, it is the worst case. And "nothing was refused" is a POSITIVE FINDING an agent
+      # cannot otherwise distinguish from "SpecGuard does not track that".
+      #
+      # See `serialized_delivery_health`.
+      delivery_health: serialized_delivery_health,
+      # WHETHER ANY KEY ON THIS REPOSITORY IS CARRYING A TOKEN NOTHING HAS USED — rotated, with no
+      # authentication since. The other half of "is this repository reachable", and the half
+      # `delivery_health` structurally cannot cover: a 401 resolves no repository and writes no row
+      # (`IngestRejection`), so a pipeline failing on authentication is invisible to every rejection
+      # figure above. This is the one 401-shaped failure the platform can report anyway, because it
+      # need not observe the 401 — it owns the row and stamped the instant the token was retired.
+      #
+      # Beside `delivery_health` and NOT inside `api_key`, on that block's own membership rule: it
+      # is single-key facts about the REQUESTING key, and this is a statement about the
+      # repository's keys as a set — necessarily including keys that are not the one asking, since
+      # the asking one has just authenticated and can never be in this state. See
+      # `serialized_credential_health`.
+      #
+      # SERVED ON EVERY RESPONSE, including when nothing is rotated, for the reason `delivery_health`
+      # states: "no key is stranded" is a POSITIVE FINDING an agent cannot otherwise tell apart from
+      # "SpecGuard does not track that".
+      credential_health: serialized_credential_health,
+      # WHICH RUN THE RUN-GRAIN HALF OF THIS BODY DESCRIBES, and why that run. Placed before
+      # `latest_run` on the `*_window` blocks' own convention — the disclosure precedes what it
+      # discloses about — and it is the window-shaped block for the anchor rather than for a series.
+      # See `serialized_run_anchor`.
+      run_anchor: serialized_run_anchor,
       latest_run: serialized_latest_run,
       history_window: serialized_history_window,
       history: serialized_history,
@@ -250,20 +375,212 @@ class Api::V1::RepositoriesController < Api::BaseController
 
   private
 
+  # THE DELIVERIES THIS REPOSITORY'S CI MADE THAT THE ENDPOINT REFUSED, and the one verdict that
+  # tells an agent whether the rest of this body still describes its suite.
+  #
+  # == What this block is for
+  #
+  # Every run-grain key here — `latest_run` and its five rollups, both growth pairs, `unstable_tests`
+  # — is read off rows that were ACCEPTED. When ingestion is being refused, those rows stop moving
+  # while remaining perfectly well-formed, so the response an agent receives is a complete,
+  # non-null description of a suite state that no longer exists. It then optimises a test that was
+  # deleted, hunts a flake that was fixed, or reports growth that never happened, and nothing in the
+  # body contradicts it. This is the project's own *Vacuous Green* class (SPGD-78) at the agent
+  # surface, and the trigger is not hypothetical: SPGD-560 documents a gem version floor that 400s
+  # every run over 256 KiB — every large suite, which is the population this product exists for.
+  #
+  # == The honesty bounds, none of them guessable from the keys
+  #
+  # * ⚠️ **AUTHENTICATED-AND-REFUSED ONLY. A 401 IS UNATTRIBUTABLE AND IS NOT IMPLIED HERE.**
+  #   `ApiKey.authenticate` returning `nil` resolves no repository, so there is nothing to attribute
+  #   a row to and none is written — `Api::V1::IngestsController` states that on the write path. A
+  #   client sending a revoked token sees `refusing: false` and always will. Replacing one false
+  #   claim with a second one is the failure mode this block exists to avoid.
+  # * **`reasons` is `Ingest::Payload`'s own error list, verbatim** — the same words the client was
+  #   handed in its 400, never re-worded into a platform-side verdict. This endpoint's standing rule
+  #   for `outcome`, applied one grain down.
+  # * **NOT A RETRY QUEUE.** The payload was refused and was not stored; no run of it exists and
+  #   none can be reconstructed. What ships is that the agent LEARNS it happened and what the
+  #   endpoint objected to.
+  # * **Both of `RejectedIngests#refusing?`'s bounds transfer unchanged** and are restated rather
+  #   than re-derived (argued in full at `rejected_ingests.rb:29-38`): a sharded run that is half
+  #   accepted and half refused reads as refusing, because a shard thrown away IS a suite partly
+  #   thrown away; and a refusal ages out of `IngestRejection::REPOSITORY_RETENTION_ROWS`, so a
+  #   repository refused and then silent forever eventually reads healthy again.
+  #
+  # == The two truncation bounds are independent, and both are disclosed
+  #
+  # `rejections_window.bounded` counts DELIVERIES retained; `reasons_truncated` counts REASONS
+  # inside one delivery. A list nowhere near its window bound can still be hiding almost everything
+  # — one refusal of a 20,000-example suite is a single row. `IngestRejection` carries that argument.
+  #
+  # `reasons` / `omitted_reasons_count` are served rather than the raw `details` column: `details` is
+  # capped at `RETAINED_REASONS_PER_ROW` with no per-row disclosure beside it, so serving it raw
+  # would hand a client a silently-shortened objection to read as the endpoint's whole sentence —
+  # exactly the habit this block was built to correct, at a smaller grain.
+  def serialized_delivery_health
+    {
+      refusing: rejected_ingests.refusing?,
+      last_rejection_at: rejected_ingests.last_rejection_at&.iso8601,
+      rejections_window: {
+        limit: IngestRejection::PANEL_LIMIT,
+        bounded: rejected_ingests.bounded?,
+        retention_rows: IngestRejection::REPOSITORY_RETENTION_ROWS,
+        any_reasons_truncated: rejected_ingests.truncated_rows?
+      },
+      rejections: rejected_ingests.rows.map { |rejection| serialized_ingest_rejection_row(rejection) }
+    }
+  end
+
+  # The keys whose `last_used_at` was stamped by a token that no longer exists, and the verdict the
+  # UI's connection indicator is built on. `ApiKey#rotated_and_unused?` carries the rule — an ordering
+  # comparison between the rotation and the last use, with both nil cases decided — and it is the
+  # same object the two web surfaces read, so the agent and the page cannot disagree about a key.
+  #
+  # `rotated_and_unused` is the whole-repository answer; `keys` names WHICH, because the remedy is
+  # per-key (a secret to update in whichever store that pipeline reads) and a bare boolean would
+  # leave an agent unable to act on it. Key NAMES only — no digest, no hint, nothing that
+  # identifies a token — and the caller already holds a key on this repository, so the set of key
+  # names is not something this discloses to anyone who could not list them anyway.
+  #
+  # Unbounded on purpose: this is a list of things that are WRONG, and a repository has a handful
+  # of keys rather than a stream of them, so there is no window to bound and no truncation to
+  # disclose. ONE query, and the predicate is applied in Ruby rather than as SQL deliberately: a
+  # WHERE clause here would be a second expression of `rotated_and_unused?`'s rule, free to drift
+  # from the one the two web surfaces read, and this block exists to stop the agent and the page
+  # disagreeing about a key.
+  def serialized_credential_health
+    stranded = current_repository.api_keys.select(&:rotated_and_unused?)
+
+    {
+      rotated_and_unused: stranded.any?,
+      keys: stranded.map do |api_key|
+        {
+          name: api_key.name,
+          rotated_at: api_key.rotated_at.iso8601,
+          # The stamp the rotation stranded, served rather than hidden: it is the key's history and
+          # it is exactly the figure a client must not read as a live reachability signal. `null`
+          # when the key was rotated before it ever authenticated.
+          last_used_at: api_key.last_used_at&.iso8601
+        }
+      end
+    }
+  end
+
+  # One refused delivery. `reported_client` is `nil` — never a substituted placeholder — when the
+  # client sent no `User-Agent`, which is `IngestRejection#reported_client`'s own rule: a version
+  # nobody reported must not be invented, least of all on the block whose subject is a diagnosis by
+  # client version.
+  def serialized_ingest_rejection_row(rejection)
+    {
+      occurred_at: rejection.occurred_at.iso8601,
+      reported_client: rejection.reported_client,
+      reasons: rejection.reasons,
+      omitted_reasons_count: rejection.omitted_reasons_count,
+      reasons_truncated: rejection.reasons_truncated?
+    }
+  end
+
+  # ⭐ ANCHORED ON `current_repository.latest_test_run` AND NEVER ON THE `latest_test_run` MEMO.
+  # This is the one non-obvious thing in this feature and a later reader must not "simplify" it.
+  #
+  # That memo is RE-ANCHORED BY `?commit_sha=` — deliberately, so every run-grain block describes
+  # the named run coherently. Handing it here would compare the newest refusal against an arbitrary
+  # PINNED OLDER run, so any client bookmarking an old commit on a perfectly healthy repository
+  # would be told `refusing: true`. That is the same class of falsehood this block exists to remove,
+  # reintroduced by the fix.
+  #
+  # Delivery health is a fact about the repository's DELIVERY STREAM, not about whichever run the
+  # caller anchored to, so the accepted side is the true newest accepted run on every request.
+  #
+  # Read unconditionally rather than reusing the memo when no `?commit_sha=` was sent. That
+  # conditional would save one indexed `LIMIT 1` lookup on the unpinned path and would couple this
+  # block's correctness to the CURRENT list of parameters that re-anchor — the next one to arrive
+  # would silently reintroduce the bug above, in a block whose entire purpose is not lying about
+  # freshness. One query is the right price for a correctness property that cannot decay.
+  #
+  # Memoized across the nil with `||=` on the OBJECT rather than the row, so the verdict and the
+  # rows under it are read off one bounded query no matter how many serializers ask.
+  def rejected_ingests
+    @rejected_ingests ||= RejectedIngests.for(
+      current_repository,
+      last_accepted_run_at: current_repository.latest_test_run&.created_at
+    )
+  end
+
+  # WHICH RUN THE RUN-GRAIN HALF OF THIS BODY DESCRIBES, and why that one — the disclosure block for
+  # the anchor, shaped like the `*_window` blocks and serving the same purpose they do: a client must
+  # not have to infer from the figures which question was answered.
+  #
+  # PRESENT ON EVERY RESPONSE, never `null`, including on a repository CI has never reported to. It
+  # is a statement about the REQUEST — which run was asked for and which one was picked — and that
+  # statement exists whether or not there are runs to pick from. `latest_run` is the key that goes
+  # `null` for "CI has never reported"; this one then says `commit_sha: null` beside a `source` that
+  # still reports whether anybody asked, which is a different fact and the one that distinguishes
+  # "no runs at all" from "no run for the sha you named".
+  #
+  # `source` is the client's first read: `"requested"` means `?commit_sha=` named a run, `"default"`
+  # means this is the repository's newest run because nobody asked. It is a fact about the ASK and
+  # NOT about whether the ask worked — an unknown sha is still `"requested"` — which is exactly the
+  # split `history_window` draws with `branch_scope` beside its raw `branch`.
+  #
+  # `requested_commit_sha` is the RAW ASK, echoed back and kept EVEN ON FALLBACK. Without it a client
+  # handed a body anchored on a different sha could not tell a fallback from its own bug, because the
+  # only other place the ask appears is the URL it no longer holds. `null` when there was none, and
+  # `null` too for the malformed shapes `RequestedCommitShaParam` reads as no ask — the guard's
+  # answer is the one serialized, so the block never claims a request the endpoint did not honour.
+  #
+  # `resolved` is FALSE IN EXACTLY ONE CASE: the client named a sha and is not being served it.
+  # Deliberately not "did something resolve" — on a default call there was no ask to fail, so this is
+  # `true` and a client's `unless resolved` warning fires only on a real fallback rather than on
+  # every unparameterised GET. Served off `requested_test_run` — the same memo the anchor itself is
+  # picked from — and never re-derived by comparing the two shas, so the disclosure and the choice it
+  # discloses cannot come apart.
+  #
+  # `commit_sha`/`branch` NAME THE RUN ACTUALLY SERVED, which is what makes the fallback legible:
+  # under `source: "requested", resolved: false` they are the newest run's, and they will not equal
+  # `requested_commit_sha`. Both nullable, and `branch` independently so — it is nullable by schema
+  # and `Ingest::Payload` accepts a body without it, so `null` there means "the client did not say"
+  # exactly as it does on `latest_run`.
+  #
+  # ⭐ `history[0] == latest_run` HOLDS ON A DEFAULT CALL AND IS NOT EXPECTED TO HOLD UNDER AN
+  # EXPLICIT ASK. `history` is not re-anchored by `?commit_sha=` — it stays the repository's recent
+  # runs, newest first, narrowed only by `?branch=` — so naming an older run makes `latest_run` a row
+  # from the middle of that array or from behind its bound entirely. That is the contract rather than
+  # a bug, and this block is what says so, the way `history_window.branch_scope` says it for the
+  # branch-filtered case. A client that needs the identity back omits the parameter.
+  def serialized_run_anchor
+    {
+      source: requested_commit_sha ? "requested" : "default",
+      requested_commit_sha: requested_commit_sha,
+      resolved: requested_commit_sha.nil? || !requested_test_run.nil?,
+      commit_sha: latest_test_run&.commit_sha,
+      branch: latest_test_run&.branch
+    }
+  end
+
   # `nil` — not a zeroed block — when CI has never reported. A repository whose CI has never run
   # must not serialize byte-identically to one that ran and genuinely found an empty suite; that is
   # the conflation the Overview panel refuses too (see RepositoriesController#show).
   # A repository-wide ratio floored at 0.0 cannot express the difference, which is why this reads
   # the run.
   #
-  # NOT RE-ANCHORED BY `?branch=`. This names the repository's newest run and keeps naming it under
-  # every request; only `history` narrows. A client filtering the history has asked a question about
-  # a series, not for a different latest run, and re-anchoring would silently change the meaning of
-  # four blocks (`latest_run`, `shards`, and the `history[0] == latest_run` identity the tie-break
-  # examples pin) to answer one. The consequence is worth stating because it is the one surprise
-  # here: under `?branch=main` on a repository whose newest run is on `feature/x`, `history[0]` is
-  # a `main` row and `latest_run` is the `feature/x` one, and they are *supposed* to differ.
-  # `history_window.branch_scope` is what says so.
+  # NOT RE-ANCHORED BY `?branch=`. This names the run `run_anchor` above resolved to and keeps
+  # naming it under every request; only `history` narrows. A client filtering the history has asked
+  # a question about a series, not for a different latest run, and re-anchoring would silently change
+  # the meaning of four blocks (`latest_run`, `shards`, and the `history[0] == latest_run` identity
+  # the tie-break examples pin) to answer one. The consequence is worth stating because it is the one
+  # surprise here: under `?branch=main` on a repository whose newest run is on `feature/x`,
+  # `history[0]` is a `main` row and `latest_run` is the `feature/x` one, and they are *supposed* to
+  # differ. `history_window.branch_scope` is what says so.
+  #
+  # RE-ANCHORED BY `?commit_sha=`, which is the one parameter that does and is deliberately a
+  # different kind of ask: `?branch=` asks about a SERIES, this asks WHICH RUN. It is read once, in
+  # the `latest_test_run` memo, so this block and everything hanging off it move together rather than
+  # each re-reading the parameter — see that memo, and `serialized_run_anchor` for what the response
+  # says about the move. The `history[0] == latest_run` identity above holds on a default call and is
+  # NOT expected to hold under an explicit ask; `run_anchor` is what says so, the way
+  # `history_window.branch_scope` does for its own block.
   def serialized_latest_run
     test_run = latest_test_run
 
@@ -323,6 +640,24 @@ class Api::V1::RepositoriesController < Api::BaseController
       # it drills out of is the only one here that is not a rollup of where the code lives. See
       # `serialized_repeated_description_examples` below.
       repeated_description_examples: serialized_repeated_description_examples(test_run),
+      # THE FOURTH KEY ON THIS BLOCK WHOSE `null` IS A FACT ABOUT THE REQUEST, and the only drill-in
+      # here that opens a POPULATION rather than a pick. The three above it open one area, one file
+      # and one sentence — each the rows behind a LINE of a ranking served just above it. This one
+      # opens the rows behind `total_specs` MINUS `annotated_specs`, two keys at the top of this very
+      # block, which is a subtraction and names nothing.
+      #
+      # It is the rung `annotated_ratio` never had. Every other figure on this endpoint that reports a
+      # population can be walked down to the examples it counts; the product's stated primary adoption
+      # metric was the sole exception, on both surfaces — `repositories#show` prints *"SpecGuard cannot
+      # see the other N tests"* and cannot name one of them either. See
+      # `serialized_unannotated_examples` below.
+      unannotated_examples: serialized_unannotated_examples(test_run),
+      # THE RANKING ABOVE THE KEY DIRECTLY ABOVE IT, and the fifth `null`-is-a-fact-about-the-request
+      # key on this block — served from the SAME `?unannotated_examples=` ask rather than from a new
+      # parameter, so a client that never asks still pays nothing. See
+      # `serialized_unannotated_directories` below, where the scope difference between the two keys
+      # is stated in full.
+      unannotated_directories: serialized_unannotated_directories(test_run),
       # `TestRun#suite_size_measured?`, the same predicate `serialized_history_row` serves below and
       # for the same reason: a run that reported zero tests has a `total_specs` but not a
       # measurement, and a difference taken against it describes the report rather than the suite.
@@ -744,14 +1079,23 @@ class Api::V1::RepositoriesController < Api::BaseController
   end
 
   # WHICH DESCRIPTIONS ONE RUN RECORDED MORE THAN ONCE, ranked by the wall clock those examples cost
-  # between them — the ⭐overcoverage reading `repositories#show` has rendered since SPGD-344, and
-  # the last of the five run-grain panels to reach a client that cannot read a panel.
+  # between them — the ⭐overcoverage reading `repositories#show` has rendered since SPGD-344,
+  # carried here so it reaches a client that cannot read a panel.
   #
   # INSIDE `latest_run` rather than beside it, on the membership test the comment on
   # `unstable_tests` states in full: every key that block serves is a statement about ONE run's
   # rows, and "this test is unstable" is a statement about one test across several.
   # `RepeatedDescriptions.for` narrows both of its reads to a single `test_run_id`, so this is a
-  # statement about one run's rows and belongs where the other four are.
+  # statement about one run's rows and belongs inside `latest_run` with every other block that
+  # meets it.
+  #
+  # STATED AS A RULE, NOT AS A TALLY, on purpose. The claims above used to carry a count of the
+  # run-grain blocks — accurate when written, falsified as each later block was added below them.
+  # The paragraph directly below carries a count as well, and it stays accurate: it counts the
+  # blocks positioned ABOVE this point, which nothing added below can change. That is the
+  # discriminator, and the reason the rewrite stopped where it did — a count of set membership rots
+  # when a member joins it, and a count of position above a fixed point does not. Every run-grain
+  # block added after this one has landed below it.
   #
   # THE GRAIN IS THE DESCRIPTION, which is a grain none of the four blocks above can reach. They
   # roll a run's rows up by where the code LIVES — the example, its file, its area — and no
@@ -855,8 +1199,13 @@ class Api::V1::RepositoriesController < Api::BaseController
   # `unstable_tests` states in full: every key this block serves is a statement about ONE run's
   # rows. `SpecDirectoryFiles.for` narrows to a single `test_run_id`, so it belongs with the other
   # five. And `latest_run` is not re-anchored by `?branch=`, so an area ask composes with a branch
-  # ask without either touching the other: the drill-in always describes the newest run, exactly as
-  # the panel does.
+  # ask without either touching the other. It IS re-anchored by `?commit_sha=`, and this drill-in
+  # follows it there WITHOUT READING THE PARAMETER: both hang off the one `latest_test_run` memo, so
+  # the rows here and the `latest_run` they are an area OF can never come from two different runs.
+  # Which run that is, `run_anchor` says. It is the repository's newest one only on a default call,
+  # and on an explicit ask this list is STILL the panel's: `RepositoriesController` reads
+  # `?commit_sha=` through this same `RequestedCommitShaParam` — the comment beside its own include
+  # is the corroboration — so both surfaces re-anchor on the run the client named.
   #
   # THE SAME OBJECT THE PANEL READS, never a hand-written query — this file's governing rule, stated
   # in full on `serialized_spec_files` above. `SpecDirectoryFiles` is view-free, so the API and the
@@ -935,8 +1284,13 @@ class Api::V1::RepositoriesController < Api::BaseController
   # states in full: every key this block serves is a statement about ONE run's rows.
   # `SpecObservation.in_file` narrows to a single `test_run_id`, so it belongs with the others. And
   # `latest_run` is not re-anchored by `?branch=`, so a file ask composes with a branch ask and with
-  # an area ask without any of the three touching another: the drill-in always describes the newest
-  # run, exactly as the panel does.
+  # an area ask without any of the three touching another. `?commit_sha=` is the one ask that DOES
+  # move the anchor, and this drill-in moves with it unread — the file is always a file OF the run
+  # `latest_run` named, because both read the single `latest_test_run` memo, and `run_anchor` names
+  # that run. It is the repository's newest one only on a default call, and on an explicit ask this
+  # list is STILL the panel's: `RepositoriesController` reads `?commit_sha=` through this same
+  # `RequestedCommitShaParam`, so under an explicit ask the two surfaces agree — both re-anchor on
+  # the run the client named rather than diverging.
   #
   # THE SAME OBJECT THE PANEL READS, never a hand-written query — this file's governing rule, stated
   # in full on `serialized_spec_files` above. `SpecFileExamples` is view-free apart from
@@ -1041,7 +1395,12 @@ class Api::V1::RepositoriesController < Api::BaseController
   # states in full: `SpecObservation.with_description` narrows to a single `test_run_id`, so this is
   # a statement about ONE run's rows. And `latest_run` is not re-anchored by `?branch=`, so a
   # description ask composes with all three of the other asks without any of the four touching
-  # another: the drill-in always describes the newest run, exactly as the panel does.
+  # another. The fifth ask is the exception and is meant to be: `?commit_sha=` re-anchors
+  # `latest_run`, and this drill-in re-anchors with it without reading the parameter, because the
+  # group is always a group WITHIN the run that one `latest_test_run` memo picked. `run_anchor` is
+  # what names it. Only on a default call is that the repository's newest run, and these rows are
+  # the panel's on an explicit ask too — `RepositoriesController` reads `?commit_sha=` through this
+  # same `RequestedCommitShaParam`, so both surfaces re-anchor on the run the client named.
   #
   # THE SAME OBJECT THE PANEL READS, never a hand-written query — this file's governing rule, stated
   # in full on `serialized_spec_files` above. `RepeatedDescriptionExamples` is view-free apart from
@@ -1115,6 +1474,243 @@ class Api::V1::RepositoriesController < Api::BaseController
       recorded_count: examples.recorded_count,
       timed_count: examples.timed_count,
       limit: SpecObservation::REPEATED_DESCRIPTION_EXAMPLES_LIMIT
+    }
+  end
+
+  # WHICH TESTS SPECGUARD CANNOT SEE — the rows behind the product's stated primary adoption metric,
+  # and until now the one figure on either surface that could be reported and not opened.
+  #
+  # `latest_run.total_specs` and `latest_run.annotated_specs` sit twenty lines above this key, and
+  # `annotated_ratio` beside them. Their difference is what `repositories#show` renders under "Not
+  # visible to SpecGuard" as *"SpecGuard cannot see the other N tests"*, and a subtraction is the whole
+  # answer a reader has ever been given: an agent told to raise annotation coverage receives
+  # `annotated_ratio: 0.43` and cannot name ONE of the tests that number is about. Every other ranking
+  # on this endpoint has a drill-down rung — `spec_directory` → files, `spec_file` → examples,
+  # `repeated_description` → examples, `unstable_test` → runs — and this was the sole exception.
+  #
+  # THE COUNT AND THE LIST ARE ONE PREDICATE, WHICH IS WHY THE ROWS COME OFF `spec_observations.status`
+  # AND NOT FROM ANYWHERE ELSE. `Ingest::Payload#annotated_specs` rejects `status == "unannotated"` and
+  # its size becomes `annotated_specs_count`; `Ingest::ObservationRecorder#attributes` writes that same
+  # string onto every row of the same delivery. So `recorded_count` here and `total_specs -
+  # annotated_specs` above are one derivation evaluated twice rather than two figures that agree today
+  # — the property this file demands of a count and its list everywhere else, and the reason this rung
+  # needed no migration and no new data. `SpecObservation.unannotated_in` argues it in full, and the
+  # reconciliation is pinned in `spec/requests/api/v1/repository_unannotated_examples_spec.rb` for an
+  # UNSHARDED run: on a sharded one those counters are re-derived by SUM over `test_run_shards` while
+  # these rows are what was actually stored, which is the same separation `serialized_spec_files`
+  # states for its own denominator.
+  #
+  # THE WORKLIST CAN BE POINTED AT WHERE THE WORK IS, WITH THE TWO PARAMETERS THAT ALREADY NARROW
+  # EVERY OTHER PER-EXAMPLE QUESTION HERE. Sent alone the flag answers the WHOLE RUN in one order,
+  # capped, and a team adopting SpecGuard on the module they are actually touching could not ask for
+  # its unannotated tests: they got a hundred rows from wherever `spec/` sorts first, and the only
+  # route to `spec/services/` was to annotate every alphabetically-earlier example first — a hundred
+  # at a time, each batch costing a CI run and a re-ingest. Sent WITH `?spec_file=` or
+  # `?spec_directory=`, the population narrows to it — rows and `recorded_count` both — on the
+  # `area → file → example` ladder those two parameters already are, and on the predicates this
+  # application already owns: `where(spec_file_path: …)` and `DIRECTORY_EXPRESSION` compared for
+  # EQUALITY, which is the IMMEDIATE PARENT and never a prefix, so `spec/models/orders` is its own
+  # area rather than part of `spec/models`. See `SpecObservation.unannotated_in`, which argues the
+  # predicates, the AND-ing of the pair and the absence of a precedence rule between them.
+  #
+  # THE TWO PARAMETERS DO NOT STOP OPENING THEIR OWN BLOCKS. They are read once, by the guards this
+  # controller already includes, and each reaches its own drill-in beside this one — `?spec_file=` →
+  # `spec_file_examples`, `?spec_directory=` → `spec_directory_files`. They do not reach equally far,
+  # and the asymmetry is the point rather than a rounding: `?spec_directory=` alone carries on to the
+  # two directory file-growth pairs as well, six served keys against `?spec_file=`'s two. It is that
+  # ONE DRILL-IN EACH, not the growth pairs and not this block, that makes the empty answer here
+  # reconcilable rather than ambiguous, and it is stated in full at the keys below.
+  #
+  # INSIDE `latest_run` rather than beside it, on the membership test the comment on `unstable_tests`
+  # states in full: `SpecObservation.unannotated_in` narrows to a single `test_run_id`, so this is a
+  # statement about ONE run's rows. And `latest_run` is not re-anchored by `?branch=`, so this ask
+  # composes with the other four — narrowing on two of them and leaving the other two untouched, none
+  # of the five re-anchoring another. `?commit_sha=` is the exception and is meant to be: it
+  # re-anchors `latest_run`, and this drill-in re-anchors with it WITHOUT READING THE PARAMETER,
+  # because both hang off the one `latest_test_run` memo and `run_anchor` names the run they landed
+  # on. That matters more here than on its siblings — "what is still unannotated" is the question an
+  # adopting repository asks after every push, so asking it of an older commit is the ordinary use
+  # rather than the exotic one.
+  #
+  # THE ROW SHAPE IS FOUR FIELDS AND DELIBERATELY NOT THE OTHER BLOCKS' SIX. The three per-example
+  # blocks above agree field for field on purpose — `serialized_spec_file_examples` states why, and a
+  # `contain_exactly` in each of their request specs enforces it — and this block is not a fourth
+  # member of that set. Those three list examples a reader has come to MEASURE, so they carry
+  # `duration_seconds` and `outcome`; this one lists examples a reader has come to OPEN AND EDIT, so it
+  # carries exactly what opens a file and nothing else. `outcome` would be worse than surplus here: an
+  # unannotated example's outcome is a fact about the last run, and a worklist sorted for editing that
+  # also whispers "this one failed" invites the reader to do the other job. The four are `name`,
+  # `spec_file_path`, `file_path` and `line_number` — and the last three are the pair
+  # `serialized_spec_file_examples` keeps apart plus the line: `file_path` is where the example is
+  # DEFINED and `spec_file_path` is the file that RAN it, which differ for a shared example group, and
+  # a reader opening the wrong one of the two finds nothing to annotate.
+  #
+  # `null` — WITH THE KEY PRESENT — MEANS "YOU DID NOT ASK", on the spelling the three drill-ins above
+  # fixed, and the distinction it protects is the sharpest on this block. A fully-annotated run is not
+  # an empty file or a stale bookmark: it is the STATE THE METRIC EXISTS TO REACH, so it arrives as the
+  # block with `rows: []` and `recorded_count: 0` — HTTP 200, never a 404 and never a `null`. Collapsing
+  # it into the no-ask spelling would answer the best possible outcome with the one word reserved for
+  # "you did not ask", and a client walking a repository to completion would watch the block vanish at
+  # the moment it succeeded and be unable to tell that from its own parameter having been dropped.
+  #
+  # `recorded_count` IS THE UNANNOTATED POPULATION OF WHATEVER WAS ASKED FOR — the whole run by
+  # default, and the narrowed slice when `?spec_file=` or `?spec_directory=` came with the flag. It is
+  # the `COUNT(*) OVER ()` window of `SpecObservation::UNANNOTATED_POPULATION_COUNTS`, evaluated after
+  # the WHERE and before the LIMIT, so it describes what the ask holds rather than what fit on the
+  # page — and it narrows with the rows for free rather than through a second aggregate. Re-deriving
+  # it by folding `rows` is wrong here far more often than on the siblings: this population is
+  # routinely the WHOLE RUN — a repository that has just installed the gem has `recorded_count ==
+  # total_specs` on day one — so the cap fires as the normal case rather than the exotic one, and
+  # `recorded_count > rows.length` is a comparison this block ships the two OPERANDS of rather than the
+  # answer to — the same ships-the-numbers rule the siblings follow, and the reason
+  # `UnannotatedExamples` defines no `truncated?` for a caller that does not exist yet.
+  #
+  # ⚠️ WHICH IS WHY THE NARROWING IS ECHOED. `recorded_count` is the one figure on this endpoint a
+  # client is invited to reconcile against a headline — `total_specs - annotated_specs`, one predicate
+  # evaluated twice — and a narrowed count silently breaks that reconciliation. So the two keys below
+  # say which population the count is of, and a client that sent neither sees `null` twice and can
+  # reconcile exactly as before.
+  #
+  # NO SECOND COUNT, where all three siblings serve one. Each of theirs discloses COVERAGE of the
+  # column its rows are ranked by, and this block ranks by nothing and serves neither nullable column
+  # — see `SpecObservation::UNANNOTATED_POPULATION_COUNTS`, where the omission is argued as a choice
+  # rather than left as an absence. `limit` is READ OFF `SpecObservation::UNANNOTATED_EXAMPLES_LIMIT`
+  # rather than restated, on the precedent every capped block here sets — it is its own constant and is
+  # neither `FILE_EXAMPLES_LIMIT` nor `REPEATED_DESCRIPTION_EXAMPLES_LIMIT`.
+  #
+  # EXACTLY ONE ADDITIONAL QUERY WHEN ASKED, AND NONE WHEN NOT, on the three drill-ins' rule: the gate
+  # is the ASK and it is decided before any read is issued, so a client that never sends the parameter
+  # pays nothing for the key's existence. The narrowing does not change that — it is a predicate on the
+  # one read, not a second one, and it is read off guards this controller already includes for their
+  # own blocks. The read is bounded by the RUN rather than by the suite and rides
+  # `index_spec_observations_on_test_run_id`, EXPLAIN-certified for exactly this narrow — and for both
+  # narrowed shapes — in `spec/models/spec_observation_spec.rb`.
+  def serialized_unannotated_examples(test_run)
+    return nil unless requested_unannotated_examples?
+
+    examples = UnannotatedExamples.for(test_run, spec_file: requested_spec_file,
+                                                 spec_directory: requested_spec_directory)
+
+    {
+      # THE ASK RESTATED IS THE NARROWING, AND `null` WHEN THERE WAS NONE. The flag itself carries no
+      # value to echo — the sibling drill-ins echo the key the client picked out of a ranking, and
+      # this parameter is a presence rather than a pick; see `RequestedUnannotatedExamplesParam` for
+      # why it is the flag-style one. What CAN be restated is where in the run the client asked to
+      # start, and it has to be: `recorded_count` moves with it.
+      #
+      # As the server READ them, never echoed from the raw parameter, on `history_window.branch`'s
+      # rule and `spec_file_examples.path`'s: a malformed shape is no ask at all and reaches no
+      # narrowing, so what is served here is always the value the rows were actually gathered under.
+      #
+      # BOTH ARE AND-ED WHEN BOTH ARRIVE, and a contradictory pair — an area and a file outside it —
+      # is answered with `rows: []` and both narrowings echoed, which reads as an empty intersection
+      # rather than as one parameter having been dropped. `SpecObservation.unannotated_in` argues why
+      # there is no precedence rule.
+      #
+      # AN UNKNOWN PATH IS THE SAME EMPTY BLOCK, never a 404 and never a prefix match onto a
+      # neighbouring file or a sibling subdirectory — `serialized_spec_file_examples` fixed that
+      # answer and this inherits it. Unknown-vs-fully-annotated is not distinguished here, and a
+      # client that needs the two apart already has them in the SAME RESPONSE BODY for free: with
+      # `?spec_file=`, `spec_file_examples.recorded_count > 0` beside a zero here means the file
+      # exists and is fully annotated, and both zero means the run recorded nothing at that path.
+      # `?spec_directory=` reconciles against `spec_directory_files` the same way. No new field, no
+      # new query.
+      spec_file: examples.spec_file,
+      spec_directory: examples.spec_directory,
+      # FOUR ROW FIELDS, NOT THE OTHER PER-EXAMPLE BLOCKS' SIX, and the difference is asserted rather
+      # than structural on purpose — the same way their agreement is. A `contain_exactly` over these
+      # names in this block's request spec goes red if `duration_seconds` or `outcome` is added here,
+      # and the siblings' own `contain_exactly`s go red if one of theirs is dropped to match, so
+      # neither set can drift into the other unnoticed.
+      rows: examples.rows.map do |observation|
+        {
+          name: observation.name,
+          file_path: observation.file_path,
+          line_number: observation.line_number,
+          spec_file_path: observation.spec_file_path
+        }
+      end,
+      recorded_count: examples.recorded_count,
+      limit: SpecObservation::UNANNOTATED_EXAMPLES_LIMIT
+    }
+  end
+
+  # WHERE THE ANNOTATION DEBT IS, by code area — the ranking the block above is a worklist under, and
+  # the answer to the question that block could not be asked. `unannotated_examples` is ordered
+  # file-navigably and says so; `?spec_file=` / `?spec_directory=` narrow it, and both only help a
+  # client that already knows which area to name. Nothing in this response body said. This key does.
+  #
+  # NO NEW REQUEST PARAMETER. It rides `requested_unannotated_examples?` — the same gate, decided
+  # before any read is issued — on this file's rule that THE GATE IS THE ASK: a client that never
+  # sends the flag pays nothing for the key's existence, and one that does gets the ranking and the
+  # worklist off one request rather than having to learn a second parameter to make the first usable.
+  # EXACTLY ONE ADDITIONAL QUERY FOR THIS KEY WHEN ASKED, AND NONE WHEN NOT — so the ask now costs
+  # TWO reads in total, one per block, which is what the cost examples in
+  # `repository_unannotated_examples_spec.rb` pin.
+  #
+  # ⭐ THIS MAP IS WHOLE-RUN EVEN UNDER `?spec_file=` / `?spec_directory=`, AND ITS SIBLING IS NOT.
+  # This is the one place on this endpoint where two keys of ONE block are deliberately scoped
+  # differently, so it is disclosed here rather than left for a client to discover by arithmetic.
+  #
+  # `unannotated_examples.recorded_count` NARROWS with the narrowing — SPGD-608 made it so on purpose,
+  # because the window rides the WHERE and a count beside a narrowed list has to describe the
+  # population that list was cut from. This map does the opposite BY DESIGN: it is the thing a client
+  # picks a narrowing FROM, and a map that narrowed to the area you had already picked would answer
+  # nothing — one row, echoing the parameter back. So it stays whole-run and remains a way to choose
+  # the NEXT area to go and work on, which is the whole reason the rung exists.
+  #
+  # The consequence a client must be able to explain: under a narrowing, `unannotated_examples.recorded_count`
+  # is NOT the sum of `unannotated_directories[].unannotated_count`, and neither figure is wrong. The
+  # first counts one area (or one file); the second ranks the whole run and is capped besides — so the
+  # sum is short of the run's total whenever `directory_count > rows.size`, narrowing or no narrowing.
+  # `spec_file` / `spec_directory` are echoed on the sibling block for exactly this reconciliation, and
+  # `directory_count` beside these rows is the other half of it.
+  #
+  # `limit` is READ OFF `SpecObservation::UNANNOTATED_DIRECTORIES_LIMIT` rather than restated, on the
+  # precedent every capped block here sets — it is its own constant and is neither
+  # `HEAVIEST_DIRECTORIES_LIMIT` nor `UNANNOTATED_EXAMPLES_LIMIT`.
+  #
+  # OPERANDS, NEVER A FRACTION — this file's governing rule for every rollup it serves. The rows carry
+  # `unannotated_count` and the `recorded_count` it was counted against, so a client divides by the
+  # same figure the ranking was built on. A single percentage here would be a number a client cannot
+  # take apart, and the sibling rollups' `coverage_label` is TIMING coverage and would be mistaken for
+  # this one the moment either shipped a bare ratio.
+  #
+  # `null` WHEN THE FLAG WAS NOT SENT, and `null` — not an empty block — for a run that recorded no
+  # per-example rows at all, which is `UnannotatedDirectories#recorded?` and the same absence
+  # `serialized_spec_directories` answers that run with.
+  #
+  # ⭐ THAT SECOND NULL IS THE OTHER PLACE THESE TWO KEYS OF ONE BLOCK DISAGREE, and it is disclosed
+  # here for the same reason the scope disagreement above is. On a run that recorded no per-example
+  # rows, with the flag sent:
+  #
+  #     unannotated_examples    -> a present block, `rows: []`, `recorded_count: 0`
+  #     unannotated_directories -> `null`
+  #
+  # A client reconciling those is doing exactly the arithmetic the paragraph above was written to
+  # protect, so the difference has to be readable rather than inferred from two absent things looking
+  # alike. It is NOT an inconsistency to iron out. The sibling's zero is ambiguous by construction —
+  # "fully annotated" and "recorded nothing at all" are the same `recorded_count: 0` there, and that
+  # block's own comment sends a client to neighbouring keys to tell such pairs apart. This key IS one
+  # of those neighbours: a PRESENT map beside that zero means the run has a per-area grain and the
+  # zero is the success state; a `null` map means the run recorded nothing and the zero is an absence
+  # of data. Serving `rows: []` here instead would spend a distinction a client has no other way to
+  # make in order to make two keys look the same. Both halves are pinned together in
+  # `repository_unannotated_examples_spec.rb`, beside the fully-annotated run that reaches the same
+  # zero with the map present.
+  def serialized_unannotated_directories(test_run)
+    return nil unless requested_unannotated_examples?
+
+    directories = UnannotatedDirectories.for(test_run)
+
+    return nil unless directories.recorded?
+
+    {
+      rows: directories.rows.map do |row|
+        { path: row.path, unannotated_count: row.unannotated_count, recorded_count: row.recorded_count }
+      end,
+      directory_count: directories.directory_count,
+      limit: SpecObservation::UNANNOTATED_DIRECTORIES_LIMIT
     }
   end
 
@@ -1343,8 +1939,8 @@ class Api::V1::RepositoriesController < Api::BaseController
   # finding it: a surface reporting a clean result for work it did not do. The `null` cannot be
   # misread, and this block says which of the two states produced it.
   #
-  # `order` NAMES ALL THREE KEYS, and `tie_break_served` is `true` here — one of the two places on
-  # this endpoint where it is, the other being `serialized_directory_growth_window`.
+  # `order` NAMES ALL THREE KEYS, and `tie_break_served` is `true` here — one of the blocks on
+  # this endpoint where it is, as is `serialized_directory_growth_window`.
   # `UnstableTests#initialize` sorts by `(-failed_run_count, -run_count,
   # name)` and every one of those three is served on the row below, so unlike `history` and
   # `branches` — whose tie-breaks are an ingest sequence and a last-run timestamp that no row
@@ -1670,10 +2266,10 @@ class Api::V1::RepositoriesController < Api::BaseController
   # block's own business. Its `state` is what separates the eight answers.
   #
   # `order` names both keys and `tie_break_served` is TRUE, which is the honest reading here and
-  # only the second place on this endpoint it is. `SpecObservation.directory_growth_between` orders
-  # by `ABS(anchor_count - baseline_count) DESC` then `path ASC`, and both operands and the path go
-  # out on every row — so a client CAN reproduce this order from what it holds, unlike `history`
-  # (whose tie-break is an ingest sequence no row carries) and `branches`.
+  # not the only block on this endpoint where it is. `SpecObservation.directory_growth_between`
+  # orders by `ABS(anchor_count - baseline_count) DESC` then `path ASC`, and both operands and the
+  # path go out on every row — so a client CAN reproduce this order from what it holds, unlike
+  # `history` (whose tie-break is an ingest sequence no row carries) and `branches`.
   #
   # `basis` IS THE OBJECT'S OWN LOAD-BEARING LIMITATION, served as a token because a client cannot
   # act on the paragraph `spec_directory_window_growth.rb` spends on it. The figures compare TWO
@@ -1917,7 +2513,13 @@ class Api::V1::RepositoriesController < Api::BaseController
   # never off `requested_branch`, which narrows `history` and must not be read as having narrowed
   # this. Like `latest_run`, this block is NOT re-anchored by `?branch=`: under `?branch=main` on a
   # repository whose newest run is on `feature/x`, this still compares the two newest `feature/x`
-  # runs, and `branch` says `feature/x` so the two cannot be confused.
+  # runs, and `branch` says `feature/x` so the two cannot be confused. And like `latest_run` again,
+  # it IS re-anchored by `?commit_sha=` — the one parameter that moves the anchor. Under an explicit
+  # ask `anchor_commit_sha` and `branch` are the NAMED run's, and the baseline is the run before THAT
+  # one on ITS branch, because `previous_test_run_on_branch` is handed the very `latest_test_run`
+  # memo `latest_run` was built from. Both halves are stated here deliberately: this block is one of
+  # the few that enumerates what does and does not move it, and an enumeration that named only the
+  # parameter with no effect would be the more misleading half to leave standing alone.
   #
   # `basis` IS WHAT SEPARATES THIS PAIR FROM THE ONE ABOVE IT, and it is the key a client reads to
   # know which of the two growth measurements it is holding. `two_endpoints` there says the figures
@@ -2109,7 +2711,11 @@ class Api::V1::RepositoriesController < Api::BaseController
   # because `Repository#previous_test_run_on_branch` scopes to the latest run's OWN branch and
   # refuses a blank one, so this is branch-correct by construction rather than by a parameter. Like
   # `latest_run` and the count pair, this block is NOT re-anchored by `?branch=`: `branch` names the
-  # branch the comparison WAS MADE ON, read off the latest run and never off `requested_branch`.
+  # branch the comparison WAS MADE ON, read off the latest run and never off `requested_branch`. And
+  # like both of them it IS re-anchored by `?commit_sha=`, the one parameter that moves the anchor:
+  # `anchor_commit_sha` and `branch` become the NAMED run's and the baseline the run before THAT one
+  # on ITS branch, off the same `latest_test_run` memo. That is what keeps the two growth windows
+  # under one request from sitting on two different runs — neither chooses, both follow.
   #
   # `basis` is `previous_run_on_branch`, the count pair's token and for its reason: the baseline is
   # one specific run, named by `baseline_commit_sha`, so the comparison has no gap in it — an area
@@ -2554,19 +3160,68 @@ class Api::V1::RepositoriesController < Api::BaseController
     }
   end
 
-  # The repository's newest run, memoized across the nil — read by `latest_run` and by BOTH
-  # run-over-run growth blocks above, which is why it is an accessor here and not three calls to
-  # `Repository#latest_test_run` (which memoizes nothing and would issue the query once per reader).
+  # THE RUN THE CLIENT NAMED, or `nil` when it named none and `nil` when the one it named has no run
+  # — the single source of truth for both halves of the anchor decision, so `latest_test_run` below
+  # and `run_anchor.resolved` above cannot come apart.
+  #
+  # It exists because the fallback is otherwise UNOBSERVABLE once it has happened: `latest_test_run`
+  # returns a row either way, and the only remaining way to ask "did the ask hit?" would be to
+  # compare the served sha against the requested one — a re-derivation of a decision that was already
+  # made, and one that reads as a coincidence check rather than as the fact it is standing in for.
+  #
+  # Memoized across the nil with `defined?` rather than `||=`, because `nil` — no ask — is the common
+  # answer on this endpoint and both readers ask; `||=` would re-issue the finder on every default
+  # call, which is the case this most needs to cost nothing.
+  #
+  # The `requested_commit_sha &&` guard is what makes the no-ask path issue NO QUERY AT ALL.
+  # `Repository#latest_test_run_for_commit` returns `nil` for a blank on its own, so this is not
+  # correctness — it is the difference between a default `GET` paying for a lookup it cannot use and
+  # paying for nothing.
+  def requested_test_run
+    return @requested_test_run if defined?(@requested_test_run)
+
+    @requested_test_run =
+      requested_commit_sha && current_repository.latest_test_run_for_commit(requested_commit_sha)
+  end
+
+  # THE RUN THIS ENDPOINT DESCRIBES, memoized across the nil — the repository's newest run by
+  # default, or the newest run on the sha `?commit_sha=` named. Read by `latest_run`, by `run_anchor`
+  # and by BOTH run-over-run growth blocks above, which is why it is an accessor here and not several
+  # calls to `Repository#latest_test_run` (which memoizes nothing and would issue the query once per
+  # reader).
   #
   # Memoizing also makes the ONE INSTANCE shared, which is what keeps `assembled_like?` free: that
   # predicate reads `TestRun#shard_count`, which memoizes `shard_totals` PER INSTANCE, and
   # `latest_run.shards` has already paid for it on this row by the time the growth gate asks.
   #
   # NOT RE-ANCHORED BY `?branch=` — see `serialized_latest_run`, which states that at length.
+  #
+  # ⭐ RE-ANCHORED BY `?commit_sha=`, AND THIS IS THE ONLY PLACE THE ANCHOR IS CHOSEN. Every run-grain
+  # block on the endpoint hangs off this one memo — `latest_run` and its five rollups, the three
+  # drill-ins, `shards`, both growth windows' `anchor_commit_sha`/`branch`, and `previous_test_run`
+  # below — so re-anchoring here is what makes them describe the named run COHERENTLY. A second place
+  # SELECTING a run is how they would come to disagree about which run they are on, which is the one
+  # failure this shape exists to make impossible: a client cannot be served a `latest_run` on one sha
+  # and a growth window anchored on another.
+  #
+  # The parameter itself is read by `requested_test_run` above and echoed by `serialized_run_anchor`,
+  # and neither is a second anchor: the first is the memo this one falls back FROM, and the second
+  # reports the choice rather than making one. No serializer reads `requested_commit_sha` to pick a
+  # row.
+  #
+  # `previous_test_run` follows without a change of its own. It is already "the newest run strictly
+  # older than THIS one, on THIS one's branch", which is the right baseline for a named run for the
+  # same reason it is for the newest one — and it reads the branch off whatever row this returns.
+  #
+  # FALLS BACK RATHER THAN 404s when the sha resolves to nothing, and the `||` is where that happens.
+  # A stale bookmark, a pruned run and a commit whose CI never reported are ordinary ways to arrive,
+  # so the endpoint answers with the run it would have answered with anyway — and `run_anchor`
+  # DISCLOSES the fallback rather than leaving the client to infer it from a sha that did not match
+  # the one it asked for.
   def latest_test_run
     return @latest_test_run if defined?(@latest_test_run)
 
-    @latest_test_run = current_repository.latest_test_run
+    @latest_test_run = requested_test_run || current_repository.latest_test_run
   end
 
   # The run the latest one is compared against: the newest run STRICTLY OLDER than it ON ITS OWN
@@ -2642,7 +3297,7 @@ class Api::V1::RepositoriesController < Api::BaseController
   #
   # GUARDED HERE AND NOT BY WIDENING THE MODEL — the same shape `RepositoriesController#show` already
   # uses (`if @latest_test_run && @previous_test_run`), and the reason `spec_directory_growth` states
-  # for its own guard: teaching `.for` to accept a nil would give the object an eleventh absence
+  # for its own guard: teaching `.for` to accept a nil would give the object a further absence
   # state that the dashboard — its other caller, which guards for itself — can never reach, and would
   # move a decision the two call sites make identically into a contract only one of them relies on.
   #

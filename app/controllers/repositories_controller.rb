@@ -31,9 +31,31 @@ class RepositoriesController < ApplicationController
   # `WHERE name = ''`, a query for a description no row can carry.
   include RequestedRepeatedDescriptionParam
 
+  # `?commit_sha=` read as a commit sha, naming WHICH RUN this page is anchored on. The fifth ask
+  # this page reads and the only one that RE-ANCHORS rather than narrows: the four above take the
+  # anchor as given — `?branch=` picks a series for one panel, and the three drill-in parameters
+  # open one area, one file or one description OF the run `show` had already chosen. This one
+  # chooses that run, which is why it is read in exactly one place (the `@latest_test_run`
+  # assignment in `show`) and every panel hanging off that ivar re-anchors without reading the
+  # parameter at all.
+  #
+  # The module is INCLUDED and not re-derived, which is what the comment beside
+  # `Api::V1::RepositoriesController`'s own include promised would happen: it said this page "offers
+  # no run selector, so there is no second reader to share a guard with yet. When one arrives it
+  # includes this module rather than re-deriving the guard." This is that reader. The hazard is the
+  # same at both surfaces and is argued in full in `RequestedCommitShaParam` — the value reaches a
+  # `where(commit_sha: …)` on a plain string column, where an Array does not raise but silently
+  # becomes an `IN` list at the position that CHOOSES THE RUN, so every panel on this page would
+  # describe whichever of several unrelated commits sorted newest.
+  include RequestedCommitShaParam
+
   # `?unstable_test=` read as a test description, for the drill-in under the "Tests whose outcome
   # changed" panel. Shared with `Api::V1::RepositoriesController`, which reads the same parameter
   # under the same guard to open the same window's sequence on `GET /api/v1/repository`.
+  #
+  # A NARROWING ask like the drill-in parameters above and not a second re-anchoring one, so it is
+  # read under whichever run `?commit_sha=` chose rather than choosing one itself: it opens one row
+  # of one panel, and which run the page is anchored on is settled before it is read.
   #
   # Its own concern rather than a widening of `RequestedRepeatedDescriptionParam` even though both
   # are read as a `spec_observations.name`, for the reason the concern itself carries in full: they
@@ -53,39 +75,149 @@ class RepositoriesController < ApplicationController
   # list. The fifth is a per-row question asked by repositories/show, once per API key.
   helper_method :owns_repository?, :key_count_visible?, :api_key_count, :latest_run, :former_member?
 
-  # Everything the viewer can open: what they own, plus what has been shared with them. Kept as one
-  # relation rather than `owned + shared`, because concatenating two Arrays orders them
-  # owned-then-shared and silently loses the alphabetical order the page is sorted by.
-  #
-  # No `.distinct`: RepositoryMembership rejects a row for the owner outright
-  # (`user_is_not_the_owner`), so the two sides cannot overlap. A defensive uniq here would mask
-  # that invariant breaking rather than let it fail loudly.
+  # Everything the viewer can open, through the one seam that defines that set — see
+  # `Repository.accessible_by`, which carries the union rule and the reason it stays a relation
+  # rather than becoming `owned + shared`.
   #
   # `includes(:user)` because every shared card names its owner. Without it that is one user query
   # per shared card — the same footing `shared_permissions` puts its own per-card question on, so
-  # the page costs the same whether the list has one shared card or fifty.
+  # the page costs the same whether the list has one shared card or fifty. It stays HERE and not on
+  # the seam: it is this page's per-card concern, and the other reader of that set has no use for it.
   def index
-    @repositories = Repository.where(user_id: current_user.id)
-                              .or(Repository.where(id: current_user.repository_memberships.select(:repository_id)))
+    @repositories = Repository.accessible_by(current_user)
                               .includes(:user)
                               .order(:github_full_name)
   end
 
   def show
     @repository = current_repository(:view)
-    # `includes` because the table names the creator of every row — without it, listing keys is
-    # one user query per key.
-    @api_keys = @repository.api_keys.includes(:created_by_user).order(created_at: :desc)
-    # The only signal that the repo ever reached the API: the newest use across every key.
-    # `nil` means no key has ever authenticated — see the "Connect this repository" panel.
-    @last_api_request_at = @repository.api_keys.maximum(:last_used_at)
+    # Loaded with `to_a` because the three figures below are read off it: they are claims about the
+    # same set of rows, and deriving them from one loaded collection is what stops them being
+    # separate answers to "when did this repository last reach the API" that can disagree.
+    #
+    # The `created_by_user` preload is bought only by a viewer who will actually render the keys
+    # table. That table is the only thing that names the creator of a row
+    # (`_api_keys.html.erb:23`), and it is a `keys.manage` surface end to end — for a view-only
+    # member it does not render at all, so preloading unconditionally would issue a join and
+    # discard it, on the very page whose stated rule (the API keys panel comment in `show.html.erb`)
+    # is that credential metadata is gated. Inside the gate the preload is still required: without
+    # it, listing keys is one user query per key. Asking costs nothing — `repository_policy` is
+    # memoized and already populated by `current_repository` above — and the view asks that same
+    # memoized question for `manage_keys`, so the query shape here and the render that consumes it
+    # cannot disagree about which viewer this is.
+    #
+    # PRICED, on one fixture (two keys, two distinct creators), because this load replaces two
+    # round trips rather than adding one, and the two viewer classes are owed separate figures:
+    #
+    #   keys.manage viewer  14 -> 12   drops `maximum(:last_used_at)` AND the `SELECT 1` that
+    #                                  `has_api_keys` used to cost on an unloaded relation; the
+    #                                  table's own SELECT and its preload are what remain.
+    #   view-only member    12 -> 11   drops the same two and adds only the keys SELECT, which it
+    #                                  now needs for the connection indicator. The preload is the one
+    #                                  it does NOT buy, and skipping it is the whole difference
+    #                                  between this and 12 -> 12, i.e. a join fetched and thrown
+    #                                  away.
+    #
+    # Both are pinned: the owner by the absolute page budget in `repositories_spec.rb`, the member
+    # by the paired preload guard beside it. Separate guards because from here the paths differ.
+    keys = @repository.api_keys.order(created_at: :desc)
+    keys = keys.includes(:created_by_user) if repository_policy.can?(:keys_manage)
+    @api_keys = keys.to_a
+    # The keys whose `last_used_at` was stamped by a token that no longer exists: rotated, with
+    # nothing having authenticated since. `ApiKey#rotated_and_unused?` carries the rule and both of
+    # its nil cases. Read by the key list, which must not print an inherited "last used" age, and
+    # by the connection indicator in the page header.
+    @rotated_unused_api_keys = @api_keys.select(&:rotated_and_unused?)
+    # DID ANYTHING EVER AUTHENTICATE — the newest use across every key, whichever token stamped it.
+    # `nil` means no key has ever been used at all, which is the only question this can answer and
+    # the one the "Not connected yet" branch asks. It must NOT be read as "the repository is
+    # reachable now": a rotation retires a token without touching its use, so this figure outlives
+    # the credential that produced it.
+    @last_api_request_at = @api_keys.filter_map(&:last_used_at).max
+    # THE SAME FIGURE, RESTRICTED TO KEYS WHOSE `last_used_at` STILL DESCRIBES THE TOKEN THEY ARE
+    # CARRYING NOW — the one the "Connected" stat may report, because it is the only one whose age
+    # belongs to a credential that still exists. `nil` while every key that has ever authenticated
+    # has since been rotated and not used, which is exactly the window between a rotation and the
+    # replacement reaching CI, and precisely when the stat used to read `Connected` in success tone
+    # over a pipeline that had been 401ing since the rotation.
+    #
+    # Separate from `@last_api_request_at` rather than replacing it, because the panel needs both:
+    # the difference between the two is what tells "nothing has ever connected" apart from
+    # "something did, with a token that is gone".
+    @last_live_api_request_at = (@api_keys - @rotated_unused_api_keys).filter_map(&:last_used_at).max
     # Every suite figure on the Overview panel is read off this one row — suite size, annotated
     # count, and the difference between them. `nil` is load-bearing and means *never ingested*,
     # which the panel renders as an empty state rather than as `0%`; a repository whose CI has
     # never reported must not look identical to one that reported and genuinely found no
     # annotations. Deliberately the run row itself and not a repository-wide ratio floored at 0.0,
     # which cannot express that difference — a floored figure reads the same either way.
-    @latest_test_run = @repository.latest_test_run
+    #
+    # WHICH run that is has been a question this page could not be asked until now. It is
+    # `?commit_sha=`, the same ask the JSON endpoint (SPGD-544) and the MCP bridge (SPGD-552) have
+    # taken since they shipped, and the reason it is worth having here is the one the bridge states
+    # about itself: without a run ask, the anchor names the repository's NEWEST run, which may be
+    # another branch's, with no error and no signal that you were answered about someone else's
+    # commit. On the web there was no ask AND no signal.
+    #
+    # THREE locals rather than one, because three different questions are asked of them below and
+    # collapsing any two of them is a bug this page would ship green.
+    #
+    # `newest_test_run` — the repository's newest accepted run, unconditionally, whatever was asked.
+    # It is what "when did CI last succeed" and "which series is the trajectory drawn on" mean, and
+    # neither is a question about the reader's anchor. Read once here rather than re-read at each of
+    # those two sites, so the page costs exactly the one indexed `LIMIT 1` it always cost on a
+    # default call; it is a plain local and is never reassigned, so unlike the memo below it cannot
+    # acquire a re-anchoring parameter later (see `@rejected_ingests`, which is where the API hit
+    # this and wrote the rule out).
+    #
+    # `@run_anchor_request` — the RAW ask, kept whatever it names, on the idiom
+    # `@trajectory_branch_request` below already sets for the same shape of ask on this page: a
+    # panel can only SAY the fallback happened if the ask survives it, and a stale bookmark, a
+    # pruned run and a commit whose CI never reported are all ordinary ways to arrive here.
+    #
+    # `@run_anchor_run` — the run the ask RESOLVED to, or nil. The disclosure is computed off this
+    # rather than by comparing two shas, for the reason `serialized_run_anchor` gives: the choice
+    # and the statement about the choice must not be able to come apart.
+    #
+    # NO 404 and no validation branch, at any of the three. An unknown, blank or malformed sha is
+    # not a malformed request — it falls back to the newest run and the page says so.
+    newest_test_run = @repository.latest_test_run
+    @run_anchor_request = requested_commit_sha
+    @run_anchor_run = @run_anchor_request && @repository.latest_test_run_for_commit(@run_anchor_request)
+    @latest_test_run = @run_anchor_run || newest_test_run
+    # The refused half of the same delivery stream the run above is the accepted half of, and the
+    # verdict the page header's connection indicator needs in order to stop being wrong.
+    #
+    # `@last_api_request_at` above is stamped by `Api::BaseController#authenticate_api_key!` on the
+    # way IN, so it moves for a delivery that is then refused for its payload — which is how a
+    # repository whose every run was being thrown away rendered `Connected` in success tone with a
+    # hint saying the last request was two minutes ago. That column answers "did anything
+    # authenticate", and it is the only question it can answer; whether what authenticated was then
+    # ACCEPTED is this object's, and the panel now asks both.
+    #
+    # Handed the latest run's `created_at` rather than looking one up: that run is already loaded
+    # directly above for the Overview, and a second read here would be a second answer to "when did
+    # CI last succeed" sitting one line from the first. `RejectedIngests` carries the comparison
+    # rule and both of its bounds.
+    #
+    # ⭐ ANCHORED ON `newest_test_run` AND NEVER ON `@latest_test_run`. This is the one non-obvious
+    # thing about this block and a later reader must not "simplify" it — the API states the same
+    # rule over the same comparison at `Api::V1::RepositoriesController#rejected_ingests`.
+    #
+    # That ivar is RE-ANCHORED BY `?commit_sha=`, deliberately, so every run-grain panel describes
+    # the named run coherently. Handing it here would compare the newest REFUSAL against an
+    # arbitrary pinned OLDER run, so any reader bookmarking an old commit on a perfectly healthy
+    # repository would be told their deliveries are being refused. That is the same class of
+    # falsehood this block exists to remove, reintroduced by the feature above it.
+    #
+    # Delivery health is a fact about the repository's DELIVERY STREAM, not about whichever run the
+    # reader anchored to, so the accepted side is the true newest accepted run on every request.
+    #
+    # Loaded unconditionally and NOT gated on `@latest_test_run`, unlike the per-example panels
+    # below: a repository that has never had a run accepted is not the empty case here, it is the
+    # worst case — every delivery it ever made was refused, and that is precisely when the reader
+    # needs the list. One bounded query, capped at `IngestRejection::PANEL_LIMIT`.
+    @rejected_ingests = RejectedIngests.for(@repository, last_accepted_run_at: newest_test_run&.created_at)
     # The one figure on that panel read off *two* rows: the run the suite size is compared against,
     # so a size can be reported as a change and not only as a level. Passed the already-loaded
     # latest run rather than looking it up again, so this costs exactly one query — and none at all
@@ -105,9 +237,17 @@ class RepositoriesController < ApplicationController
     # deletion no commit made. See `TestRun#suite_size_measured?` / `#assembled_like?`.
     @previous_test_run = @repository.previous_test_run_on_branch(@latest_test_run)
     # The tail of that same append-only history for the "Recent runs" panel. Bounded at ten rows by
-    # the model, so this stays O(1) no matter how long CI has been reporting. It shares
-    # `latest_test_run`'s ordering by construction, so the run named on the Overview panel above is
-    # always the top row here — the two panels cannot name different commits on the same page.
+    # the model, so this stays O(1) no matter how long CI has been reporting.
+    #
+    # NOT RE-ANCHORED BY `?commit_sha=`, and that is the contract rather than an omission: history
+    # is a SERIES and the anchor is a ROW. It shares `latest_test_run`'s ordering by construction,
+    # so on a default call the run named on the Overview panel above is always the top row here and
+    # the two panels cannot name different commits on the same page. ⭐ THAT IDENTITY IS NOT
+    # EXPECTED TO HOLD UNDER AN EXPLICIT ASK: naming an older run makes the Overview's run a row
+    # from the middle of this list, or from behind its bound entirely. The API says the same of its
+    # own `history` at `serialized_run_anchor`, and on this page the anchor disclosure in the
+    # Overview panel plus the `aria-current` row here are what make the difference legible instead
+    # of reading as a rendering bug.
     #
     # Materialised with `.to_a` rather than left as a relation, because each row is then primed
     # with its own shard count — see `ShardCountPreloading`. Every reader in the view is `any?` /
@@ -127,18 +267,28 @@ class RepositoriesController < ApplicationController
     # for every visitor while the trunk holds a month of comparable history in the same table.
     # `?branch=` is how a reader asks for that history back.
     #
-    # Deliberately a SEPARATE anchor from `@latest_test_run`, which stays exactly what it was: the
-    # Overview's suite size, its delta and the Recent runs panel all name the latest run and go on
-    # naming it whatever this parameter says. Only the trajectory moves — so a reader who selects a
-    # branch cannot end up reading a headline figure about one run under a chart about another.
+    # Deliberately a SEPARATE anchor from `@latest_test_run`, which `?branch=` leaves exactly as it
+    # found it: the Overview's suite size, its delta and every drill-in go on naming the run that
+    # ivar holds whatever this parameter says. Only the trajectory moves — so a reader who selects a
+    # branch cannot end up reading a headline figure about one run under a chart about another. That
+    # separation is what lets the two asks compose: `?branch=` picks the series, `?commit_sha=` picks
+    # the row, and neither redefines the other.
     #
-    # An absent, blank or unrecognised branch falls back to `@latest_test_run` and renders exactly
-    # what this page rendered before the parameter existed. A deleted branch, a typo and a stale
-    # bookmark are all ordinary ways to arrive here. `@trajectory_branch_request` keeps the raw ask
-    # so the panel can SAY the fallback happened, rather than quietly drawing a different branch
+    # An absent, blank or unrecognised branch falls back to the repository's newest run and renders
+    # exactly what this page rendered before the parameter existed. A deleted branch, a typo and a
+    # stale bookmark are all ordinary ways to arrive here. `@trajectory_branch_request` keeps the raw
+    # ask so the panel can SAY the fallback happened, rather than quietly drawing a different branch
     # from the one the URL names.
+    #
+    # The fallback is `newest_test_run` and specifically NOT `@latest_test_run`, for the reason
+    # "Recent runs" above is not re-anchored either: this panel draws a SERIES, and `?commit_sha=`
+    # names a row. On a default call the two are the same object and this is byte-identical to what
+    # it always was; under an explicit ask, re-anchoring here would silently move a thirty-run
+    # window onto the pinned run's branch on the strength of a parameter that says nothing about
+    # which series to draw. A reader who wants that series asks for it with `?branch=`, which is the
+    # ask this panel is built around.
     @trajectory_branch_request = requested_branch
-    @trajectory_run = @repository.latest_test_run_on_branch(@trajectory_branch_request) || @latest_test_run
+    @trajectory_run = @repository.latest_test_run_on_branch(@trajectory_branch_request) || newest_test_run
     # The choices, each with how much history it holds — ONE bounded query, and specifically not a
     # `SELECT DISTINCT branch` over the whole run history, which is the O(history) scan
     # `Repository#branch_histories` documents at length for refusing.
@@ -173,10 +323,10 @@ class RepositoriesController < ApplicationController
     # quarter of the suite and back. The view renders the object's own counts, so the caption's
     # plotted/withheld figures cannot drift from the line.
     #
-    # Held in a local because the panel below reads the SAME window. Two panels that each fetched
-    # "the last thirty runs on this branch" would be two windows with no structural reason to keep
-    # agreeing, on a page where one of them captions the other one's branch — and it would be a
-    # second copy of a query that is already the page's most carefully bounded read.
+    # Held in a local because every panel below that draws on this window reads the SAME rows. Each
+    # panel that fetched "the last thirty runs on this branch" for itself would be its own window, with
+    # no structural reason to keep agreeing, on a page where they caption each other's branch — and
+    # each would be another copy of a query that is already the page's most carefully bounded read.
     trajectory_runs = @repository.suite_size_trajectory(@trajectory_run)
     @suite_trajectory = SuiteTrajectory.new(runs: trajectory_runs, branch: @trajectory_run&.branch)
     # The slowest examples of the run every panel above names, with the coverage the panel states
@@ -239,6 +389,35 @@ class RepositoriesController < ApplicationController
     # Guarded identically, and on nothing else. ONE query, not growing with the size of the suite:
     # see `SpecDirectoryDurations`.
     @spec_directory_durations = SpecDirectoryDurations.for(@latest_test_run) if @latest_test_run
+    # The SAME grain as the line above and a different AXIS, which is why it is a second read rather
+    # than a column on that one. That rollup ranks areas by WALL CLOCK and its coverage figure is
+    # TIMING coverage; this one ranks them by how many of their examples carry no `@intent`. An
+    # area of four hundred fast unannotated examples heads this list and appears nowhere near the
+    # head of that one, so neither is derivable from the other.
+    #
+    # The Overview panel at the top of this page already prints the run's annotation debt — a
+    # subtraction, `total_specs_count - annotated_specs_count` — and a subtraction is the whole
+    # answer it can give: a five-figure count of tests the reader is handed no route to any of. That
+    # is a count of tests nobody has annotated, which is not the same as a count of tests SpecGuard
+    # holds nothing about: where the run recorded per-example rows, every one of them arrived
+    # located by both paths, and named as well whenever its producer sent a description — `name` is
+    # nullable and `SpecObservation.description_presence_in` is what counts the rows lacking one.
+    # The rows are not implied by the figure, either: that subtraction is re-derived over
+    # `test_run_shards`, so a client reporting only totals carries it with no per-example rows at
+    # all, and the panel below is what discloses that rather than letting it read as an absence of
+    # debt (`#recorded?`). The API has served the ranked, scoped worklist behind that figure since
+    # SPGD-591/608/623; this is the same rows on the page the owner actually opens.
+    #
+    # Guarded identically, and on nothing else — with no run there is nothing to rank, and the
+    # Overview's "No CI run has reported yet" is this page's one statement of that. Whether the run
+    # recorded per-example rows at all is a question the object answers (`#recorded?`), so the panel
+    # branches on one read rather than the controller taking a second.
+    #
+    # ONE query, not growing with the size of the suite: one grouped aggregate carrying its own
+    # `COUNT(*) OVER ()`, capped at `SpecObservation::UNANNOTATED_DIRECTORIES_LIMIT`. Shared verbatim
+    # with the API's `unannotated_directories` block, so the two consumers cannot disagree about a
+    # directory — see `UnannotatedDirectories`.
+    @unannotated_directories = UnannotatedDirectories.for(@latest_test_run) if @latest_test_run
     # The same run's rows at a grain none of the panels above reach: not which FILES or AREAS the
     # wall clock went into, but which DESCRIPTIONS more than one example of the run recorded, and
     # what those examples cost between them. Reachable from nowhere until now — `GROUP BY name`
@@ -317,6 +496,50 @@ class RepositoriesController < ApplicationController
     if @latest_test_run && @spec_directory_request
       @spec_directory_files = SpecDirectoryFiles.for(@latest_test_run, @spec_directory_request)
     end
+    # THE LAST RUNG OF THE ANNOTATION LADDER, and the one this page never had: not WHICH AREAS carry
+    # the run's annotation debt but WHICH TESTS. The Overview panel prints that debt at run grain as
+    # `total_specs_count - annotated_specs_count`; `@unannotated_directories` above ranks the areas
+    # it is concentrated in. Neither names a test — which is the gap this closes. Neither is a count
+    # of tests SpecGuard holds nothing about, either: an unannotated example this run RECORDED is
+    # stored exactly as an annotated one is — located by both paths, carrying whatever its producer
+    # reported of description, duration and outcome — and what it lacks is an authored `@intent`.
+    # What the subtraction does not promise is that those rows exist at all — a client reporting only
+    # totals carries the figure with none of them — which the `@unannotated_directories` block above
+    # states in full. Until this, acting on the panel this page had just handed the owner meant
+    # leaving the product for `GET /api/v1/repository?unannotated_examples=1&spec_directory=…` with
+    # an API key.
+    #
+    # NO NEW PARAMETER. It rides `?spec_directory=` and `?spec_file=`, the same asks the duration
+    # drill-downs above read. One ask opens EVERY panel that reads it, each answering in its own
+    # grain over the same area — that is how `drill_down_path` composes asks, and `show.html.erb`
+    # states the rule at "Areas that grew or shrank": it is not a collision to be fixed by minting
+    # another parameter. Assigned HERE rather than beside `@unannotated_directories`, which is the
+    # panel it belongs to topically, because it reads BOTH asks and `@spec_directory_request` is
+    # resolved directly above.
+    #
+    # Guarded on a narrowing having been ASKED for as well as on there being a run, so a page nobody
+    # asked an area or a file of issues no query at all — the same guard `SpecFileExamples` carries
+    # one axis over. `UnannotatedExamples.for`'s narrowings are OPTIONAL and whole-run is a complete
+    # ask on the JSON endpoint; this surface deliberately does not take it. A hundred rows of a
+    # twelve-thousand-example run's debt, unasked, on every dashboard load is the Overview's
+    # subtraction again at length rather than a worklist, and it would put a per-example read on the
+    # budget of every reader who never opened anything.
+    #
+    # Both narrowings are handed over together and are AND-ed by the read, never ranked: see
+    # `SpecObservation.unannotated_in`, where the absence of a precedence rule is argued. Note the
+    # signature — `test_run` is positional and the narrowings are keywords.
+    #
+    # Anchored on `@latest_test_run` for the reason every drill-down above is: the area was picked
+    # out of a ranking of that run, so its examples must come from that same run or the panel would
+    # be answering about rows the reader did not click.
+    #
+    # ONE query, bounded by the size of the narrowed slice and capped at
+    # `SpecObservation::UNANNOTATED_EXAMPLES_LIMIT`, with the population count riding the same rows
+    # as a window — and none at all without an ask: see `UnannotatedExamples`.
+    if @latest_test_run && (@spec_file_request || @spec_directory_request)
+      @unannotated_examples = UnannotatedExamples.for(@latest_test_run, spec_file: @spec_file_request,
+                                                                       spec_directory: @spec_directory_request)
+    end
     # The same areas, asked of TWO runs instead of one: not which area carries the time but which
     # area got bigger or smaller since the previous run ON THIS BRANCH. `@previous_test_run` above
     # is that run and is already in memory, so riding it costs nothing and keeps this panel on the
@@ -341,10 +564,10 @@ class RepositoriesController < ApplicationController
       #
       # Guarded on the same two runs AND on an area having been asked for, so a page nobody asked an
       # area of issues no query at all. The ask is `?spec_directory=` — the SAME parameter the
-      # durations drill-down above reads, deliberately not a second one. One ask now opens TWO
-      # panels, each answering in its own grain: which files carry the area's wall clock, and which
-      # of them moved since the previous run. That is how `drill_down_path` composes asks and it is
-      # intended — a later reader should not "fix" it by splitting the parameter in two.
+      # durations drill-down above reads, deliberately not a second one. One ask opens EVERY panel
+      # that reads it, each answering in its own grain over the same area. That is how
+      # `drill_down_path` composes asks and it is intended — a later reader should not "fix" it by
+      # splitting the parameter in two.
       #
       # `@spec_directory_growth` is passed rather than the runs alone: this drill-in inherits that
       # panel's comparability verdict instead of re-deriving it, so it cannot assert a comparison
@@ -414,7 +637,7 @@ class RepositoriesController < ApplicationController
       @unstable_tests = UnstableTests.for(@repository, trajectory_runs, branch: @trajectory_run&.branch)
       # ONE ROW of that ranking, opened: not which tests changed their outcome but WHAT THIS ONE
       # ACTUALLY DID, run by run and in the window's own order. The rung the flakiness ladder never
-      # had, and the last one on this page — `UnstableTests` is `COUNT`s and `ARRAY_AGG(DISTINCT …)`
+      # had, and the end of it — `UnstableTests` is `COUNT`s and `ARRAY_AGG(DISTINCT …)`
       # under `GROUP BY name`, which is what keeps it constant in the size of the suite and is
       # exactly what discards the run axis. A row saying `30 runs, 4 failed, [failed, passed]`
       # describes two windows calling for opposite work: four failures at runs 27–30 is a
@@ -457,8 +680,8 @@ class RepositoriesController < ApplicationController
       # intersection — an area gaining four examples a run is nobody's biggest mover on that panel
       # and sorts below its cap thirty times running.
       #
-      # The THIRD reader of this same local, for the reason stated where it is taken: three panels
-      # each fetching "the last thirty runs on this branch" would be three windows with no
+      # Another reader of this same local, for the reason stated where it is taken: every panel that
+      # fetched "the last thirty runs on this branch" for itself would be its own window, with no
       # structural reason to keep agreeing, on a page where each captions the others' branch. So the
       # window costs nothing here — it is handed over, not re-fetched.
       #
@@ -473,6 +696,32 @@ class RepositoriesController < ApplicationController
       # the size of the suite or with the length of the window: see `SpecDirectoryWindowGrowth`.
       @spec_directory_window_growth =
         SpecDirectoryWindowGrowth.for(trajectory_runs, branch: @trajectory_run&.branch)
+      # The WALL CLOCK at the grain the two panels above already speak at, and the one grain this
+      # page has never had. "Slowest tests" above is ONE run, and its own comment says why it stays
+      # there: `example_id` is positional and not stable across refactors, so a ranking that spanned
+      # runs on that key would be pairing rows not known to be the same test. That is a statement
+      # about the KEY, and `spec_identity_id` is a different key — semantic, resolved by
+      # `Ingest::IdentityResolver`, and stable across a move, a reorder and a reword alike. So this
+      # panel asks the question the per-run one declines: is this test chronically slow, or was that
+      # one bad run.
+      #
+      # Another reader of this same local, for the reason stated where it is taken: every panel that
+      # fetched "the last thirty runs on this branch" for itself would be its own window, with no
+      # structural reason to keep agreeing, on a page where each captions the others' branch. So the
+      # window costs nothing here — it is handed over, not re-fetched.
+      #
+      # Guarded on the window having runs at all, and on nothing else — the same guard its two
+      # siblings above take, and for the same reason. Whether the newest run wrote per-example rows,
+      # whether any of them have been matched to a durable test yet, and how much of what it wrote
+      # carried a timing are all questions `SlowestTests` answers, and it answers them as four named
+      # states rather than as one empty list: the panel branches on `#state`, so every figure it
+      # prints comes off one set of reads of one window.
+      #
+      # THREE bounded queries at most and ONE where the newest run has nothing to rank — a gate, a
+      # capped candidate step over a single run, and a composition over those candidates only. None
+      # of them grows with the size of the suite or with the length of the window: see
+      # `SlowestTests`.
+      @slowest_tests = SlowestTests.for(@repository, trajectory_runs, branch: @trajectory_run&.branch)
     end
     # Set by ApiKeysController#create and #regenerate, and readable exactly once — see
     # ApiKeysController.

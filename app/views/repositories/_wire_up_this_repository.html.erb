@@ -1,0 +1,106 @@
+  <%# == The integration, as one thing to paste (SPGD-705)
+      ==========================================================================================
+
+      This REPLACES "Connect this repository", and what it replaces is worth naming, because the
+      panel that stood here was not merely thin — it pointed the wrong way. It showed
+      `GET /api/v1/repository` under the heading "Endpoint" and a curl against it under "Try it".
+      That request sends SpecGuard nothing. It is a connectivity check. A reader who had just
+      minted a credential and followed the only instructions the product shipped ended up with a
+      200 and no telemetry, and nothing on the page said the write endpoint existed at all — nor
+      the client gem, nor the linter, nor the MCP bridge.
+
+      So the panel's job is now handed off rather than expanded: the whole path lives on the public
+      integration guide, which is written for a reader with no credentials and no access to this
+      source, and which is checked against the endpoint by
+      `spec/requests/integration_guide_spec.rb`. What stays here is the one thing that page cannot
+      know — WHICH repository, and WHERE its credential is.
+
+      == Why a prompt and not a checklist
+
+      The audience is an AI coding agent, and the work is genuinely per-project: the guide branches
+      on language and test framework, and this panel cannot know either. A checklist would have to
+      pick one branch and be wrong for everybody else. A prompt hands the branching to something
+      that can see the repository.
+
+      It is deliberately SHORT and deliberately not documentation. Restating the wire contract here
+      would be an unverified second copy of a page that IS verified — and the copy nobody re-reads
+      is the one that goes stale. `IntegrationGuideHelper#integration_guide_agent_prompt` builds the
+      text, and the same method builds the reveal panel's, so the two surfaces cannot drift.
+
+      == What is NOT here any more
+
+      The Connection stat and its three paragraphs of prose about 401 versus 400, about what a
+      rotated-but-unused key means, and about why "never" is not "not used since rotation". The
+      stat survives as a compact indicator in the page header; the essay does not survive at all.
+      It was explaining a table that sits on this same page — "Rejected deliveries" — in words,
+      one panel above the table itself.
+
+      Deliberately OUTSIDE the @revealed_token gate, exactly as its predecessor was: the
+      instructions have to outlive the one-shot flash, or a reader who reloads the page has no way
+      to learn what the key is for. %>
+  <%= render UI::PanelComponent.new(title: "Wire this repository up", id: "wire-up") do %>
+    <div class="space-y-4">
+      <% if has_api_keys %>
+        <p class="text-sm text-app-content-secondary">
+          Hand this to your coding agent. It names this repository, says where the key is, and sends
+          the agent to the guide to work out the rest for whatever language and test framework this
+          project actually uses.
+        </p>
+
+        <%# Its own `copy-text` scope. `copy_text_controller.js` reads the SINGULAR `sourceTarget`,
+            so every copyable payload on a page opens its own scope or they fight over which one
+            the Copy button copies. %>
+        <div data-controller="copy-text">
+          <%= render UI::CopyableCodeComponent.new(multiline: true) do %><%= integration_guide_agent_prompt(
+                repository: @repository,
+                guide_url: integration_guide_url,
+                endpoint: integration_guide_endpoint
+              ) %><% end %>
+        </div>
+
+        <%# The prompt names the SECRET, never a token, and this sentence is why. `ApiKey` stores a
+            SHA-256 digest and the plaintext lives for exactly one flash-backed render, so this
+            surface — which is every render after that one — has nothing to inline and must not
+            pretend otherwise. The reveal panel's copy of this prompt does carry the real value,
+            which is the one moment it can.
+
+            The recovery half is gated at `keys_manage`, and the gate is on the POINTER rather than
+            on the sentence: `#api-keys` is the id of a panel rendered only for that permission, so
+            an ungated link would dangle for exactly the reader who cannot act on it. Telling a
+            `view` member that the value is unrecoverable is still worth saying — it is why the
+            prompt they are looking at names a secret instead. %>
+        <p class="text-xs text-app-muted">
+          The prompt refers to the key by the name of the CI secret, not by its value: SpecGuard
+          keeps only a digest and cannot show an existing key again.
+          <% if repository_policy.can?(:keys_manage) %>
+            If it has been lost, regenerate it in
+            <a href="#api-keys" class="underline">API keys</a> below — the replacement is shown once,
+            with the prompt already carrying it.
+          <% end %>
+        </p>
+      <% elsif repository_policy.can?(:keys_manage) %>
+        <p class="text-sm text-app-content-secondary">
+          This repository has no API key yet, so there is nothing for CI to authenticate with.
+          Mint a key in <a href="#api-keys" class="underline">API keys</a> below — the prompt to hand
+          your coding agent is shown with the key already in it, once.
+        </p>
+      <% else %>
+        <p class="text-sm text-app-content-secondary">
+          This repository has no API key yet, so there is nothing for CI to authenticate with. Ask
+          <%= @repository.user.display_name %> to mint one.
+        </p>
+      <% end %>
+
+      <%# Rendered on all three branches, and that is the point of putting it outside the split: the
+          guide needs neither a key nor an endpoint to be worth reading — the linter it documents
+          needs neither either — so a reader who cannot mint a credential is not a reader with
+          nothing to do. %>
+      <p class="text-xs text-app-muted">
+        Reading it yourself:
+        <%= link_to "the integration guide", integration_guide_path, class: "underline" %>
+        covers the Ruby client gem, the intent annotation syntax, the linter that needs no
+        credential at all, and the complete ingest wire contract for a project in a language that
+        has no client.
+      </p>
+    </div>
+  <% end %>

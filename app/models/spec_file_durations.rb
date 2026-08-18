@@ -103,9 +103,10 @@ class SpecFileDurations
     # unmeasured file says "not reported" rather than "0.00s".
     def duration_label = SpecObservation.humanized_duration(total_seconds)
 
-    # How much of the file this total covers, always as a fraction and never as a bare count. "12"
-    # in a column of "4 of 12" reads as twelve of something unstated; the denominator is the point
-    # of the column, and a complete file has to be visibly complete rather than merely unannotated.
-    def coverage_label = "#{timed_count} of #{recorded_count}"
+    # How much of the file this total covers — through the same seam the other single-sided coverage
+    # fractions are spelled through, so a complete file is visibly complete rather than merely
+    # unannotated, and this row cannot disagree with the file panel drilled out of it about how the
+    # fraction is worded.
+    def coverage_label = SpecObservation.coverage_fraction(timed_count, recorded_count)
   end
 end

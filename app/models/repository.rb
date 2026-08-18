@@ -33,6 +33,10 @@ class Repository < ApplicationRecord
   has_many :spec_identities, dependent: :delete_all
   has_many :test_runs, dependent: :destroy
   has_many :spec_intents, dependent: :destroy
+  # The refused half of the same delivery stream `test_runs` holds the accepted half of. Bounded by
+  # `IngestRejection::REPOSITORY_RETENTION_ROWS` at the write path, so this is at most fifty rows —
+  # `delete_all` is one statement and the model carries no callback a destroy would run.
+  has_many :ingest_rejections, dependent: :delete_all
   has_many :repository_memberships, dependent: :destroy
   # Everyone granted access who is *not* the owner. The owner is `user` and holds every permission
   # implicitly, so they never appear here.
@@ -45,7 +49,66 @@ class Repository < ApplicationRecord
                                format: { with: FULL_NAME_FORMAT, message: "must look like org/repo" }
   validates :name, presence: true
 
+  # Everything `user` may open: what they own, UNION what has been shared with them through a
+  # membership. That union is this application's read-side authorization boundary for a repository,
+  # and it lives here — on the set — so that every surface asking "which repositories may this
+  # person see" asks the same question of the same place. Written out at a call site it is an
+  # agreement between files with nothing enforcing it, and the two ways it can drift are a link to a
+  # 403 and a repository the owner cannot find.
+  #
+  # ONE relation, never `owned + shared`. Concatenating the two sides produces an Array, at which
+  # point a caller's `.order` no longer applies and its list silently becomes owned-then-shared
+  # (pinned by spec/requests/repository_sharing_spec.rb). Returning a relation is also what lets
+  # each caller keep chaining its own concerns — an index page's `includes(:user)`, a batch lookup's
+  # `LOWER(...) IN (...)` — without any of them landing here.
+  #
+  # No `.distinct`: RepositoryMembership rejects a row for the owner outright
+  # (`user_is_not_the_owner`), so the two sides cannot overlap. A defensive uniq here would mask
+  # that invariant breaking rather than let it fail loudly.
+  #
+  # Bare `where(...)` on both sides rather than `Repository.where(...)`: inside a scope body the
+  # implicit receiver is the current relation, and `.or` requires both of its operands to be
+  # structurally compatible — building the right-hand side off the model instead would discard
+  # whatever the caller had already chained on.
+  scope :accessible_by, ->(user) {
+    where(user_id: user.id).or(where(id: user.repository_memberships.select(:repository_id)))
+  }
+
   def github_url = "https://github.com/#{github_full_name}"
+
+  # ONE LINE of ONE FILE at ONE REF, on GitHub — the sibling of `#github_url` above, which names the
+  # repository and nothing inside it. A surface that has printed a `file_path:line_number` coordinate
+  # has told the reader where to go; this is what lets them go there.
+  #
+  # `ref` IS REQUIRED AND HAS NO DEFAULT, and that is the whole design of this method. A coordinate
+  # belongs to the tree the run that recorded it was taken from: `file_path`/`line_number` are the
+  # LAST KNOWN PATH of a test rather than its identity (SPGD-114), so a test that moved is the same
+  # test and its old line number is only true against the sha it was read at. Defaulting to `main` —
+  # or to the repository's default branch, or to anything this object could supply on its own —
+  # would silently hand every caller a link to whatever has since drifted onto that line. A caller
+  # that cannot name a ref does not have a coordinate worth linking, and should say so rather than
+  # be given a plausible wrong answer.
+  #
+  # NO EXISTENCE CLAIM. This composes a URL and asks GitHub nothing: an unpushed sha, a path deleted
+  # since, a line past the end of the file each answer 404 or land short, and that is GitHub telling
+  # the truth about a commit rather than something to guard against here. A probe would be a network
+  # call per row on a hundred-row worklist, and a conditional would leave the reader unable to tell
+  # "we could not check" from "it is not there".
+  #
+  # Escaped SEGMENT-WISE on both the path and the ref, because `/` is the one character in either
+  # that must survive as structure: `url_encode` on the whole string would turn `spec/models/x.rb`
+  # into a single escaped filename GitHub cannot resolve. Applied to the ref for the same reason it
+  # is applied to the path — a sha needs no escaping at all, but a ref is a caller's string and a
+  # branch name legitimately carries slashes.
+  #
+  # @param path [String] repository-relative file path — the DEFINITION site (`file_path`), never
+  #   `spec_file_path`, which for a shared example group is a different file from the one the line
+  #   number describes.
+  # @param line [Integer] 1-based line number within `path`
+  # @param ref [String] the commit sha (or ref) to pin the link to
+  def github_blob_url(path, line, ref)
+    "#{github_url}/blob/#{escape_path_segments(ref)}/#{escape_path_segments(path)}#L#{line}"
+  end
 
   # Ties broken by id so two runs ingested in the same instant still order deterministically.
   def latest_test_run
@@ -70,6 +133,35 @@ class Repository < ApplicationRecord
     return nil if branch.blank?
 
     test_runs.where(branch: branch).order(created_at: :desc, id: :desc).first
+  end
+
+  # The newest run ON ONE NAMED COMMIT — the anchor for a run the reader asked for by sha, where
+  # `latest_test_run` is the anchor for the one the repository happens to have pushed last and
+  # `latest_test_run_on_branch` for the one a named branch pushed last.
+  #
+  # NEWEST rather than THE run, and the distinction is a fact about the table rather than caution.
+  # `test_runs` has no uniqueness constraint on `commit_sha` — the only unique index is
+  # `(repository_id, ci_run_id) WHERE ci_run_id IS NOT NULL` — so a CI re-run of the same commit is
+  # a second row, and a sharded suite reporting under one sha is several. "The run for this sha" is
+  # therefore a question with more than one answer, and this picks the same one every other
+  # newest-run reader on this model picks.
+  #
+  # Same ordering as `latest_test_run` and `latest_test_run_on_branch`, tie-break included, so "the
+  # newest run" means the same row here as it does everywhere else. Two runs ingested in the same
+  # instant on one sha resolve by id, which is the ingest sequence.
+  #
+  # `nil` — and no query at all — for a blank sha, so a caller holding an empty parameter falls back
+  # rather than issuing `WHERE commit_sha = ''`: the column is NOT NULL and `TestRun` validates its
+  # presence, so a blank matches nothing and the query is a guaranteed-empty read.
+  #
+  # `nil` too for a sha that simply has no runs, on the reasoning `latest_test_run_on_branch` gives
+  # for an unrecognised branch: a stale bookmark, a pruned run and a commit whose CI never reported
+  # are ordinary ways for a reader to arrive, and it is the caller's job to fall back to what it
+  # would have shown anyway — and to disclose that it did.
+  def latest_test_run_for_commit(sha)
+    return nil if sha.blank?
+
+    test_runs.where(commit_sha: sha).order(created_at: :desc, id: :desc).first
   end
 
   # The run `run`'s suite figures can honestly be compared against: the newest run on the **same
@@ -417,6 +509,15 @@ class Repository < ApplicationRecord
   end
 
   private
+
+  # Percent-escape a slash-separated string one segment at a time, so the separators survive as URL
+  # structure and everything else in a segment is escaped. `ERB::Util.url_encode` is the strict one
+  # — it leaves only unreserved characters alone, so a `#` or a space in a filename cannot terminate
+  # the path or split the URL. `CGI.escape` would encode a space as `+`, which is a query-string
+  # rule and wrong in a path.
+  def escape_path_segments(value)
+    value.to_s.split("/").map { |segment| ERB::Util.url_encode(segment) }.join("/")
+  end
 
   def normalize_full_name
     self.github_full_name = self.class.normalize_full_name(github_full_name)
