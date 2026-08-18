@@ -1,0 +1,209 @@
+    <%# == The slowest tests of the REPOSITORY, across this branch's window
+        The wall-clock question at the grain the page has never had one. "Slowest tests" above ranks
+        ONE run and its own comment says why it stays there: `example_id` is positional and not
+        stable across refactors, so a ranking spanning runs on that key would pair rows not known to
+        be the same test. That is a statement about the KEY. `spec_identity_id` is a different key —
+        semantic, resolved out of band by `Ingest::IdentityResolver`, and stable across a move, a
+        reorder and a reword alike — so the boundary that panel respects is not this one's, and
+        `SlowestTests` is where the crossing is argued.
+
+        The two panels are DELIBERATELY BOTH HERE and answer different questions. "Was that one bad
+        run, or is this test chronically slow" cannot be read off a single run at any cap, and
+        "which test cost the most in the run I just pushed" cannot be read off a window that sums
+        thirty of them. They are separately identifiable on purpose: different id, different title,
+        different file, and a first sentence in each that names its own grain.
+
+        Drawn on the SAME window as "Suite growth", "Areas that grew or shrank over the window" and
+        "Tests whose outcome changed" — same `?branch=` anchor, same `Repository::TRAJECTORY_LIMIT`,
+        and literally the same loaded runs (see `RepositoriesController#show`). Branch-anchored
+        because runtimes compared across branches are runtimes of different code; sharing the window
+        because every panel that fetched "the last thirty runs on this branch" for itself would be
+        its own window, with no structural reason to keep agreeing.
+
+        ⭐ FOUR STATES AND NEVER ONE BLANK PANEL. `SlowestTests#state` decides which, and the
+        wording lives here beside its siblings' so the panels cannot drift into describing the same
+        window differently. The one that must not be got wrong is `:unresolved`: identity resolution
+        runs out of band, so a run that landed seconds ago has rows nothing has matched yet, and an
+        empty list over it reads as "nothing in this suite is slow" when what happened is "nobody
+        has told us which tests these are". That is Vacuous Green verbatim, and it is the ordinary
+        state for the moments after every ingest rather than a rare one.
+
+        Outside the `manage_keys` gate, like every panel around it — read-only suite telemetry,
+        nothing credential and nothing actionable. %>
+    <% if @slowest_tests %>
+      <%= render UI::PanelComponent.new(title: "Slowest tests across the window",
+                                        id: "slowest-tests-window", class: "lg:col-span-3") do %>
+        <% case @slowest_tests.state %>
+        <% when :ranked %>
+          <%# What was ranked, over what window, by what rule, out of what population, and what the
+              ranking could not reach — all before the list, because every one of them is a
+              precondition for reading it rather than a note about it.
+
+              Every figure comes off `@slowest_tests`, which holds the list and these counts
+              together, so this paragraph cannot end up describing a different population from the
+              rows below it. Nothing here is recomputed from the rows. %>
+          <p class="text-xs text-app-muted mb-3" id="slowest-tests-window-basis">
+            <%= slowest_tests_window_sentence(@slowest_tests) %>
+            <%# ⭐ The partition: which tests are here at all was decided by ONE run, and a test the
+                newest run did not report is absent however slow it was. Not recoverable from any
+                row, so it is stated. %>
+            <%= slowest_tests_anchor_sentence(@slowest_tests) %>
+            <%# The matching rule — the one DECISION on this panel rather than a measurement, and
+                the OPPOSITE of the rule the outcome panel states for itself. %>
+            <%= slowest_tests_matching_sentence %>
+            <%= slowest_tests_coverage_sentence(@slowest_tests) %>
+            <%# The two silences: rows the anchor wrote that are not yet matched to a test, and
+                candidates the cap never examined. Rendered only where there are any — a clause
+                reading "0 rows carried no durable identity" is a sentence about arithmetic rather
+                than about this window. %>
+            <%= slowest_tests_exclusion_sentence(@slowest_tests) %>
+          </p>
+          <%# No `#any?` guard, and that is deliberate rather than an omission. `:ranked` is reached
+              only where the anchor has resolved rows, which is exactly the condition under which
+              `SpecObservation.slowest_identity_candidates_in` returns candidates and the
+              composition over them returns groups — the model destructures `candidates.first`
+              unconditionally on the same guarantee. An `else` here would be a branch no state
+              reaches, and this page's empty states are load-bearing enough that a decorative one
+              would be the worse mistake. %>
+          <%= render UI::TableComponent.new(columns: ["Test", "Total across window",
+                                                      "Slowest single run", "Runs seen", "Timed"],
+                                            describedby: "slowest-tests-window-basis") do %>
+            <% @slowest_tests.rows.each do |test| %>
+              <tr>
+                <td class="px-3 py-2 text-app-content">
+                  <%# The descriptions this test was RECORDED under across the window, not a name
+                      looked up on `spec_identities` — the composition deliberately joins nothing,
+                      because what a reader recognises is the text their own runs reported.
+
+                      `#descriptions` is a SET, sorted so two rows carrying the same one read the
+                      same way, and there is therefore no "current" description at this grain: the
+                      aggregate has no ordering to give one. So where a test wore more than one, the
+                      others are listed as what they are — the same test, seen under another
+                      description — rather than one being promoted to the label and the rest
+                      demoted to history that was never measured.
+
+                      Nullable, and empty rather than nil: `names` is `ARRAY_AGG(…) FILTER (…)`, so
+                      a test every run reported anonymously comes back with none. A blank cell in a
+                      ranked list is a row the reader can neither identify nor go and find, so that
+                      row says so and leans on the file line below it. %>
+                  <% if test.descriptions.any? %>
+                    <%= test.descriptions.first %>
+                  <% else %>
+                    <span class="text-app-muted">no description reported</span>
+                  <% end %>
+                  <%# ⭐ THE REWORDED TEST, VISIBLE. Its description changed while its identity did
+                      not, so its history did not restart — and this is the disclosure the outcome
+                      panel above structurally cannot make, since grouped on `name` a reword is two
+                      tests there. %>
+                  <% if test.renamed? %>
+                    <span class="block text-xs text-app-muted">
+                      also recorded as <%= test.descriptions.drop(1).to_sentence %>
+                    </span>
+                  <% end %>
+                  <%# ⭐ THE MOVED TEST, VISIBLE — and the single sentence this whole read exists
+                      for. Per the project's identity rule a test that moved is the same test and
+                      keeps its runtime history, so this is the guarantee being KEPT rather than an
+                      anomaly to flag; the reader is told because a history spanning two files is a
+                      fact about where to go looking. The files are named rather than counted, for
+                      the reason the outcome panel names its own: "recorded under 2 files" sends a
+                      reader looking without saying where.
+
+                      The file that RAN the test (`spec_file_path`), which for a shared example
+                      group is not the file that defines it. Nullable in the schema, so a test whose
+                      every row reported none says so rather than rendering a blank. %>
+                  <span class="block font-mono text-xs text-app-muted">
+                    <% if test.moved? %>
+                      recorded under <%= test.files_seen.to_sentence %>
+                    <% elsif test.files_seen.any? %>
+                      <%= test.files_seen.first %>
+                    <% else %>
+                      not reported
+                    <% end %>
+                  </span>
+                </td>
+                <%# The window TOTAL — what this test cost the suite across every run of the window
+                    — through `SpecObservation.humanized_duration`, which is what keeps a group
+                    nothing timed reading "not reported" rather than `0.00s`. A zero there would be
+                    a measurement invented out of silence, and it would sort as the cheapest test in
+                    the suite. %>
+                <td class="px-3 py-2 text-app-content tabular-nums"><%= test.duration_label %></td>
+                <%# ⭐ The single longest run of it, BESIDE the total and never instead of it. Sixty
+                    seconds is one minute-long test or sixty runs of a cheap one, and a ranking
+                    ordered on the sum alone cannot tell a reader which they are looking at — which
+                    is the difference between a test to optimise and a suite to run less often. The
+                    column is ordered on the total, not on this, and the caption says so. %>
+                <td class="px-3 py-2 text-app-content-secondary tabular-nums">
+                  <%= test.slowest_label %>
+                </td>
+                <td class="px-3 py-2 text-app-content-secondary tabular-nums">
+                  <%# Always the fraction. "7" alone reads as seven of something unstated, and here
+                      the denominator IS part of the claim: a test seen in 7 of 30 runs has a total
+                      summed over less than a quarter of the window it is being ranked across. %>
+                  <%= test.appearance_label(@slowest_tests.run_count) %>
+                  <%# An identity is not a key WITHIN a run — a table-driven loop, a shared example
+                      group and two verbatim-identical tests are one identity and several rows —
+                      so this is what separates "slow in 12 runs" from "run three times in each of
+                      four". Without it the total above cannot be attributed to either. %>
+                  <% if test.repeated_within_run? %>
+                    <span class="block text-xs text-app-muted">
+                      <%= number_with_delimiter(test.recorded_count) %> rows, so it ran more than
+                      once in at least one of them
+                    </span>
+                  <% end %>
+                </td>
+                <%# How much of THIS test's own history carried a timing — its own denominator, not
+                    the panel's. The total above is a `SUM`, and `SUM` skips nulls silently, so a
+                    row totalling four of its nine appearances has to say so or the figure is a
+                    measurement over a population the reader cannot see. %>
+                <td class="px-3 py-2 text-app-content-secondary tabular-nums">
+                  <%= test.coverage_label %>
+                </td>
+              </tr>
+            <% end %>
+          <% end %>
+        <% when :unresolved %>
+          <%# ⭐ THE STATE THIS PANEL EXISTS TO GET RIGHT. The newest run wrote per-example rows and
+              not one of them has been matched to a durable test yet, which is what every run looks
+              like for the seconds after it lands. An empty ranking here would be read as "nothing
+              in this suite is slow"; it is "nobody has told us which tests these are", and only the
+              wording separates them. %>
+          <div id="slowest-tests-window-unresolved">
+            <%= render UI::EmptyStateComponent.new(
+                  title: "These runs' tests have not been identified yet",
+                  description: slowest_tests_unresolved_description(@slowest_tests)
+                ) %>
+          </div>
+        <% when :unrecorded %>
+          <%# A different absence entirely, and one nothing is going to clear on its own: the newest
+              run wrote NO per-example rows, so there is no per-test grain in this window to rank at
+              any identity. A run ingested before those rows existed, or one whose client reports
+              only totals, is this state — a fact about the payload rather than about the suite, and
+              the same line the single-run panels above draw with their own `recorded?`. %>
+          <div id="slowest-tests-window-unrecorded">
+            <%= render UI::EmptyStateComponent.new(
+                  title: "No per-test detail in this window",
+                  description: "#{@slowest_tests.anchor_run.commit_sha.first(7)}, the newest run " \
+                               "in this window, reported no per-example detail at all, so there " \
+                               "is no per-test runtime here to rank across runs. A run reports a " \
+                               "suite size and a duration without reporting its examples, and a " \
+                               "client that sends only totals produces exactly this. It is a fact " \
+                               "about what CI sent rather than about how fast this suite is."
+                ) %>
+          </div>
+        <% when :no_runs %>
+          <%# Not reachable from `RepositoriesController#show`, and rendered rather than omitted.
+              The assignment sits inside `if trajectory_runs.any?`, so the object this page holds
+              always has an anchor — but the state is one of the four `SlowestTests` defines, a
+              `case` that dropped it would render a titled panel with nothing whatever inside it,
+              and the guard that makes it unreachable is in a different file from this one. Every
+              figure this branch could print is `nil` by `SlowestTests::UNREAD`, so it prints none. %>
+          <div id="slowest-tests-window-no-runs">
+            <%= render UI::EmptyStateComponent.new(
+                  title: "No runs in this window yet",
+                  description: "There is no run on this branch to rank tests across, so nothing " \
+                               "here has been measured. This panel fills in as soon as CI reports."
+                ) %>
+          </div>
+        <% end %>
+      <% end %>
+    <% end %>

@@ -1778,6 +1778,13 @@
       <% end %>
     <% end %>
 
+    <%# The other half of the window's per-test story, and the wall-clock half. The panel above says
+        which tests CHANGED THEIR OUTCOME across this window; this one says which of them COST it
+        most, matched by the same durable identity rather than by description — so it is here,
+        beside its sibling at its own grain, rather than up among the single-run duration rankings
+        whose boundary it deliberately crosses. See the partial for the argument. %>
+    <%= render "repositories/slowest_tests_over_window" -%>
+
     <%# Read-only suite telemetry, deliberately OUTSIDE the `manage_keys` gate above — the same
         class of information as the connection-health stat: a `view` member legitimately needs to
         see whether CI is still reporting and what it reported. Nothing here is credential
