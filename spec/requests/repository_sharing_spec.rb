@@ -674,6 +674,9 @@ RSpec.describe "Repository sharing", type: :request do
     end
 
     it "still does everything with no membership row of their own" do
+      # The rename target has to be in the installation, because renaming re-verifies the new name
+      # against it exactly as registering would — see `InstallationRepositories`.
+      stub_github(repos: [github_repo("acme/billing-service"), github_repo("acme/renamed")])
       expect(RepositoryMembership.where(user: owner)).to be_empty
 
       get repository_path(repository)

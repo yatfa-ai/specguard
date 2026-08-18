@@ -1,12 +1,12 @@
 <%# Step one: which organization.
 
     Links rather than a <select> + submit, because each choice carries a figure the reader needs in
-    order to make it ("acme · 18 you administer"), and a select can only show one at a time. The
+    order to make it ("acme · 18 repositories"), and a select can only show one at a time. The
     target is a plain GET with `?organization=`, so every choice is linkable and the back button
     lands here rather than in a half-filled form. %>
 <div class="space-y-3">
   <p class="text-sm text-app-content-secondary">
-    Organizations GitHub reports you administer at least one repository in.
+    Organizations with repositories the SpecGuard GitHub App is installed on.
   </p>
 
   <div class="grid gap-3 md:grid-cols-2">
@@ -15,15 +15,9 @@
         <div class="flex items-start justify-between gap-3">
           <%= render UI::HeadingComponent.new(level: 3, class: "text-app-content min-w-0 break-words") { org.login } %>
           <%= render UI::BadgeComponent.new(tone: :success, class: "shrink-0") do %>
-            <%= pluralize(org.administered_count, "repository", plural: "repositories") %>
+            <%= pluralize(org.count, "repository", plural: "repositories") %>
           <% end %>
         </div>
-        <%# Stated per organization rather than once for the page, because it is a fact about THIS
-            organization: the reader who knows acme has thirty repositories needs to know why
-            eighteen are on offer, and the answer is different for every card. %>
-        <% if (withheld = withheld_repositories_sentence(org.withheld_count)) %>
-          <p class="mt-1 text-xs text-app-muted"><%= withheld %></p>
-        <% end %>
       <% end %>
     <% end %>
   </div>

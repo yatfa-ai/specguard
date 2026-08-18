@@ -15,7 +15,8 @@ class Repository < ApplicationRecord
   # and that is deliberately all — ownership is not a property of the string and cannot be checked
   # from it. It is established at the point of writing, by asking GitHub whether the writer
   # administers the repository: `RepositoriesController#save_with_verified_ownership` is the one
-  # gate every write of this column passes through, and `GithubOwnership` is the question it asks.
+  # gate every write of this column passes through, and `InstallationRepositories` is the question
+  # it asks.
   # A record created around this model rather than through that controller — a builder in the
   # suite, a console session — is unverified by construction, which is why the gate lives with the
   # request that carries a user's GitHub token rather than in a callback here.

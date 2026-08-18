@@ -4,19 +4,27 @@ require "json"
 require "net/http"
 require "uri"
 
-# The GitHub REST client — the app's only way to ask GitHub a question on a user's behalf.
+# The GitHub REST client — the app's only way to ask GitHub a question.
 #
-# It answers exactly two questions, because those are the two that ownership-verified registration
-# rests on:
+# It authenticates as a GitHub App *installation* and answers exactly two questions, because those
+# are the two that installation-backed registration rests on:
 #
-#   client = GithubApi.for(user)
-#   client.repositories          # => Array<GithubApi::Repo>, what this user can pick from
-#   client.repository("acme/x")  # => GithubApi::Repo,        what this user may do to that repo
+#   client = GithubApi.for_installation(installation)
+#   client.repositories          # => GithubApi::Listing, what this installation covers
+#   client.repository("acme/x")  # => GithubApi::Repo,    is that one of them (404 when it is not)
 #
-# Both come back as `Repo`, which carries `admin?` — GitHub's own statement of the caller's
-# permission level, and the thing verification tests. Nothing here decides who may register what;
-# it reports what GitHub says and `GithubOwnership` decides. Keeping those apart is deliberate:
-# the decision is then testable without a network, and the client has no policy in it to drift.
+# Nothing here reads a permission level, and nothing here decides who may register what. The
+# question "may this user register this repository" is answered by the repository being IN the
+# installation at all — only an administrator of a repository can install an App on it — and
+# `InstallationRepositories` is where that is decided. Keeping the decision out of the client is
+# deliberate: it is then testable without a network, and the client has no policy in it to drift.
+#
+# ## The credential
+#
+# An installation access token, minted on demand from the App's private key and never persisted
+# (`GithubAppCredentials`). It is resolved LAZILY — on the first request the client actually makes —
+# so a page that renders without asking GitHub anything never mints one, and the swap seam below
+# never needs an App private key to stand in for this.
 #
 # ## Errors
 #
@@ -24,33 +32,29 @@ require "uri"
 # one of its four subclasses. Callers rescue one class and never see a `Net::HTTP` or `JSON`
 # exception. The subclasses exist because each means something different to a *user*:
 #
-#   Unauthorized  401 — the token is dead (revoked on GitHub, or expired). Re-authorize.
-#   Forbidden     403 — the token is alive but may not do this. Carries a `reason` (see below),
-#                       because the three things GitHub answers 403 for have three unrelated fixes.
-#   NotFound      404 — no such repository *that this token can see*. GitHub deliberately answers
-#                       404 rather than 403 for a private repository the caller cannot read, so
-#                       this does NOT mean "does not exist" and must never be reported as such.
+#   Unauthorized  401 — GitHub rejected the App's own credentials. Unlike the user token this
+#                       replaced, that is an operator's problem (wrong App id or private key), not
+#                       something the user can fix by re-authorizing.
+#   Forbidden     403 — the credential is valid but may not do this. Carries a `reason`; see below.
+#   NotFound      404 — no such repository *in this installation*. GitHub answers 404 rather than
+#                       403 for anything the credential cannot see, so this does NOT mean "does not
+#                       exist" and must never be reported as such. It is also what an uninstalled
+#                       installation looks like.
 #   Unavailable         transport failure, timeout, 5xx, or a body that is not the JSON promised.
-#
-# `Forbidden#reason` is a symbol rather than prose because a caller has to *branch* on it, not print
-# it. An SSO block and a rate limit are both 403 and they are opposites: one clears itself in an
-# hour, the other never clears until a human clicks approve in the organization. Collapsing them
-# into one "try again shortly" is how a user ends up retrying forever — see GithubOwnership, which
-# maps each reason to the fix that actually resolves it.
 #
 # ## Raw HTTP rather than Octokit
 #
-# Two endpoints, no pagination beyond `page=`, no webhooks, no GraphQL. Octokit would be a
-# dependency, a version to track and a security surface for two GETs — and the ticket's one
-# constraint on this choice (ownership is verified server-side) is unaffected either way.
+# Two endpoints, no GraphQL, and — since the credential is minted by `GithubAppCredentials` rather
+# than by a gem — nothing Octokit would be carrying the weight of. It would be a dependency, a
+# version to track and a security surface for two GETs.
 #
 # ## Test seam
 #
 # `GithubApi.factory` is the seam, in the shape and for the reason `EmbeddingGenerator.provider`
 # documents: the suite installs a deterministic fake rather than stubbing HTTP, so no spec depends
-# on the wire format and none of them reach the network.
+# on the wire format, none of them reach the network, and none of them needs App credentials.
 #
-#   GithubApi.factory = ->(token) { FakeGithub.new(...) }
+#   GithubApi.factory = ->(credential) { FakeGithub.new(...) }
 #   GithubApi.factory = nil   # back to the real client
 class GithubApi
   Error = Class.new(StandardError)
@@ -58,22 +62,22 @@ class GithubApi
   NotFound = Class.new(Error)
   Unavailable = Class.new(Error)
 
-  # 403, with which of the three unrelated 403s it was. `reason` is one of:
+  # 403, with which of the two reachable 403s it was. `reason` is one of:
   #
-  #   :rate_limited       GitHub's hourly budget for this token is spent. Genuinely transient —
-  #                       this is the only 403 for which "try again shortly" is true.
-  #   :sso_required       the repository belongs to an organization enforcing SAML SSO that this
-  #                       token has not been authorized for. Never clears on its own: somebody has
-  #                       to authorize the token for that organization on GitHub.
-  #   :insufficient_scope the grant is too narrow to answer the question. Fixed by re-authorizing.
+  #   :rate_limited  GitHub's hourly budget for this installation is spent. Genuinely transient —
+  #                  this is the one 403 for which "try again shortly" is true.
+  #   :refused       GitHub declined for any other reason. Not actionable by the user, and not
+  #                  waitable either, so it is reported rather than dressed up as a retry.
   #
-  # Defaults to `:insufficient_scope` because it is the only one of the three that a caller can
-  # act on blindly without misleading anybody: it offers a re-authorize the user may not need,
-  # rather than a wait that will never end.
+  # The `:sso_required` and `:insufficient_scope` reasons this used to distinguish are gone with the
+  # user token they were written for. SAML SSO authorization is a property of a *user* token — an
+  # installation is authorized by the organization that installed it — and a scope is not something
+  # an installation has. Neither branch could be triggered any more, and a branch that cannot be
+  # reached is a branch nobody can find out is wrong.
   class Forbidden < Error
     attr_reader :reason
 
-    def initialize(message = nil, reason: :insufficient_scope)
+    def initialize(message = nil, reason: :refused)
       super(message)
       @reason = reason
     end
@@ -85,42 +89,36 @@ class GithubApi
   # answer, and the registration page wants the whole list.
   PER_PAGE = 100
 
-  # A ceiling on `repositories`, not a promise about anyone's account. Someone with more than this
-  # many repositories would otherwise turn one page render into 40+ sequential GitHub round trips.
-  # The list is a picker, and a picker that takes a minute to appear is not one.
+  # A ceiling on `repositories`, not a promise about anyone's installation. Someone who selected
+  # more than this many repositories would otherwise turn one page render into 10+ sequential
+  # GitHub round trips. The list is a picker, and a picker that takes a minute to appear is not one.
   #
-  # Note what this cap now costs, because it changed meaning in this slice: the picker is the only
-  # way to submit a repository, and the type-to-narrow box searches the options already fetched
-  # rather than asking GitHub. So a repository past the cap is currently NOT registerable through
-  # any UI path. Back when the field was free text, the cap only affected convenience. Fixing it
-  # properly means a GitHub-side search endpoint behind the query box; until then this is a real,
-  # if rare, wall — and `repositories` reports truncation so the picker can say so out loud rather
-  # than appear complete.
+  # It bites less than it did under the OAuth listing, which enumerated every repository the user
+  # could reach: an installation contains only what somebody deliberately selected. It still bites,
+  # so `repositories` reports truncation and `InstallationRepositories` asks GitHub about a name
+  # individually rather than refusing it for a property of our own page walk.
   MAX_PAGES = 10
 
   OPEN_TIMEOUT = 5
   READ_TIMEOUT = 10
 
-  # One repository as GitHub describes it to *this* caller. `admin` is the whole point: it is
-  # GitHub's answer to "may this token administer this repository", which is the question
-  # registration has to ask and could not ask before.
+  # One repository as GitHub describes it to this installation.
   #
-  # `permissions` is present on every authenticated read of a repository (both endpoints below).
-  # When it is absent the answer is `false`, never `nil` — an unknown permission level is not a
-  # grant, and a nil flowing into a policy check is a bug waiting for a truthiness test.
+  # There is no `admin` field, and its absence is the point of this slice: the permission level was
+  # read to decide whether a user could register a repository, and that question is now settled by
+  # the repository being in the installation at all. A `Repo` that reaches a caller is registerable.
   #
   # `owner_type` is GitHub's own `owner.type` — `"Organization"` or `"User"` — and it is the one
   # field that distinguishes an organization's repository from a personal one. Bulk registration
   # groups the listing by owner and offers the organizations (see `GithubOrganizations`), and the
   # owner *segment* of `full_name` cannot answer that question: `acme/x` is the same string whether
   # `acme` is an org or a person who happens to be called that. Defaulted to `nil` — "GitHub did
-  # not say" — because both `Repo.new` call sites outside this file are tests and a required field
-  # would make every one of them describe an owner it does not care about; `organization?` reads a
-  # nil as "not an organization", which withholds rather than invents.
-  Repo = Data.define(:full_name, :private, :admin, :archived, :owner_type) do
+  # not say" — because `Repo.new` call sites outside this file are tests and a required field would
+  # make every one of them describe an owner it does not care about; `organization?` reads a nil as
+  # "not an organization", which withholds rather than invents.
+  Repo = Data.define(:full_name, :private, :archived, :owner_type) do
     def initialize(owner_type: nil, **) = super
 
-    def admin? = admin
     def private? = private
     def archived? = archived
     def organization? = owner_type == "Organization"
@@ -130,12 +128,9 @@ class GithubApi
     def owner = full_name.to_s.split("/").first.to_s
 
     def self.from(payload)
-      permissions = payload["permissions"] || {}
-
       new(
         full_name: payload["full_name"].to_s,
         private: payload["private"] == true,
-        admin: permissions["admin"] == true,
         archived: payload["archived"] == true,
         owner_type: payload.dig("owner", "type")
       )
@@ -149,86 +144,99 @@ class GithubApi
     def any? = repos.any?
   end
 
+  # Resolves an installation access token the first time the client actually needs one, and reuses
+  # it for the rest of the client's life.
+  #
+  # Lazy rather than eager because a controller builds a client on paths that may never call
+  # GitHub, and minting is a round trip. Held per client rather than looked up per request so a
+  # listing that walks ten pages mints once.
+  class InstallationCredential
+    attr_reader :installation_id
+
+    def initialize(installation_id)
+      @installation_id = installation_id
+    end
+
+    def token = @token ||= GithubAppCredentials.installation_token(installation_id)
+  end
+
   class << self
     attr_writer :factory
 
     # Resolved on every call rather than memoized, so a reload in development never leaves a stale
     # autoloaded class behind — the same rule `EmbeddingGenerator.provider` states.
-    def factory = @factory || ->(token) { new(token) }
+    def factory = @factory || ->(credential) { new(credential) }
 
-    # A client bound to this user's stored token, or `nil` when there is none to bind.
+    # A client authenticated as this installation, or `nil` when there is none to authenticate as.
     #
-    # Returns nil rather than raising because "this user has not connected GitHub yet" is an
-    # ordinary state of the world on every page that offers to connect it, not an exception. It is
-    # also what a revoked-key rotation looks like from here (see `User#github_access_token`).
-    def for(user)
-      token = user&.github_access_token
-      return nil if token.blank?
+    # Returns nil rather than raising because "this user has not installed the App yet" is an
+    # ordinary state of the world on every page that offers to install it, not an exception.
+    #
+    # Takes a `GithubInstallation` or a bare id, so a caller that has only the number — a callback
+    # confirming what it was just handed — does not have to load a row to use it.
+    def for_installation(installation)
+      id = installation.respond_to?(:installation_id) ? installation.installation_id : installation
+      id = id.to_i
+      return nil unless id.positive?
 
-      factory.call(token)
+      factory.call(InstallationCredential.new(id))
     end
   end
 
-  def initialize(access_token)
-    @access_token = access_token
+  # Takes a credential object (`InstallationCredential`) or a bare token String. The String form is
+  # for specs and the console; nothing on a request path uses it.
+  def initialize(credential)
+    @credential = credential
   end
 
-  # Every repository this token can see that the user has some direct relationship with, newest
-  # affiliation model first: repositories they own, repositories they collaborate on, and
-  # repositories they reach through an organization. Sorted by full name so the picker is stable
-  # between renders rather than reordered by GitHub's push activity.
+  # Every repository in this installation — which is to say, exactly the ones somebody who
+  # administers them chose to give SpecGuard. Sorted by full name so the picker is stable between
+  # renders rather than reordered by GitHub's push activity.
   #
   # Returns a `Listing`, not an Array, so a caller cannot read a truncated list as a complete one.
   #
-  # == This is also how an organization's repositories are enumerated
-  #
-  # `organization_member` is the affiliation that carries them, and every row arrives with the
-  # caller's own `permissions.admin` and its `owner.type` already on it. So bulk registration
-  # groups THIS listing by owner rather than calling `GET /user/orgs` + `GET /orgs/:org/repos`
-  # (`GithubOrganizations`), and three things follow that are worth stating, because the obvious
-  # reading is that a dedicated org endpoint would be more direct:
-  #
-  #   - No `read:org`. The org endpoints need a scope the `repo` grant does not include, so adding
-  #     them would mean every user who already authorized in SPGD-354 has a stored token that
-  #     cannot enumerate an org until they re-authorize. Bulk registration would be broken for
-  #     exactly the users most likely to want it.
-  #   - One round trip for every org, not one per org plus a page walk inside each. A batch is
-  #     already N saves; making its enumeration O(orgs × pages) buys nothing.
-  #   - The set is the RIGHT one rather than a superset. `/orgs/:org/repos` lists repositories the
-  #     caller may not touch; only a repository the caller can see and administer is registerable,
-  #     and that is precisely what this returns.
-  #
-  # What it costs is stated where it bites: `MAX_PAGES` bounds the whole listing, so an
-  # organization's repositories can be cut off by a *global* cap rather than a per-org one, and
-  # `truncated` is how a caller learns to say so instead of presenting a partial org as complete.
+  # GitHub sorts this endpoint by nothing in particular and offers no `sort` parameter, so the
+  # ordering is applied here. That also keeps it identical to the order a caller sees after
+  # `InstallationRepositories` merges several installations together.
   def repositories
     repos = []
     truncated = false
 
     (1..MAX_PAGES).each do |page|
-      batch = get("/user/repos", affiliation: "owner,collaborator,organization_member",
-                                sort: "full_name", direction: "asc",
-                                per_page: PER_PAGE, page: page)
-      repos.concat(Array(batch).map { |payload| Repo.from(payload) })
+      batch = page_of_repositories(page)
+      repos.concat(batch.map { |payload| Repo.from(payload) })
 
-      break if Array(batch).length < PER_PAGE
+      break if batch.length < PER_PAGE
 
       truncated = page == MAX_PAGES
     end
 
-    Listing.new(repos: repos, truncated: truncated)
+    Listing.new(repos: repos.sort_by { |repo| repo.full_name.downcase }, truncated: truncated)
   end
 
-  # One repository, with this caller's permissions on it. Raises `NotFound` when the token cannot
-  # see it — which, per the note above, covers both "no such repository" and "private, and not
-  # yours". Both are the same answer to the only question asked here.
+  # One repository, when this installation covers it. Raises `NotFound` when it does not — which,
+  # per the note above, covers "no such repository", "private and not shared with this App", and
+  # "not selected in this installation" alike. All three are the same answer to the only question
+  # asked here, and none of them is a registration.
   def repository(full_name)
     Repo.from(get("/repos/#{path_segment(full_name)}"))
   end
 
   private
 
-  attr_reader :access_token
+  attr_reader :credential
+
+  def access_token = credential.respond_to?(:token) ? credential.token : credential
+
+  # `GET /installation/repositories` answers with an OBJECT — `{total_count:, repositories: […]}` —
+  # where the user-token endpoint this replaces answered with a bare array. Unwrapped here rather
+  # than at the call site so `repositories` still reads as a page walk, and defaulted to `[]` so a
+  # body of an unexpected shape ends the walk instead of raising a NoMethodError several frames up.
+  def page_of_repositories(page)
+    payload = get("/installation/repositories", per_page: PER_PAGE, page: page)
+
+    Array(payload.is_a?(Hash) ? payload["repositories"] : payload)
+  end
 
   def get(path, **query)
     uri = URI.parse("#{API_ROOT}#{path}")
@@ -248,6 +256,11 @@ class GithubApi
                                             open_timeout: OPEN_TIMEOUT, read_timeout: READ_TIMEOUT) do |http|
       http.request(request)
     end
+  rescue GithubApi::Error
+    # `access_token` is resolved inside this block and mints through `GithubAppCredentials`, which
+    # raises this family. Without this the broad rescue below would relabel "the App is not
+    # configured" or "that installation is gone" as "GitHub could not be reached".
+    raise
   rescue StandardError => e
     # Deliberately broad: Net::HTTP raises a dozen unrelated ancestors (Errno::*, OpenSSL,
     # Net::OpenTimeout, SocketError) and enumerating them is a list that goes stale silently.
@@ -258,9 +271,9 @@ class GithubApi
   def parse(response)
     case response
     when Net::HTTPSuccess then decode(response.body)
-    when Net::HTTPUnauthorized then raise Unauthorized, "GitHub rejected the access token."
+    when Net::HTTPUnauthorized then raise Unauthorized, "GitHub rejected the SpecGuard App credentials."
     when Net::HTTPForbidden then raise forbidden_error(response)
-    when Net::HTTPNotFound then raise NotFound, "GitHub has no such repository visible to this token."
+    when Net::HTTPNotFound then raise NotFound, "GitHub has no such repository in this installation."
     else raise Unavailable, "GitHub responded #{response.code}."
     end
   end
@@ -271,23 +284,14 @@ class GithubApi
     raise Unavailable, "GitHub returned a body that is not JSON: #{e.message}"
   end
 
-  # 403 is GitHub's answer to several unrelated situations, and telling them apart matters to
-  # whoever has to fix it: a rate limit clears on its own, an SSO block needs a click in the org,
-  # and a narrow scope needs re-authorization. The reason travels on the exception so the decision
-  # is made from a symbol; the message is for the log.
-  #
-  # Read in this order deliberately. GitHub sends `X-GitHub-SSO` on a *rate-limited* response to an
-  # SSO org as readily as on an authorization failure, so checking SSO first would report an
-  # hour-long wait as a permanent org-approval problem. Exhaustion is the narrower, more certain
-  # signal, so it wins.
+  # Rate limiting is the one 403 worth telling apart, because it is the only one that clears by
+  # waiting. Everything else GitHub refuses for is reported as a refusal rather than as a retry the
+  # user would perform forever.
   def forbidden_error(response)
     if response["x-ratelimit-remaining"] == "0"
       Forbidden.new("GitHub rate limit reached; try again shortly.", reason: :rate_limited)
-    elsif response["x-github-sso"].present?
-      Forbidden.new("GitHub requires SSO authorization for that organization.", reason: :sso_required)
     else
-      Forbidden.new("GitHub refused the request; the granted access may be too narrow.",
-                    reason: :insufficient_scope)
+      Forbidden.new("GitHub refused the request.", reason: :refused)
     end
   end
 

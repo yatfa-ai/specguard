@@ -8,28 +8,27 @@
 #
 # ## Why this reads the listing rather than GitHub's org endpoints
 #
-# `GET /user/repos?affiliation=…organization_member` already returns an organization's repositories,
-# each carrying the caller's own `permissions.admin` and its `owner.type`. `GithubApi#repositories`
-# states the full argument for reusing it — no `read:org` scope (which every token issued by
-# SPGD-354 lacks, and which would therefore break bulk registration for exactly the users who
-# already connected), one round trip instead of one per organization plus a page walk inside each,
-# and the right set rather than a superset.
+# The listing is already exactly the right set. `GET /installation/repositories` returns the
+# repositories somebody who administers them deliberately handed to SpecGuard, each carrying its
+# `owner.type`, so grouping it by owner yields the organizations this viewer can register from —
+# for one round trip, and without the App needing any permission beyond the Metadata it has.
 #
-# ## What "an organization you administer" means here
+# `GET /orgs/:org/repos` would be worse on every axis that matters here: another endpoint, one call
+# per organization plus a page walk inside each, and a SUPERSET rather than the right set — it lists
+# repositories the App was never installed on, which are precisely the ones registration refuses.
 #
-# It means: an organization in which GitHub reports you administer at least one repository.
+# ## What "an organization you can register from" means here
 #
-# That is deliberately not the same statement as "you hold the Owner or Admin role in the
-# organization" — without `read:org` that role is not readable, and it is also not the predicate the
-# feature rests on. Registration is per repository and is gated per repository (`GithubOwnership`),
-# so an org role would be neither sufficient (an owner still cannot register a repository GitHub
-# says they cannot administer) nor necessary (a repository admin can register that repository
-# whatever their org role is). The honest question is the one that decides the outcome.
+# It means: an organization with at least one repository in this viewer's installation. That is not
+# a claim about anyone's org role, and it deliberately is not — an org owner still cannot register a
+# repository nobody installed the App on, and somebody who administers exactly one repository can
+# register exactly that one. The honest question is the one that decides the outcome, and here it
+# is answered by the installation itself.
 #
-# An organization with nothing to register does not appear at all — the same choice the
-# single-repository picker makes for non-admin repositories (`GithubHelper#repository_choices`), and
-# for the same reason: offering it is offering a click that can only end in an empty list. What was
-# withheld is counted rather than hidden, so a short list is never a mysterious one.
+# An organization with nothing in the installation does not appear at all, because it cannot: it
+# contributes no repositories to group. There is no "withheld" count any more and its absence is the
+# point — the OAuth listing returned everything the user could see and had to explain why most of it
+# was not on offer, where an installation contains only what was chosen.
 #
 # ## Personal repositories are out
 #
@@ -38,28 +37,15 @@
 # same machinery pointed at a different set and is left for whoever asks for it, rather than
 # smuggled in under a page that says "organization".
 class GithubOrganizations
-  # One organization and every repository of its the viewer can see.
-  #
-  # Holds ALL of them, not only the registerable ones, because the two counts are what make the
-  # picker honest: `administered` is what may be selected, and `withheld_count` is how the page says
-  # why the list is shorter than the organization is.
+  # One organization and the repositories of its that are in this viewer's installation — which is
+  # to say, all of the ones they can register.
   #
   # Nothing here is memoised, deliberately: a `Data` instance is frozen, so an `||=` on an ivar
   # raises rather than caching. The lists are tens of entries and are read a handful of times per
   # render, so recomputing is the cheaper of the two mistakes available.
   Org = Data.define(:login, :repos) do
-    # Registerable, in the picker's order. Sorted case-insensitively by name so the list reads
-    # alphabetically rather than in GitHub's ASCII order, where `Zebra` sorts before `apple`.
-    def administered = repos.select(&:admin?).sort_by { |repo| repo.full_name.downcase }
-
-    def administered_count = administered.length
-
-    # Repositories of this organization the viewer can see but cannot administer. Stated as a count
-    # rather than listed: naming them is a list of things you may not have, which is noise on a page
-    # about what you may register.
-    def withheld_count = repos.length - administered_count
-
-    def any_administered? = administered.any?
+    def count = repos.length
+    def any? = repos.any?
   end
 
   class << self
@@ -75,7 +61,6 @@ class GithubOrganizations
              .select(&:organization?)
              .group_by(&:owner)
              .map { |login, repos| Org.new(login: login, repos: repos) }
-             .select(&:any_administered?)
              .sort_by { |org| org.login.downcase }
     end
 

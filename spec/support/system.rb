@@ -66,10 +66,16 @@ module SystemAuthHelpers
   # OmniAuth is in test mode for the whole suite (spec/support/omniauth.rb), so the callback reads
   # `OmniAuth.config.mock_auth[:github]` and never leaves the process. The request phase is POST-only
   # here, which is why this visits the callback directly rather than clicking the sign-in button.
+  # The browser twin of `sign_in_via_github`, and it records an installation for the same reason:
+  # signing in connects nothing, so a spec about registering repositories would otherwise be a spec
+  # about the empty state. `installation: false` gets the unconnected user.
   def sign_in_via_github_in_browser(overrides = {})
     mock_github_auth(overrides)
     visit "/auth/github/callback"
-    User.find_by(github_uid: OmniAuth.config.mock_auth[:github]["uid"].to_s)
+
+    user = User.find_by(github_uid: OmniAuth.config.mock_auth[:github]["uid"].to_s)
+    install_for(user, overrides.fetch(:installation, OmniAuthHelpers::DEFAULT_INSTALLATION_ID))
+    user
   end
 end
 

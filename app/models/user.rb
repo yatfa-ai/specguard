@@ -8,13 +8,6 @@ class User < ApplicationRecord
   # a validation — see the comment there.
   HANDLE_FORMAT = /\A[a-z0-9](?:[a-z0-9-]{0,37}[a-z0-9])?\z/
 
-  # Either of these lets the app read a repository and the caller's permission level on it, which
-  # is all ownership verification needs. `repo` also covers private repositories; `public_repo`
-  # does not, and a user who grants only that will simply not see their private repositories in
-  # the registration list. Both are accepted so the narrower grant is a usable answer rather than
-  # a dead end. Neither is requested at sign-in — see `SpecGuard::GithubOauth`.
-  GITHUB_REPOSITORY_SCOPES = Set["repo", "public_repo"].freeze
-
   # The five-way answer from `User.resolve_by_handle`. A handle is deliberately not unique across
   # rows, so a caller that gets a bare `User` back cannot tell "this is the person you named" from
   # "this is one of several people who might be". This makes the difference impossible to ignore.
@@ -83,11 +76,17 @@ class User < ApplicationRecord
                                             foreign_key: :granted_by_user_id,
                                             dependent: :nullify, inverse_of: :granted_by_user
 
-  # The OAuth access token GitHub issued at this user's last authorization. Encrypted at rest
-  # (keys: config/initializers/active_record_encryption.rb) because it can read the repository
-  # metadata of whoever granted it — including private repositories, once the elevated scope is
-  # granted. Written only by `assign_github_authorization`; read only by `GithubApi.for`.
-  encrypts :github_access_token
+  # The GitHub App installations this user reached SpecGuard through — and, because only an
+  # administrator of a repository can install an App on it, the whole of their claim to register
+  # anything (`InstallationRepositories`).
+  #
+  # `:destroy`, unlike the two associations above, and the asymmetry is the same argument they
+  # make: a `GithubInstallation` row is nobody else's data. It holds one public numeric id and no
+  # credential — the token SpecGuard reads GitHub with is minted on demand and never persisted
+  # (`GithubAppCredentials`) — so destroying it takes nothing away from a colleague and leaves no
+  # orphan. It also cannot keep a user undestroyable for a reason they cannot see: connecting
+  # GitHub is not the sort of act that should quietly become irreversible.
+  has_many :github_installations, dependent: :destroy
 
   before_validation :normalize_github_handle
 
@@ -167,18 +166,12 @@ class User < ApplicationRecord
   # the index rather than a `LOWER()` scan.
   def self.normalize_handle(handle) = handle.to_s.strip.downcase.presence
 
-  # GitHub returns granted scopes as a comma-separated string whose spacing and ordering are not
-  # promised. Stored in one canonical form so `github_scopes` is a plain split and two grants of
-  # the same scopes compare equal.
-  def self.normalize_scopes(scope)
-    scope.to_s.split(",").map { |s| s.strip.downcase }.reject(&:empty?).uniq.sort.join(",")
-  end
-
   # Upsert from an OmniAuth::AuthHash (or anything that quacks like one).
   #
-  # Also banks the access token and the scopes GitHub actually granted with it, which is what makes
-  # the app able to ask GitHub anything on this user's behalf. Both halves are recorded in one save
-  # so a callback can never leave a row holding a token whose scopes are a previous grant's.
+  # Identity and nothing else. The callback's `credentials` are deliberately dropped on the floor:
+  # sign-in asks GitHub for a handle, an avatar and an email address, and the token that comes back
+  # with them is of no use to an app whose repository access is a GitHub App installation
+  # (`GithubInstallation`). Keeping it would be keeping a credential for the sake of it.
   #
   # A PURE IDENTITY UPSERT, AND IT STAYS ONE: it resolves who the callback is, it does not decide
   # whether they may be let in. `archived_at` is neither read nor written here — refusing an
@@ -195,47 +188,19 @@ class User < ApplicationRecord
       user.github_handle = info["nickname"].presence || info["name"].presence || auth["uid"].to_s
       user.email = info["email"]
       user.avatar_url = info["image"]
-      user.assign_github_authorization(auth)
       user.save!
     end
   end
 
-  # The token and the scopes it carries, taken off a callback's auth hash.
+  # Whether this user has connected any repositories at all — asked before any network call, so a
+  # page that only needs to know "is there anything to show" does not pay a GitHub round trip to
+  # find out there is not.
   #
-  # A callback that produced no token leaves the stored one alone rather than clearing it. GitHub
-  # omits `credentials` from a mocked or replayed auth hash, and a sign-in that happens to arrive
-  # without one is not evidence that the user revoked anything — dropping the token there would
-  # silently demote a user who had already granted repository access back to "not connected".
-  def assign_github_authorization(auth)
-    token = auth.dig("credentials", "token").presence
-    return if token.blank?
-
-    self.github_access_token = token
-    self.github_token_scopes = self.class.normalize_scopes(auth.dig("extra", "scope"))
-    self.github_token_updated_at = Time.current
-  end
-
-  # Scopes GitHub reported granting, as a set of strings. Never inferred from what we *asked* for:
-  # a user can uncheck an organization on GitHub's consent screen and come back with less than was
-  # requested, and treating the request as the grant is exactly how a feature ends up calling an
-  # API it has no scope for and rendering a 403 as a bug.
-  def github_scopes = github_token_scopes.to_s.split(",").map(&:strip).reject(&:empty?).to_set
-
-  # Whether this user has granted enough for the repository-listing and permission reads that
-  # ownership verification rests on. `repo` covers private repositories; `public_repo` is accepted
-  # because a user who granted only that can still legitimately register their public ones.
-  def github_repository_access? = github_access_token.present? && github_scopes.intersect?(GITHUB_REPOSITORY_SCOPES)
-
-  # Encrypted columns raise when the envelope will not open — which happens for exactly one
-  # reason here: the encryption keys changed (see the initializer's note on rotating
-  # `secret_key_base`). An unopenable token is operationally identical to no token: the user is
-  # asked to authorize again. So it is reported as absent rather than as a 500 on every page that
-  # asks whether GitHub is connected.
-  def github_access_token
-    super
-  rescue ActiveRecord::Encryption::Errors::Base
-    nil
-  end
+  # This is deliberately NOT an authorization check. It says a user reached SpecGuard through an
+  # installation at some point, which is a fact about our own table; what may actually be
+  # registered is decided by reading that installation live (`InstallationRepositories`), because
+  # nothing here is kept in step with GitHub and a row can outlive the installation it names.
+  def github_installed? = github_installations.any?
 
   def display_name = github_handle
 

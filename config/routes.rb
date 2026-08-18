@@ -14,11 +14,25 @@ Rails.application.routes.draw do
   get "docs/integrate", to: "pages#integrate", as: :integration_guide
 
   # --- Human auth: GitHub OAuth -------------------------------------------------
+  # Identity only. This asks GitHub for a handle, an avatar and an email address, and has never
+  # asked for more — repository access is a separate thing entirely, below.
   post  "/auth/github",          to: "sessions#passthru", as: :github_auth
   get   "/auth/github/callback", to: "sessions#create"
   post  "/auth/github/callback", to: "sessions#create"
   get   "/auth/failure",         to: "sessions#failure"
   delete "/sign_out",            to: "sessions#destroy", as: :sign_out
+
+  # --- Repository access: GitHub App installation --------------------------------
+  # Connecting repositories is installing the SpecGuard GitHub App on them and picking them in
+  # GitHub's own picker. POST going out (CSRF-protected, so nobody else can start the flow for a
+  # signed-in user); GET coming back, because the callback is GitHub's Setup URL and GitHub
+  # redirects a browser to it.
+  #
+  # The callback path is configured on the App itself on github.com. Renaming it here without
+  # changing it there sends every returning user to a 404 with no error anywhere.
+  post "/github/installation",          to: "github_installations#create",   as: :github_installation
+  get  "/github/installation/callback", to: "github_installations#callback",
+                                        as: :github_installation_callback
 
   # --- Dashboard ----------------------------------------------------------------
   resources :repositories, only: %i[index new create show edit update destroy] do

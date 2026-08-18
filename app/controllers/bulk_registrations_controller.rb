@@ -98,7 +98,7 @@ class BulkRegistrationsController < ApplicationController
   def registered_names
     @registered_names ||=
       begin
-        names = Array(organization&.administered).map { |repo| repo.full_name.downcase }
+        names = Array(organization&.repos).map { |repo| repo.full_name.downcase }
 
         if names.empty?
           Set.new
@@ -143,7 +143,7 @@ class BulkRegistrationsController < ApplicationController
   end
 
   # A batch that skipped repositories for a missing or dead grant must offer the fix, exactly as a
-  # single refused registration does — see `GithubRepositoryListing#github_authorization_needed?`,
+  # single refused registration does — see `GithubRepositoryListing#github_installation_needed?`,
   # which asks this of whichever controller it is mixed into.
   def github_verdict = @result
 end

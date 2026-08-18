@@ -22,17 +22,17 @@
     <% end %>
   <% end %>
 
-  <%# A batch skipped for a missing or dead grant is not something a re-run fixes, so the fix is
-      offered here rather than left for the reader to find their way back to. Reads the result's own
-      `reauthorize?` through GithubRepositoryListing — the same question the single-repository form
+  <%# A batch skipped because the App is not installed is not something a re-run fixes, so the fix
+      is offered here rather than left for the reader to find their way back to. Reads the result's
+      own `install?` through GithubRepositoryListing — the same question the single-repository form
       asks of a single verdict. %>
-  <% if github_authorization_needed? %>
+  <% if github_installation_needed? %>
     <%= render UI::PanelComponent.new(class: "mt-4") do %>
       <%= render UI::EmptyStateComponent.new(
             title: "Connect your GitHub repositories",
-            description: github_authorization_disclosure
+            description: github_installation_disclosure
           ) do %>
-        <%= github_authorize_button origin: bulk_repositories_path %>
+        <%= github_install_button return_to: bulk_repositories_path %>
       <% end %>
     <% end %>
   <% end %>
@@ -52,9 +52,9 @@
 
   <%# One panel per reason, in `BulkRegistration::SKIP_ORDER`, and never a heading over an empty
       group. Grouping rather than one flat list because the reasons are not equivalent: "already
-      registered" needs no action at all, "not administered by you" is a fact about GitHub, and a
-      dead token is something to go and fix — and a reader scanning twenty rows for the ones that
-      matter should not have to read every sentence to sort them. %>
+      registered" needs no action at all, "not connected to the App" is something to go and change
+      on GitHub, and a rate limit is something to wait out — and a reader scanning twenty rows for
+      the ones that matter should not have to read every sentence to sort them. %>
   <% @result.skipped_groups.each do |status, label, outcomes| %>
     <%= render UI::PanelComponent.new(title: "#{label} (#{outcomes.length})", class: "mt-4") do %>
       <ul class="divide-y divide-app-border-light">

@@ -1,13 +1,12 @@
 # frozen_string_literal: true
 
-# The viewer's own GitHub repositories, and what to say when they cannot be listed.
+# The viewer's connected GitHub repositories, and what to say when they cannot be listed.
 #
 # Extracted from `RepositoriesController` when `BulkRegistrationsController` arrived, because both
-# render a picker built from the same listing and both have to answer the same four questions when
-# it is not there: is GitHub connected at all, was the token rejected, was the request refused, or is
-# GitHub simply down. Those four have four different fixes, and a second controller re-deriving them
-# is a second place for them to drift apart — which shows up as one page telling an SSO-blocked user
-# to wait while the other tells them to ask their organization.
+# render a picker built from the same source and both have to answer the same questions when it is
+# not there: has this user installed the App at all, did GitHub refuse, or is GitHub simply down.
+# Those have different fixes, and a second controller re-deriving them is a second place for them
+# to drift apart.
 #
 # ## Nothing here is an authorization boundary
 #
@@ -20,81 +19,86 @@ module GithubRepositoryListing
 
   included do
     helper_method :github_listing, :github_listing_error, :github_listing_error_message,
-                  :github_authorization_needed?
+                  :github_listing_incomplete?, :github_installation_needed?
   end
 
   private
 
-  # The repositories this user may pick from, straight off GitHub. Memoized and lazy — read by the
-  # views that render a picker, and by nothing on the success path, so a registration that verifies
-  # costs exactly one GitHub call rather than two.
+  # Everything the viewer's installations could be read as. Memoized and lazy — read by the views
+  # that render a picker, and by nothing on the success path, so a registration that verifies costs
+  # exactly one trip to GitHub rather than two.
+  def github_sources
+    @github_sources ||= InstallationRepositories.sources(current_user)
+  end
+
+  # The repositories this user may pick from, as the plain `GithubApi::Listing` every view and
+  # helper takes — or `nil` when there is nothing to pick from and a sentence is owed instead.
+  #
+  # `nil` covers two situations that read differently and are told apart by `github_listing_error`:
+  # GitHub refused or could not be reached, and the user has not installed the App. It does NOT
+  # cover "installed, and selected nothing" — that is an empty listing rather than a missing one,
+  # and the picker says so in its own words.
   def github_listing
-    return @github_listing if defined?(@github_listing)
+    return nil unless github_sources.installed?
+    return nil if github_sources.repos.empty? && github_sources.error
 
-    @github_listing =
-      begin
-        GithubApi.for(current_user)&.repositories if current_user.github_repository_access?
-      rescue GithubApi::Error => e
-        Rails.logger.warn("[#{self.class.name}] listing repositories: #{e.class}: #{e.message}")
-        @github_listing_error = listing_error_for(e)
-        nil
-      end
+    github_sources.listing
   end
 
-  # The same three-way split the verification path makes, for the same reason: the listing call
-  # hits GitHub with the same token and gets the same 403s, so an SSO-blocked user must not be
-  # shown "GitHub is not answering right now" — nothing is wrong with GitHub, and waiting will not
-  # help. `:token_rejected` and `:scope_too_narrow` are the two the authorize button can fix.
-  def listing_error_for(error)
-    case error
-    when GithubApi::Unauthorized then :token_rejected
-    when GithubApi::Forbidden
-      GithubOwnership::FORBIDDEN_VERDICTS.fetch(error.reason, :scope_too_narrow)
-    else :unavailable
-    end
-  end
-
-  def github_listing_error
-    github_listing
-    @github_listing_error
-  end
+  # The verdict status that stopped the listing being the whole story, or `nil` when nothing did.
+  # The same statuses the verification path uses, because it is the same GitHub answering the same
+  # credential — an installation refused for one is refused for both.
+  def github_listing_error = github_sources.error
 
   # The sentence to show when the repository list could not be loaded — reusing the verification
   # path's wording so the two ways of hitting the same GitHub refusal do not explain it differently.
   # Phrased for a whole-page panel, so it is the verdict message with a subject in front of it.
+  #
+  # `nil` for `:unavailable`, which is the genuine outage the caller renders "try again shortly"
+  # for, and for no error at all.
   def github_listing_error_message
     status = github_listing_error
     return nil if status.nil? || status == :unavailable
 
-    "Your repository list #{GithubOwnership::MESSAGES.fetch(status)}"
+    "Your repository list #{InstallationRepositories::MESSAGES.fetch(status)}"
   end
 
-  # Whether the *fix* on offer is "authorize GitHub" rather than "pick something else". True before
-  # the user has ever granted repository access, and again after a token stops working or comes
-  # back too narrow to answer with.
+  # Whether a list IS being shown and is nevertheless known to be short — one of the viewer's
+  # installations answered and another did not. Distinct from `github_listing.nil?`, which is the
+  # case where there is nothing to show at all, and it needs its own answer: the picker renders,
+  # everything in it is genuinely registerable, and a repository the reader came for may still be
+  # missing for a reason that is ours rather than GitHub's.
   #
-  # The ORDER of these three is the whole point, and it is about cost as much as correctness. A
-  # verdict, when the request has one, is strictly better evidence than the listing: it comes from
-  # the write that was actually attempted, moments ago, with the same token. Reading
-  # `github_listing_error` first would force a full `GithubApi#repositories` page walk — up to
-  # `MAX_PAGES` round trips — to re-derive an answer the verdict already holds, on the one path
-  # (`BulkRegistrationsController#create`) that has just done N inline saves and already paid for
-  # that listing under a different memo.
-  #
-  # This is a no-op for `RepositoriesController`, whose failure path re-renders a picker and so
-  # needs the listing regardless.
-  def github_authorization_needed?
-    return true unless current_user.github_repository_access?
-    return github_verdict.reauthorize? if github_verdict
+  # Saying so is the same rule the truncation note follows. A picker that silently omits things is
+  # a picker people stop trusting, and "my repository is not in the list" is indistinguishable from
+  # "SpecGuard is broken" unless the page says which it is.
+  def github_listing_incomplete? = github_sources.error.present? && github_sources.repos.any?
 
-    %i[token_rejected scope_too_narrow].include?(github_listing_error)
+  # Whether the *fix* on offer is "install the SpecGuard GitHub App" rather than "pick something
+  # else". True before the user has installed it at all — and only then, because everything after
+  # that is a question of which repositories are in the installation, which is fixed on GitHub's
+  # configure page rather than by installing again.
+  #
+  # A verdict this request already collected wins over the stored fact, for the reason it always
+  # did: it comes from the write that was actually attempted, moments ago, against the same
+  # installations.
+  #
+  # Asked of `User#github_installed?` rather than of `github_sources`, which would answer the same
+  # thing: this is one `EXISTS` against our own table, where reading the sources means a GitHub page
+  # walk per installation. That matters because the view asks this FIRST — a user with nothing
+  # installed gets the button without SpecGuard having called GitHub at all, which is the right cost
+  # for a question our own table can settle.
+  def github_installation_needed?
+    return github_verdict.install? if github_verdict
+
+    !current_user&.github_installed?
   end
 
   # A verdict this request has already collected about a repository, when there is one — a controller
   # that has just tried to WRITE knows something the listing does not, and it changes the answer
   # above. `nil` here is the honest default for a controller that has only read.
   #
-  # `GithubOwnership::Verdict` and `BulkRegistration::Result` both answer `reauthorize?`, so either
-  # may be returned; this asks for the capability, not the class.
+  # `InstallationRepositories::Verdict` and `BulkRegistration::Result` both answer `install?`, so
+  # either may be returned; this asks for the capability, not the class.
   def github_verdict = nil
 end

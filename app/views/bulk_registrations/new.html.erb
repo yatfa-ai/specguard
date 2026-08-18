@@ -9,8 +9,8 @@
   <%= render UI::PageHeaderComponent.new(
         title: "Register an organization's repositories",
         subtitle: "Pick a GitHub organization and register its repositories in one action. " \
-                  "SpecGuard checks with GitHub that you administer each one, exactly as it does " \
-                  "for a single repository."
+                  "SpecGuard checks with GitHub that the App is installed on each one, exactly as " \
+                  "it does for a single repository."
       ) do |header| %>
     <% header.with_actions do %>
       <%= render UI::ButtonComponent.new(variant: :ghost, href: new_repository_path) { "Register one repository" } %>
@@ -18,21 +18,21 @@
   <% end %>
 
   <%= render UI::PanelComponent.new do %>
-    <%# The same four-way split the single-repository form makes, in the same order and with the
-        same words — see GithubRepositoryListing, which is where both pages get them from. A second
-        page inventing its own phrasing for "GitHub refused" is how an SSO-blocked user ends up
-        told to wait on one screen and to call their org admin on the other. %>
-    <% if github_authorization_needed? %>
-      <%# `origin` is passed explicitly rather than defaulting to `request.fullpath`, for the reason
-          repositories/_form states in full: this panel's likely reader arrived by POST (they
-          submitted a batch and it came back needing a grant), and `request.fullpath` is then the
-          POST path. It happens to be the same URL here — both verbs answer at /repositories/bulk —
-          but that is a coincidence of this route, not a property to rest on. %>
+    <%# The same split the single-repository form makes, in the same order and with the same words
+        — see GithubRepositoryListing, which is where both pages get them from. A second page
+        inventing its own phrasing for "GitHub refused" is how a reader ends up told to wait on one
+        screen and to go and change something on the other. %>
+    <% if github_installation_needed? %>
+      <%# `return_to` is passed explicitly rather than defaulting to `request.fullpath`, for the
+          reason repositories/_form states in full: this panel's likely reader arrived by POST (they
+          submitted a batch and it came back needing an installation), and `request.fullpath` is then
+          the POST path. It happens to be the same URL here — both verbs answer at
+          /repositories/bulk — but that is a coincidence of this route, not a property to rest on. %>
       <%= render UI::EmptyStateComponent.new(
             title: "Connect your GitHub repositories",
-            description: github_authorization_disclosure
+            description: github_installation_disclosure
           ) do %>
-        <%= github_authorize_button origin: bulk_repositories_path %>
+        <%= github_install_button return_to: bulk_repositories_path %>
       <% end %>
     <% elsif github_listing.nil? %>
       <%# Two different reasons land here and they must not read the same: GitHub being down is
@@ -53,17 +53,28 @@
         <%= render UI::ButtonComponent.new(variant: :ghost, href: repositories_path) { "Back" } %>
       </div>
     <% elsif organizations.empty? %>
-      <%# GitHub returned repositories, but none of them belongs to an organization this user
-          administers anything in. Said plainly rather than rendered as an empty chooser: the fix is
-          to register repositories one at a time, and this page cannot help. %>
+      <%# The installation covers repositories, but none of them belongs to an organization — they
+          are all in personal namespaces. Said plainly rather than rendered as an empty chooser: the
+          fix is to register repositories one at a time, and this page cannot help. %>
       <%= render UI::EmptyStateComponent.new(
             title: "No organizations to register from",
-            description: "GitHub reports no organization in which you administer a repository. " \
-                         "Personal repositories are registered one at a time."
+            description: "The SpecGuard GitHub App is not installed on any organization's " \
+                         "repositories. Personal repositories are registered one at a time."
           ) do %>
         <%= render UI::ButtonComponent.new(variant: :primary, href: new_repository_path) { "Register one repository" } %>
       <% end %>
     <% elsif organization.nil? %>
+      <% if github_listing_incomplete? %>
+        <%# Rendered above the chooser rather than instead of it, for the reason repositories/_form
+            states in full: what is listed was read from GitHub moments ago and is registerable, and
+            withholding the whole page over an unrelated installation's failure would refuse a
+            working choice. Here it also means a whole ORGANIZATION can be missing rather than some
+            of one, which is the sharper version of the same warning. %>
+        <%= render UI::AlertComponent.new(tone: :warning, title: "This list may be incomplete", class: "mb-4") do %>
+          One of your GitHub App installations could not be read, so an organization connected
+          through it may be missing. Anything shown here can still be registered.
+        <% end %>
+      <% end %>
       <%= render "organizations" %>
     <% else %>
       <%= render "picker", organization: organization %>

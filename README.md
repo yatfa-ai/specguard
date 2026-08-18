@@ -115,34 +115,57 @@ a placeholder, and the sign-in panel says so rather than dead-ending you. See
 `config/initializers/omniauth.rb`. Specs never talk to GitHub: `spec/support/omniauth.rb` puts
 OmniAuth in test mode and drives the real callback action with a mock identity.
 
-### GitHub repository access (incremental authorization)
+### GitHub repository access (App installation)
 
 Sign-in asks for `read:user,user:email` and nothing more, so a visitor who only wants to look at a
-dashboard never hands over access to their repositories. The broader `repo` scope is requested
-lazily, at the moment someone first registers a repository, from the registration page itself —
-the same OAuth provider, with the scope overridden on the request phase, and OmniAuth's `origin`
-carrying the user back to where they were. `SpecGuard::GithubOauth::SIGN_IN_SCOPE` and
-`REPOSITORY_SCOPE` are the two asks.
+dashboard never hands over anything about their repositories. Connecting repositories is a
+separate mechanism entirely: installing the **SpecGuard GitHub App** and choosing repositories in
+GitHub's own picker.
 
-That token is what closes the squatting gap: registering a repository picks from the list GitHub
-says you have, and `GithubOwnership` re-asks GitHub server-side whether you are an **admin** of
-the one you picked before the record is created. Every write of `github_full_name` clears that
-same gate — registration and rename both — and it fails closed, including when GitHub is
+That installation is what closes the squatting gap, and it is a stronger proof than the one it
+replaced. Only somebody who administers a repository can install an App on it, so a repository
+being in your installation *is* GitHub's statement that it is yours to register — there is no
+permission field to read. `InstallationRepositories` re-asks GitHub server-side on every write of
+`github_full_name` (registration and rename both), and it fails closed, including when GitHub is
 unreachable.
 
-The token is **encrypted at rest** (Active Record Encryption, `users.github_access_token`). Keys
-come from ENV, then credentials, then a fallback derived from `secret_key_base`, so a fresh
-checkout boots with nothing configured — see `config/initializers/active_record_encryption.rb`,
-which documents what rotating `secret_key_base` costs you (nothing but a re-authorization).
+This replaced an OAuth `repo` grant — GitHub's "Full control of private repositories", read **and
+write**, across everything you and your organizations could reach — which existed only to read one
+boolean off `GET /repos/:owner/:repo`. The App asks for **Metadata: read-only** and nothing else.
+`Contents: read` is deliberately not requested: nothing here reads repository code, and adding a
+permission later forces re-consent on every existing installation.
+
+**Nothing repository-reaching is persisted.** There is no token column and no encryption to
+configure. What is stored is one public numeric installation id (`github_installations`); the
+credential SpecGuard actually reads GitHub with is an installation access token minted on demand
+from the App's private key and discarded within the hour (`GithubAppCredentials`). A database dump
+carries no credentials.
+
+Five values identify the App, none of them committed:
 
 ```sh
-export ACTIVE_RECORD_ENCRYPTION_PRIMARY_KEY=...        # optional; `bin/rails db:encryption:init`
-export ACTIVE_RECORD_ENCRYPTION_DETERMINISTIC_KEY=...
-export ACTIVE_RECORD_ENCRYPTION_KEY_DERIVATION_SALT=...
+export GITHUB_APP_ID=123456
+export GITHUB_APP_SLUG=specguard                # the app's URL name, for the install link
+export GITHUB_APP_PRIVATE_KEY="$(cat key.pem)"
+export GITHUB_APP_CLIENT_ID=Iv1....             # the App's own OAuth client, for the
+export GITHUB_APP_CLIENT_SECRET=...             #   install-time code exchange
 ```
 
+or under `github_app:` in encrypted credentials. Two settings on the App itself are load-bearing
+and cannot be asserted from here: its **Setup URL** must be `<host>/github/installation/callback`,
+and **"Request user authorization (OAuth) during installation"** must be on — that is what makes
+GitHub send a `code` alongside `installation_id`, and the code is the only thing proving the person
+arriving at the setup URL is entitled to the installation they arrived carrying. See
+`config/initializers/github_app.rb`.
+
+With none of it set the app still boots and the whole suite still runs: `configured?` reports the
+absence and the connect UI explains what is missing rather than bouncing you to a github.com URL
+built from placeholders. **Development and test never need a real App** — a developer who wants
+connected repositories seeds `GithubInstallation` rows from the console.
+
 Specs never reach api.github.com either: `spec/support/github_api.rb` installs a deterministic
-fake through `GithubApi.factory`, the same public seam production code would swap.
+fake through `GithubApi.factory`, the same public seam production code swaps, and no spec needs an
+App id, a private key or a minted token.
 
 ### API keys (CI/agent auth)
 

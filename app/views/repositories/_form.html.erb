@@ -1,13 +1,13 @@
 <%# Shared by `new` and `edit` — registering and renaming are the same one-field form, and that is
     now load-bearing rather than convenient: `github_full_name` is verified on every write
     (RepositoriesController#save_with_verified_ownership), so both forms must offer the same picker
-    of repositories the viewer actually administers. A free-text field on either one is the
-    squatting gap.
+    of repositories the SpecGuard GitHub App is actually installed on. A free-text field on either
+    one is the squatting gap.
 
     locals: repository, submit_label, cancel_href %>
 <%= render UI::PanelComponent.new do %>
   <% choices = github_listing && repository_choices(github_listing, repository) %>
-  <% picker = !github_authorization_needed? && choices.present? %>
+  <% picker = !github_installation_needed? && choices.present? %>
 
   <%# A refused write must always be able to say why. When the picker renders, the field renders
       its own errors beneath it (Forms::FieldComponent) — but the three branches below render no
@@ -19,22 +19,22 @@
     <% end %>
   <% end %>
 
-  <% if github_authorization_needed? %>
-    <%# The fix here is a grant, not an edit, so no field is rendered.
+  <% if github_installation_needed? %>
+    <%# The fix here is installing the App, not an edit, so no field is rendered.
 
-        `origin` is passed explicitly rather than left to default to `request.fullpath`, because
+        `return_to` is passed explicitly rather than left to default to `request.fullpath`, because
         this panel's most likely reader arrived by POST: they submitted the form, verification came
-        back needing a grant, and this is the 422 re-render. `request.fullpath` is then
+        back needing an installation, and this is the 422 re-render. `request.fullpath` is then
         `/repositories` (the POST path) or `/repositories/:id` (the PATCH path) — neither of which
-        renders this form, so authorizing would land them on the dashboard or the show page and
+        renders this form, so installing would land them on the dashboard or the show page and
         make them find the button again. The form's own GET path is the only correct answer, and
         it is a property of what is being rendered, not of how this request arrived. %>
-    <% form_origin = repository.persisted? ? edit_repository_path(repository) : new_repository_path %>
+    <% form_return_to = repository.persisted? ? edit_repository_path(repository) : new_repository_path %>
     <%= render UI::EmptyStateComponent.new(
           title: "Connect your GitHub repositories",
-          description: github_authorization_disclosure
+          description: github_installation_disclosure
         ) do %>
-      <%= github_authorize_button origin: form_origin %>
+      <%= github_install_button return_to: form_return_to %>
     <% end %>
   <% elsif github_listing.nil? %>
     <%# Nothing to pick from and nothing the user can fix by typing, so the form is withheld rather
@@ -56,17 +56,28 @@
       <%= render UI::ButtonComponent.new(variant: :ghost, href: cancel_href) { "Back" } %>
     </div>
   <% elsif choices.blank? %>
-    <%# Reached both when GitHub returned nothing and when it returned only repositories the user
-        does not administer. Those are the same dead end from here — an empty picker with a
-        footnote is worse than saying so. %>
+    <%# The App is installed and covers no repositories — the user completed the flow and selected
+        nothing, or has since deselected everything. The fix is on GitHub, so the button goes back
+        there rather than offering a field that has nothing to offer. %>
+    <% form_return_to = repository.persisted? ? edit_repository_path(repository) : new_repository_path %>
     <%= render UI::EmptyStateComponent.new(
-          title: "No repositories to register",
-          description: "GitHub reports no repositories you administer. Only a repository you " \
-                       "administer on GitHub can be registered here."
+          title: "No repositories connected yet",
+          description: "The SpecGuard GitHub App is installed, but no repositories are selected " \
+                       "for it. Choose some on GitHub and they will appear here."
         ) do %>
+      <%= github_install_button "Choose repositories on GitHub", return_to: form_return_to %>
       <%= render UI::ButtonComponent.new(variant: :ghost, href: cancel_href) { "Back" } %>
     <% end %>
   <% else %>
+    <% if github_listing_incomplete? %>
+      <%# Rendered ABOVE the picker rather than instead of it: what is listed was read from GitHub
+          moments ago and is registerable, so withholding the whole control would be refusing a
+          working choice over an unrelated installation's failure. %>
+      <%= render UI::AlertComponent.new(tone: :warning, title: "This list may be incomplete", class: "mb-4") do %>
+        One of your GitHub App installations could not be read, so repositories connected through it
+        are missing from this list. Anything shown here can still be registered.
+      <% end %>
+    <% end %>
     <%= form_with model: repository do |form| %>
       <div class="form-grid" data-controller="repository-picker">
         <div class="form-field-full space-y-1">

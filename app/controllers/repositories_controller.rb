@@ -933,12 +933,17 @@ class RepositoriesController < ApplicationController
 
   # Records the refusal on the attribute it is about, so the form shows it under the field the user
   # has to change, exactly as a format or uniqueness failure does. The verdict is also kept for the
-  # view, which offers an authorize button instead of an error when the fix is a grant rather than
-  # an edit.
+  # view, which offers an install button instead of an error when the fix is installing the App
+  # rather than picking something else.
   def verify_github_ownership(repository)
     return true unless repository.will_save_change_to_github_full_name?
 
-    @github_verdict = GithubOwnership.verify(user: current_user, full_name: repository.github_full_name)
+    # `sources:` is this request's own read, shared with the picker the 422 re-render builds — see
+    # `InstallationRepositories.verify_batch`. It is the same live GitHub answer either way; what it
+    # saves is fetching it twice on the one path that needs it twice.
+    @github_verdict = InstallationRepositories.verify(user: current_user,
+                                                      full_name: repository.github_full_name,
+                                                      sources: github_sources)
     return true if @github_verdict.verified?
 
     repository.errors.add(:github_full_name, @github_verdict.message)
@@ -955,8 +960,8 @@ class RepositoriesController < ApplicationController
   # `GithubRepositoryListing`, which holds all of that and is shared with the bulk path.
   #
   # What this controller adds is the verdict from a write it has just ATTEMPTED: a registration
-  # refused for a grant the user does not have must offer the authorize button, and the listing
-  # alone cannot know that happened.
+  # refused because the App is not installed must offer the install button, and the listing alone
+  # cannot know that happened.
   def github_verdict = @github_verdict
 
   # Submitting the form unchanged is a valid save, so don't claim a rename that didn't happen.

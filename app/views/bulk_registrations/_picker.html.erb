@@ -2,13 +2,13 @@
 
     locals: organization (a GithubOrganizations::Org)
 
-    Every row here is a repository GitHub says this viewer administers. Nothing on this page is a
-    gate: the tick boxes are client-controlled, so `BulkRegistration` re-asks GitHub about every
+    Every row here is a repository the SpecGuard GitHub App is installed on. Nothing on this page is
+    a gate: the tick boxes are client-controlled, so `BulkRegistration` re-asks GitHub about every
     submitted name before it saves anything. What the page is responsible for is not offering a
     click that can only fail — which is why already-registered rows are shown but not selectable. %>
-<% administered = organization.administered %>
-<% registerable = administered.reject { |repo| already_registered?(repo.full_name) } %>
-<% already = administered.length - registerable.length %>
+<% installed = organization.repos %>
+<% registerable = installed.reject { |repo| already_registered?(repo.full_name) } %>
+<% already = installed.length - registerable.length %>
 
 <div class="space-y-4">
   <div class="flex flex-wrap items-center justify-between gap-2">
@@ -17,11 +17,10 @@
       <p class="mt-1 text-sm text-app-content-secondary">
         <%# Each of these is composed as one string rather than assembled across ERB lines: a
             newline inside a sentence renders fine and is invisible to anything reading the text. %>
-        <%= pluralize(administered.length, "repository", plural: "repositories") %> you administer.
+        <%= pluralize(installed.length, "repository", plural: "repositories") %> connected.
         <% if already.positive? %>
           <%= "#{already == 1 ? 'One is' : "#{already} are"} already registered and cannot be registered again." %>
         <% end %>
-        <%= withheld_repositories_sentence(organization.withheld_count) %>
       </p>
     </div>
     <%= render UI::ButtonComponent.new(variant: :ghost, size: :sm, href: bulk_repositories_path) do %>
@@ -30,12 +29,12 @@
   </div>
 
   <% if registerable.empty? %>
-    <%# Everything this viewer administers here is already registered. That is a success, not an
+    <%# Every connected repository here is already registered. That is a success, not an
         empty state to apologise for, so it says so and points at the list rather than at a form
         that could do nothing. %>
     <%= render UI::EmptyStateComponent.new(
           title: "Nothing left to register",
-          description: "Every repository you administer in #{organization.login} is already " \
+          description: "Every connected repository in #{organization.login} is already " \
                        "registered in SpecGuard."
         ) do %>
       <%= render UI::ButtonComponent.new(variant: :primary, href: repositories_path) { "Back to repositories" } %>
@@ -88,7 +87,7 @@
       </div>
 
       <ul class="mt-2 max-h-96 divide-y divide-app-border-light overflow-y-auto">
-        <% administered.each_with_index do |repo, index| %>
+        <% installed.each_with_index do |repo, index| %>
           <% taken = already_registered?(repo.full_name) %>
           <li class="py-2"
               data-bulk-picker-target="row"
@@ -105,10 +104,10 @@
               <span class="min-w-0 flex-1">
                 <span class="block break-words text-sm text-app-content"><%= repo.full_name %></span>
                 <span class="mt-1 flex flex-wrap items-center gap-1">
-                  <%# `private` and `archived` change what registering the repository will MEAN — a
-                      private one is why the broad scope was needed, an archived one will never push
-                      another CI run — so they are on the row rather than discoverable afterwards.
-                      Same two facts the single-repository picker puts on its option label. %>
+                  <%# `private` and `archived` change what registering the repository will MEAN — an
+                      archived one will never push another CI run — so they are on the row rather
+                      than discoverable afterwards. Same two facts the single-repository picker puts
+                      on its option label. %>
                   <% if taken %>
                     <%= render UI::BadgeComponent.new(tone: :info) { "Already registered" } %>
                   <% end %>

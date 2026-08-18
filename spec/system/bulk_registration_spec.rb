@@ -20,7 +20,7 @@ require "rails_helper"
 # example that notices.
 RSpec.describe "Bulk organization registration", type: :system do
   before do
-    stub_github(repos: [github_repo("acme/api"), github_repo("acme/web")], strict: true)
+    stub_github(repos: [github_repo("acme/api"), github_repo("acme/web")])
     @user = sign_in_via_github_in_browser
   end
 
