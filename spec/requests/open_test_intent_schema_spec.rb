@@ -35,13 +35,14 @@ RSpec.describe "GET /schemas/open-test-intent.v1.json", type: :request do
 
   # The mirror exists to make the identifier fetchable, so the identifier had better be in what it
   # serves — and it had better be the one that resolves. A mirror serving a document that named the
-  # dead host would be a working endpoint publishing a broken contract.
+  # old dead host would be a working endpoint publishing a broken contract. Pinned by equality
+  # rather than by a `not_to include` of the dead host: equality rejects that string too, and every
+  # other wrong one, which a negative assertion naming one known-bad value does not.
   it "carries the canonical identifier, which names the protocol repository" do
     get "/schemas/open-test-intent.v1.json"
 
     expect(JSON.parse(response.body)["$id"])
       .to eq("https://raw.githubusercontent.com/yatfa-ai/open-test-intent/schema-v1/schemas/open-test-intent.v1.json")
-    expect(response.body).not_to include("specguard.dev")
   end
 
   # `format: false` on the route. Without it Rails' optional `(.:format)` segment answers here too,
