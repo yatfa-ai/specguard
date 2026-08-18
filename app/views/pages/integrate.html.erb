@@ -36,7 +36,7 @@
     because that `$id` names a host this app is not served from and routing it is separate work.
 %>
 
-<% endpoint = root_url.sub(%r{/+\z}, "") %>
+<% endpoint = integration_guide_endpoint %>
 
 <%= render UI::PageComponent.new do %>
   <%= render UI::PageHeaderComponent.new(
@@ -139,10 +139,13 @@
       <%= render UI::AlertComponent.new(tone: :neutral, title: "With no API key set, the run is written to a file") do %>
         <p class="mt-1">
           <code>SPECGUARD_API_KEY</code> is the switch. Unset, the formatter appends the run to
-          <code>log/test_results.jsonl</code> — one whole run per line, byte for byte the body it
+          <code>log/test_results.jsonl</code> — one whole run per line, the same JSON it
           would have posted — and posts nothing. That is also the fallback when a delivery fails, so
-          a run is never lost to a network blip. <code>bundle exec specguard-ingest
-          log/test_results.jsonl</code> replays those lines to the endpoint afterwards.
+          a run survives a network blip. <code>bundle exec specguard-ingest
+          log/test_results.jsonl</code> replays those lines to the endpoint afterwards. (On the wire
+          a body of 256 KiB or more is gzipped, so a large run's request is compressed even though
+          the file's line is not. <code>rspec --dry-run</code> writes nothing at all — there is no
+          run to record.)
         </p>
       <% end %>
 
@@ -185,7 +188,9 @@
             <td class="px-3 py-2 font-mono text-xs text-app-content">SPECGUARD_BRANCH</td>
             <td class="px-3 py-2 text-xs text-app-muted">CI, then git</td>
             <td class="px-3 py-2 text-app-content-secondary">
-              Same providers, then <code>git symbolic-ref</code>. A detached checkout reports no
+              Falls back to <code>GITHUB_REF_NAME</code>, <code>CI_COMMIT_REF_NAME</code>,
+              <code>CIRCLE_BRANCH</code>, <code>BUILDKITE_BRANCH</code>, <code>GIT_BRANCH</code>,
+              then <code>git symbolic-ref</code>. A detached checkout reports no
               branch rather than the string <code>HEAD</code>.
             </td>
           </tr>
@@ -213,6 +218,17 @@
             <td class="px-3 py-2 text-xs text-app-muted">log/test_results.jsonl</td>
             <td class="px-3 py-2 text-app-content-secondary">Where a run goes when it is not delivered.</td>
           </tr>
+          <tr>
+            <td class="px-3 py-2 font-mono text-xs text-app-content">SPECGUARD_VALIDATE_INTENT</td>
+            <td class="px-3 py-2 text-xs text-app-muted">unset</td>
+            <td class="px-3 py-2 text-app-content-secondary">
+              Read by <code>specguard-lint</code> rather than by the formatter. Point it at a
+              <code>validate-intent</code> binary to check annotations with the canonical Go
+              validator instead of the gem's vendored Ruby copy; unset (or blank, which means
+              deliberately off) keeps the Ruby path. <code>--require-validator</code> turns a missing
+              or unusable binary into a failure rather than a silent fallback.
+            </td>
+          </tr>
         <% end %>
       </div>
 
@@ -222,8 +238,11 @@
         <p class="text-xs text-app-muted">
           GitHub Actions exports no per-leg index — <code>GITHUB_JOB</code> is identical across every
           leg — so a matrix-sharded suite has to name its shards itself. Under
-          <code>parallel_tests</code> or Knapsack the gem picks the index up on its own and you need
-          nothing here. Why it matters is <a href="#sharding" class="underline">below</a>.
+          <code>parallel_tests</code>, or Knapsack via <code>CI_NODE_INDEX</code>, the gem picks the
+          index up on its own and you need nothing here. Knapsack <em>Pro</em> is the exception: it
+          exports <code>KNAPSACK_PRO_CI_NODE_INDEX</code>, which the gem does not read, so set
+          <code>SPECGUARD_SHARD_ID</code> from it yourself. Why it matters is
+          <a href="#sharding" class="underline">below</a>.
         </p>
       </div>
     </div>
@@ -312,9 +331,16 @@ end</pre>
         <% end %>
         <p class="text-xs text-app-muted">
           No other key is allowed. The schema sets <code>additionalProperties: false</code>
-          deliberately, so a typo like <code>entiity</code> fails loudly instead of being silently
-          dropped — and an annotation that fails is reported as malformed, never accepted as if it
-          were absent.
+          deliberately, so a typo like <code>entiity</code> is rejected rather than silently dropped.
+          Be aware of where that rejection surfaces, though: <code>specguard-lint</code> and the
+          ingest endpoint both name it, but the <strong class="text-app-content">formatter reports a
+          malformed annotation as <code>"status": "unannotated"</code></strong> — the same thing it
+          sends for a test that has no annotation at all. That is deliberate. The wire has only two
+          statuses, and the formatter is bound never to fail your build, so its options are to
+          downgrade the one annotation or to 400 the entire run and lose telemetry for every other
+          example in it. It downgrades. The consequence for you is that a typo'd annotation is
+          invisible in the app — it just looks unannotated — which is exactly why
+          <a href="#lint" class="underline">the linter</a> exists and why it is worth running in CI.
         </p>
       </div>
 
@@ -346,7 +372,7 @@ describe("expired-card checkout flow", () => {
       <%= render UI::AlertComponent.new(tone: :neutral, title: "SpecGuard never reads your source") do %>
         <p class="mt-1">
           Nothing clones or parses your repository. Your reporter reads the annotation off the line
-          above the test and sends it as the <code>intent</code> object described in
+          above the test, or off the test's own line, and sends it as the <code>intent</code> object described in
           <a href="#wire" class="underline">the wire contract</a>; the endpoint validates that object
           against the schema above and stores it. A reporter that does no extraction at all is still
           a complete integration — it sends <code>"status": "unannotated"</code> for every example.
@@ -377,14 +403,21 @@ bundle exec specguard-lint spec/models/order_spec.rb<% end %>
 
       <div class="space-y-2">
         <p class="section-label text-app-content-secondary">What it prints, and what it exits</p>
-        <pre class="overflow-x-auto rounded-md border border-app-border-light bg-app-surface-raised px-3 py-2 font-mono text-xs text-app-content">FAIL  spec/models/order_spec.rb:9
-        -&gt; &lt;root&gt;: missing required property 'entity'
+        <pre class="overflow-x-auto rounded-md border border-app-border-light bg-app-surface-raised px-3 py-2 font-mono text-xs text-app-content">specguard-lint: validated in Ruby (SPECGUARD_VALIDATE_INTENT is unset)
 specguard-lint: checked 12 spec files
+FAIL  spec/models/order_spec.rb:9
+        -&gt; &lt;root&gt;: missing required property 'entity'
 specguard-lint: checked 3 @intent annotations, 1 malformed</pre>
+        <p class="text-xs text-app-muted">
+          The count of files comes before the findings, and the count of annotations after them. The
+          first line names which validator did the work and is written to <strong
+          class="text-app-content">stderr</strong>, not stdout — every run emits it, so redirect
+          stderr if you are capturing output for a report.
+        </p>
         <%= render UI::DefListComponent.new(rows: [
               ["Exit 0", "Every annotation found is valid — or there were none"],
               ["Exit 1", "At least one annotation is malformed"],
-              ["Exit 2", "The linter could not do its job — bad flags, no git repository, unloadable schema"]
+              ["Exit 2", "The linter could not do its job — bad flags, an unloadable schema, or --changed outside a git repository"]
             ]) %>
         <p class="text-xs text-app-muted">
           A <em>missing</em> annotation is never a failure. Adoption is opt-in and gradual, so the
@@ -416,7 +449,9 @@ specguard-lint: checked 3 @intent annotations, 1 malformed</pre>
           The body must be a JSON <em>object</em>. An array, a bare string or a number is refused
           with <code>the request body must be a JSON object</code>, and a body that will not parse
           at all is refused with <code>The request body could not be parsed as JSON.</code> Unknown
-          top-level keys are ignored rather than rejected.
+          top-level keys are ignored rather than rejected — with one exception: a key literally named
+          <code>_json</code> is refused, because that is the name Rails gives a non-object body it
+          has wrapped, and the endpoint cannot tell the two apart.
         </p>
       </div>
 
@@ -428,10 +463,12 @@ specguard-lint: checked 3 @intent annotations, 1 malformed</pre>
             <td class="px-3 py-2 text-xs text-app-muted">string</td>
             <td class="px-3 py-2 text-xs text-app-content">yes</td>
             <td class="px-3 py-2 text-app-content-secondary">
-              Must be a non-empty string once whitespace is stripped. This is the only envelope field
-              a run is refused for: without it the whole POST comes back <code>400</code> and every
-              example in it is discarded. It is free-form — SpecGuard does not check it against your
-              git history.
+              Must be a non-empty string once whitespace is stripped. Required: without it the whole
+              POST comes back <code>400</code> and every example in it is discarded. (<code>specs</code>
+              is required too, and an ill-typed <code>branch</code>, <code>ci_run_id</code>,
+              <code>shard_id</code> or <code>duration_seconds</code> refuses the run just as firmly —
+              validation is all-or-nothing, never partial.) It is free-form — SpecGuard does not
+              check it against your git history.
             </td>
           </tr>
           <tr>
@@ -638,7 +675,11 @@ specguard-lint: checked 3 @intent annotations, 1 malformed</pre>
             <td class="px-3 py-2 font-mono text-xs text-app-content-secondary break-all">{"test_run_id":…,"total_specs":2,"annotated_specs":1,"annotated_ratio":0.5,"embedding_status":"queued"}</td>
             <td class="px-3 py-2 text-app-content-secondary">
               Stored. The counts are the whole run's — every shard so far, not just this request's
-              slice. <code>annotated_ratio</code> is a 0–1 fraction.
+              slice. <code>annotated_ratio</code> is a 0–1 fraction, or <code>null</code> when the
+              run has no examples at all: a run of nothing has no share to report, and
+              <code>0.0</code> there would be indistinguishable from a measured zero share of a
+              suite that does have tests. If you post <code>specs: []</code> — which is accepted —
+              this is the shape you get back, so parse the field as nullable.
               <code>embedding_status</code> is <code>"queued"</code> when identity resolution was
               scheduled and <code>"pending"</code> when there was nothing to schedule.
             </td>
@@ -648,10 +689,13 @@ specguard-lint: checked 3 @intent annotations, 1 malformed</pre>
             <td class="px-3 py-2 font-mono text-xs text-app-content-secondary break-all">{"error":"bad_request","message":"…","details":["…"]}</td>
             <td class="px-3 py-2 text-app-content-secondary">
               Refused, and nothing was stored. <code>details</code> carries
-              <strong class="text-app-content">every</strong> failure, one per offending example,
-              each naming it by index, file and line — <code>message</code> just repeats the first.
-              Refusals are also listed on your repository's page, so a pipeline that is 400ing is
-              visible in the app and not only in your CI log.
+              <strong class="text-app-content">every</strong> failure found, not just the first —
+              <code>message</code> repeats the first one. A single bad example can produce several
+              entries, because each field is checked independently. Entries about an example are
+              prefixed <code>specs[i]</code> and carry its file and line when it has them, falling
+              back to the bare index when it does not; entries about the envelope itself name the
+              field and carry no index at all. Refusals are also listed on your repository's page,
+              so a pipeline that is 400ing is visible in the app and not only in your CI log.
             </td>
           </tr>
           <tr>
@@ -728,7 +772,8 @@ specguard-lint: checked 3 @intent annotations, 1 malformed</pre>
             outcome.
           </li>
           <li>
-            Optionally read the <code>@intent:</code> comment on the line above the test. If you
+            Optionally read the <code>@intent:</code> comment on the line above the test, or
+            trailing on the test's own line — both are legal. If you
             find one, parse it and send <code>"status": "annotated"</code> with the object; if not,
             send <code>"status": "unannotated"</code> and no intent. Start without this — an
             unannotated suite is a complete, useful integration.
@@ -751,10 +796,14 @@ specguard-lint: checked 3 @intent annotations, 1 malformed</pre>
 
       <%= render UI::AlertComponent.new(tone: :neutral, title: "If a run is refused, the endpoint tells you exactly why") do %>
         <p class="mt-1">
-          A <code>400</code> carries one message per offending example in <code>details</code>, each
-          naming the example by its index in <code>specs</code>, its file and its line. Build against
-          that rather than against guesswork: post a two-example run by hand with
-          <code>curl</code> first, read what comes back, and only then wire the reporter in.
+          A <code>400</code> lists every problem it found in <code>details</code>. Entries about an
+          example are prefixed with its index in <code>specs</code> and carry its file and line when
+          it has them — <code>specs[3] spec/models/order_spec.rb:9: …</code> — and fall back to a
+          bare <code>specs[3]</code> when the entry is malformed enough not to have any, which is
+          the case a new reporter hits first. Entries about the envelope name the offending field
+          instead. One bad example can yield several entries. Build against that rather than against
+          guesswork: post a two-example run by hand with <code>curl</code> first, read what comes
+          back, and only then wire the reporter in.
         </p>
       <% end %>
     </div>

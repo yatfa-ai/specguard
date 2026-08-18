@@ -23,6 +23,11 @@ require "rails_helper"
 # publishes about the wire format, this file is where you find out whether the server agrees. Where
 # the two disagree, the guide is wrong — the server is not adjusted to match a document.
 RSpec.describe "The public integration guide", type: :request do
+  # So this file names the endpoint the same single way the three view surfaces do. Asserting on a
+  # locally re-spelled `root_url.sub(...)` would keep passing if the helper's own stripping broke,
+  # which is exactly the drift the helper was extracted to prevent.
+  include IntegrationGuideHelper
+
   # The `<code>` payload inside the wrapper div the template stamps the shared id onto. Scoped to
   # the wrapper rather than matched on the whole page because the guide renders many copyable
   # blocks and only this one is the fixture.
@@ -87,6 +92,26 @@ RSpec.describe "The public integration guide", type: :request do
                                               "annotated_ratio" => 0.5)
     end
 
+    # The guide endorses `specs: []` ("An empty array is accepted") and separately documents the
+    # shape of the 202. Those two statements have to hold TOGETHER, and in the first version of this
+    # page they did not: `annotated_ratio` was published as "a 0–1 fraction" with no null case, while
+    # `TestRun#annotated_fraction` deliberately returns nil on a zero denominator — so a reporter
+    # built strictly from the published contract broke on the very run the page called fine.
+    #
+    # Asserted with `fetch` rather than `include`, because the bug being guarded is a null where a
+    # number was promised: `include("annotated_ratio" => nil)` would also pass against a body that
+    # omitted the key entirely, and the contract says it is present.
+    it "answers the empty-specs run the page says is accepted, in the shape the page documents" do
+      post "/api/v1/ingest",
+           params: published_payload.merge("specs" => []).to_json,
+           headers: { "Content-Type" => "application/json",
+                      "Authorization" => "Bearer #{api_key.raw_token}" }
+
+      expect(response).to have_http_status(:accepted)
+      expect(response.parsed_body.fetch("total_specs")).to eq(0)
+      expect(response.parsed_body.fetch("annotated_ratio")).to be_nil
+    end
+
     # The three fields `Ingest::Payload` never validates and `Ingest::ObservationRecorder`
     # nonetheless consumes. A guide that quietly dropped them from its worked example would still
     # pass every assertion above — the endpoint accepts a payload without them — and would have lost
@@ -123,7 +148,7 @@ RSpec.describe "The public integration guide", type: :request do
     # is the integration, and it is what was missing from every surface the product shipped before
     # this page existed.
     it "names the write endpoint" do
-      expect(response.body).to include("#{root_url.sub(%r{/+\z}, "")}/api/v1/ingest")
+      expect(response.body).to include("#{integration_guide_endpoint}/api/v1/ingest")
     end
 
     it "covers the Ruby client, the linter, the annotation protocol and the MCP bridge" do
@@ -135,6 +160,17 @@ RSpec.describe "The public integration guide", type: :request do
       expect(text).to include("specguard-mcp")
       expect(text).to include("SPECGUARD_ENDPOINT")
       expect(text).to include("SPECGUARD_API_KEY")
+    end
+
+    # A companion to the response-shape example above, and the reason both exist. That one pins what
+    # the SERVER does; this one pins that the PAGE still says so. Either alone permits the drift this
+    # ticket's review caught — the server answering null while the document promises a fraction — and
+    # only the pair closes it.
+    it "tells the reader that annotated_ratio can be null" do
+      text = Capybara.string(response.body).text.gsub(/\s+/, " ")
+
+      expect(text).to match(/annotated_ratio.{0,120}null/m),
+                      "the guide documents annotated_ratio without its null case"
     end
 
     # Every field of the envelope and of a spec entry, so a reader never has to open server source.

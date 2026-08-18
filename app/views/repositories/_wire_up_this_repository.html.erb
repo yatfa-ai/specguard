@@ -54,7 +54,7 @@
           <%= render UI::CopyableCodeComponent.new(multiline: true) do %><%= integration_guide_agent_prompt(
                 repository: @repository,
                 guide_url: integration_guide_url,
-                endpoint: root_url.sub(%r{/+\z}, "")
+                endpoint: integration_guide_endpoint
               ) %><% end %>
         </div>
 

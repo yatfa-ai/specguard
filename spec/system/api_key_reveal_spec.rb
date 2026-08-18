@@ -33,25 +33,27 @@ require "rails_helper"
 # Position is read from `getBoundingClientRect`, never from a pixel constant: this template is long
 # and still growing, and anything keyed to a known offset would rot with the next panel.
 #
-# == These examples do not reproduce the cause, and were falsified rather than trusted
+# == The condition the defect needs is installed by the example, not waited for
 #
-# The ticket that produced this file states the viewport explanation as a hypothesis and asks for
-# the OUTCOME to be fixed rather than the cause to be reproduced first. That is the right call, and
-# it is also unavoidable: the cause does not reproduce here. Headless Chromium scrolls to the top of
-# the page on the visit that follows the redirect, and the reveal is the first panel on that page,
-# so it lands on screen by coincidence — with the fix removed entirely, every example below still
-# passed.
+# The cause does not reproduce natively here, and that is worth stating plainly: headless Chromium
+# scrolls to the top of the page on the visit that follows the redirect, and the reveal is the first
+# panel on that page, so it lands on screen by coincidence. An earlier draft of this file stopped
+# there and asserted against that coincidence — which meant that with the fix removed entirely,
+# every example still passed. An example that cannot fail is worth nothing.
 #
-# An example that cannot fail is worth nothing, so these were falsified against the hypothesis
-# instead of against the environment. Driven with a scroll-restoring listener temporarily added to
-# the layout — `turbo:before-visit` saves `window.scrollY`, `turbo:load` puts it back, which is what
-# the report describes — the two viewport examples FAIL with the fix removed, still FAIL with only
-# the URL fragment restored, and PASS once `scroll_into_view_controller.js` is back. So what they
-# assert is load-bearing, and it is the controller rather than the fragment that carries it.
+# So the missing condition is now supplied by the examples themselves, in
+# `#preserve_scroll_across_the_visit`: a listener that saves the offset on the way out of the page
+# and puts it back on the way into the next one, which is what the owner's report describes and what
+# Turbo Drive does in a real browser. It is installed from the example rather than shipped in the
+# layout, so nothing about the application changes to make these pass.
 #
-# What they therefore guard, day to day, is the outcome: that the reveal ends up on screen however
-# the page is composed. Moving the panel down the page, dropping the controller, or adding something
-# that preserves scroll all break them.
+# With it in place the two viewport examples are genuinely falsifiable, and were falsified: they
+# FAIL with `scroll_into_view_controller.js` removed, still FAIL with only the URL fragment left to
+# carry it, and PASS once the controller is back. So the assertion is load-bearing, and it is the
+# controller rather than the fragment that carries it.
+#
+# What they therefore guard is the outcome: that the reveal ends up on screen however the page is
+# composed. Moving the panel further down the page, or dropping the controller, breaks them.
 RSpec.describe "Revealing an API key", type: :system do
   # Narrower and much shorter than the driver's own window, so the trigger at the bottom of the page
   # and the reveal at the top of it cannot share a screen. This is the condition the defect needs;
@@ -100,6 +102,30 @@ RSpec.describe "Revealing an API key", type: :system do
     expect(scroll_offset).to be > 0
   end
 
+  # Installs the condition the defect needs, in the page rather than in the application.
+  #
+  # Turbo Drive restoring the prior offset across the visit is what puts the reveal off-screen in a
+  # real browser. Headless Chromium does not do it on its own — it scrolls to the top, which is
+  # where the reveal happens to be — so an example that merely waited for the defect would assert
+  # against a coincidence and pass with the fix deleted. This supplies it instead.
+  #
+  # The offset is tracked on `scroll` rather than captured at `turbo:before-visit`, because the
+  # reveal is reached by a form submission and that event fires only for Drive visits: keying off it
+  # would leave the saved offset at 0, restore to the top, and hand back the same false pass. The
+  # restore runs synchronously on `turbo:load`, which is BEFORE the controller's
+  # `requestAnimationFrame` — so the fix has to actually beat the scroll restoration to pass, which
+  # is the ordering the real defect has.
+  #
+  # `window.__` names rather than locals: this is evaluated in the page, and has to survive the
+  # visit that replaces the document's body.
+  def preserve_scroll_across_the_visit
+    page.execute_script(<<~JS)
+      window.__specguardOffset = window.scrollY
+      addEventListener("scroll", () => { window.__specguardOffset = window.scrollY })
+      addEventListener("turbo:load", () => window.scrollTo(0, window.__specguardOffset))
+    JS
+  end
+
   def expect_the_reveal_to_be_on_screen
     position = reveal_position
 
@@ -117,6 +143,7 @@ RSpec.describe "Revealing an API key", type: :system do
     visit repository_path(repository)
     expect(page).to have_css("#api-keys")
     scroll_to_where_the_controls_are
+    preserve_scroll_across_the_visit
 
     click_button "New API key"
 
@@ -143,6 +170,7 @@ RSpec.describe "Revealing an API key", type: :system do
     visit repository_path(repository)
     expect(page).to have_css("#api-keys")
     scroll_to_where_the_controls_are
+    preserve_scroll_across_the_visit
 
     # `data-turbo-confirm` on the rotate button, so the dialog is part of the flow being driven.
     accept_confirm { first(:button, "Regenerate").click }

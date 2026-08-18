@@ -81,6 +81,18 @@ module IntegrationGuideHelper
     ]
   }.freeze
 
+  # The `SPECGUARD_ENDPOINT` value for THIS installation: scheme and host, no trailing slash.
+  #
+  # SpecGuard is self-hostable, so this is never a constant — it is whatever host the reader is
+  # reading the page on. `root_url` supplies that, and the strip matters: the gem joins
+  # `/api/v1/ingest` onto whatever it is given, so a trailing slash would produce a double one.
+  #
+  # It lives here because three surfaces need the same value — the guide's own env-var table, the
+  # agent prompt on the persistent repository page, and the prompt on the one-shot reveal — and a
+  # regex spelled out three times is three chances to fix two of them. The prompt itself was already
+  # centralised for exactly this reason; the endpoint it embeds deserves the same.
+  def integration_guide_endpoint = root_url.sub(%r{/+\z}, "")
+
   def integration_guide_example_payload = JSON.pretty_generate(EXAMPLE_PAYLOAD)
 
   # The Gemfile entry, verbatim from the client gem's own README so the two cannot disagree.
@@ -153,10 +165,13 @@ module IntegrationGuideHelper
     SHELL
   end
 
+  # `npm install` is sufficient on its own — `package.json` declares `"prepare": "npm run build"`,
+  # which npm runs after install for a local checkout, so `dist/` exists before the reader is told to
+  # point an agent at it. Spelling the build out as a second command would suggest it is needed.
   def integration_guide_mcp_install_snippet
     <<~SHELL.strip
       git clone https://github.com/yatfa-ai/specguard-mcp.git
-      cd specguard-mcp && npm install && npm run build
+      cd specguard-mcp && npm install
     SHELL
   end
 
