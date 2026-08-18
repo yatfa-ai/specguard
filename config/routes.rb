@@ -47,5 +47,18 @@ Rails.application.routes.draw do
     end
   end
 
+  # --- The protocol contract, downloadable ---------------------------------------
+  # A convenience mirror of the OpenTestIntent v1 schema, served unauthenticated so anyone reading
+  # the docs can fetch what their annotations are validated against. The canonical copy lives in the
+  # vendor-neutral `open-test-intent` repository, which is what the schema's `$id` names; this is a
+  # second address for the same bytes, not a second source of truth.
+  #
+  # `format: false` because the `.v1.json` in the path is part of the schema's FILENAME, not a
+  # format request. Left on, Rails' optional `(.:format)` segment would make `/schemas/
+  # open-test-intent.v1` answer too, advertising an address whose name no longer says which
+  # version it returns.
+  get "/schemas/open-test-intent.v1.json", to: "schemas#open_test_intent_v1",
+                                           as: :open_test_intent_schema, format: false
+
   get "up", to: "rails/health#show", as: :rails_health_check
 end
