@@ -720,10 +720,12 @@ specguard-lint: checked 3 @intent annotations, 1 malformed</pre>
               <code>specs[0] 9:</code> — a bare line number, not a path — with only a line, and
               <code>specs[0]:</code> with neither. The partial forms are not curiosities; omitting
               <code>line_number</code> is the mistake a new reporter makes first. Entries about the
-              envelope name the offending field instead. The one exception to all of it: a body that
-              is not a JSON object at all is refused with the single entry
-              <code>the request body must be a JSON object</code>, which names no field, because
-              nothing further was read. Refusals are also listed on your repository's page, so a
+              envelope name the offending field instead. The exceptions are the two refusals that
+              happen before any field is looked at: a body that is not JSON at all
+              (<code>The request body could not be parsed as JSON.</code>) and a body that parses
+              to something other than an object (<code>the request body must be a JSON object</code>).
+              Each is refused with that one entry alone, naming no field, because nothing further
+              was read. Refusals are also listed on your repository's page, so a
               pipeline that is 400ing is visible in the app and not only in your CI log.
             </td>
           </tr>

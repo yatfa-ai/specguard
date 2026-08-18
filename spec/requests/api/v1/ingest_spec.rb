@@ -1017,12 +1017,15 @@ RSpec.describe "POST /api/v1/ingest", type: :request do
       expect(TestRun.last.test_run_shards.sole.shard_id).to be_nil
     end
 
-    # The one exception to "`details` carries every failure found": `Payload#validate` RETURNS on a
-    # non-object body rather than falling through to the six field validators, so this response
-    # carries exactly ONE entry — and it is the only entry in the API that names no field, because
-    # there is no field to name when the body itself is the wrong shape. `contain_exactly` rather
-    # than `include` is the point of the example: it is what fails if the early return is dropped
-    # and the field validators start piling on entries about a body that was never readable.
+    # One of the two exceptions to "`details` carries every failure found": `Payload#validate`
+    # RETURNS on a non-object body rather than falling through to the six field validators, so this
+    # response carries exactly ONE entry, and it names no field because there is no field to name
+    # when the body itself is the wrong shape. (The other is an unparseable body, refused above
+    # `Payload` entirely — see "rejects a body that is not JSON at all" below.)
+    #
+    # `contain_exactly` rather than `include` is the point of the example: it is what fails if the
+    # early return is dropped and the field validators start piling on entries about a body that
+    # was never readable.
     it "rejects a JSON body that is not an object" do
       ingest([ingest_payload].to_json)
 
@@ -1031,11 +1034,16 @@ RSpec.describe "POST /api/v1/ingest", type: :request do
       expect(response.parsed_body["details"]).to contain_exactly("the request body must be a JSON object")
     end
 
+    # The second field-less refusal, and the one a client hits before `Payload` is ever reached — a
+    # truncated upload, a half-flushed buffer. Like the non-object case it answers with exactly one
+    # entry naming no field, which is the pair the integration guide documents as the exceptions to
+    # `details` being a per-field list.
     it "rejects a body that is not JSON at all, in the API's own error shape" do
       ingest("{ not json")
 
       expect(response).to have_http_status(:bad_request)
       expect(response.parsed_body["error"]).to eq("bad_request")
+      expect(response.parsed_body["details"]).to contain_exactly("The request body could not be parsed as JSON.")
       expect(TestRun.count).to eq(0)
     end
   end
