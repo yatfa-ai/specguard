@@ -1627,6 +1627,96 @@ RSpec.describe "POST /api/v1/ingest", type: :request do
       expect(anonymous.spec_observations.count).to eq(1)
     end
 
+    # ⭐ The other half of the rule, end to end through a real POST. `feature/gone` is merged: it
+    # will never receive another delivery, so `Ingest::ObservationPruner` — which only ever bounds
+    # the bucket of the run it is handed — could not reach it, and its history sat outside the one
+    # rule bounding this table for as long as the repository lived. An ingest on `main` drains it.
+    #
+    # Built directly rather than by POSTing to `feature/gone`, and that is not a shortcut: the
+    # current-branch half leaves a live branch sitting EXACTLY at the rule, so no sequence of
+    # deliveries to a branch can put that branch over it. A bucket over the rule is by construction
+    # one whose rows predate the rule reaching it, which is the population this half exists for.
+    def quiet_history(branch:, count:)
+      (0...count).map do |index|
+        run = create_test_run(repository: repository, branch: branch, total_specs_count: 1,
+                              created_at: 100.days.ago + index.minutes)
+        run.spec_observations.create!(repository: repository, file_path: "spec/gone_spec.rb",
+                                      line_number: 1, status: "unannotated")
+        run
+      end
+    end
+
+    it "drains a branch the repository has stopped writing to entirely" do
+      quiet = quiet_history(branch: "feature/gone", count: 5)
+
+      ingest_on("main", name: "a")
+
+      expect(quiet.map { |run| run.spec_observations.count }).to eq([0, 0, 0, 1, 1])
+    end
+
+    it "leaves a second repository's quiet branch alone" do
+      elsewhere = create_repository(user: create_user(github_uid: "3003", github_handle: "third"),
+                                    github_full_name: "acme/third-service")
+      theirs = (0...5).map do |index|
+        run = create_test_run(repository: elsewhere, branch: "feature/gone", total_specs_count: 1,
+                              created_at: 100.days.ago + index.minutes)
+        run.spec_observations.create!(repository: elsewhere, file_path: "spec/gone_spec.rb",
+                                      line_number: 1, status: "unannotated")
+        run
+      end
+
+      ingest_on("main", name: "a")
+
+      expect(theirs.map { |run| run.spec_observations.count }).to all(eq(1))
+    end
+
+    # ⚠️ **The two halves of the rule fail DIFFERENTLY, and both sides are pinned here so the
+    # asymmetry cannot rot into symmetry.** Either example passing alone proves nothing: "the
+    # ingest survives a prune failure" is satisfied by rescuing both, and "a prune failure fails
+    # the ingest" is satisfied by rescuing neither. It is the PAIR that says which is which.
+    #
+    # The reasoning, which is a policy choice rather than a default either way:
+    #
+    #   * `Ingest::ObservationPruner` bounds the rows THIS delivery just wrote. Its persistent
+    #     failure mode is the table having outgrown the one rule bounding it, which is the last
+    #     thing that should fail invisibly — and an ingest is idempotent, so the client's retry
+    #     costs a duplicate delivery of a slice that replaces itself. It fails the request.
+    #   * `Ingest::QuietBucketPruner` works on rows an OLDER delivery wrote, on a branch this
+    #     client may have nothing to do with. Billing a caller a 500 for that would convert
+    #     opportunistic housekeeping into an outage on a request whose data already committed.
+    #     It answers 202 and goes to `Rails.error.report` — loud in the reporter, silent in the
+    #     response.
+    describe "how each half of the rule fails" do
+      let(:timeout) { [ActiveRecord::StatementInvalid, "canceling statement due to statement timeout"] }
+
+      it "answers the quiet half's failure with an unchanged 202 and an error report" do
+        allow(Ingest::QuietBucketPruner).to receive(:drain).and_raise(*timeout)
+        expect(Rails.error).to receive(:report)
+          .with(instance_of(ActiveRecord::StatementInvalid), hash_including(handled: true, severity: :warning))
+
+        expect { ingest(ingest_payload(branch: "main")) }.to change(TestRun, :count).by(1)
+
+        expect(response).to have_http_status(:accepted)
+        expect(response.parsed_body["test_run_id"]).to eq(TestRun.last.id)
+      end
+
+      it "still fails the ingest when the current-branch half raises" do
+        allow(Ingest::ObservationPruner).to receive(:prune).and_raise(*timeout)
+
+        expect { ingest(ingest_payload(branch: "main")) }.to raise_error(ActiveRecord::StatementInvalid)
+      end
+
+      # The half that raises is the half that is contained, and no wider: a failure in the quiet
+      # half must not swallow one in its sibling, which would be the asymmetry collapsing the other
+      # way — into a rescue around both.
+      it "does not let the quiet half's rescue cover the current-branch half" do
+        allow(Ingest::ObservationPruner).to receive(:prune).and_raise(*timeout)
+        allow(Ingest::QuietBucketPruner).to receive(:drain).and_return(0)
+
+        expect { ingest(ingest_payload(branch: "main")) }.to raise_error(ActiveRecord::StatementInvalid)
+      end
+    end
+
     # ⚠️ The prune must run AFTER the ingest transaction commits, never inside it.
     # `Ingest::RunRecorder#record` holds `run.lock!` across its whole insert-and-recompute, and
     # the length of that hold is measured and load-bearing — 8 concurrent shards, 6 of 8 lost to
@@ -1654,37 +1744,43 @@ RSpec.describe "POST /api/v1/ingest", type: :request do
       expect(depths[:prune]).to eq(ActiveRecord::Base.connection.open_transactions)
     end
 
-    # A query budget on the ingest path — ADDED here rather than updated, because this file had
-    # none. `count_queries` comes from spec/support/query_capture.rb, the same subscriber the
-    # dashboard's page budgets use.
+    # A query budget on the ingest path. `count_queries` comes from spec/support/query_capture.rb,
+    # the same subscriber the dashboard's page budgets use.
     #
-    # Pinned as ABSOLUTES and in a pair, so the prune's own statements are ATTRIBUTED rather than
-    # silently absorbed into a single total that could hide any number of them. The difference
-    # between the two figures is exactly one statement, and it is the prune's:
+    # Pinned as ABSOLUTES and in a pair, so the retention rule's own statements are ATTRIBUTED
+    # rather than silently absorbed into a single total that could hide any number of them. Both
+    # halves of the rule are in these figures, and they cost differently:
     #
-    #   * a branch that has not yet filled its window costs ONE — the boundary lookup, which comes
-    #     back empty and issues no delete at all;
-    #   * a branch at its window costs TWO — the boundary lookup plus one bounded delete, which
-    #     comes back short and stops the loop rather than spending the rest of the ceiling.
+    #   * `Ingest::QuietBucketPruner`'s selection probe is ONE statement on EVERY ingest, in both
+    #     figures below. On these fixtures it comes back empty — there is one branch and it is the
+    #     one being written to — so it issues no boundary lookup and no delete. That flat one is
+    #     the price of the quiet half being unconditional, and it is what the pair is here to keep
+    #     visible: if this ever starts scaling with the number of buckets, these numbers move.
+    #   * `Ingest::ObservationPruner` costs ONE more on a branch that has not yet filled its
+    #     window — the boundary lookup, which comes back empty and issues no delete at all;
+    #   * and TWO more on a branch at its window — that boundary lookup plus one bounded delete,
+    #     which comes back short and stops the loop rather than spending the rest of the ceiling.
     #
-    # Neither figure follows the size of the backlog: the ceiling on the delete statements is
-    # `Ingest::ObservationPruner::MAX_BATCHES_PER_INGEST`, and it is asserted directly against a
-    # backlog several times its size in the pruner's own spec.
+    # The difference between the two figures is exactly that one delete. Neither figure follows the
+    # size of the backlog: the ceilings on the delete statements are
+    # `Ingest::ObservationPruner::MAX_BATCHES_PER_INGEST` and
+    # `Ingest::QuietBucketPruner::MAX_BATCHES_PER_INGEST`, each asserted directly against a backlog
+    # several times its size in the two pruners' own specs.
     describe "what one ingest costs" do
       # The repository and its key are lazy `let`s, so touching them here keeps their inserts out
       # of the counted block — otherwise the first measurement counts the fixture rather than the
       # request.
       before { api_key }
 
-      it "spends a fixed budget, of which the prune is one statement on an unfilled window" do
-        expect(count_queries { ingest(ingest_payload(branch: "main")) }).to eq(7)
+      it "spends a fixed budget, of which the rule is two statements on an unfilled window" do
+        expect(count_queries { ingest(ingest_payload(branch: "main")) }).to eq(8)
       end
 
       it "spends exactly one more once the window is full and a run falls out of it" do
         ingest(ingest_payload(branch: "main"))
         ingest(ingest_payload(branch: "main"))
 
-        expect(count_queries { ingest(ingest_payload(branch: "main")) }).to eq(8)
+        expect(count_queries { ingest(ingest_payload(branch: "main")) }).to eq(9)
       end
     end
   end

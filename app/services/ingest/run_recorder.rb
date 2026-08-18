@@ -60,11 +60,15 @@ module Ingest
   # from those rows: those stay a function of `test_run_shards`, unchanged.
   #
   # Those rows are also the only thing here that grows without bound, so this class is where the
-  # bound is applied: after the transaction below commits — never inside it — the delivery's own
-  # branch is pruned back to `SpecObservation::BRANCH_RETENTION_RUNS` runs by
-  # {Ingest::ObservationPruner}. Enforcement lives at the write path rather than in a scheduled
-  # job, because the write path is where the growth happens and it is the one place guaranteed to
-  # run whenever it does.
+  # bound is applied, in two halves and after the transaction below commits — never inside it. The
+  # delivery's own branch is pruned back to `SpecObservation::BRANCH_RETENTION_RUNS` runs by
+  # {Ingest::ObservationPruner}, and then ONE other bucket of the same repository — a branch this
+  # delivery did not touch and may never receive another POST — is drained by
+  # {Ingest::QuietBucketPruner}. The second half is what stops a repository's merged `feature/*`
+  # history sitting permanently outside the rule; without it the rule reached only whatever branch
+  # happened to be live. Enforcement lives at the write path rather than in a scheduled job,
+  # because the write path is where the growth happens and it is the one place guaranteed to run
+  # whenever it does. The two halves fail DIFFERENTLY, on purpose: see `#drain_quiet_bucket`.
   class RunRecorder
     # Two shards racing is the ordinary case; three collisions in a row on the same key would mean
     # the row is being created and rolled back repeatedly, which is not something retrying fixes.
@@ -126,6 +130,7 @@ module Ingest
       end
 
       prune_observations(run)
+      drain_quiet_bucket(run)
 
       run.reload
     end
@@ -143,6 +148,34 @@ module Ingest
     # because a laptop `bundle exec rspec` grows this table exactly as a CI matrix does.
     def prune_observations(run) = Ingest::ObservationPruner.prune(run)
 
+    # The other half of the same rule, on a bucket this delivery did NOT write — see
+    # {Ingest::QuietBucketPruner} for which bucket and for why the selection advances instead of
+    # re-visiting one. Beside the call above rather than folded into it: the two halves have
+    # different failure policies, and this rescue is the seam that keeps them different.
+    #
+    # ⚠️ **`rescue` here and deliberately none above.** `prune_observations` bounds the rows this
+    # ingest just wrote, and it is allowed to fail the request — a retention rule that cannot keep
+    # up with its own write path is the last thing that should fail invisibly, and an ingest is
+    # idempotent so the client's retry costs a duplicate delivery of a slice that replaces itself.
+    # None of that transfers here. This is opportunistic backlog work on rows an OLDER delivery
+    # wrote; the client never asked for it, cannot act on it, and its data has already committed.
+    # Converting that into a 500 would bill a caller for housekeeping and lose nothing by not.
+    #
+    # The shape is {Ingest::IdentityResolver}`#reclaim_expired_cache`'s — the service raises, the
+    # call site that knows what it is in the middle of contains it. One deliberate difference:
+    # that sibling guards a CACHE and logs at `warn` because nothing is wrong; `spec_observations`
+    # is the product's data, so a drain that keeps failing means the table is outgrowing its rule
+    # on every bucket but the live one. That belongs in the error reporter, not in a log line.
+    def drain_quiet_bucket(run)
+      Ingest::QuietBucketPruner.drain(run)
+    rescue StandardError => e
+      Rails.error.report(
+        e, handled: true, severity: :warning, source: "specguard.ingest",
+        context: { repository_id: run.repository_id, run_id: run.id, branch: run.branch }
+      )
+      nil
+    end
+
     # A run no CI provider named: one `create!`, no shard rows, nothing derived — the path this
     # class had before sharding existed. The only addition is that its examples are recorded too,
     # in the same transaction, so a run either has both halves or neither. `test_run_shard_id` is
@@ -154,6 +187,7 @@ module Ingest
       end
 
       prune_observations(run)
+      drain_quiet_bucket(run)
 
       run
     end

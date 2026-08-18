@@ -51,20 +51,25 @@ module Ingest
   # than its ceiling prunes what the ceiling allows and leaves the rest, and successive ingests
   # ON THAT BRANCH walk that branch's backlog down to the rule.
   #
-  # ⚠️ The branch qualifier is the whole of the claim, not a footnote to it. An invocation reaches
-  # only the rows of the branch of the run it was handed, and the only caller is the write path —
-  # so a branch converges while it is being written to and STOPS CONVERGING the moment it stops
-  # receiving runs. The measured repository is 46,000 runs across 2,001 branches, and most of
-  # those branches are merged `feature/*` that will never see another POST: their history is not
-  # walked down by this class over time. It is frozen at whatever it held, out of this rule's
-  # reach by construction. What this bounds is FUTURE GROWTH ON LIVE BRANCHES — on a healthy
-  # repository, a handful of them. It is not a backfill and must not be provisioned for as one.
+  # ⚠️ The branch qualifier is the whole of the claim, not a footnote to it. An invocation of THIS
+  # class reaches only the rows of the branch of the run it was handed, and its only caller is the
+  # write path — so a bucket converges while it is being written to and stops converging the moment
+  # it stops receiving runs. The measured repository is 46,000 runs across 2,001 branches, and most
+  # of those are merged `feature/*` that will never see another POST.
   #
-  # That is a scope decision rather than an oversight. Enforcement lives at the write path because
-  # that is where the growth happens, and this slice deliberately adds no scheduler and no
-  # recurring job — which is also the only thing that could ever visit a branch nothing is writing
-  # to. Draining the pre-existing tail on branches that have gone quiet therefore needs a
-  # different mechanism than this one, and that is separate work rather than a fold-in here.
+  # That used to be the end of the sentence, and it no longer is. {Ingest::QuietBucketPruner} runs
+  # beside this class on the same write path and drains ONE other bucket of the same repository per
+  # ingest, selected on a predicate that provably advances across buckets rather than re-visiting
+  # one. So a merged `feature/*` branch IS walked down now — not by the ingest on that branch,
+  # which will never come, but by the ingests still arriving on whatever branches the repository is
+  # live on. What this class bounds is future growth on the live bucket; what the pair of them
+  # bounds is the repository.
+  #
+  # What remains out of reach is smaller and different in kind: a repository that has stopped
+  # ingesting ALTOGETHER. Neither half has a trigger for it, because both hang off the write path
+  # and there is still no scheduler and no recurring job. Its tail is therefore STATIC rather than
+  # growing — the silence that stops the drain is the same silence that stops the writes — which
+  # is the honest remainder rather than the original one. Provision for neither half as a backfill.
   #
   # The ceiling is stated against the design point rather than picked round: 20,000 examples is
   # one run, so 50,000 rows per delivery is two and a half runs' worth of history removed per
@@ -111,15 +116,32 @@ module Ingest
     # bounded amount of work for the ingest request that pays for it rather than a table sweep.
     DELETE_BATCH_SIZE = 10_000
 
-    # How many of those statements one ingest may issue. With the batch size above this is the
-    # per-invocation ceiling — 50,000 rows — that makes the paragraph on convergence true.
+    # How many of those statements one invocation may issue by DEFAULT, which is what the
+    # current-branch half spends. With the batch size above this is the per-invocation ceiling —
+    # 50,000 rows — that makes the paragraph on convergence true.
+    #
+    # A default rather than a constant read straight from the loop, because {.prune_bucket} lets
+    # the caller state a smaller one: {Ingest::QuietBucketPruner} spends less of an ingest on
+    # backlog work than this class spends on the delivery it was handed. One ingest's TOTAL is the
+    # sum of the two, and it is stated per invocation — a sharded run POSTs once per shard.
     MAX_BATCHES_PER_INGEST = 5
 
-    def self.prune(run) = new(run).prune
+    # The current-branch half: the bucket of the run this ingest just wrote. Unchanged in meaning
+    # and in failure policy — a raise here still fails the ingest.
+    def self.prune(run) = new(repository_id: run.repository_id, branch: run.branch).prune
 
-    def initialize(run)
-      @repository_id = run.repository_id
-      @branch = run.branch
+    # The same delete, aimed at a bucket no run in hand belongs to, on a ceiling the caller states.
+    # {Ingest::QuietBucketPruner} owns WHICH bucket and WHY it is safe to pick; all that is
+    # delegated here is the boundary-and-batched-delete this class already is, so the two halves
+    # cannot drift on what "expired" means.
+    def self.prune_bucket(repository_id:, branch:, max_batches: MAX_BATCHES_PER_INGEST)
+      new(repository_id: repository_id, branch: branch, max_batches: max_batches).prune
+    end
+
+    def initialize(repository_id:, branch:, max_batches: MAX_BATCHES_PER_INGEST)
+      @repository_id = repository_id
+      @branch = branch
+      @max_batches = max_batches
     end
 
     # @return [Integer] how many rows this invocation deleted. Zero when the branch holds fewer
@@ -131,7 +153,7 @@ module Ingest
 
       deleted = 0
 
-      MAX_BATCHES_PER_INGEST.times do
+      @max_batches.times do
         batch = delete_batch(boundary)
         deleted += batch
         # A short batch means the backlog is exhausted, so stop rather than spending the rest of
