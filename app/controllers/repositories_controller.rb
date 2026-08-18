@@ -376,15 +376,22 @@ class RepositoriesController < ApplicationController
     @spec_directory_durations = SpecDirectoryDurations.for(@latest_test_run) if @latest_test_run
     # The SAME grain as the line above and a different AXIS, which is why it is a second read rather
     # than a column on that one. That rollup ranks areas by WALL CLOCK and its coverage figure is
-    # TIMING coverage; this one ranks them by how many of their examples SpecGuard cannot see. An
+    # TIMING coverage; this one ranks them by how many of their examples carry no `@intent`. An
     # area of four hundred fast unannotated examples heads this list and appears nowhere near the
     # head of that one, so neither is derivable from the other.
     #
-    # The Overview panel at the top of this page already prints the run's invisible count — a
+    # The Overview panel at the top of this page already prints the run's annotation debt — a
     # subtraction, `total_specs_count - annotated_specs_count` — and a subtraction is the whole
-    # answer it can give: a five-figure count of tests the reader is handed no route to any of. The
-    # API has served the ranked, scoped worklist behind that figure since SPGD-591/608/623; this is
-    # the same rows on the page the owner actually opens.
+    # answer it can give: a five-figure count of tests the reader is handed no route to any of. That
+    # is a count of tests nobody has annotated, which is not the same as a count of tests SpecGuard
+    # holds nothing about: where the run recorded per-example rows, every one of them arrived
+    # located by both paths, and named as well whenever its producer sent a description — `name` is
+    # nullable and `SpecObservation.description_presence_in` is what counts the rows lacking one.
+    # The rows are not implied by the figure, either: that subtraction is re-derived over
+    # `test_run_shards`, so a client reporting only totals carries it with no per-example rows at
+    # all, and the panel below is what discloses that rather than letting it read as an absence of
+    # debt (`#recorded?`). The API has served the ranked, scoped worklist behind that figure since
+    # SPGD-591/608/623; this is the same rows on the page the owner actually opens.
     #
     # Guarded identically, and on nothing else — with no run there is nothing to rank, and the
     # Overview's "No CI run has reported yet" is this page's one statement of that. Whether the run
@@ -475,12 +482,17 @@ class RepositoriesController < ApplicationController
       @spec_directory_files = SpecDirectoryFiles.for(@latest_test_run, @spec_directory_request)
     end
     # THE LAST RUNG OF THE ANNOTATION LADDER, and the one this page never had: not WHICH AREAS carry
-    # the run's annotation debt but WHICH TESTS. The Overview panel prints "Not visible to
-    # SpecGuard" as `total_specs_count - annotated_specs_count` and says *"SpecGuard cannot see the
-    # other N tests"*; `@unannotated_directories` above ranks the areas that count is concentrated
-    # in. Neither names a test. Until this, acting on the panel this page had just handed the owner
-    # meant leaving the product for `GET /api/v1/repository?unannotated_examples=1&spec_directory=…`
-    # with an API key.
+    # the run's annotation debt but WHICH TESTS. The Overview panel prints that debt at run grain as
+    # `total_specs_count - annotated_specs_count`; `@unannotated_directories` above ranks the areas
+    # it is concentrated in. Neither names a test — which is the gap this closes. Neither is a count
+    # of tests SpecGuard holds nothing about, either: an unannotated example this run RECORDED is
+    # stored exactly as an annotated one is — located by both paths, carrying whatever its producer
+    # reported of description, duration and outcome — and what it lacks is an authored `@intent`.
+    # What the subtraction does not promise is that those rows exist at all — a client reporting only
+    # totals carries the figure with none of them — which the `@unannotated_directories` block above
+    # states in full. Until this, acting on the panel this page had just handed the owner meant
+    # leaving the product for `GET /api/v1/repository?unannotated_examples=1&spec_directory=…` with
+    # an API key.
     #
     # NO NEW PARAMETER. It rides `?spec_directory=` and `?spec_file=`, the same asks the duration
     # drill-downs above read. One ask opens EVERY panel that reads it, each answering in its own
