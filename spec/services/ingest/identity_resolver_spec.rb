@@ -1586,17 +1586,57 @@ RSpec.describe Ingest::IdentityResolver do
       #
       # Asserted against `LexicalEmbeddingProvider`'s answer for each row's OWN text rather than against a
       # fixture, so what has to line up is the provider's real output. Compared within a tolerance
-      # because pgvector stores four-byte floats and Ruby's are eight — an exact `eq` would fail on
-      # the storage round trip rather than on the pairing.
+      # because `spec_identities.embedding` is `halfvec(1024)` — pgvector's TWO-byte float, IEEE
+      # half, an 11-bit significand — and Ruby's Floats are float8, so a round trip rounds to about
+      # three significant decimal digits. Every component of a unit-normalised embedding is at most
+      # 1 in magnitude, so the round trip moves any one of them by at most 2**-11 ≈ 4.9e-4, and
+      # `1e-3` is the next round number above that. The same bound for the same reason as
+      # `spec/models/embedding_cache_entry_spec.rb`. Until 2026-08-17 this column was `vector(1536)`
+      # — four-byte floats — and the bound here was `1e-5`; the migration to `halfvec` made the
+      # substrate four orders of magnitude coarser and the old bound stale.
       EmbeddingGenerator.provider = batching_provider
       first = ingest(new_page, ci_run_id: "run-1")
 
-      repository.spec_identities.each do |identity|
-        own = LexicalEmbeddingProvider.call(identity.text)
-        drift = own.zip(identity.embedding.to_a).map { |mine, stored| (mine - stored).abs }.max
+      identities = repository.spec_identities.to_a
+      # Pinned before the reductions so neither of them is vacuously green on an empty page.
+      expect(identities.size).to eq(5)
 
-        expect(drift).to be < 1e-5
-      end
+      round_trip_tolerance = 1e-3
+
+      # The two populations the bound has to separate, each reduced to the single value that
+      # actually constrains it. WORST round trip: every row's own vector must come back inside the
+      # tolerance, so the largest of them is the one that decides. WEAKEST mis-pairing: every row
+      # re-checked against its NEIGHBOUR's text — exactly the off-by-one page shift this example
+      # exists to catch — must land outside it, so the smallest of them is the one that decides.
+      worst_round_trip = identities.map do |identity|
+        own = LexicalEmbeddingProvider.call(identity.text)
+        own.zip(identity.embedding.to_a).map { |mine, stored| (mine - stored).abs }.max
+      end.max
+
+      weakest_mispairing = identities.zip(identities.rotate(1)).map do |identity, neighbour|
+        theirs = LexicalEmbeddingProvider.call(neighbour.text)
+        theirs.zip(identity.embedding.to_a).map { |mine, stored| (mine - stored).abs }.max
+      end.min
+
+      # ⭐ ONE assertion, naming the tolerance ONCE, and that is deliberate: it is what makes the
+      # bound genuinely unretireable rather than merely accompanied by a check that looks like it.
+      # Written the obvious way — `worst_round_trip < 1e-3` here and `weakest_mispairing > 1e-3`
+      # below it — the two numbers are independent literals, and loosening only the assertion that
+      # had gone red (the only one anybody "fixing" a failure ever touches) leaves the other green
+      # and sails through: measured, `be < 1e0` passed both examples with the guard fully retired.
+      # Binding the value to a name and reading it twice does not close that either, because the
+      # loosening edit rewrites the usage, not the binding. Collapsing both to one comparison does:
+      # there is no longer an assertion that can be loosened in isolation, and any value large
+      # enough to stop catching a shifted page is now too large to sit under `weakest_mispairing`.
+      #
+      # It also states the real property in one line — the tolerance lives strictly between the
+      # noise and the signal — and its failure message prints both bounds, so a regression on
+      # either side says which side moved. Measured here: quantisation tops out at ~1.2e-4, and the
+      # closest any two of these five texts come is ~0.349 — that is the minimum over ALL ordered
+      # pairs, not just the five `rotate(1)` happens to form, so no row ordering can produce a
+      # weaker signal than the one quoted. `1e-3` therefore clears the worst noise by ~8x and sits
+      # ~349x under the weakest signal, with two orders of magnitude of daylight on each side.
+      expect(round_trip_tolerance).to be_between(worst_round_trip, weakest_mispairing).exclusive
 
       # And the consequence that mis-pairing would have on the product: run 2's text differs from
       # run 1's in punctuation and whitespace only, so the digest equality cannot answer any of it
@@ -2325,14 +2365,38 @@ RSpec.describe Ingest::IdentityResolver do
       expect(identity_by_file(second).values).to match_array(shared_page.pluck(:name))
 
       # And the vectors themselves agree with what the provider would have returned, within the
-      # four-byte float the column stores — the same tolerance the order-contract example uses, and
-      # for the same reason.
-      other_repository.spec_identities.each do |identity|
-        own = LexicalEmbeddingProvider.call(identity.text)
-        drift = own.zip(identity.embedding.to_a).map { |mine, stored| (mine - stored).abs }.max
+      # TWO-byte float the column stores — the same `1e-3` the order-contract example uses, and for
+      # the same reason: `halfvec(1024)` is IEEE half, an 11-bit significand, so a round trip moves
+      # a unit-normalised component by at most 2**-11 ≈ 4.9e-4. (Until 2026-08-17 the column was
+      # `vector(1536)` and this read `1e-5`; the bound moved with the substrate, not with the
+      # failure.)
+      identities = other_repository.spec_identities.to_a
+      # Pinned before the reductions so neither of them is vacuously green on an empty page.
+      expect(identities.size).to eq(5)
 
-        expect(drift).to be < 1e-5
-      end
+      round_trip_tolerance = 1e-3
+
+      worst_round_trip = identities.map do |identity|
+        own = LexicalEmbeddingProvider.call(identity.text)
+        own.zip(identity.embedding.to_a).map { |mine, stored| (mine - stored).abs }.max
+      end.max
+
+      weakest_mispairing = identities.zip(identities.rotate(1)).map do |identity, neighbour|
+        theirs = LexicalEmbeddingProvider.call(neighbour.text)
+        theirs.zip(identity.embedding.to_a).map { |mine, stored| (mine - stored).abs }.max
+      end.min
+
+      # ⭐ The bound has to BITE for the mis-KEYED cache the way the order-contract example asserts
+      # it for the mis-PAIRED page: a cache that served a valid vector under the wrong key completes
+      # the resolve silently, and only the vector can see it. Asserted in the single-comparison
+      # shape that example explains at length — the tolerance is named once, so no half of it can
+      # be loosened in isolation until a failure goes away.
+      #
+      # Different fixtures from that example, so different numbers, and each comment quotes the
+      # drifts its OWN example produces: quantisation here tops out at ~1.0e-4, and the closest any
+      # two of these five texts come — over all ordered pairs, so it does not depend on row order —
+      # is ~0.235. `1e-3` clears the worst noise by ~10x and sits ~235x under the weakest signal.
+      expect(round_trip_tolerance).to be_between(worst_round_trip, weakest_mispairing).exclusive
     end
   end
 
