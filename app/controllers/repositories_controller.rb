@@ -637,6 +637,32 @@ class RepositoriesController < ApplicationController
       # the size of the suite or with the length of the window: see `SpecDirectoryWindowGrowth`.
       @spec_directory_window_growth =
         SpecDirectoryWindowGrowth.for(trajectory_runs, branch: @trajectory_run&.branch)
+      # The WALL CLOCK at the grain the two panels above already speak at, and the one grain this
+      # page has never had. "Slowest tests" above is ONE run, and its own comment says why it stays
+      # there: `example_id` is positional and not stable across refactors, so a ranking that spanned
+      # runs on that key would be pairing rows not known to be the same test. That is a statement
+      # about the KEY, and `spec_identity_id` is a different key — semantic, resolved by
+      # `Ingest::IdentityResolver`, and stable across a move, a reorder and a reword alike. So this
+      # panel asks the question the per-run one declines: is this test chronically slow, or was that
+      # one bad run.
+      #
+      # Another reader of this same local, for the reason stated where it is taken: every panel that
+      # fetched "the last thirty runs on this branch" for itself would be its own window, with no
+      # structural reason to keep agreeing, on a page where each captions the others' branch. So the
+      # window costs nothing here — it is handed over, not re-fetched.
+      #
+      # Guarded on the window having runs at all, and on nothing else — the same guard its two
+      # siblings above take, and for the same reason. Whether the newest run wrote per-example rows,
+      # whether any of them have been matched to a durable test yet, and how much of what it wrote
+      # carried a timing are all questions `SlowestTests` answers, and it answers them as four named
+      # states rather than as one empty list: the panel branches on `#state`, so every figure it
+      # prints comes off one set of reads of one window.
+      #
+      # THREE bounded queries at most and ONE where the newest run has nothing to rank — a gate, a
+      # capped candidate step over a single run, and a composition over those candidates only. None
+      # of them grows with the size of the suite or with the length of the window: see
+      # `SlowestTests`.
+      @slowest_tests = SlowestTests.for(@repository, trajectory_runs, branch: @trajectory_run&.branch)
     end
     # Set by ApiKeysController#create and #regenerate, and readable exactly once — see
     # ApiKeysController.

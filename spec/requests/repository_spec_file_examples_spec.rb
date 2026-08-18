@@ -687,7 +687,19 @@ RSpec.describe "Repository spec file examples", type: :request do
       # a file now costs TWO narrowed reads rather than one. The delta below moves with it, and both
       # figures are stated rather than left to the equality, because an equality alone is satisfied
       # by two pages that regressed together.
-      expect(large_queries.size).to eq(10)
+      # RECOUNTED AT 11 by SPGD-728, which added the "Slowest tests across the window" panel:
+      # ONE further read, and it is that panel's GATING PROBE — the row/unresolved-row count over
+      # the newest run of the branch window, asked before either of the two steps behind it. The
+      # fixtures in this file never run `Ingest::IdentityResolver`, which is what an ingest endpoint
+      # answers `202` and enqueues a job for, so every row here carries a NULL `spec_identity_id`,
+      # the gate reports nothing resolved and the panel stops: one read, not three. A page whose
+      # window HAS been resolved pays three, and that budget — a gate, a capped candidate step over
+      # one run, and a composition over those candidates only — is asserted in
+      # spec/requests/repository_window_slowest_tests_spec.rb. The added read moves with neither
+      # the size of the suite nor the length of the window, since it counts one run's rows.
+      # It is not a per-file read and does not move with a file being open, which is why the
+      # drill-down's own delta below is still exactly two.
+      expect(large_queries.size).to eq(11)
     end
 
     # The whole drill-down is off the default page's budget. A reader who never opens a file pays
@@ -706,7 +718,7 @@ RSpec.describe "Repository spec file examples", type: :request do
       unopened = queries_against("spec_observations") { get repository_path(repository) }
 
       expect(unopened.size).to eq(opened.size - 2)
-      expect(unopened.size).to eq(8)
+      expect(unopened.size).to eq(9)
     end
   end
 end
