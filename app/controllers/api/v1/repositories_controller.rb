@@ -599,6 +599,29 @@ class Api::V1::RepositoriesController < Api::BaseController
       # would be a silent two-orders-of-magnitude error for any client that read both. `null` for a
       # run that reported no tests; the model carries why.
       annotated_ratio: test_run.annotated_fraction,
+      # HOW THIS RUN READS — the three states of `SpecObservation::READINGS` over its per-example
+      # rows, unconditional and cheap (one aggregate over one run), because it is the block's answer
+      # to a question every other key here left to a subtraction.
+      #
+      # `total_specs - annotated_specs` was the only figure a client had for "what SpecGuard cannot
+      # see", and the MCP bridge repeats that sentence to an agent verbatim. It counts the examples
+      # with no AUTHORED intent, which is exact, and most of those carry a `Class#method behavior`
+      # description SpecGuard reads perfectly well. `unreadable` is the population that claim may be
+      # made about, `derived` is the population it was wrongly made about, and both are served here
+      # so no client has to phrase its own version of the distinction.
+      #
+      # `recorded` is shipped WITH them and is not `total_specs`. The counters above are re-derived
+      # by SUM over `test_run_shards` from what each shard REPORTED; these three are counted over the
+      # rows actually STORED, and a sharded or partially-redelivered run legitimately has more of the
+      # first than of the second. A client dividing these by `total_specs` would be dividing two
+      # populations; `recorded` is the denominator that was counted with them. It is also how a
+      # client tells "this run stored no per-example detail" (`recorded: 0`, three zeros beside it)
+      # from "this run is entirely unreadable", which are the same three zeros otherwise.
+      #
+      # `authored` deliberately does NOT replace `annotated_specs` above and no client should read it
+      # as the annotation coverage figure — that is `annotated_ratio`, off the counters, answering
+      # exactly as it did before this key existed. `authored` is here so the three sum to `recorded`.
+      intent_readings: serialized_intent_readings(test_run),
       # Nullable by schema. Serializing `0.0` for an unreported duration would assert the run took
       # no time — the same "not reported" vs `0.0s` distinction the Recent runs table draws.
       #
@@ -1477,12 +1500,18 @@ class Api::V1::RepositoriesController < Api::BaseController
     }
   end
 
-  # WHICH TESTS SPECGUARD CANNOT SEE — the rows behind the product's stated primary adoption metric,
-  # and until now the one figure on either surface that could be reported and not opened.
+  # WHICH TESTS CARRY NO `@intent` — the rows behind the product's stated primary adoption metric,
+  # and until this key the one figure on either surface that could be reported and not opened.
+  #
+  # ⚠️ NOT "which tests SpecGuard cannot see", which is what this comment and this block's own
+  # description said until SPGD-711. That population is `intent_readings.unreadable`, and it is far
+  # smaller: most of the rows here carry a `Class#method behavior` description SpecGuard reads. Each
+  # row's `reading` says which, and `unreadable_count` beside `recorded_count` is the only figure in
+  # this block any "cannot see" sentence may be built on.
   #
   # `latest_run.total_specs` and `latest_run.annotated_specs` sit twenty lines above this key, and
-  # `annotated_ratio` beside them. Their difference is what `repositories#show` renders under "Not
-  # visible to SpecGuard" as *"SpecGuard cannot see the other N tests"*, and a subtraction is the whole
+  # `annotated_ratio` beside them. Their difference is what `repositories#show` used to render under
+  # "Not visible to SpecGuard" as *"SpecGuard cannot see the other N tests"*, and a subtraction is the whole
   # answer a reader has ever been given: an agent told to raise annotation coverage receives
   # `annotated_ratio: 0.43` and cannot name ONE of the tests that number is about. Every other ranking
   # on this endpoint has a drill-down rung — `spec_directory` → files, `spec_file` → examples,
@@ -1585,6 +1614,22 @@ class Api::V1::RepositoriesController < Api::BaseController
   # own blocks. The read is bounded by the RUN rather than by the suite and rides
   # `index_spec_observations_on_test_run_id`, EXPLAIN-certified for exactly this narrow — and for both
   # narrowed shapes — in `spec/models/spec_observation_spec.rb`.
+  # `latest_run.intent_readings` — see the key on `serialized_latest_run` for what the four figures
+  # are and which of them may not be read as annotation coverage.
+  #
+  # Unconditional, unlike the two `?unannotated_examples=` blocks below, and that is deliberate
+  # rather than an oversight about cost. Those two are a HUNDRED-ROW WORKLIST and a TEN-ROW RANKING
+  # — payload a client that did not ask for it should not be handed. This is four integers off one
+  # aggregate over one run, and it is what makes `unreadable` reachable without a second request. A
+  # client that has to opt in to the correction goes on reading the subtraction, which is the state
+  # SPGD-711 exists to end.
+  def serialized_intent_readings(test_run)
+    readings = test_run.intent_readings
+
+    { authored: readings.authored, derived: readings.derived, unreadable: readings.unreadable,
+      recorded: readings.recorded }
+  end
+
   def serialized_unannotated_examples(test_run)
     return nil unless requested_unannotated_examples?
 
@@ -1627,12 +1672,48 @@ class Api::V1::RepositoriesController < Api::BaseController
           name: observation.name,
           file_path: observation.file_path,
           line_number: observation.line_number,
-          spec_file_path: observation.spec_file_path
+          spec_file_path: observation.spec_file_path,
+          # WHAT SPECGUARD READS OF THIS ROW, per row, so the caller never has to re-derive it — and
+          # so it cannot re-derive it DIFFERENTLY, which is what a client seeing `name` and no
+          # reading would end up doing. `reading` is `"derived"` or `"unreadable"` and never
+          # `"authored"`: this list is narrowed to `status = 'unannotated'`, so the third state
+          # cannot appear here (see `SpecObservation::UNANNOTATED_POPULATION_COUNTS` for the same
+          # argument about the missing count).
+          #
+          # `derived_intent` is the three fields themselves, or `null`, and the two keys are
+          # redundant on purpose: the reading is what a client BRANCHES on, the fields are what it
+          # SHOWS, and an agent asked to check whether SpecGuard has the test right needs the second.
+          # `layer` is absent from it because it is inferred from the directory rather than read from
+          # the description — see `DerivedIntent`, which states in full what an authored `@intent`
+          # still buys over this.
+          reading: observation.reading,
+          derived_intent: serialized_derived_intent(observation)
         }
       end,
       recorded_count: examples.recorded_count,
+      # The same population split by reading. Windows over the same rows and the same WHERE as
+      # `recorded_count`, so all three narrow together under `spec_file` / `spec_directory` — a
+      # client cannot end up holding a derived count for one slice beside a total for another.
+      #
+      # This is where the endpoint stops being able to be read as "the tests SpecGuard cannot see".
+      # `recorded_count` reconciles against `total_specs - annotated_specs` exactly as it always did
+      # and means what it always meant — no authored `@intent`. `unreadable_count` is the only figure
+      # here any "cannot see" sentence may be built on.
+      derived_count: examples.derived_count,
+      unreadable_count: examples.unreadable_count,
       limit: SpecObservation::UNANNOTATED_EXAMPLES_LIMIT
     }
+  end
+
+  # One row's derived reading as three fields, or `null` when the description yielded none.
+  #
+  # Nil rather than a hash of nils: "SpecGuard read nothing from this description" is one state, and
+  # three null fields is a shape a client would have to test three times to recognise.
+  def serialized_derived_intent(observation)
+    derived = observation.derived_intent
+    return nil unless derived
+
+    { entity: derived.entity, action: derived.action, behavior: derived.behavior }
   end
 
   # WHERE THE ANNOTATION DEBT IS, by code area — the ranking the block above is a worklist under, and
@@ -1707,7 +1788,13 @@ class Api::V1::RepositoriesController < Api::BaseController
 
     {
       rows: directories.rows.map do |row|
-        { path: row.path, unannotated_count: row.unannotated_count, recorded_count: row.recorded_count }
+        # The three readings beside the two totals that were already here. `unannotated_count` is
+        # unchanged in meaning and in value — no authored `@intent` — and is what reconciles against
+        # the run's counters; `derived_count` and `unreadable_count` split it, and are what stop a
+        # client rendering the whole of it as debt SpecGuard is blind to.
+        { path: row.path, unannotated_count: row.unannotated_count, recorded_count: row.recorded_count,
+          authored_count: row.authored_count, derived_count: row.derived_count,
+          unreadable_count: row.unreadable_count }
       end,
       directory_count: directories.directory_count,
       limit: SpecObservation::UNANNOTATED_DIRECTORIES_LIMIT

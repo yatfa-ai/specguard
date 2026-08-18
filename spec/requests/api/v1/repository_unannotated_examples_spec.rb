@@ -129,13 +129,18 @@ RSpec.describe "GET /api/v1/repository — latest_run.unannotated_examples", typ
         "rows" => [
           { "name" => "behaves like a billable charges once",
             "file_path" => "spec/support/shared_examples/billable.rb",
-            "line_number" => 7, "spec_file_path" => target_file },
+            "line_number" => 7, "spec_file_path" => target_file,
+            "reading" => "unreadable", "derived_intent" => nil },
           { "name" => "Pricing rounds to the currency unit", "file_path" => other_file,
-            "line_number" => 9, "spec_file_path" => other_file },
+            "line_number" => 9, "spec_file_path" => other_file,
+            "reading" => "unreadable", "derived_intent" => nil },
           { "name" => "Pricing applies the volume tier", "file_path" => other_file,
-            "line_number" => 40, "spec_file_path" => other_file }
+            "line_number" => 40, "spec_file_path" => other_file,
+            "reading" => "unreadable", "derived_intent" => nil }
         ],
         "recorded_count" => 3,
+        "derived_count" => 0,
+        "unreadable_count" => 3,
         "limit" => SpecObservation::UNANNOTATED_EXAMPLES_LIMIT
       )
     end
@@ -159,9 +164,11 @@ RSpec.describe "GET /api/v1/repository — latest_run.unannotated_examples", typ
       served = block(query: ask)
 
       expect(served.keys)
-        .to contain_exactly("spec_file", "spec_directory", "rows", "recorded_count", "limit")
+        .to contain_exactly("spec_file", "spec_directory", "rows", "recorded_count", "derived_count",
+                            "unreadable_count", "limit")
       expect(served["rows"].first.keys)
-        .to contain_exactly("name", "file_path", "line_number", "spec_file_path")
+        .to contain_exactly("name", "file_path", "line_number", "spec_file_path", "reading",
+                            "derived_intent")
       # Not the six-field per-example shape, and specifically not by accident: the endpoint's other
       # per-example block is on the same response and DOES carry both.
       expect(served["rows"].first).not_to have_key("duration_seconds")
@@ -406,7 +413,8 @@ RSpec.describe "GET /api/v1/repository — latest_run.unannotated_examples", typ
 
       expect(response).to have_http_status(:ok)
       expect(typo_file).to eq("spec_file" => "spec/services/pricing_spec.rbx", "spec_directory" => nil,
-                              "rows" => [], "recorded_count" => 0,
+                              "rows" => [], "recorded_count" => 0, "derived_count" => 0,
+                              "unreadable_count" => 0,
                               "limit" => SpecObservation::UNANNOTATED_EXAMPLES_LIMIT)
       expect(typo_area["rows"]).to eq([])
       expect(typo_area["recorded_count"]).to eq(0)
@@ -534,8 +542,10 @@ RSpec.describe "GET /api/v1/repository — latest_run.unannotated_examples", typ
     it "ranks areas by unannotated count, and ships the operands rather than a fraction" do
       expect(debt_map(query: ask)).to eq(
         "rows" => [
-          { "path" => "spec/services", "unannotated_count" => 2, "recorded_count" => 2 },
-          { "path" => "spec/models", "unannotated_count" => 1, "recorded_count" => 3 }
+          { "path" => "spec/services", "unannotated_count" => 2, "recorded_count" => 2,
+            "authored_count" => 0, "derived_count" => 0, "unreadable_count" => 2 },
+          { "path" => "spec/models", "unannotated_count" => 1, "recorded_count" => 3,
+            "authored_count" => 2, "derived_count" => 0, "unreadable_count" => 1 }
         ],
         "directory_count" => 2,
         "limit" => SpecObservation::UNANNOTATED_DIRECTORIES_LIMIT
@@ -552,7 +562,19 @@ RSpec.describe "GET /api/v1/repository — latest_run.unannotated_examples", typ
 
       expect(served.keys).to contain_exactly("rows", "directory_count", "limit")
       expect(served["rows"].first.keys)
-        .to contain_exactly("path", "unannotated_count", "recorded_count")
+        .to contain_exactly("path", "unannotated_count", "recorded_count", "authored_count",
+                            "derived_count", "unreadable_count")
+      # The three readings partition the area's whole population, which is what makes them safe to
+      # render side by side: a row whose parts did not sum to `recorded_count` would be a panel
+      # showing three columns of a four-way split.
+      expect(served["rows"]).to all(satisfy do |row|
+        row["authored_count"] + row["derived_count"] + row["unreadable_count"] == row["recorded_count"]
+      end)
+      # And `unannotated_count` is exactly the two non-authored readings — the identity that lets this
+      # key keep its old meaning while the new ones split it.
+      expect(served["rows"]).to all(satisfy do |row|
+        row["derived_count"] + row["unreadable_count"] == row["unannotated_count"]
+      end)
       # The denominators are the areas' OWN populations, taken off the same response: the two
       # `recorded_count`s sum to the run's `total_specs`, which they cannot do if the aggregate was
       # counting unannotated rows twice.
@@ -674,8 +696,10 @@ RSpec.describe "GET /api/v1/repository — latest_run.unannotated_examples", typ
       key = rooted.api_keys.create!
 
       expect(debt_map(key: key, query: ask)["rows"])
-        .to eq([{ "path" => ".", "unannotated_count" => 1, "recorded_count" => 1 },
-                { "path" => "spec/models", "unannotated_count" => 1, "recorded_count" => 1 }])
+        .to eq([{ "path" => ".", "unannotated_count" => 1, "recorded_count" => 1,
+                  "authored_count" => 0, "derived_count" => 0, "unreadable_count" => 1 },
+                { "path" => "spec/models", "unannotated_count" => 1, "recorded_count" => 1,
+                  "authored_count" => 0, "derived_count" => 0, "unreadable_count" => 1 }])
       # And it is a real path the client can hand straight back to the narrowing rung, which a null
       # key would not be — the round trip is the reason the COALESCE is there.
       expect(block(key: key, query: ask.merge(spec_directory: "."))["recorded_count"]).to eq(1)
@@ -700,8 +724,10 @@ RSpec.describe "GET /api/v1/repository — latest_run.unannotated_examples", typ
       served = debt_map(key: key, query: ask)
 
       expect(served["rows"])
-        .to eq([{ "path" => "spec/models/orders", "unannotated_count" => 2, "recorded_count" => 2 },
-                { "path" => "spec/models", "unannotated_count" => 1, "recorded_count" => 1 }])
+        .to eq([{ "path" => "spec/models/orders", "unannotated_count" => 2, "recorded_count" => 2,
+                  "authored_count" => 0, "derived_count" => 0, "unreadable_count" => 2 },
+                { "path" => "spec/models", "unannotated_count" => 1, "recorded_count" => 1,
+                  "authored_count" => 0, "derived_count" => 0, "unreadable_count" => 1 }])
       # Two areas, not one — the disclosure agrees with the rows, so a subtree rollup could not hide
       # in the count either.
       expect(served["directory_count"]).to eq(2)
@@ -726,8 +752,10 @@ RSpec.describe "GET /api/v1/repository — latest_run.unannotated_examples", typ
       served = debt_map(key: key, query: ask)
 
       expect(served["rows"])
-        .to eq([{ "path" => "spec/services", "unannotated_count" => 1, "recorded_count" => 1 },
-                { "path" => "spec/models", "unannotated_count" => 0, "recorded_count" => 1 }])
+        .to eq([{ "path" => "spec/services", "unannotated_count" => 1, "recorded_count" => 1,
+                  "authored_count" => 0, "derived_count" => 0, "unreadable_count" => 1 },
+                { "path" => "spec/models", "unannotated_count" => 0, "recorded_count" => 1,
+                  "authored_count" => 1, "derived_count" => 0, "unreadable_count" => 0 }])
       expect(served["directory_count"]).to eq(2)
     end
 
@@ -783,7 +811,8 @@ RSpec.describe "GET /api/v1/repository — latest_run.unannotated_examples", typ
       expect(done_run.dig("unannotated_examples", "recorded_count")).to eq(0)
       expect(done_run["unannotated_directories"]).not_to be_nil
       expect(done_run.dig("unannotated_directories", "rows"))
-        .to eq([{ "path" => "spec/models", "unannotated_count" => 0, "recorded_count" => 1 }])
+        .to eq([{ "path" => "spec/models", "unannotated_count" => 0, "recorded_count" => 1,
+                  "authored_count" => 1, "derived_count" => 0, "unreadable_count" => 0 }])
     end
   end
 
@@ -816,6 +845,7 @@ RSpec.describe "GET /api/v1/repository — latest_run.unannotated_examples", typ
 
       expect(block(key: key, query: ask))
         .to eq("spec_file" => nil, "spec_directory" => nil, "rows" => [], "recorded_count" => 0,
+               "derived_count" => 0, "unreadable_count" => 0,
                "limit" => SpecObservation::UNANNOTATED_EXAMPLES_LIMIT)
       expect(response).to have_http_status(:ok)
       # And the run really is fully annotated, so the zero is the success state rather than an empty
@@ -958,7 +988,7 @@ RSpec.describe "GET /api/v1/repository — latest_run.unannotated_examples", typ
     # that group by the same directory expression is argued.
     it "reads spec_observations once per block it serves, and leaves every other grain alone" do
       area, file, example, description, flakiness, growth, directory_files, file_examples,
-        description_examples, _dfg, _rtg, _dfrtg, unstable_test_runs, unannotated, debt =
+        description_examples, _dfg, _rtg, _dfrtg, unstable_test_runs, unannotated, debt, readings =
         observation_reads_by_grain { get_repository(query: ask) }
 
       expect([area.length, file.length, example.length, description.length, flakiness.length,
@@ -966,6 +996,12 @@ RSpec.describe "GET /api/v1/repository — latest_run.unannotated_examples", typ
               description_examples.length, unstable_test_runs.length, unannotated.length,
               debt.length])
         .to eq([1, 1, 2, 2, 0, 0, 0, 0, 0, 0, 1, 1])
+      # ⭐ AND THE RUN-GRAIN READINGS, WHICH IS THE ONE GRAIN HERE THAT IS NOT BEHIND AN ASK.
+      # `latest_run.intent_readings` is served on every request, because a correction a client has to
+      # opt into leaves that client reading the subtraction the whole key exists to replace. So it is
+      # ONE read whether or not the flag was sent, and the two totals below carry it.
+      expect(readings.length).to eq(1)
+      expect(run_readings_grain_reads { get_repository }.length).to eq(1)
       # ⭐ THE AREA GRAIN IS STILL ONE. The debt ranking GROUPS BY the same `DIRECTORY_EXPRESSION`
       # the by-wall-clock area rollup does — the one expression on this table that cannot be
       # un-shared — so a partition that told them apart by their grouping would count this read
@@ -976,10 +1012,11 @@ RSpec.describe "GET /api/v1/repository — latest_run.unannotated_examples", typ
       # a read matching no grain's pattern is invisible to every one of them.
       expect(observation_reads { get_repository(query: ask) }.length)
         .to eq(classified_observation_reads { get_repository(query: ask) })
-      expect(observation_reads { get_repository(query: ask) }.length).to eq(8)
-      # Six without the ask — the total `repository_latest_run_spec.rb` pins for this endpoint,
-      # restated here as the thing this slice did NOT change.
-      expect(observation_reads { get_repository }.length).to eq(6)
+      expect(observation_reads { get_repository(query: ask) }.length).to eq(9)
+      # Seven without the ask — the total `repository_latest_run_spec.rb` pins for this endpoint,
+      # restated here as the thing this slice did NOT change. It went from six to seven when
+      # `intent_readings` landed, which is the ONE ungated read this file's slice added.
+      expect(observation_reads { get_repository }.length).to eq(7)
       expect(unannotated_examples_grain_reads { get_repository }).to be_empty
       expect(unannotated_directories_grain_reads { get_repository }).to be_empty
     end
@@ -992,10 +1029,11 @@ RSpec.describe "GET /api/v1/repository — latest_run.unannotated_examples", typ
 
       grains = observation_reads_by_grain { get_repository(query: query) }
 
-      expect([grains[7].length, grains[13].length, grains[14].length]).to eq([1, 1, 1])
+      expect([grains[7].length, grains[13].length, grains[14].length, grains[15].length])
+        .to eq([1, 1, 1, 1])
       expect(observation_reads { get_repository(query: query) }.length)
         .to eq(classified_observation_reads { get_repository(query: query) })
-      expect(observation_reads { get_repository(query: query) }.length).to eq(9)
+      expect(observation_reads { get_repository(query: query) }.length).to eq(10)
     end
 
     # The suite-size axis, and the one that decides whether this key is affordable at the roadmap's
@@ -1024,7 +1062,8 @@ RSpec.describe "GET /api/v1/repository — latest_run.unannotated_examples", typ
       # The 400 examples sit in ONE area, so the map is one row carrying all of them — the grouped
       # read is bounded by the run's DIRECTORIES where the worklist is bounded by its rows.
       expect(debt_map(key: key, query: ask)["rows"])
-        .to eq([{ "path" => "spec/models", "unannotated_count" => 400, "recorded_count" => 400 }])
+        .to eq([{ "path" => "spec/models", "unannotated_count" => 400, "recorded_count" => 400,
+                  "authored_count" => 0, "derived_count" => 0, "unreadable_count" => 400 }])
     end
   end
 end

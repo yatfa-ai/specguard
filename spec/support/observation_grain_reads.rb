@@ -284,17 +284,50 @@ module ObservationGrainReads
   # disagree about what a directory is. It cannot be un-shared, so — exactly as the area/growth split
   # already is — the grain is separated on what it orders by.
   #
-  # `COUNT(*) FILTER (WHERE status = 'unannotated')` is issued by no other read of this table. The
-  # near neighbour is `.unannotated_in`, which spells the same predicate in a WHERE and emits
-  # `AS unannotated_recorded_count` besides, so the two cannot meet: a WHERE clause is not an ORDER BY
-  # and grain 13 matches on an alias this read does not select. Nothing here is a residual definition
-  # — an unclassified read still belongs to no list and is caught by the total, on this file's rule.
-  UNANNOTATED_DEBT_ORDER = /ORDER BY COUNT\(\*\) FILTER \(WHERE status = 'unannotated'\) DESC/
+  # `COUNT(*) FILTER (WHERE status = 'unannotated')` **as an ORDER BY term**, which is issued by no
+  # other read of this table. The near neighbour is `.unannotated_in`, which spells the same predicate
+  # in a WHERE and emits `AS unannotated_recorded_count` besides, so the two cannot meet: a WHERE
+  # clause is not a `DESC` and grain 13 matches on an alias this read does not select. Nothing here is
+  # a residual definition — an unclassified read still belongs to no list and is caught by the total,
+  # on this file's rule.
+  #
+  # ⚠️ IT NO LONGER ANCHORS ON `ORDER BY `, and the reason is a change to what this read RANKS rather
+  # than to what it is. SPGD-711 put a term in front of it — `COUNT(*) FILTER (WHERE <reading> =
+  # 'unreadable') DESC` — so the debt count is now the SECOND sort term and the anchored pattern
+  # stopped matching, silently, by reporting zero reads for a grain that fired. The `DESC` suffix is
+  # what keeps this a match on an ORDER BY rather than on the projection: `.unannotated_directories_in`
+  # also SELECTS this expression, in the same statement, and without the suffix the pattern would still
+  # classify correctly today for the accidental reason that both live in one read — the kind of
+  # today's-call-sites reasoning this file rejects everywhere else.
+  #
+  # NOT retargeted at the new leading term. That one is spelled with `READING_EXPRESSION`, which
+  # `SpecObservation::RUN_READING_COUNTS` shares by design, so a pattern built on it would be a
+  # candidate for two reads at once — the exact double-classification `classified_observation_reads`
+  # exists to catch. The debt count remains the quantity only this read ranks by.
+  UNANNOTATED_DEBT_ORDER = /COUNT\(\*\) FILTER \(WHERE status = 'unannotated'\) DESC/
+
+  # The RUN-grain reading counts — `SpecObservation.reading_counts_in`, the one read on this table
+  # that answers how many of a run's examples SpecGuard has an authored, a derived or no reading of.
+  #
+  # Matched on `AS run_authored_count`, the fifth member of the alias family, and it inherits that
+  # family's guarantee for the fifth time rather than needing one of its own:
+  # `SpecObservation::RUN_READING_COUNTS` exists as a constant PRECISELY so this projection carries
+  # aliases nothing else emits. That is not a preference here, it is the only firm option — this read
+  # shares `READING_COUNTS` verbatim with `.unannotated_directories_in`, deliberately, so that a run's
+  # headline and its by-area rollup cannot disagree about what a reading is, and the two would
+  # otherwise be told apart only by the ABSENCE of a `GROUP BY`. A negative match is the residual
+  # definition this file opens by refusing.
+  #
+  # ⚠️ THIS GRAIN IS UNGATED. Every other drill-in here fires only on the parameter that asks for it;
+  # this one is served on every request, because a correction a client has to opt into leaves that
+  # client reading the subtraction SPGD-711 exists to replace. A block bounding this endpoint's reads
+  # of `spec_observations` should expect exactly one of these on any request that resolves a run.
+  RUN_READINGS_PROJECTION = /AS run_authored_count/
 
   # `[area, file, example, description, flakiness, growth, directory_files, file_examples,
   # repeated_description_examples, directory_file_growth, runtime_growth,
   # directory_file_runtime_growth, unstable_test_runs, unannotated_examples,
-  # unannotated_directories]` — the fifteen grains,
+  # unannotated_directories, run_readings]` — the sixteen grains,
   # each an array of the
   # statements matched. The single-run grains come first, in the order `serialized_latest_run` serves
   # them, and the two CROSS-RUN grains after them in the order `show` serves them — so a
@@ -329,7 +362,8 @@ module ObservationGrainReads
      reads.grep(RUNTIME_GROWTH_ORDER).grep(AREA_PREDICATE),
      reads.grep(/AS unstable_test_recorded_count/),
      reads.grep(/AS unannotated_recorded_count/),
-     reads.grep(UNANNOTATED_DEBT_ORDER)]
+     reads.grep(UNANNOTATED_DEBT_ORDER),
+     reads.grep(RUN_READINGS_PROJECTION)]
   end
 
   # `UnstableTests.for`'s four reads, in the order it issues them: the gating outcome-reporting
@@ -361,6 +395,7 @@ module ObservationGrainReads
   def unstable_test_runs_grain_reads(&) = observation_reads_by_grain(&)[12]
   def unannotated_examples_grain_reads(&) = observation_reads_by_grain(&)[13]
   def unannotated_directories_grain_reads(&) = observation_reads_by_grain(&)[14]
+  def run_readings_grain_reads(&) = observation_reads_by_grain(&)[15]
 end
 
 RSpec.configure do |config|

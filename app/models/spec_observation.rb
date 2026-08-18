@@ -462,6 +462,96 @@ class SpecObservation < ApplicationRecord
   # the real population — the same division of labour every capped ranking here ships.
   UNANNOTATED_DIRECTORIES_LIMIT = 10
 
+  # HOW WELL SPECGUARD KNOWS ONE TEST — three states, and the reason this file no longer has a
+  # column that answers the question.
+  #
+  # * `authored` — the example carries an `@intent` its author wrote and the envelope schema-checked.
+  #   The destination, and the only state `annotated_specs_count` has ever counted.
+  # * `derived` — no annotation, but the example's own description yields an entity, an action and a
+  #   behavior that satisfy the OpenTestIntent schema. See {DerivedIntent}. Weaker evidence than an
+  #   authored intent and never sold as the same thing — but a real reading of the test, and the
+  #   ordinary state of every suite that has not started annotating.
+  # * `unreadable` — no annotation and a description the fields cannot be got from. **This is the
+  #   only population any "SpecGuard cannot see this test" language may describe.**
+  #
+  # == Derived at READ TIME, and that is the substantive decision of this change
+  #
+  # The alternative was a third `status` value written at ingest. It was refused for three reasons,
+  # each of which is a property this shape has and that one does not:
+  #
+  # 1. **Every already-ingested run improves the moment this deploys.** The descriptions have been
+  #    stored on `spec_observations.name` all along; nobody re-runs a suite, upgrades a client, or
+  #    waits for a backfill over a table that holds one row per example per run.
+  # 2. **`Ingest::Payload::STATUSES` stays two-valued.** `.unannotated_in` and
+  #    `.unannotated_directories_in` both argue at length that `total_specs_count -
+  #    annotated_specs_count` and `WHERE status = 'unannotated'` are ONE predicate evaluated twice,
+  #    and that a third status would need every such read revisited in the same commit. A read-time
+  #    reading adds a dimension beside that predicate instead of a value inside it, so the identity
+  #    holds untouched and no counter, column or migration came with this.
+  # 3. **A derived reading cannot disguise a client-side failure as a healthy suite.** The known
+  #    failure mode is a scanner that falls over and classifies a whole run unannotated. Because
+  #    nothing here can move `annotated_specs_count`, that run still reads 0% annotated, still shows
+  #    an empty meter, and still leads its own sentence with that figure. What changes is only that
+  #    the run's *descriptions* are also reported — under a different word.
+  #
+  # The cost is that a reading is recomputed per read rather than stored. It is one `CASE` over rows
+  # a query is already touching (see {READING_EXPRESSION}), which is why that cost is affordable.
+  #
+  # ORDERED WEAKEST-EVIDENCE-LAST on purpose: `READINGS.first` is the destination and `.last` is the
+  # population worth acting on, and several surfaces iterate this constant to build their columns.
+  READINGS = %w[authored derived unreadable].freeze
+
+  # One row's reading, in SQL — the single expression every counted, grouped and ranked answer on
+  # this file is built from, so no two surfaces can disagree about which state a row is in.
+  #
+  # `status = 'annotated'` FIRST and spelled verbatim, under the rule `.unannotated_directories_in`
+  # states for its own predicate: an authored intent outranks a description unconditionally, exactly
+  # as `Ingest::SpecSignal` prefers the intent over the name, so a row that carries one never reaches
+  # the regex at all.
+  #
+  # `btrim(COALESCE(name, ''))` because `name` is nullable — `Ingest::ObservationRecorder` writes it
+  # through `presence_of`, so a producer that sent nothing stores a NULL, and `NULL ~ '…'` is NULL
+  # rather than false, which a `CASE` would fall through on but which is worth not relying on. The
+  # trim pairs with `DerivedIntent.from`'s `.strip`, so the two engines are handed the same string.
+  #
+  # The pattern is {DerivedIntent::SQL_PATTERN} rather than a regex written here, and that is the
+  # whole point of that constant: the rule is authored once and each engine adds its own anchors.
+  # `spec/models/spec_observation_spec.rb` runs this expression against the database over the same
+  # corpus `spec/services/derived_intent_spec.rb` runs the Ruby matcher over, and asserts they agree
+  # row for row — so a divergence goes red instead of mislabelling a panel.
+  READING_EXPRESSION = <<~SQL.squish
+    CASE WHEN spec_observations.status = 'annotated' THEN 'authored'
+         WHEN btrim(COALESCE(spec_observations.name, '')) ~ '#{DerivedIntent::SQL_PATTERN}' THEN 'derived'
+         ELSE 'unreadable' END
+  SQL
+
+  # `COUNT(*) FILTER (WHERE …)` per reading, keyed by reading.
+  #
+  # FILTERed aggregates rather than a `where` narrow, for the reason `.unannotated_directories_in`
+  # gives in full: narrowing the read would give every group a denominator of its own rows, which is
+  # the numerator again under a second name. Three counts and a `COUNT(*)` off ONE grouped pass over
+  # the run means the four can never describe different populations.
+  #
+  # Each is also legal as a WINDOW — `COUNT(*) FILTER (…) OVER ()` — which is how
+  # {UNANNOTATED_POPULATION_COUNTS} rides these back on a listed row without a second query.
+  READING_COUNTS = READINGS.index_with do |reading|
+    "COUNT(*) FILTER (WHERE #{READING_EXPRESSION} = '#{reading}')"
+  end.freeze
+
+  # The RUN-grain projection of {READING_COUNTS}, aliased — the four figures `.reading_counts_in`
+  # picks, in the order `IntentReadings` takes them.
+  #
+  # ALIASED, and the aliases are the point rather than decoration. `spec/support/observation_grain_
+  # reads.rb` partitions this endpoint's reads of this table by matching SQL only one read can
+  # produce, and it states the rule its firmest matches obey: an alias whose uniqueness is guaranteed
+  # BY A CONSTANT BESIDE THE SQL, not by an observation about today's call sites. Unaliased, this read
+  # would be told from `.unannotated_directories_in` only by the absence of a `GROUP BY` — the
+  # residual definition that file opens by refusing — because the two share {READING_COUNTS} on
+  # purpose, so that a run's headline and its by-area rollup can never disagree about what a reading
+  # is. `run_*_count` is emitted here and nowhere else, and this constant is why.
+  RUN_READING_COUNTS = (READINGS.map { |reading| "#{READING_COUNTS[reading]} AS run_#{reading}_count" } +
+                        ["COUNT(*) AS run_recorded_count"]).freeze
+
   # What the drill-down's caption has to say ABOUT the rows under it, counted in the SAME read that
   # returns them — `COUNT(*) OVER ()` and `COUNT(duration_seconds) OVER ()`, which count non-nulls.
   #
@@ -524,7 +614,24 @@ class SpecObservation < ApplicationRecord
   # aggregate, for the reason `FILE_POPULATION_COUNTS` gives — this list excludes nothing WITHIN the
   # population it selects, so the population the count describes is exactly the population the window
   # sees.
-  UNANNOTATED_POPULATION_COUNTS = "COUNT(*) OVER () AS unannotated_recorded_count"
+  #
+  # == The two READING windows, and why there is no third
+  #
+  # `unannotated_derived_count` and `unannotated_unreadable_count` split the same population the
+  # first window totals, so a caption can say how many of the run's un-annotated examples SpecGuard
+  # nonetheless READ and how many it genuinely cannot — the distinction SPGD-711 exists to stop this
+  # block collapsing. They are windows over the SAME `WHERE`, so all three narrow together under
+  # `?spec_file=` / `?spec_directory=` and cannot come to describe different slices.
+  #
+  # There is deliberately no `unannotated_authored_count`. The read this rides on is narrowed to
+  # `status = 'unannotated'`, so that window would be a structural zero on every row of every run —
+  # a column whose value is decided by the WHERE clause rather than by the data, which is the same
+  # objection `.unannotated_directories_in` raises against narrowing its own read.
+  UNANNOTATED_POPULATION_COUNTS = [
+    "COUNT(*) OVER () AS unannotated_recorded_count",
+    "#{READING_COUNTS['derived']} OVER () AS unannotated_derived_count",
+    "#{READING_COUNTS['unreadable']} OVER () AS unannotated_unreadable_count"
+  ].join(", ")
 
   # **The retention rule.** How many runs OF ONE BRANCH keep their rows; everything older than the
   # Nth most recent run on that branch is deleted by {Ingest::ObservationPruner} after the ingest
@@ -837,8 +944,15 @@ class SpecObservation < ApplicationRecord
       .limit(limit)
   end
 
-  # ONE run's UNANNOTATED examples — the rows behind the subtraction the dashboard prints as *"SpecGuard
-  # cannot see the other N tests"*, and the one ranking on this endpoint that had no rung under it.
+  # ONE run's UNANNOTATED examples — the rows behind the subtraction the dashboard USED TO print as
+  # *"SpecGuard cannot see the other N tests"*, and the one ranking on this endpoint that had no rung
+  # under it.
+  #
+  # ⚠️ THAT SENTENCE IS GONE AND THIS POPULATION IS NOT. SPGD-711 corrected the claim, not the rows:
+  # every row here lacks an authored `@intent` — which is exact, and is the same predicate the
+  # subtraction evaluates — while most of them carry a description SpecGuard reads perfectly well.
+  # {READINGS} is the split, `UNANNOTATED_POPULATION_COUNTS` counts it, and the ordering below leads
+  # with the rows nothing could be read from.
   #
   # The third sibling of `.in_file` and `.with_description` and deliberately shaped like them, because
   # it is the same kind of read one axis over: those narrow a run to the rows of a FILE and to the rows
@@ -938,6 +1052,21 @@ class SpecObservation < ApplicationRecord
   # it returned. That figure is an ATTRIBUTE of the returned records rather than a separate value,
   # which makes this relation one to load and read — `UnannotatedExamples` is its one caller —
   # rather than one to count or paginate further.
+  # == The UNREADABLE rows come FIRST, and the cap is why that is not a preference
+  #
+  # The list is capped at a hundred and ordered file-navigably, which was a complete answer while
+  # every row on it was the same kind of row. It is not one now: SPGD-711 splits this population into
+  # examples SpecGuard READ from their own description and examples it could not, and the second
+  # group is both far smaller and the only one any "cannot see this test" sentence may describe. A
+  # purely alphabetical order buries them — a run whose dark corner sits in `spec/workers/` hands the
+  # reader a hundred rows of `spec/api/` that SpecGuard understands perfectly well, and the corner is
+  # off the page.
+  #
+  # So the FIRST sort term is the reading, and it is spelled as the boolean `= 'derived'` because
+  # Postgres orders `false` before `true`: unreadable rows head the page, derived rows follow, and
+  # within each group the file-navigable order below is untouched. The three terms after it are still
+  # total where the ones before tie, so two identical asks still return the same page — which the cap
+  # makes load-bearing rather than tidy, for the reason stated above.
   def self.unannotated_in(test_run, limit: UNANNOTATED_EXAMPLES_LIMIT, spec_file: nil,
                           spec_directory: nil)
     scope = where(test_run_id: test_run.id, status: "unannotated")
@@ -946,7 +1075,7 @@ class SpecObservation < ApplicationRecord
 
     scope
       .select(Arel.sql("spec_observations.*, #{UNANNOTATED_POPULATION_COUNTS}"))
-      .order(:spec_file_path, :line_number, :id)
+      .order(Arel.sql("(#{READING_EXPRESSION} = 'derived')"), :spec_file_path, :line_number, :id)
       .limit(limit)
   end
 
@@ -1007,16 +1136,85 @@ class SpecObservation < ApplicationRecord
   # to rows the group has already touched. Certified in `spec/models/spec_observation_spec.rb` on the
   # one thing that has to stay true — one run reached through an index rather than every run's rows
   # walked.
+  # == It ranks on the DARK areas first, and the debt second
+  #
+  # `unreadable_count DESC` leads, `unannotated_count DESC` breaks it, `DIRECTORY_EXPRESSION ASC`
+  # breaks that. Before SPGD-711 there was one quantity to rank by and the question did not arise;
+  # there are now two, and they are not the same worklist. `unannotated_count` is ANNOTATION DEBT —
+  # areas somebody has not written an `@intent` for yet — and it is the number a reader raising the
+  # authored ratio works down. `unreadable_count` is where SpecGuard has NOTHING: no annotation and a
+  # description it could not read either, which is the only population the product may describe as
+  # invisible and, on a suite written in the ordinary shapes, a far smaller one.
+  #
+  # The dark areas lead because the cap is ten. A ranking led by debt on a suite that has never
+  # annotated anything is a ranking by area SIZE — the ten biggest directories, in size order, every
+  # time — and the handful of areas SpecGuard genuinely cannot read never appear. Led by unreadable
+  # count, the ten rows are the ten places worth looking, and debt still orders every area that ties
+  # at zero unreadable, which on a fully-readable suite is all of them: the old ranking survives
+  # intact underneath, as the tiebreak it now is.
+  #
+  # == Four counts per area, from ONE grouped pass
+  #
+  # `authored`, `derived` and `unreadable` come back beside the `unannotated` and `recorded` totals
+  # that were already here, all as FILTERed aggregates over the same open WHERE — so the panel can
+  # show the three states side by side without any of them being able to describe a different
+  # population from the others. `unannotated_count` is retained rather than recomputed as
+  # `derived + unreadable`: it is the figure that reconciles against `total_specs -
+  # annotated_specs`, and a caller must be able to read it without knowing that identity.
+  #
+  # The new columns are APPENDED to the tuple, leaving `UnannotatedDirectories::DIRECTORY_COUNT_INDEX`
+  # pointing where it did — the tuple shape is a stated contract between the two objects and this
+  # keeps the statement true rather than renumbering it.
   def self.unannotated_directories_in(test_run, limit: UNANNOTATED_DIRECTORIES_LIMIT)
     where(test_run_id: test_run.id)
       .group(Arel.sql(DIRECTORY_EXPRESSION))
-      .order(Arel.sql("COUNT(*) FILTER (WHERE status = 'unannotated') DESC"),
+      .order(Arel.sql("#{READING_COUNTS['unreadable']} DESC"),
+             Arel.sql("COUNT(*) FILTER (WHERE status = 'unannotated') DESC"),
              Arel.sql("#{DIRECTORY_EXPRESSION} ASC"))
       .limit(limit)
       .pluck(Arel.sql(DIRECTORY_EXPRESSION),
              Arel.sql("COUNT(*) FILTER (WHERE status = 'unannotated')"),
              Arel.sql("COUNT(*)"),
-             Arel.sql("COUNT(*) OVER ()"))
+             Arel.sql("COUNT(*) OVER ()"),
+             *READINGS.map { |reading| Arel.sql(READING_COUNTS[reading]) })
+  end
+
+  # HOW THIS RUN READS, in one line per state — the run-grain answer the Overview panel replaced a
+  # subtraction with, and the figure every "SpecGuard cannot see N tests" sentence on this product is
+  # now taken from.
+  #
+  # == Why a subtraction could not stay
+  #
+  # `total_specs_count - annotated_specs_count` is exact, cheap, and answers a question nobody asked:
+  # it counts the examples with no AUTHORED intent and was rendered as the examples SpecGuard cannot
+  # SEE. Those are the same number only on a suite whose descriptions say nothing. This read is what
+  # separates them, and it can only be a read over the rows: the counters know a status and nothing
+  # about a description.
+  #
+  # == The population is the RUN'S ROWS, and that is disclosed rather than smoothed over
+  #
+  # `UnannotatedExamples` states the separation in full and both dashboard panels already print it:
+  # the run's counters are re-derived by SUM over `test_run_shards` from what each shard REPORTED,
+  # while these are the observations actually STORED, and on a sharded or partially-redelivered run
+  # the two legitimately differ. So {IntentReadings#recorded} rides back with the three states rather
+  # than being assumed equal to `total_specs_count` — a surface that wants a denominator for these
+  # three has one that was counted with them, and a surface that wants the suite size keeps reading
+  # the counter.
+  #
+  # A run with no per-example rows at all — one ingested before they existed, or from a client
+  # sending only totals — comes back all zeros with `recorded` zero, which {IntentReadings#recorded?}
+  # turns into "this run has nothing to say" rather than "this run is entirely readable".
+  #
+  # == Cost
+  #
+  # ONE aggregate row over ONE run, served by `index_spec_observations_on_test_run_id`, issued once
+  # per page. No GROUP BY, so `pick` returns the single row the four aggregates produce — the same
+  # shape and the same reasoning as `TestRun#shard_totals`.
+  def self.reading_counts_in(test_run)
+    counts = where(test_run_id: test_run.id).pick(*RUN_READING_COUNTS.map { |sql| Arel.sql(sql) })
+
+    IntentReadings.new(authored: counts[0].to_i, derived: counts[1].to_i, unreadable: counts[2].to_i,
+                       recorded: counts[3].to_i)
   end
 
   # How many distinct descriptions one narrowing may hand the composition step below.
@@ -2197,6 +2395,38 @@ class SpecObservation < ApplicationRecord
              Arel.sql("COUNT(*) OVER ()"),
              Arel.sql("SUM(#{previous_recorded}) OVER ()"), Arel.sql("SUM(#{latest_recorded}) OVER ()"),
              Arel.sql("SUM(#{previous_timed}) OVER ()"), Arel.sql("SUM(#{latest_timed}) OVER ()"))
+  end
+
+  # How well SpecGuard knows THIS test — one of {READINGS}. See that constant for the three states
+  # and for why the answer is computed rather than stored.
+  #
+  # Computed in Ruby off the row's own columns rather than read from a projected `reading` alias,
+  # deliberately: every relation on this file is loadable without that projection — `.in_file`,
+  # `.slowest_in`, a bare `find` — and a method that answered only for rows fetched through one
+  # particular `select` is a method whose nil is a bug somewhere else. The SQL expression exists to
+  # COUNT and RANK tens of thousands of rows at once; this exists to answer for the one row a surface
+  # is rendering, and `spec/models/spec_observation_spec.rb` runs both over the same corpus.
+  def reading
+    return READINGS.first if status == "annotated"
+
+    derived_intent ? "derived" : "unreadable"
+  end
+
+  # This row's intent as read from its own description, or nil when the description yields none.
+  #
+  # Nil for an ANNOTATED row too, and that is a statement rather than an optimisation: a row carrying
+  # an author's intent has no derived reading, because deriving one would invite a surface to show
+  # the platform's guess beside the author's declaration as though the two were comparable evidence.
+  # `Ingest::SpecSignal` makes the same call one grain down — the intent wins, and the name is not
+  # consulted at all.
+  #
+  # Memoized through `defined?` rather than `||=`, since nil is the common answer and the ordinary
+  # memo would re-derive on every call for exactly the rows a list is longest in.
+  def derived_intent
+    return nil if status == "annotated"
+    return @derived_intent if defined?(@derived_intent)
+
+    @derived_intent = DerivedIntent.from(name, spec_file_path: spec_file_path)
   end
 
   # What to call this row on a surface that lists it. `name` is what the client sent as the

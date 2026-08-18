@@ -47,9 +47,19 @@ RSpec.describe "Repository unannotated examples", type: :request do
     panel.all("tbody tr").map do |row|
       cells = row.all("td")
 
+      # `cells[1]` and not `cells.last`: SPGD-711 appended a "What SpecGuard reads" column, so the
+      # spec-file column stopped being the last one — and a `.last` read would have gone on passing,
+      # silently, against the wrong cell. That column has its own accessor below rather than a fourth
+      # key here, because every `eq` in this file compares whole rows.
       { test: row_name(cells.first), defined_at: row_location(cells.first),
-        spec_file: cells.last.text.gsub(/\s+/, " ").strip }
+        spec_file: cells[1].text.gsub(/\s+/, " ").strip }
     end
+  end
+
+  # What SpecGuard reads of each listed example, in order — the derived entity, action and behavior
+  # run together, or the sentence that says it read nothing.
+  def row_readings
+    panel.all("tbody tr").map { |row| row.all("td").last.text.gsub(/\s+/, " ").strip }
   end
 
   def row_names = rows.map { |row| row[:test] }
@@ -585,6 +595,81 @@ RSpec.describe "Repository unannotated examples", type: :request do
 
       expect(web).to eq(api)
       expect(web.size).to eq(3)
+    end
+  end
+
+  # ⭐ WHAT SPECGUARD READS OF EACH ROW — the column SPGD-711 added, and the correction the panel's
+  # own caption used to get wrong.
+  #
+  # Every row on this panel lacks an `@intent`. Most of them SpecGuard nonetheless READS, from the
+  # `Class#method behavior` description the client sends and this platform stores; the last column
+  # shows the three fields it got, so a reader can CHECK the reading rather than take a badge's word
+  # for it. The rows it read nothing from come first, because the list is capped at a hundred and
+  # those are the ones that must not fall off the page.
+  describe "what the panel says SpecGuard reads of each test" do
+    # A run whose area holds one derivable description and one that is not, plus one of each in
+    # another area so the narrowing is still doing its work.
+    def mixed_reading_run
+      repository = create_repository(user: @user)
+      ingest(repository,
+             [unannotated_spec(file_path: order_spec, line_number: 30,
+                               name: "Order#settle clears the outstanding balance"),
+              unannotated_spec(file_path: refund_spec, line_number: 9,
+                               name: "Refund restores the stock"),
+              unannotated_spec(file_path: "spec/requests/checkout_spec.rb", line_number: 5,
+                               name: "Checkout rejects an empty cart")])
+      repository
+    end
+
+    it "shows the entity, action and behavior it read, rather than a badge saying it read something" do
+      get repository_path(mixed_reading_run, spec_directory: area)
+
+      expect(row_readings.first)
+        .to eq("Nothing — no @intent, and the description does not give an entity, an action and a behavior.")
+      expect(row_readings.last).to eq("Order settle clears the outstanding balance")
+    end
+
+    # ⭐ THE ORDERING, and the reason it is not a preference: the cap is a hundred, the unreadable
+    # population is the small one, and a purely alphabetical page would bury it. `refund_spec` sorts
+    # AFTER `order_spec`, so a file-navigable-only order puts the derivable row first — which is what
+    # this asserts against.
+    it "lists the tests it could read nothing from first, ahead of the ones it read" do
+      get repository_path(mixed_reading_run, spec_directory: area)
+
+      expect(rows.map { |row| row[:test] })
+        .to eq(["Refund restores the stock", "Order#settle clears the outstanding balance"])
+    end
+
+    # The caption carries the split, and it is counted off the same windows the rows came back on —
+    # so it cannot describe a different slice from the table under it. It also says what a derived
+    # reading is MISSING, because the honest version of "derived" is the one that does not sell it as
+    # an annotation.
+    it "says how many of them it read and how many it could not, and what a derived reading lacks" do
+      get repository_path(mixed_reading_run, spec_directory: area)
+
+      expect(basis_line).to have_text("SpecGuard reads 1 of them from the test's own description",
+                                      normalize_ws: true)
+      expect(basis_line).to have_text("The other 1 it cannot read at all, and those are listed first",
+                                      normalize_ws: true)
+      expect(basis_line).to have_text("no preconditions", normalize_ws: true)
+      # And the claim the panel used to make about every row on it is made about none of them.
+      expect(panel).to have_no_text("SpecGuard cannot see")
+      expect(panel).to have_no_text("Not visible to SpecGuard")
+    end
+
+    # The good branch of the same sentence. An area SpecGuard reads entirely is not "no unannotated
+    # tests" — the rows are still there and still unannotated — so the caption has to say the second
+    # thing without saying the first.
+    it "says there is nothing it cannot read, where there is nothing it cannot read" do
+      repository = create_repository(user: @user)
+      ingest(repository,
+             [unannotated_spec(file_path: order_spec, line_number: 30,
+                               name: "Order#settle clears the outstanding balance")])
+
+      get repository_path(repository, spec_directory: area)
+
+      expect(basis_line).to have_text("There is none here it cannot read at all", normalize_ws: true)
+      expect(rows.size).to eq(1)
     end
   end
 end

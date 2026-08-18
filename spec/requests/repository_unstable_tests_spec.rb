@@ -717,7 +717,7 @@ RSpec.describe "Repository unstable tests", type: :request do
     # than two runs on the branch, so that read names a different pair from the last-push one and is
     # a real round trip on each of them rather than a query-cache repeat.
     #
-    # RECOUNTED AT 14 by SPGD-649, which added the "Where the unannotated tests are" panel: ONE
+    # RECOUNTED AT 14 by SPGD-649, which added the by-area annotation panel: ONE
     # further read of this table, the same run's rows grouped by AREA on the ANNOTATION axis. It is
     # the eighth neighbour, and it is the one the enumeration above does not carry — that sentence
     # is left at thirteen because thirteen is what it correctly said at its own moment, and this
@@ -755,7 +755,14 @@ RSpec.describe "Repository unstable tests", type: :request do
       # panels would be equal and worthless.
       expect(rows.size).to eq(4)
       expect(large_queries.size).to eq(small_queries.size)
-      expect(large_queries.size).to eq(14)
+      # RECOUNTED AT 15 by SPGD-711, which added the run's INTENT READINGS: ONE further read of
+      # this table, an ungated aggregate over the same run's rows splitting them into authored,
+      # derived and unreadable. It is not the by-area annotation read counted above under another
+      # name — that one GROUPS and ranks, this one does neither, and it answers the Overview's own
+      # sentence rather than a panel's list. Ungated unlike every drill-in on this page, because a
+      # correction a client has to opt into leaves the Overview printing the subtraction it replaced.
+      # Its own budget is asserted in spec/requests/api/v1/repository_intent_readings_spec.rb.
+      expect(large_queries.size).to eq(15)
     end
 
     # The candidate narrowing is what makes the composition affordable, and its `IN` list is capped
@@ -770,7 +777,7 @@ RSpec.describe "Repository unstable tests", type: :request do
         ingest(repository, specs, commit_sha: "red#{format("%011d", index)}", at: (30 - index).days.ago)
       end
 
-      expect(queries_against("spec_observations") { get repository_path(repository) }.size).to eq(14)
+      expect(queries_against("spec_observations") { get repository_path(repository) }.size).to eq(15)
     end
 
     # The gate is what it says it is: a window that cannot be compared asks nothing past the probe
@@ -780,14 +787,15 @@ RSpec.describe "Repository unstable tests", type: :request do
 
       queries = queries_against("spec_observations") { get repository_path(repository) }
 
-      # TEN of these belong to the panels above, which read the latest run (and, for the three
+      # ELEVEN of these belong to the panels above, which read the latest run (and, for the three
       # by-area comparisons, an earlier one) regardless — the tenth being the single-run annotation
-      # rollup SPGD-649 added, which reads the latest run whatever the window says; the eleventh is
-      # this panel's gating probe, and there is no twelfth. The window comparison is among the ten
-      # and not among what the gate withholds: its own gate is about SIZES and is satisfied here,
-      # where this panel's is about OUTCOMES and is not — two windows of the same runs, two
-      # different questions to refuse.
-      expect(queries.size).to eq(11)
+      # rollup SPGD-649 added and the ELEVENTH the run's intent readings SPGD-711 added, both of
+      # which read the latest run whatever the window says; the twelfth is this panel's gating
+      # probe, and there is no thirteenth. The window comparison is among the eleven and not among
+      # what the gate withholds: its own gate is about SIZES and is satisfied here, where this
+      # panel's is about OUTCOMES and is not — two windows of the same runs, two different
+      # questions to refuse.
+      expect(queries.size).to eq(12)
       # What the gate withholds is a grouping by description over the WINDOW — the candidate
       # narrowing and the composition that follows it, both of which narrow `test_run_id` to a LIST
       # of runs. The single-run `GROUP BY name` among the ten belongs to the "Descriptions this run

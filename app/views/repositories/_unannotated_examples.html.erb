@@ -1,11 +1,19 @@
     <%# == The unannotated tests THEMSELVES, for the place the reader picked
-        The last rung of the ladder the Overview panel opens and "Where the unannotated tests are"
-        narrows. That panel prints "Not visible to SpecGuard" as `total_specs_count -
-        annotated_specs_count` and says *"SpecGuard cannot see the other N tests"*; the ranking above
+        The last rung of the ladder the Overview panel opens and "How SpecGuard reads this suite, by
+        area" narrows. The Overview used to print "Not visible to SpecGuard" as `total_specs_count -
+        annotated_specs_count` and say *"SpecGuard cannot see the other N tests"*; the ranking above
         names the AREAS that count is concentrated in. Neither names a TEST, and until this panel the
         only route to one was `GET /api/v1/repository?unannotated_examples=1&spec_directory=…` with
         an API key — a route off the product, for the reader the product had just handed a worklist
         to.
+
+        SPGD-711 then corrected what may be said ABOUT these rows without changing which rows they
+        are. Every example here lacks an authored `@intent` — exact, and the same predicate the
+        Overview subtracts. Most of them SpecGuard nonetheless READS, from the description the client
+        sends and this platform stores; the last column shows exactly what it read, so a reader can
+        check the reading rather than take a badge's word for it. The rows it read nothing from come
+        FIRST, because the list is capped at a hundred and those are the ones that must not fall off
+        the page.
 
         Rendered only when a narrowing was ASKED for, and the read is taken only then. The model's
         narrowings are OPTIONAL and whole-run is a complete ask on the JSON endpoint; this surface
@@ -61,7 +69,7 @@
               capped read. Its class comment names the alternative in as many words — *"`recorded_count
               > rows.size` is a client's sentence to write"* — and this is the client. Both operands
               are the object's own integers off one read, and this asks only which is larger; the same
-              shape "Where the unannotated tests are" folds `carries_debt` in, one grain up. %>
+              shape "How SpecGuard reads this suite, by area" folds `carries_debt` in, one grain up. %>
           <% truncated = @unannotated_examples.recorded_count > @unannotated_examples.rows.size %>
 
           <%# What the list IS, before the list — the discipline every panel on this page keeps. Every
@@ -127,6 +135,23 @@
                 over it, and the refusal is the same one. %>
             Named and not scored: nothing here says whether a test ought to carry an
             <code>@intent</code>, only that this run recorded it without one.
+            <%# THE SPLIT SPGD-711 PUT IN THIS CAPTION. Every row here is unannotated, which is
+                exact — and this list used to be captioned, on the API and the MCP bridge, as the
+                tests SpecGuard cannot see, which was not. Both figures come off windows over the
+                same rows the table shows (see `UnannotatedExamples#derived_count`), so the sentence
+                cannot describe a different slice from the list, and the unreadable rows are at the
+                HEAD of the list by the read's own ordering — so on a cut page they are the ones a
+                reader is looking at rather than the ones past the cap. %>
+            SpecGuard reads <%= number_with_delimiter(@unannotated_examples.derived_count) %>
+            of them from the test's own description — shown in the last column, and a weaker reading
+            than an <code>@intent</code>: no preconditions, and a layer inferred from the directory
+            rather than declared.
+            <% if @unannotated_examples.unreadable_count.positive? %>
+              The other <%= number_with_delimiter(@unannotated_examples.unreadable_count) %>
+              it cannot read at all, and those are listed first.
+            <% else %>
+              There is none here it cannot read at all.
+            <% end %>
             <%# Counted off THIS RUN's per-example rows. The Overview's figure is a subtraction over
                 the run's own counters, and while both sides read the same `status` the payload wrote,
                 the two populations are not guaranteed identical — and this list is narrowed on top of
@@ -136,7 +161,7 @@
             the suite size on the Overview panel above and may legitimately differ from it.
           </p>
 
-          <%= render UI::TableComponent.new(columns: ["Test", "Spec file"],
+          <%= render UI::TableComponent.new(columns: ["Test", "Spec file", "What SpecGuard reads"],
                                             describedby: "unannotated-examples-basis") do %>
             <% @unannotated_examples.rows.each do |observation| %>
               <tr>
@@ -214,6 +239,31 @@
                       site above sits somewhere else. %>
                   <%= observation.spec_file_path %>
                 </td>
+                <td class="px-3 py-2 text-xs text-app-content-secondary">
+                  <%# WHAT SPECGUARD GOT FROM THE DESCRIPTION, or a plain statement that it got
+                      nothing — the column that stops this list being captioned as tests the product
+                      cannot see.
+
+                      The three fields are shown rather than a badge reading "derived", because the
+                      reader's question is not "did a regex match" but "is what SpecGuard read
+                      actually right about my test". Shown, they can be checked; summarised, they
+                      have to be trusted. `layer` is deliberately absent from the cell: it is the
+                      guessed field (`DerivedIntent::DEFAULT_LAYER`) and the caption already says the
+                      layer is inferred, so printing it per row would spend the most space on the
+                      least evidence.
+
+                      No new query. `SpecObservation#derived_intent` runs the same rule the read
+                      counted with, in Ruby, over columns this row already carries. %>
+                  <% derived = observation.derived_intent %>
+                  <% if derived %>
+                    <span class="font-mono text-app-content"><%= derived.entity %></span>
+                    <span class="font-mono text-app-content"><%= derived.action %></span>
+                    <span class="block text-app-muted"><%= derived.behavior %></span>
+                  <% else %>
+                    <span class="text-app-muted">Nothing — no <code>@intent</code>, and the
+                      description does not give an entity, an action and a behavior.</span>
+                  <% end %>
+                </td>
               </tr>
             <% end %>
           <% end %>
@@ -252,7 +302,7 @@
               ) %>
         <% else %>
           <%# A run with no per-example rows AT ALL — ingested before those rows existed, or from a
-              client that sends only totals. The same pair "Where the unannotated tests are" keeps
+              client that sends only totals. The same pair "How SpecGuard reads this suite, by area" keeps
               apart one grain up, and the one thing this state may not do is read as the state above
               it: "nobody sent the detail" and "nothing is unannotated" are the same empty table and
               opposite news.

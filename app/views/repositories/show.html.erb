@@ -231,7 +231,23 @@
         <% else %>
           <% total_specs = @latest_test_run.total_specs_count.to_i %>
           <% annotated_specs = @latest_test_run.annotated_specs_count.to_i %>
-          <% invisible_specs = total_specs - annotated_specs %>
+          <%# THE THREE READINGS, and the subtraction they replace.
+
+              `total_specs - annotated_specs` used to be assigned here as `invisible_specs` and
+              rendered as the tests SpecGuard "cannot see". The subtraction is exact and the
+              sentence was false: it counts the examples with no AUTHORED intent, and most of those
+              carry a description — `Invoice#total sums the line items` — that this platform
+              receives, stores, and ranks three other panels by. `TestRun#intent_readings` splits
+              that population into what SpecGuard READ from those descriptions and what it genuinely
+              could not, and only the second may be spoken about as invisible.
+
+              `annotated_specs` above is untouched and still comes off the run's own COUNTERS, so
+              "how much of this suite has a human-written intent" answers exactly as it did before.
+              The three readings below are counted over the per-example ROWS, which is a different
+              population on a sharded or partially-redelivered run — the same separation the two
+              panels further down already disclose, and the reason `recorded` rides back with them
+              and is what the sentence divides by rather than `total_specs`. %>
+          <% readings = @latest_test_run.intent_readings %>
 
           <%# The only figure on this panel read off more than one run. Every other number here is
               a level — what the suite is right now — and a level cannot say whether 20,013 tests
@@ -415,10 +431,22 @@
                           else
                             number_with_delimiter(total_specs)
                           end %>
+          <%# The reading rows appear only when this run stored per-example detail. A run that
+              reported suite totals alone — one ingested before those rows existed, or a client
+              sending only counts — has three honest zeros to show, and three zeros in a def-list
+              read as "SpecGuard can read none of it" rather than as "this run did not say".
+              `IntentReadings#recorded?` is the gate, and the caption below carries the same
+              branch. %>
+          <% reading_rows = if readings.recorded?
+                              [["Read from the description", number_with_delimiter(readings.derived)],
+                               ["Not readable by SpecGuard", number_with_delimiter(readings.unreadable)]]
+                            else
+                              []
+                            end %>
           <%= render UI::DefListComponent.new(rows: [
                 ["Tests in suite", suite_size],
                 ["Carrying an @intent", number_with_delimiter(annotated_specs)],
-                ["Not visible to SpecGuard", number_with_delimiter(invisible_specs)],
+                *reading_rows,
                 *cost_rows
               ]) %>
 
@@ -426,11 +454,31 @@
             <p class="text-xs text-app-muted">
               <%= @latest_test_run.annotated_ratio %>% — <%= number_with_delimiter(annotated_specs) %>
               of <%= number_with_delimiter(total_specs) %> tests carry an @intent.
-              <% if invisible_specs.zero? %>
-                Every test in the suite is visible to SpecGuard.
+              <%# The @intent share is stated FIRST and unconditionally, whatever the readings say.
+                  That ordering is a guard, not a habit: the known client-side failure is a scanner
+                  that falls over and classifies a whole run unannotated, and on such a run the
+                  descriptions still read perfectly well. If the derived figure led, that run would
+                  read as a healthy suite. Led by 0.0%, with an empty meter above it, it reads as
+                  what it is. %>
+              <% if !readings.recorded? %>
+                This run reported suite totals without the per-example rows SpecGuard reads test
+                descriptions from, so there is nothing here to say how much of the rest it can
+                make out — not that it can make out none of it.
+              <% elsif readings.unreadable? %>
+                Of the <%= number_with_delimiter(readings.recorded) %>
+                <%= "example".pluralize(readings.recorded) %> this run recorded, SpecGuard reads
+                <%= number_with_delimiter(readings.read) %> — the annotated ones and
+                <%= number_with_delimiter(readings.derived) %> more from the test's own description
+                — and cannot read the remaining <%= number_with_delimiter(readings.unreadable) %>.
+                A description is a weaker reading than an @intent: it carries no preconditions, and
+                its layer is inferred from the directory rather than declared.
               <% else %>
-                SpecGuard cannot see the other <%= number_with_delimiter(invisible_specs) %>
-                <%= "test".pluralize(invisible_specs) %>.
+                SpecGuard reads every one of the
+                <%= number_with_delimiter(readings.recorded) %>
+                <%= "example".pluralize(readings.recorded) %> this run recorded — the annotated ones,
+                and the rest from the test's own description, which is a weaker reading than an
+                @intent: it carries no preconditions, and its layer is inferred from the directory
+                rather than declared.
               <% end %>
             </p>
           <% else %>
