@@ -473,24 +473,6 @@ RSpec.describe SpecObservation do
         ActiveRecord::Base.connection.select_values("EXPLAIN #{relation.to_sql}").join("\n")
       end
 
-      # The plan for whatever SQL the block causes to be run against this table — for a read whose
-      # projection is not on the relation (a `pluck` of aggregates) and therefore has no `to_sql`
-      # worth EXPLAINing.
-      # Not a query counter, so none of the shared helpers in spec/support/query_capture.rb fit: it
-      # keeps the FIRST matching statement to feed EXPLAIN, and must run under
-      # `unprepared_statement` so the captured SQL carries its literals.
-      def plan_for_actual_sql
-        captured = nil
-        subscriber = ActiveSupport::Notifications.subscribe("sql.active_record") do |_, _, _, _, payload|
-          captured ||= payload[:sql] if payload[:name] != "SCHEMA" && payload[:sql].to_s.include?("spec_observations")
-        end
-        ActiveRecord::Base.connection.unprepared_statement { yield }
-
-        ActiveRecord::Base.connection.select_values("EXPLAIN #{captured}").join("\n")
-      ensure
-        ActiveSupport::Notifications.unsubscribe(subscriber)
-      end
-
       it "reads the slowest examples off the by-duration index" do
         plan = plan_for(slowest)
 
@@ -546,7 +528,7 @@ RSpec.describe SpecObservation do
       # PREFIX predicate, which is what a `text_pattern_ops` index serves and this read issues none
       # of. That is what let the panel ship with no migration.
       it "reads the panel's one-file drill-down off the by-file index" do
-        plan = plan_for_actual_sql { described_class.in_file(run, "spec/d3/f3_spec.rb").to_a }
+        plan = plan_for_actual_sql("spec_observations") { described_class.in_file(run, "spec/d3/f3_spec.rb").to_a }
 
         expect(plan).to include("index_spec_observations_on_test_run_id_and_spec_file_path")
         expect(plan).not_to match(/Seq Scan on spec_observations/)
@@ -574,7 +556,7 @@ RSpec.describe SpecObservation do
       # example above gives: the predicate alone is not the read the panel makes, which adds a
       # projection, an ordering and a cap on top of it.
       it "reads the panel's one-description drill-down off an index rather than scanning the table" do
-        plan = plan_for_actual_sql { described_class.with_description(run, "example 3").to_a }
+        plan = plan_for_actual_sql("spec_observations") { described_class.with_description(run, "example 3").to_a }
 
         expect(plan).to match(INDEXED_BY_RUN)
         expect(plan).not_to match(/Seq Scan on spec_observations/)
@@ -599,7 +581,7 @@ RSpec.describe SpecObservation do
       # examples above give: the predicate alone is not the read the block makes, which adds a
       # projection, an ordering and a cap on top of it.
       it "reads the run's unannotated examples off an index rather than scanning the table" do
-        plan = plan_for_actual_sql { described_class.unannotated_in(run).to_a }
+        plan = plan_for_actual_sql("spec_observations") { described_class.unannotated_in(run).to_a }
 
         expect(plan).to match(/#{INDEXED_BY_RUN.source}|index_spec_observations_on_test_run_id_and_spec_file_path/)
         expect(plan).not_to match(/Seq Scan on spec_observations/)
@@ -621,7 +603,7 @@ RSpec.describe SpecObservation do
       # a narrowing added to the model and not to the certification would leave the certification
       # measuring a statement the endpoint no longer makes.
       it "reads ONE FILE's unannotated examples off an index rather than scanning the table" do
-        plan = plan_for_actual_sql do
+        plan = plan_for_actual_sql("spec_observations") do
           described_class.unannotated_in(run, spec_file: "spec/d3/f3_spec.rb").to_a
         end
 
@@ -630,7 +612,7 @@ RSpec.describe SpecObservation do
       end
 
       it "reads ONE AREA's unannotated examples off an index rather than scanning the table" do
-        plan = plan_for_actual_sql { described_class.unannotated_in(run, spec_directory: "spec/d3").to_a }
+        plan = plan_for_actual_sql("spec_observations") { described_class.unannotated_in(run, spec_directory: "spec/d3").to_a }
 
         expect(plan).to match(/#{INDEXED_BY_RUN.source}|index_spec_observations_on_test_run_id_and_spec_file_path/)
         expect(plan).not_to match(/Seq Scan on spec_observations/)
@@ -646,7 +628,7 @@ RSpec.describe SpecObservation do
       # output — one row per file, not per example — so what has to stay true at the design point is
       # that one run's rows are still reached through an index rather than by walking every run's.
       it "reads the panel's by-file rollup off an index rather than scanning the table" do
-        plan = plan_for_actual_sql { described_class.file_durations_in(run) }
+        plan = plan_for_actual_sql("spec_observations") { described_class.file_durations_in(run) }
 
         expect(plan).to match(INDEXED_BY_RUN)
         expect(plan).not_to match(/Seq Scan on spec_observations/)
@@ -665,7 +647,7 @@ RSpec.describe SpecObservation do
       # sent the slice to a migration had the premise been wrong, so it is the one that must run
       # against a real planner with real statistics at the 20-run seed.
       it "reads the panel's by-directory rollup off an index rather than scanning the table" do
-        plan = plan_for_actual_sql { described_class.directory_durations_in(run) }
+        plan = plan_for_actual_sql("spec_observations") { described_class.directory_durations_in(run) }
 
         expect(plan).to match(INDEXED_BY_RUN)
         expect(plan).not_to match(/Seq Scan on spec_observations/)
@@ -684,7 +666,7 @@ RSpec.describe SpecObservation do
       # scan either way. This is the example that would have sent the slice to a migration had that
       # been wrong, so it runs against a real planner with real statistics at the 20-run seed.
       it "reads the annotation-debt ranking off an index rather than scanning the table" do
-        plan = plan_for_actual_sql { described_class.unannotated_directories_in(run) }
+        plan = plan_for_actual_sql("spec_observations") { described_class.unannotated_directories_in(run) }
 
         expect(plan).to match(INDEXED_BY_RUN)
         expect(plan).not_to match(/Seq Scan on spec_observations/)
@@ -696,7 +678,7 @@ RSpec.describe SpecObservation do
       # makes "one grouped aggregate, no new index" a claim about this read rather than a hope
       # borrowed from the one above it. An edit that adds a `DISTINCT` aggregate here reddens this.
       it "hash-aggregates the debt ranking, paying none of the sibling's sort" do
-        plan = plan_for_actual_sql { described_class.unannotated_directories_in(run) }
+        plan = plan_for_actual_sql("spec_observations") { described_class.unannotated_directories_in(run) }
 
         expect(plan).to include("HashAggregate")
         expect(plan).not_to include("GroupAggregate")
@@ -724,7 +706,7 @@ RSpec.describe SpecObservation do
       # would pass on that one too, which is exactly the indiscriminate assertion this example
       # exists to stop being.
       it "pays for the distinct-description count with a sort, and says so in the plan" do
-        plan = plan_for_actual_sql { described_class.directory_durations_in(run) }
+        plan = plan_for_actual_sql("spec_observations") { described_class.directory_durations_in(run) }
 
         expect(plan).to include("GroupAggregate")
         expect(plan).to match(/Sort Key: .*substring.*, name/)
@@ -766,7 +748,7 @@ RSpec.describe SpecObservation do
       # strategy IS forced rather than chosen, it is pinned: see the by-directory rollup above,
       # whose `DISTINCT` aggregate rules hashing out and whose sort is asserted for that reason.
       it "reads the panel's one-directory drill-down off an index rather than scanning the table" do
-        plan = plan_for_actual_sql { described_class.files_in_directory(run, "spec/d3") }
+        plan = plan_for_actual_sql("spec_observations") { described_class.files_in_directory(run, "spec/d3") }
 
         expect(plan).to match(INDEXED_BY_RUN)
         expect(plan).not_to match(/Seq Scan on spec_observations/)
@@ -812,7 +794,7 @@ RSpec.describe SpecObservation do
       # above are certified at.
       it "reads the panel's two-run by-area comparison off an index rather than scanning the table" do
         previous_run = repository.test_runs.where.not(id: run.id).first
-        plan = plan_for_actual_sql { described_class.directory_growth_between(run, previous_run) }
+        plan = plan_for_actual_sql("spec_observations") { described_class.directory_growth_between(run, previous_run) }
 
         expect(plan).to match(INDEXED_OR_COVERED_BY_RUN)
         expect(plan).not_to match(/Seq Scan on spec_observations/)
@@ -833,7 +815,7 @@ RSpec.describe SpecObservation do
       # wider one here would accept a plan this read cannot have.
       it "reads the panel's two-run by-area RUNTIME comparison off an index rather than scanning" do
         previous_run = repository.test_runs.where.not(id: run.id).first
-        plan = plan_for_actual_sql { described_class.directory_runtime_growth_between(run, previous_run) }
+        plan = plan_for_actual_sql("spec_observations") { described_class.directory_runtime_growth_between(run, previous_run) }
 
         expect(plan).to match(INDEXED_BY_RUN)
         expect(plan).not_to match(/Seq Scan on spec_observations/)
@@ -860,7 +842,7 @@ RSpec.describe SpecObservation do
       # it picks.
       it "reads the panel's two-run one-area comparison off an index rather than scanning the table" do
         previous_run = repository.test_runs.where.not(id: run.id).first
-        plan = plan_for_actual_sql { described_class.file_growth_between(run, previous_run, "spec/d3") }
+        plan = plan_for_actual_sql("spec_observations") { described_class.file_growth_between(run, previous_run, "spec/d3") }
 
         expect(plan).to match(INDEXED_OR_COVERED_BY_RUN)
         expect(plan).not_to match(/Seq Scan on spec_observations/)
@@ -879,7 +861,7 @@ RSpec.describe SpecObservation do
       # precisely the false-ACCEPT a query count would also give.
       it "reads the two-run one-area RUNTIME comparison off an index rather than scanning" do
         previous_run = repository.test_runs.where.not(id: run.id).first
-        plan = plan_for_actual_sql do
+        plan = plan_for_actual_sql("spec_observations") do
           described_class.file_runtime_growth_between(run, previous_run, "spec/d3")
         end
 
@@ -929,7 +911,7 @@ RSpec.describe SpecObservation do
       # query — the same tradeoff `.directory_durations_in` carries, which is why this asserts the
       # shared matcher rather than the widened `INDEXED_OR_COVERED_BY_RUN` beside it.
       it "reads the panel's repeated-description ranking off an index rather than scanning" do
-        plan = plan_for_actual_sql { described_class.repeated_descriptions_in(run) }
+        plan = plan_for_actual_sql("spec_observations") { described_class.repeated_descriptions_in(run) }
 
         expect(plan).to match(INDEXED_BY_RUN)
         expect(plan).not_to match(/Seq Scan on spec_observations/)
@@ -941,7 +923,7 @@ RSpec.describe SpecObservation do
       # and a plan assertion on the ranking alone would say nothing about the query that produces
       # the caption beside it.
       it "counts the run's described and undescribed rows off an index rather than scanning" do
-        plan = plan_for_actual_sql { described_class.description_presence_in(run) }
+        plan = plan_for_actual_sql("spec_observations") { described_class.description_presence_in(run) }
 
         expect(plan).to match(INDEXED_BY_RUN)
         expect(plan).not_to match(/Seq Scan on spec_observations/)
@@ -1146,28 +1128,12 @@ RSpec.describe SpecObservation do
 
       before { ActiveRecord::Base.connection.execute("ANALYZE spec_observations") }
 
-      # The plan for the SQL each read ACTUALLY runs, captured off the wire rather than EXPLAINed
-      # from a hand-written copy — a copy is a second definition of the query that can drift from
-      # the one the panel makes. `unprepared_statement` inlines the binds, because `EXPLAIN` cannot
-      # be handed a `$1`.
-      def plan_for_actual_sql
-        captured = nil
-        subscriber = ActiveSupport::Notifications.subscribe("sql.active_record") do |_, _, _, _, payload|
-          captured ||= payload[:sql] if payload[:name] != "SCHEMA" && payload[:sql].to_s.include?("spec_observations")
-        end
-        ActiveRecord::Base.connection.unprepared_statement { yield }
-
-        ActiveRecord::Base.connection.select_values("EXPLAIN #{captured}").join("\n")
-      ensure
-        ActiveSupport::Notifications.unsubscribe(subscriber)
-      end
-
       # Observed: two index probes per run of the window, both off a `test_run_id` index, neither
       # of them touching a row past the one that answers it. The point of the lateral is that the
       # cost follows the window's LENGTH and not the suite's size — the aggregate spelling of this
       # question reads every row in the window to produce two integers.
       it "probes the window's runs through an index rather than reading the window" do
-        plan = plan_for_actual_sql { described_class.window_outcome_reporting(window_ids) }
+        plan = plan_for_actual_sql("spec_observations") { described_class.window_outcome_reporting(window_ids) }
 
         expect(plan).to match(/#{SCAN} index_spec_observations_on_test_run_id\w*/)
         expect(plan).not_to match(/Seq Scan on spec_observations/)
@@ -1178,7 +1144,7 @@ RSpec.describe SpecObservation do
       # failed' list a later slice will want". This is that read, and the narrowing it makes
       # possible is what keeps the composition below off the whole window.
       it "narrows to the window's failures off the by-outcome index" do
-        plan = plan_for_actual_sql { described_class.unstable_candidates_in(window_ids) }
+        plan = plan_for_actual_sql("spec_observations") { described_class.unstable_candidates_in(window_ids) }
 
         expect(plan).to include("index_spec_observations_on_test_run_id_and_outcome")
         expect(plan).to match(SCAN)
@@ -1190,7 +1156,7 @@ RSpec.describe SpecObservation do
       # repository as well as by window — without that column there is no index on `name` to walk
       # and the grouping falls back to reading the runs whole.
       it "composes the candidates off the by-name index rather than scanning the table" do
-        plan = plan_for_actual_sql do
+        plan = plan_for_actual_sql("spec_observations") do
           described_class.outcome_composition_in(repository_id: repository.id, run_ids: window_ids,
                                                  names: ["example 7", "example 13"])
         end
@@ -1203,7 +1169,7 @@ RSpec.describe SpecObservation do
       # A btree indexes its nulls, so `name IS NULL` is a range of that same index and the count
       # costs what the unnamed rows cost rather than what the window does.
       it "counts the unnamed rows off the by-name index too" do
-        plan = plan_for_actual_sql do
+        plan = plan_for_actual_sql("spec_observations") do
           described_class.unnamed_row_count_in(repository_id: repository.id, run_ids: window_ids)
         end
 
@@ -1219,7 +1185,7 @@ RSpec.describe SpecObservation do
       # against the 6,000 the window holds — which is what makes this read constant in the size of
       # the suite rather than merely cheaper than the window.
       it "reads one description's run sequence off the by-name index rather than scanning" do
-        plan = plan_for_actual_sql do
+        plan = plan_for_actual_sql("spec_observations") do
           described_class.outcome_sequence_in(repository_id: repository.id, run_ids: window_ids,
                                               name: "example 7").to_a
         end
@@ -1475,53 +1441,6 @@ RSpec.describe SpecObservation do
 
       before { ActiveRecord::Base.connection.execute("ANALYZE spec_observations") }
 
-      # The plan for the SQL each read ACTUALLY runs, captured off the wire rather than EXPLAINed
-      # from a hand-written copy — a copy is a second definition of the query, free to drift from the
-      # one the panel makes. `unprepared_statement` inlines the binds, because `EXPLAIN` cannot be
-      # handed a `$1`.
-      def captured_sql(&)
-        captured = nil
-        subscriber = ActiveSupport::Notifications.subscribe("sql.active_record") do |_, _, _, _, payload|
-          captured ||= payload[:sql] if payload[:name] != "SCHEMA" &&
-                                        payload[:sql].to_s.include?("spec_observations")
-        end
-        ActiveRecord::Base.connection.unprepared_statement(&)
-
-        captured
-      ensure
-        ActiveSupport::Notifications.unsubscribe(subscriber)
-      end
-
-      def plan_for_actual_sql(&)
-        ActiveRecord::Base.connection.select_values("EXPLAIN #{captured_sql(&)}").join("\n")
-      end
-
-      # How many rows of `spec_observations` the read ACTUALLY touched, off `EXPLAIN (ANALYZE)` —
-      # the only spelling of this assertion that measures the query rather than restating the SQL.
-      # Rows removed by a filter are counted too: a plan that reached ten times as many rows and
-      # threw them away has not been bounded, whatever it returned.
-      #
-      # Only nodes carrying a `Relation Name` are counted, so a bitmap's index node and its heap node
-      # are not the same rows twice — the index node names an index and no relation.
-      def rows_touched(&)
-        plan = ActiveRecord::Base.connection.select_value(
-          "EXPLAIN (ANALYZE, FORMAT JSON) #{captured_sql(&)}"
-        )
-        plan = JSON.parse(plan) if plan.is_a?(String)
-
-        total = 0
-        walk = lambda do |node|
-          if node["Relation Name"] == "spec_observations"
-            total += (node["Actual Rows"].to_i + node["Rows Removed by Filter"].to_i) *
-                     [node["Actual Loops"].to_i, 1].max
-          end
-          Array(node["Plans"]).each { |child| walk.call(child) }
-        end
-        walk.call(plan.first["Plan"])
-
-        total
-      end
-
       # One run's rows through an index that LEADS WITH `test_run_id`, rather than by walking every
       # run's — `SLOWEST_LIMIT` identities out of one run, never an aggregate over the window.
       #
@@ -1540,7 +1459,7 @@ RSpec.describe SpecObservation do
       # it: unscope this read from its run and the plan walks every run's rows, whichever index it
       # had before.
       it "narrows to the anchor run's slowest identities through a by-run index" do
-        plan = plan_for_actual_sql { described_class.slowest_identity_candidates_in(anchor) }
+        plan = plan_for_actual_sql("spec_observations") { described_class.slowest_identity_candidates_in(anchor) }
 
         expect(plan).to match(INDEXED_BY_RUN)
         expect(plan).not_to match(/Seq Scan on spec_observations/)
@@ -1549,7 +1468,7 @@ RSpec.describe SpecObservation do
       # ⭐ `index_spec_observations_on_spec_identity_id` — the index the schema has carried since
       # slice 1 with no cross-run reader. This is that reader, and no index was added for it.
       it "composes the candidates off the by-identity index rather than scanning the table" do
-        plan = plan_for_actual_sql do
+        plan = plan_for_actual_sql("spec_observations") do
           described_class.identity_duration_composition_in(
             run_ids: window_ids, spec_identity_ids: identity_ids.first(10)
           )
@@ -1573,7 +1492,7 @@ RSpec.describe SpecObservation do
       # See `.identity_duration_composition_in`, which carries the plan and the arithmetic.
       it "reads on the order of the candidate count, not of the window" do
         composed = lambda do |count|
-          rows_touched do
+          rows_touched("spec_observations") do
             described_class.identity_duration_composition_in(
               run_ids: window_ids, spec_identity_ids: identity_ids.first(count)
             )
