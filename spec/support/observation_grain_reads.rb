@@ -318,13 +318,14 @@ module ObservationGrainReads
   # `classified_observation_reads` above — rank their fixture AGAINST THIS PARTITION: how much of it
   # the fixture leaves live, and how it places against other fixtures on grains live and on total
   # reads. A read added here can falsify all three without touching a line either of those files
-  # owns, and it does not have to be a NEW grain to do it: every grain added so far has corrected
-  # THIS file's own count of the partition and left those paragraphs stale, and the growth grain's
-  # SECOND READER — `directory_run_growth`, see "The growth grain has TWO READERS" above — moved
-  # their total-reads figures without changing the grain count at all. So when you add a read here,
-  # whether it opens a new grain or joins an existing one, RE-READ THOSE TWO REQUEST SPECS, and keep
-  # their prose free of any suite-wide total or counted ranking — the claim they need is "this
-  # fixture leaves several grains live", which no later read can falsify.
+  # owns, and it does not have to be a NEW grain to do it: every grain appended since those
+  # paragraphs were written has corrected THIS file's own count of the partition and left them
+  # stale, and the growth grain's SECOND READER — `directory_run_growth`, see "The growth grain has
+  # TWO READERS" above — moved every total-reads figure ANY OF THEM quoted FOR ANOTHER FIXTURE
+  # without changing the grain count at all. So when you add a read here, whether it opens a new
+  # grain or joins an existing one, RE-READ THOSE TWO REQUEST SPECS, and keep their prose free of
+  # any suite-wide total or counted ranking — the claim they need is "this fixture leaves several
+  # grains live", which no later read can falsify.
   #
   # `growth` (5), `directory_files` (6) and `runtime_growth` (10) each carry an EXCLUSION rather than
   # only their own pattern, and the exclusions are not decoration. `directory_file_growth` (9) is the
