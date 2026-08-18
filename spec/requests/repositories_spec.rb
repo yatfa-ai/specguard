@@ -663,6 +663,66 @@ RSpec.describe "Repository registration and API keys", type: :request do
       expect(panel).to have_text("25.0% — 1 of 4 tests carry an @intent.", normalize_ws: true)
     end
 
+    # ⭐ THE DESTINATION, AND THE SENTENCE THAT MAY NOT DESCRIBE AN EMPTY SET.
+    #
+    # Every other branch of this paragraph discloses what a derived reading COSTS — no preconditions,
+    # a layer inferred from the directory — because every other branch has derived readings to
+    # qualify. On a fully-authored suite there are none: "and the rest from the test's own
+    # description" would name an empty set, and the caveat behind it would warn the reader about the
+    # weakness of a reading nothing on the page rests on. The panel branches on `recorded?` and on
+    # `unreadable?` with exactly this care; this is the third state it was missing.
+    it "says nothing about derived readings on a suite that has none" do
+      repository = create_repository(user: @user, github_full_name: "acme/fully-annotated")
+      Ingest::RunRecorder.record(
+        repository,
+        { commit_sha: "feedfacecafe0712", branch: "main", total_specs_count: 2,
+          annotated_specs_count: 2, duration_seconds: 12.0 },
+        specs: [annotated_spec(file_path: "spec/models/invoice_spec.rb", line_number: 4),
+                annotated_spec(file_path: "spec/models/invoice_spec.rb", line_number: 9)]
+          .map(&:deep_stringify_keys)
+      )
+
+      get repository_path(repository)
+
+      panel = overview_panel
+      expect(panel).to have_text("Every one of the 2 examples this run recorded carries an @intent " \
+                                 "its author wrote", normalize_ws: true)
+      # The two clauses that may not appear over a suite with nothing derived in it: the empty set,
+      # and the warning about a reading that is not on this page.
+      expect(panel).to have_no_text("the rest from the test's own description")
+      expect(panel).to have_no_text("it carries no preconditions")
+      # And the state above it is still stated in full, so this is a shorter sentence rather than a
+      # quieter one.
+      expect(panel).to have_text("100.0% — 2 of 2 tests carry an @intent.", normalize_ws: true)
+    end
+
+    # The middle branch, which had no example of its own either: derived readings and NO unreadable
+    # population. The "cannot read the remaining N" sentence may not be rendered at N = 0 — that is
+    # what `IntentReadings#unreadable?` exists for — and the derived caveat still must be, because
+    # here there IS something derived to qualify.
+    it "qualifies its derived readings on a suite with no unreadable examples" do
+      repository = create_repository(user: @user, github_full_name: "acme/all-derived")
+      Ingest::RunRecorder.record(
+        repository,
+        { commit_sha: "feedfacecafe0713", branch: "main", total_specs_count: 2,
+          annotated_specs_count: 1, duration_seconds: 12.0 },
+        specs: [annotated_spec(file_path: "spec/models/invoice_spec.rb", line_number: 4),
+                unannotated_spec(file_path: "spec/models/order_spec.rb", line_number: 9,
+                                 name: "Order#settle clears the outstanding balance")]
+          .map(&:deep_stringify_keys)
+      )
+
+      get repository_path(repository)
+
+      panel = overview_panel
+      expect(panel).to have_text("the rest from the test's own description", normalize_ws: true)
+      expect(panel).to have_text("it carries no preconditions", normalize_ws: true)
+      expect(panel).to have_no_text("cannot read the remaining")
+      # Unmoved, on the run where a derived reading is half the suite — the figure a reader asks
+      # "how much of this suite has a human-written intent" of.
+      expect(panel).to have_text("50.0% — 1 of 2 tests carry an @intent.", normalize_ws: true)
+    end
+
     it "puts the real counts into the meter's accessible markup, not (ratio, 100)" do
       repository = create_repository(user: @user)
       repository.test_runs.create!(commit_sha: "feedfacecafe0002", total_specs_count: 3,

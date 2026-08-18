@@ -472,13 +472,23 @@
                 — and cannot read the remaining <%= number_with_delimiter(readings.unreadable) %>.
                 A description is a weaker reading than an @intent: it carries no preconditions, and
                 its layer is inferred from the directory rather than declared.
-              <% else %>
+              <% elsif readings.derived.positive? %>
                 SpecGuard reads every one of the
                 <%= number_with_delimiter(readings.recorded) %>
                 <%= "example".pluralize(readings.recorded) %> this run recorded — the annotated ones,
                 and the rest from the test's own description, which is a weaker reading than an
                 @intent: it carries no preconditions, and its layer is inferred from the directory
                 rather than declared.
+              <% else %>
+                <%# THE FULLY-AUTHORED SUITE — the destination, and the one branch with nothing to
+                    qualify. Every sibling above discloses what a DERIVED reading costs, because
+                    every sibling above has some. Here `derived` is zero: the "and the rest from the
+                    test's own description" clause would describe an empty set, and the caveat after
+                    it would warn a reader about the weakness of a reading nothing on this page is
+                    built on. So the branch exists to say LESS, which is the whole of its content. %>
+                Every one of the <%= number_with_delimiter(readings.recorded) %>
+                <%= "example".pluralize(readings.recorded) %> this run recorded carries an @intent
+                its author wrote — nothing here is inferred from a test's description.
               <% end %>
             </p>
           <% else %>

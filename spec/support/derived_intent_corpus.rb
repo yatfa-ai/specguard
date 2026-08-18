@@ -16,6 +16,22 @@
 #
 # So: adding a case here extends both files at once, and that is the property to preserve. A case
 # that belongs to only one engine belongs in that engine's file, not here.
+#
+# == ⭐ WHAT THIS CORPUS CERTIFIES, AND WHAT IT DOES NOT — stated, because the last version did not
+#
+# It certifies that the two engines give the SAME verdict on every string below, and that the
+# verdict is the one named below. It does NOT certify anything about a shape absent from this list,
+# and the gap is not hypothetical: every string in the first version of this corpus was ASCII with
+# clean bookends, so it exercised `DerivedIntent::PATTERN`'s body thoroughly and never once asked
+# what the two engines did with WHITESPACE. They did different things. `String#strip` and Postgres
+# `btrim/2` disagree about a tab and a newline, and Ruby's `[[:space:]]` and Postgres's disagree
+# about U+00A0 — so a description ending in a newline was `derived` in Ruby and `unreadable` in SQL,
+# in exactly the shape this file's agreement example was written to catch, while the example passed.
+#
+# The whitespace cases at the foot of each list below are that hole closed. They look pedantic and
+# they are the only reason the guarantee in `DerivedIntent`'s class comment is a tested claim rather
+# than a hopeful one — so a padded case is never redundant with the tidy case it resembles, and none
+# of them may be dropped for looking like one.
 module DerivedIntentCorpus
   # Descriptions that MUST yield a reading, and what they must yield.
   #
@@ -63,6 +79,54 @@ module DerivedIntentCorpus
     # corpus rather than in a comment, because it is the boundary both engines have to agree on.
     "Cart#total totals the cart" => {
       entity: "Cart", action: "total", behavior: "totals the cart"
+    },
+    # == THE WHITESPACE CASES — the ones the first corpus lacked, and the drift they let through
+    #
+    # Verdicts under the OLD engines (`.strip` + `btrim` + `[[:space:]]`), measured rather than
+    # reasoned about, because the two are not the same exercise:
+    #
+    # | description                | old Ruby   | old SQL    |            |
+    # |----------------------------|------------|------------|------------|
+    # | trailing SPACE             | derived    | derived    | agreed     |
+    # | trailing TAB               | derived    | unreadable | DIVERGED   |
+    # | leading NEWLINE            | derived    | unreadable | DIVERGED   |
+    # | VERTICAL TAB both ends     | derived    | unreadable | DIVERGED   |
+    # | trailing U+00A0            | unreadable | derived    | DIVERGED   |
+    #
+    # Four of the five split the two engines, in BOTH directions, and the fifth is here for the
+    # opposite reason — see its own note. They are here so that a future edit reintroducing a
+    # normalisation step in one engine, or reaching for the POSIX class again, goes red rather than
+    # shipping.
+    #
+    # A trailing SPACE, which is the one padding character the two old engines DID agree about —
+    # `btrim` takes a space and so does `.strip`. It is kept precisely because it never diverged: it
+    # is the regression pin that removing both trims did not change the answer on the case that was
+    # already right, which is the half of a repair that is easy to leave untested.
+    "Invoice#finalize locks the line items once finalized " => {
+      entity: "Invoice", action: "finalize", behavior: "locks the line items once finalized"
+    },
+    # A trailing TAB and a leading NEWLINE — `.strip` takes both and `btrim/2` takes neither, so
+    # Ruby read them and SQL did not. The behavior comes out identical to the space-padded case
+    # above, which is the whole point: padding may not change what is read.
+    "Invoice#finalize locks the line items once finalized\t" => {
+      entity: "Invoice", action: "finalize", behavior: "locks the line items once finalized"
+    },
+    "\nInvoice#finalize locks the line items once finalized" => {
+      entity: "Invoice", action: "finalize", behavior: "locks the line items once finalized"
+    },
+    # A VERTICAL TAB, the member of `DerivedIntent::WHITESPACE` most easily got wrong: Postgres's
+    # `E''` STRING escapes do not define `\v` — a `btrim(…, E'\v')` written to repair this would trim
+    # the LETTER v — while its REGEX escapes do. Pinned so the set is exercised rather than trusted.
+    "\vCart#total totals the cart\v" => {
+      entity: "Cart", action: "total", behavior: "totals the cart"
+    },
+    # A NON-BREAKING SPACE at the end of the behavior, and the divergence that ran the other way:
+    # Ruby's `[[:space:]]` calls U+00A0 space, so `BEHAVIOR`'s closing bookend refused it and the
+    # row read as unreadable — while Postgres's `[[:space:]]` does not, so it read as derived. Under
+    # the spelled ASCII class it is an ordinary character to both, and it stays IN the behavior
+    # rather than being trimmed off the end of it.
+    "Invoice#finalize locks the line items once finalized\u00A0" => {
+      entity: "Invoice", action: "finalize", behavior: "locks the line items once finalized\u00A0"
     }
   }.freeze
 
@@ -90,6 +154,21 @@ module DerivedIntentCorpus
     # costs the whole rule its precision.
     "Matrix#<=> orders two matrices by determinant" => "an operator method is not matched",
     # A second sigil before any whitespace. Rare, and refused rather than guessed at.
-    "Invoice#line#total sums one line of the invoice" => "two sigils and no whitespace between them"
+    "Invoice#line#total sums one line of the invoice" => "two sigils and no whitespace between them",
+    # == The whitespace cases that must yield NOTHING — the same hole, the other verdict
+    #
+    # A NON-BREAKING SPACE where the separator belongs. The call `DerivedIntent::WHITESPACE` makes
+    # is that U+00A0 is an ordinary character, so it does not separate an action from a behavior —
+    # and the point is that it is the SAME call in both engines, not that it is the only defensible
+    # one. Under Ruby's Unicode `[[:space:]]` this derived; under Postgres's it did not.
+    "Invoice#finalize\u00A0locks the line items once finalized" =>
+      "a non-breaking space does not separate the action from the behavior",
+    # Padding cannot RESCUE a description either: a behavior below the schema's fifteen characters
+    # stays absence however much whitespace surrounds it. The padding is not part of the behavior's
+    # length in either engine, which is the property `BEHAVIOR`'s bookends buy. Both old engines
+    # agreed here too, and it is kept for the reason the space-padded case above is.
+    "  Cart#total sums it   " => "padding does not lengthen a behavior below the schema's minimum",
+    # Whitespace and nothing else — the degenerate padded row.
+    "\t\n  " => "a description of nothing but whitespace"
   }.freeze
 end

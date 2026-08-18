@@ -509,21 +509,79 @@ class SpecObservation < ApplicationRecord
   # as `Ingest::SpecSignal` prefers the intent over the name, so a row that carries one never reaches
   # the regex at all.
   #
-  # `btrim(COALESCE(name, ''))` because `name` is nullable — `Ingest::ObservationRecorder` writes it
-  # through `presence_of`, so a producer that sent nothing stores a NULL, and `NULL ~ '…'` is NULL
-  # rather than false, which a `CASE` would fall through on but which is worth not relying on. The
-  # trim pairs with `DerivedIntent.from`'s `.strip`, so the two engines are handed the same string.
+  # `COALESCE(name, '')` because `name` is nullable — `Ingest::ObservationRecorder` writes it through
+  # `presence_of`, so a producer that sent nothing stores a NULL, and `NULL ~ '…'` is NULL rather
+  # than false, which a `CASE` would fall through on but which is worth not relying on.
+  #
+  # ⚠️ AND NO `btrim`, which is a repair rather than an omission. This expression used to trim, and
+  # `DerivedIntent.from` used to `.strip`, and that pair — one rule, written twice by hand, in two
+  # languages, OUTSIDE the one pattern string the two engines share — is not the same operation
+  # twice: `btrim/2` trims spaces only, while `String#strip` also takes tab, newline, VT, FF and CR.
+  # A description ending in a newline was `derived` in Ruby and `unreadable` here, which is a row
+  # rendering an empty cell under a caption that just counted it as read. {DerivedIntent::PATTERN}
+  # absorbs the padding now, so this expression is handed the RAW stored string and there is nothing
+  # left out here for the Ruby side to spell differently. Do not reintroduce a trim on either side.
   #
   # The pattern is {DerivedIntent::SQL_PATTERN} rather than a regex written here, and that is the
   # whole point of that constant: the rule is authored once and each engine adds its own anchors.
   # `spec/models/spec_observation_spec.rb` runs this expression against the database over the same
-  # corpus `spec/services/derived_intent_spec.rb` runs the Ruby matcher over, and asserts they agree
-  # row for row — so a divergence goes red instead of mislabelling a panel.
+  # corpus `spec/services/derived_intent_spec.rb` runs the Ruby matcher over — a corpus that now
+  # carries the padded, tabbed and non-ASCII-space cases the old one lacked — and asserts they agree
+  # row for row, so a divergence goes red instead of mislabelling a panel.
   READING_EXPRESSION = <<~SQL.squish
     CASE WHEN spec_observations.status = 'annotated' THEN 'authored'
-         WHEN btrim(COALESCE(spec_observations.name, '')) ~ '#{DerivedIntent::SQL_PATTERN}' THEN 'derived'
+         WHEN COALESCE(spec_observations.name, '') ~ '#{DerivedIntent::SQL_PATTERN}' THEN 'derived'
          ELSE 'unreadable' END
   SQL
+
+  # == 💰 WHAT THIS COSTS PER ROW, MEASURED — because it replaced a `status` comparison
+  #
+  # Every read below used to test one indexed enum column and now evaluates a regex, and the regex
+  # is spelled once per FILTERed aggregate: four times a row in `.unannotated_directories_in`, three
+  # in `.unannotated_in` and in `.reading_counts_in`. Postgres does not common-subexpression these,
+  # so the multiplier is real. Stated rather than left to be discovered, on the same rule the reads
+  # here already follow for their read COUNTS.
+  #
+  # Measured on this branch against the containerised Postgres, on ONE run of 35,000 rows — the
+  # design point the ticket opens with — with `EXPLAIN (ANALYZE, TIMING OFF)`, best of nine, the
+  # ActiveRecord query cache off:
+  #
+  # | read                          | before  | after   |
+  # |-------------------------------|---------|---------|
+  # | `.reading_counts_in`          |  5.4 ms | 179 ms  |
+  # | `.unannotated_directories_in` | 76 ms   | 263 ms  |
+  # | `.unannotated_in`             | 36 ms   | 227 ms  |
+  #
+  # ONE evaluation over 35,000 rows is 76 ms against 1.6 ms for the same scan without it — ~2.1 µs a
+  # row — so the figures above are between two and three evaluations' worth, which is what the
+  # spelled-out repetition predicts.
+  #
+  # ⭐ THE `status` ARM IS ALSO A SHORT CIRCUIT, and it is why this is a floor rather than a tax. An
+  # authored row never reaches the regex: the same headline read is 9.4 ms on a run whose 35,000
+  # rows are all annotated, 203 ms as ingested here (30,000 unannotated) and 214 ms with all 35,000
+  # unannotated. The cost falls as a suite does the thing the product is asking it to do, and the
+  # figures above are the worst case — the zero-annotation suite, which is exactly the adopter this
+  # ticket is about.
+  #
+  # == The fix that exists, the number it is worth, and why it is not taken here
+  #
+  # A subquery does NOT collapse the repetition — the planner flattens it straight back and the read
+  # measures 182 ms, unchanged. An optimisation fence does: `... OFFSET 0` around a subquery
+  # projecting the reading once takes the headline read from 179 ms to 68 ms, and a `MATERIALIZED`
+  # CTE to 75 ms. That is the one evaluation per row the table above says is the floor.
+  #
+  # Not done in this change, deliberately, and the reasons are about what else would have to move.
+  # A fence puts a subquery between the WHERE and the aggregates on all three reads, and
+  # `.unannotated_in`'s own comment certifies that its narrows reach ONE RUN THROUGH AN INDEX rather
+  # than walking every run's rows — a claim that would need re-establishing against the new plan
+  # rather than re-asserted. It also cannot keep {READING_COUNTS} shared between the run headline
+  # and the by-area rollup, since the fenced reads would count a projected `reading` column instead
+  # of the expression; that sharing is the property stopping those two disagreeing about what a
+  # reading IS, and trading a correctness guarantee for latency is not a trade to make quietly. And
+  # `spec/support/observation_grain_reads.rb` partitions this endpoint's reads by matching their
+  # SQL, so all three pins would need rebaselining. That is its own change with its own
+  # verification, not a rider on a correctness fix — and the numbers above are here so it can be
+  # decided rather than rediscovered.
 
   # `COUNT(*) FILTER (WHERE …)` per reading, keyed by reading.
   #

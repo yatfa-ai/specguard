@@ -57,10 +57,31 @@
 # So {PATTERN} is ONE unanchored source string, and each engine adds only its own anchors:
 # {RUBY_PATTERN} wraps it in `\A…\z` with `MULTILINE` (Ruby's `.` skips newlines by default and its
 # `^`/`$` are line anchors), {SQL_PATTERN} wraps it in `^…$` (Postgres ARE matches newline with `.`
-# and anchors to the whole string by default). Everything in between — POSIX classes, non-capturing
-# groups, bounded repeats — means the same thing to both. `spec/services/derived_intent_spec.rb`
-# runs the SQL predicate and this class over one corpus and asserts they agree row for row, so a
-# divergence fails a test rather than mislabelling a panel.
+# and anchors to the whole string by default). `spec/services/derived_intent_spec.rb` runs this
+# class over one corpus and `spec/models/spec_observation_spec.rb` runs the SQL predicate over the
+# same strings, asserting they agree row for row — so a divergence fails a test rather than
+# mislabelling a panel.
+#
+# == ⚠️ THE WHOLE RULE HAS TO BE IN THAT STRING — a lesson, not a design note
+#
+# The first cut of this class NORMALISED before matching: `String#strip` here, `btrim(COALESCE(name,
+# ''))` in `READING_EXPRESSION`. That is a second rule, written twice by hand, sitting OUTSIDE the
+# one string the two engines share — and the two spellings are not the same operation. Postgres
+# `btrim/2` trims spaces only; Ruby's `String#strip` also takes tab, newline, VT, FF, CR and NUL. A
+# description ending in a newline was therefore `derived` in Ruby and `unreadable` in SQL, which is
+# exactly the silent mislabelling the agreement example exists to catch — and the corpus, every
+# string of it ASCII with clean bookends, never asked the question.
+#
+# Two repairs, and both are structural rather than a correction to one call:
+#
+# 1. The padding is INSIDE {PATTERN} (`SPACE*` at each end). There is no normalisation step left for
+#    the two engines to spell differently, and {BEHAVIOR}'s non-space bookends mean the capture
+#    comes out trimmed by construction rather than by a second `.strip` on this side only.
+# 2. The whitespace is {WHITESPACE} — six ASCII characters, spelled — rather than `[[:space:]]`,
+#    which is *itself* two rules: Ruby's is Unicode-aware on a UTF-8 string and Postgres's is not.
+#
+# `spec/support/derived_intent_corpus.rb` now carries the padded, tabbed and non-ASCII-space cases,
+# and states what the corpus does and does not certify.
 class DerivedIntent
   # A constant name: one capitalised segment of at least two characters, optionally namespaced.
   #
@@ -75,19 +96,46 @@ class DerivedIntent
   # they are a small population and a permissive pattern here costs the whole rule its precision.
   ACTION = "[A-Za-z_][A-Za-z0-9_]+[?!=]?"
 
+  # The whitespace BOTH engines recognise, spelled out rather than borrowed from `[[:space:]]`.
+  #
+  # ⚠️ SPELLED BECAUSE `[[:space:]]` IS NOT ONE RULE. Ruby's is Unicode-aware on a UTF-8 string;
+  # Postgres's defers to the collation's `iswspace`, which under glibc says U+00A0 is not space. One
+  # pattern string containing `[[:space:]]` would therefore still be two different rules, and a
+  # description ending in a non-breaking space would be read by one engine and not the other. These
+  # six are ASCII, are written as escapes Postgres ARE and Ruby both give their C meanings, and
+  # depend on no locale. A non-breaking space is consequently an ORDINARY CHARACTER to both — it may
+  # sit inside a behavior and may not separate an action from one, which is the same call twice
+  # rather than an accident of two libraries.
+  #
+  # NUL is absent though `String#strip` removes it, and that costs nothing: Postgres `text` cannot
+  # hold a NUL byte, so a row whose description carries one cannot exist to be disagreed about.
+  WHITESPACE = "\\t\\n\\v\\f\\r "
+
+  # The two derived classes. Everything below is written in terms of these, so the set above is the
+  # single place the answer to "what counts as space here" is given.
+  SPACE = "[#{WHITESPACE}]"
+  NON_SPACE = "[^#{WHITESPACE}]"
+
   # The rest of the description, at least 15 characters, starting and ending on a non-space.
   #
   # Fifteen because `OpenTestIntent`'s `behavior` is `minLength: 15`. The non-space bookends are not
-  # tidiness: without them the pattern would match a description whose behavior is 15 characters of
-  # which the last three are spaces, and the Ruby side — which strips — would then hold a 12
-  # character behavior the schema rejects while the SQL side counted the row as derived.
-  BEHAVIOR = "[^[:space:]].{13,}[^[:space:]]"
+  # tidiness: they are what makes the capture trimmed BY CONSTRUCTION, so no engine needs a strip of
+  # its own to get the same three fields. Without them the pattern would match a description whose
+  # behavior is 15 characters of which the last three are spaces, and a reading the schema rejects
+  # would be counted as one the schema accepts.
+  BEHAVIOR = "#{NON_SPACE}.{13,}#{NON_SPACE}"
 
   # `#` or `.` — instance or singleton. The sigil is consumed and NOT kept in {#action}, because an
   # author writing this annotation by hand writes `action: call`, not `action: "#call"`, and a
   # derived reading that spelled its action differently from an authored one would make the two
   # incomparable on the one field they most obviously line up on.
-  PATTERN = "(#{ENTITY})[#.](#{ACTION})[[:space:]]+(#{BEHAVIOR})"
+  #
+  # ⭐ THE PADDING IS PART OF THE RULE — `SPACE*` at each end rather than a trim in each engine. See
+  # the class comment: a `.strip` here and a `btrim` there is one rule written twice, and those two
+  # spellings do not agree about a tab or a newline. Here there is nothing to spell twice. The
+  # capture groups are unaffected: {BEHAVIOR}'s trailing `NON_SPACE` forces the greedy `.` to give
+  # back any trailing whitespace to the `SPACE*` that follows it.
+  PATTERN = "#{SPACE}*(#{ENTITY})[#.](#{ACTION})#{SPACE}+(#{BEHAVIOR})#{SPACE}*"
 
   # Built with `Regexp.new` rather than a literal so the one source string above is the only place
   # the rule is written. `MULTILINE` makes `.` match a newline, which is what Postgres does with no
@@ -123,10 +171,14 @@ class DerivedIntent
   # @return [DerivedIntent, nil] the reading this description yields, or nil when it yields none.
   #   Nil is the ordinary answer for a great many real descriptions and is never an error.
   def self.from(name, spec_file_path: nil)
-    match = RUBY_PATTERN.match(name.to_s.strip)
+    # NO `.strip`, and its absence is load-bearing rather than an economy — see the class comment.
+    # A normalisation here is one the SQL engine has to reproduce in a different language, and the
+    # two spellings drifted. {PATTERN} absorbs the padding, so both engines are handed the raw
+    # stored string and neither is free to tidy it differently.
+    match = RUBY_PATTERN.match(name.to_s)
     return nil unless match
 
-    reading = new(entity: match[1], action: match[2], behavior: match[3].strip,
+    reading = new(entity: match[1], action: match[2], behavior: match[3],
                   spec_file_path: spec_file_path)
 
     # The schema is asked rather than assumed. {PATTERN} is built to guarantee this passes, and the

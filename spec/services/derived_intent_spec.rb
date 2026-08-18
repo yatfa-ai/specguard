@@ -85,6 +85,48 @@ RSpec.describe DerivedIntent do
     end
   end
 
+  # ⭐ THE STRUCTURE THAT MAKES THE CORPUS'S AGREEMENT MEAN SOMETHING.
+  #
+  # The corpus asks the two engines the same question and compares their answers, which catches a
+  # divergence AFTER it exists. These two catch the two ways one was introduced before, at the place
+  # it would be introduced again — and they are cheap enough to be worth having beside a corpus that
+  # is not.
+  describe "the rule, as one string both engines are given" do
+    # The whole rule, padding included, is in `PATTERN`. A normalisation step OUTSIDE it has to be
+    # written twice in two languages, and the two spellings that were there — `String#strip` and
+    # `btrim(COALESCE(name, ''))` — do not agree about a tab or a newline. So: the padding is in the
+    # pattern, and nothing here or in `SpecObservation::READING_EXPRESSION` may trim.
+    it "absorbs its own padding rather than leaving a trim for each engine to spell" do
+      expect(described_class::PATTERN).to start_with("#{described_class::SPACE}*")
+      expect(described_class::PATTERN).to end_with("#{described_class::SPACE}*")
+      expect(SpecObservation::READING_EXPRESSION).not_to include("btrim")
+
+      # And the consequence, which is the part that matters: every member of `WHITESPACE` is absorbed
+      # at either end, and none of it reaches the fields. A trim in ONE engine would pass this too —
+      # `spec/models/spec_observation_spec.rb` is where the OTHER engine is asked the same thing —
+      # but a rule that lost the padding from the pattern would fail here first.
+      unpadded = described_class.from("Cart#total totals the cart").to_intent
+
+      ["\t", "\n", "\v", "\f", "\r", " "].each do |pad|
+        expect(described_class.from("#{pad}Cart#total totals the cart#{pad}")&.to_intent)
+          .to eq(unpadded), "#{pad.inspect} was not absorbed by the pattern"
+      end
+    end
+
+    # `[[:space:]]` is not one rule: Ruby's is Unicode-aware on a UTF-8 string and Postgres's is not,
+    # so U+00A0 is whitespace to one engine and an ordinary character to the other. One pattern
+    # string containing it is still two rules, which is the failure this class was corrected for.
+    it "spells its whitespace rather than borrowing a POSIX class whose meaning differs" do
+      expect(described_class::PATTERN).not_to include("[:space:]")
+      expect(described_class::WHITESPACE).to eq("\\t\\n\\v\\f\\r ")
+      # Both directions of the U+00A0 disagreement, pinned as behaviour and not only as structure.
+      expect(described_class.from("Invoice#finalize locks the line items once finalized\u00A0"))
+        .not_to be_nil
+      expect(described_class.from("Invoice#finalize\u00A0locks the line items once finalized"))
+        .to be_nil
+    end
+  end
+
   # `layer` is the one field of a derived reading that comes from somewhere other than the
   # description, and it is a CONVENTION GUESS. It is derived at all so the reading satisfies the
   # schema, which requires it — and it is named in the class comment as part of what an authored
