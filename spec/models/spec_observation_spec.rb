@@ -1231,6 +1231,369 @@ RSpec.describe SpecObservation do
     end
   end
 
+  # The reads that span runs AND group on the durable identity — the first two in this application
+  # to aggregate `spec_identity_id` at all. The block above spans runs while grouping on `name`,
+  # which is a different key answering a different question and is not disturbed by these; what
+  # these add is the one thing that key cannot survive, which is a test being renamed or moved.
+  # What they return is asserted here, and what {SlowestTests} makes of them is
+  # spec/models/slowest_tests_spec.rb.
+  describe "the questions a repository's runtime history has to answer" do
+    let(:rows_per_run) { 300 }
+    let(:repository) { create_repository }
+    # Twenty runs in the table and six of them in the window, so "read the window through an index"
+    # is a decision the planner makes rather than a foregone conclusion — the sibling blocks seed
+    # twenty for the same reason.
+    let(:runs) { (1..20).map { |i| create_test_run(repository: repository, commit_sha: "sha#{i}") } }
+    # OLDEST FIRST, as `Repository#suite_size_trajectory` hands its window over, so `.last` is the
+    # newest run and the anchor everything here is partitioned by.
+    let(:window) { runs.first(6) }
+    let(:window_ids) { window.map(&:id) }
+    let(:anchor) { window.last }
+    let(:identity_ids) { seed_identities }
+
+    # THE MOVED TEST. Example 3 sits in one file for the window's first three runs and in another
+    # for its last three, with a different line number on each side — the exact edit
+    # `SpecObservation`'s class comment records `example_id` and the `file_path:line_number`
+    # coordinate as unstable across, and the one this grouping key exists to survive.
+    MOVED_EXAMPLE = 3
+
+    # One vector, reused across every identity, built once. Nothing in either read under test
+    # touches `embedding` — the resolution that produced these rows is `Ingest::IdentityResolver`'s
+    # and is asserted there — so three hundred distinct vectors would be three hundred thousand
+    # random floats bought for nothing.
+    def seed_identities
+      now = Time.current
+      vector = EmbeddingGenerator.call("one vector, reused")
+      SpecIdentity.insert_all(
+        (1..rows_per_run).map do |index|
+          { repository_id: repository.id, text: "identity #{index}",
+            text_digest: SpecIdentity.digest_for("identity #{index}"), signal_source: "name",
+            embedding: vector, file_path: "spec/f#{index % 15}_spec.rb", line_number: index,
+            created_at: now, updated_at: now }
+        end
+      )
+
+      SpecIdentity.where(repository: repository).order(:id).pluck(:id)
+    end
+
+    # Example 1 is the slowest, example 2 the next, and so on down — a total, stable order with no
+    # ties at the head, so "the ten slowest" is a fact about the seed rather than about the planner.
+    # Every fiftieth example is UNTIMED and every hundredth is UNRESOLVED, which are the two
+    # exclusions these reads have to state rather than swallow.
+    def duration_for(index)
+      return nil if (index % 50).zero? && !(index % 100).zero?
+
+      100.0 / index
+    end
+
+    def identity_for(index)
+      (index % 100).zero? ? nil : identity_ids[index - 1]
+    end
+
+    def path_for(index, run_index)
+      return run_index < 3 ? "spec/before_spec.rb" : "spec/after_spec.rb" if index == MOVED_EXAMPLE
+
+      "spec/f#{index % 15}_spec.rb"
+    end
+
+    def line_for(index, run_index)
+      return run_index < 3 ? 10 : 400 if index == MOVED_EXAMPLE
+
+      index
+    end
+
+    def seed(test_run, run_index)
+      now = Time.current
+      rows = (1..rows_per_run).map do |index|
+        {
+          test_run_id: test_run.id, repository_id: repository.id,
+          example_id: "./spec/f#{index % 15}_spec.rb[1:#{index}]",
+          spec_file_path: path_for(index, run_index), file_path: path_for(index, run_index),
+          line_number: line_for(index, run_index), name: "example #{index}",
+          duration_seconds: duration_for(index), outcome: "passed",
+          status: "unannotated", spec_identity_id: identity_for(index),
+          created_at: now, updated_at: now
+        }
+      end
+
+      SpecObservation.insert_all(rows)
+    end
+
+    before { runs.each_with_index { |test_run, index| seed(test_run, index) } }
+
+    describe "what they return" do
+      # The ranking the candidate step exists for: one run's slowest identities, capped, in a total
+      # order. Ten identities, and they are examples 1 through 10 because the seed's durations fall
+      # away monotonically from example 1.
+      it "names the anchor run's slowest identities, slowest first" do
+        candidates = described_class.slowest_identity_candidates_in(anchor)
+
+        expect(candidates.map(&:first)).to eq(identity_ids.first(10))
+      end
+
+      # The count rides back on every row, evaluated after the GROUP BY and before the LIMIT, so it
+      # counts every identity the run holds however few are returned. 297 and not 300: the three
+      # unresolved rows are not an identity and never become a group.
+      it "rides the anchor's whole identity count back on every row, before the cap" do
+        candidates = described_class.slowest_identity_candidates_in(anchor)
+
+        expect(candidates.map { |tuple| tuple[1] }).to all(eq(297))
+        expect(candidates.length).to eq(10)
+      end
+
+      # The NUMERATOR of the coverage fraction, re-totalled back up to the run by a window over an
+      # aggregate — in the same round trip as the ranking, which is what makes the caption a claim
+      # about THIS list. 294: the run's 297 resolved rows less the three nothing timed.
+      it "rides the ranked population's timed-row count back on every row" do
+        candidates = described_class.slowest_identity_candidates_in(anchor)
+
+        expect(candidates.map { |tuple| tuple[2].to_i }).to all(eq(294))
+      end
+
+      # ⭐ And the DENOMINATOR is deliberately absent, which is a defect this read once had. It
+      # carried a `SUM(COUNT(*)) OVER ()` counting the run's resolved rows — the same predicate over
+      # the same population `.identity_presence_in` already counts as `recorded_count -
+      # unresolved_count`, measured a second time in a second statement. Two snapshots, no
+      # transaction between them, and a caption that could be caught rendering figures that do not
+      # add up. The tuple is three wide because that population is measured ONCE, at the gate, and
+      # `SlowestTests` threads it through.
+      it "does not re-count the resolved population the gate already measured" do
+        candidates = described_class.slowest_identity_candidates_in(anchor)
+        gate = described_class.identity_presence_in(anchor)
+
+        expect(candidates.map(&:length)).to all(eq(3))
+        expect(gate[:recorded_count] - gate[:unresolved_count]).to eq(297)
+      end
+
+      it "keeps the slowest end of the list when the cap bites" do
+        candidates = described_class.slowest_identity_candidates_in(anchor, limit: 3)
+
+        expect(candidates.map(&:first)).to eq(identity_ids.first(3))
+        expect(candidates.map { |tuple| tuple[1] }).to all(eq(297))
+      end
+
+      # A row with no durable identity cannot be matched to itself across runs, so it never becomes
+      # a group — the same refusal `.unstable_candidates_in` makes for a null `name`, at the key
+      # this read groups on.
+      it "never groups the unresolved rows into an identity of their own" do
+        expect(described_class.slowest_identity_candidates_in(anchor, limit: 300).map(&:first))
+          .to all(be_present)
+      end
+
+      # ⭐ Untimed identities are KEPT and sort LAST. `duration_seconds: :desc` is NULLS FIRST in
+      # Postgres, so the ordering — not an exclusion — is what keeps a list captioned "slowest" from
+      # being headed by tests nothing timed. Dropping them instead would change each surviving
+      # group's population, which is the trap `.file_durations_in` documents for aggregates.
+      it "sorts the identities nothing timed to the very end rather than dropping them" do
+        candidates = described_class.slowest_identity_candidates_in(anchor, limit: 300)
+        untimed = [50, 150, 250].map { |index| identity_ids[index - 1] }
+
+        expect(candidates.map(&:first).last(3)).to match_array(untimed)
+        expect(candidates.length).to eq(297)
+      end
+
+      # ⭐ THE MOVED-TEST GUARANTEE, asserted directly and at the grain that makes it. Example 3
+      # changed both halves of the `file_path:line_number` coordinate midway through the window, and
+      # it comes back as ONE group whose total is every run's duration summed — six runs of the same
+      # test rather than two histories of three.
+      it "sums a moved test's runs into one row rather than splitting it at the move" do
+        moved = identity_ids[MOVED_EXAMPLE - 1]
+
+        composed = described_class.identity_duration_composition_in(
+          run_ids: window_ids, spec_identity_ids: [moved]
+        )
+
+        expect(composed.length).to eq(1)
+        identity_id, total_seconds, recorded, timed, run_count, slowest, names, files = composed.first
+        expect(identity_id).to eq(moved)
+        expect(total_seconds).to be_within(0.0001).of(6 * (100.0 / MOVED_EXAMPLE))
+        expect([recorded, timed, run_count]).to eq([6, 6, 6])
+        expect(slowest).to be_within(0.0001).of(100.0 / MOVED_EXAMPLE)
+        expect(names).to eq(["example #{MOVED_EXAMPLE}"])
+        # Both sides of the move, disclosed rather than smoothed over — a history spanning two files
+        # is a fact about where the reader has to go looking.
+        expect(files.sort).to eq(["spec/after_spec.rb", "spec/before_spec.rb"])
+      end
+
+      it "composes each candidate over the whole window" do
+        composed = described_class.identity_duration_composition_in(
+          run_ids: window_ids, spec_identity_ids: [identity_ids[6]]
+        )
+
+        # identity, total, recorded, timed, runs, slowest, names, files —
+        # `SpecObservation::IDENTITY_DURATION_COMPOSITION`'s order, which the caller destructures by.
+        _id, total_seconds, recorded, timed, run_count, slowest, names, files = composed.first
+        expect(total_seconds).to be_within(0.0001).of(6 * (100.0 / 7))
+        expect([recorded, timed, run_count]).to eq([6, 6, 6])
+        expect(slowest).to be_within(0.0001).of(100.0 / 7)
+        expect([names, files]).to eq([["example 7"], ["spec/f7_spec.rb"]])
+      end
+
+      # Bounded to the window, never to the repository's whole history — the fourteen runs outside
+      # it hold the same identities and must not be summed into these figures.
+      it "counts only the runs of the window it was given" do
+        composed = described_class.identity_duration_composition_in(
+          run_ids: window_ids.first(2), spec_identity_ids: [identity_ids[6]]
+        )
+
+        _id, total_seconds, recorded, timed, run_count, * = composed.first
+        expect(total_seconds).to be_within(0.0001).of(2 * (100.0 / 7))
+        expect([recorded, timed, run_count]).to eq([2, 2, 2])
+      end
+
+      # An identity every row of which went untimed sums to SQL NULL rather than to zero, and the
+      # counts beside it are what let a surface say "not reported" instead of inventing a `0.00s`.
+      it "reports a nil total, never a zero, for a test nothing timed" do
+        composed = described_class.identity_duration_composition_in(
+          run_ids: window_ids, spec_identity_ids: [identity_ids[49]]
+        )
+
+        _id, total_seconds, recorded, timed, run_count, slowest, * = composed.first
+        expect(total_seconds).to be_nil
+        expect(slowest).to be_nil
+        expect([recorded, timed, run_count]).to eq([6, 0, 6])
+      end
+
+      it "answers for a window of no runs, and for no candidates, without asking anything" do
+        expect(count_queries do
+          expect(described_class.identity_duration_composition_in(
+            run_ids: [], spec_identity_ids: identity_ids.first(3)
+          )).to be_empty
+          expect(described_class.identity_duration_composition_in(
+            run_ids: window_ids, spec_identity_ids: []
+          )).to be_empty
+        end).to eq(0)
+      end
+    end
+
+    # The bound the whole two-step shape exists for, measured rather than asserted. The naive
+    # spelling of this question groups the window whole — 1,800 rows on this seed, 600,000 at the
+    # roadmap's design point — and what these examples pin is that the composition reads on the
+    # order of `candidates × window runs` instead.
+    describe "the plan Postgres chooses for each of them" do
+      SCAN_NODE = /(?:Index Only Scan using|Index Scan using|Bitmap Index Scan on)/
+
+      before { ActiveRecord::Base.connection.execute("ANALYZE spec_observations") }
+
+      # The plan for the SQL each read ACTUALLY runs, captured off the wire rather than EXPLAINed
+      # from a hand-written copy — a copy is a second definition of the query, free to drift from the
+      # one the panel makes. `unprepared_statement` inlines the binds, because `EXPLAIN` cannot be
+      # handed a `$1`.
+      def captured_sql(&)
+        captured = nil
+        subscriber = ActiveSupport::Notifications.subscribe("sql.active_record") do |_, _, _, _, payload|
+          captured ||= payload[:sql] if payload[:name] != "SCHEMA" &&
+                                        payload[:sql].to_s.include?("spec_observations")
+        end
+        ActiveRecord::Base.connection.unprepared_statement(&)
+
+        captured
+      ensure
+        ActiveSupport::Notifications.unsubscribe(subscriber)
+      end
+
+      def plan_for_actual_sql(&)
+        ActiveRecord::Base.connection.select_values("EXPLAIN #{captured_sql(&)}").join("\n")
+      end
+
+      # How many rows of `spec_observations` the read ACTUALLY touched, off `EXPLAIN (ANALYZE)` —
+      # the only spelling of this assertion that measures the query rather than restating the SQL.
+      # Rows removed by a filter are counted too: a plan that reached ten times as many rows and
+      # threw them away has not been bounded, whatever it returned.
+      #
+      # Only nodes carrying a `Relation Name` are counted, so a bitmap's index node and its heap node
+      # are not the same rows twice — the index node names an index and no relation.
+      def rows_touched(&)
+        plan = ActiveRecord::Base.connection.select_value(
+          "EXPLAIN (ANALYZE, FORMAT JSON) #{captured_sql(&)}"
+        )
+        plan = JSON.parse(plan) if plan.is_a?(String)
+
+        total = 0
+        walk = lambda do |node|
+          if node["Relation Name"] == "spec_observations"
+            total += (node["Actual Rows"].to_i + node["Rows Removed by Filter"].to_i) *
+                     [node["Actual Loops"].to_i, 1].max
+          end
+          Array(node["Plans"]).each { |child| walk.call(child) }
+        end
+        walk.call(plan.first["Plan"])
+
+        total
+      end
+
+      # One run's rows through an index that LEADS WITH `test_run_id`, rather than by walking every
+      # run's — `SLOWEST_LIMIT` identities out of one run, never an aggregate over the window.
+      #
+      # `INDEXED_BY_RUN` is the shared matcher defined ~1,000 lines above, in the per-run duration
+      # block; constants defined inside an example group land at top level, so it is reachable here.
+      # Named rather than left to be discovered, because a constant reused across two distant blocks
+      # is a coupling a reader has no local sign of — and because its comment there is where the
+      # argument for matching a SHAPE instead of an index name is made in full.
+      #
+      # WHICH of those indexes is left to Postgres, for the reason `INDEXED_BY_RUN` above documents
+      # at length and which was confirmed here by measurement: the wider
+      # `(test_run_id, duration_seconds)` is the obvious guess and the planner does not take it,
+      # since the aggregate visits the heap for `spec_identity_id` either way and the narrower
+      # `(test_run_id, outcome)` bitmap prices better. Pinning the guess would pin a cost tiebreak
+      # that has no bearing on this criterion. What has a bearing is the `Seq Scan` refusal beside
+      # it: unscope this read from its run and the plan walks every run's rows, whichever index it
+      # had before.
+      it "narrows to the anchor run's slowest identities through a by-run index" do
+        plan = plan_for_actual_sql { described_class.slowest_identity_candidates_in(anchor) }
+
+        expect(plan).to match(INDEXED_BY_RUN)
+        expect(plan).not_to match(/Seq Scan on spec_observations/)
+      end
+
+      # ⭐ `index_spec_observations_on_spec_identity_id` — the index the schema has carried since
+      # slice 1 with no cross-run reader. This is that reader, and no index was added for it.
+      it "composes the candidates off the by-identity index rather than scanning the table" do
+        plan = plan_for_actual_sql do
+          described_class.identity_duration_composition_in(
+            run_ids: window_ids, spec_identity_ids: identity_ids.first(10)
+          )
+        end
+
+        expect(plan).to include("index_spec_observations_on_spec_identity_id")
+        expect(plan).to match(SCAN_NODE)
+        expect(plan).not_to match(/Seq Scan on spec_observations/)
+      end
+
+      # ⭐ THE BOUND, MEASURED — and measured by SHRINKING THE CANDIDATE LIST rather than by naming
+      # one ceiling, because what has to stay true is that the work follows the CANDIDATES. A single
+      # ceiling passes just as happily on a read that has stopped being narrowed at all; three
+      # candidates costing a third of what ten cost, over the same window, cannot.
+      #
+      # The measured plan is a bitmap index scan on `spec_identity_id` fetching
+      # `candidates × runs those identities appear in`, with the window applied as a FILTER on top —
+      # 200 rows for ten candidates over twenty runs of history, of which 60 survive. So the honest
+      # ceiling is written against the runs in the TABLE and not against the window's six, and the
+      # read is bounded by `BRANCH_RETENTION_RUNS` rather than by how wide a window is asked for.
+      # See `.identity_duration_composition_in`, which carries the plan and the arithmetic.
+      it "reads on the order of the candidate count, not of the window" do
+        composed = lambda do |count|
+          rows_touched do
+            described_class.identity_duration_composition_in(
+              run_ids: window_ids, spec_identity_ids: identity_ids.first(count)
+            )
+          end
+        end
+
+        ten = composed.call(10)
+        three = composed.call(3)
+
+        expect(ten).to be <= 10 * runs.size * 2
+        expect(three).to be <= 3 * runs.size * 2
+        # The window it is scoped to holds thirty times what the read touches, which is the whole of
+        # what the two-step shape buys — and the ratio widens with the suite, because this read
+        # follows the candidate count while a whole-window group-by follows the row count.
+        expect(SpecObservation.where(test_run_id: window_ids).count).to eq(1800)
+        expect(ten).to be < 1800 / 5
+      end
+    end
+  end
+
   describe "what happens when the things it hangs off go away" do
     let(:repository) { create_repository }
     let(:run) { create_test_run(repository: repository) }
