@@ -38,9 +38,25 @@
 # way, and this mirrors that two-step exactly:
 #
 # 1. **Candidates** — `.slowest_identity_candidates_in`, the NEWEST run's slowest identities, capped.
-#    One run, reached through `index_spec_observations_on_test_run_id_and_duration_seconds`.
+#    ONE run, reached through an index that LEADS WITH `test_run_id` — which one is the planner's to
+#    pick, and the measured pick is not the obvious one. `EXPLAIN` takes the `(test_run_id, outcome)`
+#    bitmap rather than `…_on_test_run_id_and_duration_seconds`: the aggregate visits the heap for
+#    `spec_identity_id` either way, so the wider index buys a whole-run grouping nothing. What has to
+#    stay true is that one run is read through an index instead of every run's rows being walked, and
+#    that — not a cost tiebreak Postgres may revisit — is what the certification asserts.
 # 2. **Composition** — `.identity_duration_composition_in`, those identities ONLY across the window,
-#    on `index_spec_observations_on_spec_identity_id`. `limit × window` rows, not the window.
+#    on `index_spec_observations_on_spec_identity_id`. The bound is **candidates × the runs those
+#    identities appear in at all**, NOT `limit × window`: that index is on `spec_identity_id` alone,
+#    so the window arrives as a FILTER after the fetch rather than as an index condition that narrows
+#    it (measured: 200 rows fetched, 140 removed, 60 kept, against a window holding 1,800). Which
+#    leaves it bounded by RETENTION — `BRANCH_RETENTION_RUNS` caps a branch at 60 runs, so a
+#    candidate's rows are capped whatever window is asked for.
+#
+# Both bounds above are MEASURED, and both corrected an earlier claim this comment made from the
+# armchair; `.slowest_identity_candidates_in` and `.identity_duration_composition_in` carry the
+# `EXPLAIN` output the corrections came from. The number this read follows is the CANDIDATE COUNT,
+# and the number the naive spelling follows is the row count — which is the whole of why it is two
+# steps.
 #
 # Three bounded statements for the whole panel — a gate, a candidate step and a composition — and
 # none of them grows with the size of the suite. The count is not constant in STATE, and that is the
@@ -58,6 +74,16 @@
 # in the suite being asked about: it was deleted, renamed past its own identity, or not selected by
 # this run's filter, and a ranking that resurrected it would answer "what is slow in this suite" with
 # the contents of a suite that no longer exists. `#anchor_run` names the run that decided it.
+#
+# The partition has a SECOND edge, on a different axis, and it is stated here for the same reason.
+# The cap is applied on each candidate's ANCHOR-RUN duration; the list is then ordered on its WINDOW
+# TOTAL. Those are two different orderings, so a test sitting eleventh in the anchor run is absent
+# even if its total across the window would have led the list — a cheap-today test with a long
+# history is exactly the shape that falls through. It is inherent to narrowing before aggregating
+# (the alternative being the whole-window group-by the two steps exist to refuse), and `#truncated?`
+# with `#unexamined_count` disclose that the cap bit. But "the slowest tests in this repository" is
+# not quite the claim the rows support, and this object states its partitions rather than letting
+# them be discovered.
 #
 # == ⭐ An empty list has three meanings and they are three states, never one blank panel
 #
@@ -127,12 +153,15 @@ class SlowestTests
 
     candidates = SpecObservation.slowest_identity_candidates_in(anchor, limit: limit)
     identity_ids = candidates.map(&:first)
-    _id, candidate_count, resolved_count, timed_count = candidates.first
+    _id, candidate_count, timed_count = candidates.first
 
     new(state: :ranked, **window, **presence,
-        # Off any row, because all three ride back on every one of them.
-        candidate_count: candidate_count.to_i, resolved_count: resolved_count.to_i,
-        timed_count: timed_count.to_i,
+        # The first two off any row, because both ride back on every one of them. `resolved_count` is
+        # NOT among them: it is the gate's own figure, threaded through rather than re-counted, on
+        # `.slowest_identity_candidates_in`'s ⚠️ — the same predicate over the same population
+        # measured in two statements is two snapshots the caption can be caught between.
+        candidate_count: candidate_count.to_i, timed_count: timed_count.to_i,
+        resolved_count: resolved_rows,
         tuples: SpecObservation.identity_duration_composition_in(
           run_ids: runs.map(&:id), spec_identity_ids: identity_ids
         ))
@@ -181,6 +210,18 @@ class SlowestTests
   ROW_ATTRIBUTES = [:spec_identity_id, *SpecObservation::IDENTITY_DURATION_COMPOSITION.keys].freeze
 
   private_constant :ROW_ATTRIBUTES
+
+  # ⭐ Which of the four states this is — one ranked, three not. A symbol rather than a reassembly of
+  # `#recorded?` / `#resolved?` / `#any?` in the right order, because that reassembly is exactly what
+  # the ⭐ section above says a reader should not have to perform: `:no_runs`, `:unrecorded`,
+  # `:unresolved` and `:ranked` are one blank panel and four different things to say about it, and
+  # only the last of them may be rendered as "nothing in this suite is slow". {SpecDirectoryWindowGrowth}
+  # exposes its own for the same reason and the views `case` on it.
+  #
+  # The predicates below are kept beside it rather than replaced by it: they are what the states are
+  # DEFINED in terms of, and a surface asking only "is there anything to draw" should not have to
+  # enumerate three symbols to find out.
+  attr_reader :state
 
   # The branch every figure here was drawn on, and the one the panels around it are drawn on.
   # Runtimes compared across branches are runtimes of different code, so the window is

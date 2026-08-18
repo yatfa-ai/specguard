@@ -143,6 +143,15 @@ RSpec.describe SlowestTests do
       expect(ranking.branch).to eq("main")
     end
 
+    # The fourth state, and the ONLY one whose empty list a reader may take as "nothing was slow" —
+    # which is why it is named rather than inferred. The three above are all `rows.empty?` too, and
+    # a surface that branched on `any?` alone would render the same blank panel for all four.
+    it "names itself ranked, the one state an empty list could be read from" do
+      expect(ranking.state).to eq(:ranked)
+      expect(ranking.recorded?).to be true
+      expect(ranking.resolved?).to be true
+    end
+
     # The window and nothing wider: a fifth run outside it holds the same tests and must not be
     # summed into their totals.
     it "sums only the runs of the window it was given" do
@@ -150,6 +159,78 @@ RSpec.describe SlowestTests do
 
       expect(narrowed.rows.first.total_seconds).to be_within(0.0001).of(6.0)
       expect(narrowed.run_count).to eq(2)
+    end
+
+    # What a single row says about its OWN history, as against what the object above says about the
+    # population. These render on the same line of the panel and each answers a question the summed
+    # total cannot.
+    describe "what each row says about its own history" do
+      # A test added midway through the window: present in the anchor, so it ranks, but with a
+      # history shorter than the window it is being reported over. Seeded HERE rather than in the
+      # outer block because it moves the anchor's row counts, which the disclosure examples below
+      # pin exactly.
+      let(:late) { identity("Search reindexes the changed documents") }
+
+      before do
+        runs.last(2).each do |run|
+          observe(run, spec_identity: late, name: "late", path: "spec/search_spec.rb", duration: 5.0)
+        end
+      end
+
+      # ⭐ 60 seconds is one minute-long test or sixty runs of a cheap one, and the ordering — which
+      # is on the SUM — cannot tell them apart. `#slowest_label` is what separates them: the moved
+      # test totals 12s across four 3s runs, the looped one totals 4s across eight 0.5s ones, and
+      # the two sit four rows apart in a list that says nothing about the difference without this.
+      it "states the single longest run beside the total, which the ordering cannot" do
+        moved_row = ranking.rows.find { |row| row.spec_identity_id == moved.id }
+        looped_row = ranking.rows.find { |row| row.spec_identity_id == looped.id }
+
+        expect([moved_row.duration_label, moved_row.slowest_label]).to eq(["12.00s", "3.00s"])
+        expect([looped_row.duration_label, looped_row.slowest_label]).to eq(["4.00s", "0.50s"])
+      end
+
+      # The same nil hazard `#duration_label` is tested for one method over, at the other aggregate:
+      # an untimed group's `MAX` is SQL NULL, and rendering it as `0.00s` would report a measurement
+      # invented out of silence — the single fastest test in the suite, from rows nothing timed.
+      it "refuses to render an untimed test's longest run as a zero" do
+        row = ranking.rows.find { |candidate| candidate.spec_identity_id == untimed.id }
+
+        expect(row.slowest_seconds).to be_nil
+        expect(row.slowest_label).to eq("not reported")
+      end
+
+      # Rows of a test's own history that carried no duration, and so are not in its total — the
+      # per-row half of the disclosure the object makes for the anchor.
+      it "counts the rows of its own history that carried no timing" do
+        untimed_row = ranking.rows.find { |row| row.spec_identity_id == untimed.id }
+        moved_row = ranking.rows.find { |row| row.spec_identity_id == moved.id }
+
+        expect([untimed_row.recorded_count, untimed_row.timed_count]).to eq([4, 0])
+        expect(untimed_row.untimed_count).to eq(4)
+        expect(moved_row.untimed_count).to eq(0)
+      end
+
+      # ⭐ How much of the window this test was seen in — 2 of 4 for one added midway, which is the
+      # figure that keeps its 10 seconds from being read against the same denominator as a test that
+      # ran throughout.
+      it "states how much of the window it appeared in" do
+        late_row = ranking.rows.find { |row| row.spec_identity_id == late.id }
+        steady_row = ranking.rows.find { |row| row.spec_identity_id == steady.id }
+
+        expect(late_row.run_count).to eq(2)
+        expect(late_row.appearance_label(ranking.run_count)).to eq("2 of 4")
+        expect(steady_row.appearance_label(ranking.run_count)).to eq("4 of 4")
+      end
+
+      # The denominator is the CALLER'S, and this is the signature a caller can get wrong. A row does
+      # not know the window it is being reported over — holding one would be the second, drifting
+      # spelling of the window that the class comment refuses — so the parameter is what it renders,
+      # and passing a different one changes the label rather than being quietly ignored.
+      it "takes the window it renders against rather than holding one of its own" do
+        late_row = ranking.rows.find { |row| row.spec_identity_id == late.id }
+
+        expect(late_row.appearance_label(30)).to eq("2 of 30")
+      end
     end
 
     describe "what it discloses about the population it ranked" do
@@ -225,6 +306,9 @@ RSpec.describe SlowestTests do
         expect(empty.recorded?).to be false
         expect(empty.resolved?).to be false
         expect(empty.anchor_run).to be_nil
+        # The state SAYS which of the four this is, rather than leaving a caller to reassemble it
+        # from the three predicates above in the right order.
+        expect(empty.state).to eq(:no_runs)
         # `nil` and never `0`: a zero here is an exclusion count nothing measured, indistinguishable
         # on the wire from a window measured to have excluded nothing.
         expect([empty.recorded_count, empty.unresolved_count, empty.candidate_count,
@@ -243,6 +327,9 @@ RSpec.describe SlowestTests do
         expect(ranking.any?).to be false
         expect([ranking.recorded_count, ranking.unresolved_count]).to eq([0, 0])
         expect(ranking.excluded_unresolved_rows?).to be false
+        # Distinct from `:no_runs` above: there IS a run and it was read, and "this repository's CI
+        # has never sent per-example detail" is a different thing to go and fix than "no runs yet".
+        expect(ranking.state).to eq(:unrecorded)
       end
 
       # The gate is asked first and on its own, so a window with nothing to rank costs ONE read.
@@ -273,6 +360,9 @@ RSpec.describe SlowestTests do
         expect(ranking.recorded_count).to eq(1)
         expect(ranking.unresolved_count).to eq(1)
         expect(ranking.excluded_unresolved_rows?).to be true
+        # ⭐ The state a surface must never render as an empty ranking — named, so it can be `case`d
+        # on rather than inferred from `recorded? && !resolved?`.
+        expect(ranking.state).to eq(:unresolved)
       end
 
       # Every figure the candidate step would have produced is absent rather than zeroed — the step

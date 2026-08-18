@@ -1341,14 +1341,28 @@ RSpec.describe SpecObservation do
         expect(candidates.length).to eq(10)
       end
 
-      # The coverage of the population the ranking was drawn from, re-totalled back up to the run by
-      # a window over an aggregate — in the same round trip as the ranking, which is what makes the
-      # caption a claim about THIS list. The denominator is the run's RESOLVED rows (297 of its 300)
-      # and the numerator the timed ones among them (294, the three untimed excepted).
-      it "rides the ranked population's timing coverage back on every row" do
+      # The NUMERATOR of the coverage fraction, re-totalled back up to the run by a window over an
+      # aggregate — in the same round trip as the ranking, which is what makes the caption a claim
+      # about THIS list. 294: the run's 297 resolved rows less the three nothing timed.
+      it "rides the ranked population's timed-row count back on every row" do
         candidates = described_class.slowest_identity_candidates_in(anchor)
 
-        expect(candidates.map { |tuple| [tuple[2].to_i, tuple[3].to_i] }).to all(eq([297, 294]))
+        expect(candidates.map { |tuple| tuple[2].to_i }).to all(eq(294))
+      end
+
+      # ⭐ And the DENOMINATOR is deliberately absent, which is a defect this read once had. It
+      # carried a `SUM(COUNT(*)) OVER ()` counting the run's resolved rows — the same predicate over
+      # the same population `.identity_presence_in` already counts as `recorded_count -
+      # unresolved_count`, measured a second time in a second statement. Two snapshots, no
+      # transaction between them, and a caption that could be caught rendering figures that do not
+      # add up. The tuple is three wide because that population is measured ONCE, at the gate, and
+      # `SlowestTests` threads it through.
+      it "does not re-count the resolved population the gate already measured" do
+        candidates = described_class.slowest_identity_candidates_in(anchor)
+        gate = described_class.identity_presence_in(anchor)
+
+        expect(candidates.map(&:length)).to all(eq(3))
+        expect(gate[:recorded_count] - gate[:unresolved_count]).to eq(297)
       end
 
       it "keeps the slowest end of the list when the cap bites" do
@@ -1510,6 +1524,12 @@ RSpec.describe SpecObservation do
 
       # One run's rows through an index that LEADS WITH `test_run_id`, rather than by walking every
       # run's — `SLOWEST_LIMIT` identities out of one run, never an aggregate over the window.
+      #
+      # `INDEXED_BY_RUN` is the shared matcher defined ~1,000 lines above, in the per-run duration
+      # block; constants defined inside an example group land at top level, so it is reachable here.
+      # Named rather than left to be discovered, because a constant reused across two distant blocks
+      # is a coupling a reader has no local sign of — and because its comment there is where the
+      # argument for matching a SHAPE instead of an index name is made in full.
       #
       # WHICH of those indexes is left to Postgres, for the reason `INDEXED_BY_RUN` above documents
       # at length and which was confirmed here by measurement: the wider

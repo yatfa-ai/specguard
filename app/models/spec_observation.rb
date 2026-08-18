@@ -1388,24 +1388,32 @@ class SpecObservation < ApplicationRecord
   # surface states what it summed over. An identity nothing timed sorts last and renders as "not
   # reported" through `.humanized_duration`, never as a zero.
   #
-  # == The three ride-alongs, and why they are windows over aggregates
+  # == The two ride-alongs, and why they are windows over aggregates
   #
   # `COUNT(*) OVER ()` counts candidate IDENTITIES — evaluated after `GROUP BY` and before `LIMIT`,
   # so it counts all of them however few are returned. That is the truncation disclosure
   # `.unstable_candidates_in` documents and `SlowestTests#truncated?` reports.
   #
-  # `SUM(COUNT(*)) OVER ()` and `SUM(COUNT(duration_seconds)) OVER ()` are a window over an
-  # aggregate, which reads oddly and is the point: they re-total the per-identity counts back up to
-  # the RUN, so the coverage fraction the caption states is measured over the very rows this ranking
-  # was drawn from, in the same round trip. Fetched separately they would be two figures with no
-  # structural reason to keep agreeing with the list — the rule `SlowestExamples` states for its own
-  # caption. Their population is the run's RESOLVED rows, which is narrower than the run: the rows
-  # this read excludes are counted by `.identity_presence_in` above, which is the gate this sits
-  # behind and never a second measurement of the same thing.
+  # `SUM(COUNT(duration_seconds)) OVER ()` is a window over an aggregate, which reads oddly and is
+  # the point: it re-totals the per-identity timed counts back up to the RUN, so the numerator of the
+  # coverage fraction the caption states is measured over the very rows this ranking was drawn from,
+  # in the same round trip. Fetched separately it would be a figure with no structural reason to keep
+  # agreeing with the list — the rule `SlowestExamples` states for its own caption.
+  #
+  # ⚠️ Its DENOMINATOR is deliberately NOT fetched here, and that absence is the correction of a
+  # defect rather than an omission. This read once carried a `SUM(COUNT(*)) OVER ()` beside it to
+  # count the run's resolved rows, and its comment claimed that was "never a second measurement" of
+  # what `.identity_presence_in` counts. It was exactly that: this read's `WHERE spec_identity_id IS
+  # NOT NULL` and that gate's `recorded_count - unresolved_count` are the SAME PREDICATE over the SAME
+  # population, computed twice in two statements with no transaction around them. An ingest landing
+  # between the two let a surface render "7 rows recorded, 1 excluded" beside "5 of 6 timed" — three
+  # figures from two snapshots that do not add up, on an object whose whole claim is that its list and
+  # its captions are one read. So the population is measured ONCE, at the gate, and {SlowestTests}
+  # threads that figure through as the denominator. One measurement cannot disagree with itself.
   #
   # @param test_run [TestRun] the ANCHOR — normally the newest run of the window.
-  # @return [Array<Array>] `[spec_identity_id, candidate_count, resolved_count, timed_count]` per
-  #   kept identity, where the last three are the same figures on every row.
+  # @return [Array<Array>] `[spec_identity_id, candidate_count, timed_count]` per kept identity,
+  #   where the last two are the same figures on every row.
   def self.slowest_identity_candidates_in(test_run, limit: SLOWEST_LIMIT)
     where(test_run_id: test_run.id)
       .where.not(spec_identity_id: nil)
@@ -1414,7 +1422,6 @@ class SpecObservation < ApplicationRecord
       .limit(limit)
       .pluck(Arel.sql("spec_identity_id"),
              Arel.sql("COUNT(*) OVER ()"),
-             Arel.sql("SUM(COUNT(*)) OVER ()"),
              Arel.sql("SUM(COUNT(duration_seconds)) OVER ()"))
   end
 
