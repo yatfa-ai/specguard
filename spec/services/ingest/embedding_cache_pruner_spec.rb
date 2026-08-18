@@ -110,8 +110,24 @@ RSpec.describe Ingest::EmbeddingCachePruner do
       # reason as `spec/models/embedding_cache_entry_spec.rb` and the two identity-resolver
       # examples. Until 2026-08-17 the column was `vector(1536)` and this bound was `1e-6`; the
       # migration to `halfvec` made the substrate four orders of magnitude coarser.
-      drift = vector.zip(found.fetch(kept.first)).map { |mine, stored| (mine - stored).abs }.max
-      expect(drift).to be < 1e-3
+      #
+      # Bound to one name, asserted in one comparison, for the reason the identity-resolver
+      # examples set out: this number moved three orders of magnitude in that migration, and a
+      # separate "and a husk fails it" assertion alongside would not have stopped the next such
+      # move, because loosening the one that had gone red leaves the other green.
+      round_trip_tolerance = 1e-3
+
+      round_trip = vector.zip(found.fetch(kept.first)).map { |mine, stored| (mine - stored).abs }.max
+      # A husk — a row that survived the sweep with its vector zeroed — is what the round trip is
+      # being distinguished FROM, so it is the far side of the same bound. Compared in Ruby rather
+      # than built in the database: the point is the DISCRIMINATING POWER of the tolerance, not
+      # that the pruner can produce a husk, and 6/7 is this fixture's largest component.
+      husk_drift = vector.map(&:abs).max
+
+      # ⭐ The tolerance lives strictly between what a real round trip costs and what a husk would,
+      # and says so once. Measured: the round trip is ~2.1e-4 and the husk is 0.857, so `1e-3`
+      # clears the noise by ~5x and sits ~860x under the signal.
+      expect(round_trip_tolerance).to be_between(round_trip, husk_drift).exclusive
     end
 
     it "does not delete an expired entry that has since been REVIVED by a re-embed" do

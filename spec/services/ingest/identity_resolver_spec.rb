@@ -1598,29 +1598,45 @@ RSpec.describe Ingest::IdentityResolver do
       first = ingest(new_page, ci_run_id: "run-1")
 
       identities = repository.spec_identities.to_a
-      # Pinned before the loops so neither of them is vacuously green on an empty page.
+      # Pinned before the reductions so neither of them is vacuously green on an empty page.
       expect(identities.size).to eq(5)
 
-      identities.each do |identity|
+      round_trip_tolerance = 1e-3
+
+      # The two populations the bound has to separate, each reduced to the single value that
+      # actually constrains it. WORST round trip: every row's own vector must come back inside the
+      # tolerance, so the largest of them is the one that decides. WEAKEST mis-pairing: every row
+      # re-checked against its NEIGHBOUR's text — exactly the off-by-one page shift this example
+      # exists to catch — must land outside it, so the smallest of them is the one that decides.
+      worst_round_trip = identities.map do |identity|
         own = LexicalEmbeddingProvider.call(identity.text)
-        drift = own.zip(identity.embedding.to_a).map { |mine, stored| (mine - stored).abs }.max
+        own.zip(identity.embedding.to_a).map { |mine, stored| (mine - stored).abs }.max
+      end.max
 
-        expect(drift).to be < 1e-3
-      end
-
-      # ⭐ And the bound still BITES — the half of this that a tolerance loosened until green would
-      # have quietly retired while leaving the guard looking present. Each row is re-checked against
-      # its NEIGHBOUR's text, which is exactly the off-by-one page shift the example exists to
-      # catch, and that comparison has to FAIL the very same assertion. It fails by a wide margin:
-      # quantisation moves a component by ~5e-5 here, while a different text's vector differs from
-      # this one by ~0.35 per component — so `1e-3` sits ~20x above the noise and ~350x below the
-      # signal, and there is room for neither to be mistaken for the other.
-      identities.zip(identities.rotate(1)).each do |identity, neighbour|
+      weakest_mispairing = identities.zip(identities.rotate(1)).map do |identity, neighbour|
         theirs = LexicalEmbeddingProvider.call(neighbour.text)
-        drift = theirs.zip(identity.embedding.to_a).map { |mine, stored| (mine - stored).abs }.max
+        theirs.zip(identity.embedding.to_a).map { |mine, stored| (mine - stored).abs }.max
+      end.min
 
-        expect(drift).to be > 1e-3
-      end
+      # ⭐ ONE assertion, naming the tolerance ONCE, and that is deliberate: it is what makes the
+      # bound genuinely unretireable rather than merely accompanied by a check that looks like it.
+      # Written the obvious way — `worst_round_trip < 1e-3` here and `weakest_mispairing > 1e-3`
+      # below it — the two numbers are independent literals, and loosening only the assertion that
+      # had gone red (the only one anybody "fixing" a failure ever touches) leaves the other green
+      # and sails through: measured, `be < 1e0` passed both examples with the guard fully retired.
+      # Binding the value to a name and reading it twice does not close that either, because the
+      # loosening edit rewrites the usage, not the binding. Collapsing both to one comparison does:
+      # there is no longer an assertion that can be loosened in isolation, and any value large
+      # enough to stop catching a shifted page is now too large to sit under `weakest_mispairing`.
+      #
+      # It also states the real property in one line — the tolerance lives strictly between the
+      # noise and the signal — and its failure message prints both bounds, so a regression on
+      # either side says which side moved. Measured here: quantisation tops out at ~1.2e-4, and the
+      # closest any two of these five texts come is ~0.349 — that is the minimum over ALL ordered
+      # pairs, not just the five `rotate(1)` happens to form, so no row ordering can produce a
+      # weaker signal than the one quoted. `1e-3` therefore clears the worst noise by ~8x and sits
+      # ~349x under the weakest signal, with two orders of magnitude of daylight on each side.
+      expect(round_trip_tolerance).to be_between(worst_round_trip, weakest_mispairing).exclusive
 
       # And the consequence that mis-pairing would have on the product: run 2's text differs from
       # run 1's in punctuation and whitespace only, so the digest equality cannot answer any of it
@@ -2355,27 +2371,32 @@ RSpec.describe Ingest::IdentityResolver do
       # `vector(1536)` and this read `1e-5`; the bound moved with the substrate, not with the
       # failure.)
       identities = other_repository.spec_identities.to_a
-      # Pinned before the loops so neither of them is vacuously green on an empty page.
+      # Pinned before the reductions so neither of them is vacuously green on an empty page.
       expect(identities.size).to eq(5)
 
-      identities.each do |identity|
+      round_trip_tolerance = 1e-3
+
+      worst_round_trip = identities.map do |identity|
         own = LexicalEmbeddingProvider.call(identity.text)
-        drift = own.zip(identity.embedding.to_a).map { |mine, stored| (mine - stored).abs }.max
+        own.zip(identity.embedding.to_a).map { |mine, stored| (mine - stored).abs }.max
+      end.max
 
-        expect(drift).to be < 1e-3
-      end
-
-      # ⭐ And the bound still BITES, for the mis-KEYED cache the same way the order-contract example
-      # asserts it for the mis-PAIRED page: a cache that served a valid vector under the wrong key
-      # completes the resolve silently, and only the vector can see it. Re-checked against a
-      # NEIGHBOUR's text, which must fail the identical assertion — a tolerance widened past that
-      # margin would have retired this check while leaving it on the page.
-      identities.zip(identities.rotate(1)).each do |identity, neighbour|
+      weakest_mispairing = identities.zip(identities.rotate(1)).map do |identity, neighbour|
         theirs = LexicalEmbeddingProvider.call(neighbour.text)
-        drift = theirs.zip(identity.embedding.to_a).map { |mine, stored| (mine - stored).abs }.max
+        theirs.zip(identity.embedding.to_a).map { |mine, stored| (mine - stored).abs }.max
+      end.min
 
-        expect(drift).to be > 1e-3
-      end
+      # ⭐ The bound has to BITE for the mis-KEYED cache the way the order-contract example asserts
+      # it for the mis-PAIRED page: a cache that served a valid vector under the wrong key completes
+      # the resolve silently, and only the vector can see it. Asserted in the single-comparison
+      # shape that example explains at length — the tolerance is named once, so no half of it can
+      # be loosened in isolation until a failure goes away.
+      #
+      # Different fixtures from that example, so different numbers, and each comment quotes the
+      # drifts its OWN example produces: quantisation here tops out at ~1.0e-4, and the closest any
+      # two of these five texts come — over all ordered pairs, so it does not depend on row order —
+      # is ~0.235. `1e-3` clears the worst noise by ~10x and sits ~235x under the weakest signal.
+      expect(round_trip_tolerance).to be_between(worst_round_trip, weakest_mispairing).exclusive
     end
   end
 
