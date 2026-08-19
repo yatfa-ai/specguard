@@ -2133,8 +2133,11 @@ RSpec.describe SpecObservation do
         expect(described_class.unannotated_directories_in(run)).to eq([["spec/models", 1, 2, 1, 0, 0, 2]])
       end
 
-      # The tiebreak is TOTAL, so two identical asks return the same order. `unannotated_count DESC`
-      # alone leaves ties to the planner, and the cap makes that load-bearing rather than tidy — a
+      # The LAST tiebreak is TOTAL, so two identical asks return the same order. The three rows below
+      # tie on BOTH count terms — one unannotated example each, and each of them unreadable, since
+      # `observe` names them "example 1", "example 2" and "example 3", which carry no reading — so
+      # neither `unreadable_count DESC` nor `unannotated_count DESC` orders this, and the two of them
+      # together still leave ties to the planner. The cap makes that load-bearing rather than tidy: a
       # client comparing this ranking across two requests must not read a re-shuffle as a change in
       # the suite.
       it "breaks a tie on the directory expression, ascending" do

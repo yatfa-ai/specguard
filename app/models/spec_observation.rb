@@ -1233,13 +1233,34 @@ class SpecObservation < ApplicationRecord
   # the run touched: a zero-debt area sorts last by construction and the cap removes it, while
   # `directory_count` still describes every area — the ranking is of debt, the disclosure is of the run.
   #
-  # == The ordering, and why both terms are needed
+  # == The ordering: the DARK areas first, the debt second, the path last
   #
-  # `unannotated_count DESC` is the ranking; `#{DIRECTORY_EXPRESSION} ASC` is a TOTAL tiebreak, so two
-  # areas carrying the same debt come back in the same order on two identical asks. The cap makes that
-  # load-bearing rather than tidy — a reader comparing this ranking across two requests must not be
-  # handed a re-shuffled tail, which is the same argument `.unannotated_in` makes for its third sort
-  # term. No `NULLS LAST` clause and none wanted: `COUNT` returns 0 where `SUM` returns NULL, so unlike
+  # `unreadable_count DESC` leads, `unannotated_count DESC` breaks it, `#{DIRECTORY_EXPRESSION} ASC`
+  # breaks that. Three terms, and this is the ONLY section in this block that says what they are.
+  # SPGD-711 added the lead term and, for a round, left the old two-term section standing beside this
+  # one — so a reader following `_unannotated_directories.html.erb`'s pointer here met a paragraph
+  # calling the tiebreak the ranking, and met it FIRST. One section per ordering, or the next change
+  # writes a third.
+  #
+  # Before SPGD-711 there was one quantity to rank by and the question did not arise; there are now
+  # two, and they are not the same worklist. `unannotated_count` is ANNOTATION DEBT — areas somebody
+  # has not written an `@intent` for yet — and it is the number a reader raising the authored ratio
+  # works down. `unreadable_count` is where SpecGuard has NOTHING: no annotation and a description it
+  # could not read either, which is the only population the product may describe as invisible and, on
+  # a suite written in the ordinary shapes, a far smaller one.
+  #
+  # The dark areas lead because the cap is ten. A ranking led by debt on a suite that has never
+  # annotated anything is a ranking by area SIZE — the ten biggest directories, in size order, every
+  # time — and the handful of areas SpecGuard genuinely cannot read never appear. Led by unreadable
+  # count, the ten rows are the ten places worth looking, and debt still orders every area that ties
+  # at zero unreadable, which on a fully-readable suite is all of them: the old ranking survives
+  # intact underneath, as the tiebreak it now is.
+  #
+  # `#{DIRECTORY_EXPRESSION} ASC` comes last and is a TOTAL tiebreak, so two areas tying on BOTH
+  # counts come back in the same order on two identical asks. The cap makes that load-bearing rather
+  # than tidy — a reader comparing this ranking across two requests must not be handed a re-shuffled
+  # tail, which is the same argument `.unannotated_in` makes for its third sort term. No `NULLS LAST`
+  # clause and none wanted: `COUNT` returns 0 where `SUM` returns NULL, so unlike
   # `.directory_durations_in` this read has no null-ranked rows to keep off the head.
   #
   # == Query cost
@@ -1253,22 +1274,6 @@ class SpecObservation < ApplicationRecord
   # to rows the group has already touched. Certified in `spec/models/spec_observation_spec.rb` on the
   # one thing that has to stay true — one run reached through an index rather than every run's rows
   # walked.
-  # == It ranks on the DARK areas first, and the debt second
-  #
-  # `unreadable_count DESC` leads, `unannotated_count DESC` breaks it, `DIRECTORY_EXPRESSION ASC`
-  # breaks that. Before SPGD-711 there was one quantity to rank by and the question did not arise;
-  # there are now two, and they are not the same worklist. `unannotated_count` is ANNOTATION DEBT —
-  # areas somebody has not written an `@intent` for yet — and it is the number a reader raising the
-  # authored ratio works down. `unreadable_count` is where SpecGuard has NOTHING: no annotation and a
-  # description it could not read either, which is the only population the product may describe as
-  # invisible and, on a suite written in the ordinary shapes, a far smaller one.
-  #
-  # The dark areas lead because the cap is ten. A ranking led by debt on a suite that has never
-  # annotated anything is a ranking by area SIZE — the ten biggest directories, in size order, every
-  # time — and the handful of areas SpecGuard genuinely cannot read never appear. Led by unreadable
-  # count, the ten rows are the ten places worth looking, and debt still orders every area that ties
-  # at zero unreadable, which on a fully-readable suite is all of them: the old ranking survives
-  # intact underneath, as the tiebreak it now is.
   #
   # == Four counts per area, from ONE grouped pass
   #

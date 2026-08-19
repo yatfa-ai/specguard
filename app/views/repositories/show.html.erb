@@ -1007,9 +1007,12 @@
 <%= render "repositories/suite_growth" -%>
 
 <%# Directly under the growth panel and ahead of the wall-clock family below it, because this is the
-    ANNOTATION axis the Overview panel opened at the top of this page and then dead-ended — the
-    "Not visible to SpecGuard" figure and the sentence beside it are what this answers. The
-    duration rankings are a different question and stay together after it. %>
+    ANNOTATION axis the Overview panel opens at the top of this page and then dead-ends — the
+    Overview says how the whole run reads and this says WHERE those readings are. Until SPGD-711 the
+    figure it dead-ended on was "Not visible to SpecGuard" and this panel answered that ONE number;
+    the def-list above stopped printing that label when it gained its reading rows, so both surfaces
+    now split the same three states and this one locates them. The duration rankings are a different
+    question and stay together after it. %>
 <%= render "repositories/unannotated_directories" -%>
 
 <%# The rung beneath it, and the only route on this page from an AREA carrying debt to the NAME of

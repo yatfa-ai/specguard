@@ -536,10 +536,16 @@ RSpec.describe "GET /api/v1/repository — latest_run.unannotated_examples", typ
   # disclosure, the whole-run SCOPE under a narrowing, and the area semantics it inherits.
   describe "the ranking that says WHERE the annotation debt is" do
     # The fixture's two areas carry different debt and are not in alphabetical agreement with it:
-    # `spec/services` holds two unannotated of two recorded, `spec/models` one of three. So the
-    # ranking is by `unannotated_count DESC` and NOT by path, not by `recorded_count`, and not by the
-    # insertion order — every one of those alternatives produces a different first row here.
-    it "ranks areas by unannotated count, and ships the operands rather than a fraction" do
+    # `spec/services` holds two unannotated of two recorded, `spec/models` one of three. So the head
+    # row is NOT by path, not by `recorded_count`, and not by the insertion order — every one of those
+    # alternatives produces a different first row here.
+    #
+    # ⚠️ IT DOES NOT DISCRIMINATE THE LEAD TERM, and says so rather than implying it does. This
+    # comment used to read "the ranking is by `unannotated_count DESC`"; SPGD-711 put
+    # `unreadable_count DESC` in front of that, and in this fixture the two agree — `spec/services`
+    # leads on unreadable (2 to 1) as well as on debt (2 to 1), so the row order below is green under
+    # either term. The example after this one is the one that pulls them apart, in both directions.
+    it "ranks the areas, and ships the operands rather than a fraction" do
       expect(debt_map(query: ask)).to eq(
         "rows" => [
           { "path" => "spec/services", "unannotated_count" => 2, "recorded_count" => 2,
@@ -550,6 +556,54 @@ RSpec.describe "GET /api/v1/repository — latest_run.unannotated_examples", typ
         "directory_count" => 2,
         "limit" => SpecObservation::UNANNOTATED_DIRECTORIES_LIMIT
       )
+    end
+
+    # ⭐ THE LEAD TERM, pulled apart from the one it replaced, in BOTH directions — and the API needs
+    # its own because `specguard-mcp` states this row order to agents as contract
+    # ("ranked `unreadable_count` DESC, then `unannotated_count` DESC"). The dashboard pins the same
+    # rule at `spec/requests/repository_unannotated_directories_spec.rb`; the read is shared, so this
+    # is the endpoint's copy of the claim it publishes rather than a second implementation.
+    #
+    # Both halves put the expected head row LAST alphabetically, so `path ASC` cannot produce either
+    # answer and the count terms are what is under test.
+    it "leads on the areas it cannot read, and falls back to debt where none is dark" do
+      dark = separate_repository("acme/one-dark-area")
+      ingest(dark,
+             # Three times the debt, and SpecGuard reads every one of them.
+             [unannotated_spec(file_path: "spec/alpha/ledger_post_spec.rb", line_number: 1,
+                               name: "Ledger#post records the journal entry"),
+              unannotated_spec(file_path: "spec/alpha/ledger_void_spec.rb", line_number: 2,
+                               name: "Ledger#void reverses the journal entry"),
+              unannotated_spec(file_path: "spec/alpha/ledger_close_spec.rb", line_number: 3,
+                               name: "Ledger#close seals the accounting period"),
+              # One unannotated row, and nothing to read it by.
+              unannotated_spec(file_path: "spec/zulu/sweep_spec.rb", line_number: 4,
+                               name: "the nightly sweep runs")])
+
+      rows = debt_map(key: dark.api_keys.create!, query: ask)["rows"]
+
+      # `spec/alpha` carries three of the four unannotated rows and is second: under the ranking this
+      # example replaced it led, and the one area SpecGuard can say nothing about was below it.
+      expect(rows.map { it["path"] }).to eq(["spec/zulu", "spec/alpha"])
+      expect(rows.map { it["unannotated_count"] }).to eq([1, 3])
+      expect(rows.map { it["unreadable_count"] }).to eq([1, 0])
+
+      # The other direction: with nothing dark anywhere, the debt ranking is intact underneath as the
+      # tiebreak, so the area carrying the most unannotated rows leads exactly as it did before.
+      readable = separate_repository("acme/nothing-dark")
+      ingest(readable,
+             [unannotated_spec(file_path: "spec/alpha/ledger_post_spec.rb", line_number: 1,
+                               name: "Ledger#post records the journal entry"),
+              unannotated_spec(file_path: "spec/zulu/refund_issue_spec.rb", line_number: 2,
+                               name: "Refund#issue returns the money to the payer"),
+              unannotated_spec(file_path: "spec/zulu/refund_void_spec.rb", line_number: 3,
+                               name: "Refund#void reverses the settled refund")])
+
+      rows = debt_map(key: readable.api_keys.create!, query: ask)["rows"]
+
+      expect(rows.map { it["path"] }).to eq(["spec/zulu", "spec/alpha"])
+      expect(rows.map { it["unreadable_count"] }).to eq([0, 0])
+      expect(rows.map { it["unannotated_count"] }).to eq([2, 1])
     end
 
     # The sub-block's own key set as its stated subject, on the pattern every contract example in this
@@ -583,10 +637,12 @@ RSpec.describe "GET /api/v1/repository — latest_run.unannotated_examples", typ
       expect(served["rows"].first).not_to have_key("coverage_label")
     end
 
-    # The tiebreak, which the cap makes load-bearing rather than tidy: two areas carrying the same
-    # debt must come back in the same order on two identical asks, or a client comparing the ranking
-    # across requests reads a re-shuffle as a change in the suite. `unannotated_count DESC` alone is
-    # not a total order and Postgres is under no obligation to be stable.
+    # The LAST tiebreak, which the cap makes load-bearing rather than tidy: two areas tying on BOTH
+    # counts must come back in the same order on two identical asks, or a client comparing the ranking
+    # across requests reads a re-shuffle as a change in the suite. The fixture below ties on both —
+    # one unannotated row each, every one of them unreadable — so neither count term orders it and
+    # `path ASC` is what is under test. Two count terms are still not a total order and Postgres is
+    # under no obligation to be stable.
     it "breaks a tie on path ASC, so two identical asks return the same order" do
       tied = separate_repository("acme/tied-areas")
       ingest(tied,
