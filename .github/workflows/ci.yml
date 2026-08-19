@@ -46,7 +46,7 @@ jobs:
       SPECGUARD_API_KEY: ${{ secrets.SPECGUARD_API_KEY }}
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - uses: ruby/setup-ruby@v1
         with:
@@ -57,8 +57,17 @@ jobs:
       # the check does not fail, it SKIPS ("npm is unavailable, so DaisyUI cannot be resolved
       # here"). A CI run without Node would report the gate as green while never comparing the
       # committed app/assets/builds/tailwind.css against its sources — the one thing that step is
-      # for. No cache: there is no package-lock.json to key one on.
-      - uses: actions/setup-node@v4
+      # for.
+      #
+      # `node-version` is the Node this project builds CSS with, and is unrelated to the action's
+      # own runtime — the two are easy to conflate. 20 is what the stylesheet toolchain is
+      # documented against.
+      #
+      # No caching: there is no package-lock.json to key one on. v7's `package-manager-cache`
+      # defaults to true but only activates when package.json declares `packageManager` (or
+      # `devEngines.packageManager`), which this one does not — so adding that field later would
+      # silently switch caching on, against a repository with no lockfile.
+      - uses: actions/setup-node@v7
         with:
           node-version: "20"
 
