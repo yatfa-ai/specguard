@@ -382,6 +382,15 @@ RSpec.describe Ingest::IdentityResolver do
     # not.
     def digest_lookups(&) = executed_sql(&).grep(/\ASELECT "spec_identities"\."text_digest"/)
 
+    # **Scoped to `spec_identities`, because the claim is about REWRITING AN IDENTITY ROW and not
+    # about the page's write count.** An ingest of this shape issues two other `UPDATE`s that have
+    # nothing to do with the upgrade — the run's own counts, and `#link_all`'s single statement
+    # pointing the page's observations at their identities — and both would still be there on the
+    # day the refusal broke. The round-trip group's `#update_statements` is deliberately unanchored
+    # because that group is counting the page's total cost; this one is asserting that a particular
+    # row was never written, so it names the table.
+    def identity_updates(&) = executed_sql(&).grep(/\AUPDATE "spec_identities"/)
+
     def annotated_page
       (1..5).map do |index|
         annotated_spec(file_path: "spec/models/a#{index}_spec.rb", line_number: index,
@@ -430,11 +439,28 @@ RSpec.describe Ingest::IdentityResolver do
       # upgrades the row here and then re-splits it on the NEXT ingest, when the unannotated example
       # re-presents a name the upgraded row no longer holds and scores ~0.86 against a 0.95 bar. Two
       # rows is where both paths end up; this one gets there without rewriting a row in between.
-      run = ingest([unannotated_spec(file_path: "spec/models/invoice_spec.rb", line_number: 1,
-                                     name: "Invoice finalize locks the line items"),
-                    annotated_spec(file_path: "spec/models/invoice_spec.rb", line_number: 2,
-                                   name: "Invoice finalize locks the line items")],
-                   ci_run_id: "run-1")
+      run = nil
+      identity_writes = identity_updates do
+        run = ingest([unannotated_spec(file_path: "spec/models/invoice_spec.rb", line_number: 1,
+                                       name: "Invoice finalize locks the line items"),
+                      annotated_spec(file_path: "spec/models/invoice_spec.rb", line_number: 2,
+                                     name: "Invoice finalize locks the line items")],
+                     ci_run_id: "run-1")
+      end
+
+      # **The half of the claim the destination cannot pin, and the only assertion here the refusal
+      # owns.** Everything below this line — two rows, both sources, nothing unresolved — is reached
+      # just as well WITHOUT the guard, because `#upgrade` casts the placeholder to a `NULL` id, the
+      # `UPDATE` matches nothing, and `:lost_race` sends the observation on to `#claim_identity`
+      # anyway. Delete the guard and the assertions that follow stay green; delete it and THIS one
+      # goes red on exactly one statement, `… WHERE "id" = NULL`, written for a row that does not
+      # exist yet. "Without rewriting a row in between" is the thing the refusal is for, so it is
+      # the thing that gets held down — and asserted as an ABSENCE rather than as a count, because
+      # the page has genuinely decided to write no identity row at all.
+      #
+      # The irony is worth keeping visible: unguarded, the slice that exists to take round trips off
+      # this path would ADD one to it.
+      expect(identity_writes).to be_empty
 
       expect(repository.spec_identities.pluck(:signal_source).sort).to eq(%w[intent name])
       expect(run.spec_observations.unresolved).to be_empty
