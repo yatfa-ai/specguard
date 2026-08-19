@@ -10,7 +10,7 @@
 #
 # It's strongly recommended that you check this file into your version control system.
 
-ActiveRecord::Schema[8.1].define(version: 2026_08_19_120000) do
+ActiveRecord::Schema[8.1].define(version: 2026_08_19_130000) do
   # These are extensions that must be enabled in order to support this database
   enable_extension "pg_catalog.plpgsql"
   enable_extension "vector"
@@ -48,6 +48,16 @@ ActiveRecord::Schema[8.1].define(version: 2026_08_19_120000) do
     t.index ["installation_id"], name: "index_github_installations_on_installation_id"
     t.index ["user_id", "installation_id"], name: "index_github_installations_on_user_id_and_installation_id", unique: true
     t.index ["user_id"], name: "index_github_installations_on_user_id"
+  end
+
+  create_table "github_registration_grants", force: :cascade do |t|
+    t.datetime "captured_at", null: false
+    t.datetime "created_at", null: false
+    t.jsonb "registrable_full_names", default: [], null: false
+    t.datetime "updated_at", null: false
+    t.bigint "user_id", null: false
+    t.jsonb "visible_full_names", default: [], null: false
+    t.index ["user_id"], name: "index_github_registration_grants_on_user_id", unique: true
   end
 
   create_table "ingest_rejections", force: :cascade do |t|
@@ -328,6 +338,7 @@ ActiveRecord::Schema[8.1].define(version: 2026_08_19_120000) do
   add_foreign_key "api_keys", "repositories"
   add_foreign_key "api_keys", "users", column: "created_by_user_id"
   add_foreign_key "github_installations", "users"
+  add_foreign_key "github_registration_grants", "users"
   add_foreign_key "ingest_rejections", "repositories"
   add_foreign_key "repositories", "users"
   add_foreign_key "repository_memberships", "repositories"

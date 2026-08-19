@@ -32,8 +32,32 @@ module GithubRepositoryListing
   # Everything the viewer's installations could be read as. Memoized and lazy — read by the views
   # that render a picker, and by nothing on the success path, so a registration that verifies costs
   # exactly one trip to GitHub rather than two.
+  #
+  # ## This is also where the viewer's registration grant is refreshed, and why it is here
+  #
+  # A request authenticated by an `sgu_` API key has a person and no GitHub credential — the token
+  # lives in a browser session and nowhere else (`GithubUserSession`). So registration over the API
+  # redeems a snapshot of what GitHub said instead, and something has to take that snapshot at a
+  # moment a live token is in hand. See `GithubRegistrationGrant`.
+  #
+  # THIS read is that moment, and the choice of it is the whole reason the mechanism costs nothing.
+  # It is a read the browser was making anyway, already memoized and already lazy, so refreshing the
+  # grant here adds ZERO GitHub round trips and zero page renders: an active person's grant is
+  # simply always current, and the staleness bound only ever bites on an account nobody has signed
+  # into for a week. Hanging it off the OAuth callback instead — the other moment a live token
+  # exists — would have meant a fresh installation page-walk on every sign-in, for a snapshot the
+  # very next page render would have taken for free.
+  #
+  # `capture` decides for itself whether this reading is one a grant may be built from: an
+  # incomplete one is discarded and the previous grant survives untouched, because in a grant an
+  # absent name is a REFUSAL. It never raises, because this is a page render that has already got
+  # what it came for.
   def github_sources
-    @github_sources ||= InstallationRepositories.sources(current_user, user_token: github_user_token)
+    @github_sources ||= begin
+      sources = InstallationRepositories.sources(current_user, user_token: github_user_token)
+      GithubRegistrationGrant.capture(user: current_user, sources: sources)
+      sources
+    end
   end
 
   # The repositories this user may pick from — the ones they administer — as the plain

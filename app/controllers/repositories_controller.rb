@@ -964,50 +964,34 @@ class RepositoriesController < ApplicationController
     params.expect(repository: [:github_full_name])
   end
 
-  # The single gate every write of `github_full_name` passes through — and it is written as a save
-  # rather than as a `before_action` guard for a structural reason: `repository_params` has two
-  # callers (`#create` and `#update`), so a check bolted onto one action leaves the other one
-  # writing the identity column unverified. Squatting would simply have moved from POST
-  # /repositories to PATCH /repositories/:id and the gap would have read as closed.
+  # The single gate every write of `github_full_name` passes through. The gate itself — the
+  # `valid?` -> ownership -> `save` order, and why it is a save rather than a `before_action` —
+  # now lives in `RepositoryRegistration`, because a second caller with no browser session needs
+  # exactly the same gate and must not reimplement it. Read that class for the order and its
+  # reasons; what stays here is the WEB tree's answer to "who is asking, and with what evidence".
   #
-  # Order is load-bearing:
+  # `LiveVerifier` is that answer: this person, this session's GitHub credential, and this
+  # request's own read of their installations. The machine surface passes a different verifier and
+  # gets the same gate.
   #
-  #   1. `valid?` first, so a slug that is not `org/repo` — or one already registered — is refused
-  #      from the record's own rules and never becomes a GitHub round trip. It also runs
-  #      `normalize_full_name`, so step 2 asks GitHub about the value that would actually be
-  #      stored rather than about whatever was pasted.
-  #   2. Ownership, and only when the identity is actually changing. A rename form submitted
-  #      unchanged, like the one `rename_notice` exists to describe, must not re-ask GitHub — and
-  #      must not fail closed on a GitHub outage for a write that changes nothing.
-  #   3. `save`.
-  #
-  # Fails closed at every step: a verdict that is not `verified?` — including "GitHub could not be
-  # reached" — does not save.
+  # `sources:` is passed as a LAMBDA rather than as a value, and that is not style. `github_sources`
+  # is memoized and lazy precisely so a registration that verifies costs one GitHub round trip
+  # rather than two, and so a rename form submitted unchanged costs none at all — see
+  # `rename_notice`. Evaluating it here, at construction, would force the read before the gate has
+  # decided whether the name is even changing.
   def save_with_verified_ownership(repository)
-    return false unless repository.valid?
-    return false unless verify_github_ownership(repository)
-
-    repository.save
+    registration = RepositoryRegistration.new(repository: repository, verifier: live_verifier)
+    saved = registration.save
+    # Kept for the view, which offers an install button instead of an error when the fix is
+    # installing the App rather than picking something else. `nil` when nothing was asked.
+    @github_verdict = registration.verdict
+    saved
   end
 
-  # Records the refusal on the attribute it is about, so the form shows it under the field the user
-  # has to change, exactly as a format or uniqueness failure does. The verdict is also kept for the
-  # view, which offers an install button instead of an error when the fix is installing the App
-  # rather than picking something else.
-  def verify_github_ownership(repository)
-    return true unless repository.will_save_change_to_github_full_name?
-
-    # `sources:` is this request's own read, shared with the picker the 422 re-render builds — see
-    # `InstallationRepositories.verify_batch`. It is the same live GitHub answer either way; what it
-    # saves is fetching it twice on the one path that needs it twice.
-    @github_verdict = InstallationRepositories.verify(user: current_user,
-                                                      user_token: github_user_token,
-                                                      full_name: repository.github_full_name,
-                                                      sources: github_sources)
-    return true if @github_verdict.verified?
-
-    repository.errors.add(:github_full_name, @github_verdict.message)
-    false
+  def live_verifier
+    RepositoryRegistration::LiveVerifier.new(user: current_user,
+                                             user_token: github_user_token,
+                                             sources: -> { github_sources })
   end
 
   # The repositories this user may pick from, straight off GitHub. Memoized and lazy — read by the
