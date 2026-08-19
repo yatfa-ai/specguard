@@ -723,6 +723,77 @@ RSpec.describe "Repository registration and API keys", type: :request do
       expect(panel).to have_text("50.0% — 1 of 2 tests carry an @intent.", normalize_ws: true)
     end
 
+
+    # ⭐ THE FIFTH STATE, AND THE ONE THE TICKET IS MOST ABOUT: rows recorded, NOTHING derived, and
+    # an unreadable population. It reached the `unreadable?` arm — the one arm written on the
+    # assumption that there is a derived population to describe — and so the suite SpecGuard can
+    # read none of was handed "SpecGuard reads 0 — the annotated ones and 0 more from the test's own
+    # description", plus a caveat about the weakness of an inference that was never made. Both are
+    # the objections the fully-authored branch below already writes out for itself; this is the arm
+    # they had not been applied to.
+    #
+    # It is not an exotic run. Derivation is deliberately narrow — `Entity#action` or `Entity.action`
+    # plus a behavior — so a suite written with string `describe`s throughout derives NOTHING, run
+    # wide, and that repository is exactly the "genuinely unreadable" population the ticket names and
+    # requires be "reported plainly as such".
+    it "reports an unreadable suite plainly when nothing derived at all" do
+      repository = create_repository(user: @user, github_full_name: "acme/prose-described")
+      Ingest::RunRecorder.record(
+        repository,
+        { commit_sha: "feedfacecafe0714", branch: "main", total_specs_count: 2,
+          annotated_specs_count: 0, duration_seconds: 12.0 },
+        specs: [unannotated_spec(file_path: "spec/requests/registration_spec.rb", line_number: 4,
+                                 name: "user registration sends a welcome email"),
+                unannotated_spec(file_path: "spec/requests/registration_spec.rb", line_number: 9,
+                                 name: "user registration rejects a duplicate handle")]
+          .map(&:deep_stringify_keys)
+      )
+
+      get repository_path(repository)
+
+      panel = overview_panel
+      expect(panel).to have_text("SpecGuard cannot read 2 — every one of them that carries no " \
+                                 "@intent", normalize_ws: true)
+      expect(panel).to have_text("do not give it an entity, an action and a behavior",
+                                 normalize_ws: true)
+      # ⭐ ASSERTED CLAUSE BY CLAUSE rather than against the whole sentence: one `have_no_text` over
+      # the paragraph would go green again on any caption that merely reworded it. Each of these is a
+      # claim the old arm made about an empty set.
+      expect(panel).to have_no_text("more from the test's own description")
+      expect(panel).to have_no_text("it carries no preconditions")
+      expect(panel).to have_no_text("layer is inferred from the directory")
+      # And the guard that this state sits next to: a run whose scanner fell over lands NEAR here,
+      # and must still lead with the @intent share off the run's own counters.
+      expect(panel).to have_text("0.0% — 0 of 2 tests carry an @intent.", normalize_ws: true)
+      expect(panel).to have_text("Read from the description 0", normalize_ws: true)
+    end
+
+    # The same arm with an AUTHORED population in it, which is where a sentence written only for the
+    # all-dark run above would give itself away: `unreadable` here is 1 of 2, not all of it, so
+    # "every one of them that carries no @intent" has to be a narrowing rather than a synonym for
+    # the whole run. Same arm, both sub-cases, so nothing about the wording can be true by accident.
+    it "narrows the unreadable claim to the unannotated rows when some carry an @intent" do
+      repository = create_repository(user: @user, github_full_name: "acme/half-authored-dark")
+      Ingest::RunRecorder.record(
+        repository,
+        { commit_sha: "feedfacecafe0715", branch: "main", total_specs_count: 2,
+          annotated_specs_count: 1, duration_seconds: 12.0 },
+        specs: [annotated_spec(file_path: "spec/models/invoice_spec.rb", line_number: 4),
+                unannotated_spec(file_path: "spec/requests/registration_spec.rb", line_number: 9,
+                                 name: "user registration sends a welcome email")]
+          .map(&:deep_stringify_keys)
+      )
+
+      get repository_path(repository)
+
+      panel = overview_panel
+      expect(panel).to have_text("Of the 2 examples this run recorded, SpecGuard cannot read 1",
+                                 normalize_ws: true)
+      expect(panel).to have_no_text("more from the test's own description")
+      expect(panel).to have_no_text("it carries no preconditions")
+      expect(panel).to have_text("50.0% — 1 of 2 tests carry an @intent.", normalize_ws: true)
+    end
+
     it "puts the real counts into the meter's accessible markup, not (ratio, 100)" do
       repository = create_repository(user: @user)
       repository.test_runs.create!(commit_sha: "feedfacecafe0002", total_specs_count: 3,

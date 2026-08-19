@@ -464,6 +464,33 @@
                 This run reported suite totals without the per-example rows SpecGuard reads test
                 descriptions from, so there is nothing here to say how much of the rest it can
                 make out — not that it can make out none of it.
+              <% elsif readings.derived.zero? && readings.unreadable? %>
+                <%# THE SUITE NOTHING DERIVED FROM — and the arm the branch below was written on the
+                    assumption of. `IntentReadings#unreadable?` asks only whether the unreadable
+                    population is non-empty, so a run with an unreadable population and NO derived
+                    one used to land there and be told "SpecGuard reads 0 ... and 0 more from the
+                    test's own description", followed by a caveat about the weakness of an inference
+                    this run never made. Those are the two objections the fully-authored branch below
+                    writes out for itself, on a state that is not the exotic one: derivation is
+                    deliberately narrow, so a suite written with string `describe`s throughout
+                    derives nothing run-wide, and that suite is precisely the population this panel
+                    exists to name. So this arm says LESS than the one under it, and the derived
+                    figure it does not print is the derived figure it does not have.
+
+                    GUARDED ON BOTH TERMS, not on `derived.zero?` alone: the `else` at the bottom is
+                    also a zero-derived state, and a bare `derived.zero?` here would swallow the
+                    fully-authored suite into a sentence about what SpecGuard cannot read. %>
+                Of the <%= number_with_delimiter(readings.recorded) %>
+                <%= "example".pluralize(readings.recorded) %> this run recorded, SpecGuard cannot
+                read <%= number_with_delimiter(readings.unreadable) %> — every one of them that
+                carries no @intent. Their descriptions do not give it an entity, an action and a
+                behavior, so none of them yielded a reading either.
+                <%# "every one of them that carries no @intent" is exact rather than rhetorical, and
+                    only in this arm: the three states sum to `recorded` and `derived` is zero here,
+                    so `unreadable` IS `recorded - authored`. It is scoped to the rows this run
+                    recorded and does not reach for the @intent count in the sentence above it —
+                    that figure is a counter over a population `UnannotatedExamples` documents as
+                    legitimately different. %>
               <% elsif readings.unreadable? %>
                 Of the <%= number_with_delimiter(readings.recorded) %>
                 <%= "example".pluralize(readings.recorded) %> this run recorded, SpecGuard reads
@@ -480,12 +507,17 @@
                 @intent: it carries no preconditions, and its layer is inferred from the directory
                 rather than declared.
               <% else %>
-                <%# THE FULLY-AUTHORED SUITE — the destination, and the one branch with nothing to
-                    qualify. Every sibling above discloses what a DERIVED reading costs, because
-                    every sibling above has some. Here `derived` is zero: the "and the rest from the
-                    test's own description" clause would describe an empty set, and the caveat after
-                    it would warn a reader about the weakness of a reading nothing on this page is
-                    built on. So the branch exists to say LESS, which is the whole of its content. %>
+                <%# THE FULLY-AUTHORED SUITE — the destination. Here `derived` is zero: the "and
+                    the rest from the test's own description" clause would describe an empty set,
+                    and the caveat after it would warn a reader about the weakness of a reading
+                    nothing on this page is built on. So the branch exists to say LESS, which is the
+                    whole of its content.
+
+                    THE OTHER ZERO-DERIVED ARM is the second one up top, and the two split on what
+                    is left over rather than on what was derived: there the leftover is a population
+                    SpecGuard cannot read and this paragraph's job is to name it; here there is no
+                    leftover at all. Both drop the derived clause and its caveat for the same
+                    reason, so the sentences they DO print are the only difference between them. %>
                 Every one of the <%= number_with_delimiter(readings.recorded) %>
                 <%= "example".pluralize(readings.recorded) %> this run recorded carries an @intent
                 its author wrote — nothing here is inferred from a test's description.
