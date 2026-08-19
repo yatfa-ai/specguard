@@ -10,9 +10,13 @@ RSpec.describe SpecIdentity do
     # opposite questions: "are these two observations the same test" versus "are these two tests
     # redundant with each other". A pair the duplicate engine is meant to REPORT has to RESOLVE as
     # two identities, so matching must sit strictly above duplication. Pinned as an inequality
-    # rather than as a literal, because what matters is the ordering, not the number.
+    # rather than as a literal, because what matters is the ordering, not the number — and read off
+    # the other constant rather than off a copy of it, so that moving EITHER one past the other goes
+    # red here. It previously asserted `> 0.88`, which is neither constant (the duplicate engine
+    # ships 0.85) and so pinned the ordering to a number no code held; that literal is the exact
+    # failure this example's own comment says it exists to avoid.
     it "matches more strictly than the duplicate engine reports" do
-      expect(described_class::MATCH_SIMILARITY).to be > 0.88
+      expect(described_class::MATCH_SIMILARITY).to be > NearDuplicateClusters::SIMILARITY
     end
 
     it "expresses the distance the neighbor scope wants, derived rather than restated" do

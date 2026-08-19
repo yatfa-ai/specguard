@@ -139,7 +139,9 @@ class NearDuplicateClusters
   #
   # == What this number IS derived from
   #
-  # Two measurements, taken with the shipped provider, bounding the value from each side.
+  # Two measurements, taken with the feature-hashing provider retired on 2026-08-17 and not with the
+  # one shipped today, bounding the value from each side. The ⚠️ paragraph below says what that
+  # costs; this line names the provider so the table underneath is not read as the current one's.
   #
   # **The band comes from the semantic calibration** recorded on {SpecIdentity}, re-derivable in
   # seconds because the pairs are named rather than the numbers merely asserted:

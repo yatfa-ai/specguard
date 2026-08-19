@@ -682,10 +682,13 @@ RSpec.describe Ingest::IdentityResolver do
 
     it "keeps a pair inside the duplicate-detection band as two identities" do
       # The invariant that matters between the two thresholds, as behaviour rather than as a claim
-      # about a constant. These two score 0.9236 on the shipped provider: at or above the duplicate
-      # engine's 0.88, so it is entitled to report them as redundant, and below MATCH_SIMILARITY, so
-      # resolution still gives each its own history. Lower the constant to 0.75 and this merges them
-      # — which is the failure the "strictly above" rule exists to prevent.
+      # about a constant. These two score 0.9243 under `LexicalEmbeddingProvider` at
+      # DIMENSIONS = 1024 — spec support (`spec/support/lexical_embeddings.rb`), the feature-hashing
+      # implementation this app shipped as `EmbeddingGenerator::LocalProvider` until 2026-08-17 and
+      # NOT the provider it ships today. That is at or above the duplicate engine's 0.85, so it is
+      # entitled to report them as redundant, and below MATCH_SIMILARITY, so resolution still gives
+      # each its own history. Lower the constant to 0.75 and this merges them — which is the failure
+      # the "strictly above" rule exists to prevent.
       ingest([unannotated_spec(file_path: "spec/a_spec.rb", line_number: 1,
                                name: "Order#checkout rejects an expired card"),
               unannotated_spec(file_path: "spec/a_spec.rb", line_number: 2,
@@ -789,8 +792,10 @@ RSpec.describe Ingest::IdentityResolver do
 
     it "leaves the text alone for an edit the provider CAN tell apart, inside the match band" do
       # The falsifier for keying this on `SpecIdentity::MATCH_SIMILARITY` instead of on
-      # normalisation-equivalence. "card" → "cards" scores 0.9840 on the shipped provider — above
-      # the 0.95 bar, so it re-sights the row it already had, exactly as it did before this slice —
+      # normalisation-equivalence. "card" → "cards" scores 0.9841 under `LexicalEmbeddingProvider`
+      # at DIMENSIONS = 1024 — spec support, not the shipped provider (see the duplicate-band
+      # example above for why that distinction is load-bearing) — above the 0.95 bar, so it
+      # re-sights the row it already had, exactly as it did before this slice —
       # and it is a genuine edit rather than another spelling of the same string, so the identity
       # must keep its own text. An implementation that refreshed on "anything that matched" passes
       # every other example in this group and fails here.

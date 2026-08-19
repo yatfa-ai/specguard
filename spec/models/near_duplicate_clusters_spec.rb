@@ -72,6 +72,14 @@ RSpec.describe NearDuplicateClusters do
 
     # Bounded from below by the measured "lexically similar but DIFFERENT test" mark, and from above
     # by the measured singular→plural mark — the band the class comment derives the value inside.
+    #
+    # ⚠️ Whose calibration: that band is the RETIRED feature-hashing provider's table, the one the
+    # class comment's own ⚠️ paragraph flags as measured on the provider dropped on 2026-08-17. It
+    # is NOT `EmbeddingGenerator::VoyageProvider`'s, which has never been calibrated against these
+    # pairs. So the bounds are kept as-is deliberately: they pin where 0.85 sits inside the window
+    # it was actually chosen in, which is a fact about how the constant was derived. They do not
+    # claim that window is the right one for the provider running today, and they must not be
+    # widened to accommodate one — re-deriving the band needs a measurement this repo does not have.
     it "sits inside the band the provider's own calibration leaves open" do
       expect(described_class::SIMILARITY).to be > 0.80
       expect(described_class::SIMILARITY).to be <= 0.89
