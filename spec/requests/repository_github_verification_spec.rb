@@ -361,6 +361,21 @@ RSpec.describe "Installation-verified repository registration", type: :request d
       expect(response.body).not_to include("<select")
     end
 
+    # The install branch is asked first and has to keep winning over the reconnect one, including
+    # when a listing read WOULD come back `:not_authorized`: a user with nothing installed cannot
+    # fix anything by reconnecting. And the page settles it without asking GitHub at all, which is
+    # the reason `github_installation_needed?` reads our own table rather than the sources.
+    it "offers the installation without calling GitHub when nothing is connected and the token is rejected" do
+      uninstall_github_app(@user)
+      fake = stub_github(unauthorized: true)
+
+      get new_repository_path
+
+      expect(response.body).to include("Connect your GitHub repositories")
+      expect(response.body).not_to include("Reconnect to GitHub")
+      expect(fake.calls_to(:repositories)).to eq(0)
+    end
+
     # Installed, and covering nothing — the user completed the flow and selected no repositories, or
     # has since deselected them all. Distinct from "not installed": installing again would do
     # nothing, and the fix is choosing repositories on GitHub.
@@ -405,6 +420,26 @@ RSpec.describe "Installation-verified repository registration", type: :request d
       expect(response.body).to include("This list may be incomplete")
     end
 
+    # The same short-list shape as above, with the unreadable installation returning a 401 rather
+    # than an outage — and it must still render the picker. `collect` keeps the FIRST error and goes
+    # on merging the installations that answered, so this viewer has `error == :not_authorized` AND
+    # a repository they can register right now. Offering them the reconnect button instead would
+    # take away a working picker to fix something that is not in their way; the honest answer is the
+    # list, plus the note that it is short.
+    it "renders the picker rather than the reconnect button when only one installation rejects the token" do
+      add_github_installation(@user, installation_id: 6002)
+      stub_github_per_installation do |id|
+        FakeGithubApi.new(**(id == 6002 ? { unauthorized: true } : { repos: [github_repo("acme/api")] }))
+      end
+
+      get new_repository_path
+
+      expect(response.body).to include("<select")
+      expect(response.body).to include("acme/api")
+      expect(response.body).to include("This list may be incomplete")
+      expect(response.body).not_to include("Reconnect to GitHub")
+    end
+
     it "does not claim the list is incomplete when every installation answered" do
       stub_github(repos: [github_repo("acme/api")])
 
@@ -413,24 +448,39 @@ RSpec.describe "Installation-verified repository registration", type: :request d
       expect(response.body).not_to include("This list may be incomplete")
     end
 
-    # An operator-side failure — a wrong App id, a private key that is not this App's — is nothing
-    # the user can act on, so it is reported as GitHub not answering rather than as a button that
-    # cannot help. The reason goes to the log.
-    it "reports rejected App credentials as an outage rather than as the user's problem" do
+    # The only credential on this read is the viewer's own session token — `GithubApi` sends
+    # `Authorization: Bearer <the user's token>` and nothing else, and there is no App id and no
+    # private key in this codebase for GitHub to have rejected instead. So a 401 here is always the
+    # user's own token, expired or revoked mid-session.
+    #
+    # That is precisely the case the reconnect button exists for, and it is the one the session
+    # cannot see for itself: the token is locally unexpired and looks live until GitHub is asked.
+    # Reporting it as an outage would tell the reader to wait out something that is not happening,
+    # for as long as the stored expiry has left to run, when the fix is one click.
+    it "offers the reconnect button when GitHub rejects the user's token" do
+      # Configured so the real button renders rather than the operator notice that stands in for it
+      # — the assertion below is about the button being OFFERED, not about the panel's heading.
+      allow(SpecGuard::GithubApp).to receive_messages(configured?: true, slug: "specguard")
       stub_github(unauthorized: true)
 
       get new_repository_path
 
-      expect(response.body).to include("GitHub is not answering right now")
+      expect(response.body).to include("Reconnect to GitHub")
+      expect(response.body).to include(github_installation_authorize_path)
+      expect(response.body).not_to include("GitHub is not answering right now")
       expect(response.body).not_to include("<select")
     end
 
+    # The other half of the pair above, and the reason the two must not collapse into one answer.
+    # An outage is waitable and offers no button; a rejected token is not waitable and offers
+    # nothing else. Reading either as the other tells the user to do the one thing that cannot work.
     it "says so, rather than showing an empty picker, when GitHub will not answer" do
       stub_github(unavailable: true)
 
       get new_repository_path
 
       expect(response.body).to include("GitHub is not answering right now")
+      expect(response.body).not_to include("Reconnect to GitHub")
       expect(response.body).not_to include("<select")
     end
 
