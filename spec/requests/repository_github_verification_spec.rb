@@ -407,8 +407,8 @@ RSpec.describe "Installation-verified repository registration", type: :request d
     # A user with two installations, one of which will not answer. What WAS read is GitHub's own
     # answer and is still registerable, so the picker renders — but the page says the list is short
     # rather than letting "my repository is not here" read as "SpecGuard is broken".
-    it "renders the picker and says so when one installation could not be read" do
-      add_github_installation(@user, installation_id: 6002)
+    it "renders the picker and names the installation that could not be read" do
+      add_github_installation(@user, installation_id: 6002, account_login: "globex")
       stub_github_per_installation do |id|
         FakeGithubApi.new(**(id == 6002 ? { unavailable: true } : { repos: [github_repo("acme/api")] }))
       end
@@ -418,6 +418,62 @@ RSpec.describe "Installation-verified repository registration", type: :request d
       expect(response.body).to include("<select")
       expect(response.body).to include("acme/api")
       expect(response.body).to include("This list may be incomplete")
+      # WHICH account. A user with `acme` and `globex` connected cannot act on "one of your GitHub
+      # App installations" — they cannot tell whether the one that failed is the organization they
+      # came to register, which is the whole question they are asking the page.
+      expect(response.body).to include("SpecGuard could not read globex just now.")
+      expect(response.body).not_to include("One of your GitHub App installations")
+    end
+
+    # The account this user connected with no login recorded — a callback can arrive without one —
+    # must still be nameable, or the sentence above degrades to a blank where the name goes, which
+    # is worse than the anonymous wording it replaced.
+    it "names an installation with no recorded login by its fallback name" do
+      add_github_installation(@user, installation_id: 6002)
+      stub_github_per_installation do |id|
+        FakeGithubApi.new(**(id == 6002 ? { unavailable: true } : { repos: [github_repo("acme/api")] }))
+      end
+
+      get new_repository_path
+
+      expect(response.body).to include("SpecGuard could not read Installation 6002 just now.")
+    end
+
+    # An installation GitHub answers 404 for is the case that rendered NOTHING before: a 404 is a
+    # complete answer about an installation nobody can read any more, so it contributes an empty
+    # listing and records no error — and the notice keyed on the error alone, so an entire account's
+    # repositories could leave the picker in silence. An uninstall is the ordinary way a row goes
+    # stale, which makes this the likeliest of the three, not the exotic one.
+    it "names an installation GitHub no longer lists, which said nothing at all before" do
+      add_github_installation(@user, installation_id: 6002, account_login: "globex")
+      stub_github_per_installation do |id|
+        FakeGithubApi.new(**(id == 6002 ? { not_found: true } : { repos: [github_repo("acme/api")] }))
+      end
+
+      get new_repository_path
+
+      expect(response.body).to include("<select")
+      expect(response.body).to include("acme/api")
+      expect(response.body).to include("This list may be incomplete")
+      expect(response.body).to include("GitHub no longer lists globex as connected to SpecGuard")
+    end
+
+    # Naming the account is free, and this is what says so: the outcomes are recorded during the
+    # read the page already made, from installation rows already loaded to make it. Asserted as one
+    # call PER INSTALLATION rather than as a zero — a re-read to find the name would show up here as
+    # a second call, and a bare "no calls" assertion on a page that must call GitHub twice could
+    # only pass by measuring nothing.
+    it "names the failing account without asking GitHub again" do
+      add_github_installation(@user, installation_id: 6002, account_login: "globex")
+      fakes = { 5001 => FakeGithubApi.new(repos: [github_repo("acme/api")]),
+                6002 => FakeGithubApi.new(unavailable: true) }
+      stub_github_per_installation { |id| fakes.fetch(id) }
+
+      get new_repository_path
+
+      expect(response.body).to include("SpecGuard could not read globex just now.")
+      expect(fakes[5001].calls_to(:repositories)).to eq(1)
+      expect(fakes[6002].calls_to(:repositories)).to eq(1)
     end
 
     # The same short-list shape as above, with the unreadable installation returning a 401 rather
@@ -427,7 +483,7 @@ RSpec.describe "Installation-verified repository registration", type: :request d
     # take away a working picker to fix something that is not in their way; the honest answer is the
     # list, plus the note that it is short.
     it "renders the picker rather than the reconnect button when only one installation rejects the token" do
-      add_github_installation(@user, installation_id: 6002)
+      add_github_installation(@user, installation_id: 6002, account_login: "globex")
       stub_github_per_installation do |id|
         FakeGithubApi.new(**(id == 6002 ? { unauthorized: true } : { repos: [github_repo("acme/api")] }))
       end
@@ -437,6 +493,7 @@ RSpec.describe "Installation-verified repository registration", type: :request d
       expect(response.body).to include("<select")
       expect(response.body).to include("acme/api")
       expect(response.body).to include("This list may be incomplete")
+      expect(response.body).to include("SpecGuard could not read globex just now.")
       expect(response.body).not_to include("Reconnect to GitHub")
     end
 
@@ -446,6 +503,19 @@ RSpec.describe "Installation-verified repository registration", type: :request d
       get new_repository_path
 
       expect(response.body).not_to include("This list may be incomplete")
+    end
+
+    # And names nobody. The notice is the only thing that names an account, so a page without one
+    # must not mention any — a reader whose installations all answered has nothing to act on.
+    it "names no account when every installation answered" do
+      add_github_installation(@user, installation_id: 6002, account_login: "globex")
+      stub_github(repos: [github_repo("acme/api")])
+
+      get new_repository_path
+
+      expect(response.body).not_to include("This list may be incomplete")
+      expect(response.body).not_to include("SpecGuard could not read")
+      expect(response.body).not_to include("GitHub no longer lists")
     end
 
     # The only credential on this read is the viewer's own session token — `GithubApi` sends
