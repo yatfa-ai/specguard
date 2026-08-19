@@ -32,6 +32,26 @@ module Builders
     user.user_api_keys.create!(name: name)
   end
 
+  # A `GithubRegistrationGrant` stated directly, for specs about REDEEMING one.
+  #
+  # Deliberately not a mint: the mint path is what `spec/requests/github_registration_grant_spec.rb`
+  # exercises, over the browser read the grant really hangs off, and going through it here would
+  # give every API spec a browser session it must not have. This states the recorded fact and
+  # nothing else, which is exactly what a request carrying only an `sgu_` key can see of it.
+  #
+  # `visible` defaults to `registrable`, the ordinary case of somebody who administers everything
+  # they were given. Pass a superset for the organization member who can see more than they may
+  # register. Both are downcased on the way in, as the mint path stores them.
+  def create_registration_grant(user:, registrable: ["acme/billing-service"], visible: nil,
+                                captured_at: Time.current)
+    GithubRegistrationGrant.create!(
+      user: user,
+      registrable_full_names: registrable.map(&:downcase),
+      visible_full_names: (visible || registrable).map(&:downcase),
+      captured_at: captured_at
+    )
+  end
+
   # Shares an existing repository with a user who does not own it. `permissions` are the stored
   # strings, e.g. %w[view keys.manage] — see RepositoryMembership::PERMISSIONS.
   def create_membership(repository:, user:, permissions: [RepositoryMembership::VIEW])

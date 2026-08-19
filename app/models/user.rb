@@ -106,6 +106,19 @@ class User < ApplicationRecord
   # GitHub is not the sort of act that should quietly become irreversible.
   has_many :github_installations, dependent: :destroy
 
+  # The recording of what GitHub said about this person's repositories, taken while a browser
+  # session held a token that could ask — the evidence `POST /api/v1/repositories` redeems, since a
+  # request carrying an API key has no such token. See `GithubRegistrationGrant`.
+  #
+  # `has_one`, because the grant is a statement about the PERSON and there is exactly one of them
+  # (the unique index on `user_id` is the schema half of that rule). A second row would be a second,
+  # divergent opinion about the same GitHub account.
+  #
+  # `:destroy` on `github_installations`' argument, which applies here more strongly: this holds no
+  # credential at all, only repository names GitHub already told this person, and it is derived —
+  # the next page render takes it again. Nothing of anyone else's is in it.
+  has_one :github_registration_grant, dependent: :destroy
+
   before_validation :normalize_github_handle
 
   validates :github_uid, presence: true, uniqueness: true

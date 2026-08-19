@@ -38,7 +38,7 @@
 # organization from another. A caller with no token gets `:not_authorized` and an offer to fetch
 # one, which is a redirect the user will usually not even see.
 #
-# ## Six verdicts
+# ## Seven verdicts
 #
 # `GithubOwnership` carried eight, because eight things could go wrong with an admin check over an
 # OAuth `repo` grant. What survives is what a *user* can still distinguish and act on:
@@ -51,6 +51,15 @@
 #                         one it held. Fixed by authorizing again, which `authorize?` offers as a
 #                         button; for somebody who has already authorized the App, GitHub renders
 #                         nothing and the round trip is invisible.
+#   :not_granted          nobody has asked GitHub about this person recently enough to answer. The
+#                         one status no live check can ever produce: it belongs to the machine
+#                         surface, where the request holds an `sgu_` API key and no GitHub
+#                         credential at all, and is decided from a `GithubRegistrationGrant` that
+#                         is missing or past its bound. Deliberately NOT `:not_authorized`, which
+#                         is about the credential THIS request is holding and offers a button this
+#                         request can press — an agent has no browser to press it in, and the fix
+#                         is a person signing in to SpecGuard and reconnecting GitHub, which is
+#                         what the sentence says.
 #   :not_in_installation  the App is installed and this repository is not in what this user can see
 #                         of it. This is the squatting refusal, and it is also GitHub's 404: a
 #                         credential cannot see anything outside what it may reach, so "not
@@ -88,6 +97,14 @@ class InstallationRepositories
     not_installed: "could not be verified — install the SpecGuard GitHub App on it first.",
     not_authorized: "could not be verified — SpecGuard needs your permission to ask GitHub about " \
                     "it again. Reconnect and try once more.",
+    # Deliberately a DIFFERENT sentence from the two refusals below, and not a rewording of
+    # `:not_authorized` above. Those three all mean "GitHub has answered, and the answer is no or
+    # is about this session's credential"; this one means SpecGuard holds no current answer to give
+    # and cannot obtain one from where the request arrived. It names the fix, which is somewhere
+    # else entirely: a browser.
+    not_granted: "cannot be registered from an API key — SpecGuard has no current record of your " \
+                 "GitHub permissions. Sign in to SpecGuard in a browser and reconnect GitHub, " \
+                 "then try again.",
     not_in_installation: "is not one of the repositories the SpecGuard GitHub App is installed on. " \
                          "Add it on GitHub, then pick it here.",
     not_administered: "cannot be registered by you — GitHub does not list you as an administrator " \

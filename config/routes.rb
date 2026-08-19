@@ -99,6 +99,11 @@ Rails.application.routes.draw do
       # refuse each other's tokens with a 401 (see `Api::BaseController`), so the near-identical
       # paths cannot quietly serve the wrong thing.
       get "repositories", to: "user_repositories#index"
+      # Registering over the API. Same controller as the `get` above because it is the same
+      # credential and the same noun; a separate controller would need its own
+      # `accepts_user_credential` declaration and would be one omission away from a 401 nobody can
+      # explain. The GitHub ownership check is NOT skipped here — see the controller.
+      post "repositories", to: "user_repositories#create"
     end
   end
 
