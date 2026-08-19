@@ -438,6 +438,10 @@ RSpec.describe SpecObservation do
     # twenty runs a single run is ~5% of the table, so "use the index" is a decision rather than a
     # foregone conclusion.
     describe "the plan Postgres chooses for each of them" do
+      # The `ANALYZE` in the `before` below reaches past the per-example rollback. This puts back
+      # what it perturbs — see the mechanism, and the measured numbers, in the support file.
+      restores_relation_statistics_for "spec_observations"
+
       let(:runs) { 20 }
 
       # One run's rows reached THROUGH `index_spec_observations_on_test_run_id` (or a composite
@@ -463,7 +467,14 @@ RSpec.describe SpecObservation do
         (runs - 1).times { seed(create_test_run(repository: repository)) }
 
         # Without stats the planner works off hard-coded defaults and its choice says nothing about
-        # the data. `ANALYZE` is legal inside the transaction the suite wraps each example in.
+        # the data. `ANALYZE` is legal inside the transaction the suite wraps each example in — but
+        # legality is not containment, and the difference is the whole point: `pg_statistic` is
+        # written transactionally and does roll back, while `pg_class.reltuples`/`relpages` — for
+        # this table and for every index on it — are written in place by `heap_inplace_update()`
+        # and survive the rollback. The declaration on the group above puts them back; without it
+        # this group would leave the catalog claiming 6,000 observations in a table that is empty
+        # again, and every plan-asserting example that ran before autovacuum corrected it would
+        # plan against that phantom.
         ActiveRecord::Base.connection.execute("ANALYZE spec_observations")
       end
 
@@ -1124,6 +1135,10 @@ RSpec.describe SpecObservation do
     # `Seq Scan` refusal is what carries each assertion's reach: unscope any of these reads from
     # its window and the plan turns into a sequential scan of the whole table.
     describe "the plan Postgres chooses for each of them" do
+      # The `ANALYZE` in the `before` below reaches past the per-example rollback. This puts back
+      # what it perturbs — see the mechanism, and the measured numbers, in the support file.
+      restores_relation_statistics_for "spec_observations"
+
       SCAN = /(?:Index Only Scan using|Index Scan using|Bitmap Index Scan on)/
 
       before { ActiveRecord::Base.connection.execute("ANALYZE spec_observations") }
@@ -1437,6 +1452,10 @@ RSpec.describe SpecObservation do
     # roadmap's design point — and what these examples pin is that the composition reads on the
     # order of `candidates × window runs` instead.
     describe "the plan Postgres chooses for each of them" do
+      # The `ANALYZE` in the `before` below reaches past the per-example rollback. This puts back
+      # what it perturbs — see the mechanism, and the measured numbers, in the support file.
+      restores_relation_statistics_for "spec_observations"
+
       SCAN_NODE = /(?:Index Only Scan using|Index Scan using|Bitmap Index Scan on)/
 
       before { ActiveRecord::Base.connection.execute("ANALYZE spec_observations") }
