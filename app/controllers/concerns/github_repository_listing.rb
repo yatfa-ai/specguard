@@ -24,7 +24,7 @@ module GithubRepositoryListing
   included do
     helper_method :github_listing, :github_listing_error, :github_listing_error_message,
                   :github_listing_incomplete?, :github_installation_needed?,
-                  :github_visible_listing, :github_withheld_count
+                  :github_visible_listing, :github_withheld_count, :github_unread_accounts
   end
 
   private
@@ -103,10 +103,33 @@ module GithubRepositoryListing
   # everything in it is genuinely registerable, and a repository the reader came for may still be
   # missing for a reason that is ours rather than GitHub's.
   #
+  # Asked of the per-installation outcomes rather than of the merged `error`, which could not see
+  # the case an uninstall produces — see `github_unread_accounts` directly below.
+  #
   # Saying so is the same rule the truncation note follows. A picker that silently omits things is
   # a picker people stop trusting, and "my repository is not in the list" is indistinguishable from
   # "SpecGuard is broken" unless the page says which it is.
-  def github_listing_incomplete? = github_sources.error.present? && github_sources.registrable.any?
+  def github_listing_incomplete? = github_unread_accounts.any?
+
+  # WHICH of the viewer's connected accounts are missing from the list being shown — one
+  # `InstallationRepositories::Outcome` each, carrying the account's display name and what came
+  # back. Empty when every installation answered, and empty when there is no list on the page for
+  # a missing account to qualify.
+  #
+  # This is what `github_listing_incomplete?` is now asked of, and it widens that question in one
+  # way that matters: an installation GitHub answers 404 for records no error, so the old reading
+  # (`error.present?`) was false and NOTHING was said — a whole account could leave the picker in
+  # silence. Every other case it admits is the one it admitted before, because an installation that
+  # failed is an installation that set `error`.
+  #
+  # Free: `github_sources` is memoized, the outcomes are built during the read the page already
+  # made, and naming an account costs no GitHub call and no query — the installation rows were
+  # loaded to make the read in the first place.
+  def github_unread_accounts
+    return [] if github_listing.nil? || github_sources.registrable.empty?
+
+    github_sources.unread_outcomes
+  end
 
   # Whether the *fix* on offer is "install the SpecGuard GitHub App" rather than "pick something
   # else". True before the user has installed it at all — and only then, because everything after

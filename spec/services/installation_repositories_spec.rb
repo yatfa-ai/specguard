@@ -170,6 +170,64 @@ RSpec.describe InstallationRepositories do
       expect(result).to be_complete
     end
 
+    # The attribution the pages are built from. It is recorded per INSTALLATION rather than merged,
+    # because "which account is missing" is a different question from "what went wrong" and the
+    # merged `error` cannot answer it: it keeps only the first failure and knows no names.
+    it "reports what each installation answered, by the name the user knows it as" do
+      add_github_installation(user, installation_id: 6002, account_login: "globex")
+      stub_github_per_installation do |id|
+        FakeGithubApi.new(**(id == 6002 ? { unavailable: true } : { repos: [github_repo("acme/api")] }))
+      end
+
+      outcomes = sources.outcomes.index_by(&:account)
+
+      expect(outcomes.keys).to match_array(%w[acme globex])
+      expect(outcomes["acme"]).to have_attributes(status: :read, count: 1)
+      expect(outcomes["globex"]).to have_attributes(status: :unavailable, count: 0)
+      expect(sources.unread_outcomes.map(&:account)).to eq(["globex"])
+    end
+
+    # The 404 is the case this attribution exists for. It is NOT an error — it stays out of `error`
+    # and leaves `complete?` true, which is what keeps an absent name reported as GitHub's refusal
+    # rather than as our ignorance — and it is nevertheless an account whose repositories are not on
+    # the page. Both halves are asserted together because widening one into the other is the exact
+    # mistake this shape prevents.
+    it "reports an installation GitHub no longer lists as unread without making it an error" do
+      add_github_installation(user, installation_id: 6002, account_login: "globex")
+      stub_github_per_installation do |id|
+        FakeGithubApi.new(**(id == 6002 ? { not_found: true } : { repos: [github_repo("acme/api")] }))
+      end
+
+      result = sources
+
+      expect(result.unread_outcomes.map(&:account)).to eq(["globex"])
+      expect(result.unread_outcomes.first).to be_unreadable
+      expect(result.error).to be_nil
+      expect(result).to be_complete
+      expect(result.repos.map(&:full_name)).to eq(["acme/api"])
+    end
+
+    # An installation whose login was never recorded — a callback can arrive without one — is still
+    # named, by the fallback `GithubInstallation#display_name` provides. A blank where the account
+    # name goes would be worse than the anonymous sentence this replaced.
+    it "names an installation with no recorded login by its fallback name" do
+      add_github_installation(user, installation_id: 6002)
+      stub_github_per_installation do |id|
+        FakeGithubApi.new(**(id == 6002 ? { unavailable: true } : { repos: [github_repo("acme/api")] }))
+      end
+
+      expect(sources.unread_outcomes.map(&:account)).to eq(["Installation 6002"])
+    end
+
+    # Nothing to explain when nothing is missing, and an empty list rather than a nil for the
+    # callers that ask without checking.
+    it "reports nothing unread when every installation answered" do
+      stub_github(repos: [github_repo("acme/api")])
+
+      expect(sources.unread_outcomes).to be_empty
+      expect(sources.outcomes.map(&:status)).to eq([:read])
+    end
+
     it "records a failure without raising" do
       stub_github(unavailable: true)
 

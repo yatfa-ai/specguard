@@ -147,6 +147,52 @@ module GithubHelper
       "administer #{count == 1 ? 'is' : 'are'} not listed."
   end
 
+  # "SpecGuard could not read acme just now. Repositories connected through that account are
+  # missing from this list. Anything shown here can still be registered." — the short-list notice,
+  # with the account NAMED, and `nil` when nothing is missing.
+  #
+  # One definition for the two pages that show it (the single-repository picker, the organization
+  # chooser), for the reason `withheld_repositories_sentence` states in full: it is the same fact
+  # on both, and two copies is two chances for one to disagree about what it means. Before this
+  # they both said "One of your GitHub App installations could not be read", which named nothing —
+  # a user with `acme` and `globex` connected could not tell whether the one that failed was the
+  # organization they came to register.
+  #
+  # `missing:` is the only thing the two pages differ on and is a plural noun beginning its own
+  # sentence: the single-repository picker is missing REPOSITORIES, the organization chooser can be
+  # missing whole ORGANIZATIONS, which is the sharper version of the same warning. Everything else
+  # — which accounts, which failure, what to do — is decided here.
+  #
+  # The two failures are worded apart because their fixes are different. An installation that would
+  # not answer is a transient thing and may well answer on the next page load. An installation
+  # GitHub reports as GONE will not come back on its own: an uninstall is the ordinary way one goes
+  # stale, and reinstalling is done on GitHub. That second case is the one this page said NOTHING
+  # about until now — a 404 contributes an empty listing and records no error by design, so there
+  # was no error for a notice to key on and an entire account could leave the picker in silence.
+  def unreadable_accounts_sentence(outcomes, missing:)
+    unread = Array(outcomes).reject(&:read?)
+    return nil if unread.empty?
+
+    gone, failed = unread.partition(&:unreadable?)
+
+    sentences = []
+
+    if failed.any?
+      sentences << "SpecGuard could not read #{failed.map(&:account).to_sentence} just now."
+    end
+
+    if gone.any?
+      sentences << "GitHub no longer lists #{gone.map(&:account).to_sentence} as connected to " \
+                   "SpecGuard — the App may have been uninstalled there, which is put right in " \
+                   "your GitHub settings."
+    end
+
+    sentences << "#{missing} connected through #{unread.one? ? 'that account' : 'those accounts'} " \
+                 "are missing from this list. Anything shown here can still be registered."
+
+    sentences.join(" ")
+  end
+
   private
 
   # `private` and `archived` change what registering the repository will *mean* — an archived one

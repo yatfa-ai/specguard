@@ -98,6 +98,28 @@ class InstallationRepositories
                  "GitHub. Try again shortly."
   }.freeze
 
+  # What ONE of the user's installations answered, and which account it was.
+  #
+  # The attribution existed before this type did and was thrown away: `collect` iterates the
+  # `GithubInstallation` records, so it holds the named account at the exact line each outcome is
+  # decided. Keeping it costs no GitHub call and no query — the rows are already loaded — and it is
+  # the difference between a page saying "one of your GitHub App installations could not be read"
+  # and a page saying which one.
+  #
+  # `status` is the reading rather than a verdict, and it carries one thing the merged `error`
+  # cannot: `:unreadable`, GitHub's 404. That is a COMPLETE answer about an installation nobody can
+  # read any more — an uninstall is the ordinary way a row goes stale — so it is deliberately not an
+  # error and does not make the sources incomplete. It is nevertheless an account whose repositories
+  # are not on the page, which is the whole reason a reader is owed a sentence about it.
+  Outcome = Data.define(:account, :status, :count) do
+    # Did this installation hand over its repositories? True for an installation that answered with
+    # none of them, which is an answer rather than a failure.
+    def read? = status == :read
+
+    # GitHub's 404: this user no longer reaches this installation, and the fix is on GitHub.
+    def unreadable? = status == :unreadable
+  end
+
   # Everything the user's installations could be read as, plus what stopped that being the whole
   # story. Both halves matter, and for the same reason: an ABSENT name means "GitHub says no" only
   # when the reading was complete. When it was cut short — by our own page walk, or by an
@@ -108,7 +130,7 @@ class InstallationRepositories
   # because those are two different refusals and the second cannot be worded without the
   # distinction. `registrable` is the subset a user may actually act on, and is what the picker is
   # built from.
-  Sources = Data.define(:repos, :truncated, :error, :installed) do
+  Sources = Data.define(:repos, :truncated, :error, :installed, :outcomes) do
     def truncated? = truncated
     def installed? = installed
     def complete? = !truncated && error.nil?
@@ -133,6 +155,16 @@ class InstallationRepositories
     # administrator of — the count the pages above word as a sentence. Zero for the ordinary case
     # of somebody who administers everything they were given.
     def withheld_count = repos.length - registrable.length
+
+    # The installations whose repositories are NOT in `repos`, each named — what a short list owes
+    # its reader. Empty for the ordinary user whose installations all answered, and it stays empty
+    # rather than becoming nil when there were no installations to ask.
+    #
+    # Note what this is not keyed on: `error`. An installation that answered 404 contributed
+    # nothing and left `error` nil, so it is invisible to `complete?` by design and would be
+    # invisible to the page for the same reason. It is listed here because the question this
+    # answers is "whose repositories are missing", not "what went wrong".
+    def unread_outcomes = outcomes.reject(&:read?)
   end
 
   class << self
@@ -227,7 +259,7 @@ class InstallationRepositories
     private
 
     def blank_sources(installed:, error: nil)
-      Sources.new(repos: [], truncated: false, error: error, installed: installed)
+      Sources.new(repos: [], truncated: false, error: error, installed: installed, outcomes: [])
     end
 
     def installations_for(user)
@@ -240,40 +272,52 @@ class InstallationRepositories
       repos = []
       truncated = false
       error = nil
+      outcomes = []
 
       installations.each do |installation|
-        listing = read(installation, user_token)
-        next error ||= listing if listing.is_a?(Symbol)
+        listing, status = read(installation, user_token)
+        outcomes << Outcome.new(account: installation.display_name, status: status,
+                                count: listing ? listing.repos.length : 0)
+        next error ||= status if listing.nil?
 
         repos.concat(listing.repos)
         truncated ||= listing.truncated?
       end
 
-      Sources.new(repos: dedupe(repos), truncated: truncated, error: error, installed: true)
+      Sources.new(repos: dedupe(repos), truncated: truncated, error: error, installed: true,
+                  outcomes: outcomes)
     end
 
-    # One installation's repositories as this user sees them, or the verdict status its failure
-    # becomes. A Symbol rather than a raise because the caller is merging several of these and one
-    # failure must not decide the fate of the rest.
+    # One installation's repositories as this user sees them, plus what the reading WAS — either
+    # `:read`, `:unreadable`, or the verdict status its failure becomes. A returned status rather
+    # than a raise because the caller is merging several of these and one failure must not decide
+    # the fate of the rest; the listing is nil exactly when the status is a failure.
     #
     # A 404 is NOT a failure here, and that is the one case worth stating: it is what an uninstalled
     # installation — or one this user has lost access to — answers, and neither contains any
     # repository this user may register. That is a complete answer rather than a gap in our
     # knowledge, so it returns an empty listing, which lets an absent name be reported as GitHub's
     # refusal rather than as our own ignorance.
+    #
+    # Returned as `[listing, status]` so that the two things a 404 is can both be said at once. It
+    # remains an EMPTY LISTING to `collect` — merged, contributing no error, leaving `complete?`
+    # true — and it is separately reported as `:unreadable`, which is what lets a page name the
+    # account. Telling them apart HERE rather than at the merge is deliberate: the alternative is
+    # widening the 404 into an error, which would turn GitHub's refusal into `:unavailable` in
+    # `name_verdict` and change what registration does. This distinction is for display only.
     def read(installation, user_token)
       client = GithubApi.for_user(user_token, installation)
-      return :not_authorized if client.nil?
+      return [nil, :not_authorized] if client.nil?
 
-      client.repositories
+      [client.repositories, :read]
     rescue GithubApi::NotFound
-      GithubApi::Listing.new(repos: [], truncated: false)
+      [GithubApi::Listing.new(repos: [], truncated: false), :unreadable]
     rescue GithubApi::Unauthorized
       # The token expired or was revoked mid-session. Distinct from an outage because the fix is a
       # thing the user can perform, and the page offers it as a button.
-      :not_authorized
+      [nil, :not_authorized]
     rescue GithubApi::Error => e
-      status_for(e, "installation #{installation.installation_id}")
+      [nil, status_for(e, "installation #{installation.installation_id}")]
     end
 
     # Two installations can legitimately contain the same repository — an organization installation

@@ -85,8 +85,7 @@
             working choice. Here it also means a whole ORGANIZATION can be missing rather than some
             of one, which is the sharper version of the same warning. %>
         <%= render UI::AlertComponent.new(tone: :warning, title: "This list may be incomplete", class: "mb-4") do %>
-          One of your GitHub App installations could not be read, so an organization connected
-          through it may be missing. Anything shown here can still be registered.
+          <%= unreadable_accounts_sentence(github_unread_accounts, missing: "Organizations") %>
         <% end %>
       <% end %>
       <%= render "organizations" %>
