@@ -472,7 +472,7 @@ RSpec.describe SpecObservation do
         # written transactionally and does roll back, while `pg_class.reltuples`/`relpages` — for
         # this table and for every index on it — are written in place by `heap_inplace_update()`
         # and survive the rollback. The declaration on the group above puts them back; without it
-        # this group would leave the catalog claiming 6,000 observations in a table that is empty
+        # this group would leave the catalog claiming 10,000 observations in a table that is empty
         # again, and every plan-asserting example that ran before autovacuum corrected it would
         # plan against that phantom.
         ActiveRecord::Base.connection.execute("ANALYZE spec_observations")
