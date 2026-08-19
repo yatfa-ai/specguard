@@ -1364,7 +1364,7 @@ RSpec.describe Ingest::IdentityResolver do
       # **The rest of the band the example above opens, and the reason `#nearest_pending` scans at a
       # threshold instead of looking up a vector.** These two descriptions differ by one pluralised
       # word. They are not equivalent under the provider — different features, different vectors —
-      # but they score cosine 0.9926 against a `MATCH_SIMILARITY` bar of 0.95, so `#nearest` on the
+      # but they score cosine 0.9925 against a `MATCH_SIMILARITY` bar of 0.95, so `#nearest` on the
       # per-row path called them one test and re-sighted the second onto the first.
       #
       # A page-pending repair keyed on vector EQUALITY answers nil here and lets them split, which
@@ -1378,6 +1378,15 @@ RSpec.describe Ingest::IdentityResolver do
       # NOT the identical-vector case, so a failure here is the band being open and nothing else.
       expect(EmbeddingGenerator.call(first)).not_to eq(EmbeddingGenerator.call(second))
       expect(EmbeddingGenerator.equivalent?(first, second)).to be(false)
+
+      # And the figure in the paragraph above is pinned too, to the precision it is quoted at. It
+      # is prose everywhere else it appears (here and on `IdentityResolver#nearest_pending`), and a
+      # quoted measurement nothing executes is a number that drifts from the tree and keeps reading
+      # true. A bare dot product IS the cosine here because the provider L2-normalises — the
+      # property `lexical_embedding_provider_spec.rb` pins separately.
+      cosine = EmbeddingGenerator.call(first).zip(EmbeddingGenerator.call(second))
+                                 .sum { |one, two| one * two }
+      expect(cosine).to be_within(0.00005).of(0.9925)
 
       run = ingest([unannotated_spec(file_path: "spec/models/invoice_spec.rb", line_number: 1,
                                      name: first),

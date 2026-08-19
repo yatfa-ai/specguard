@@ -316,7 +316,12 @@ module Ingest
     # suite's default stub (`spec/support/embedding_generator.rb`) is dense too — measured, 1024 of
     # 1024 non-zero. The only configuration in which this shape compresses anything is
     # `LexicalEmbeddingProvider`, which is spec-only by its own header ("**Not shipped**") and which
-    # feature-hashes a description into about 60 of 1024 dimensions (measured: 5.9% density).
+    # feature-hashes a description into a few percent of the 1024 dimensions. How few is a function
+    # of description LENGTH rather than a constant, so it is quoted as a range over a named corpus —
+    # the descriptions these specs actually use — instead of as a single figure over an unnamed one:
+    # 24/1024 (2.3%) for "rejects an expired card", 40/1024 (3.9%) for "Order#checkout rejects an
+    # expired card", and 75/1024 (7.3%) for the longer `Invoice#finalize` description in
+    # `identity_resolver_spec.rb`'s pluralisation example.
     #
     # Kept anyway, on two grounds and not on a claim about what ships. It is CORRECT under either
     # density — walking the non-zero dimensions is the same dot product, not an approximation of one
@@ -1599,7 +1604,7 @@ module Ingest
     # ends up with is the page the per-row path would have written — and it is what keeps `BATCH_SIZE`
     # a cost knob rather than a decision about how many identities a suite has. An earlier revision
     # of this method keyed a Hash on the vector and closed only the cosine-1.0 band; that left an
-    # ordinary pair of descriptions differing by one pluralised word (measured at cosine 0.9926
+    # ordinary pair of descriptions differing by one pluralised word (measured at cosine 0.9925
     # under `LexicalEmbeddingProvider`, the provider these specs run, against a 0.95 bar) splitting
     # into two identities on a first ingest, and splitting or not according to where the page
     # boundary fell. Both are refused here.
