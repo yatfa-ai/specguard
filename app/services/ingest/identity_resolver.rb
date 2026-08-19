@@ -187,11 +187,30 @@ module Ingest
     # **It is the one number here whose square something pays, and that is worth knowing before
     # raising it.** Deferring the insert means a page's misses are compared against each other in
     # process ({#nearest_pending}) rather than through the index, which is O(page²) on a page of
-    # pure misses — measured at ~1.3s for a full page of 500, against the ~1.0s of statement
-    # overhead batching the insert saves on that same page. Doubling this quadruples that term while
-    # only halving the round trips it is bought with, so the batching's case gets WORSE as this
-    # grows, not better. Nothing on an unchanged page touches it. {#nearest_pending} carries the
-    # whole ledger.
+    # pure misses. On the provider that ships — `VoyageProvider`, 1024 dimensions, **dense** — that
+    # is 124,750 pairs of 1024-element Ruby dot product per full page, and it makes a first ingest
+    # ~1.4s per page SLOWER than the per-row path on a local socket, bought back only once a
+    # statement's round trip exceeds ~2.9ms. {#nearest_pending} carries the measured ledger and the
+    # two cheaper scans that were tried and refused.
+    #
+    # **What that implies for this number, stated because the ledger above invites the question.**
+    # The scan is O(page²) per page and therefore O(N x page) over a suite, while the round trips
+    # batching saves are O(N) and almost independent of page width — at any page above ~100, a
+    # 20,000-example first ingest saves ~N of them either way. So the two pressures point OPPOSITE
+    # WAYS and shrinking this number strictly improves the first ingest: halving it halves total
+    # scan time while giving up almost none of the batching's benefit.
+    #
+    # It stays at 500 regardless, and the reason is that a first ingest is not what this constant is
+    # tuned for. Halving it doubles the page count, and with it the 13 statements every page costs
+    # on an UNCHANGED re-ingest (pinned at `identity_resolver_spec.rb`'s "what a page of unchanged
+    # text costs in round trips") — the ordinary case, paid on every CI run for the life of the
+    # repository, against a first ingest paid once. Trading the common case for the rare one is the
+    # wrong direction. And this has exactly ONE use site — `find_in_batches(batch_size:)` in
+    # {#resolve} — which makes it look more local than it is: it sets the page width, and every
+    # per-page cost in this class (the embed request, the digest short-circuit, the three flush
+    # statements, this scan) is a function of the page it hands out. Recorded here as a known
+    # tension, not resolved unilaterally: if a first ingest's wall clock ever becomes the complaint,
+    # this paragraph is where the lever is, and lowering the page is the lever.
     #
     # **What it does not decide is how many identities a suite gets**, and that is a property worth
     # stating because one revision of this slice broke it: a page-pending row is matched at the same
@@ -287,21 +306,33 @@ module Ingest
     # answer to a question {#nearest} can no longer be asked: the rows this page has decided to
     # insert are not in the table yet, so the index cannot see them.
     #
-    # Sparse — the indices of the non-zero dimensions and their values, rather than the 1536-wide
-    # array — because that is the whole of what makes the scan affordable, and because it is what
-    # the shipped provider actually produces. `LocalProvider` hashes a description's words and
-    # trigrams into 1536 dimensions and touches about 94 of them for an ordinary RSpec description
-    # (measured: 6% density), so a dot product that walks the non-zero dimensions does about 94
-    # multiplications where a dense one does 1536. A provider whose vectors are dense stores every
-    # dimension here and pays the dense cost — correctly, and see {#nearest_pending} for what that
-    # costs and why it is still bounded.
+    # Stored as the indices of the non-zero dimensions and their values rather than as the dense
+    # 1024-wide array. **Read what that does and does not buy, because it is easy to over-read.**
+    #
+    # It is a compression that is INERT on everything this application ships. The one provider is
+    # `EmbeddingGenerator::VoyageProvider` (`voyageai/voyage-4-lite`, 1024 dimensions — owner
+    # decision, 2026-08-17, "one provider, one model, one width"), and its vectors are dense: every
+    # dimension non-zero, so `indices` holds all 1024 of them and the scan pays the dense cost. The
+    # suite's default stub (`spec/support/embedding_generator.rb`) is dense too — measured, 1024 of
+    # 1024 non-zero. The only configuration in which this shape compresses anything is
+    # `LexicalEmbeddingProvider`, which is spec-only by its own header ("**Not shipped**") and which
+    # feature-hashes a description into about 60 of 1024 dimensions (measured: 5.9% density).
+    #
+    # Kept anyway, on two grounds and not on a claim about what ships. It is CORRECT under either
+    # density — walking the non-zero dimensions is the same dot product, not an approximation of one
+    # — and it is what the identity-resolution specs actually run under, so the code exercised by
+    # the suite is the code deployed. What it must not be read as is a reason the scan is cheap in
+    # production. It is not; {#nearest_pending} carries the measured ledger for the dense case, and
+    # the dense case is the shipped one.
     #
     # Carries its own `magnitude` so the comparison is a true COSINE rather than a bare dot product.
-    # Both shipped providers return unit vectors, which would make the two identical and the
-    # division dead code — but `EmbeddingGenerator.validate` checks width and finiteness and does
-    # NOT check normalisation, so a provider returning unrolled vectors would silently turn every
-    # similarity here into a number that is not one, against a threshold that assumes it is. One
-    # `Math.sqrt` per pending row buys the guarantee that this method and `nearest` are answering
+    # Every provider in this tree whose output can be inspected normalises explicitly — the suite's
+    # stub and `LexicalEmbeddingProvider` both divide by the norm — which is what makes the division
+    # LOOK like dead code. Nothing enforces it: `EmbeddingGenerator.validate` checks width and
+    # finiteness and does NOT check normalisation, and a vendor's normalisation is a property of the
+    # vendor rather than of this interface. A provider returning unrolled vectors would silently turn
+    # every similarity here into a number that is not one, against a threshold that assumes it is.
+    # One `Math.sqrt` per pending row buys the guarantee that this method and `nearest` are answering
     # the same question.
     PendingVector = Struct.new(:digest, :indices, :values, :magnitude)
 
@@ -1568,35 +1599,65 @@ module Ingest
     # ends up with is the page the per-row path would have written — and it is what keeps `BATCH_SIZE`
     # a cost knob rather than a decision about how many identities a suite has. An earlier revision
     # of this method keyed a Hash on the vector and closed only the cosine-1.0 band; that left an
-    # ordinary pair of descriptions differing by one pluralised word (measured at cosine 0.9926 on
-    # the shipped provider, against a 0.95 bar) splitting into two identities on a first ingest, and
-    # splitting or not according to where the page boundary fell. Both are refused here.
+    # ordinary pair of descriptions differing by one pluralised word (measured at cosine 0.9926
+    # under `LexicalEmbeddingProvider`, the provider these specs run, against a 0.95 bar) splitting
+    # into two identities on a first ingest, and splitting or not according to where the page
+    # boundary fell. Both are refused here.
     #
-    # == What the scan costs, measured rather than assumed — and it is not free
+    # == What the scan costs, measured on the provider that ships — and it is the dominant term
     #
-    # It is O(pending) per miss and therefore O(page²) over a page of pure misses. Measured on this
-    # tree by resolving one `BATCH_SIZE` page of 500 genuinely new tests (124,750 pairs) end to end,
-    # against a local Postgres socket:
+    # It is O(pending) per miss and therefore O(page²) over a page of pure misses: 124,750 pairs at
+    # `BATCH_SIZE` = 500, each pair a 1024-element dot product in Ruby.
     #
-    #   per-row `INSERT`, no scan needed (origin/main)   3.4s   492 identities
-    #   batched `INSERT`, no scan (the band left open)   2.4s   500 identities  ← wrong
-    #   batched `INSERT` + this scan                     4.0s   492 identities
+    # **Measure it dense, because dense is what ships.** `VoyageProvider` returns 1024 non-zero
+    # floats, so {PendingVector} compresses nothing in production and the inner loop runs its full
+    # width. The suite's default stub is dense at the same width, which makes it a faithful stand-in
+    # for the COST (not the semantics) and means these numbers need no API key. Resolving one page
+    # of 500 genuinely new tests end to end, against a local Postgres socket:
     #
-    # Read the identity column first: batching the insert without this scan splits eight of those
-    # 500 into rows the per-row path did not create, and the scan puts all eight back. Read the time
-    # column second and honestly — **on a local socket this slice is now a net slowdown on the page
-    # shape it targets**, because batching saves ~1.0s of statement overhead there and the scan
-    # spends ~1.3s. What the batching also removes is 499 round TRIPS, which cost nothing measurable
-    # over a Unix socket and are the whole of the cost over a network: the slice pays for itself once
-    # a statement's round trip exceeds about 0.6ms, and is a loss below that. That is the trade, and
-    # it is a real one rather than a rounding error.
+    #                                          test (no YJIT)   production (YJIT)
+    #   per-row `INSERT`, no scan (main)            5.2s              4.8s
+    #   batched `INSERT` + this scan                11.4s             6.2s
     #
-    # A dense dot over all 1536 dimensions instead of the non-zero ones measures 8.4s for the same
-    # page, which is the version that would make the slice indefensible; {PendingVector} is what
-    # keeps it merely marginal. A Cauchy-Schwarz early exit over entries sorted by descending
-    # magnitude was tried and measured at 0.655s against 0.645s — no gain, because these vectors
-    # spread their mass evenly over ~78 features, so the remaining-norm bound decays as a square root
-    # and never bites early. Refused on the measurement rather than carried as dead complexity.
+    # Read it honestly: **on a local socket this slice is a net slowdown on the page shape it
+    # targets** — +6.2s in the suite's interpreter, **+1.4s in production's**, where `config.yjit`
+    # is on (`load_defaults 8.1` sets `yjit = !Rails.env.local?`). YJIT is why the production row is
+    # the one that matters and the test row overstates the cost by better than 4x.
+    #
+    # What the batching removes against that is 499 round TRIPS, which cost nothing measurable over
+    # a Unix socket and are the whole of the cost over a network. So the break-even is
+    # **~2.9ms of round trip** (the unrounded 1.46s / 499), not the sub-millisecond figure an earlier
+    # revision of this comment claimed from a sparse provider: below that the slice is a loss, above
+    # it a win. Same-host and same-AZ Postgres sit under that bar; a cross-AZ or cross-region managed
+    # database sits over it. **This is genuinely marginal on latency, and it is bought for the
+    # correctness of the identity graph, which is not marginal at all.**
+    #
+    # Both rows above produce 500 identities for these 500 deliberately-unlike tests, so the table is
+    # a like-for-like cost comparison and nothing else. What it does NOT show is the third variant —
+    # batching the insert with this scan REMOVED — which is the fast and wrong one: two near-identical
+    # brand-new tests in one page split into rows the per-row path never created, permanently. That
+    # variant is not benchmarked here because it is pinned as behaviour instead, by the two examples
+    # "gives ONE row to two spellings of one test that are both new and both on this page" and
+    # "gives ONE row to two new spellings that MATCH without embedding to the same vector" — delete
+    # the scan and those fail, which is the point of them.
+    #
+    # == Two ways to make it cheaper, both refused, and why
+    #
+    # A Cauchy-Schwarz early exit over entries sorted by descending magnitude was tried and measured
+    # at 0.655s against 0.645s on the sparse provider — no gain, because the bound decays as a
+    # square root and never bites early. Dense is no better and the reason is the same, only more so:
+    # 1024 dimensions spread the mass flatter still, so the partial-sum bound sits near 1.0 for every
+    # pair and rejects nothing. Cauchy-Schwarz cannot separate candidates at a 0.95 bar in this
+    # regime; that is a property of the geometry, not of the implementation.
+    #
+    # Bucketing pending rows by a cheap LEXICAL key and dotting only within a bucket would cut the
+    # quadratic honestly — and is refused, because it is unsound against the provider that ships.
+    # `voyage-4-lite` is semantic: two brand-new tests can sit above 0.95 while sharing few tokens,
+    # and that pair is exactly the one this method exists to catch. A lexical prefilter would let it
+    # split, silently and un-testably under a stub whose vectors carry no meaning.
+    #
+    # No cheap EXACT prefilter is available for dense high-dimensional vectors at a high threshold.
+    # The scan is irreducible at this page size; what is tunable is the page. See {BATCH_SIZE}.
     #
     # And it is paid ONLY on that shape. `@pending_vectors` holds the page's misses SO FAR, which is
     # empty on every page of an unchanged suite and stays empty however large the page is: an
@@ -1605,26 +1666,25 @@ module Ingest
     # establish for the life of the repository — and a permanent split is not a cost that a later
     # ingest can pay off, which is what makes it worth a second on a page that happens once.
     #
-    # A provider returning DENSE vectors pays the 8.4s figure rather than the 1.3s one, because
-    # {PendingVector} stores what the provider gives it. Named rather than guarded against: the
-    # shipped provider is `LocalProvider` by owner decision ("SpecGuard does not pay for
-    # embeddings"), a dense provider is a deliberate act with an initializer behind it, and the
-    # remedy if one is ever chosen belongs with the ANN lookup that same page is already bound by —
-    # **SPGD-375's**, which owns this path's remaining per-row round trip.
+    # The remaining per-row round trip on this page is the ANN lookup, and it is **SPGD-375's**. If
+    # the scan above is ever to get cheaper, that is where the pending rows would have to become
+    # visible to an index instead of to a Ruby loop; there is no cheaper answer at this layer.
 
     #
     # == Cosine and not a dot product, and the best match and not the first
     #
     # Divided by both magnitudes so the number compared against `SpecIdentity::MATCH_SIMILARITY` is
     # the same number pgvector's `cosine` operator produces for {#nearest}. See {PendingVector} for
-    # why that division is not dead code even though both shipped providers return unit vectors.
+    # why that division is not dead code even though every provider in this tree normalises.
     #
     # The whole buffer is scanned and the BEST match taken, rather than returning the first row over
     # the bar, because that is what `nearest_neighbors(...).first` does and the two must not disagree
     # about which identity a text belongs to depending on which side of the page boundary it fell.
-    # A zero-magnitude vector — a description with no alphanumeric content, which {LocalProvider}
-    # honestly reduces to no direction at all — matches nothing here, exactly as it matches nothing
-    # at the index, where pgvector answers NaN rather than a confident wrong neighbour.
+    # A zero-magnitude vector — a description with no alphanumeric content, which
+    # `LexicalEmbeddingProvider` honestly reduces to no direction at all — matches nothing here,
+    # exactly as it matches nothing at the index, where pgvector answers NaN rather than a confident
+    # wrong neighbour. Guarded rather than assumed away: `EmbeddingGenerator.validate` checks width
+    # and finiteness, so a zero vector is a valid one as far as the interface is concerned.
     #
     # {#nearest} is still asked FIRST and still wins: a committed row is at least as good an answer
     # as a pending one, and the row that is already in the table is the one a later page would find

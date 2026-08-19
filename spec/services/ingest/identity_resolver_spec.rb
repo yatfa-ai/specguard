@@ -1660,7 +1660,7 @@ RSpec.describe Ingest::IdentityResolver do
     # digest rather than on an integer id.
     #
     # One scan of the whole `VALUES` clause rather than a split into tuples: a digest is 64 hex
-    # characters and every row carries exactly one, while the embedding beside it is a 1536-element
+    # characters and every row carries exactly one, while the embedding beside it is a 1024-element
     # vector literal that any tuple-splitting regex would have to survive first.
     def values_digests(statement)
       statement[/VALUES (.+) ON CONFLICT/m, 1].scan(/\b[0-9a-f]{64}\b/)
