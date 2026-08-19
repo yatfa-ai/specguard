@@ -199,7 +199,7 @@ class SpecDirectoryDurations
     def distinct_description_label
       return "no descriptions" unless named?
 
-      "#{distinct_name_count} of #{named_count}"
+      SpecObservation.coverage_fraction(distinct_name_count, named_count)
     end
 
     # No `#over_covered?`, and no threshold anywhere on this Row. The ratio of distinct descriptions
