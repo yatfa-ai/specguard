@@ -139,6 +139,14 @@ class GithubAppUserAuthorization
                           client_secret: SpecGuard::GithubApp.client_secret,
                           code: code)
 
+      # `decode` passes an ARRAY through untouched, because the listing walks genuinely expect one.
+      # This endpoint does not, and reading `["error"]` off an Array raises a TypeError that the
+      # controller's `rescue GithubApi::Error` does not catch — a 500 on the callback instead of the
+      # designed redirect. Defaulted to `{}` so a body of the wrong shape falls through to the
+      # "no access token" refusal below, which is already what a 200 carrying neither an error nor a
+      # token gets. The same guard the three other readers of `decode` already carry.
+      payload = {} unless payload.is_a?(Hash)
+
       # GitHub answers 200 with `{"error": "bad_verification_code"}` for a code that is expired,
       # already used, or simply invented — the status line alone would read that as success.
       if payload["error"].present?

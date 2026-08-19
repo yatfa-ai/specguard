@@ -394,6 +394,25 @@ RSpec.describe "Bulk organization registration", type: :request do
 
       expect(response).to have_http_status(:ok)
       expect(response.body).to include("GitHub is not answering right now")
+      expect(response.body).not_to include("Reconnect to GitHub")
+    end
+
+    # A 401 is not an outage. The only credential on this read is the viewer's own session token —
+    # there is no App id and no private key in this codebase to have been rejected instead — so it
+    # means the token expired or was revoked mid-session, which the session cannot tell for itself
+    # because the stored expiry has not lapsed yet. The fix is a click, and this page offers the
+    # same button the single-repository form does rather than sending the reader away to wait.
+    it "offers the reconnect button when GitHub rejects the user's token" do
+      # Configured so the real button renders rather than the operator notice that stands in for it.
+      allow(SpecGuard::GithubApp).to receive_messages(configured?: true, slug: "specguard")
+      stub_github(unauthorized: true)
+
+      get bulk_repositories_path
+
+      expect(response).to have_http_status(:ok)
+      expect(response.body).to include("Reconnect to GitHub")
+      expect(response.body).to include(github_installation_authorize_path)
+      expect(response.body).not_to include("GitHub is not answering right now")
     end
 
     # GitHub answered here, and said no — so "try again shortly" would be describing something else.

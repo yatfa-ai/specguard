@@ -183,6 +183,38 @@ RSpec.describe "GitHub App installation", type: :request do
       expect(flash[:alert]).to include("could not confirm the installation")
     end
 
+    # The two above stub the service and raise, so they pin the CONTROLLER's handling of a refusal
+    # they were handed. This one refuses to stub it: the exchange runs for real against a token
+    # endpoint answering 200 with a JSON ARRAY, which is a body `GithubAppUserAuthorization#decode`
+    # passes through untouched because the installation and repository walks need arrays. Reading
+    # `["error"]` off one raised a `TypeError`, which is not a `GithubApi::Error` and so walked
+    # straight past the rescue below into a 500 error page on the OAuth callback — with the
+    # diagnostic never logged. Asserted end to end because that is where the cost was paid.
+    it "redirects rather than 500ing when GitHub answers the exchange with a JSON array" do
+      user = sign_in_via_github(installation: false)
+      with_configured_app
+      token_endpoint = Net::HTTPOK.new("1.1", "200", "OK")
+      allow(token_endpoint).to receive(:body).and_return("[]")
+      http = instance_double(Net::HTTP)
+      allow(http).to receive(:request).and_return(token_endpoint)
+      allow(Net::HTTP).to receive(:start).and_yield(http)
+      allow(Rails.logger).to receive(:warn)
+
+      get github_installation_callback_path, params: { installation_id: 777, code: "abc" }
+
+      expect(response).to redirect_to(repositories_path)
+      expect(flash[:alert]).to include("could not confirm the installation")
+      expect(Rails.logger).to have_received(:warn).with(/GithubApi::Unauthorized.*no access token/)
+
+      # Fail-closed, asserted rather than inferred from the order the controller happens to run in:
+      # no installation recorded, and no credential in the session for a later page to read with.
+      expect(user.github_installations).to be_empty
+      expect(session["github_user_token"]).to be_nil
+
+      # And it stopped at the exchange — the identity read and the listing walk never happened.
+      expect(http).to have_received(:request).once
+    end
+
     # Idempotent, because the flow is: GitHub sends a user here every time they pass through it,
     # including when they merely change which repositories are selected. A second visit updates the
     # row rather than failing on the uniqueness index or growing a duplicate.

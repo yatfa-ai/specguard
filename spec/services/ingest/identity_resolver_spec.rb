@@ -3606,6 +3606,10 @@ RSpec.describe Ingest::IdentityResolver do
     # repository-wide scan of a table holding `BRANCH_RETENTION_RUNS` runs of a 20,000-example suite
     # per branch, to find nothing on a healthy repository.
     describe "the plan Postgres chooses for it" do
+      # The `ANALYZE` in the `before` below reaches past the per-example rollback. This puts back
+      # what it perturbs — see the mechanism, and the measured numbers, in the support file.
+      restores_relation_statistics_for "spec_observations"
+
       let(:resolved_runs) { 10 }
       let(:rows_per_run) { 500 }
       # A backlog LARGER than one sweep may take — the shape the ordering keys are in the index for,
@@ -3674,7 +3678,14 @@ RSpec.describe Ingest::IdentityResolver do
              created_at: (SpecObservation::EMBED_ATTEMPT_GRACE + 1.hour).ago, rows: stranded_rows)
 
         # Without stats the planner works off hard-coded defaults and its choice says nothing about
-        # the data. `ANALYZE` is legal inside the transaction the suite wraps each example in.
+        # the data. `ANALYZE` is legal inside the transaction the suite wraps each example in — but
+        # legality is not containment, and the difference is the whole point: `pg_statistic` is
+        # written transactionally and does roll back, while `pg_class.reltuples`/`relpages` — for
+        # this table and for every index on it — are written in place by `heap_inplace_update()`
+        # and survive the rollback. The declaration on the group above puts them back; without it
+        # this group would leave the catalog claiming 7,000 observations in a table that is empty
+        # again, and every plan-asserting example that ran before autovacuum corrected it would
+        # plan against that phantom.
         ActiveRecord::Base.connection.execute("ANALYZE spec_observations")
       end
 
@@ -3926,6 +3937,10 @@ RSpec.describe Ingest::IdentityResolver do
     # it. Seeded and certified exactly as "the plan Postgres chooses for it" above does, against the
     # relations the report actually counts rather than against copies of them.
     describe "the plan Postgres chooses for its counts" do
+      # The `ANALYZE` in the `before` below reaches past the per-example rollback. This puts back
+      # what it perturbs — see the mechanism, and the measured numbers, in the support file.
+      restores_relation_statistics_for "spec_observations"
+
       let(:resolved_runs) { 10 }
       let(:rows_per_run) { 500 }
 

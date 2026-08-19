@@ -128,14 +128,43 @@ module GithubRepositoryListing
     !current_user&.github_installed?
   end
 
-  # Whether the fix on offer is "reconnect to GitHub" — the App is installed and this session simply
-  # has no credential to read it with. Overrides `GithubUserSession`'s plain reading to add the same
-  # verdict seam `github_installation_needed?` uses, and for the same reason: a write that was
+  # Whether the fix on offer is "reconnect to GitHub" — the App is installed and this session has no
+  # credential GitHub will accept for it. Overrides `GithubUserSession`'s plain reading to add the
+  # same verdict seam `github_installation_needed?` uses, and for the same reason: a write that was
   # actually attempted moments ago knows something the session state does not.
+  #
+  # Two things can be wrong with the credential and only one of them is visible locally. `super`
+  # answers for the session that holds NO token; a token that is locally unexpired and which GitHub
+  # nevertheless rejects looks live from here, and is only ever discovered by asking — which is what
+  # the listing read already did, recording it as `:not_authorized`. Both have the same fix and so
+  # the same button, and the second is the case the button most exists for: without this the user is
+  # shown "GitHub is not answering right now" and told to wait out an outage that is not happening,
+  # until the stored expiry lapses on its own.
+  #
+  # A 401 on that read can only be the user's token. `GithubApi` sends the viewer's own session
+  # credential and nothing else — there is no App id and no private key in this codebase (see
+  # `config/initializers/github_app.rb`) — so there is no operator-side credential for GitHub to
+  # have rejected instead.
+  #
+  # `super` is asked BEFORE the listing is read to keep the cheapness the comments above make a point
+  # of: for the no-token-but-installed user it answers from one `EXISTS` against our own table, and
+  # reading the listing means touching `github_sources`. The two orderings agree — that path's
+  # sources are `:not_authorized` too, because `InstallationRepositories.sources` short-circuits on
+  # a blank token without calling GitHub.
+  #
+  # `github_listing.nil?` is the load-bearing half of the last condition and NOT a tidy extra guard.
+  # `collect` keeps the FIRST error it meets and goes on merging the installations that answered, so
+  # a viewer with two installations, one of which 401s, has `error == :not_authorized` AND a listing
+  # of genuinely registerable repositories. Asking the error alone would replace that working picker
+  # with a button — worse than the defect this method is fixing, because there IS something to show
+  # and reconnecting would not add to it. The button is owed only when the error is the whole story,
+  # which is what `github_listing` returning nil means (`registrable.empty? && error`). The
+  # short-list case keeps its own answer: the picker, plus `github_listing_incomplete?`.
   def github_authorization_needed?
     return github_verdict.authorize? if github_verdict
+    return true if super
 
-    super
+    github_listing.nil? && github_listing_error == :not_authorized
   end
 
   # A verdict this request has already collected about a repository, when there is one — a controller
