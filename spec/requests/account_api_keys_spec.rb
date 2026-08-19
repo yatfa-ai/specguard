@@ -101,4 +101,72 @@ RSpec.describe "Account API keys", type: :request do
 
     expect(response).to redirect_to(root_path)
   end
+
+  # The CLIENT-SIDE half of criterion 1's "revealed exactly once". The server-side half is two
+  # examples up — the flash is consumed, a reload shows only the hint — but the partial's own
+  # comments name two mechanisms as what makes that claim "actually true", and neither is a thing
+  # any other example here would notice the loss of: both failure modes are silent, and this
+  # credential has no rotation and no second reveal, so the panel failing at its one job is
+  # unrecoverable in a way the repository panel's is not.
+  #
+  # Adapted from the sibling panel's guards in `repository_api_key_regeneration_spec.rb`, which
+  # this partial was copied from. Deliberately NOT the whole set: the wording, the both-outcomes
+  # messages, the no-JS status line and the button type are settled by the shared components and
+  # asserted there. What is asserted here is what is specific to THIS render — the `sgu_` payload,
+  # the filename, and the cache opt-out on the page that carries the token.
+  describe "the reveal panel" do
+    def reveal_panel
+      Capybara.string(response.body)
+              .find("[data-controller='copy-text'][data-copy-text-auto-copy-value]")
+    end
+
+    it "hands auto-copy the bare token, under a filename named after the key" do
+      mint("Laptop")
+
+      # `copy-text` copies `textContent` verbatim for both the clipboard and the download, so this
+      # is asserting WHICH payload the panel controller grabs, not merely that it has one. Document
+      # order would hand it the curl snippet if that snippet's nested scope were ever collapsed —
+      # and a reader whose clipboard holds a curl command has no way back to the token.
+      own_sources = own_copy_sources(reveal_panel)
+
+      expect(own_sources.size).to eq(1)
+      expect(own_sources.first.text.strip).to match(/\Asgu_[A-Za-z0-9_-]{20,}\z/)
+
+      # `revealed_token_filename` moved to `ApplicationHelper` because a SECOND panel renders it.
+      # This is that second call site, and the only assertion that would notice it stop being made.
+      expect(reveal_panel["data-copy-text-download-filename-value"])
+        .to eq("specguard-laptop-api-key.txt")
+    end
+
+    # Turbo Drive would falsify the panel's own bold claim on its own: it snapshots the live DOM
+    # when the reader navigates away and repaints it on Back, plaintext token included, and
+    # `connect()` fires on a restored snapshot exactly as on a fresh render — so auto-copy would
+    # re-run too, over a clipboard the reader has since used.
+    #
+    # Asserted as the meta and not `data-turbo-cache="false"` on the panel because the element-level
+    # attribute does not exist in turbo-rails 2.0.23: `getSetting("cache-control")` reads exactly
+    # this tag, so an example asserting the attribute would pass while the token stayed in cache.
+    # The meta can stop rendering without this partial being touched at all — a change to how
+    # `content_for :head` is captured, or to `accounts/show`'s structure around the render.
+    it "keeps the render carrying the token out of Turbo's snapshot cache" do
+      mint("Laptop")
+
+      cache_control = Capybara.string(response.body)
+                              .find("meta[name='turbo-cache-control']", visible: :all)
+
+      expect(cache_control["content"]).to eq("no-cache")
+    end
+
+    # Paired with the example above: that one alone would also pass if the meta were parked in the
+    # layout for every page, which would quietly cost the whole app its snapshot cache. This is what
+    # makes the assertion about THIS render rather than about the application template.
+    it "leaves the snapshot cache alone on a page with no token on it" do
+      mint("Laptop")
+
+      get account_path
+
+      expect(response.body).not_to match(/sgu_[A-Za-z0-9_-]{20,}/)
+      expect(response.body).not_to include("turbo-cache-control")
+    end
+  end
 end
