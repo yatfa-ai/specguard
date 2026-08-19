@@ -26,6 +26,12 @@ module Builders
     user.repositories.create!(github_full_name: github_full_name)
   end
 
+  # One `sgu_` user API key. `raw_token` is readable on the returned object and nowhere else —
+  # reload it and the plaintext is gone, which is the property `UserApiKey` exists to have.
+  def create_user_api_key(user: create_user, name: "Laptop")
+    user.user_api_keys.create!(name: name)
+  end
+
   # Shares an existing repository with a user who does not own it. `permissions` are the stored
   # strings, e.g. %w[view keys.manage] — see RepositoryMembership::PERMISSIONS.
   def create_membership(repository:, user:, permissions: [RepositoryMembership::VIEW])

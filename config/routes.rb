@@ -4,8 +4,9 @@ Rails.application.routes.draw do
   # The public integration guide (SPGD-705). Deliberately outside every authentication gate, and
   # that is the requirement rather than an oversight: its intended reader is as often an AI coding
   # agent handed nothing but this URL as it is a person, and such an agent has no session and
-  # cannot acquire one. It documents the two `api/v1` routes declared below and promises nothing
-  # beyond them, so there is nothing on it a signed-out reader must not see.
+  # cannot acquire one. It documents the two CI-facing `api/v1` routes declared below — the ones a
+  # repository's own `sgk_` key answers — and promises nothing beyond them, so there is nothing on
+  # it a signed-out reader must not see.
   #
   # `/docs/…` rather than a bare `/integrate` so the next document has an obvious home; the named
   # helper is `integration_guide_path`, which is what the repository page's agent-prompt block
@@ -71,6 +72,18 @@ Rails.application.routes.draw do
     resources :members, only: %i[index new create edit update destroy], controller: "memberships"
   end
 
+  # --- Account: what belongs to the person rather than to a repository ------------
+  # The first top-level surface that is not about one repository. `sgu_` user keys authenticate AS
+  # the person across everything they may open (see `UserApiKey`), so there is no repository to hang
+  # them off and `/repositories/:id/api_keys` would be the wrong address in a way that quietly
+  # misdescribes the credential.
+  #
+  # Singular `resource`, because there is exactly one account per session and its id is the session
+  # — an `/account/:id` would be an invitation to type somebody else's.
+  resource :account, only: :show do
+    resources :api_keys, only: %i[create destroy], controller: "user_api_keys"
+  end
+
   # --- Machine auth: Bearer API key ---------------------------------------------
   namespace :api do
     namespace :v1 do
@@ -78,6 +91,14 @@ Rails.application.routes.draw do
       # Phase 3 (/check-intent) mounts alongside these.
       get "repository", to: "repositories#show"
       post "ingest", to: "ingests#create"
+
+      # PLURAL, and a different credential from the singular route above — which is the whole
+      # reason it is a separate controller rather than an `index` on that one. `/repository`
+      # answers to a `sgk_` repository key and reports on the one repository it names;
+      # `/repositories` answers to a `sgu_` user key and lists what that PERSON may open. The two
+      # refuse each other's tokens with a 401 (see `Api::BaseController`), so the near-identical
+      # paths cannot quietly serve the wrong thing.
+      get "repositories", to: "user_repositories#index"
     end
   end
 

@@ -11,6 +11,11 @@
 # (`Repository#latest_test_run` and `#recent_test_runs`, which share an ordering tie-break
 # included), so the API and the dashboard cannot name different commits for the same repository.
 class Api::V1::RepositoriesController < Api::BaseController
+  # THIS ENDPOINT NEEDS A REPOSITORY, and says so rather than discovering it. Every figure this
+  # controller serves is read off `current_repository`, so a credential that resolves no repository
+  # has nothing to be served here — a `sgu_` user key gets 401. See `Api::BaseController`.
+  accepts_repository_credential
+
   # How each `history` row was assembled, in one aggregate for the whole window. The same four
   # lines the human Recent-runs panel primes its rows with — see `ShardCountPreloading`, which is
   # one module rather than two copies because nothing in it needs anything an
