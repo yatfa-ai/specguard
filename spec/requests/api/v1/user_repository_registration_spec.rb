@@ -67,6 +67,39 @@ RSpec.describe "API v1 — POST /api/v1/repositories", type: :request do
       expect(row.attributes.values.map(&:to_s)).not_to include(a_string_including(token))
     end
 
+    # Attribution, which is the one property of this key that CANNOT be repaired after the fact:
+    # `ApiKeysController#destroy` is a hard `destroy!` with no audit row, so a key minted with a
+    # NULL creator is unattributed forever — the reason `add_created_by_user_to_api_keys` went to
+    # the trouble of a backfill rather than starting the column empty.
+    #
+    # Asserted on the STORED row, and on the person rather than on "not nil", because the only
+    # candidate this request could get wrong is a different one: ownership and authorship are the
+    # same person here, so an implementation reading either off the repository would also pass a
+    # nil-check. `repositories/_api_keys` renders this column, and "Unknown" is a sentence about a
+    # key minted before attribution existed or whose creator was deleted — neither is true of one
+    # minted a second ago by a person who is still here.
+    it "records the person who minted it as its creator" do
+      register("acme/billing-service")
+
+      expect(ApiKey.last.created_by_user).to eq(person)
+    end
+
+    # The response promises a repository AND a key, so the two writes are one transaction. Without
+    # it a failed mint leaves the caller holding a registration they cannot deliver to and cannot
+    # re-register — the retry is refused as already taken — with no API path out, because minting a
+    # key over the API is a slice that has not shipped.
+    #
+    # The stub is the shape of the only failure that is real: `token_digest` carries a unique index.
+    it "registers nothing when the key it promised cannot be minted" do
+      allow_any_instance_of(ApiKey).to receive(:save!).and_raise(ActiveRecord::RecordNotUnique)
+
+      expect do
+        register("acme/billing-service")
+      rescue ActiveRecord::RecordNotUnique
+        nil
+      end.not_to change(Repository, :count)
+    end
+
     # `Repository#normalize_full_name` runs before the grant is consulted (the gate's `valid?` step),
     # and the grant is keyed case-insensitively for the reason `InstallationRepositories
     # .verify_batch` gives: GitHub logins and repository names are.

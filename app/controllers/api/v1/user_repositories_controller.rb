@@ -53,6 +53,9 @@ class Api::V1::UserRepositoriesController < Api::BaseController
   # The name every first key gets. Deliberately the same string `ApiKeysController` defaults to, so
   # a repository registered by an agent and one registered in a browser have identically-named keys
   # rather than two conventions a person has to learn.
+  #
+  # The naming is only half of that parity — see `#create` for the other half, which is the one that
+  # cannot be repaired later if it is skipped.
   FIRST_KEY_NAME = "Default CI Key"
 
   def index
@@ -66,17 +69,46 @@ class Api::V1::UserRepositoriesController < Api::BaseController
   # `current_api_user.repositories.new` rather than `Repository.new(user: …)`: ownership is set from
   # the CREDENTIAL and is not a field of the request, so there is no parameter a caller could send
   # that would register something under somebody else's account.
+  #
+  # ## `created_by_user`: the half of the parity with `ApiKeysController` that has no second chance
+  #
+  # `add_created_by_user_to_api_keys` says why: `ApiKeysController#destroy` is a hard `destroy!` with
+  # no audit row, so attribution is not backfillable after the fact — a key minted NULL is NULL
+  # forever. There is nothing to infer from either: this request KNOWS who minted the key, because
+  # the person the `sgu_` key speaks for is the only reason the registration was permitted at all,
+  # and the roadmap's own non-goal is that the key's reach is the person's reach. Leaving it blank
+  # would render a false sentence — `repositories/_api_keys` shows "Unknown" for a creator that was
+  # never recorded or has been deleted, and neither is true of a key a person minted a second ago —
+  # and would silently undercount `MembershipsController#keys_minted_by`, the query behind the
+  # warning shown when that person's access is revoked.
+  #
+  # ## One transaction, because the response promises both
+  #
+  # A repository that reached the database without its key leaves the caller holding a registration
+  # they cannot deliver to and cannot re-register — the retry is refused with `has already been
+  # taken` — and no API path out of it, since minting a key over the API is a slice that has not
+  # shipped. The failure is remote (`name` is a constant and `token_digest` collisions are not a real
+  # event), but rolling back is recoverable and half-registering is not.
   def create
     repository = current_api_user.repositories.new(github_full_name: create_params[:github_full_name])
     registration = RepositoryRegistration.new(repository: repository, verifier: grant_verifier)
+    api_key = nil
+
+    registered = ActiveRecord::Base.transaction do
+      # `next false` rather than a raise: a refused registration has written nothing to roll back,
+      # and the response it deserves is a 400 rather than the 500 an exception would become.
+      next false unless registration.save
+
+      api_key = repository.api_keys.create!(name: FIRST_KEY_NAME, created_by_user: current_api_user)
+      true
+    end
 
     # A refusal is a refusal whether it came from the record's own rules (not `org/repo`, already
     # registered) or from the ownership gate, and both have already been recorded on the record as
     # errors — so there is one response path rather than a branch that has to know which happened.
-    return render_bad_request(repository.errors.full_messages) unless registration.save
+    return render_bad_request(repository.errors.full_messages) unless registered
 
-    render json: registered_body(repository, repository.api_keys.create!(name: FIRST_KEY_NAME)),
-           status: :created
+    render json: registered_body(repository, api_key), status: :created
   end
 
   private
@@ -91,8 +123,12 @@ class Api::V1::UserRepositoriesController < Api::BaseController
   # The evidence this request can offer, which is a recording rather than a live answer. `nil` is an
   # ordinary state and not an error: it is every person who has not opened SpecGuard in a browser
   # since this shipped, and `GrantVerifier` refuses on it with a sentence naming the fix.
+  #
+  # Through the association rather than `GithubRegistrationGrant.find_by(user_id: …)`, which is the
+  # same query written the long way — `User has_one :github_registration_grant` is what makes "one
+  # grant per person" a fact of the schema rather than a convention each caller re-states.
   def grant_verifier
-    RepositoryRegistration::GrantVerifier.new(grant: GithubRegistrationGrant.find_by(user_id: current_api_user.id))
+    RepositoryRegistration::GrantVerifier.new(grant: current_api_user.github_registration_grant)
   end
 
   # `repository` is deliberately the same four fields `#index` and `Api::V1::RepositoriesController`
