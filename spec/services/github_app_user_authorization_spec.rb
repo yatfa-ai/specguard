@@ -181,6 +181,22 @@ RSpec.describe GithubAppUserAuthorization do
       expect(fake.requests.length).to eq(1)
     end
 
+    # A JSON ARRAY is a member of the same class as the two above — it carries neither an error nor
+    # a token — but it used to be the one member that CRASHED instead of being refused. `decode`
+    # passes arrays through untouched (the installation and repository walks need that), so this is
+    # a body `exchange` can really be handed, and `["error"]` on an Array raises a TypeError, which
+    # is not a `GithubApi::Error` and so escapes the callback's rescue as a 500. Refused here as
+    # what it is: a 200 that proves nothing.
+    ["[]", '["x"]'].each do |body|
+      it "refuses a 200 whose body is the JSON array #{body}" do
+        fake = with_responses(exchange_response(body))
+
+        expect { described_class.authorize(code: "abc123", github_uid: "1001") }
+          .to raise_error(GithubApi::Unauthorized, /no access token/)
+        expect(fake.requests.length).to eq(1)
+      end
+    end
+
     # A callback that arrives with no code at all is the plain forgery: someone typed the setup URL
     # with an installation id on it. It is settled here, without asking GitHub anything.
     [nil, "", "   "].each do |value|
