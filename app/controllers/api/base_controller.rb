@@ -41,6 +41,19 @@
 # repository key sent to a user-key endpoint (or the reverse) is refused with no query at all, and a
 # valid presentation costs exactly the single `find_by` on a unique digest index that resolution has
 # always been. Probing both tables per request would have been the naive shape.
+#
+# `bind_principal` is part of that claim, not an exception to it. It runs on every authenticated
+# request, and reading the principal is free only because resolution brings it back in the SAME
+# statement: `UserApiKey.authenticate` uses `eager_load(:user)` rather than `joins(:user)` for
+# exactly this reason, and its comment spells out the difference. `ApiKey`'s branch is not the same
+# shape and is not held to the same claim — `current_repository` is the endpoint's PAYLOAD, was
+# never joined against, and costs its own read by design.
+#
+# This paragraph is a measured claim rather than an asserted one, and the measurement is scoped to
+# match it: `spec/requests/api/v1/credential_seam_spec.rb` counts a whole valid presentation across
+# BOTH credential tables AND `users`, so a second read of the person fails there. A guard filtered
+# to the credential tables alone would report "exactly one read" while the request made two, which
+# is precisely how this paragraph came to be wrong once already.
 class Api::BaseController < ActionController::API
   # The credential class this endpoint accepts — `ApiKey`, `UserApiKey`, or `nil` for "has not said,
   # therefore nothing". Set through the two macros below rather than assigned directly, so the

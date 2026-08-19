@@ -33,6 +33,16 @@ class UserApiKeysController < ApplicationController
     # `AccountsController#show`. `revealed_api_key` stays a BARE token because the copy-text
     # Stimulus controller copies that element's text verbatim, which is why the name travels
     # separately.
+    #
+    # The consequence of SHARING those keys with the repository surface, written down rather than
+    # discovered later: a flash is consumed by whatever request arrives NEXT, not specifically by
+    # the redirect target. If anything intervenes — a Turbo hover-prefetch, a second tab — this
+    # `sgu_` token can be consumed by `repositories#show` and rendered in a panel that describes it
+    # as that repository's CI key, beside a curl pointed at an endpoint it will 401 against. That
+    # is a MISLABELLING risk and not a leak: the only person who can see it is the one who just
+    # minted it. It is inherited from the existing mechanism rather than introduced here, and the
+    # ticket asked for that mechanism specifically. If a later slice gives the two panels distinct
+    # flash keys, this is the reason.
     flash[:revealed_api_key] = user_api_key.raw_token
     flash[:revealed_api_key_name] = user_api_key.name
 

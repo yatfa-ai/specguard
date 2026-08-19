@@ -36,12 +36,45 @@ RSpec.describe "API v1 — the credential seam", type: :request do
       queries_against("api_keys", &)
     end
 
+    # A WIDER population than `credential_reads`, and the difference is the whole point of it.
+    #
+    # `Api::BaseController` claims authentication costs one indexed read. Two different regressions
+    # would falsify that, and they land on DIFFERENT TABLES: probing the second credential table
+    # (caught by `credential_reads`), and reading the resolved person a second time to bind the
+    # principal (invisible to it — that read is against `users`). A filter naming only the
+    # credential tables reports "exactly one read" while the request makes two, so the cost claim
+    # has to be measured over both tables or it is not measured at all.
+    #
+    # This is not hypothetical: `UserApiKey.authenticate` spelled with `joins(:user)` instead of
+    # `eager_load(:user)` filters through the `users` row without populating the association, and
+    # `bind_principal`'s `.user` then re-reads it by primary key on EVERY authenticated request.
+    # `"users"` is quoted so the filter matches the table and not the substring in `user_api_keys`.
+    def authentication_reads(&)
+      queries_against(/api_keys|"users"/, &)
+    end
+
     it "reads no credential table at all when the prefix does not match the endpoint" do
       # Resolved OUTSIDE the measured block: minting a key is itself two statements against a
       # credential table, and a lazily-evaluated `let` inside would count them as the request's.
       token = repository_key.raw_token
 
       statements = credential_reads { get "/api/v1/repositories", headers: bearer(token) }
+
+      expect(response).to have_http_status(:unauthorized)
+      expect(statements).to be_empty
+    end
+
+    # The other direction of the same refusal. The mechanism is shared, so this is not a hole
+    # today — but the header of this file argues that the two directions are asymmetric and each
+    # needs its own examples, and that argument does not stop applying to the zero-read half. This
+    # is the direction where a leaked `nil` repository would be recorded rather than raised, so it
+    # is the one worth pinning twice.
+    it "reads no credential table when a user key is presented to the ingest endpoint" do
+      token = user_key.raw_token
+
+      statements = credential_reads do
+        post "/api/v1/ingest", params: ingest_payload, as: :json, headers: bearer(token)
+      end
 
       expect(response).to have_http_status(:unauthorized)
       expect(statements).to be_empty
@@ -56,17 +89,33 @@ RSpec.describe "API v1 — the credential seam", type: :request do
       expect(statements).to be_empty
     end
 
-    # The positive control for the two zeroes above: without it they would also pass against an
-    # endpoint that had stopped authenticating anything. One read resolves a valid key — the
-    # digest lookup — and it is a read of the ONE table the endpoint declared for.
-    it "reads exactly one credential table on a valid presentation" do
+    # The positive control for the zeroes above: without it they would also pass against an
+    # endpoint that had stopped authenticating anything. Measured over `authentication_reads`, so
+    # the SAME example is also the guard on the cost claim — it sees every table a valid
+    # presentation touches to get its principal, not just the one it was resolved from.
+    #
+    # Two statements, and the second is not a read: the `SELECT` that resolves the key, and the
+    # `last_used_at` stamp. Asserted three ways, because each catches a different regression.
+    it "resolves a valid presentation in one read, and reads the person no second time" do
       token = user_key.raw_token
 
-      statements = credential_reads { get "/api/v1/repositories", headers: bearer(token) }
+      statements = authentication_reads { get "/api/v1/repositories", headers: bearer(token) }
 
       expect(response).to have_http_status(:ok)
+
+      # (1) One credential read, against the ONE table the endpoint declared for — the original
+      # control, unchanged in what it claims.
       expect(statements.grep(/FROM "user_api_keys"/).size).to eq(1)
       expect(statements.grep(/FROM "api_keys"/)).to be_empty
+
+      # (2) The person is never SELECTed on their own. The resolving statement reads `users`
+      # through a JOIN and carries its columns back, so `bind_principal` has nothing left to
+      # fetch; a statement whose own `FROM` is `users` means it went and got them again.
+      expect(statements.grep(/FROM "users"/)).to be_empty
+
+      # (3) The total, so a THIRD read appearing against any of these tables fails here even if it
+      # is spelled in a way (1) and (2) do not recognise.
+      expect(statements.size).to eq(2)
     end
   end
 

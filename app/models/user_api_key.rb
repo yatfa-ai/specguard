@@ -59,12 +59,22 @@ class UserApiKey < ApplicationRecord
   # offboarding control has already refused. So an archived owner's token resolves to nothing, and
   # the endpoint answers 401 with no more detail than it gives a token that never existed.
   #
-  # Still one indexed read: the unique digest index picks the row, and the join checks one column on
-  # the one `users` row it points at.
+  # Still one indexed read, and `eager_load` rather than `joins` is what keeps it true. Both spell
+  # the same JOIN and both let `merge(User.active)` land its `archived_at IS NULL` in the `WHERE`,
+  # so they refuse an archived owner identically. They differ in what they leave behind: `joins`
+  # visits the `users` row to filter on it and then discards it, so the very next caller —
+  # `Api::BaseController#bind_principal`, on EVERY authenticated request — reads that same row a
+  # second time by primary key. `eager_load` selects its columns in the one statement and hands
+  # back a record whose `user` is already `loaded?`, so binding the principal costs no query at all.
+  # The join has to be paid for either way; this is the spelling that does not pay for it twice.
+  #
+  # `spec/models/user_api_key_spec.rb` pins both halves — one statement, and a `user` that reads
+  # zero — and `spec/requests/api/v1/credential_seam_spec.rb` counts the whole request against
+  # BOTH tables so the claim is measured over HTTP rather than asserted in this comment.
   def self.authenticate(token)
     return nil if token.blank?
 
-    joins(:user).merge(User.active).find_by(token_digest: digest(token))
+    eager_load(:user).merge(User.active).find_by(token_digest: digest(token))
   end
 
   def touch_last_used!

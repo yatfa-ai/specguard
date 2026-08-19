@@ -46,6 +46,36 @@ RSpec.describe UserApiKey do
     expect(user_api_key.token_hint).not_to include(user_api_key.raw_token.delete_prefix("sgu_"))
   end
 
+  # `Api::BaseController` states that authentication costs one indexed read, and `authenticate` is
+  # where that is either true or not. It is asserted HERE as well as over HTTP because this is the
+  # site: the request spec can only see the consequence, while this pins the two properties that
+  # produce it, separately, so a regression names which one it broke.
+  #
+  # `count_queries` comes from spec/support/query_capture.rb.
+  describe "what resolving a token costs" do
+    it "resolves in a single statement" do
+      raw = create_user_api_key(user: user).raw_token
+
+      expect(count_queries { described_class.authenticate(raw) }).to eq(1)
+    end
+
+    # The half that `joins(:user)` would fail. Both spellings resolve in one statement and both
+    # refuse an archived owner, so the example above and the archiving examples below CANNOT tell
+    # them apart. The difference is only visible here: `joins` filters through the `users` row and
+    # discards it, leaving `Api::BaseController#bind_principal` to read the same row again by
+    # primary key on every authenticated request; `eager_load` brings its columns back in the one
+    # statement. A count of zero is the whole claim.
+    it "carries the person back with it, so binding the principal reads nothing" do
+      raw = create_user_api_key(user: user).raw_token
+
+      resolved = described_class.authenticate(raw)
+
+      expect(resolved.association(:user).loaded?).to be(true)
+      expect(count_queries { resolved.user }).to eq(0)
+      expect(resolved.user).to eq(user)
+    end
+  end
+
   # The prefix is what `Api::BaseController` discriminates on BEFORE it reads either table, so a
   # `sgu_` that happened to also start `sgk_` — or either being a prefix of the other — would make
   # that decision ambiguous rather than merely ugly.
