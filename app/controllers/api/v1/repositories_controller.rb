@@ -1699,6 +1699,17 @@ class Api::V1::RepositoriesController < Api::BaseController
       # `recorded_count` reconciles against `total_specs - annotated_specs` exactly as it always did
       # and means what it always meant — no authored `@intent`. `unreadable_count` is the only figure
       # here any "cannot see" sentence may be built on.
+      #
+      # ⚠️ ALL THREE ARE POPULATION-GRAIN AGAINST A CAPPED `rows`, and for this pair that is sharper
+      # than it is for `recorded_count`. The read leads with the rows nothing could be read from — so
+      # `rows` fills with unreadable examples FIRST, and the derived ones are exactly what a cap
+      # drops. A client that counts non-null `derived_intent` over `rows` and expects `derived_count`
+      # is comparing a page against a population, and on a capped response the honest answer to that
+      # comparison is routinely zero-of-many rather than merely short. `limit` below is shipped so
+      # the client can tell a capped response from a whole one; `recorded_count > rows.size` is the
+      # comparison, and it is a client's sentence to write for the reason `UnannotatedExamples`
+      # states. The dashboard's own caption got this wrong in exactly this cell (SPGD-711), which is
+      # why it is written down here rather than left as a property of the ordering.
       derived_count: examples.derived_count,
       unreadable_count: examples.unreadable_count,
       limit: SpecObservation::UNANNOTATED_EXAMPLES_LIMIT

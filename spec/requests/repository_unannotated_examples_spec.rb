@@ -712,4 +712,131 @@ RSpec.describe "Repository unannotated examples", type: :request do
       expect(basis_line).to have_text("These are the tests it genuinely cannot see", normalize_ws: true)
     end
   end
+
+  # ⭐ THE SPLIT ON A CUT PAGE — the two grains this caption holds at once, and the cell where they
+  # stop agreeing.
+  #
+  # `#derived_count` and `#unreadable_count` are windows evaluated after the WHERE, so they count the
+  # narrowed POPULATION. "shown in the last column" is a claim about the hundred rows RENDERED. Those
+  # are one row set only while nothing was cut — and this list caps at a hundred and models the cut
+  # explicitly, twenty lines above the split, in a paragraph that says "The other N are not on this
+  # page".
+  #
+  # The two states each had examples and the intersection had none. `capped_run` above builds 112 rows
+  # named "Model N does its thing" — no `Entity#action`, so all 112 are unreadable, the run lands in
+  # the zero-derived arm, and that is the ONE arm the cap cannot hurt. `mixed_reading_run` exercises
+  # the other two arms with three uncut rows. Neither fixture can reach a cut page carrying both
+  # populations, so the cap paragraph and the split paragraph had never been rendered against each
+  # other.
+  #
+  # Which matters MOST here rather than least, because of this read's own ordering decision: the
+  # unreadable rows lead, deliberately, so that the small group a "cannot see" sentence describes
+  # cannot fall off the page. The exact consequence is that the READINGS are what falls off it.
+  describe "the split, where the worklist is capped and the page holds only part of it" do
+    # How many rendered rows actually show a derived reading — the PAGE-grain figure, read off the
+    # column itself. Every assertion below cross-checks the caption's number against this rather than
+    # only pinning a string, because a sentence that says "0" is a defect of the same family as one
+    # that says "5" if the column disagrees with it.
+    def derived_rows_on_page = row_readings.count { |reading| !reading.start_with?("Nothing") }
+
+    # `unreadable` of them from a description `DerivedIntent` reads nothing out of, then `derived` of
+    # them from the ordinary `Entity#action behavior` shape. Path prefixes `aaa_`/`zzz_` so the two
+    # groups cannot be separated by the file-navigable order alone: the READING term is what leads.
+    def capped_mixed_run(unreadable:, derived:)
+      repository = create_repository(user: @user)
+      dark = (1..unreadable).map do |n|
+        unannotated_spec(file_path: "#{area}/aaa_#{format('%03d', n)}_spec.rb", line_number: n,
+                         name: "Model #{n} does its thing")
+      end
+      read = (1..derived).map do |n|
+        unannotated_spec(file_path: "#{area}/zzz_#{format('%03d', n)}_spec.rb", line_number: n,
+                         name: "Invoice#total sums line item #{n}")
+      end
+      ingest(repository, dark + read)
+      repository
+    end
+
+    # ⭐ THE REPRODUCTION. 120 unreadable and 5 derived: the unreadable rows fill the cap exactly, so
+    # every one of the hundred visible rows shows "Nothing" and all five readings are past it. The
+    # caption used to say "SpecGuard reads 5 of them from the test's own description — shown in the
+    # last column" over a page whose every row showed the opposite.
+    it "does not point at the last column for readings the cap left off the page" do
+      get repository_path(capped_mixed_run(unreadable: 120, derived: 5), spec_directory: area)
+
+      expect(rows.size).to eq(SpecObservation::UNANNOTATED_EXAMPLES_LIMIT)
+      expect(derived_rows_on_page).to eq(0)
+      # The false clause, pinned with the words on either side of it: "shown in the last column"
+      # alone still appears legitimately on an UNCUT page, and this is an assertion about which
+      # sentence it is attached to.
+      expect(basis_line)
+        .to have_no_text("from the test's own description — shown in the last column", normalize_ws: true)
+      # The population figures are unchanged — this is a correction to a claim, not to a count.
+      expect(basis_line).to have_text("SpecGuard reads 5 of them from the test's own description",
+                                      normalize_ws: true)
+      expect(basis_line).to have_text("The other 120 it cannot read at all, and those are listed first",
+                                      normalize_ws: true)
+      # And the page-grain clause that replaces it, asserted against the column it describes.
+      expect(basis_line).to have_text(
+        "the last column shows #{derived_rows_on_page} of those 5 readings on this page, " \
+        "and the other 5 are past the cap", normalize_ws: true
+      )
+    end
+
+    # The same arm with the cap falling INSIDE the derived group: 40 unreadable rows fit, so 60 of
+    # the 90 readings are on the page. This is the example a "0" hard-wired into the sentence, or a
+    # `rows.size` printed in place of a real count of the column, goes red on — and it is the cell
+    # that proves `derived_on_page` is read off the rows rather than inferred from the arm.
+    it "counts the readings the page does carry, where the cap falls inside them" do
+      get repository_path(capped_mixed_run(unreadable: 40, derived: 90), spec_directory: area)
+
+      expect(rows.size).to eq(SpecObservation::UNANNOTATED_EXAMPLES_LIMIT)
+      expect(derived_rows_on_page).to eq(60)
+      expect(basis_line).to have_text(
+        "the last column shows 60 of those 90 readings on this page, and the other 30 are past the cap",
+        normalize_ws: true
+      )
+      expect(basis_line)
+        .to have_no_text("from the test's own description — shown in the last column", normalize_ws: true)
+    end
+
+    # ⭐ THE THIRD ARM, which fails the same way more mildly and so is the one that would have been
+    # left behind by a fix written only against the reproduction above. "SpecGuard reads all 130
+    # examples here — shown in the last column" is printed two sentences after the same caption has
+    # said "The other 30 are not on this page".
+    it "does not claim the whole derived population is in the column, where the list was cut" do
+      derivable = SpecObservation::UNANNOTATED_EXAMPLES_LIMIT + 30
+      get repository_path(capped_mixed_run(unreadable: 0, derived: derivable), spec_directory: area)
+
+      expect(rows.size).to eq(SpecObservation::UNANNOTATED_EXAMPLES_LIMIT)
+      expect(derived_rows_on_page).to eq(SpecObservation::UNANNOTATED_EXAMPLES_LIMIT)
+      expect(basis_line).to have_text("SpecGuard reads all 130 examples here from the test's own description",
+                                      normalize_ws: true)
+      expect(basis_line).to have_text("There is none here it cannot read at all", normalize_ws: true)
+      expect(basis_line).to have_text(
+        "The last column shows 100 of those 130 readings on this page, and the other 30 are past the cap",
+        normalize_ws: true
+      )
+      expect(basis_line)
+        .to have_no_text("own description — shown in the last column", normalize_ws: true)
+    end
+
+    # AND THE ZERO-DERIVED ARM IS LEFT ALONE UNDER THE CAP, which is a structural claim rather than a
+    # preference: `derived_count` is zero over the whole narrowed population and the page is a subset
+    # of that population, so every rendered row is unreadable and "the last column says so row by row"
+    # is true of the page whether or not anything was cut. This example is what makes that argument
+    # checkable — a fix that qualified all three arms indiscriminately would put a "past the cap"
+    # clause about an empty remainder onto the one arm that never needed one.
+    it "leaves the arm that read nothing pointing at the column, cut or not" do
+      get repository_path(capped_mixed_run(unreadable: 112, derived: 0), spec_directory: area)
+
+      expect(rows.size).to eq(SpecObservation::UNANNOTATED_EXAMPLES_LIMIT)
+      expect(derived_rows_on_page).to eq(0)
+      expect(basis_line).to have_text(
+        "SpecGuard reads none of them from the test's own description either — the last column says so row by row",
+        normalize_ws: true
+      )
+      expect(basis_line).to have_no_text("past the cap")
+      expect(basis_line).to have_no_text("readings on this page")
+    end
+  end
 end
