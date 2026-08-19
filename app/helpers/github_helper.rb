@@ -1,74 +1,119 @@
 # frozen_string_literal: true
 
-# The GitHub authorization affordance, in one place because it is asked for from three different
-# situations that all resolve the same way: the user has never granted repository access, their
-# token stopped working, or a verification came back needing a grant rather than an edit.
+# The GitHub App installation affordance, in one place because it is asked for from three different
+# situations that all resolve the same way: the user has never installed the App, they installed it
+# and the repository they want is not in it, or a registration came back needing an installation
+# rather than a different pick.
 module GithubHelper
-  # POSTs to the OmniAuth request phase with the broader scope in the query string —
-  # omniauth-github promotes a request-phase `scope` parameter over the provider's configured one
-  # (OmniAuth::Strategies::GitHub#authorize_params), which is what makes incremental authorization
-  # possible without mounting a second provider.
+  # POSTs to the flow that sends the user to GitHub to install the App and choose repositories.
   #
-  # `origin` is OmniAuth's own return-to mechanism: it is stashed during the request phase and read
-  # back in `SessionsController#create`, so the user lands where they were rather than on the
-  # dashboard. It is validated there, not here — a helper that builds the link is not the place
-  # that has to be right about an open redirect.
+  # POST rather than a link, and CSRF-protected as any other POST, so a third-party page cannot
+  # bounce a signed-in user into an installation flow they did not ask for.
+  #
+  # `return_to` round-trips through GitHub's `state` parameter, so the user lands where they were
+  # rather than on the dashboard. It is validated when it comes back, not here — a helper that
+  # builds the button is not the place that has to be right about an open redirect.
   #
   # It falls back to `request.fullpath`, which is only right when the button is rendered by a GET
   # of the page you want to come back to. A caller rendering this inside a non-GET response — a 422
-  # re-render, say — must pass the origin explicitly, or it will send the user back to a path that
-  # renders nothing. See `repositories/_form`, which does.
-  def github_repository_authorization_path(origin: nil)
-    github_auth_path(scope: SpecGuard::GithubOauth::REPOSITORY_SCOPE, origin: origin || request.fullpath)
-  end
-
+  # re-render, say — must pass it explicitly, or it will send the user back to a path that renders
+  # nothing. See `repositories/_form`, which does.
+  #
   # `turbo: false` is load-bearing, for the reason pages/home.html.erb states in full at the
-  # sign-in button: OmniAuth answers this POST with a 302 to github.com, Turbo drives `button_to`
-  # through `fetch`, and a `fetch` cannot follow a cross-origin redirect — the click silently does
-  # nothing. A native browser POST follows it normally.
-  def github_authorize_button(label = "Connect GitHub repositories", origin: nil, variant: :primary)
-    button_to label, github_repository_authorization_path(origin: origin),
+  # sign-in button: the action answers with a 302 to github.com, Turbo drives `button_to` through
+  # `fetch`, and a `fetch` cannot follow a cross-origin redirect — the click silently does nothing.
+  # A native browser POST follows it normally.
+  #
+  # ## On an unconfigured instance this is the reason, not the button
+  #
+  # Development and test never have real App credentials, and an instance whose operator has not set
+  # them yet is an ordinary state of the world rather than a bug. The button would still render, and
+  # clicking it would bounce the reader to a github.com URL built from placeholders — a 404 on
+  # somebody else's site with nothing here to explain it. `GithubInstallationsController` refuses the
+  # POST for the same reason, so this is the affordance agreeing with the gate rather than a second
+  # opinion about it: what a reader cannot do, they are told about instead of offered.
+  #
+  # One place rather than a branch at each of the three call sites, because three copies of "is the
+  # App configured" is three chances for one of them to keep offering a button that cannot work.
+  def github_install_button(label = "Connect repositories on GitHub", return_to: nil, variant: :primary)
+    return github_app_unconfigured_notice unless SpecGuard::GithubApp.configured?
+
+    button_to label, github_installation_path(return_to: return_to || request.fullpath),
               form: { data: { turbo: false } },
               class: UI::ButtonComponent.classes(variant: variant)
   end
 
-  # What the app is about to be able to read, said plainly at the moment it is asked for rather
-  # than left to GitHub's consent screen to phrase. The scope is broad and pretending otherwise
-  # would be the wrong trade to hide.
-  def github_authorization_disclosure
-    "SpecGuard will ask GitHub for access to your repositories. It reads two things: the list of " \
-      "repositories you can pick from, and whether you administer the one you pick. It stores " \
-      "nothing from GitHub beyond the org/repo you register, and you can revoke the access at any " \
-      "time from your GitHub settings."
+  # Named in the same shape as the sign-in path's own unconfigured notice (pages/home.html.erb), so
+  # an operator who has met one recognises the other. It names the variables rather than saying
+  # "contact your administrator", because on this app the reader frequently IS the administrator.
+  def github_app_unconfigured_notice
+    render UI::AlertComponent.new(tone: :warning, title: "The SpecGuard GitHub App is not configured") do
+      tag.span(safe_join([
+        "Set ", tag.code("GITHUB_APP_SLUG"), ", ", tag.code("GITHUB_APP_CLIENT_ID"), " and ",
+        tag.code("GITHUB_APP_CLIENT_SECRET"), " (or the ", tag.code("github_app"),
+        " credentials) and restart the app. See ", tag.code("config/initializers/github_app.rb"), "."
+      ]))
+    end
   end
 
-  # What the picker offers: the repositories GitHub says this user administers, and nothing else.
+  # What is about to happen, said plainly at the moment it is offered rather than left to GitHub's
+  # consent screen to phrase. The consent screen itself is GitHub's, rendered from the App's own
+  # configuration; this is the sentence before it, not a copy of it.
+  def github_installation_disclosure
+    "SpecGuard connects repositories through a GitHub App. You choose which repositories it is " \
+      "installed on, in GitHub's own picker, and it asks for read-only access to their metadata — " \
+      "not their code. You can register the ones GitHub lists you as an administrator of. You can " \
+      "change the selection or uninstall it at any time from your GitHub settings."
+  end
+
+  # The other button, for the other missing thing. The App is installed and this session simply has
+  # no credential to read it with — so this asks GitHub for one and asks for nothing else. For
+  # anyone who has authorized the App before, GitHub renders no screen: they leave and come back.
   #
-  # Non-admin repositories are withheld rather than listed-and-rejected. A user can see plenty of
-  # repositories they cannot administer — every public repo they have ever collaborated on — and
-  # offering one as a choice would be offering a click that can only end in a 422. The count of
-  # what was withheld is reported in the hint, so the list is short without being mysterious.
+  # Deliberately worded as reconnecting rather than as an error. Nothing is broken and nothing the
+  # user did caused it; a session ended, which is the most ordinary thing that can happen to one.
+  def github_authorize_button(label = "Reconnect to GitHub", return_to: nil, variant: :primary)
+    return github_app_unconfigured_notice unless SpecGuard::GithubApp.configured?
+
+    button_to label, github_installation_authorize_path(return_to: return_to || request.fullpath),
+              form: { data: { turbo: false } },
+              class: UI::ButtonComponent.classes(variant: variant)
+  end
+
+  # What the picker offers: exactly the repositories in the user's installation(s).
   #
-  # A persisted name is prepended when GitHub's list does not contain it, which is the rename
-  # form's case: a repository registered before verification existed, or one past the listing cap,
-  # must still be representable by the control that shows the current value. It is a *display*
-  # concession only — submitting it unchanged writes nothing, and submitting it as a change is
-  # verified like any other value.
+  # There is no filtering left to do HERE, and that is a statement about this method rather than
+  # about the policy: `InstallationRepositories::Sources#listing` has already dropped everything the
+  # viewer does not administer, so a listing that reaches a view is registerable in full. Deciding
+  # it there rather than here is what keeps the offered set and the accepted set the same object —
+  # a picker that offers what the write will refuse is worse than no picker.
+  #
+  # A persisted name is prepended when GitHub's list does not contain it, which is the rename form's
+  # case: a repository registered before the installation changed, or one past the listing cap, must
+  # still be representable by the control that shows the current value. It is a *display* concession
+  # only — submitting it unchanged writes nothing, and submitting it as a change is verified like
+  # any other value.
   def repository_choices(listing, repository)
-    administered = administered_repos(listing)
-    choices = administered.map { |repo| [repository_choice_label(repo), repo.full_name] }
+    choices = listing.repos.map { |repo| [repository_choice_label(repo), repo.full_name] }
 
     current = repository.persisted? ? repository.github_full_name_was : nil
-    return choices if current.blank? || administered.any? { |repo| repo.full_name == current }
+    return choices if current.blank? || listing.repos.any? { |repo| repo.full_name == current }
 
     choices.unshift([current, current])
   end
 
-  # Beneath the field, because each of these changes what an *absent* repository means, and a
-  # picker that silently omits things is a picker people stop trusting.
-  def repository_picker_hint(listing)
-    sentences = ["Only repositories you administer on GitHub can be registered."]
-    sentences << withheld_repositories_sentence(listing.repos.length - administered_repos(listing).length)
+  # Beneath the field, because each of these changes what an *absent* repository means, and a picker
+  # that silently omits things is a picker people stop trusting.
+  #
+  # `withheld:` is how many repositories this viewer can reach but is not an administrator of — the
+  # ordinary position of every read-only member of every organization that installs the App, and the
+  # single most likely reason a reader's repository is not in the list. Defaulted rather than
+  # required only because a caller with no sources cannot know it; every real caller passes it.
+  def repository_picker_hint(listing, withheld: 0)
+    sentences = ["These are the repositories the SpecGuard GitHub App is installed on that GitHub " \
+                 "lists you as an administrator of. Add more from your GitHub settings."]
+
+    sentences << withheld_repositories_sentence(withheld)
 
     if listing.truncated?
       sentences << "Showing the first #{GithubApi::MAX_PAGES * GithubApi::PER_PAGE} repositories " \
@@ -78,34 +123,35 @@ module GithubHelper
     sentences.compact.join(" ")
   end
 
-  # "3 repositories you do not administer are not listed." — the sentence that keeps a withheld list
-  # from being a mysterious one, and `nil` when nothing was withheld.
+  # "3 connected repositories you do not administer are not listed." — the sentence that keeps a
+  # short list from being a mysterious one, and `nil` when nothing was withheld.
   #
-  # One definition for the three places that say it (the single-repository picker's hint, the
-  # organization card, the organization's repository list). It is the same fact each time, and three
-  # copies is three chances for one of them to disagree about the verb — which is exactly the kind of
-  # drift that makes a reader wonder whether they mean different things.
+  # One definition for the four places that say it (the single-repository picker's hint and its
+  # nothing-to-offer empty state, the organization card, the organization's repository list). It is
+  # the same fact each time, and four copies is four chances for one of them to disagree about the
+  # verb — which is exactly the kind of drift that makes a reader wonder whether they mean different
+  # things.
+  #
+  # It says "connected" as well as "you do not administer" because BOTH conditions are load-bearing
+  # and a reader who is told only one will fix the wrong thing: these are repositories already in
+  # the installation, so installing the App again on them changes nothing, and the way to register
+  # one is for somebody who administers it to do so.
   #
   # Composed as one String rather than assembled across ERB lines, deliberately: interpolating a
   # `pluralize` mid-sentence in a template puts a newline inside the sentence, which reads fine in a
   # browser and is invisible to anything matching on the text.
   def withheld_repositories_sentence(count)
-    return nil unless count.positive?
+    return nil unless count.to_i.positive?
 
-    "#{pluralize(count, 'repository', plural: 'repositories')} you do not administer " \
-      "#{count == 1 ? 'is' : 'are'} not listed."
+    "#{pluralize(count, 'connected repository', plural: 'connected repositories')} you do not " \
+      "administer #{count == 1 ? 'is' : 'are'} not listed."
   end
 
   private
 
-  def administered_repos(listing)
-    @administered_repos ||= {}
-    @administered_repos[listing] ||= listing.repos.select(&:admin?).sort_by { |repo| repo.full_name.downcase }
-  end
-
-  # `private` and `archived` change what registering the repository will *mean* — a private one is
-  # why the broad scope was needed, and an archived one will never push another CI run — so they
-  # are on the option itself rather than discoverable only after registering.
+  # `private` and `archived` change what registering the repository will *mean* — an archived one
+  # will never push another CI run — so they are on the option itself rather than discoverable only
+  # after registering.
   def repository_choice_label(repo)
     notes = []
     notes << "private" if repo.private?

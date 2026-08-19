@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
-# GitHub OAuth — the human sign-in path. (CI/agents use API keys instead; see ApiKey.)
+# GitHub OAuth — the human sign-in path, and ONLY that. (CI/agents use API keys instead; see
+# ApiKey. Repository access is a GitHub App installation; see SpecGuard::GithubApp.)
 #
 # The client id/secret are secrets and are NOT committed. Provide them however you like:
 #
@@ -21,26 +22,22 @@ module SpecGuard
   module GithubOauth
     PLACEHOLDER = "specguard-oauth-not-configured"
 
-    # What a *visitor* is asked for. Deliberately the minimum that identifies a person: enough to
-    # create their row and show their handle and avatar, and not one scope more.
+    # What a *visitor* is asked for, and the only scope this app ever requests. Deliberately the
+    # minimum that identifies a person: enough to create their row and show their handle and
+    # avatar, and not one scope more.
+    #
+    # There used to be a second, broader constant here — `repo`, GitHub's "Full control of private
+    # repositories" — requested the first time someone registered a repository, in order to read
+    # one boolean off `GET /repos/:owner/:repo`. It is gone, along with the column that held the
+    # token it bought. Repository access is a GitHub App installation now
+    # (`SpecGuard::GithubApp`), which asks for far less and proves at least as much: the App
+    # requests Metadata: read-only, and what it buys — a repository's presence in one of the user's
+    # installations AND GitHub naming that user an administrator of it — is read from one response
+    # to `GET /user/installations/:id/repositories`. See `InstallationRepositories`.
+    #
+    # NOTHING should reintroduce a scope here. The token this issues is not stored, and there is
+    # nothing left in the app that would read one.
     SIGN_IN_SCOPE = "read:user,user:email"
-
-    # What someone is asked for when they first register a repository, and never before —
-    # incremental authorization. `repo` is GitHub's narrowest scope that can both list private
-    # repositories and report the caller's permission level on one, which is what ownership
-    # verification rests on (see GithubOwnership).
-    #
-    # It is a broad scope, and the consequence is stated to the user at the point they are asked
-    # rather than buried here: SpecGuard then holds a token that can read their repositories.
-    # SpecGuard reads two things with it — the list you pick from, and your permission level on
-    # what you picked — and stores neither beyond the `org/repo` you register. The alternative,
-    # asking every visitor for `repo` at sign-in, would take the same access from everyone who
-    # only ever wanted to look at a dashboard.
-    #
-    # The sign-in scopes are carried along so a re-authorization never *narrows* what is already
-    # granted: GitHub issues a token for exactly the scopes in the request, so omitting them here
-    # would trade the identity scopes away for the repository one.
-    REPOSITORY_SCOPE = "repo,#{SIGN_IN_SCOPE}"
 
     class << self
       def client_id

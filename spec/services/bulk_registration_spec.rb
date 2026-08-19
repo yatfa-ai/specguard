@@ -6,15 +6,25 @@ require "rails_helper"
 #
 # The contract under test is not "it registers things" — it is that EVERY submitted name comes back
 # answered. A batch is not a transaction: a user turning SpecGuard on across an organization will
-# routinely have three repositories already registered and one they do not administer, and refusing
-# to do nineteen things because of one is not a feature. So the examples below are mostly about the
-# arithmetic of the result: what was registered, what was skipped, and whether the two still add up
-# to what was submitted.
+# routinely have three repositories already registered and one the GitHub App was never installed
+# on, and refusing to do nineteen things because of one is not a feature. So the examples below are
+# mostly about the arithmetic of the result: what was registered, what was skipped, and whether the
+# two still add up to what was submitted.
+#
+# Ownership here takes two things — the repository is in one of the user's GitHub App installations
+# AND GitHub names this user an administrator of it (see `InstallationRepositories`) — so the
+# repositories named in `stub_github(repos: […])` are not scenery: they ARE the set that may be
+# registered, and `github_repo(…, admin: false)` is the one a user can see and cannot register.
+# A name outside the list is a name nobody handed to SpecGuard, and the fake refuses it exactly as
+# GitHub would refuse a read made with this user's own credential.
 RSpec.describe BulkRegistration do
   let(:user) { create_user }
 
-  def register(*names)
-    described_class.call(user: user, full_names: names.flatten)
+  # `user_token` is what the ownership question is asked WITH — a credential that speaks for this
+  # user rather than for the App — so a batch is not registerable without one. The
+  # `not_authorized:` shape is a spec about a session that has none.
+  def register(*names, user_token: "ghu_octocat")
+    described_class.call(user: user, full_names: names.flatten, user_token: user_token)
   end
 
   def outcome_for(result, full_name)
@@ -22,8 +32,8 @@ RSpec.describe BulkRegistration do
   end
 
   describe "the happy path" do
-    it "registers every repository GitHub says the user administers" do
-      stub_github(repos: [github_repo("acme/api"), github_repo("acme/web")], strict: true)
+    it "registers every repository the SpecGuard GitHub App is installed on" do
+      stub_github(repos: [github_repo("acme/api"), github_repo("acme/web")])
 
       expect { @result = register("acme/api", "acme/web") }.to change(Repository, :count).by(2)
 
@@ -33,7 +43,7 @@ RSpec.describe BulkRegistration do
     end
 
     it "hands back the row it created, so a summary can link to it" do
-      stub_github(repos: [github_repo("acme/api")], strict: true)
+      stub_github(repos: [github_repo("acme/api")])
 
       outcome = register("acme/api").registered.first
 
@@ -45,23 +55,26 @@ RSpec.describe BulkRegistration do
   # The arithmetic. Nothing may be dropped on the floor, because a summary a reader cannot check is
   # the dishonest "registered 20!" this whole slice exists to avoid.
   describe "answering for every submitted name" do
+    # Two of these are refused for what used to be two different reasons — one the installation does
+    # not cover, one GitHub has never heard of — and they come back as ONE status. An installation
+    # credential is answered 404 for anything outside its own installation, so SpecGuard cannot tell
+    # "you did not select it" from "it does not exist", and the result says the one thing it knows
+    # rather than inventing the distinction.
     it "returns one outcome per submitted repository, whatever happened to each" do
       create_repository(user: create_user(github_uid: "9", github_handle: "someone"),
                         github_full_name: "acme/taken")
-      stub_github(repos: [github_repo("acme/api"), github_repo("acme/theirs", admin: false),
-                          github_repo("acme/taken")], strict: true)
+      stub_github(repos: [github_repo("acme/api"), github_repo("acme/taken")])
 
       result = register("acme/api", "acme/theirs", "acme/taken", "ghost/repo", "not-a-slug")
 
       expect(result.total_count).to eq(5)
       expect(result.registered_count + result.skipped_count).to eq(5)
       expect(result.outcomes.map(&:status))
-        .to eq(%i[registered not_admin already_registered not_found invalid])
+        .to eq(%i[registered not_in_installation already_registered not_in_installation invalid])
     end
 
     it "registers what it can and skips the rest, rather than failing the batch" do
-      stub_github(repos: [github_repo("acme/api"), github_repo("acme/theirs", admin: false)],
-                  strict: true)
+      stub_github(repos: [github_repo("acme/api")])
 
       expect { register("acme/api", "acme/theirs") }.to change(Repository, :count).by(1)
     end
@@ -72,7 +85,7 @@ RSpec.describe BulkRegistration do
     # of them are already registered.
     it "skips a repository this user already registered, and links to it" do
       existing = create_repository(user: user, github_full_name: "acme/api")
-      stub_github(repos: [github_repo("acme/api")], strict: true)
+      stub_github(repos: [github_repo("acme/api")])
 
       expect { @result = register("acme/api") }.not_to change(Repository, :count)
 
@@ -86,7 +99,7 @@ RSpec.describe BulkRegistration do
       owner = create_user(github_uid: "9", github_handle: "owner")
       shared = create_repository(user: owner, github_full_name: "acme/api")
       create_membership(repository: shared, user: user)
-      stub_github(repos: [github_repo("acme/api")], strict: true)
+      stub_github(repos: [github_repo("acme/api")])
 
       expect(register("acme/api").skipped.first.repository).to eq(shared)
     end
@@ -96,7 +109,7 @@ RSpec.describe BulkRegistration do
     it "does not link to a repository this user may not open" do
       create_repository(user: create_user(github_uid: "9", github_handle: "stranger"),
                         github_full_name: "acme/api")
-      stub_github(repos: [github_repo("acme/api")], strict: true)
+      stub_github(repos: [github_repo("acme/api")])
 
       outcome = register("acme/api").skipped.first
 
@@ -108,39 +121,46 @@ RSpec.describe BulkRegistration do
     # has to be too — otherwise the summary fails to find the very row it is describing.
     it "finds the existing row whatever its case" do
       existing = create_repository(user: user, github_full_name: "Acme/API")
-      stub_github(repos: [github_repo("acme/api")], strict: true)
+      stub_github(repos: [github_repo("acme/api")])
 
       expect(register("acme/api").skipped.first.repository).to eq(existing)
     end
 
-    # An already-registered repository the user has since lost admin on is still already registered.
-    # Reporting it as "not yours" would send them to fix something that is not the problem — and it
-    # must not cost a GitHub question either.
-    it "reports already-registered before ownership, and does not ask GitHub about it" do
+    # A repository registered before it was dropped from the installation is still registered.
+    # Reporting it as "not connected to the App" would send the user to GitHub to fix something that
+    # is not the problem — and it must not cost a GitHub question either.
+    it "reports already-registered before membership, and does not ask GitHub about it" do
       create_repository(user: user, github_full_name: "acme/api")
-      fake = stub_github(repos: [github_repo("acme/api", admin: false)], strict: true)
+      fake = stub_github(repos: [])
 
       expect(register("acme/api").skipped.first.status).to eq(:already_registered)
       expect(fake.calls).to be_empty
     end
   end
 
-  describe "ownership is verified here, not inherited from the page" do
+  describe "membership is verified here, not inherited from the page" do
     # The tick boxes are client-controlled. A submitted name the page never offered is an ASSERTION,
-    # and it is refused.
-    it "refuses a repository the user does not administer, however it was submitted" do
-      stub_github(repos: [github_repo("someone-else/theirs", admin: false)], strict: true)
+    # and it is refused by asking GitHub which repositories the App is actually installed on.
+    it "refuses a repository outside the user's installation, however it was submitted" do
+      stub_github(repos: [github_repo("acme/api")])
 
       expect { @result = register("someone-else/theirs") }.not_to change(Repository, :count)
 
-      expect(@result.skipped.first.status).to eq(:not_admin)
-      expect(@result.skipped.first.sentence).to include("is not a repository you administer on GitHub")
+      expect(@result.skipped.first.status).to eq(:not_in_installation)
+      expect(@result.skipped.first.sentence)
+        .to include("is not one of the repositories the SpecGuard GitHub App is installed on")
     end
 
-    it "refuses a repository GitHub has never heard of" do
-      stub_github(repos: [], strict: true)
+    # The same refusal, deliberately. There is no separate "GitHub has never heard of it" answer to
+    # give: the installation credential sees nothing outside the installation, so a repository that
+    # does not exist and one that was never selected are the same 404 and get the same sentence —
+    # one that tells the user to add it on GitHub rather than claiming it is not there.
+    it "refuses a repository GitHub has never heard of with that same answer" do
+      stub_github(repos: [])
 
-      expect { register("ghost/repo") }.not_to change(Repository, :count)
+      expect { @result = register("ghost/repo") }.not_to change(Repository, :count)
+
+      expect(@result.skipped.first.status).to eq(:not_in_installation)
     end
 
     # Fails closed, for the whole batch. Verifying by default during an outage reopens the squatting
@@ -153,18 +173,58 @@ RSpec.describe BulkRegistration do
       expect(@result.skipped.map(&:status)).to eq(%i[unavailable unavailable])
     end
 
-    it "registers nothing when the user has not authorized repository access" do
-      revoke_github_repository_access(user)
+    # A token GitHub rejects mid-batch is a session that has run out, not an outage and not a
+    # missing installation: this user has installed the App and installing it again fixes nothing.
+    # It fails closed, and the summary offers the button that does fix it.
+    it "registers nothing when GitHub rejects the user's credential" do
+      stub_github(unauthorized: true)
 
       expect { @result = register("acme/api") }.not_to change(Repository, :count)
 
-      expect(@result.skipped.first.status).to eq(:not_connected)
-      expect(@result).to be_reauthorize
+      expect(@result.skipped.first.status).to eq(:not_authorized)
+      expect(@result).to be_authorize
+      expect(@result).not_to be_install
     end
 
-    # One GitHub call for the batch, and it stays one — see GithubOwnership.verify_batch.
+    # The same refusal one step earlier, and the ordinary one: a returning user's first batch of the
+    # session, before anything has asked GitHub who they are. Nothing is registered on a question
+    # that was never actually asked.
+    it "registers nothing when the session holds no credential at all" do
+      expect { @result = register("acme/api", user_token: nil) }.not_to change(Repository, :count)
+
+      expect(@result.skipped.first.status).to eq(:not_authorized)
+      expect(@result).to be_authorize
+    end
+
+    # The gap the audit found, at the layer that carries it. A bulk submission is checkboxes the
+    # browser controls, so a name the picker never offered can arrive here — and "in the
+    # installation" is not the same as "yours". A read-only member of an organization can see every
+    # repository their employer connected; none of them is theirs to register.
+    it "refuses a repository in the installation that this user does not administer" do
+      stub_github(repos: [github_repo("acme/api"), github_repo("acme/vault", admin: false)])
+
+      expect { @result = register("acme/api", "acme/vault") }.to change(Repository, :count).by(1)
+
+      expect(@result.registered.map(&:full_name)).to eq(%w[acme/api])
+      expect(@result.skipped.map(&:status)).to eq(%i[not_administered])
+      expect(@result.skipped.first.sentence).to include("does not list you as an administrator")
+    end
+
+    it "registers nothing when the user has not installed the App" do
+      uninstall_github_app(user)
+
+      expect { @result = register("acme/api") }.not_to change(Repository, :count)
+
+      expect(@result.skipped.first.status).to eq(:not_installed)
+      expect(@result).to be_install
+    end
+
+    # One listing for the batch, and it stays one — see `InstallationRepositories.verify_batch`.
+    # Membership is a set test over a listing SpecGuard has to fetch anyway, so fifteen names cost
+    # what one costs; a per-name question would be fifteen sequential round trips before the first
+    # row is saved.
     it "asks GitHub once however many repositories were submitted" do
-      fake = stub_github(repos: Array.new(15) { |i| github_repo("acme/r#{i}") }, strict: true)
+      fake = stub_github(repos: Array.new(15) { |i| github_repo("acme/r#{i}") })
 
       register(Array.new(15) { |i| "acme/r#{i}" })
 
@@ -175,7 +235,7 @@ RSpec.describe BulkRegistration do
 
   describe "the record's own rules run before GitHub is asked" do
     it "refuses a name that is not org/repo without a GitHub round trip" do
-      fake = stub_github(repos: [github_repo("acme/api")], strict: true)
+      fake = stub_github(repos: [github_repo("acme/api")])
 
       expect { @result = register("nonsense") }.not_to change(Repository, :count)
 
@@ -184,10 +244,10 @@ RSpec.describe BulkRegistration do
       expect(fake.calls).to be_empty
     end
 
-    # `valid?` is what runs `normalize_full_name`, so GitHub is asked about — and the summary names
-    # — the value that would actually be stored.
+    # `valid?` is what runs `normalize_full_name`, so the name looked for in the installation — and
+    # the one the summary names — is the value that would actually be stored.
     it "asks GitHub about the normalized name, not whatever was pasted" do
-      fake = stub_github(repos: [github_repo("acme/api")], strict: true)
+      fake = stub_github(repos: [github_repo("acme/api")])
 
       result = register("https://github.com/acme/api.git")
 
@@ -208,7 +268,7 @@ RSpec.describe BulkRegistration do
     end
 
     it "ignores blank entries" do
-      stub_github(repos: [github_repo("acme/api")], strict: true)
+      stub_github(repos: [github_repo("acme/api")])
 
       expect(register("acme/api", "", "  ").total_count).to eq(1)
     end
@@ -216,7 +276,7 @@ RSpec.describe BulkRegistration do
     # The same repository named twice would otherwise register once and report ITSELF as already
     # registered — a true sentence about a batch nobody submitted.
     it "deduplicates the same repository named twice, case-insensitively" do
-      stub_github(repos: [github_repo("acme/api")], strict: true)
+      stub_github(repos: [github_repo("acme/api")])
 
       expect { @result = register("acme/api", "ACME/API") }.to change(Repository, :count).by(1)
 
@@ -227,29 +287,39 @@ RSpec.describe BulkRegistration do
   describe "the summary a caller renders" do
     it "groups skips by reason, in a stable order, dropping empty groups" do
       create_repository(user: user, github_full_name: "acme/taken")
-      stub_github(repos: [github_repo("acme/theirs", admin: false), github_repo("acme/taken")],
-                  strict: true)
+      stub_github(repos: [github_repo("acme/taken")])
 
       groups = register("acme/theirs", "acme/taken", "nope").skipped_groups
 
-      expect(groups.map(&:first)).to eq(%i[already_registered not_admin invalid])
-      expect(groups.map(&:second)).to eq(["Already registered", "Not administered by you on GitHub",
+      expect(groups.map(&:first)).to eq(%i[already_registered not_in_installation invalid])
+      expect(groups.map(&:second)).to eq(["Already registered",
+                                          "Not connected to the SpecGuard GitHub App",
                                           "Not a valid repository name"])
       expect(groups.map { |_, _, rows| rows.length }).to eq([1, 1, 1])
     end
 
-    # A batch skipped for a dead token is not something a re-run fixes, so the summary has to be
-    # able to offer the grant instead of only counting.
-    it "reports when the fix on offer is a GitHub grant rather than a different selection" do
-      stub_github(unauthorized: true)
+    # A batch skipped because the App is not installed is not something a re-run fixes, so the
+    # summary has to be able to offer the install button instead of only counting.
+    it "reports when the fix on offer is installing the App rather than a different selection" do
+      uninstall_github_app(user)
 
-      expect(register("acme/api")).to be_reauthorize
+      expect(register("acme/api")).to be_install
     end
 
-    it "does not offer a grant for refusals a grant cannot fix" do
-      stub_github(repos: [github_repo("acme/theirs", admin: false)], strict: true)
+    # The App IS installed and this repository is not in it. The fix is on GitHub's own picker, so
+    # offering "install the App" here would send the user through a flow they have already done.
+    it "does not offer the install button for a refusal installing cannot fix" do
+      stub_github(repos: [github_repo("acme/api")])
 
-      expect(register("acme/theirs")).not_to be_reauthorize
+      expect(register("acme/theirs")).not_to be_install
+    end
+
+    # Nor for a refusal that is not the user's to fix at all: rejected App credentials are an
+    # operator's misconfiguration, and the button would be advice that cannot work.
+    it "does not offer the install button when GitHub rejected the App's credentials" do
+      stub_github(unauthorized: true)
+
+      expect(register("acme/api")).not_to be_install
     end
   end
 
@@ -257,7 +327,7 @@ RSpec.describe BulkRegistration do
   # "already registered" rather than as an exception escaping the action.
   describe "losing a race to another registration" do
     it "reports a repository the unique index rejected as already registered" do
-      stub_github(repos: [github_repo("acme/api")], strict: true)
+      stub_github(repos: [github_repo("acme/api")])
       allow_any_instance_of(Repository).to receive(:save).and_raise(ActiveRecord::RecordNotUnique)
 
       result = register("acme/api")

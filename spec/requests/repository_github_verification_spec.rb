@@ -11,7 +11,19 @@ require "rails_helper"
 # The gap had two doors, not one — `repository_params` is shared by `#create` and `#update` — so
 # every example below that pins the create path has a rename twin. A guard on one action only would
 # have moved the gap one route over and read as closed.
-RSpec.describe "Ownership-verified repository registration", type: :request do
+#
+# What ANSWERS the question changed with SPGD-424 and the gap did not reopen. It was
+# `permissions.admin` read over an OAuth `repo` grant — GitHub's full control of private
+# repositories, asked for in order to read one boolean. It is now TWO conditions read from one
+# response to `GET /user/installations/:id/repositories`, made with the user's own short-lived
+# credential: the repository is in one of this user's App installations, AND GitHub reports this
+# user as an administrator of it.
+#
+# Both are load-bearing and each has its own example below. Installation membership alone is not
+# enough, because GitHub shows an organization's installation to every member of that organization
+# — so a read-only member could otherwise register everything their employer connected. The admin
+# bar is the same bar the OAuth path had, now bought with Metadata: read-only instead.
+RSpec.describe "Installation-verified repository registration", type: :request do
   before { @user = sign_in_via_github }
 
   def register(full_name)
@@ -19,32 +31,66 @@ RSpec.describe "Ownership-verified repository registration", type: :request do
   end
 
   describe "POST /repositories" do
-    it "registers a repository GitHub says the user administers" do
-      stub_github(repos: [github_repo("acme/billing-service", admin: true)], strict: true)
+    it "registers a repository the installation covers" do
+      fake = stub_github(repos: [github_repo("acme/billing-service")])
 
       expect { register("acme/billing-service") }.to change(Repository, :count).by(1)
 
       expect(response).to redirect_to(repository_path(Repository.last))
       expect(Repository.last.user).to eq(@user)
+      # One GitHub read for the whole registration. The listing IS the verification, so there is no
+      # second question to ask.
+      expect(fake.calls_to(:repositories)).to eq(1)
     end
 
-    # THE example. The repository exists, the user can see it, and it is not theirs.
-    it "refuses a repository the user does not administer" do
-      stub_github(repos: [github_repo("someone-else/private-repo", admin: false)], strict: true)
+    # THE example. Somebody else's repository, named directly at the endpoint, bypassing the picker
+    # entirely — which is exactly what a squatter would do. It is not in this user's installation,
+    # so there is nothing for them to register.
+    it "refuses a repository outside the user's installation" do
+      stub_github(repos: [github_repo("acme/billing-service")])
 
       expect { register("someone-else/private-repo") }.not_to change(Repository, :count)
 
       expect(response).to have_http_status(:unprocessable_content)
-      expect(response.body).to include("is not a repository you administer on GitHub")
+      expect(response.body).to include("is not one of the repositories the SpecGuard GitHub App is installed on")
     end
 
-    it "refuses a repository GitHub has never heard of" do
-      stub_github(repos: [], strict: true)
+    # THE OTHER example, and the one this file did not have when the gap was reopened. The
+    # repository IS in the installation — somebody who administers it did connect it — and this
+    # user is not that somebody. That is the position of every read-only member of every
+    # organization that installs the App, and under an installation-token read they could register
+    # all of it.
+    it "refuses a repository in the installation that this user does not administer" do
+      stub_github(repos: [github_repo("acme/billing-service"), github_repo("acme/vault", admin: false)])
+
+      expect { register("acme/vault") }.not_to change(Repository, :count)
+
+      expect(response).to have_http_status(:unprocessable_content)
+      expect(response.body).to include("does not list you as an administrator")
+    end
+
+    # And it is not merely refused at the write — it is never offered. The picker and the gate are
+    # built from the same object, so a page cannot show something the POST would turn down.
+    it "does not offer a repository this user only has read access to" do
+      stub_github(repos: [github_repo("acme/billing-service"), github_repo("acme/vault", admin: false)])
+
+      get new_repository_path
+
+      expect(response.body).to include("acme/billing-service")
+      expect(response.body).not_to include("acme/vault")
+    end
+
+    # "Does not exist" and "exists and is not yours" are ONE answer from this credential,
+    # which cannot see outside its own installation — and that is a feature rather than a loss of
+    # detail: the old path told a stranger whether a private repository existed by answering
+    # `:not_found` for an invented name and `:not_admin` for a real one.
+    it "refuses a repository GitHub has never heard of, in the same words" do
+      stub_github(repos: [])
 
       expect { register("ghost/repo") }.not_to change(Repository, :count)
 
       expect(response).to have_http_status(:unprocessable_content)
-      expect(response.body).to include("was not found on GitHub")
+      expect(response.body).to include("is not one of the repositories the SpecGuard GitHub App is installed on")
     end
 
     # Fails closed. If an outage were treated as a pass, the gap would reopen on every GitHub 500 —
@@ -55,11 +101,11 @@ RSpec.describe "Ownership-verified repository registration", type: :request do
       expect { register("acme/billing-service") }.not_to change(Repository, :count)
 
       expect(response).to have_http_status(:unprocessable_content)
-      expect(response.body).to include("GitHub did not answer")
+      expect(response.body).to include("could not read your full repository list")
     end
 
-    it "refuses when the user has not authorized repository access, and offers the grant" do
-      revoke_github_repository_access(@user)
+    it "refuses when the App is not installed, and offers to install it" do
+      uninstall_github_app(@user)
 
       expect { register("acme/billing-service") }.not_to change(Repository, :count)
 
@@ -67,32 +113,31 @@ RSpec.describe "Ownership-verified repository registration", type: :request do
       expect(response.body).to include("Connect your GitHub repositories")
     end
 
-    # The authorize button on a 422 has to come back to the form, and the form is a GET the user is
+    # The install button on a 422 has to come back to the form, and the form is a GET the user is
     # no longer on: `request.fullpath` here is `/repositories`, the POST path, which renders the
-    # index. A user who submits, is told to connect GitHub, and grants it would land on the
+    # index. A user who submits, is told to connect GitHub, and installs the App would land on the
     # dashboard and have to find "Register" again — on the one path they are most likely to press
     # the button.
-    it "returns the user to the registration form after authorizing from a failed registration" do
-      revoke_github_repository_access(@user)
+    it "returns the user to the registration form after installing from a failed registration" do
+      allow(SpecGuard::GithubApp).to receive_messages(configured?: true, slug: "specguard")
+      uninstall_github_app(@user)
 
       register("acme/billing-service")
 
       expect(response).to have_http_status(:unprocessable_content)
-      expect(response.body).to include(CGI.escapeHTML("origin=#{CGI.escape(new_repository_path)}"))
-      expect(response.body).not_to include(CGI.escapeHTML("origin=#{CGI.escape(repositories_path)}&"))
+      expect(response.body).to include(CGI.escapeHTML("return_to=#{CGI.escape(new_repository_path)}"))
+      expect(response.body).not_to include(CGI.escapeHTML("return_to=#{CGI.escape(repositories_path)}\""))
     end
 
-    # An SSO-enforced organization answers 403 forever until a human authorizes the token for it.
-    # "GitHub did not answer. Try again shortly." is the one sentence that guarantees the user
-    # retries in a loop, so this asserts both the right words and the absence of the wrong ones.
-    it "tells an SSO-blocked user what actually resolves it, not to wait" do
-      stub_github(forbidden: :sso_required)
+    # GitHub refusing is not GitHub being down, and it is not something the user can fix by
+    # installing again either — so it is reported rather than dressed up as a retry or as a button.
+    it "reports a refusal without telling the user to wait it out" do
+      stub_github(forbidden: :refused)
 
       expect { register("acme/billing-service") }.not_to change(Repository, :count)
 
       expect(response).to have_http_status(:unprocessable_content)
-      expect(response.body).to include("organization may need to approve SpecGuard")
-      expect(response.body).not_to include("GitHub did not answer")
+      expect(response.body).to include("could not read your full repository list")
     end
 
     it "names the rate limit rather than reporting it as an outage" do
@@ -105,27 +150,38 @@ RSpec.describe "Ownership-verified repository registration", type: :request do
       expect(response.body).not_to include("GitHub did not answer")
     end
 
-    # Shape and uniqueness are the record's own rules and cost nothing to check. Asking GitHub
-    # about a string that could not be a repository name is a round trip whose answer is already
-    # known, on a path a signed-in user can hammer. (The 422 re-render then lists the picker, which
-    # is a different question and a different endpoint — hence `calls_to(:repository)`.)
-    it "does not ask GitHub about a name that is not org/repo" do
-      fake = stub_github
+    # Shape and uniqueness are the record's own rules and settle the answer before GitHub's does.
+    # The discriminator is the SENTENCE rather than a round-trip count: verification now reads the
+    # same listing the picker is built from, so an extra question costs no extra request and a
+    # counter could not tell the two orders apart.
+    it "refuses a name that is not org/repo on the record's own rules" do
+      stub_github
 
       register("nonsense")
 
       expect(response).to have_http_status(:unprocessable_content)
       expect(response.body).to include("must look like org/repo")
-      expect(fake.calls_to(:repository)).to eq(0)
+      expect(response.body).not_to include("is not one of the repositories")
     end
 
-    it "asks GitHub about the normalized name, not the pasted one" do
-      fake = stub_github(repos: [github_repo("acme/billing-service")], strict: true)
+    # `valid?` runs `normalize_full_name`, so what is checked against the installation is the value
+    # that would actually be STORED rather than whatever was pasted. A URL whose normalized form is
+    # in the installation registers; one whose normalized form is not, does not.
+    it "checks the normalized name against the installation, not the pasted one" do
+      stub_github(repos: [github_repo("acme/billing-service")])
 
       register("https://github.com/acme/billing-service")
 
       expect(response).to redirect_to(repository_path(Repository.last))
-      expect(fake.calls).to eq([[:repository, "acme/billing-service"]])
+      expect(Repository.last.github_full_name).to eq("acme/billing-service")
+    end
+
+    it "refuses a pasted URL whose normalized name is outside the installation" do
+      stub_github(repos: [github_repo("acme/billing-service")])
+
+      expect { register("https://github.com/someone-else/thing.git") }.not_to change(Repository, :count)
+
+      expect(response).to have_http_status(:unprocessable_content)
     end
   end
 
@@ -138,8 +194,8 @@ RSpec.describe "Ownership-verified repository registration", type: :request do
       patch repository_path(repository), params: { repository: { github_full_name: full_name } }
     end
 
-    it "refuses to rename onto a repository the user does not administer" do
-      stub_github(repos: [github_repo("someone-else/private-repo", admin: false)], strict: true)
+    it "refuses to rename onto a repository outside the installation" do
+      stub_github(repos: [github_repo("acme/billing-service")])
 
       rename("someone-else/private-repo")
 
@@ -148,7 +204,7 @@ RSpec.describe "Ownership-verified repository registration", type: :request do
     end
 
     it "refuses to rename onto a repository GitHub cannot see" do
-      stub_github(repos: [], strict: true)
+      stub_github(repos: [])
 
       rename("ghost/repo")
 
@@ -156,8 +212,8 @@ RSpec.describe "Ownership-verified repository registration", type: :request do
       expect(repository.reload.github_full_name).to eq("acme/billing-service")
     end
 
-    it "renames onto another repository the user administers" do
-      stub_github(repos: [github_repo("acme/checkout")], strict: true)
+    it "renames onto another repository in the installation" do
+      stub_github(repos: [github_repo("acme/checkout")])
 
       rename("acme/checkout")
 
@@ -168,40 +224,42 @@ RSpec.describe "Ownership-verified repository registration", type: :request do
     # An unchanged submit changes no identity, so there is nothing to verify — and, just as
     # importantly, it must not start failing during a GitHub outage for a write that does nothing.
     it "does not ask GitHub when the submitted name is unchanged" do
-      fake = stub_github
+      fake = stub_github(unavailable: true)
 
       rename("acme/billing-service")
 
       expect(response).to redirect_to(repository_path(repository))
-      expect(fake.calls_to(:repository)).to eq(0)
+      expect(fake.calls_to(:repositories)).to eq(0)
     end
 
     # The create path's twin: here `request.fullpath` is `/repositories/:id`, the PATCH path, which
     # renders the show page rather than the rename form.
-    it "returns the user to the rename form after authorizing from a failed rename" do
-      revoke_github_repository_access(@user)
+    it "returns the user to the rename form after installing from a failed rename" do
+      allow(SpecGuard::GithubApp).to receive_messages(configured?: true, slug: "specguard")
+      uninstall_github_app(@user)
 
       rename("acme/checkout")
 
       expect(response).to have_http_status(:unprocessable_content)
       expect(response.body)
-        .to include(CGI.escapeHTML("origin=#{CGI.escape(edit_repository_path(repository))}"))
+        .to include(CGI.escapeHTML("return_to=#{CGI.escape(edit_repository_path(repository))}"))
     end
 
-    it "tells an SSO-blocked user what actually resolves it, not to wait" do
-      stub_github(forbidden: :sso_required)
+    # The create path's twin: an outage must not let a rename through either, because the rename
+    # form writes the same identity column the registration form does.
+    it "refuses to rename anything while GitHub cannot be reached" do
+      stub_github(unavailable: true)
 
       rename("acme/checkout")
 
       expect(response).to have_http_status(:unprocessable_content)
       expect(repository.reload.github_full_name).to eq("acme/billing-service")
-      expect(response.body).to include("organization may need to approve SpecGuard")
-      expect(response.body).not_to include("GitHub did not answer")
+      expect(response.body).to include("could not read your full repository list")
     end
   end
 
   describe "GET /repositories/new" do
-    it "offers the user's administered repositories as a list rather than a free-text field" do
+    it "offers the installation's repositories as a list rather than a free-text field" do
       stub_github(repos: [github_repo("acme/billing-service"), github_repo("acme/checkout")])
 
       get new_repository_path
@@ -213,30 +271,33 @@ RSpec.describe "Ownership-verified repository registration", type: :request do
       expect(response.body).not_to include('placeholder="org/repo"')
     end
 
-    # Offering a repository the server will refuse is offering a click that can only end in a 422.
-    it "withholds repositories the user cannot administer, and says how many" do
-      stub_github(repos: [github_repo("acme/billing-service"),
-                          github_repo("rails/rails", admin: false)])
+    # Nothing is withheld here, and the picker says where the list comes from instead of
+    # apologising for its length.
+    it "offers everything in the installation, and says where the list comes from" do
+      stub_github(repos: [github_repo("acme/billing-service"), github_repo("acme/checkout")])
 
       get new_repository_path
 
       expect(response.body).to include("acme/billing-service")
-      expect(response.body).not_to include("rails/rails")
-      expect(response.body).to include("1 repository you do not administer is not listed")
+      expect(response.body).to include("acme/checkout")
+      expect(response.body).to include("These are the repositories the SpecGuard GitHub App is installed on")
+      expect(response.body).not_to include("you do not administer")
     end
 
-    # The plural arm of the same sentence. Asserted as the whole sentence rather than as the count,
-    # because two independent things decide how it reads — Rails' `pluralize` (overridden, because
-    # the default plural of "repository" is not the one English uses) and a hand-rolled `is`/`are`
-    # ternary — and a partial match would hold only one of them. The singular is pinned above.
-    it "says how many were withheld in the plural when more than one was" do
+    # And when something IS withheld the picker accounts for it. This is the ordinary position of a
+    # read-only member of an organization that installed the App: the repository they came looking
+    # for is genuinely connected, and is genuinely not theirs to register — two facts a bare short
+    # list cannot tell them apart from a broken page.
+    it "counts the connected repositories the viewer may not register" do
       stub_github(repos: [github_repo("acme/billing-service"),
-                          github_repo("rails/rails", admin: false),
-                          github_repo("sinatra/sinatra", admin: false)])
+                          github_repo("acme/legacy", admin: false),
+                          github_repo("acme/vault", admin: false)])
 
       get new_repository_path
 
-      expect(response.body).to include("2 repositories you do not administer are not listed.")
+      expect(response.body).to include("acme/billing-service")
+      expect(response.body).not_to include("acme/legacy")
+      expect(response.body).to include("2 connected repositories you do not administer are not listed.")
     end
 
     it "marks a private repository as private in the list" do
@@ -290,22 +351,78 @@ RSpec.describe "Ownership-verified repository registration", type: :request do
       expect(response.body).not_to include("Showing the first")
     end
 
-    it "asks for authorization instead of a picker when GitHub is not connected yet" do
-      revoke_github_repository_access(@user)
+    it "asks for the installation instead of a picker when nothing is connected yet" do
+      uninstall_github_app(@user)
 
       get new_repository_path
 
       expect(response.body).to include("Connect your GitHub repositories")
-      expect(response.body).to include("SpecGuard will ask GitHub for access to your repositories")
+      expect(response.body).to include("SpecGuard connects repositories through a GitHub App")
       expect(response.body).not_to include("<select")
     end
 
-    it "asks for authorization again when GitHub rejects the stored token" do
+    # Installed, and covering nothing — the user completed the flow and selected no repositories, or
+    # has since deselected them all. Distinct from "not installed": installing again would do
+    # nothing, and the fix is choosing repositories on GitHub.
+    it "distinguishes an installation that covers nothing from no installation at all" do
+      stub_github(repos: [])
+
+      get new_repository_path
+
+      expect(response.body).to include("No repositories connected yet")
+      expect(response.body).not_to include("<select")
+    end
+
+    # And a THIRD empty page, which is not the one above: the installation covers plenty and this
+    # viewer administers none of it. "No repositories connected yet" would be a false statement to
+    # make to them, and the button it carries goes to a picker that would fix nothing — the thing in
+    # their way is somebody else's admin rights.
+    it "distinguishes an installation that covers nothing this viewer administers" do
+      stub_github(repos: [github_repo("acme/api", admin: false),
+                          github_repo("acme/web", admin: false)])
+
+      get new_repository_path
+
+      expect(response.body).to include("Nothing here is yours to register")
+      expect(response.body).to include("2 connected repositories you do not administer are not listed.")
+      expect(response.body).not_to include("No repositories connected yet")
+      expect(response.body).not_to include("<select")
+    end
+
+    # A user with two installations, one of which will not answer. What WAS read is GitHub's own
+    # answer and is still registerable, so the picker renders — but the page says the list is short
+    # rather than letting "my repository is not here" read as "SpecGuard is broken".
+    it "renders the picker and says so when one installation could not be read" do
+      add_github_installation(@user, installation_id: 6002)
+      stub_github_per_installation do |id|
+        FakeGithubApi.new(**(id == 6002 ? { unavailable: true } : { repos: [github_repo("acme/api")] }))
+      end
+
+      get new_repository_path
+
+      expect(response.body).to include("<select")
+      expect(response.body).to include("acme/api")
+      expect(response.body).to include("This list may be incomplete")
+    end
+
+    it "does not claim the list is incomplete when every installation answered" do
+      stub_github(repos: [github_repo("acme/api")])
+
+      get new_repository_path
+
+      expect(response.body).not_to include("This list may be incomplete")
+    end
+
+    # An operator-side failure — a wrong App id, a private key that is not this App's — is nothing
+    # the user can act on, so it is reported as GitHub not answering rather than as a button that
+    # cannot help. The reason goes to the log.
+    it "reports rejected App credentials as an outage rather than as the user's problem" do
       stub_github(unauthorized: true)
 
       get new_repository_path
 
-      expect(response.body).to include("Connect your GitHub repositories")
+      expect(response.body).to include("GitHub is not answering right now")
+      expect(response.body).not_to include("<select")
     end
 
     it "says so, rather than showing an empty picker, when GitHub will not answer" do
@@ -317,32 +434,21 @@ RSpec.describe "Ownership-verified repository registration", type: :request do
       expect(response.body).not_to include("<select")
     end
 
-    # The listing call hits GitHub with the same token and collects the same 403s as verification
-    # does, so it must make the same distinction. "GitHub is not answering right now" is false here
-    # — GitHub answered, and said no.
-    it "distinguishes GitHub refusing from GitHub being down when listing" do
-      stub_github(forbidden: :sso_required)
+    # The listing call hits GitHub with the same credential and collects the same 403s as
+    # verification does, so it must make the same distinction. A rate limit clears by waiting and
+    # says so; reporting it as an outage would be true-ish and useless.
+    it "names the rate limit rather than reporting it as an outage when listing" do
+      stub_github(forbidden: :rate_limited)
 
       get new_repository_path
 
       expect(response.body).to include("GitHub refused the request")
-      expect(response.body).to include("organization may need to approve SpecGuard")
+      expect(response.body).to include("rate limit")
       expect(response.body).not_to include("GitHub is not answering right now")
-    end
-
-    # A too-narrow grant is the one 403 a re-authorization fixes, so it gets the button rather than
-    # an explanation the user cannot act on.
-    it "offers the grant when the token is too narrow to list repositories" do
-      stub_github(forbidden: :insufficient_scope)
-
-      get new_repository_path
-
-      expect(response.body).to include("Connect your GitHub repositories")
-      expect(response.body).not_to include("<select")
     end
   end
 
-  # The rename form's own case. The picker offers what GitHub says you administer *now*, but the
+  # The rename form's own case. The picker offers what the installation covers *now*, but the
   # record being renamed already has a name — and the whole reason to open this form is that the
   # name is stale. A repository registered before verification existed, renamed on GitHub since, or
   # sitting past the listing cap is absent from that list, and the control that is supposed to show
@@ -389,13 +495,56 @@ RSpec.describe "Ownership-verified repository registration", type: :request do
     # server would reject again, and would drop the real one they are trying to rename away from.
     it "prepends the persisted name, not the rejected input, when a rename comes back refused" do
       repository = create_repository(user: @user, github_full_name: "acme/legacy-tracker")
-      stub_github(repos: [github_repo("acme/billing-service")], strict: true)
+      stub_github(repos: [github_repo("acme/billing-service")])
 
       patch repository_path(repository), params: { repository: { github_full_name: "ghost/repo" } }
 
       expect(response).to have_http_status(:unprocessable_content)
       expect(response.body).to include('value="acme/legacy-tracker"')
       expect(response.body).not_to include('value="ghost/repo"')
+    end
+  end
+
+  # The scenario the audit named, at the level it actually bites.
+  #
+  # GitHub hands an organization's installation to EVERY member of that organization — `GET
+  # /user/installations` grants it at `:read`, which plain membership gives — so two users
+  # legitimately hold a row for the same installation id. Reading that installation with a
+  # credential that speaks for the APP answers both of them identically, which is how a read-only
+  # member came to be offered fifty repositories they cannot even see on github.com. Reading it with
+  # a credential that speaks for the PERSON cannot: GitHub answers each of them about their own
+  # access.
+  #
+  # So this is one installation, one repository, two sessions, and two different answers.
+  describe "two users holding the same installation" do
+    it "answers each of them with their own access, not the App's" do
+      # The fake keys off the credential, which is the whole claim: the same installation id, read
+      # with two different tokens, comes back differently.
+      GithubApi.factory = lambda { |token, installation_id|
+        raise "expected the shared installation, got #{installation_id}" unless installation_id == 4242
+
+        FakeGithubApi.new(repos: [github_repo("acme/vault", admin: token == "ghu_owner")])
+      }
+
+      sign_in_via_github(uid: "3003", info: { nickname: "owner" }, installation: false)
+      authorize_github_app(installations: [[4242, "acme"]], token: "ghu_owner")
+
+      get new_repository_path
+      expect(response.body).to include("acme/vault")
+
+      delete sign_out_path
+
+      sign_in_via_github(uid: "4004", info: { nickname: "member" }, installation: false)
+      authorize_github_app(installations: [[4242, "acme"]], token: "ghu_member")
+
+      # Not offered...
+      get new_repository_path
+      expect(response.body).not_to include("acme/vault")
+
+      # ...and not registerable by naming it at the endpoint either, which is the move that matters.
+      expect { register("acme/vault") }.not_to change(Repository, :count)
+      expect(response).to have_http_status(:unprocessable_content)
+      expect(response.body).to include("does not list you as an administrator")
     end
   end
 end

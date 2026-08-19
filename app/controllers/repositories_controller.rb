@@ -49,6 +49,21 @@ class RepositoriesController < ApplicationController
   # describe whichever of several unrelated commits sorted newest.
   include RequestedCommitShaParam
 
+  # `?unstable_test=` read as a test description, for the drill-in under the "Tests whose outcome
+  # changed" panel. Shared with `Api::V1::RepositoriesController`, which reads the same parameter
+  # under the same guard to open the same window's sequence on `GET /api/v1/repository`.
+  #
+  # A NARROWING ask like the drill-in parameters above and not a second re-anchoring one, so it is
+  # read under whichever run `?commit_sha=` chose rather than choosing one itself: it opens one row
+  # of one panel, and which run the page is anchored on is settled before it is read.
+  #
+  # Its own concern rather than a widening of `RequestedRepeatedDescriptionParam` even though both
+  # are read as a `spec_observations.name`, for the reason the concern itself carries in full: they
+  # select different POPULATIONS — that one opens ONE RUN's rows carrying a description, this one
+  # opens a WINDOW's — and one module answering both would make a divergence either is free to make
+  # a breaking change to the parameter nobody was editing.
+  include RequestedUnstableTestParam
+
   # The repositories this user may pick from, straight off GitHub, and the four different things to
   # say when that list cannot be loaded. Shared with `BulkRegistrationsController`, which renders a
   # picker built from the same listing and has to answer the same questions the same way.
@@ -612,8 +627,52 @@ class RepositoriesController < ApplicationController
     # examples, whether two of them reported outcomes, and whether anything in them was unstable
     # are questions the object answers — the panel branches on its predicates, so every figure it
     # prints comes off one set of reads of one window.
+    #
+    # The ask for ONE of that panel's rows is read here rather than inside the guard, because it is
+    # also what every OTHER link on this page carries through (`RepositoriesHelper#drill_down_path`),
+    # and a page whose window happens to be empty still has to reproduce the reader's URL rather than
+    # silently dropping an ask out of every href on it.
+    @unstable_test_request = requested_unstable_test
     if trajectory_runs.any?
       @unstable_tests = UnstableTests.for(@repository, trajectory_runs, branch: @trajectory_run&.branch)
+      # ONE ROW of that ranking, opened: not which tests changed their outcome but WHAT THIS ONE
+      # ACTUALLY DID, run by run and in the window's own order. The rung the flakiness ladder never
+      # had, and the end of it — `UnstableTests` is `COUNT`s and `ARRAY_AGG(DISTINCT …)`
+      # under `GROUP BY name`, which is what keeps it constant in the size of the suite and is
+      # exactly what discards the run axis. A row saying `30 runs, 4 failed, [failed, passed]`
+      # describes two windows calling for opposite work: four failures at runs 27–30 is a
+      # REGRESSION with a culprit commit to find, and four failures at runs 3, 11, 19 and 26 is
+      # FLAKINESS with none. Deciding between those is the panel's whole purpose and the one
+      # question it could not answer.
+      #
+      # THE SAME `trajectory_runs` LOCAL, handed in rather than re-queried, and the model's own
+      # "window is HANDED IN" invariant (`UnstableTestRuns`) is sharper here than anywhere else on
+      # the page: these rows are read for their POSITION against commits the panels above serialized
+      # from the first fetch, so a second fetch would put an off-by-one between the sequence and the
+      # commits it is read against — and naming the wrong culprit commit is worse than naming none.
+      #
+      # `name` is POSITIONAL and there is no `branch:` kwarg, unlike the `UnstableTests.for` call
+      # directly above it. The window is already branch-scoped by construction, and the shape of the
+      # neighbouring call is not a reason to give this one the same one.
+      #
+      # Guarded on the ASK and on nothing else — not on `@unstable_tests.comparable?`, deliberately.
+      # A window the ranking has nothing to say about is precisely the one where the raw per-run
+      # grain is worth having: "no candidates" and "here is what this test actually did" answer
+      # different questions, and gating the second on the first would withhold the grain exactly
+      # when the aggregate above it went silent. `Api::V1::RepositoriesController` makes this same
+      # choice for the same reason.
+      #
+      # The ask is kept whatever it names: a window that recorded nothing under it is an ordinary
+      # answer — the project's identity rule is semantic, so a RENAMED test starts a new history and
+      # every bookmark to the old description goes stale by design — and `UnstableTestRuns` names it
+      # in an empty state rather than a 404.
+      #
+      # EXACTLY ONE query when asked and none when not, bounded by ONE DESCRIPTION'S rows over at
+      # most `Repository::TRAJECTORY_LIMIT` runs — constant in the size of the suite, not merely
+      # sublinear in it: see `SpecObservation.outcome_sequence_in`.
+      if @unstable_test_request
+        @unstable_test_runs = UnstableTestRuns.for(@repository, trajectory_runs, @unstable_test_request)
+      end
       # The area grain of the panels above, asked of the WINDOW the two panels around it are already
       # drawn on: not which area moved since the last push but which area moved across the branch's
       # last thirty runs. The page had "growth over time" (the chart, one number per run, no area
@@ -933,12 +992,18 @@ class RepositoriesController < ApplicationController
 
   # Records the refusal on the attribute it is about, so the form shows it under the field the user
   # has to change, exactly as a format or uniqueness failure does. The verdict is also kept for the
-  # view, which offers an authorize button instead of an error when the fix is a grant rather than
-  # an edit.
+  # view, which offers an install button instead of an error when the fix is installing the App
+  # rather than picking something else.
   def verify_github_ownership(repository)
     return true unless repository.will_save_change_to_github_full_name?
 
-    @github_verdict = GithubOwnership.verify(user: current_user, full_name: repository.github_full_name)
+    # `sources:` is this request's own read, shared with the picker the 422 re-render builds — see
+    # `InstallationRepositories.verify_batch`. It is the same live GitHub answer either way; what it
+    # saves is fetching it twice on the one path that needs it twice.
+    @github_verdict = InstallationRepositories.verify(user: current_user,
+                                                      user_token: github_user_token,
+                                                      full_name: repository.github_full_name,
+                                                      sources: github_sources)
     return true if @github_verdict.verified?
 
     repository.errors.add(:github_full_name, @github_verdict.message)
@@ -955,8 +1020,8 @@ class RepositoriesController < ApplicationController
   # `GithubRepositoryListing`, which holds all of that and is shared with the bulk path.
   #
   # What this controller adds is the verdict from a write it has just ATTEMPTED: a registration
-  # refused for a grant the user does not have must offer the authorize button, and the listing
-  # alone cannot know that happened.
+  # refused because the App is not installed must offer the install button, and the listing alone
+  # cannot know that happened.
   def github_verdict = @github_verdict
 
   # Submitting the form unchanged is a valid save, so don't claim a rename that didn't happen.

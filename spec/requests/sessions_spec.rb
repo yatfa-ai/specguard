@@ -4,7 +4,10 @@ require "rails_helper"
 
 RSpec.describe "GitHub sign-in", type: :request do
   it "signs a new user in and lands them on their repositories" do
-    expect { sign_in_via_github }.to change(User, :count).by(1)
+    # `installation: false` because this example is about the SIGN-IN response. Connecting an
+    # installation drives the App's callback afterwards, which would leave `response` on the page
+    # that redirect landed on — and signing in connects nothing anyway, which is the point.
+    expect { sign_in_via_github(installation: false) }.to change(User, :count).by(1)
 
     expect(response).to redirect_to(repositories_path)
     follow_redirect!
@@ -21,9 +24,11 @@ RSpec.describe "GitHub sign-in", type: :request do
   # legitimately collide with an existing row's, and a constraint would turn that into a 500 in the
   # sign-in path for the innocent second person. Ambiguity is reported by `User.resolve_by_handle`.
   it "signs a second user in when their handle collides with an existing row's" do
-    sign_in_via_github(uid: "1001", info: { nickname: "octocat" })
+    sign_in_via_github(uid: "1001", info: { nickname: "octocat" }, installation: false)
 
-    expect { sign_in_via_github(uid: "2002", info: { nickname: "octocat" }) }.to change(User, :count).by(1)
+    expect do
+      sign_in_via_github(uid: "2002", info: { nickname: "octocat" }, installation: false)
+    end.to change(User, :count).by(1)
 
     expect(response).to redirect_to(repositories_path)
     expect(User.where(github_handle: "octocat").pluck(:github_uid)).to contain_exactly("1001", "2002")
@@ -59,12 +64,12 @@ RSpec.describe "GitHub sign-in", type: :request do
   # session already on the other side of it.
   describe "an archived user" do
     it "is refused at the callback, and is not reactivated by it" do
-      user = sign_in_via_github
+      user = sign_in_via_github(installation: false)
       delete sign_out_path
       user.update!(archived_at: Time.current)
       archived_at = user.reload.archived_at
 
-      expect { sign_in_via_github }.not_to change(User, :count)
+      expect { sign_in_via_github(installation: false) }.not_to change(User, :count)
 
       # No session was established.
       expect(session[:user_id]).to be_nil
