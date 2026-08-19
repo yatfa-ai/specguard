@@ -3250,6 +3250,10 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
   # Neither can fail for a per-branch leak in principle. The branch axis is therefore written here
   # rather than inherited, and every run in it names a branch explicitly.
   describe "what the branches catalogue costs the endpoint" do
+    # The `ANALYZE` in the examples below reaches past the per-example rollback. This puts back
+    # what it perturbs — see the mechanism, and the measured numbers, in the support file.
+    restores_relation_statistics_for "test_runs"
+
     def create_branches(count, prefix:)
       Array.new(count) do |index|
         create_test_run(repository: repository, commit_sha: "#{prefix}%08d" % index,
@@ -3339,6 +3343,10 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
   # `pick` for `shard_count` would show up as twenty-nine extra queries that a three-row fixture
   # cannot distinguish from none.
   describe "what a branch-scoped history costs the endpoint" do
+    # The `ANALYZE` in the examples below reaches past the per-example rollback. This puts back
+    # what it perturbs — see the mechanism, and the measured numbers, in the support file.
+    restores_relation_statistics_for "test_runs"
+
     def create_main_runs(count, prefix:)
       Array.new(count) do |index|
         create_test_run(repository: repository, commit_sha: "#{prefix}%08d" % index, branch: "main",
