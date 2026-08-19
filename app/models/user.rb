@@ -67,6 +67,23 @@ class User < ApplicationRecord
   has_many :created_api_keys, class_name: "ApiKey", foreign_key: :created_by_user_id,
                               dependent: :nullify, inverse_of: :created_by_user
 
+  # The account-level credentials this person holds — `sgu_` keys, which authenticate AS them across
+  # every repository they may open. See `UserApiKey`.
+  #
+  # `:destroy`, and the contrast with `created_api_keys` directly above is the whole reason this
+  # line needs a comment. That association is `:nullify` because an `ApiKey` belongs to the
+  # repository and merely RECORDS who minted it: degrading it to "unknown creator" costs a name and
+  # keeps a colleague's CI running. None of that reasoning survives the move to a credential whose
+  # entire meaning is the person. Nullifying here is not even expressible — `user_api_keys.user_id`
+  # is `NOT NULL` — and if it were, it would leave a token authenticating as nobody, holding
+  # whatever access its owner had on the day they left. So the rows go when the person does.
+  #
+  # ARCHIVING is the path that actually gets walked, and `:dependent` says nothing about it:
+  # archiving destroys nothing by design (see the `active` scope below). Refusing an archived
+  # owner's token is `UserApiKey.authenticate`'s job, done at the resolution site, for the reason
+  # given there.
+  has_many :user_api_keys, dependent: :destroy
+
   # `:nullify` for the same reason as `created_api_keys`, one step further: a membership is somebody
   # *else's* access. Deleting the person who granted it must forget who granted it, never revoke the
   # colleague who was granted it — and it must not be confused with `repository_memberships` above,

@@ -11,6 +11,11 @@
                   class: "block rounded-md px-2 py-1.5 text-sm text-app-content-secondary hover:bg-app-neutral-surface hover:text-app-content" %>
       <%= link_to "Register a repository", new_repository_path,
                   class: "block rounded-md px-2 py-1.5 text-sm text-app-content-secondary hover:bg-app-neutral-surface hover:text-app-content" %>
+      <%# The account page, and the first nav item that is not about repositories. It exists because
+          `sgu_` user API keys belong to the person rather than to any one repository, so there is
+          no repository page they could have lived on. %>
+      <%= link_to "Account", account_path,
+                  class: "block rounded-md px-2 py-1.5 text-sm text-app-content-secondary hover:bg-app-neutral-surface hover:text-app-content" %>
     <% else %>
       <p class="px-2 py-2 text-sm text-app-content-secondary">
         Sign in to register a repository and mint an API key.

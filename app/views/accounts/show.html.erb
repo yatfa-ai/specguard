@@ -1,0 +1,71 @@
+<% content_for :title, "Account · SpecGuard" %>
+
+<%= render UI::PageComponent.new do %>
+  <%= render UI::PageHeaderComponent.new(
+        title: "Account",
+        subtitle: "Credentials that belong to you rather than to one repository."
+      ) %>
+
+  <%= render "accounts/revealed_user_token" -%>
+
+  <%= render UI::PanelComponent.new(title: "Your API keys", id: "user-api-keys") do |panel| %>
+    <% panel.with_actions do %>
+      <%# Inline, not .form-grid: this lives in a panel header and stays one row — the same shape
+          the repository page's key form takes, for the same reason. %>
+      <%= form_with url: account_api_keys_path, scope: :user_api_key,
+                    class: "flex items-end gap-2" do |form| %>
+        <%= form.field :name, label: "Name", placeholder: "Laptop" %>
+        <%= form.submit_button "New API key", size: :sm %>
+      <% end %>
+    <% end %>
+
+    <%# Named by the table below through `describedby`: it states what a row IS — a credential that
+        speaks for this person everywhere — which a reader landing on the header row by navigation
+        would otherwise never meet. %>
+    <p id="user-api-keys-caption" class="mb-3 text-sm text-app-content-secondary">
+      These keys authenticate as <strong>you</strong>, across every repository you can open — not as
+      one repository. They start <code class="font-mono text-xs">sgu_</code>, and a repository's own
+      <code class="font-mono text-xs">sgk_</code> key will not work in their place, or the reverse.
+      Hold as many as you need and revoke them one at a time: revoking one leaves the rest working.
+    </p>
+
+    <% if @user_api_keys.any? %>
+      <%= render UI::TableComponent.new(columns: ["Name", "Key", "Created", "Last used", ""],
+                                        describedby: "user-api-keys-caption") do %>
+        <% @user_api_keys.each do |user_api_key| %>
+          <tr>
+            <td class="px-3 py-2"><%= user_api_key.name %></td>
+            <td class="px-3 py-2 font-mono text-xs text-app-content-secondary">
+              <%= user_api_key.token_hint %>
+            </td>
+            <td class="px-3 py-2 text-app-content-secondary tabular-nums">
+              <%= time_ago_in_words(user_api_key.created_at) %> ago
+            </td>
+            <td class="px-3 py-2 text-app-content-secondary tabular-nums">
+              <%# No rotated-and-unused case to report here, unlike the repository key table: there
+                  is no rotation for this credential, so `last_used_at` can never have been stamped
+                  by a token that has since stopped existing. See UserApiKey. %>
+              <%= user_api_key.last_used_at ? "#{time_ago_in_words(user_api_key.last_used_at)} ago" : "never" %>
+            </td>
+            <td class="px-3 py-2 text-right">
+              <%# Revoke and nothing beside it. Its sibling on the repository page offers Regenerate
+                  first, because a repository key is usually wired into a pipeline that would have
+                  to be re-pointed; this credential has no such fixture and the honest replacement
+                  is a fresh key plus this button. %>
+              <%= button_to "Revoke", account_api_key_path(user_api_key), method: :delete,
+                            class: UI::ButtonComponent.classes(variant: :danger, size: :xs),
+                            form: { data: { turbo_confirm: "Revoke #{user_api_key.name}? Anything " \
+                                                           "still using this token stops working " \
+                                                           "immediately." } } %>
+            </td>
+          </tr>
+        <% end %>
+      <% end %>
+    <% else %>
+      <%= render UI::EmptyStateComponent.new(
+            title: "No personal API keys",
+            description: "Mint one to let an agent read the repositories you can see."
+          ) %>
+    <% end %>
+  <% end %>
+<% end %>

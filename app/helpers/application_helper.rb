@@ -1,4 +1,16 @@
 module ApplicationHelper
+  # Filename for the reveal-once token download. Named after the key, so somebody who mints two of
+  # them in a sitting can tell the files apart; `parameterize` is also what stops a user-controlled
+  # key name from reaching the browser's `download` attribute as a path.
+  #
+  # Here rather than in `RepositoriesHelper`, where it started, because there are now TWO reveal
+  # panels rendering it — a repository's `sgk_` key on repositories#show, and a person's `sgu_` key
+  # on accounts#show — and neither surface owns the rule. Nothing about it was ever repository-
+  # shaped.
+  def revealed_token_filename(name)
+    ["specguard", name.to_s.parameterize.presence, "api-key"].compact.join("-") + ".txt"
+  end
+
   # The one rendering of a run's wall clock. `TestRun#duration_label` settles the wording; this
   # settles the treatment that goes with it, so the Overview panel's header figure and the
   # Recent-runs table cell cannot drift into two different renderings of the same column.

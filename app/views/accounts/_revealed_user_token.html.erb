@@ -1,0 +1,79 @@
+<% if @revealed_token.present? %>
+  <%# Keeps this one render out of Turbo Drive's snapshot cache, which is what makes the "only time
+      this token is shown" claim below actually true. Without it Turbo snapshots the live DOM —
+      plaintext token and all — when the reader navigates away, and repaints it on Back or on any
+      return to this page.
+
+      It has to be this meta and not `data-turbo-cache="false"` on the panel: the element-level
+      attribute is not implemented in turbo-rails 2.0.23, and the sole cache opt-out Turbo reads is
+      `getSetting("cache-control")`, i.e. this tag. The same mechanism, and the same reasoning, as
+      `repositories/_revealed_token` — see the full note there. %>
+  <% content_for :head do %>
+    <meta name="turbo-cache-control" content="no-cache">
+  <% end %>
+
+  <%# The id is the fragment `UserApiKeysController` redirects to, and the controller is the second
+      mechanism for the same job: this panel renders above a table the mint form sits beside, and
+      Turbo preserves scroll across the redirect, so a perfect reveal can still arrive off-screen.
+      There is no second chance — only a digest is stored. %>
+  <%= render UI::PanelComponent.new(
+        title: @revealed_token_name.present? ? "Your new API key: #{@revealed_token_name}" : "Your new API key",
+        id: "revealed-key",
+        data: { controller: "scroll-into-view" }
+      ) do %>
+    <%# Auto-copy is declared at the call site rather than defaulted on in the component because it
+        is right for exactly this one: overwriting a clipboard is cheap and reversible, and leaving
+        this page without the token is neither. %>
+    <div class="space-y-3"
+         data-controller="copy-text"
+         data-copy-text-auto-copy-value="true"
+         data-copy-text-copied-message-value="Copied to your clipboard — paste it somewhere safe before you leave this page."
+         data-copy-text-copy-failed-message-value="Your browser did not allow an automatic copy. Use Copy or Download below, before you leave this page."
+         data-copy-text-download-filename-value="<%= revealed_token_filename(@revealed_token_name) %>">
+      <%= render UI::AlertComponent.new(tone: :warning, title: "This is the only time this token is shown") do %>
+        <p>Only the SHA-256 digest is stored, so reloading this page will not show it again. There is
+          no way to rotate this key — if you lose it, mint another and revoke this one.</p>
+        <%# Starts as the truth with JavaScript off, and is REPLACED by copy_text_controller with
+            what actually happened: an auto-copy the browser blocked must not read as one that
+            worked. `role="status"` because this line is the only report that the copy was refused,
+            and it is swapped in after load. %>
+        <p class="mt-1 font-semibold" role="status" data-copy-text-target="status">
+          Copy it before you leave this page.
+        </p>
+      <% end %>
+
+      <%# NO nested `data-controller="copy-text"` here: this snippet is the AUTO-COPY scope's
+          payload, and its own scope would hide it from the panel controller above. The curl block
+          below takes the nested scope instead, for that reason in reverse — `sourceTarget` is
+          singular, so a second payload in THIS scope would be what auto-copy grabbed. %>
+      <div class="space-y-1">
+        <p class="section-label text-app-content-secondary">The key</p>
+        <%= render UI::CopyableCodeComponent.new do %><%= @revealed_token %><% end %>
+      </div>
+
+      <div class="flex flex-wrap items-center gap-x-3 gap-y-1">
+        <%= render UI::ButtonComponent.new(variant: :secondary, size: :sm, type: "button",
+                                           data: { action: "copy-text#download" }) do %>
+          Download as a file
+        <% end %>
+        <p class="text-xs text-app-muted">
+          Written from this page, not fetched from the server — SpecGuard does not hold the token.
+        </p>
+      </div>
+
+      <%# The one request that proves this credential works, with the token already in it. Points at
+          the PLURAL route deliberately: it is the endpoint this key answers to, and the singular
+          `/api/v1/repository` would 401 for it — which is the seam working, and a confusing first
+          impression to hand somebody who has just minted a key.
+
+          Its own `copy-text` scope, on the rule stated above. %>
+      <div class="space-y-1" data-controller="copy-text">
+        <p class="section-label text-app-content-secondary">Check the key works</p>
+        <%= render UI::CopyableCodeComponent.new do %>curl -H "Authorization: Bearer <%= @revealed_token %>" <%= api_v1_repositories_url %><% end %>
+        <p class="text-xs text-app-muted">
+          Ready to run as-is. It lists every repository you can open, and sends SpecGuard nothing.
+        </p>
+      </div>
+    </div>
+  <% end %>
+<% end %>
