@@ -56,16 +56,31 @@ RSpec.describe "Repository unstable test runs", type: :request do
 
   def ranking_panel = page.find("#unstable-tests")
 
-  # One row as a reader meets it: which run, on which branch, when it landed, and what that run said
-  # happened. Whitespace-collapsed, because a cell assembled across two ERB tags is one reading on
-  # the page whatever the source did with indentation.
+  # One row as a reader meets it: which run, where the test was defined in it, on which branch, when
+  # it landed, how long it took and what that run said happened. Whitespace-collapsed, because a
+  # cell assembled across two ERB tags is one reading on the page whatever the source did with
+  # indentation.
   def rows
     panel.all("tbody tr").map do |row|
-      commit, branch, ingested, outcome = row.all("td").map { |cell| cell.text.gsub(/\s+/, " ").strip }
+      commit, definition_site, branch, ingested, duration, outcome =
+        row.all("td").map { |cell| cell.text.gsub(/\s+/, " ").strip }
 
-      { commit: commit, branch: branch, ingested: ingested, outcome: outcome }
+      { commit: commit, definition_site: definition_site, branch: branch, ingested: ingested,
+        duration: duration, outcome: outcome }
     end
   end
+
+  # The definition-site cell's LINKS, read as hrefs rather than as text — this panel's whole
+  # departure from its siblings lives in the ref inside the href, and the visible coordinate is
+  # identical whichever commit the link was pinned to. CELL-scoped by position, because the commit
+  # cell beside it is the other place a sha appears on this row.
+  def definition_site_hrefs
+    panel.all("tbody tr").map { |row| row.all("td")[1].all("a").map { |link| link[:href] } }.flatten
+  end
+
+  def duration_sequence = rows.map { |row| row[:duration] }
+
+  def definition_site_sequence = rows.map { |row| row[:definition_site] }
 
   def outcome_sequence = rows.map { |row| row[:outcome] }
 
@@ -606,6 +621,167 @@ RSpec.describe "Repository unstable test runs", type: :request do
 
       expect(response).to have_http_status(:ok)
       expect(panel?).to be(false)
+    end
+  end
+
+  # HOW LONG THE TEST TOOK IN EACH RUN — the column the sequence needs to get past its own verdict.
+  # The outcome column separates a regression from a flake; it stops there, and for the largest class
+  # of real flakes the next answer is timing. A test that passes at 4s and fails at 31s is hitting a
+  # timeout rather than behaving randomly, and no aggregate over the window can show that: the
+  # ranking above holds counts and a set of outcome words, and the per-run figure is the whole point.
+  describe "how long the test took in each run" do
+    # Durations are stamped PER RUN and read back per row. A view that took one figure off the
+    # sequence — the first row's, or the window's own `duration_seconds` — renders a plausible
+    # column that is constant down the list, which is exactly the shape a fixture with one duration
+    # cannot tell from the right answer.
+    it "carries each run's own duration rather than one figure repeated down the sequence" do
+      repository = create_repository(user: @user)
+      [["passed", 4.0], ["failed", 31.0]].each_with_index do |(outcome, duration), index|
+        ingest(repository,
+               [example_spec(name: flaky, outcome: outcome, duration: duration),
+                example_spec(name: stable, outcome: "passed", line_number: 2,
+                             file_path: "spec/models/user_spec.rb", duration: 0.01)],
+               commit_sha: sha_for(index), at: (30 - index).days.ago)
+      end
+
+      get repository_path(repository, unstable_test: flaky)
+
+      expect(duration_sequence).to eq(["4.00s", "31.00s"])
+    end
+
+    # A run whose client reported no timing says so IN WORDS. `duration_seconds` is nullable —
+    # `result&.run_time` comes back nil for an example that never ran — and `%.2f` over a nil is
+    # "0.00s", which makes "the client sent no timing" byte-identical to "this test took no time".
+    # On a column read for a timeout that is the one wrong answer it must not produce, so it is
+    # pinned here rather than left to the model spec that owns the seam: what this asserts is that
+    # the view goes THROUGH that seam.
+    it "renders a run that reported no timing as not reported rather than as a zero" do
+      repository = create_repository(user: @user)
+      [0.5, nil].each_with_index do |duration, index|
+        ingest(repository, [example_spec(name: flaky, outcome: "passed", duration: duration)],
+               commit_sha: sha_for(index), at: (30 - index).days.ago)
+      end
+
+      get repository_path(repository, unstable_test: flaky)
+
+      expect(duration_sequence).to eq(["0.50s", "not reported"])
+    end
+
+    # And the caption says whose measurement it is, because "4.00s" on a dashboard reads as
+    # something the dashboard measured. It is the client's own per-example figure, and a row may
+    # carry none.
+    it "says the durations are the client's own and that a row may carry none" do
+      repository = repository_with(%w[passed failed])
+
+      get repository_path(repository, unstable_test: flaky)
+
+      expect(basis_line).to have_text("Durations are the client's own per-example timings",
+                                      normalize_ws: true)
+      expect(basis_line).to have_text("a run whose client reported none says so rather than " \
+                                      "reading as a zero", normalize_ws: true)
+    end
+  end
+
+  # WHERE THE TEST RAN IN EACH RUN, as a link — the reading the four sibling per-example panels
+  # cannot make. They list one run's rows and pin every link to the page-level sha; these rows each
+  # carry their own run, and the identity rule is semantic, so the coordinate is allowed to change
+  # down the list and each link has to be pinned to the commit that actually ran that example.
+  describe "where the test was defined in each run" do
+    # THE assertion that separates per-run pinning from the page-level pinning it would be copied
+    # from. Both render the same visible coordinate on every row; only the ref inside the href
+    # differs, and a single-sha fixture makes the two byte-identical — so this reads TWO rows at TWO
+    # commits and asserts each href carries its OWN row's sha.
+    it "pins each row's coordinate to the commit that ran it" do
+      repository = repository_with(%w[passed failed])
+
+      get repository_path(repository, unstable_test: flaky)
+
+      expect(definition_site_sequence).to eq(["spec/models/invoice_spec.rb:1"] * 2)
+      expect(definition_site_hrefs).to eq(
+        ["https://github.com/acme/checkout/blob/#{sha_for(0)}/spec/models/invoice_spec.rb#L1",
+         "https://github.com/acme/checkout/blob/#{sha_for(1)}/spec/models/invoice_spec.rb#L1"]
+      )
+      expect(definition_site_hrefs.uniq.size).to eq(2)
+    end
+
+    # The case the per-run pinning exists FOR: a test that moved. Under the semantic identity rule
+    # it is the same test and keeps its history, so the two rows are one sequence — and each of them
+    # links to the file it lived in at its own commit. A page-level sha would send the older row's
+    # link to a path that did not exist yet at that ref.
+    it "follows a test that moved, path and commit together" do
+      repository = create_repository(user: @user)
+      [["spec/models/invoice_spec.rb", 1], ["spec/models/billing/invoice_spec.rb", 44]]
+        .each_with_index do |(file_path, line_number), index|
+          ingest(repository,
+                 [example_spec(name: flaky, outcome: "passed", file_path: file_path,
+                               line_number: line_number)],
+                 commit_sha: sha_for(index), at: (30 - index).days.ago)
+        end
+
+      get repository_path(repository, unstable_test: flaky)
+
+      expect(definition_site_sequence).to eq(["spec/models/invoice_spec.rb:1",
+                                              "spec/models/billing/invoice_spec.rb:44"])
+      expect(definition_site_hrefs.first).to end_with("#{sha_for(0)}/spec/models/invoice_spec.rb#L1")
+      expect(definition_site_hrefs.last)
+        .to end_with("#{sha_for(1)}/spec/models/billing/invoice_spec.rb#L44")
+    end
+
+    # The coordinate is `file_path` + `line_number`, NEVER `spec_file_path` + `line_number`.
+    # `spec_file_path` is the *including* file and differs from `file_path` only for a shared example
+    # group — which is exactly the case where the line number describes a line in the OTHER file, so
+    # the forbidden pairing prints a coordinate whose halves come from two files and links at
+    # whatever happens to sit on that line of the including one. The two files here disagree in both
+    # halves, so a view built from the wrong one cannot pass.
+    it "builds the coordinate from the definition site and not from the including file" do
+      repository = create_repository(user: @user)
+      2.times do |index|
+        ingest(repository,
+               [example_spec(name: flaky, outcome: "passed",
+                             file_path: "spec/support/shared/behaves_like_lockable.rb",
+                             line_number: 12, spec_file_path: "spec/models/invoice_spec.rb")],
+               commit_sha: sha_for(index), at: (30 - index).days.ago)
+      end
+
+      get repository_path(repository, unstable_test: flaky)
+
+      expect(definition_site_sequence.uniq)
+        .to eq(["spec/support/shared/behaves_like_lockable.rb:12"])
+      expect(definition_site_hrefs.first)
+        .to end_with("/spec/support/shared/behaves_like_lockable.rb#L12")
+      expect(definition_site_hrefs.first).not_to include("invoice_spec")
+    end
+
+    # A row whose coordinate has a missing half renders NOTHING — not a bare ":" that reads as a
+    # coordinate, and not `…/blob/<sha>/#L1`, which resolves to the repository root and so looks like
+    # a link that worked. Asserted BESIDE a row that does have one, so this cannot pass over a
+    # column that failed to render at all.
+    it "renders no coordinate and no link for a row with no definition site" do
+      repository = create_repository(user: @user)
+      ["spec/models/invoice_spec.rb", ""].each_with_index do |file_path, index|
+        ingest(repository,
+               [example_spec(name: flaky, outcome: "passed", file_path: file_path, line_number: 1)],
+               commit_sha: sha_for(index), at: (30 - index).days.ago)
+      end
+
+      get repository_path(repository, unstable_test: flaky)
+
+      expect(definition_site_sequence).to eq(["spec/models/invoice_spec.rb:1", ""])
+      expect(definition_site_hrefs.size).to eq(1)
+      expect(panel.all("tbody tr").last.all("td")[1]).to have_no_css("a")
+    end
+
+    # And the caption names the rule, because a path that changes down a list of ONE test's runs
+    # reads as two tests to anyone who does not know identity here is semantic.
+    it "says a coordinate that changes down the list is the identity rule working" do
+      repository = repository_with(%w[passed failed])
+
+      get repository_path(repository, unstable_test: flaky)
+
+      expect(basis_line).to have_text("A definition site that CHANGES down this list is the " \
+                                      "identity rule working", normalize_ws: true)
+      expect(basis_line).to have_text("not two different tests sharing a description",
+                                      normalize_ws: true)
     end
   end
 

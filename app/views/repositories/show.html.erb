@@ -1914,9 +1914,22 @@
             carried by more than one example in a run contributes one row per example — so the
             length of this list is not the length of the window, and which run a row belongs to is
             read off its commit rather than off its position.
+            <%# The two per-run columns that are read ACROSS rows, and the reading each of them needs
+                before it can be read that way. Static rather than counted off this window, like the
+                reading rule above it and unlike the silence clause beside it: both are rules that
+                hold of every sequence this panel draws, and neither states a figure about these
+                rows, so there is no population here for a sentence to disagree with. %>
+            Durations are the client's own per-example timings and not anything measured here, and a
+            run whose client reported none says so rather than reading as a zero. A definition site
+            that CHANGES down this list is the identity rule working — a test that moved is the same
+            test and keeps its history — and not two different tests sharing a description; each row
+            links against its own run's commit, so two rows pointing at two different files can both
+            be right.
           </p>
-          <%= render UI::TableComponent.new(columns: ["Commit", "Branch", "Ingested", "Outcome"],
-                                            describedby: "unstable-test-runs-basis") do %>
+          <%= render UI::TableComponent.new(
+                columns: ["Commit", "Definition site", "Branch", "Ingested", "Duration", "Outcome"],
+                describedby: "unstable-test-runs-basis"
+              ) do %>
             <% @unstable_test_runs.rows.each do |row| %>
               <tr>
                 <td class="px-3 py-2 font-mono text-xs text-app-content">
@@ -1925,6 +1938,51 @@
                       Seven characters, the same abbreviation the Recent runs panel below uses, so
                       one page renders one sha one way. %>
                   <%= row.commit_sha.first(7) %>
+                </td>
+                <td class="px-3 py-2 font-mono text-xs text-app-content-secondary">
+                  <%# WHERE THE TEST WAS DEFINED IN THIS RUN, PINNED TO THIS ROW'S OWN COMMIT — the
+                      one thing this panel can say that its four sibling per-example listings
+                      cannot. They each list ONE run's rows, so they pin every link to the
+                      page-level `@latest_test_run.commit_sha` and are right to. These rows each
+                      carry their own run (`Row#run`, `#commit_sha`), and under the project's
+                      semantic identity rule a test that MOVED is the same test and keeps its
+                      history — so a coordinate is allowed to change down this list, and the only
+                      honest ref for a row is the commit that actually ran that example. Borrowing
+                      the page's sha here would point a reader at whatever now sits on that line of
+                      a file that need not have held this test at the time, which is the
+                      wrong-culprit reading in the file dimension.
+
+                      Built from `file_path`, NEVER from `spec_file_path` — the rule
+                      `SpecObservation#location_label` and `Repository#github_blob_url`'s `@param
+                      path` both state. `spec_file_path` is the *including* file and differs from
+                      `file_path` only for a shared example group, which is exactly the case where
+                      the line number describes a line in the OTHER file: pairing them prints a
+                      coordinate whose two halves come from two files and links at whatever happens
+                      to sit on that line of the including one. `Row` exposes `spec_file_path` and
+                      not `file_path`, so this reads through `row.observation` — the same reach the
+                      outcome cell below already makes, and the one that needs no model change.
+
+                      ZERO NEW QUERIES: `SpecObservation.outcome_sequence_in` selects
+                      `spec_observations.*`, so both halves are already loaded; `@repository` is
+                      loaded long before this partial renders; and `#github_blob_url` is string
+                      composition.
+
+                      Rendered only when the coordinate has BOTH halves, and rendered as NOTHING
+                      when it does not. `file_path` and `line_number` are `NOT NULL` and
+                      `Ingest::Payload` rejects a delivery missing either, so this guards a pair
+                      that should never come apart rather than a branch anyone expects to fire —
+                      but the two shapes it forecloses are both worse than an empty cell: a bare
+                      ":" reads as a coordinate, and `…/blob/<sha>/#L1` resolves to the repository
+                      root, so a broken link here would LOOK like it worked. %>
+                  <% if row.observation.file_path.present? && row.observation.line_number.present? %>
+                    <%= link_to row.observation.location_label,
+                                @repository.github_blob_url(row.observation.file_path,
+                                                            row.observation.line_number,
+                                                            row.commit_sha),
+                                class: "underline underline-offset-2 decoration-app-border-light " \
+                                       "text-app-content hover:decoration-app-content",
+                                target: "_blank", rel: "noopener noreferrer" %>
+                  <% end %>
                 </td>
                 <td class="px-3 py-2 text-app-content-secondary">
                   <%# Per-row rather than borrowed from the window, on the rule
@@ -1941,6 +1999,28 @@
                       retry or a second workflow — so a reader deciding that a failure MOVED needs
                       to be able to tell two runs of one sha apart before they go looking at it. %>
                   <%= time_ago_in_words(row.ingested_at) %> ago
+                </td>
+                <td class="px-3 py-2 text-app-content-secondary tabular-nums">
+                  <%# HOW LONG THIS RUN TOOK OVER THIS EXAMPLE — the column that separates the two
+                      readings the outcome column can only get as far as. Once the sequence has said
+                      "scattered", the reader's next question is WHY, and for the largest class of
+                      real flakes the answer is timing: a test that passes at 4s and fails at 31s is
+                      hitting a timeout rather than behaving randomly, and nothing but the per-run
+                      grain can show that.
+
+                      Through `#duration_label`, the model's one formatting seam for a figure at
+                      this table's grain, and deliberately not re-formatted here. Its first line is
+                      `return "not reported" if seconds.nil?`, and its own doc comment names the
+                      hazard that line exists for: `duration_seconds` is nullable — `result&.run_time`
+                      comes back nil for an example that never ran — so an ungated nil formats as
+                      "0.00s" and makes "the client sent no timing" byte-identical to "this test
+                      took no time". On a column read for a timeout, that is the one wrong answer it
+                      must not produce.
+
+                      `tabular-nums` like the Ingested cell beside it: this column is read by
+                      comparing rows DOWN it rather than one row at a time, and proportional digits
+                      put the same magnitudes at different widths. %>
+                  <%= row.observation.duration_label %>
                 </td>
                 <td class="px-3 py-2">
                   <%# What that run said happened, through `#outcome_label` and `#outcome_tone` — the
