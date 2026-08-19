@@ -175,11 +175,48 @@ module Ingest
     # methods this constant has nothing to do with.
     #
     # What it does NOT bound is a page of genuinely new text, and the paragraph above says why: the
-    # ANN lookup and the upsert are still one per row, so a first run is round-trip bound whatever
-    # this is. The embed no longer is — {#page_embeddings} asks for the page's vectors in one
-    # request, and asks for none of the ones this deployment already owns — which lowers that
-    # page's floor without changing its shape. The number tuned here is what an UNCHANGED page
-    # costs, which is the ordinary case.
+    # ANN lookup is still one per row, so a first run is round-trip bound whatever this is. The embed
+    # no longer is — {#page_embeddings} asks for the page's vectors in one request, and asks for none
+    # of the ones this deployment already owns — and neither is the insert, which is one
+    # `INSERT … ON CONFLICT` for the page's whole set of new identities
+    # ({#insert_pending_identities}) where it was one per miss. Both lower that page's floor without
+    # changing its shape, and the ANN lookup is the only per-row round trip this path has left. The
+    # number tuned here is what an UNCHANGED page costs, which is the ordinary case; the changed one
+    # is SPGD-375's lookup.
+    #
+    # **It is the one number here whose square something pays, and that is worth knowing before
+    # raising it.** Deferring the insert means a page's misses are compared against each other in
+    # process ({#nearest_pending}) rather than through the index, which is O(page²) on a page of
+    # pure misses. On the provider that ships — `VoyageProvider`, 1024 dimensions, **dense** — that
+    # is 124,750 pairs of 1024-element Ruby dot product per full page, and it makes a first ingest
+    # ~1.4s per page SLOWER than the per-row path on a local socket, bought back only once a
+    # statement's round trip exceeds ~2.9ms. {#nearest_pending} carries the measured ledger and the
+    # two cheaper scans that were tried and refused.
+    #
+    # **What that implies for this number, stated because the ledger above invites the question.**
+    # The scan is O(page²) per page and therefore O(N x page) over a suite, while the round trips
+    # batching saves are O(N) and almost independent of page width — at any page above ~100, a
+    # 20,000-example first ingest saves ~N of them either way. So the two pressures point OPPOSITE
+    # WAYS and shrinking this number strictly improves the first ingest: halving it halves total
+    # scan time while giving up almost none of the batching's benefit.
+    #
+    # It stays at 500 regardless, and the reason is that a first ingest is not what this constant is
+    # tuned for. Halving it doubles the page count, and with it the 13 statements every page costs
+    # on an UNCHANGED re-ingest (pinned at `identity_resolver_spec.rb`'s "what a page of unchanged
+    # text costs in round trips") — the ordinary case, paid on every CI run for the life of the
+    # repository, against a first ingest paid once. Trading the common case for the rare one is the
+    # wrong direction. And this has exactly ONE use site — `find_in_batches(batch_size:)` in
+    # {#resolve} — which makes it look more local than it is: it sets the page width, and every
+    # per-page cost in this class (the embed request, the digest short-circuit, the three flush
+    # statements, this scan) is a function of the page it hands out. Recorded here as a known
+    # tension, not resolved unilaterally: if a first ingest's wall clock ever becomes the complaint,
+    # this paragraph is where the lever is, and lowering the page is the lever.
+    #
+    # **What it does not decide is how many identities a suite gets**, and that is a property worth
+    # stating because one revision of this slice broke it: a page-pending row is matched at the same
+    # `SpecIdentity::MATCH_SIMILARITY` the index applies, so two near-identical new tests land on one
+    # identity whether they share a page or straddle the boundary between two. This stays a knob on
+    # cost, tunable without changing what a repository ends up holding.
     #
     # That makes this a size worth tuning where it used not to be, but not a different KIND of
     # constant: both readings bound one page, and neither is a bound on how much work a delivery
@@ -247,6 +284,63 @@ module Ingest
       def from_name? = source == "name"
     end
 
+    # **A stand-in for the id of a row this page has decided to insert but has not inserted yet.**
+    # {#claim_identity} buffers its row and hands one of these back; {#insert_pending_identities}
+    # issues the page's single `INSERT` and {#substitute_pending} replaces every one of them with the
+    # id the database returned, before any statement that could carry it is built.
+    #
+    # A Struct and deliberately not a negative integer or any other in-band id. A placeholder that
+    # survived substitution has to fail LOUDLY: as an object it makes {#link_all}'s bind refuse it,
+    # or {#resight_all}'s, at the seam that produced it. As an integer it would be written to
+    # `spec_observations.spec_identity_id` — a foreign key to a row that does not exist, or worse a
+    # row that does — and the first anyone heard of it would be a repository whose observations point
+    # at strangers.
+    #
+    # Carries the DIGEST rather than an index into the buffer, because the digest is what the
+    # returned ids are keyed by ({#insert_pending_identities} maps `RETURNING` by `text_digest`, not
+    # by position) and what the buffer itself is keyed by — one name for the row, held by everything
+    # that has to agree about which row it is.
+    PendingIdentity = Struct.new(:digest)
+
+    # **One pending row's vector, in the form {#nearest_pending} can compare cheaply.** The page's
+    # answer to a question {#nearest} can no longer be asked: the rows this page has decided to
+    # insert are not in the table yet, so the index cannot see them.
+    #
+    # Stored as the indices of the non-zero dimensions and their values rather than as the dense
+    # 1024-wide array. **Read what that does and does not buy, because it is easy to over-read.**
+    #
+    # It is a compression that is INERT on everything this application ships. The one provider is
+    # `EmbeddingGenerator::VoyageProvider` (`voyageai/voyage-4-lite`, 1024 dimensions — owner
+    # decision, 2026-08-17, "one provider, one model, one width"), and its vectors are dense: every
+    # dimension non-zero, so `indices` holds all 1024 of them and the scan pays the dense cost. The
+    # suite's default stub (`spec/support/embedding_generator.rb`) is dense too — measured, 1024 of
+    # 1024 non-zero. The only configuration in which this shape compresses anything is
+    # `LexicalEmbeddingProvider`, which is spec-only by its own header ("**Not shipped**") and which
+    # feature-hashes a description into a few percent of the 1024 dimensions. How few is a function
+    # of description LENGTH rather than a constant, so it is quoted as a range over a named corpus —
+    # the descriptions these specs actually use — instead of as a single figure over an unnamed one:
+    # 24/1024 (2.3%) for "rejects an expired card", 40/1024 (3.9%) for "Order#checkout rejects an
+    # expired card", and 75/1024 (7.3%) for the longer `Invoice#finalize` description in
+    # `identity_resolver_spec.rb`'s pluralisation example.
+    #
+    # Kept anyway, on two grounds and not on a claim about what ships. It is CORRECT under either
+    # density — walking the non-zero dimensions is the same dot product, not an approximation of one
+    # — and it is what the identity-resolution specs actually run under, so the code exercised by
+    # the suite is the code deployed. What it must not be read as is a reason the scan is cheap in
+    # production. It is not; {#nearest_pending} carries the measured ledger for the dense case, and
+    # the dense case is the shipped one.
+    #
+    # Carries its own `magnitude` so the comparison is a true COSINE rather than a bare dot product.
+    # Every provider in this tree whose output can be inspected normalises explicitly — the suite's
+    # stub and `LexicalEmbeddingProvider` both divide by the norm — which is what makes the division
+    # LOOK like dead code. Nothing enforces it: `EmbeddingGenerator.validate` checks width and
+    # finiteness and does NOT check normalisation, and a vendor's normalisation is a property of the
+    # vendor rather than of this interface. A provider returning unrolled vectors would silently turn
+    # every similarity here into a number that is not one, against a threshold that assumes it is.
+    # One `Math.sqrt` per pending row buys the guarantee that this method and `nearest` are answering
+    # the same question.
+    PendingVector = Struct.new(:digest, :indices, :values, :magnitude)
+
     # One identity's pending spelling refresh — see {#note_drift} for what earns a row one and
     # {#refresh_all} for which of a page's candidates is actually written.
     #
@@ -273,12 +367,25 @@ module Ingest
       # tripped, in which case that fallback answers nil rather than asking. See {#embedding_for},
       # which explains where the missing key comes from and why the breaker has to be re-read there.
       @embeddings = {}
-      # The page's two write buffers, emptied and refilled by every {#resolve_page} for the same
-      # reason and with the same total-rather-than-conditional guarantee: {#resight} and {#claim}
-      # append to them one row at a time, and {#flush_page} spends each on ONE statement. See
-      # {#resolve_page} for why the decision stays per row while the write is per page.
+      # The page's write buffers, emptied and refilled by every {#resolve_page} for the same
+      # reason and with the same total-rather-than-conditional guarantee: {#resight}, {#claim} and
+      # {#claim_identity} append to them one row at a time, and {#flush_page} spends each on ONE
+      # statement. See {#resolve_page} for why the decision stays per row while the write is per page.
       @sightings = []
       @links = []
+      # The page's pending identity inserts, `digest => row attributes`. Keyed by digest and never a
+      # list, because one `upsert_all` carrying two rows with the same `(repository_id, text_digest)`
+      # is refused by Postgres outright ("ON CONFLICT DO UPDATE command cannot affect row a second
+      # time") — a page-shaped crash where the per-row path merely conflicted onto itself. The map
+      # {#claim_identity} writes is what stops a second byte-identical row reaching it at all; this
+      # key is the belt to that brace, and it is the same key the returned ids arrive under.
+      @pending_identities = {}
+      # The vectors of the rows above, as {PendingVector}s — **what {#nearest} cannot see, answered
+      # without asking it.** A page's pending rows are not in the table yet, so the index lookup
+      # misses them, and the per-row path this replaced did not: it inserted each row before the
+      # next row asked. Scanned by {#nearest_pending}, which is what keeps a page's identity graph
+      # the same one the per-row path produced.
+      @pending_vectors = []
       # The page's pending spelling refreshes, `identity_id => {Drift}` — one entry per identity by
       # construction, which is {#note_drift}'s first bound against thrash. Same total-rather-than-
       # conditional guarantee as the two buffers above.
@@ -544,8 +651,8 @@ module Ingest
 
     # One page of the work list: ask the database once which of these texts this repository already
     # holds, ask the provider once for the vectors the rest of them need, decide each row against
-    # those two answers, and write what the whole page decided in two statements rather than in two
-    # per row.
+    # those two answers, and write what the whole page decided in a fixed number of statements rather
+    # than in three per row.
     #
     # This is where the page seam has to be. Both of {#resolve}'s lists run through {#claim}, and
     # {#identity_for} sees one observation at a time and cannot know what the other 499 are — so a
@@ -556,12 +663,12 @@ module Ingest
     # {#digest_index} introduced and is now the shape of both halves. A row the index cannot answer
     # still falls through to embed/{#nearest}/{#claim_identity} unchanged, and {#identical_text} is
     # still the method that answers one row — see it for why that seam is load-bearing rather than
-    # stylistic. What changed is that {#resight} and {#claim} now RECORD what they decided instead
-    # of writing it, and {#flush_page} spends the two buffers on one statement each.
+    # stylistic. What changed is that {#resight}, {#claim} and {#claim_identity} now RECORD what they
+    # decided instead of writing it, and {#flush_page} spends each buffer on one statement.
     #
     # `inherited:` chooses which of the two claim seams the page's rows take, and it is a parameter
     # rather than a second method because the page itself is identical either way: the same one
-    # lookup, the same per-row decision after it, the same two writes at the end. {#claim_inherited}
+    # lookup, the same per-row decision after it, the same writes at the end. {#claim_inherited}
     # for the repository's earlier runs, {#claim} for `@run`'s own, and {#claim_inherited} is where
     # the asymmetry is argued.
     #
@@ -593,7 +700,7 @@ module Ingest
     # exception is already propagating would replace it — Ruby discards the in-flight exception for
     # whatever an `ensure` raises — so a page that died on {#nearest} and then met a deadlock in
     # {#flush_page} would report the deadlock and lose the cause. That is not hypothetical now that
-    # the flush is where a page's database errors surface ({#write_page}): the two writes are the
+    # the flush is where a page's database errors surface ({#write_page}): the page's writes are the
     # only statements left on this path that a concurrent job can collide with. So the flush's own
     # failure is logged and dropped WHEN there is an original to keep, and raised as before when
     # there is not. Dropped and never swallowed silently: the log line names both, because "the page
@@ -603,6 +710,8 @@ module Ingest
       @embeddings = page_embeddings(observations)
       @sightings = []
       @links = []
+      @pending_identities = {}
+      @pending_vectors = []
       @drifts = {}
       resolved = 0
 
@@ -628,15 +737,27 @@ module Ingest
       resolved
     end
 
-    # The page's two writes, and the whole of what this slice bought: **O(1) `UPDATE` statements per
-    # page where there were two per ROW.**
+    # The page's writes, and the whole of what this lineage bought: **O(1) statements per page where
+    # there were two `UPDATE`s and an `INSERT` per ROW.**
     #
     # Order matters and it is the order the per-row path had. A re-sighting moves the identity;
     # linking the observation is what makes it resolved. Flushing the sightings first keeps the two
     # in the same relative order they were written in when they were written per row, so a pass that
     # dies between them leaves the same state a pass that died between two rows' UPDATEs did.
     #
-    # It is also, now, a lock order. Both statements are multi-row ({#write_page} argues what that
+    # **{#insert_pending_identities} goes FIRST, and for two reasons that happen to agree.** It is
+    # the statement that produces the ids: a page's new identities are held as {PendingIdentity}
+    # placeholders while the page is walked, and every buffer below can be carrying one, so the
+    # substitution has to happen before anything binds them. And it writes `spec_identities`, so it
+    # belongs on the same side of the identities/observations lock order as {#resight_all} and ahead
+    # of {#link_all} — see below, and {#write_page} for what that order is for.
+    #
+    # It is also the seam the placeholders are resolved at, and deliberately the ONLY one. The three
+    # methods below read `@sightings`, `@links` and `@spellings_in_use` exactly as they did when
+    # every id in them was already real; resolving a placeholder inside each consumer instead would
+    # be three implementations of one rule that have to agree, and a fourth the next slice forgets.
+    #
+    # It is also, now, a lock order. Both `UPDATE`s are multi-row ({#write_page} argues what that
     # changed), and every page of every job issues them in this order — identities, then
     # observations — so two concurrent passes cannot hold one of these tables while waiting for the
     # other. Whatever contention is left is inside a single table, which is what {#write_page}'s
@@ -652,7 +773,7 @@ module Ingest
     # would take the "keep the original" branch and silently discard everything the page resolved.
     # An optional write must not be able to cost the page its required ones, so it is ordered behind
     # them and the count is taken before it. (It has no lock-ordering claim to make by going first:
-    # it commits its own transaction per row and holds nothing while the two statements above run.)
+    # it commits its own transaction per row and holds nothing while the statements above run.)
     #
     # **It IS a per-row write in a burst, and the bound is page-shaped rather than lifetime-shaped.**
     # An ordinary page issues nothing at all, and an identity crosses the drift transition once —
@@ -677,6 +798,7 @@ module Ingest
     # @return [Integer] how many observations this page actually linked — see {#link_all}, which
     #   counts the rows the statement MATCHED rather than the rows it was handed.
     def flush_page
+      insert_pending_identities
       sightings = newest_sighting_per_identity
 
       resight_all(sightings)
@@ -686,15 +808,87 @@ module Ingest
       resolved
     end
 
-    # **The page's write, issued once and retried at most once if Postgres picks it as the deadlock
-    # victim.** Both statements below go through here, and this is the whole of what answers the
-    # concurrency question batching them asks.
+    # **The page's new identities, in one `INSERT … ON CONFLICT … RETURNING`.** The last of the
+    # per-row statements this lineage set out to remove: a repository's FIRST ingest of a
+    # 20,000-example suite is 20,000 misses by construction, so this was 20,000 sequential round trips
+    # to write what one page had already decided.
     #
-    # The per-row path could not deadlock, structurally rather than by luck. `update_column` and a
-    # one-row `update_all` each ran in autocommit: one row lock, taken and released inside one
-    # statement. A transaction that never holds a second lock cannot be half of a cycle. {#resight_all}
-    # and {#link_all} each take up to `BATCH_SIZE` row locks and hold them all until the statement
-    # ends, which is a lock footprint three orders of magnitude wider at the design point.
+    # Nothing about the row changed — see {#claim_identity} for the conflict key, why it is an upsert
+    # rather than an insert, and what the conflict branch does. What changed is that the statement is
+    # the page's rather than the row's, and the id therefore arrives after the walk instead of during
+    # it.
+    #
+    # **The ids are mapped by `text_digest` and never by position.** `RETURNING` makes no promise
+    # that its rows come back in `VALUES` order — a different plan may not scan them in it — so
+    # zipping the result against the buffer would look correct in a green test and cross-link rows
+    # under a plan nobody asked for. The digest is already the buffer's key and already unique within
+    # the page; asking the statement to return it costs one short column.
+    #
+    # **Sorted by that key** before the statement is built, for the reason {#write_page} argues at
+    # length: these rows take locks on `spec_identities` — an upsert that conflicts locks the row it
+    # conflicts onto — and two concurrent jobs over overlapping pages should present the rows they
+    # share in the same relative order. `repository_id` is constant across a page, so the digest is
+    # the whole of the conflict key that varies.
+    #
+    # Through {#write_page} like the page's other batched statements, and sound to re-issue for the
+    # same reason: it is one statement in autocommit with nothing partial to unwind, and a second
+    # attempt either inserts what the first would have or conflicts onto the row that arrived
+    # meanwhile and re-sights it — guarded, as ever, by {SpecIdentity::SIGHTING_NOT_OLDER}.
+    def insert_pending_identities
+      return if @pending_identities.empty?
+
+      rows = @pending_identities.keys.sort.map { |digest| @pending_identities.fetch(digest) }
+
+      ids = write_page do
+        SpecIdentity.upsert_all(
+          rows,
+          unique_by: %i[repository_id text_digest],
+          on_duplicate: Arel.sql(SpecIdentity::RESIGHT_ON_CONFLICT),
+          record_timestamps: false, returning: %w[id text_digest]
+        ).rows.to_h { |id, digest| [digest, id] }
+      end
+
+      substitute_pending(ids)
+    end
+
+    # **Every {PendingIdentity} the page handed out, replaced by the id the insert returned** — in
+    # all three of the buffers one can reach, at one seam, before any of them is spent.
+    #
+    # Three and not one, which is the whole reason this is its own method. `@links` is the obvious
+    # one. `@sightings` and `@spellings_in_use` are reached by the *second* byte-identical row of a
+    # page: {#claim_identity} puts its row into `@digest_index`, so that row takes {#identical_text}'s
+    # hit branch in {#identity_for}, which appends the id to `@spellings_in_use` and re-sights it. A
+    # placeholder therefore rides into {#resight_all}, {#link_all} and {#refresh_all} alike, and the
+    # only way for those three to need no knowledge of it is for none of them to see one.
+    #
+    # `fetch` and never `[]`: a placeholder with no returned id is a broken invariant — the statement
+    # returns a row per row it was handed, conflict or not — and it must raise here rather than write
+    # a `nil` foreign key or silently drop a spelling refusal.
+    #
+    # `@spellings_in_use` is rebuilt entry by entry rather than mapped because it is a Set and it is
+    # PASS-scoped: it holds ids from earlier pages, each already substituted at its own page's flush,
+    # and they must be left alone.
+    def substitute_pending(ids)
+      real = ->(identity) { identity.is_a?(PendingIdentity) ? ids.fetch(identity.digest) : identity }
+
+      @links.each { |link| link[1] = real.call(link[1]) }
+      @sightings.each { |sighting| sighting[0] = real.call(sighting[0]) }
+      @spellings_in_use.select { |identity| identity.is_a?(PendingIdentity) }.each do |pending|
+        @spellings_in_use.delete(pending)
+        @spellings_in_use << ids.fetch(pending.digest)
+      end
+    end
+
+    # **The page's write, issued once and retried at most once if Postgres picks it as the deadlock
+    # victim.** Every batched statement below goes through here, and this is the whole of what answers
+    # the concurrency question batching them asks.
+    #
+    # The per-row path could not deadlock, structurally rather than by luck. `update_column`, a one-row
+    # `update_all` and a one-row upsert each ran in autocommit: one row lock, taken and released
+    # inside one statement. A transaction that never holds a second lock cannot be half of a cycle.
+    # {#insert_pending_identities}, {#resight_all} and {#link_all} each take up to `BATCH_SIZE` row
+    # locks and hold them all until the statement ends, which is a lock footprint three orders of
+    # magnitude wider at the design point.
     #
     # That would be academic if two passes could not overlap, and this class says twice that they do:
     # every shard of a run enqueues a job for the run ({#unresolved_bounds}, {RETRY_SWEEP_LIMIT}),
@@ -724,7 +918,9 @@ module Ingest
     # so there is no partial application to compensate for and nothing to unwind — the retry is the
     # same statement against a database that never saw the first attempt.
     #
-    # Both are safe to re-issue. The re-sighting is guarded per row against the row's own
+    # All three are safe to re-issue. The insert is an upsert onto `(repository_id, text_digest)`, so a
+    # second attempt lands on the row a first attempt inserted — or on a concurrent job's — and
+    # re-sights it under the same guard as the rest. The re-sighting is guarded per row against the row's own
     # `last_seen_test_run_id`, so a second attempt either writes exactly what the first would have or
     # is refused by a newer sighting that landed in between — and being refused is the correct
     # outcome, not a lost write. The link sets one column to one value and counts what it MATCHED, so
@@ -822,8 +1018,8 @@ module Ingest
     #
     # **The third thing this page asks once instead of per row, and — with the cache below — the
     # last of the three SPGD-72's cost clause names.** {#digest_index} made the identical-text
-    # answer one query per page and
-    # {#flush_page} made the writes two statements per page; what was left was the embed, which the
+    # answer one query per page and {#flush_page} made the writes a fixed number of statements per
+    # page; what was left was the embed, which the
     # identical-text shortcut removes for an UNCHANGED suite and does nothing for a changed one. Any
     # first run, any rename, any delivery whose text is not byte-identical to a row already held
     # still reached the provider once per example — 20,000 sequential HTTPS round trips on a changed
@@ -1286,13 +1482,17 @@ module Ingest
     # here — {#embed} consumes it at the single call site and returns nil, so the stamping path
     # below is reached through {#identity_for} rather than through this rescue, and SPGD-367's
     # behaviour is untouched. Everything else the class comment lists as "what a job-level policy
-    # would have to cover" is what this catches: {#nearest}'s lookup and the upsert in
-    # {#claim_identity}.
+    # would have to cover" is what this catches, and what is left of that list is {#nearest}'s
+    # lookup and {#nearest_pending}'s scan of it in memory — the two questions still asked per row.
     #
-    # What it can no longer catch is the row's own two `UPDATE`s, and that is not a narrowing of the
-    # containment so much as a consequence of those writes no longer being the row's: they are the
-    # page's now, issued once by {#flush_page}, and a failure in one of them is page-shaped for the
-    # same reason {#digest_index}'s is. {#resolve_page} states that line rather than leaving it here.
+    # What it can no longer catch is the row's own two `UPDATE`s — nor, since this slice, its
+    # `INSERT` — and that is not a narrowing of the containment so much as a consequence of those
+    # writes no longer being the row's: they are the page's now, issued once by {#flush_page}, and a
+    # failure in one of them is page-shaped for the same reason {#digest_index}'s is. {#resolve_page}
+    # states that line rather than leaving it here. A poison inherited row that used to cost only
+    # itself an upsert now costs the page one, which is the same trade this method's neighbours made
+    # when their writes moved, and it is bounded the same way: the page's rows stay unresolved and
+    # unstamped, and the cross-run sweep re-reads them.
     #
     # **It is not a promise that the delivery survives anything.** {#record_resolve_failure} is
     # itself an UPDATE, so a failure broad enough to take the connection with it raises from inside
@@ -1358,6 +1558,12 @@ module Ingest
         return resight(match.id, observation)
       end
 
+      # The same question about the rows THIS PAGE has decided to insert and has not inserted yet,
+      # which the lookup above cannot see. Asked here and not earlier because that is exactly where
+      # the lookup answered it while the insert was per row — see {#nearest_pending}.
+      pending = nearest_pending(embedding)
+      return resight(pending, observation) if pending
+
       # Nothing matched the text that represents this test — and if this test just gained an
       # `@intent`, nothing ever will, because the row it already has is held under a name no run
       # will present again. Last question before inserting, and only for an intent-derived signal.
@@ -1379,9 +1585,208 @@ module Ingest
       claim_identity(signal, embedding, observation)
     end
 
-    # @return [Integer, nil] the id of the identity this repository already holds for text that is
-    #   **byte-identical** to this signal's, found without embedding anything and — now — without
-    #   asking the database anything either.
+    # @return [PendingIdentity, nil] the row THIS PAGE has already decided to insert whose text this
+    #   observation's is a match for at {SpecIdentity::MATCH_SIMILARITY} — nil when the page holds no
+    #   such row, which is every page in the steady state.
+    #
+    # **The half of the page's snapshot {#nearest} cannot cover, and the reason this method exists at
+    # all.** {#nearest} asks the HNSW index, and a page's pending rows are not in the table yet. The
+    # per-row path never had that gap: it inserted and committed each row before the next row asked,
+    # so the second of two near-identical BRAND-NEW tests — "Order#checkout rejects an expired card"
+    # and "Order  checkout rejects an expired card!" arriving in one page of a repository's FIRST
+    # ingest, neither held, the digests different — found the first at the index and was re-sighted
+    # onto it. Deferring the insert takes that answer away, and getting two identities for one test
+    # is a permanent split of its history: every later ingest presents both spellings, each hits its
+    # own digest, and nothing ever reconciles them.
+    #
+    # So this scans, and it scans at the SAME threshold {#nearest} uses rather than a cheaper one.
+    # That is what makes deferring the insert invisible in the identity graph — the page a repository
+    # ends up with is the page the per-row path would have written — and it is what keeps `BATCH_SIZE`
+    # a cost knob rather than a decision about how many identities a suite has. An earlier revision
+    # of this method keyed a Hash on the vector and closed only the cosine-1.0 band; that left an
+    # ordinary pair of descriptions differing by one pluralised word (measured at cosine 0.9925
+    # under `LexicalEmbeddingProvider`, the provider these specs run, against a 0.95 bar) splitting
+    # into two identities on a first ingest, and splitting or not according to where the page
+    # boundary fell. Both are refused here.
+    #
+    # == What the scan costs, measured on the provider that ships — and it is the dominant term
+    #
+    # It is O(pending) per miss and therefore O(page²) over a page of pure misses: 124,750 pairs at
+    # `BATCH_SIZE` = 500, each pair a 1024-element dot product in Ruby.
+    #
+    # **Measure it dense, because dense is what ships.** `VoyageProvider` returns 1024 non-zero
+    # floats, so {PendingVector} compresses nothing in production and the inner loop runs its full
+    # width. The suite's default stub is dense at the same width, which makes it a faithful stand-in
+    # for the COST (not the semantics) and means these numbers need no API key. Resolving one page
+    # of 500 genuinely new tests end to end, against a local Postgres socket:
+    #
+    #                                          test (no YJIT)   production (YJIT)
+    #   per-row `INSERT`, no scan (main)            5.2s              4.8s
+    #   batched `INSERT` + this scan                11.4s             6.2s
+    #
+    # Read it honestly: **on a local socket this slice is a net slowdown on the page shape it
+    # targets** — +6.2s in the suite's interpreter, **+1.4s in production's**, where `config.yjit`
+    # is on (`load_defaults 8.1` sets `yjit = !Rails.env.local?`). YJIT is why the production row is
+    # the one that matters and the test row overstates the cost by better than 4x.
+    #
+    # What the batching removes against that is 499 round TRIPS, which cost nothing measurable over
+    # a Unix socket and are the whole of the cost over a network. So the break-even is
+    # **~2.9ms of round trip** (the unrounded 1.46s / 499), not the sub-millisecond figure an earlier
+    # revision of this comment claimed from a sparse provider: below that the slice is a loss, above
+    # it a win. Same-host and same-AZ Postgres sit under that bar; a cross-AZ or cross-region managed
+    # database sits over it. **This is genuinely marginal on latency, and it is bought for the
+    # correctness of the identity graph, which is not marginal at all.**
+    #
+    # Both rows above produce 500 identities for these 500 deliberately-unlike tests, so the table is
+    # a like-for-like cost comparison and nothing else. What it does NOT show is the third variant —
+    # batching the insert with this scan REMOVED — which is the fast and wrong one: two near-identical
+    # brand-new tests in one page split into rows the per-row path never created, permanently. That
+    # variant is not benchmarked here because it is pinned as behaviour instead, by the two examples
+    # "gives ONE row to two spellings of one test that are both new and both on this page" and
+    # "gives ONE row to two new spellings that MATCH without embedding to the same vector" — delete
+    # the scan and those fail, which is the point of them.
+    #
+    # == Two ways to make it cheaper, both refused, and why
+    #
+    # A Cauchy-Schwarz early exit over entries sorted by descending magnitude was tried and measured
+    # at 0.655s against 0.645s on the sparse provider — no gain, because the bound decays as a
+    # square root and never bites early. Dense is no better and the reason is the same, only more so:
+    # 1024 dimensions spread the mass flatter still, so the partial-sum bound sits near 1.0 for every
+    # pair and rejects nothing. Cauchy-Schwarz cannot separate candidates at a 0.95 bar in this
+    # regime; that is a property of the geometry, not of the implementation.
+    #
+    # Bucketing pending rows by a cheap LEXICAL key and dotting only within a bucket would cut the
+    # quadratic honestly — and is refused, because it is unsound against the provider that ships.
+    # `voyage-4-lite` is semantic: two brand-new tests can sit above 0.95 while sharing few tokens,
+    # and that pair is exactly the one this method exists to catch. A lexical prefilter would let it
+    # split, silently and un-testably under a stub whose vectors carry no meaning.
+    #
+    # No cheap EXACT prefilter is available for dense high-dimensional vectors at a high threshold.
+    # The scan is irreducible at this page size; what is tunable is the page. See {BATCH_SIZE}.
+    #
+    # And it is paid ONLY on that shape. `@pending_vectors` holds the page's misses SO FAR, which is
+    # empty on every page of an unchanged suite and stays empty however large the page is: an
+    # ordinary re-ingest never reaches this method, because {#identical_text} answered it. The cost
+    # is a first ingest and a mass rename, where it buys the identity lineage those two ingests
+    # establish for the life of the repository — and a permanent split is not a cost that a later
+    # ingest can pay off, which is what makes it worth a second on a page that happens once.
+    #
+    # The remaining per-row round trip on this page is the ANN lookup, and it is **SPGD-375's**. If
+    # the scan above is ever to get cheaper, that is where the pending rows would have to become
+    # visible to an index instead of to a Ruby loop; there is no cheaper answer at this layer.
+    #
+    # == Cosine and not a dot product, and the best match and not the first
+    #
+    # Divided by both magnitudes so the number compared against `SpecIdentity::MATCH_SIMILARITY` is
+    # the same number pgvector's `cosine` operator produces for {#nearest}. See {PendingVector} for
+    # why that division is not dead code even though every provider in this tree normalises.
+    #
+    # The whole buffer is scanned and the BEST match taken, rather than returning the first row over
+    # the bar, because that is what `nearest_neighbors(...).first` does and the two must not disagree
+    # about which identity a text belongs to depending on which side of the page boundary it fell.
+    # A zero-magnitude vector — a description with no alphanumeric content, which
+    # `LexicalEmbeddingProvider` honestly reduces to no direction at all — matches nothing here,
+    # exactly as it matches nothing at the index, where pgvector answers NaN rather than a confident
+    # wrong neighbour. Guarded rather than assumed away: `EmbeddingGenerator.validate` checks width
+    # and finiteness, so a zero vector is a valid one as far as the interface is concerned.
+    #
+    # {#nearest} is still asked FIRST and still wins: a committed row is at least as good an answer
+    # as a pending one, and the row that is already in the table is the one a later page would find
+    # anyway.
+    #
+    # That ordering is NOT a reproduction of the per-row path's, and the difference is worth stating
+    # where the reader meets it. The per-row path asked ONE question, over a union that already
+    # contained this page's earlier rows because each was committed before the next row asked, and
+    # it took the global best. This asks two questions in sequence, so **a committed row over the
+    # bar wins regardless of margin** — a committed candidate at 0.96 takes an observation that a
+    # pending one at 0.99 would have taken before. Reaching that needs a triple where the two
+    # candidates score below {SpecIdentity::MATCH_SIMILARITY} against EACH OTHER while both sit above
+    # it against the incoming text, which is a narrower shape than the band this method exists to
+    # close, and every candidate in it is inside the threshold's own declared ambiguity: the bar says
+    # these are the same test, and it does not rank two rows that both clear it. Preferring the
+    # committed row is the deliberate call — it is the answer that does not depend on where the page
+    # boundary fell, which is the property the rest of this method buys.
+    #
+    # No {#note_drift} on this path, and that is not an omission. A drift candidate says an EXISTING
+    # row's stored spelling is worth moving; this row has no stored spelling yet — it is being
+    # written by this same page, from the observation that claimed it — so there is nothing to
+    # converge, and a candidate keyed by a placeholder would be a fifth buffer for
+    # {#substitute_pending} to keep straight.
+    def nearest_pending(embedding)
+      return nil if @pending_vectors.empty?
+
+      magnitude = magnitude_of(embedding)
+      return nil if magnitude.zero?
+
+      best = nil
+      best_similarity = 0.0
+
+      @pending_vectors.each do |pending|
+        next if pending.magnitude.zero?
+
+        indices = pending.indices
+        values = pending.values
+        width = indices.size
+        dot = 0.0
+        offset = -1
+        while (offset += 1) < width
+          dot += embedding[indices[offset]] * values[offset]
+        end
+
+        similarity = dot / (magnitude * pending.magnitude)
+        next unless similarity > best_similarity
+
+        best_similarity = similarity
+        best = pending.digest
+      end
+
+      PendingIdentity.new(best) if best && best_similarity >= SpecIdentity::MATCH_SIMILARITY
+    end
+
+    # This page's record of a row it has decided to insert, in the shape {#nearest_pending} scans —
+    # see {PendingVector} for why it is sparse and why it carries its own magnitude.
+    #
+    # Built once, when the row is claimed, rather than re-derived per comparison: a page of pure
+    # misses compares each new vector against every earlier one, so anything done here is done once
+    # per row and anything done in the scan's inner loop is done up to 124,750 times.
+    def pending_vector(digest, embedding)
+      indices = []
+      values = []
+      total = 0.0
+      index = -1
+
+      while (index += 1) < embedding.size
+        value = embedding[index]
+        next if value.zero?
+
+        indices << index
+        values << value
+        total += value * value
+      end
+
+      PendingVector.new(digest, indices, values, Math.sqrt(total))
+    end
+
+    # The Euclidean norm of a raw embedding — the divisor that turns {#nearest_pending}'s dot product
+    # into a cosine. Walks the dense array because the vector being scored has not been reduced to a
+    # {PendingVector} yet and may never be: it becomes one only if it turns out to be a miss.
+    def magnitude_of(embedding)
+      total = 0.0
+      index = -1
+
+      while (index += 1) < embedding.size
+        value = embedding[index]
+        total += value * value
+      end
+
+      Math.sqrt(total)
+    end
+
+    # @return [Integer, PendingIdentity, nil] the identity this repository already holds for text
+    #   that is **byte-identical** to this signal's, found without embedding anything and — now —
+    #   without asking the database anything either. A {PendingIdentity} when the row is one THIS
+    #   PAGE has decided to insert and has not inserted yet ({#claim_identity}), which is the same
+    #   answer one statement earlier and is resolved to an id by {#substitute_pending}.
     #
     # **Still the per-row seam, and deliberately so.** What moved is where the answer comes from: the
     # page asked once ({#digest_index}, one `WHERE text_digest IN (…)` against the UNIQUE
@@ -1803,6 +2208,27 @@ module Ingest
       held = @digest_index[name_digest]
       return nil unless held&.from_name?
 
+      # **A row this same page has decided to insert and has not inserted yet cannot be upgraded.**
+      # {#upgrade} names its target by id and its id is a {PendingIdentity} — the `UPDATE` would
+      # match nothing, and taking `:lost_race` from that would delete a map entry that is still true.
+      # Refused here instead, which leaves the entry standing (the pending row genuinely is under
+      # that name) and sends this observation on to {#claim_identity} to buffer its own row.
+      #
+      # What that costs is a name-derived row beside the triple where the per-row path had one row
+      # for the length of this page — and it costs it in the case where two observations of ONE test
+      # arrive in a single delivery, one before and one after it gained an `@intent`, which the
+      # upgrade path was never built for. It is one ingest of earliness rather than a different
+      # destination: the per-row path upgrades here and RE-SPLITS on the next ingest, when the
+      # unannotated example re-presents a name the upgraded row no longer holds and scores ~0.86
+      # against a 0.95 bar. Both paths settle on the same two rows; this one gets there without
+      # rewriting a row in between. `identity_resolver_spec.rb`'s "refuses the upgrade when the row
+      # under the name is one THIS PAGE has not inserted yet" pins both halves of that.
+      #
+      # The alternative — flushing the page's inserts mid-walk to get an id — would put a round trip
+      # back on the path this slice exists to take one off, and put it there on the say-so of the
+      # rarest shape on it.
+      return nil if held.id.is_a?(PendingIdentity)
+
       digest = SpecIdentity.digest_for(signal.text)
       outcome = upgrade(held.id, signal, digest, embedding)
 
@@ -1961,7 +2387,7 @@ module Ingest
     # again against a map that now knows about it. `transaction(requires_new: true)` so that refusal
     # is contained here rather than poisoning anything around it, exactly as in {#upgrade}.
     #
-    # No {#write_page} wrapper and no deadlock retry, unlike the page's two batched statements: this
+    # No {#write_page} wrapper and no deadlock retry, unlike the page's batched statements: this
     # takes ONE row lock, inside one statement, and a transaction that never holds a second lock
     # cannot be half of a cycle — the same argument {#write_page} makes about the per-row path it
     # replaced. That argument covers `Deadlocked` and not every error a statement can raise, which is
@@ -2157,8 +2583,8 @@ module Ingest
       end
     end
 
-    # A `(VALUES …) AS alias (columns)` join source with a `?` per value, for the two statements
-    # above to bind.
+    # A `(VALUES …) AS alias (columns)` join source with a `?` per value, for the two `UPDATE`s above
+    # to bind.
     #
     # **The first tuple's holes are CAST and the rest are bare**, which is the minimum that makes
     # the join sound rather than a flourish: Postgres takes an unadorned literal's type from the
@@ -2209,6 +2635,19 @@ module Ingest
 
     # A test nothing matched: insert it — or lose the race to insert it and take the winner.
     #
+    # **Records the row rather than writing it**, because the write is the page's and not the row's
+    # since this slice: {#insert_pending_identities} spends the buffer on one `INSERT` for the whole
+    # page. This was one round trip per miss, and a repository's FIRST ingest is all misses by
+    # construction — 20,000 sequential statements at the design point, to write what one page had
+    # already decided. Nothing about WHICH row is inserted, or what its conflict clause does, is
+    # decided anywhere but here; everything below is still the statement's contract, stated where the
+    # row is built.
+    #
+    # @return [PendingIdentity] a placeholder, because the id does not exist yet. Nothing in the loop
+    #   needs the real one: {#claim} only buffers `[observation.id, identity]` and {#resight} only
+    #   buffers `[identity, observation]`, and both buffers are spent after the insert has run — see
+    #   {#substitute_pending}, which is the one seam that turns these back into ids.
+    #
     # `upsert_all` rather than `create!` because the miss is exactly where two ingests collide. Every
     # shard of a repository's first run resolves for the first time, so two of them reaching the same
     # text and both finding nothing is the ordinary case and not a corner. `ON CONFLICT … DO UPDATE
@@ -2225,7 +2664,9 @@ module Ingest
     #
     # `record_timestamps: false` because the row carries its own — {SpecIdentity::RESIGHTABLE} keeps
     # `created_at` out of the update list, so a row that already existed keeps when the test first
-    # appeared and moves only its `updated_at`.
+    # appeared and moves only its `updated_at`. `Time.current` is taken per row and not per page for
+    # the same reason: it is the moment this test was decided to be new, which is a fact about the
+    # row rather than about the statement that carries it.
     #
     # `on_duplicate:` rather than `update_only:` so the conflict branch carries
     # {SpecIdentity::SIGHTING_NOT_OLDER} — the same guard {#resight} takes as a `WHERE`, spelled as
@@ -2250,25 +2691,38 @@ module Ingest
     # embed more" is a regression no example here would have caught — `:208` asserts identity count,
     # not embed count. So the page's map learns what the page wrote, and the snapshot is a snapshot
     # only of what was there BEFORE the page started.
+    #
+    # **It has a second job now that the write is deferred, and it is the load-bearing one.** The
+    # entry is what stops a second byte-identical row of the same page reaching this method at all —
+    # and therefore what stops the page's buffer holding two rows with one conflict key, which is a
+    # statement Postgres refuses outright rather than an extra embed. `@pending_identities`' own key
+    # is the belt to that brace, so neither the map's job nor the buffer's shape is the whole of the
+    # answer alone. The placeholder it carries is the {PendingIdentity}, so a hit on it takes the
+    # ordinary re-sighting path with an id that is not yet an id — see {#substitute_pending} for
+    # every buffer that then has to be put right, and why they are all put right in one place.
     def claim_identity(signal, embedding, observation)
       now = Time.current
       digest = SpecIdentity.digest_for(signal.text)
 
-      id = SpecIdentity.upsert_all(
-        [{
+      unless @pending_identities.key?(digest)
+        @pending_identities[digest] = {
           repository_id: @repository.id,
           text: signal.text,
           text_digest: digest,
           signal_source: signal.source.to_s,
           embedding: embedding
-        }.merge(sighting(observation, now), created_at: now)],
-        unique_by: %i[repository_id text_digest],
-        on_duplicate: Arel.sql(SpecIdentity::RESIGHT_ON_CONFLICT),
-        record_timestamps: false, returning: %w[id]
-      ).rows.dig(0, 0)
+        }.merge(sighting(observation, now), created_at: now)
+        # Pushed under the same guard as the row itself and never beside it: `@pending_identities`
+        # is a map keyed by digest and this is a list, so a second claim of one digest that the two
+        # brace against would leave the list holding the row twice — scored twice by
+        # {#nearest_pending} for no change in the answer, and growing a page's worst case past the
+        # square it is bounded at above.
+        @pending_vectors << pending_vector(digest, embedding)
+      end
 
-      @digest_index[digest] = HeldIdentity.new(id, signal.source.to_s)
-      id
+      pending = PendingIdentity.new(digest)
+      @digest_index[digest] = HeldIdentity.new(pending, signal.source.to_s)
+      pending
     end
 
     # @return [Array<Float>, nil] this row's vector out of the page's request — nil when the page

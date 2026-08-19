@@ -111,12 +111,18 @@ RSpec.describe "GitHub App installation", type: :request do
     # than corrected: a value we cannot vouch for is not one to repair into something adjacent.
     it "refuses to carry a return path that leaves this site" do
       sign_in_via_github(installation: false)
+      carrying_the_fallback =
+        "https://github.com/apps/specguard/installations/new?state=%2Frepositories"
 
       post github_installation_path, params: { return_to: "https://evil.example/phish" }
+      expect(response).to redirect_to(carrying_the_fallback)
 
-      expect(response).to redirect_to(
-        "https://github.com/apps/specguard/installations/new?state=%2Frepositories"
-      )
+      post github_installation_path, params: { return_to: "//evil.example/phish" }
+      expect(response).to redirect_to(carrying_the_fallback)
+
+      # The same trick with the slash a few user agents normalise back off-site.
+      post github_installation_path, params: { return_to: "/\\evil.example" }
+      expect(response).to redirect_to(carrying_the_fallback)
     end
 
     it "requires a signed-in user" do
@@ -250,6 +256,10 @@ RSpec.describe "GitHub App installation", type: :request do
 
       get github_installation_callback_path, params: { code: "abc", state: "//evil.example" }
       expect(response).to redirect_to(repositories_path)
+
+      # The same trick with the slash a few user agents normalise back off-site.
+      get github_installation_callback_path, params: { code: "abc", state: "/\\evil.example" }
+      expect(response).to redirect_to(repositories_path)
     end
 
     # GitHub confirmed the authorization and reported no installations, which is what cancelling out
@@ -376,12 +386,18 @@ RSpec.describe "GitHub App installation", type: :request do
 
     it "refuses to carry a return path that leaves this site" do
       sign_in_via_github(installation: false)
+      carrying_the_fallback =
+        "https://github.com/login/oauth/authorize?client_id=Iv1.test&state=%2Frepositories"
 
       post github_installation_authorize_path, params: { return_to: "https://evil.example/phish" }
+      expect(response).to redirect_to(carrying_the_fallback)
 
-      expect(response).to redirect_to(
-        "https://github.com/login/oauth/authorize?client_id=Iv1.test&state=%2Frepositories"
-      )
+      post github_installation_authorize_path, params: { return_to: "//evil.example/phish" }
+      expect(response).to redirect_to(carrying_the_fallback)
+
+      # The same trick with the slash a few user agents normalise back off-site.
+      post github_installation_authorize_path, params: { return_to: "/\\evil.example" }
+      expect(response).to redirect_to(carrying_the_fallback)
     end
 
     it "requires a signed-in user" do
@@ -431,6 +447,10 @@ RSpec.describe "GitHub App installation", type: :request do
       expect(response).to redirect_to(repositories_path)
 
       sign_in_via_github(origin: "//evil.example/phish", installation: false)
+      expect(response).to redirect_to(repositories_path)
+
+      # The same trick with the slash a few user agents normalise back off-site.
+      sign_in_via_github(origin: "/\\evil.example", installation: false)
       expect(response).to redirect_to(repositories_path)
     end
 
