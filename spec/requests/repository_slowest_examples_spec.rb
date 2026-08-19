@@ -737,7 +737,17 @@ RSpec.describe "Repository slowest tests", type: :request do
       # identical population and ranks it by WALL CLOCK, so neither ranking can be read off the
       # other. Its own budget, and that it stays one read as the number of areas grows, is asserted
       # in spec/requests/repository_unannotated_directories_spec.rb.
-      # RECOUNTED AT 9 by SPGD-711, which added the run's INTENT READINGS: ONE further read of
+      # RECOUNTED AT 9 by SPGD-728, which added the "Slowest tests across the window" panel:
+      # ONE further read, and it is that panel's GATING PROBE — the row/unresolved-row count over
+      # the newest run of the branch window, asked before either of the two steps behind it. The
+      # fixtures in this file never run `Ingest::IdentityResolver`, which is what an ingest endpoint
+      # answers `202` and enqueues a job for, so every row here carries a NULL `spec_identity_id`,
+      # the gate reports nothing resolved and the panel stops: one read, not three. A page whose
+      # window HAS been resolved pays three, and that budget — a gate, a capped candidate step over
+      # one run, and a composition over those candidates only — is asserted in
+      # spec/requests/repository_window_slowest_tests_spec.rb. The added read moves with neither
+      # the size of the suite nor the length of the window, since it counts one run's rows.
+      # RECOUNTED AT 10 by SPGD-711, which added the run's INTENT READINGS: ONE further read of
       # this table, an ungated aggregate over the same run's rows splitting them into authored,
       # derived and unreadable. It is not the by-area annotation read counted above under another
       # name — that one GROUPS and ranks, this one does neither, and it answers the Overview's own
@@ -746,7 +756,7 @@ RSpec.describe "Repository slowest tests", type: :request do
       # Its own budget is asserted in spec/requests/api/v1/repository_intent_readings_spec.rb.
       # Page-wide rather than panel-scoped on purpose: what must not grow is the number of times
       # ONE page walks this table, and only a count taken across the whole request can say that.
-      expect(large_queries.size).to eq(9)
+      expect(large_queries.size).to eq(10)
     end
   end
 

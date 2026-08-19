@@ -49,6 +49,21 @@ class RepositoriesController < ApplicationController
   # describe whichever of several unrelated commits sorted newest.
   include RequestedCommitShaParam
 
+  # `?unstable_test=` read as a test description, for the drill-in under the "Tests whose outcome
+  # changed" panel. Shared with `Api::V1::RepositoriesController`, which reads the same parameter
+  # under the same guard to open the same window's sequence on `GET /api/v1/repository`.
+  #
+  # A NARROWING ask like the drill-in parameters above and not a second re-anchoring one, so it is
+  # read under whichever run `?commit_sha=` chose rather than choosing one itself: it opens one row
+  # of one panel, and which run the page is anchored on is settled before it is read.
+  #
+  # Its own concern rather than a widening of `RequestedRepeatedDescriptionParam` even though both
+  # are read as a `spec_observations.name`, for the reason the concern itself carries in full: they
+  # select different POPULATIONS — that one opens ONE RUN's rows carrying a description, this one
+  # opens a WINDOW's — and one module answering both would make a divergence either is free to make
+  # a breaking change to the parameter nobody was editing.
+  include RequestedUnstableTestParam
+
   # The repositories this user may pick from, straight off GitHub, and the four different things to
   # say when that list cannot be loaded. Shared with `BulkRegistrationsController`, which renders a
   # picker built from the same listing and has to answer the same questions the same way.
@@ -376,15 +391,22 @@ class RepositoriesController < ApplicationController
     @spec_directory_durations = SpecDirectoryDurations.for(@latest_test_run) if @latest_test_run
     # The SAME grain as the line above and a different AXIS, which is why it is a second read rather
     # than a column on that one. That rollup ranks areas by WALL CLOCK and its coverage figure is
-    # TIMING coverage; this one ranks them by how many of their examples SpecGuard cannot see. An
+    # TIMING coverage; this one ranks them by how many of their examples carry no `@intent`. An
     # area of four hundred fast unannotated examples heads this list and appears nowhere near the
     # head of that one, so neither is derivable from the other.
     #
-    # The Overview panel at the top of this page already prints the run's invisible count — a
+    # The Overview panel at the top of this page already prints the run's annotation debt — a
     # subtraction, `total_specs_count - annotated_specs_count` — and a subtraction is the whole
-    # answer it can give: a five-figure count of tests the reader is handed no route to any of. The
-    # API has served the ranked, scoped worklist behind that figure since SPGD-591/608/623; this is
-    # the same rows on the page the owner actually opens.
+    # answer it can give: a five-figure count of tests the reader is handed no route to any of. That
+    # is a count of tests nobody has annotated, which is not the same as a count of tests SpecGuard
+    # holds nothing about: where the run recorded per-example rows, every one of them arrived
+    # located by both paths, and named as well whenever its producer sent a description — `name` is
+    # nullable and `SpecObservation.description_presence_in` is what counts the rows lacking one.
+    # The rows are not implied by the figure, either: that subtraction is re-derived over
+    # `test_run_shards`, so a client reporting only totals carries it with no per-example rows at
+    # all, and the panel below is what discloses that rather than letting it read as an absence of
+    # debt (`#recorded?`). The API has served the ranked, scoped worklist behind that figure since
+    # SPGD-591/608/623; this is the same rows on the page the owner actually opens.
     #
     # Guarded identically, and on nothing else — with no run there is nothing to rank, and the
     # Overview's "No CI run has reported yet" is this page's one statement of that. Whether the run
@@ -475,12 +497,17 @@ class RepositoriesController < ApplicationController
       @spec_directory_files = SpecDirectoryFiles.for(@latest_test_run, @spec_directory_request)
     end
     # THE LAST RUNG OF THE ANNOTATION LADDER, and the one this page never had: not WHICH AREAS carry
-    # the run's annotation debt but WHICH TESTS. The Overview panel prints "Not visible to
-    # SpecGuard" as `total_specs_count - annotated_specs_count` and says *"SpecGuard cannot see the
-    # other N tests"*; `@unannotated_directories` above ranks the areas that count is concentrated
-    # in. Neither names a test. Until this, acting on the panel this page had just handed the owner
-    # meant leaving the product for `GET /api/v1/repository?unannotated_examples=1&spec_directory=…`
-    # with an API key.
+    # the run's annotation debt but WHICH TESTS. The Overview panel prints that debt at run grain as
+    # `total_specs_count - annotated_specs_count`; `@unannotated_directories` above ranks the areas
+    # it is concentrated in. Neither names a test — which is the gap this closes. Neither is a count
+    # of tests SpecGuard holds nothing about, either: an unannotated example this run RECORDED is
+    # stored exactly as an annotated one is — located by both paths, carrying whatever its producer
+    # reported of description, duration and outcome — and what it lacks is an authored `@intent`.
+    # What the subtraction does not promise is that those rows exist at all — a client reporting only
+    # totals carries the figure with none of them — which the `@unannotated_directories` block above
+    # states in full. Until this, acting on the panel this page had just handed the owner meant
+    # leaving the product for `GET /api/v1/repository?unannotated_examples=1&spec_directory=…` with
+    # an API key.
     #
     # NO NEW PARAMETER. It rides `?spec_directory=` and `?spec_file=`, the same asks the duration
     # drill-downs above read. One ask opens EVERY panel that reads it, each answering in its own
@@ -600,8 +627,52 @@ class RepositoriesController < ApplicationController
     # examples, whether two of them reported outcomes, and whether anything in them was unstable
     # are questions the object answers — the panel branches on its predicates, so every figure it
     # prints comes off one set of reads of one window.
+    #
+    # The ask for ONE of that panel's rows is read here rather than inside the guard, because it is
+    # also what every OTHER link on this page carries through (`RepositoriesHelper#drill_down_path`),
+    # and a page whose window happens to be empty still has to reproduce the reader's URL rather than
+    # silently dropping an ask out of every href on it.
+    @unstable_test_request = requested_unstable_test
     if trajectory_runs.any?
       @unstable_tests = UnstableTests.for(@repository, trajectory_runs, branch: @trajectory_run&.branch)
+      # ONE ROW of that ranking, opened: not which tests changed their outcome but WHAT THIS ONE
+      # ACTUALLY DID, run by run and in the window's own order. The rung the flakiness ladder never
+      # had, and the end of it — `UnstableTests` is `COUNT`s and `ARRAY_AGG(DISTINCT …)`
+      # under `GROUP BY name`, which is what keeps it constant in the size of the suite and is
+      # exactly what discards the run axis. A row saying `30 runs, 4 failed, [failed, passed]`
+      # describes two windows calling for opposite work: four failures at runs 27–30 is a
+      # REGRESSION with a culprit commit to find, and four failures at runs 3, 11, 19 and 26 is
+      # FLAKINESS with none. Deciding between those is the panel's whole purpose and the one
+      # question it could not answer.
+      #
+      # THE SAME `trajectory_runs` LOCAL, handed in rather than re-queried, and the model's own
+      # "window is HANDED IN" invariant (`UnstableTestRuns`) is sharper here than anywhere else on
+      # the page: these rows are read for their POSITION against commits the panels above serialized
+      # from the first fetch, so a second fetch would put an off-by-one between the sequence and the
+      # commits it is read against — and naming the wrong culprit commit is worse than naming none.
+      #
+      # `name` is POSITIONAL and there is no `branch:` kwarg, unlike the `UnstableTests.for` call
+      # directly above it. The window is already branch-scoped by construction, and the shape of the
+      # neighbouring call is not a reason to give this one the same one.
+      #
+      # Guarded on the ASK and on nothing else — not on `@unstable_tests.comparable?`, deliberately.
+      # A window the ranking has nothing to say about is precisely the one where the raw per-run
+      # grain is worth having: "no candidates" and "here is what this test actually did" answer
+      # different questions, and gating the second on the first would withhold the grain exactly
+      # when the aggregate above it went silent. `Api::V1::RepositoriesController` makes this same
+      # choice for the same reason.
+      #
+      # The ask is kept whatever it names: a window that recorded nothing under it is an ordinary
+      # answer — the project's identity rule is semantic, so a RENAMED test starts a new history and
+      # every bookmark to the old description goes stale by design — and `UnstableTestRuns` names it
+      # in an empty state rather than a 404.
+      #
+      # EXACTLY ONE query when asked and none when not, bounded by ONE DESCRIPTION'S rows over at
+      # most `Repository::TRAJECTORY_LIMIT` runs — constant in the size of the suite, not merely
+      # sublinear in it: see `SpecObservation.outcome_sequence_in`.
+      if @unstable_test_request
+        @unstable_test_runs = UnstableTestRuns.for(@repository, trajectory_runs, @unstable_test_request)
+      end
       # The area grain of the panels above, asked of the WINDOW the two panels around it are already
       # drawn on: not which area moved since the last push but which area moved across the branch's
       # last thirty runs. The page had "growth over time" (the chart, one number per run, no area
@@ -625,6 +696,32 @@ class RepositoriesController < ApplicationController
       # the size of the suite or with the length of the window: see `SpecDirectoryWindowGrowth`.
       @spec_directory_window_growth =
         SpecDirectoryWindowGrowth.for(trajectory_runs, branch: @trajectory_run&.branch)
+      # The WALL CLOCK at the grain the two panels above already speak at, and the one grain this
+      # page has never had. "Slowest tests" above is ONE run, and its own comment says why it stays
+      # there: `example_id` is positional and not stable across refactors, so a ranking that spanned
+      # runs on that key would be pairing rows not known to be the same test. That is a statement
+      # about the KEY, and `spec_identity_id` is a different key — semantic, resolved by
+      # `Ingest::IdentityResolver`, and stable across a move, a reorder and a reword alike. So this
+      # panel asks the question the per-run one declines: is this test chronically slow, or was that
+      # one bad run.
+      #
+      # Another reader of this same local, for the reason stated where it is taken: every panel that
+      # fetched "the last thirty runs on this branch" for itself would be its own window, with no
+      # structural reason to keep agreeing, on a page where each captions the others' branch. So the
+      # window costs nothing here — it is handed over, not re-fetched.
+      #
+      # Guarded on the window having runs at all, and on nothing else — the same guard its two
+      # siblings above take, and for the same reason. Whether the newest run wrote per-example rows,
+      # whether any of them have been matched to a durable test yet, and how much of what it wrote
+      # carried a timing are all questions `SlowestTests` answers, and it answers them as four named
+      # states rather than as one empty list: the panel branches on `#state`, so every figure it
+      # prints comes off one set of reads of one window.
+      #
+      # THREE bounded queries at most and ONE where the newest run has nothing to rank — a gate, a
+      # capped candidate step over a single run, and a composition over those candidates only. None
+      # of them grows with the size of the suite or with the length of the window: see
+      # `SlowestTests`.
+      @slowest_tests = SlowestTests.for(@repository, trajectory_runs, branch: @trajectory_run&.branch)
     end
     # Set by ApiKeysController#create and #regenerate, and readable exactly once — see
     # ApiKeysController.
@@ -895,12 +992,18 @@ class RepositoriesController < ApplicationController
 
   # Records the refusal on the attribute it is about, so the form shows it under the field the user
   # has to change, exactly as a format or uniqueness failure does. The verdict is also kept for the
-  # view, which offers an authorize button instead of an error when the fix is a grant rather than
-  # an edit.
+  # view, which offers an install button instead of an error when the fix is installing the App
+  # rather than picking something else.
   def verify_github_ownership(repository)
     return true unless repository.will_save_change_to_github_full_name?
 
-    @github_verdict = GithubOwnership.verify(user: current_user, full_name: repository.github_full_name)
+    # `sources:` is this request's own read, shared with the picker the 422 re-render builds — see
+    # `InstallationRepositories.verify_batch`. It is the same live GitHub answer either way; what it
+    # saves is fetching it twice on the one path that needs it twice.
+    @github_verdict = InstallationRepositories.verify(user: current_user,
+                                                      user_token: github_user_token,
+                                                      full_name: repository.github_full_name,
+                                                      sources: github_sources)
     return true if @github_verdict.verified?
 
     repository.errors.add(:github_full_name, @github_verdict.message)
@@ -917,8 +1020,8 @@ class RepositoriesController < ApplicationController
   # `GithubRepositoryListing`, which holds all of that and is shared with the bulk path.
   #
   # What this controller adds is the verdict from a write it has just ATTEMPTED: a registration
-  # refused for a grant the user does not have must offer the authorize button, and the listing
-  # alone cannot know that happened.
+  # refused because the App is not installed must offer the install button, and the listing alone
+  # cannot know that happened.
   def github_verdict = @github_verdict
 
   # Submitting the form unchanged is a valid save, so don't claim a rename that didn't happen.

@@ -147,7 +147,7 @@
 # ORDER BY is `array_position(…)`, which would in fact be unique but rests on the ordering strategy
 # rather than on the projection — the accident this file has twice declined to rest a partition on.
 # The alias is the only match here whose uniqueness is guaranteed BY A RULE WRITTEN BESIDE THE SQL,
-# and it is now the guarantee three of the thirteen grains stand on.
+# and it is now the guarantee that several of this file's grains stand on.
 #
 # == The EIGHTH arrival, where the alias family's guarantee is joined by a second one
 #
@@ -203,16 +203,23 @@ module ObservationGrainReads
   # The classified total: the sum of EVERY grain's reads. Defined here rather than at the call sites
   # for the reason the partition itself is — a sum written by hand is free to name a SUBSET, and the
   # omitted term is silently correct only while its fixture holds it at zero. That is not a tidiness
-  # complaint: the two compose-several-drill-ins-at-once examples run SIX and SEVEN of the nine grains
-  # non-zero at once, among the most any fixture here runs, so they are where a cross-grain
-  # misclassification is likeliest to be observable — and they were the two that shipped with no sum
-  # at all, because when a sum is hand-written the richest fixture is the most tedious one to write it
-  # for. SIX is a TIE rather than a maximum, and the two available measures disagree about which
-  # fixture is richest: the SINGLE-ASK blocks in `repository_unstable_tests_spec.rb` and
-  # `repository_directory_growth_spec.rb` also run six grains non-zero, and both issue MORE total
-  # reads — 11 and 10, against these two examples' 8 and 9 — because a cross-run grain can read four
-  # times where a drill-in reads once. So a block needs this sum whenever its own fixture leaves
-  # SEVERAL GRAINS LIVE, which is not the same as composing drill-ins and does not stop at five.
+  # complaint: the two compose-several-drill-ins-at-once examples run SIX and SEVEN grains non-zero at
+  # once, so they are among the places a cross-grain misclassification is likeliest to be observable —
+  # and they were the two that shipped with no sum at all, because when a sum is hand-written the
+  # fixture leaving the most grains live is the most tedious one to write it for.
+  #
+  # NEITHER IS THE MAXIMUM, ON EITHER MEASURE — and no counted leaderboard is given here on purpose:
+  # every figure this paragraph has quoted for another fixture, and every denominator it has quoted
+  # for the partition, went stale the first time a read was added here — whether that read opened a
+  # NEW grain or landed in an EXISTING one. Both halves rot, and they rot on different commits: the
+  # growth grain's second reader (see "TWO READERS" above) moved every total-reads figure quoted
+  # here FOR ANOTHER FIXTURE while leaving the grain count untouched. The SINGLE-ASK blocks in
+  # `repository_unstable_tests_spec.rb`, `repository_directory_growth_spec.rb` and
+  # `repository_directory_runtime_file_growth_spec.rb` each leave at least as many grains live as
+  # either example — the last of them more than either — and each issues MORE total reads than either,
+  # because a cross-run grain can read several times where a drill-in reads once. So a block needs
+  # this sum whenever its own fixture leaves SEVERAL GRAINS LIVE, which is not the same as composing
+  # drill-ins and does not stop at five.
   # Appending a grain to `observation_reads_by_grain` extends this automatically; nothing downstream
   # has to be edited.
   #
@@ -336,6 +343,22 @@ module ObservationGrainReads
   # rollups they sit between, for exactly that reason: each was added after the grains before it, and
   # every existing caller destructures a prefix of this array. Appending is what keeps
   # `directory_files` at index 6 for the callers already naming it there.
+  #
+  # ⭐ APPENDING IS FREE FOR CALLERS AND IS NOT FREE FOR PROSE, AND THAT IS THE PART THAT KEEPS BEING
+  # MISSED — AND IT IS NOT ONLY APPENDING. The comparison paragraphs in
+  # `repository_spec_file_examples_spec.rb` and
+  # `repository_repeated_description_examples_spec.rb` — and the one beside
+  # `classified_observation_reads` above — rank their fixture AGAINST THIS PARTITION: how much of it
+  # the fixture leaves live, and how it places against other fixtures on grains live and on total
+  # reads. A read added here can falsify all three without touching a line either of those files
+  # owns, and it does not have to be a NEW grain to do it: every grain appended since those
+  # paragraphs were written has corrected THIS file's own count of the partition and left them
+  # stale, and the growth grain's SECOND READER — `directory_run_growth`, see "The growth grain has
+  # TWO READERS" above — moved every total-reads figure ANY OF THEM quoted FOR ANOTHER FIXTURE
+  # without changing the grain count at all. So when you add a read here, whether it opens a new
+  # grain or joins an existing one, RE-READ THOSE TWO REQUEST SPECS, and keep their prose free of
+  # any suite-wide total or counted ranking — the claim they need is "this fixture leaves several
+  # grains live", which no later read can falsify.
   #
   # `growth` (5), `directory_files` (6) and `runtime_growth` (10) each carry an EXCLUSION rather than
   # only their own pattern, and the exclusions are not decoration. `directory_file_growth` (9) is the

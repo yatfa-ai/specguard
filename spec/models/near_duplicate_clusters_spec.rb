@@ -685,6 +685,10 @@ RSpec.describe NearDuplicateClusters do
   describe "what it costs on a suite at a meaningful fraction of the design point" do
     let(:identities) { 3_000 }
 
+    # The `ANALYZE` in the `before` below reaches past the per-example rollback. This puts back
+    # what it perturbs — see the mechanism, and the measured numbers, in the support file.
+    restores_relation_statistics_for "spec_identities", "spec_observations"
+
     before do
       seed(repository, identities)
       # A second tenant, so `repository_id` is a real narrowing rather than the whole table — the
@@ -695,7 +699,13 @@ RSpec.describe NearDuplicateClusters do
       seed_tiny_tenants
       seed_observations(repository)
       # Without stats the planner works off hard-coded defaults and its choice says nothing about
-      # the data. `ANALYZE` is legal inside the transaction the suite wraps each example in.
+      # the data. `ANALYZE` is legal inside the transaction the suite wraps each example in — but
+      # legality is not containment, and the difference is the whole point: `pg_statistic` is
+      # written transactionally and does roll back, while `pg_class.reltuples`/`relpages` — for
+      # both tables and for every index on them — are written in place by `heap_inplace_update()`
+      # and survive the rollback. Without the declaration above, this example group would leave the
+      # catalog claiming ~6,500 identities in a table that is empty again, and every plan-asserting
+      # example that ran before autovacuum corrected it would plan against that phantom.
       ActiveRecord::Base.connection.execute("ANALYZE spec_identities")
       ActiveRecord::Base.connection.execute("ANALYZE spec_observations")
     end

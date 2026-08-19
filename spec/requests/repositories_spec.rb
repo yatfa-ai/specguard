@@ -2532,6 +2532,9 @@ RSpec.describe "Repository registration and API keys", type: :request do
     end
 
     it "re-derives the display name and normalizes a pasted GitHub URL" do
+      # The NORMALIZED name is what gets verified against the installation, which is the point of
+      # the pairing here: GitHub is asked about `acme/renamed`, never about the pasted URL.
+      stub_github(repos: [github_repo("acme/renamed")])
       repository = create_repository(user: @user, github_full_name: "acme/old-name")
 
       patch repository_path(repository),

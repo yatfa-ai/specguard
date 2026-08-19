@@ -14,11 +14,33 @@ Rails.application.routes.draw do
   get "docs/integrate", to: "pages#integrate", as: :integration_guide
 
   # --- Human auth: GitHub OAuth -------------------------------------------------
+  # Identity only. This asks GitHub for a handle, an avatar and an email address, and has never
+  # asked for more — repository access is a separate thing entirely, below.
   post  "/auth/github",          to: "sessions#passthru", as: :github_auth
   get   "/auth/github/callback", to: "sessions#create"
   post  "/auth/github/callback", to: "sessions#create"
   get   "/auth/failure",         to: "sessions#failure"
   delete "/sign_out",            to: "sessions#destroy", as: :sign_out
+
+  # --- Repository access: GitHub App installation --------------------------------
+  # Connecting repositories is installing the SpecGuard GitHub App on them and picking them in
+  # GitHub's own picker. POST going out (CSRF-protected, so nobody else can start the flow for a
+  # signed-in user); GET coming back, because GitHub redirects a browser to it.
+  #
+  # `authorize` is the smaller of the two ways out: it asks GitHub only for a credential that speaks
+  # for the signed-in user, which every session needs before it can read anything and which a user
+  # who has already authorized the App is granted without seeing a screen. It is what the reconnect
+  # button posts to, and it exists so that needing a credential does not walk somebody through the
+  # repository picker again.
+  #
+  # The callback path is configured on the App itself on github.com — as BOTH its callback URL and
+  # its setup URL, which is why one action serves both journeys. Renaming it here without changing
+  # it there sends every returning user to a 404 with no error anywhere.
+  post "/github/installation",           to: "github_installations#create",    as: :github_installation
+  post "/github/installation/authorize", to: "github_installations#authorize",
+                                         as: :github_installation_authorize
+  get  "/github/installation/callback",  to: "github_installations#callback",
+                                         as: :github_installation_callback
 
   # --- Dashboard ----------------------------------------------------------------
   resources :repositories, only: %i[index new create show edit update destroy] do
@@ -58,6 +80,19 @@ Rails.application.routes.draw do
       post "ingest", to: "ingests#create"
     end
   end
+
+  # --- The protocol contract, downloadable ---------------------------------------
+  # A convenience mirror of the OpenTestIntent v1 schema, served unauthenticated so anyone reading
+  # the docs can fetch what their annotations are validated against. The canonical copy lives in the
+  # vendor-neutral `open-test-intent` repository, which is what the schema's `$id` names; this is a
+  # second address for the same bytes, not a second source of truth.
+  #
+  # `format: false` because the `.v1.json` in the path is part of the schema's FILENAME, not a
+  # format request. Left on, Rails' optional `(.:format)` segment would make `/schemas/
+  # open-test-intent.v1` answer too, advertising an address whose name no longer says which
+  # version it returns.
+  get "/schemas/open-test-intent.v1.json", to: "schemas#open_test_intent_v1",
+                                           as: :open_test_intent_schema, format: false
 
   get "up", to: "rails/health#show", as: :rails_health_check
 end

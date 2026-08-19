@@ -390,10 +390,10 @@ RSpec.describe "GET /api/v1/repository — latest_run.spec_file_examples", type:
         observation_reads_by_grain { get_repository(query: query) }
 
       expect([directory_files.length, file_examples.length]).to eq([1, 1])
-      # And the classified reads are ALL of them — asserted HERE most of all. SIX of the nine grains
-      # are non-zero at once, among the most any fixture here runs, so this is among the fixtures
-      # where a cross-grain misclassification is most observable. The `eq([1, 1])` above covers the two
-      # drill-ins alone, and the bare `8` below is exactly the total that
+      # And the classified reads are ALL of them — asserted HERE most of all. SIX grains are non-zero
+      # at once — one of the richer fixtures here, though not the richest — so this is among the
+      # places where a cross-grain misclassification is most observable. The `eq([1, 1])` above covers
+      # the two drill-ins alone, and the bare `8` below is exactly the total that
       # spec/support/observation_grain_reads.rb argues cannot tell "one aggregate per grain" from "one
       # grain reading twice" — so without this line a read adopted into another grain, or matching no
       # grain at all, is invisible to every assertion in the example.

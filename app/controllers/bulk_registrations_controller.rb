@@ -54,7 +54,8 @@ class BulkRegistrationsController < ApplicationController
     return render_refusal(nothing_selected_message) if @full_names.empty?
     return render_refusal(too_many_message) if @full_names.length > BulkRegistration::MAX_BATCH
 
-    @result = BulkRegistration.call(user: current_user, full_names: @full_names)
+    @result = BulkRegistration.call(user: current_user, user_token: github_user_token,
+                                    full_names: @full_names)
     render :create
   end
 
@@ -62,8 +63,13 @@ class BulkRegistrationsController < ApplicationController
 
   # Every organization this viewer can register something from, derived from the listing rather than
   # from GitHub's org endpoints — see `GithubOrganizations` for why, and what that costs.
+  #
+  # Built from `github_visible_listing` rather than `github_listing`: the narrowed listing has
+  # already dropped what this viewer cannot administer, and dropping it before grouping is what
+  # leaves the page unable to say how much of an organization it is not showing. `GithubOrganizations`
+  # applies the same bar itself, per organization, and keeps the difference.
   def organizations
-    @organizations ||= GithubOrganizations.from(github_listing)
+    @organizations ||= GithubOrganizations.from(github_visible_listing)
   end
 
   # The organization being picked from, or `nil` when none has been chosen yet — which is also the
@@ -73,7 +79,7 @@ class BulkRegistrationsController < ApplicationController
   def organization
     return @organization if defined?(@organization)
 
-    @organization = GithubOrganizations.find(github_listing, params[:organization])
+    @organization = GithubOrganizations.find(github_visible_listing, params[:organization])
   end
 
   # Which of the organization's repositories are already registered here, so the picker can say so
@@ -98,7 +104,7 @@ class BulkRegistrationsController < ApplicationController
   def registered_names
     @registered_names ||=
       begin
-        names = Array(organization&.administered).map { |repo| repo.full_name.downcase }
+        names = Array(organization&.repos).map { |repo| repo.full_name.downcase }
 
         if names.empty?
           Set.new
@@ -143,7 +149,7 @@ class BulkRegistrationsController < ApplicationController
   end
 
   # A batch that skipped repositories for a missing or dead grant must offer the fix, exactly as a
-  # single refused registration does — see `GithubRepositoryListing#github_authorization_needed?`,
+  # single refused registration does — see `GithubRepositoryListing#github_installation_needed?`,
   # which asks this of whichever controller it is mixed into.
   def github_verdict = @result
 end

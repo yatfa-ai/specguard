@@ -229,12 +229,12 @@ class UnstableTests
 
     # How much of the window this description was seen in — always the fraction, because "12" alone
     # reads as twelve of something unstated and the denominator is the point.
-    def appearance_label(window_run_count) = "#{run_count} of #{window_run_count}"
+    def appearance_label(window_run_count) = SpecObservation.coverage_fraction(run_count, window_run_count)
 
     # How much of its own history it failed in. The denominator is the runs it APPEARED in, never
     # the window: a test added halfway through the window failed in two of the fifteen runs that
     # ran it, and dividing by thirty would report a stability it was never measured for.
-    def failure_label = "#{failed_run_count} of #{run_count}"
+    def failure_label = SpecObservation.coverage_fraction(failed_run_count, run_count)
 
     # The words this description was seen wearing, echoed verbatim and sorted so two rows carrying
     # the same set read the same way. Never reworded and never folded into a verdict —

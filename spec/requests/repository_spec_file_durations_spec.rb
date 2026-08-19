@@ -309,14 +309,29 @@ RSpec.describe "Repository heaviest spec files", type: :request do
       # further read, the same run's rows grouped by AREA on the ANNOTATION axis rather than on the
       # wall clock the by-directory rollup ranks them by. It IS a `GROUP BY`, so the grouping tally
       # below moves with it — from three to four — where SPGD-344's presence count did not.
-      # RECOUNTED AT 9 by SPGD-711, which added the run's INTENT READINGS: ONE further read of
+      # RECOUNTED AT 9 by SPGD-728, which added the "Slowest tests across the window" panel:
+      # ONE further read, and it is that panel's GATING PROBE — the row/unresolved-row count over
+      # the newest run of the branch window, asked before either of the two steps behind it. The
+      # fixtures in this file never run `Ingest::IdentityResolver`, which is what an ingest endpoint
+      # answers `202` and enqueues a job for, so every row here carries a NULL `spec_identity_id`,
+      # the gate reports nothing resolved and the panel stops: one read, not three. A page whose
+      # window HAS been resolved pays three, and that budget — a gate, a capped candidate step over
+      # one run, and a composition over those candidates only — is asserted in
+      # spec/requests/repository_window_slowest_tests_spec.rb. The added read moves with neither
+      # the size of the suite nor the length of the window, since it counts one run's rows.
+      # The grouping tally below does NOT move with it: the gate is a plain two-column aggregate
+      # over one run with no `GROUP BY` at all, which is exactly what makes it cheap enough to ask
+      # before deciding whether to ask anything else.
+      # RECOUNTED AT 10 by SPGD-711, which added the run's INTENT READINGS: ONE further read of
       # this table, an ungated aggregate over the same run's rows splitting them into authored,
       # derived and unreadable. It is not the by-area annotation read counted above under another
       # name — that one GROUPS and ranks, this one does neither, and it answers the Overview's own
       # sentence rather than a panel's list. Ungated unlike every drill-in on this page, because a
       # correction a client has to opt into leaves the Overview printing the subtraction it replaced.
       # Its own budget is asserted in spec/requests/api/v1/repository_intent_readings_spec.rb.
-      expect(large_queries.size).to eq(9)
+      # The grouping tally below does not move with this one either, and for the same reason
+      # SPGD-728's gate does not: it is a plain aggregate over one run with no `GROUP BY`.
+      expect(large_queries.size).to eq(10)
       expect(large_queries.count { |sql| sql.include?("GROUP BY") }).to eq(4)
     end
   end
