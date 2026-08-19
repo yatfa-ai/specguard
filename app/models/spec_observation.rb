@@ -1784,11 +1784,12 @@ class SpecObservation < ApplicationRecord
   # A caption pairs its fraction with a trailing noun phrase naming what was counted — "3 of 4 added
   # up", "12 of 15 runs plotted", "12 of the 40 examples reported an outcome" — and, load-bearingly,
   # each has a COMPLETE case that is not a fraction at all: "all 4 added up", "every one of the last
-  # 15 runs plotted", "none of them can be plotted". That completeness rule is the whole point of
-  # those labels — a label is the most prominent claim a number wears, so only the complete case is
-  # allowed to say "all" — and it is a rule this seam has no way to state, because it cannot see
-  # which of two operands being equal means "every" and which means a coincidence. Anything
-  # answering that description is a different sentence rather than this one with a noun on the end:
+  # 15 runs plotted", "Every one of the 40 examples reported an outcome". That completeness rule is
+  # the whole point of those labels — a label is the most prominent claim a number wears, so only
+  # the complete case is allowed to say "all" — and it is a rule this seam has no way to state,
+  # because it cannot see which of two operands being equal means "every" and which means a
+  # coincidence. Anything answering that description is a different sentence rather than this one
+  # with a noun on the end:
   # `TestRun#machine_seconds_coverage` and `TestRun#wall_clock_coverage`, `SuiteTrajectory#coverage`
   # and `SuiteTrajectory#runtime_coverage`, and several in `RepositoriesHelper` that a grep for two
   # interpolated operands never reaches — their numerator can be a literal ("0 of 4 reported") and
