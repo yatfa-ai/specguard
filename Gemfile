@@ -63,6 +63,12 @@ gem "faraday"
 group :development, :test do
   # Test framework
   gem "rspec-rails", "~> 8.0"
+  # SpecGuard's own Ruby client, so this suite reports itself to the platform it is. `require:
+  # false` because nothing in the app loads it: the formatter is pulled in by `--require` from
+  # SPEC_OPTS, which only CI sets. A local `bin/rspec` therefore behaves exactly as it did before —
+  # deliberate, because an unconfigured formatter does not stay quiet, it appends one JSON object
+  # per line to `SPECGUARD_OUTPUT_PATH` (see the gem's formatter: api_key set → POST, unset → file).
+  gem "specguard-rspec", "~> 0.2.3", require: false
   # Node matchers for ViewComponent unit specs (render_inline + have_css), and the browser-driven
   # system specs in spec/system.
   gem "capybara"

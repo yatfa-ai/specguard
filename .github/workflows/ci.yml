@@ -1,0 +1,106 @@
+# The suite gate, and the first thing that reports this repository to SpecGuard.
+#
+# Runs `bin/ci` rather than `bundle exec rspec`, deliberately: `config/ci.rb` is where the gate is
+# defined (gem audit, importmap audit, design-system drift, stylesheet freshness, then the suite),
+# and a workflow that ran only the tests would be a second, quieter definition of "green" that
+# drifts from the one a developer runs locally.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  ci:
+    runs-on: ubuntu-latest
+
+    services:
+      # pgvector, not stock postgres: db/schema.rb opens with `enable_extension "vector"`, so a
+      # plain `postgres:16` image fails at schema load rather than at some later query. The
+      # extension is created here by the superuser the service container runs as — which is why CI
+      # needs no equivalent of the one-time `CREATE EXTENSION vector` production required.
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: specguard_test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      RAILS_ENV: test
+      # config/database.yml names `specguard_test` with no host or role, which resolves to a local
+      # socket. DATABASE_URL is merged on top by Rails, which is what points it at the service
+      # container above.
+      DATABASE_URL: postgres://postgres:postgres@localhost:5432/specguard_test
+
+      SPECGUARD_ENDPOINT: https://specguard.yatfa.com
+      # Repository-scoped ingest key for yatfa-ai/specguard. Absent on fork pull requests, which is
+      # handled — see the telemetry step below.
+      SPECGUARD_API_KEY: ${{ secrets.SPECGUARD_API_KEY }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: .ruby-version
+          bundler-cache: true
+
+      # Only `lint:stylesheet` needs this, and it needs it to do anything at all: with npm missing
+      # the check does not fail, it SKIPS ("npm is unavailable, so DaisyUI cannot be resolved
+      # here"). A CI run without Node would report the gate as green while never comparing the
+      # committed app/assets/builds/tailwind.css against its sources — the one thing that step is
+      # for. No cache: there is no package-lock.json to key one on.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      # spec/support/system.rb looks for /usr/bin/chromium and /usr/bin/chromedriver, and when they
+      # are absent it SKIPS the browser-driven examples rather than failing ("a missing Chromium
+      # must not read as a broken application" — correct for a developer's laptop, wrong for the
+      # gate). This runner image ships google-chrome instead, so without this step every system
+      # spec would silently not run and CI would still be green. Both paths are overridable by env
+      # var precisely so this is not pinned to one image's layout; the driver registers with
+      # `browser: :chrome`, so Chrome satisfies it.
+      #
+      # Resolved and asserted rather than assumed: if the image ever stops shipping either binary,
+      # this fails loudly here instead of quietly shrinking the suite.
+      - name: Point the system specs at this runner's browser
+        run: |
+          chrome="$(command -v google-chrome || command -v chromium || true)"
+          driver="$(command -v chromedriver || true)"
+          [ -z "$driver" ] && [ -n "${CHROMEWEBDRIVER:-}" ] && driver="${CHROMEWEBDRIVER}/chromedriver"
+          test -x "$chrome" || { echo "::error::no google-chrome or chromium on this runner"; exit 1; }
+          test -x "$driver" || { echo "::error::no chromedriver on this runner"; exit 1; }
+          echo "browser: $chrome"
+          echo "driver:  $driver"
+          {
+            echo "CHROMIUM_BINARY=$chrome"
+            echo "CHROMEDRIVER_BINARY=$driver"
+          } >> "$GITHUB_ENV"
+
+      # The formatter is additive and never fails a run, but it is NOT inert when unconfigured:
+      # with no api_key it appends one JSON object per line to SPECGUARD_OUTPUT_PATH instead of
+      # posting. So it is switched on here rather than in .rspec — CI reports, a local `bin/rspec`
+      # is untouched, and a fork PR (no secret) simply runs the suite.
+      - name: Enable SpecGuard telemetry when a key is configured
+        if: env.SPECGUARD_API_KEY != ''
+        run: |
+          {
+            echo "SPEC_OPTS=--require specguard/rspec/formatter --format SpecGuard::RSpecFormatter"
+            echo "SPECGUARD_COMMIT_SHA=${{ github.event.pull_request.head.sha || github.sha }}"
+            echo "SPECGUARD_BRANCH=${{ github.head_ref || github.ref_name }}"
+            echo "SPECGUARD_RUN_ID=${{ github.run_id }}-${{ github.run_attempt }}"
+          } >> "$GITHUB_ENV"
+
+      # `github.sha` on a pull_request is the ephemeral merge commit, which exists on no branch and
+      # cannot be checked out later. The head sha above is the commit a person would name.
+      - name: bin/ci
+        run: bin/ci
