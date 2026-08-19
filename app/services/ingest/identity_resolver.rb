@@ -1674,7 +1674,6 @@ module Ingest
     # The remaining per-row round trip on this page is the ANN lookup, and it is **SPGD-375's**. If
     # the scan above is ever to get cheaper, that is where the pending rows would have to become
     # visible to an index instead of to a Ruby loop; there is no cheaper answer at this layer.
-
     #
     # == Cosine and not a dot product, and the best match and not the first
     #
