@@ -66,10 +66,42 @@ module SystemAuthHelpers
   # OmniAuth is in test mode for the whole suite (spec/support/omniauth.rb), so the callback reads
   # `OmniAuth.config.mock_auth[:github]` and never leaves the process. The request phase is POST-only
   # here, which is why this visits the callback directly rather than clicking the sign-in button.
+  # The browser twin of `sign_in_via_github`, and it connects an installation for the same reason:
+  # signing in connects nothing, so a spec about registering repositories would otherwise be a spec
+  # about the empty state. `installation: false` gets the unconnected user.
+  #
+  # The GitHub credential goes into the BROWSER's session, which means driving the App's callback in
+  # the browser rather than writing a row. Capybara runs the app in this same process, so the two
+  # stand-ins — the App's credentials and the code exchange — are the same RSpec stubs the request
+  # helper uses, applied to the same objects the server thread is calling.
   def sign_in_via_github_in_browser(overrides = {})
     mock_github_auth(overrides)
     visit "/auth/github/callback"
-    User.find_by(github_uid: OmniAuth.config.mock_auth[:github]["uid"].to_s)
+
+    user = User.find_by(github_uid: OmniAuth.config.mock_auth[:github]["uid"].to_s)
+    connect_in_browser(user, overrides.fetch(:installation, OmniAuthHelpers::DEFAULT_INSTALLATION_ID))
+    user
+  end
+
+  private
+
+  def connect_in_browser(user, installation)
+    return user if user.nil? || installation == false || installation.nil?
+
+    id = installation == true ? OmniAuthHelpers::DEFAULT_INSTALLATION_ID : installation
+    rows = [GithubAppUserAuthorization::Installation.new(installation_id: id, account_login: "acme")]
+    authorization = GithubAppUserAuthorization::Authorization.new(
+      token: OmniAuthHelpers::DEFAULT_USER_TOKEN, expires_at: 1.hour.from_now, installations: rows
+    )
+
+    allow(SpecGuard::GithubApp).to receive(:configured?).and_return(true)
+    allow(GithubAppUserAuthorization).to receive(:authorize).and_return(authorization)
+
+    visit "/github/installation/callback?code=spec-code&state=/up"
+    user
+  ensure
+    allow(SpecGuard::GithubApp).to receive(:configured?).and_call_original
+    allow(GithubAppUserAuthorization).to receive(:authorize).and_call_original
   end
 end
 

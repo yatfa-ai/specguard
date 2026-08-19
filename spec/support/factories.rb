@@ -3,17 +3,23 @@
 # Deliberately plain builders rather than a factory gem — the domain models are few and simple
 # enough that a fixture DSL would be more machinery than they justify.
 module Builders
-  # Connected to GitHub by default, at the elevated scope — the same default, for the same reason,
-  # as `OmniAuthHelpers::DEFAULT_AUTH` and the permissive `FakeGithubApi`: a spec about sharing or
-  # API keys needs a user who can register a repository, and should not have to describe an OAuth
-  # grant to get one. Pass `github_access_token: nil` for a user who has signed in and gone no
-  # further, which is what every user is until they first register something.
-  def create_user(github_uid: "1001", github_handle: "octocat",
-                  github_access_token: "gho_test_token",
-                  github_token_scopes: "read:user,repo,user:email")
-    User.create!(github_uid: github_uid, github_handle: github_handle,
-                 github_access_token: github_access_token,
-                 github_token_scopes: github_token_scopes)
+  # Connected to GitHub by default — the same default, for the same reason, as the permissive
+  # `FakeGithubApi`: a spec about sharing or API keys needs a user who can register a repository,
+  # and should not have to describe a GitHub App installation to get one.
+  #
+  # The installation row is what `InstallationRepositories` reads before it asks GitHub anything, so
+  # a user without one is "has not connected repositories" however permissive the fake is. Pass
+  # `installation_id: nil` for that user — the state everybody is in between signing in and first
+  # connecting something — or call `uninstall_github_app` on one that already has it.
+  #
+  # No token, and there is nothing to pass one as. The credential repository reads are made with is
+  # the viewer's own, held in their session for the length of it (`GithubUserSession`), so a user
+  # row holds no credential at all any more. A non-request spec passes one to
+  # `InstallationRepositories` directly.
+  def create_user(github_uid: "1001", github_handle: "octocat", installation_id: 5001)
+    User.create!(github_uid: github_uid, github_handle: github_handle).tap do |user|
+      GithubInstallation.record(user: user, installation_id: installation_id, account_login: "acme") if installation_id
+    end
   end
 
   def create_repository(user: create_user, github_full_name: "acme/billing-service")

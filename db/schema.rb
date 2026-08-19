@@ -10,7 +10,7 @@
 #
 # It's strongly recommended that you check this file into your version control system.
 
-ActiveRecord::Schema[8.1].define(version: 2026_08_17_120000) do
+ActiveRecord::Schema[8.1].define(version: 2026_08_18_120001) do
   # These are extensions that must be enabled in order to support this database
   enable_extension "pg_catalog.plpgsql"
   enable_extension "vector"
@@ -37,6 +37,17 @@ ActiveRecord::Schema[8.1].define(version: 2026_08_17_120000) do
     t.datetime "updated_at", null: false
     t.index ["provider_fingerprint", "text_digest"], name: "index_embedding_cache_entries_on_key", unique: true
     t.index ["updated_at"], name: "index_embedding_cache_entries_on_updated_at"
+  end
+
+  create_table "github_installations", force: :cascade do |t|
+    t.string "account_login"
+    t.datetime "created_at", null: false
+    t.bigint "installation_id", null: false
+    t.datetime "updated_at", null: false
+    t.bigint "user_id", null: false
+    t.index ["installation_id"], name: "index_github_installations_on_installation_id"
+    t.index ["user_id", "installation_id"], name: "index_github_installations_on_user_id_and_installation_id", unique: true
+    t.index ["user_id"], name: "index_github_installations_on_user_id"
   end
 
   create_table "ingest_rejections", force: :cascade do |t|
@@ -296,10 +307,7 @@ ActiveRecord::Schema[8.1].define(version: 2026_08_17_120000) do
     t.string "avatar_url"
     t.datetime "created_at", null: false
     t.string "email"
-    t.text "github_access_token"
     t.string "github_handle", null: false
-    t.string "github_token_scopes"
-    t.datetime "github_token_updated_at"
     t.string "github_uid", null: false
     t.datetime "updated_at", null: false
     t.index ["github_handle"], name: "index_users_on_github_handle"
@@ -308,6 +316,7 @@ ActiveRecord::Schema[8.1].define(version: 2026_08_17_120000) do
 
   add_foreign_key "api_keys", "repositories"
   add_foreign_key "api_keys", "users", column: "created_by_user_id"
+  add_foreign_key "github_installations", "users"
   add_foreign_key "ingest_rejections", "repositories"
   add_foreign_key "repositories", "users"
   add_foreign_key "repository_memberships", "repositories"
