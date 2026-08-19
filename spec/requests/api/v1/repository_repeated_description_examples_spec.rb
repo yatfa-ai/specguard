@@ -453,14 +453,16 @@ RSpec.describe "GET /api/v1/repository — latest_run.repeated_description_examp
 
       expect([directory_files.length, file_examples.length,
               repeated_description_examples.length]).to eq([1, 1, 1])
-      # And the classified reads are ALL of them — asserted HERE most of all. This fixture runs the
-      # MOST GRAINS NON-ZERO of any in the suite — SEVEN of the nine at once — so it is where a
-      # cross-grain misclassification is most observable. That is the measure under which it leads,
-      # and naming it matters because the other one disagrees: by TOTAL reads the single-ask blocks
-      # in `repository_unstable_tests_spec.rb` and `repository_directory_growth_spec.rb` issue 11 and
-      # 10 against the 9 below. The `eq([1, 1, 1])` above covers the three drill-ins alone — the
-      # other six grains are destructured to `_` deliberately — and the bare `9` below is exactly the
-      # total that spec/support/observation_grain_reads.rb argues cannot tell "one aggregate per
+      # And the classified reads are ALL of them — asserted HERE most of all. This fixture runs SEVEN
+      # grains non-zero at once, and that is the whole reason the sum belongs here: several grains
+      # live at once is where a cross-grain misclassification is most observable. It is NOT the
+      # richest fixture in the suite on either measure — other blocks leave more grains live and issue
+      # more total reads — and no counted ranking of them is given here on purpose, because the one
+      # that used to be went stale as soon as a read was added to the partition — and not only when a
+      # grain was appended; see the note beside `observation_reads_by_grain`. The `eq([1, 1, 1])`
+      # above covers the three drill-ins alone — the grains it does not name are deliberately
+      # discarded, to a `_` or off the end of the destructuring — and the bare `9` below is exactly
+      # the total that spec/support/observation_grain_reads.rb argues cannot tell "one aggregate per
       # grain" from "one grain reading twice". Without this line a read adopted into another grain,
       # or matching no grain at all, is invisible to every assertion here.
       expect(observation_reads { get_repository(query: query) }.length)
