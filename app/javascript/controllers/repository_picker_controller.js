@@ -12,7 +12,7 @@ import { Controller } from "@hotwired/stimulus"
 // The action is `refine` rather than the obvious CSS-colliding synonym, and that is load-bearing:
 // Tailwind scans this directory as literal text, so writing that word here — as an identifier OR
 // in a prose comment — emits Tailwind's filtering utility into the built stylesheet. Nothing in
-// this controller is ever an HTML class, so that CSS is dead weight and reds `lint:stylesheet`.
+// this controller is ever an HTML class, so that CSS is dead weight.
 // See app/assets/tailwind/application.css, which documents the collision in full and excludes the
 // DaisyUI half of it.
 //

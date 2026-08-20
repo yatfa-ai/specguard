@@ -175,8 +175,11 @@ empty.
 > dependency whose absence makes a step **skip silently instead of fail**, so the gate reports green
 > having never run:
 >
-> - **Node.** `lint:stylesheet` without npm reports "npm is unavailable, so DaisyUI cannot be
->   resolved here" and passes, never comparing the committed CSS against its sources.
+> - **Node.** `lint:stylesheet` without npm reported "npm is unavailable, so DaisyUI cannot be
+>   resolved here" and passed, never comparing the committed CSS against its sources. That check no
+>   longer exists: the stylesheet is now built from an npm-pinned toolchain and is not committed at
+>   all, so there is nothing to be stale. Node is a hard requirement of the build instead of a
+>   condition the check quietly tolerated.
 > - **The browser.** `spec/support/system.rb` looks for `/usr/bin/chromium` and
 >   `/usr/bin/chromedriver`; GitHub's runners ship `google-chrome` instead, and a missing browser
 >   skips every system spec. `CHROMIUM_BINARY` / `CHROMEDRIVER_BINARY` exist for exactly this, and

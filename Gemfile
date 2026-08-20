@@ -14,8 +14,11 @@ gem "importmap-rails"
 gem "turbo-rails"
 # Hotwire's modest JavaScript framework [https://stimulus.hotwired.dev]
 gem "stimulus-rails"
-# Use Tailwind CSS [https://github.com/rails/tailwindcss-rails]
-gem "tailwindcss-rails"
+# Bundle and process CSS [https://github.com/rails/cssbundling-rails]
+# Tailwind comes from npm (`@tailwindcss/cli`) rather than from tailwindcss-rails, so the build is
+# pinned by package-lock.json and `css:build` hooks into `assets:precompile`. The built stylesheet
+# is NOT committed — see .gitignore and the README.
+gem "cssbundling-rails"
 
 # Use Active Model has_secure_password [https://guides.rubyonrails.org/active_model_basics.html#securepassword]
 # gem "bcrypt", "~> 3.1.7"

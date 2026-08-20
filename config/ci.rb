@@ -11,9 +11,18 @@ CI.run do
   # or a raw DaisyUI button.
   step "Style: Design-system drift", "bin/rails lint:design_system"
 
-  # app/assets/builds/tailwind.css is committed so a clone can boot without Node; this proves
-  # the committed file is still what the sources actually produce.
-  step "Style: Stylesheet is current", "bin/rails lint:stylesheet"
+  # app/assets/builds/ is generated and gitignored, so there is no committed artifact to go stale
+  # and nothing to compare against. The build itself happens in the "Setup" step above — `bin/setup`
+  # runs `npm ci && npm run build:css`, and fails loudly if npm is missing.
+  #
+  # This asserts the result. It is not the only protection: because the layout names the asset
+  # (`stylesheet_link_tag "application"`), Propshaft raises `MissingAssetError` on the first render
+  # if the build produced nothing. That is precisely what the old `:app` GLOB did not do — a glob
+  # over app/assets/**/*.css just yields a smaller set, so a missing stylesheet rendered no link and
+  # the suite went green against an app with no CSS.
+  #
+  # The step earns its place by failing HERE, named, before 3000 examples explode inside a view.
+  step "Style: Stylesheet was built", "test -s app/assets/builds/application.css"
 
   step "Tests", "bin/rspec"
 

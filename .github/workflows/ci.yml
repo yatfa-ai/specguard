@@ -53,23 +53,20 @@ jobs:
           ruby-version: .ruby-version
           bundler-cache: true
 
-      # Only `lint:stylesheet` needs this, and it needs it to do anything at all: with npm missing
-      # the check does not fail, it SKIPS ("npm is unavailable, so DaisyUI cannot be resolved
-      # here"). A CI run without Node would report the gate as green while never comparing the
-      # committed app/assets/builds/tailwind.css against its sources — the one thing that step is
-      # for.
+      # Node is a hard requirement, not an optional nicety: the stylesheet is not committed, and
+      # `bin/setup` — the first step of bin/ci — builds it with `npm ci && npm run build:css`.
+      # Without Node the run dies there, which is the intended behaviour; the old arrangement, where
+      # a missing npm made a CSS check pass without doing anything, is gone.
       #
       # `node-version` is the Node this project builds CSS with, and is unrelated to the action's
-      # own runtime — the two are easy to conflate. 20 is what the stylesheet toolchain is
-      # documented against.
+      # own runtime — the two are easy to conflate.
       #
-      # No caching: there is no package-lock.json to key one on. v7's `package-manager-cache`
-      # defaults to true but only activates when package.json declares `packageManager` (or
-      # `devEngines.packageManager`), which this one does not — so adding that field later would
-      # silently switch caching on, against a repository with no lockfile.
+      # Caching is keyed on package-lock.json, which is committed precisely so that the stylesheet
+      # is reproducible rather than whatever the registry served that day.
       - uses: actions/setup-node@v7
         with:
           node-version: "20"
+          cache: npm
 
       # spec/support/system.rb looks for /usr/bin/chromium and /usr/bin/chromedriver, and when they
       # are absent it SKIPS the browser-driven examples rather than failing ("a missing Chromium
