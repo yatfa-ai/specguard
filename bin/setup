@@ -15,6 +15,13 @@ FileUtils.chdir APP_ROOT do
   puts "== Installing dependencies =="
   system("bundle check") || system!("bundle install")
 
+  # The stylesheet is generated, not committed. Building it here is what makes a fresh clone
+  # styled without anyone having to know that — and without a first run that dies on
+  # Propshaft::MissingAssetError in the first view it renders.
+  puts "\n== Building the stylesheet =="
+  system! "npm ci"
+  system! "npm run build:css"
+
   # puts "\n== Copying sample files =="
   # unless File.exist?("config/database.yml")
   #   FileUtils.cp "config/database.yml.sample", "config/database.yml"

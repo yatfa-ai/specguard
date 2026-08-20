@@ -5,9 +5,11 @@
 # Builds a single image shared by the web server (puma) and the Solid Queue worker.
 #
 # SpecGuard uses importmap (no JS bundling), so no JS bundler is needed in this
-# build. Node + `npm install` ARE needed, though — assets:precompile runs
-# tailwindcss:build, which resolves the `daisyui` @plugin from node_modules (see
-# lib/spec_guard/stylesheet_lint.rb: "npm for DaisyUI, then the Tailwind CLI").
+# build. Node IS required, though, and not optionally: the stylesheet is not
+# committed, and `cssbundling-rails` runs `npm run build:css` from
+# assets:precompile. A build without Node produces an image whose first rendered
+# page raises Propshaft::MissingAssetError — the layout names its stylesheet, so
+# an absent one is an error rather than a missing link.
 # SpecGuard does not use ActiveRecord Encryption, so assets:precompile needs only
 # SECRET_KEY_BASE_DUMMY=1.
 # Ruby matches .ruby-version (4.0.5).
@@ -42,9 +44,9 @@ RUN apt-get update -qq && \
         build-essential git libpq-dev libyaml-dev pkg-config && \
     rm -rf /var/lib/apt/lists /var/cache/apt/archives
 
-# Node 20 for the CSS build: assets:precompile runs tailwindcss:build, which
-# resolves the `daisyui` @plugin (app/assets/tailwind/application.css) from
-# node_modules. importmap means no JS bundling — npm is here only for daisyui.
+# Node 20 for the CSS build: assets:precompile runs `npm run build:css` through
+# cssbundling-rails, compiling app/assets/tailwind/application.css with Tailwind
+# and DaisyUI from node_modules. importmap means no JS bundling.
 RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - && \
     apt-get install -y nodejs && \
     rm -rf /var/lib/apt/lists /var/cache/apt/archives
@@ -56,14 +58,15 @@ RUN bundle install && \
     # -j 1 disable parallel compilation to avoid a QEMU bug: https://github.com/rails/bootsnap/issues/495
     bundle exec bootsnap precompile -j 1 --gemfile
 
-# Install npm deps (daisyui) for the CSS build. No lockfile in this repo, so a
-# plain install (resolves daisyui ^5.7.16). Layered before COPY . .; the
-# .dockerignore keeps the host node_modules out of the context either way.
-COPY package.json ./
-RUN npm install
+# Install npm deps for the CSS build. `npm ci`, not `npm install`: it installs
+# exactly package-lock.json and fails if the lockfile and package.json disagree,
+# so the image's stylesheet is the one the lockfile describes rather than
+# whatever the registry offered today. Layered before COPY . . so it caches.
+COPY package.json package-lock.json ./
+RUN npm ci
 
-# Copy application code (incl. the committed app/assets/builds/tailwind.css,
-# which assets:precompile regenerates from the tailwind sources + daisyui).
+# Copy application code. app/assets/builds/ is gitignored and .dockerignored —
+# assets:precompile below produces it.
 COPY . .
 
 # Precompile bootsnap code for faster boot times.

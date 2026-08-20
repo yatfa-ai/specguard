@@ -21,7 +21,13 @@
     <link rel="stylesheet"
           href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap">
 
-    <%= stylesheet_link_tag :app, "data-turbo-track": "reload" %>
+    <%#
+      Named, not `:app`. `:app` is a GLOB over app/assets/**/*.css (propshaft/helper.rb), so it
+      links whatever happens to sit in an asset directory — including, once tailwindcss-rails stopped
+      excluding it, the Tailwind entry file itself. Naming the built stylesheet is what keeps the
+      source out of the response.
+    %>
+    <%= stylesheet_link_tag "application", "data-turbo-track": "reload" %>
     <%= javascript_importmap_tags %>
   </head>
 

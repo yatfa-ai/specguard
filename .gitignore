@@ -33,14 +33,12 @@
 # Ignore master key for decrypting credentials and more.
 /config/master.key
 
-# Node — only DaisyUI, pulled in by the Tailwind build.
+# Node. `package-lock.json` is COMMITTED on purpose: Tailwind and DaisyUI both come from npm, and
+# their versions end up inside the generated stylesheet, so an unpinned install makes the CSS
+# irreproducible and turns an unrelated upstream patch release into a diff.
 /node_modules
-/package-lock.json
 
-# NOTE: app/assets/builds is deliberately NOT ignored.
-#
-# The Tailwind build needs DaisyUI from node_modules (`@plugin "daisyui"`), so an npm-less
-# clone could not compile CSS — and Propshaft raises on a missing stylesheet, which would
-# break `bundle exec rspec` on a fresh checkout. Committing the compiled stylesheet keeps
-# `bin/rails db:prepare && bundle exec rspec` green with zero Node setup.
-# Rebuild it with `npm install && bin/rails tailwindcss:build` after changing any view or token.
+# app/assets/builds is generated. `npm run build:css` writes it, `cssbundling-rails` runs that from
+# `assets:precompile`, and `bin/setup` runs it for a fresh clone — so it is never committed.
+/app/assets/builds/*
+!/app/assets/builds/.keep

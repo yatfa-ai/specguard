@@ -12,8 +12,8 @@ import { Controller } from "@hotwired/stimulus"
 //
 //   - The action is `refine`, not the CSS-colliding synonym. Tailwind scans this directory as
 //     literal text, so writing that word here — as an identifier OR in prose — emits DaisyUI's
-//     filtering component into the built stylesheet, which nothing can apply and which reds
-//     `bin/rails lint:stylesheet`. See app/assets/tailwind/application.css.
+//     filtering component into the built stylesheet, which nothing can apply.
+//     See app/assets/tailwind/application.css.
 //   - For the same reason the tick-box target is `pick`. The obvious name for it is a DaisyUI
 //     component this app does not use and has not excluded, so spelling it out here would emit that
 //     component's CSS off a Stimulus target name.

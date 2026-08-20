@@ -29,7 +29,7 @@ exactly one place each:
 |---|---|---|
 | Ruby | see `.ruby-version` | |
 | PostgreSQL | 16+ | **with `pgvector` installed** — the schema does `enable_extension "vector"` |
-| Node | 20+ | *only* to rebuild the stylesheet (DaisyUI is an npm package). Not needed to boot or test. |
+| Node | 20+ | required — the stylesheet is built, not committed. `bin/setup` runs the build. |
 
 Installing pgvector:
 
@@ -191,18 +191,28 @@ bin/rails lint:design_system                  # check
 bin/rails lint:design_system:update_baseline  # shrink-only; FORCE=1 to accept growth
 ```
 
-`app/assets/builds/tailwind.css` is **committed**. DaisyUI comes from npm (`@plugin "daisyui"`), so
-a clone without Node could not compile CSS — and Propshaft raises on a missing stylesheet, which
-would break `bundle exec rspec` on a fresh checkout. Committing the compiled file keeps setup
-Node-free. After changing any view, component or token:
+`app/assets/builds/application.css` is **generated and gitignored**. Tailwind and DaisyUI both come
+from npm, pinned by the committed `package-lock.json`, and `cssbundling-rails` runs the build from
+`assets:precompile` — so the production image compiles its own stylesheet.
+
+`bin/setup` builds it, so a fresh clone is styled. To rebuild after changing a view, component or
+token — or to watch while working:
 
 ```sh
-npm install
-bin/rails tailwindcss:build
+npm run build:css
+npm run watch:css    # or `bin/dev`, which runs it alongside the server
 ```
 
-`bin/ci` re-runs that build and fails if the committed file is stale, so it cannot silently drift.
-(The check skips itself where npm is unavailable.)
+The layout NAMES its stylesheet — `stylesheet_link_tag "application"` — so a missing build raises
+`Propshaft::MissingAssetError` on the first render rather than passing quietly. That is deliberate:
+the previous `stylesheet_link_tag :app` was a *glob* over `app/assets/**/*.css`, and a glob with one
+fewer file is not an error, so an app with no CSS booted, served, and passed its whole suite.
+`bin/ci` also asserts the file exists, so the failure is named at a step instead of surfacing as a
+stack trace inside the first view.
+
+The entry file lives in `app/assets/tailwind/`, a directory `config/initializers/assets.rb` keeps
+off the asset load path. It is an input to the build, not an asset: served, it would publish the
+`@source` globs and the whole `@theme` token block.
 
 ## Related repositories
 
