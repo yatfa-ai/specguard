@@ -11,9 +11,14 @@
 
     <%= yield :head %>
 
-    <link rel="icon" href="/icon.png" type="image/png">
+    <%# Modern icon set. The SVG is what every current browser actually renders in the tab; the
+        .ico carries hand-tuned 16/32/48 rasters for the ones that don't, and is what a bare
+        GET /favicon.ico (which browsers request with or without a link tag) resolves to instead
+        of a Rails 404. icon.png stays the apple-touch-icon — iOS ignores SVG here. %>
+    <link rel="icon" href="/favicon.ico" sizes="32x32">
     <link rel="icon" href="/icon.svg" type="image/svg+xml">
     <link rel="apple-touch-icon" href="/icon.png">
+    <meta name="theme-color" content="#0f172a">
 
     <%# Plus Jakarta Sans via <link>, not @import — an @import in CSS blocks the parser. %>
     <link rel="preconnect" href="https://fonts.googleapis.com">
