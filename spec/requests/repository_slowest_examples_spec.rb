@@ -731,7 +731,7 @@ RSpec.describe "Repository slowest tests", type: :request do
       # therefore cannot count for itself. Its own budget, including that the two stay two as the
       # number of repeated descriptions grows, is asserted in
       # spec/requests/repository_repeated_descriptions_spec.rb.
-      # RECOUNTED AT 8 by SPGD-649, which added the "Where the unannotated tests are" panel: ONE
+      # RECOUNTED AT 8 by SPGD-649, which added the by-area annotation panel: ONE
       # further read of this table, the same run's rows grouped by AREA on the ANNOTATION axis. It
       # is not the by-directory rollup counted above under another name — that one groups the
       # identical population and ranks it by WALL CLOCK, so neither ranking can be read off the
@@ -747,9 +747,16 @@ RSpec.describe "Repository slowest tests", type: :request do
       # one run, and a composition over those candidates only — is asserted in
       # spec/requests/repository_window_slowest_tests_spec.rb. The added read moves with neither
       # the size of the suite nor the length of the window, since it counts one run's rows.
+      # RECOUNTED AT 10 by SPGD-711, which added the run's INTENT READINGS: ONE further read of
+      # this table, an ungated aggregate over the same run's rows splitting them into authored,
+      # derived and unreadable. It is not the by-area annotation read counted above under another
+      # name — that one GROUPS and ranks, this one does neither, and it answers the Overview's own
+      # sentence rather than a panel's list. Ungated unlike every drill-in on this page, because a
+      # correction a client has to opt into leaves the Overview printing the subtraction it replaced.
+      # Its own budget is asserted in spec/requests/api/v1/repository_intent_readings_spec.rb.
       # Page-wide rather than panel-scoped on purpose: what must not grow is the number of times
       # ONE page walks this table, and only a count taken across the whole request can say that.
-      expect(large_queries.size).to eq(9)
+      expect(large_queries.size).to eq(10)
     end
   end
 

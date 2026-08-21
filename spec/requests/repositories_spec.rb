@@ -593,9 +593,19 @@ RSpec.describe "Repository registration and API keys", type: :request do
       run
     end
 
-    it "shows the suite denominator and the tests SpecGuard cannot see" do
+    # ⭐ THIS EXAMPLE USED TO PIN THE CLAIM SPGD-711 CORRECTED, and it is kept pointed at the same
+    # run so the correction is legible as one. Three specs, two annotated, no per-example rows.
+    #
+    # The panel used to render `3 - 2` as "Not visible to SpecGuard 1" and say "SpecGuard cannot see
+    # the other 1 test." It cannot know that. The counters carry a `status` and nothing about a
+    # description, and whether SpecGuard can READ a test is a question only the rows can answer — so
+    # on a run that stored none, the panel now declines to answer it and says so.
+    #
+    # What it still prints, unchanged and in the same words: the suite size, the @intent count and
+    # the ratio. Those are the counters' own facts and are the one thing this change was required to
+    # leave answering exactly as it did.
+    it "shows the suite denominator and the @intent share, and no longer guesses what it cannot see" do
       repository = create_repository(user: @user)
-      # 3 specs, 2 annotated — so 1 test is invisible to SpecGuard, and 66.7% is the ratio.
       repository.test_runs.create!(commit_sha: "feedfacecafe0001", branch: "main",
                                    total_specs_count: 3, annotated_specs_count: 2)
 
@@ -605,11 +615,183 @@ RSpec.describe "Repository registration and API keys", type: :request do
       # The denominator, which was stored and API-returned but rendered nowhere before this.
       expect(panel).to have_text("Tests in suite 3", normalize_ws: true)
       expect(panel).to have_text("Carrying an @intent 2", normalize_ws: true)
-      # The number the whole panel exists for: what SpecGuard *cannot* see.
-      expect(panel).to have_text("Not visible to SpecGuard 1", normalize_ws: true)
       # ...and the ratio never appears without the denominator it was computed over.
       expect(panel).to have_text("66.7% — 2 of 3 tests carry an @intent.", normalize_ws: true)
-      expect(panel).to have_text("SpecGuard cannot see the other 1 test.", normalize_ws: true)
+      # The claim it can no longer make about this run, and the honest replacement.
+      expect(panel).to have_no_text("Not visible to SpecGuard")
+      expect(panel).to have_no_text("SpecGuard cannot see the other")
+      expect(panel).to have_text("nothing here to say how much of the rest it can make out — not " \
+                                 "that it can make out none of it", normalize_ws: true)
+    end
+
+    # ⭐ THE SAME RUN WITH ITS PER-EXAMPLE ROWS, which is where the three readings can be told apart
+    # — and where the sentence the panel used to print is finally true of something.
+    #
+    # Four rows: one annotated, two whose descriptions derive, one that reads as nothing. The
+    # subtraction the panel used to render would have called all three of the last ones invisible.
+    it "names what it read from the descriptions, and reserves 'cannot read' for what it could not" do
+      repository = create_repository(user: @user, github_full_name: "acme/readable-suite")
+      Ingest::RunRecorder.record(
+        repository,
+        { commit_sha: "feedfacecafe0711", branch: "main", total_specs_count: 4,
+          annotated_specs_count: 1, duration_seconds: 60.0 },
+        specs: [annotated_spec(file_path: "spec/models/invoice_spec.rb", line_number: 4),
+                unannotated_spec(file_path: "spec/models/order_spec.rb", line_number: 9,
+                                 name: "Order#settle clears the outstanding balance"),
+                unannotated_spec(file_path: "spec/models/refund_spec.rb", line_number: 12,
+                                 name: "Refund#issue returns the money to the payer"),
+                unannotated_spec(file_path: "spec/requests/checkout_spec.rb", line_number: 3,
+                                 name: "Checkout rejects an expired card")].map(&:deep_stringify_keys)
+      )
+
+      get repository_path(repository)
+
+      panel = overview_panel
+      expect(panel).to have_text("Carrying an @intent 1", normalize_ws: true)
+      expect(panel).to have_text("Read from the description 2", normalize_ws: true)
+      expect(panel).to have_text("Not readable by SpecGuard 1", normalize_ws: true)
+      # The sentence, with its denominator taken from the rows rather than from the counters — and
+      # with what a derived reading LACKS said in the same breath, because the honest version of
+      # "derived" is the one that does not sell it as an annotation.
+      expect(panel).to have_text("SpecGuard reads 3 — the annotated ones and 2 more from the " \
+                                 "test's own description — and cannot read the remaining 1",
+                                 normalize_ws: true)
+      expect(panel).to have_text("it carries no preconditions", normalize_ws: true)
+      # ⭐ AND THE ADOPTION METRIC IS UNMOVED. Three of four examples are READ; one of four carries an
+      # @intent. A change that let the second figure drift toward the first would have redefined the
+      # product's own coverage metric, which is the one thing this correction may not do.
+      expect(panel).to have_text("25.0% — 1 of 4 tests carry an @intent.", normalize_ws: true)
+    end
+
+    # ⭐ THE DESTINATION, AND THE SENTENCE THAT MAY NOT DESCRIBE AN EMPTY SET.
+    #
+    # Every other branch of this paragraph discloses what a derived reading COSTS — no preconditions,
+    # a layer inferred from the directory — because every other branch has derived readings to
+    # qualify. On a fully-authored suite there are none: "and the rest from the test's own
+    # description" would name an empty set, and the caveat behind it would warn the reader about the
+    # weakness of a reading nothing on the page rests on. The panel branches on `recorded?` and on
+    # `unreadable?` with exactly this care; this is the third state it was missing.
+    it "says nothing about derived readings on a suite that has none" do
+      repository = create_repository(user: @user, github_full_name: "acme/fully-annotated")
+      Ingest::RunRecorder.record(
+        repository,
+        { commit_sha: "feedfacecafe0712", branch: "main", total_specs_count: 2,
+          annotated_specs_count: 2, duration_seconds: 12.0 },
+        specs: [annotated_spec(file_path: "spec/models/invoice_spec.rb", line_number: 4),
+                annotated_spec(file_path: "spec/models/invoice_spec.rb", line_number: 9)]
+          .map(&:deep_stringify_keys)
+      )
+
+      get repository_path(repository)
+
+      panel = overview_panel
+      expect(panel).to have_text("Every one of the 2 examples this run recorded carries an @intent " \
+                                 "its author wrote", normalize_ws: true)
+      # The two clauses that may not appear over a suite with nothing derived in it: the empty set,
+      # and the warning about a reading that is not on this page.
+      expect(panel).to have_no_text("the rest from the test's own description")
+      expect(panel).to have_no_text("it carries no preconditions")
+      # And the state above it is still stated in full, so this is a shorter sentence rather than a
+      # quieter one.
+      expect(panel).to have_text("100.0% — 2 of 2 tests carry an @intent.", normalize_ws: true)
+    end
+
+    # The middle branch, which had no example of its own either: derived readings and NO unreadable
+    # population. The "cannot read the remaining N" sentence may not be rendered at N = 0 — that is
+    # what `IntentReadings#unreadable?` exists for — and the derived caveat still must be, because
+    # here there IS something derived to qualify.
+    it "qualifies its derived readings on a suite with no unreadable examples" do
+      repository = create_repository(user: @user, github_full_name: "acme/all-derived")
+      Ingest::RunRecorder.record(
+        repository,
+        { commit_sha: "feedfacecafe0713", branch: "main", total_specs_count: 2,
+          annotated_specs_count: 1, duration_seconds: 12.0 },
+        specs: [annotated_spec(file_path: "spec/models/invoice_spec.rb", line_number: 4),
+                unannotated_spec(file_path: "spec/models/order_spec.rb", line_number: 9,
+                                 name: "Order#settle clears the outstanding balance")]
+          .map(&:deep_stringify_keys)
+      )
+
+      get repository_path(repository)
+
+      panel = overview_panel
+      expect(panel).to have_text("the rest from the test's own description", normalize_ws: true)
+      expect(panel).to have_text("it carries no preconditions", normalize_ws: true)
+      expect(panel).to have_no_text("cannot read the remaining")
+      # Unmoved, on the run where a derived reading is half the suite — the figure a reader asks
+      # "how much of this suite has a human-written intent" of.
+      expect(panel).to have_text("50.0% — 1 of 2 tests carry an @intent.", normalize_ws: true)
+    end
+
+
+    # ⭐ THE FIFTH STATE, AND THE ONE THE TICKET IS MOST ABOUT: rows recorded, NOTHING derived, and
+    # an unreadable population. It reached the `unreadable?` arm — the one arm written on the
+    # assumption that there is a derived population to describe — and so the suite SpecGuard can
+    # read none of was handed "SpecGuard reads 0 — the annotated ones and 0 more from the test's own
+    # description", plus a caveat about the weakness of an inference that was never made. Both are
+    # the objections the fully-authored branch below already writes out for itself; this is the arm
+    # they had not been applied to.
+    #
+    # It is not an exotic run. Derivation is deliberately narrow — `Entity#action` or `Entity.action`
+    # plus a behavior — so a suite written with string `describe`s throughout derives NOTHING, run
+    # wide, and that repository is exactly the "genuinely unreadable" population the ticket names and
+    # requires be "reported plainly as such".
+    it "reports an unreadable suite plainly when nothing derived at all" do
+      repository = create_repository(user: @user, github_full_name: "acme/prose-described")
+      Ingest::RunRecorder.record(
+        repository,
+        { commit_sha: "feedfacecafe0714", branch: "main", total_specs_count: 2,
+          annotated_specs_count: 0, duration_seconds: 12.0 },
+        specs: [unannotated_spec(file_path: "spec/requests/registration_spec.rb", line_number: 4,
+                                 name: "user registration sends a welcome email"),
+                unannotated_spec(file_path: "spec/requests/registration_spec.rb", line_number: 9,
+                                 name: "user registration rejects a duplicate handle")]
+          .map(&:deep_stringify_keys)
+      )
+
+      get repository_path(repository)
+
+      panel = overview_panel
+      expect(panel).to have_text("SpecGuard cannot read 2 — every one of them that carries no " \
+                                 "@intent", normalize_ws: true)
+      expect(panel).to have_text("do not give it an entity, an action and a behavior",
+                                 normalize_ws: true)
+      # ⭐ ASSERTED CLAUSE BY CLAUSE rather than against the whole sentence: one `have_no_text` over
+      # the paragraph would go green again on any caption that merely reworded it. Each of these is a
+      # claim the old arm made about an empty set.
+      expect(panel).to have_no_text("more from the test's own description")
+      expect(panel).to have_no_text("it carries no preconditions")
+      expect(panel).to have_no_text("layer is inferred from the directory")
+      # And the guard that this state sits next to: a run whose scanner fell over lands NEAR here,
+      # and must still lead with the @intent share off the run's own counters.
+      expect(panel).to have_text("0.0% — 0 of 2 tests carry an @intent.", normalize_ws: true)
+      expect(panel).to have_text("Read from the description 0", normalize_ws: true)
+    end
+
+    # The same arm with an AUTHORED population in it, which is where a sentence written only for the
+    # all-dark run above would give itself away: `unreadable` here is 1 of 2, not all of it, so
+    # "every one of them that carries no @intent" has to be a narrowing rather than a synonym for
+    # the whole run. Same arm, both sub-cases, so nothing about the wording can be true by accident.
+    it "narrows the unreadable claim to the unannotated rows when some carry an @intent" do
+      repository = create_repository(user: @user, github_full_name: "acme/half-authored-dark")
+      Ingest::RunRecorder.record(
+        repository,
+        { commit_sha: "feedfacecafe0715", branch: "main", total_specs_count: 2,
+          annotated_specs_count: 1, duration_seconds: 12.0 },
+        specs: [annotated_spec(file_path: "spec/models/invoice_spec.rb", line_number: 4),
+                unannotated_spec(file_path: "spec/requests/registration_spec.rb", line_number: 9,
+                                 name: "user registration sends a welcome email")]
+          .map(&:deep_stringify_keys)
+      )
+
+      get repository_path(repository)
+
+      panel = overview_panel
+      expect(panel).to have_text("Of the 2 examples this run recorded, SpecGuard cannot read 1",
+                                 normalize_ws: true)
+      expect(panel).to have_no_text("more from the test's own description")
+      expect(panel).to have_no_text("it carries no preconditions")
+      expect(panel).to have_text("50.0% — 1 of 2 tests carry an @intent.", normalize_ws: true)
     end
 
     it "puts the real counts into the meter's accessible markup, not (ratio, 100)" do
@@ -670,7 +852,11 @@ RSpec.describe "Repository registration and API keys", type: :request do
       panel = overview_panel
       # This repository genuinely has 0% — and says so with its denominator attached.
       expect(panel).to have_text("0.0% — 0 of 3 tests carry an @intent.", normalize_ws: true)
-      expect(panel).to have_text("SpecGuard cannot see the other 3 tests.", normalize_ws: true)
+      # It says nothing about what it can READ of the other three, because this run stored no
+      # per-example rows and the counters do not carry a description. Before SPGD-711 the panel
+      # asserted it could see none of them, which was a claim it had no evidence for either way.
+      expect(panel).to have_text("nothing here to say how much of the rest it can make out",
+                                 normalize_ws: true)
       expect(panel).to have_no_text("No CI run has reported yet", normalize_ws: true)
     end
 
@@ -1845,7 +2031,10 @@ RSpec.describe "Repository registration and API keys", type: :request do
         # first-request-only work cannot land in it.
         get repository_path(repository)
 
-        expect(count_all_queries { get repository_path(repository) }).to eq(20)
+        # 21 rather than 20 since SPGD-711: `TestRun#intent_readings` is one aggregate over the latest
+      # run's rows, served on every page load because the Overview's reading rows and the sentence
+      # beside them both read it. Memoized on the run, so it is one query and not one per reader.
+      expect(count_all_queries { get repository_path(repository) }).to eq(21)
         # And the page really did render the thing being counted — an absolute count is satisfied
         # by a page that renders nothing at all.
         expect(distribution.all("li").size).to eq(4)
@@ -1925,7 +2114,7 @@ RSpec.describe "Repository registration and API keys", type: :request do
 
       # Suite coverage is the same class of information as the connection-health stat: a `view`
       # member needs it, and none of it is credential metadata.
-      expect(overview_panel).to have_text("Not visible to SpecGuard 1", normalize_ws: true)
+      expect(overview_panel).to have_text("Carrying an @intent 2", normalize_ws: true)
       expect(response.body).not_to include("api-keys")
     end
   end

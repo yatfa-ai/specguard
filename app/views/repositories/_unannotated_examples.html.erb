@@ -1,11 +1,19 @@
     <%# == The unannotated tests THEMSELVES, for the place the reader picked
-        The last rung of the ladder the Overview panel opens and "Where the unannotated tests are"
-        narrows. That panel prints "Not visible to SpecGuard" as `total_specs_count -
-        annotated_specs_count` and says *"SpecGuard cannot see the other N tests"*; the ranking above
+        The last rung of the ladder the Overview panel opens and "How SpecGuard reads this suite, by
+        area" narrows. The Overview used to print "Not visible to SpecGuard" as `total_specs_count -
+        annotated_specs_count` and say *"SpecGuard cannot see the other N tests"*; the ranking above
         names the AREAS that count is concentrated in. Neither names a TEST, and until this panel the
         only route to one was `GET /api/v1/repository?unannotated_examples=1&spec_directory=…` with
         an API key — a route off the product, for the reader the product had just handed a worklist
         to.
+
+        SPGD-711 then corrected what may be said ABOUT these rows without changing which rows they
+        are. Every example here lacks an authored `@intent` — exact, and the same predicate the
+        Overview subtracts. Most of them SpecGuard nonetheless READS, from the description the client
+        sends and this platform stores; the last column shows exactly what it read, so a reader can
+        check the reading rather than take a badge's word for it. The rows it read nothing from come
+        FIRST, because the list is capped at a hundred and those are the ones that must not fall off
+        the page.
 
         Rendered only when a narrowing was ASKED for, and the read is taken only then. The model's
         narrowings are OPTIONAL and whole-run is a complete ask on the JSON endpoint; this surface
@@ -61,8 +69,36 @@
               capped read. Its class comment names the alternative in as many words — *"`recorded_count
               > rows.size` is a client's sentence to write"* — and this is the client. Both operands
               are the object's own integers off one read, and this asks only which is larger; the same
-              shape "Where the unannotated tests are" folds `carries_debt` in, one grain up. %>
+              shape "How SpecGuard reads this suite, by area" folds `carries_debt` in, one grain up. %>
           <% truncated = @unannotated_examples.recorded_count > @unannotated_examples.rows.size %>
+
+          <%# HOW MANY OF THE READINGS ARE ON THIS PAGE — a PAGE-grain figure, and it exists because
+              the caption's split below is a POPULATION-grain one. `#derived_count` and
+              `#unreadable_count` are `COUNT(*) FILTER (…) OVER ()`, evaluated after the WHERE and
+              therefore over the whole narrowed population; `truncated` above is the state in which
+              that population and the rendered rows are different row sets. A clause pointing at "the
+              last column" is a claim about the rendered rows, and printing one off a population count
+              was wrong on exactly the cut page — the read's own ordering leads with the rows nothing
+              could be read from, so the readings are the ones that fall past the cap.
+
+              COUNTED THROUGH `#derived_intent`, WHICH IS THE CALL THE CELL ITSELF MAKES — not
+              `rows.size - unreadable_count`, and not a second read. The last column renders
+              `observation.derived_intent` and shows the three fields or the "Nothing" sentence on
+              that one predicate, so counting through it means the figure and the column cannot
+              disagree about a row: they are one method evaluated on one object. Arithmetic over the
+              two window counts would agree today and would be a second rule the moment either the
+              ordering or the windows changed.
+
+              FREE, rather than cheap. `SpecObservation#derived_intent` memoizes through `defined?`,
+              and every row on this page has its cell rendered below — so this fold pays the
+              derivation the cell was going to pay anyway and the cell reads the memo. At the hundred-
+              row cap that is a hundred memo writes moved earlier, not a hundred extra regexes.
+
+              Folded in the view on the same rule `truncated` is: `UnannotatedExamples` refuses a
+              predicate no surface calls, and its class comment hands the client the comparison to
+              write. This is the client, the operands are the object's own rows, and the sentence
+              that needs it is three lines away. %>
+          <% derived_on_page = @unannotated_examples.rows.count { |observation| observation.derived_intent } %>
 
           <%# What the list IS, before the list — the discipline every panel on this page keeps. Every
               figure is counted off THE SAME READ that returned the rows: the population count rides
@@ -127,6 +163,118 @@
                 over it, and the refusal is the same one. %>
             Named and not scored: nothing here says whether a test ought to carry an
             <code>@intent</code>, only that this run recorded it without one.
+            <%# THE SPLIT SPGD-711 PUT IN THIS CAPTION. Every row here is unannotated, which is
+                exact — and this list used to be captioned, on the API and the MCP bridge, as the
+                tests SpecGuard cannot see, which was not. Both figures come off windows over the
+                same rows the read narrowed to (see `UnannotatedExamples#derived_count`), so the
+                sentence cannot describe a different POPULATION from the one this list was cut from.
+
+                ⚠️ THAT IS THE POPULATION AND NOT THE PAGE, and the two are the same row set only
+                while nothing was cut. The unreadable rows are at the HEAD of the list by the read's
+                own ordering, which is deliberate — they are the small group and the only one any
+                "cannot see this test" sentence may describe, so the cap must not drop them. The
+                exact consequence is that on a CUT page it is the READINGS that are past the cap,
+                and a clause pointing a reader at "the last column" for a figure counted over the
+                population pointed at a column that showed the opposite. `derived_on_page` above is
+                the page-grain operand that closes it, and every clause below that names the column
+                is now printed off THAT figure while every clause that names the population is
+                printed off the windows. %>
+            <%# BRANCHED ON WHAT WAS READ, THEN ON WHETHER THE PAGE HOLDS IT — five arms over two
+                axes, and the second axis is what round 6 added.
+
+                THE READING AXIS. The Overview two panels up holds the same rule on both of ITS
+                zero-derived arms: `show.html.erb` keeps the derived clause and its caveat out of
+                the fully-authored suite AND out of the suite nothing derived from, because the
+                reason is the same in both and is nothing to do with what is left over. Where
+                nothing was derived, "SpecGuard reads N of them from the test's own description"
+                describes an EMPTY SET, "shown in the last column" points at a column showing the
+                opposite, and the caveat after it warns a reader about the weakness of a reading
+                NOTHING on the page rests on — while "the other M" and "those are listed first" are
+                both said of a population that is the whole list. That branch is not exotic here:
+                narrow to `spec/requests` and the ordinary `POST /api/v1/ingest rejects a malformed
+                body` shape lands in it, which is `DerivedIntent`'s own canonical unreadable
+                example.
+
+                THE CAP AXIS, and why it is on two of the three arms rather than all three. A
+                derived arm's column clause is a claim about the RENDERED rows and its counts are
+                over the POPULATION, so the two arms that carry one need the cut and uncut sentences
+                written apart. THE ZERO-DERIVED ARM DOES NOT, and that is structural rather than an
+                omission: `derived_count` is zero over the whole narrowed population, the page is a
+                subset of that population, so every rendered row is unreadable and "the last column
+                says so row by row" is true of the page whether or not anything was cut. There is no
+                cut/uncut pair to write because the cap cannot separate the two grains when one of
+                them is empty.
+
+                WHAT THE CUT ARMS MAY ASSERT, which the ordering decides. The unreadable rows head
+                the list, so a cut page fills with them first: if ANY derived row is on the page
+                then every unreadable row is too, and `derived_on_page` is `rows.size -
+                unreadable_count`, which is strictly below `derived_count` because the list was cut.
+                And if none is, `derived_on_page` is zero. So on a cut page `derived_on_page <
+                derived_count` ALWAYS, and "the other N are past the cap" is never a sentence about
+                an empty remainder — which is why both cut arms may state the subtraction flatly
+                rather than guarding it.
+
+                ONE SENTENCE ACROSS BOTH CUT SUB-CASES, rather than a "none of them" arm beside an
+                "N of them" one. Where the readings are ENTIRELY past the cap the clause reads "shows
+                0 of those 5 readings on this page, and the other 5 are past the cap", which is
+                slightly stiff and exactly true — the two figures still close on `derived_count`, and
+                "the other" contrasts with the ones on the page whether that is none or sixty. A
+                fourth arm would buy the stiffness back at the price of another cell nothing renders
+                against, which is the trade that produced this finding in the first place.
+
+                Each arm is written out whole rather than assembled from a shared clause, on this
+                caption's existing rule — see the truncated/untruncated pair above, where a shared
+                clause would let an edit meant for one land on both. That rule is why the cap axis
+                is nested here instead of hoisted into one qualifier appended after the branch: an
+                appended sentence would have to be guarded on `derived_count` anyway to stay off the
+                zero-derived arm, and its "shown" would have lost the noun it points at. %>
+            <% if @unannotated_examples.derived_count.zero? %>
+              SpecGuard reads none of them from the test's own description either — the last column
+              says so row by row. These are the tests it genuinely cannot see: not merely tests
+              without an <code>@intent</code>, but tests whose description does not give it an
+              entity, an action and a behavior.
+            <% elsif @unannotated_examples.unreadable_count.positive? %>
+              <% if truncated %>
+                SpecGuard reads <%= number_with_delimiter(@unannotated_examples.derived_count) %>
+                of them from the test's own description — a weaker reading than an
+                <code>@intent</code>: no preconditions, and a layer inferred from the directory
+                rather than declared.
+                The other <%= number_with_delimiter(@unannotated_examples.unreadable_count) %>
+                it cannot read at all, and those are listed first — so the last column shows
+                <%= number_with_delimiter(derived_on_page) %> of those
+                <%= number_with_delimiter(@unannotated_examples.derived_count) %> readings on this
+                page, and the other
+                <%= number_with_delimiter(@unannotated_examples.derived_count - derived_on_page) %>
+                are past the cap.
+              <% else %>
+                SpecGuard reads <%= number_with_delimiter(@unannotated_examples.derived_count) %>
+                of them from the test's own description — shown in the last column, and a weaker
+                reading than an <code>@intent</code>: no preconditions, and a layer inferred from the
+                directory rather than declared.
+                The other <%= number_with_delimiter(@unannotated_examples.unreadable_count) %>
+                it cannot read at all, and those are listed first.
+              <% end %>
+            <% else %>
+              <% if truncated %>
+                SpecGuard reads all <%= number_with_delimiter(@unannotated_examples.derived_count) %>
+                <%= "example".pluralize(@unannotated_examples.derived_count) %> here from the test's
+                own description — a weaker reading than an <code>@intent</code>: no preconditions,
+                and a layer inferred from the directory rather than declared.
+                There is none here it cannot read at all.
+                The last column shows <%= number_with_delimiter(derived_on_page) %> of those
+                <%= number_with_delimiter(@unannotated_examples.derived_count) %> readings on this
+                page, and the other
+                <%= number_with_delimiter(@unannotated_examples.derived_count - derived_on_page) %>
+                are past the cap.
+              <% else %>
+                SpecGuard reads all <%= number_with_delimiter(@unannotated_examples.derived_count) %>
+                <%= "example".pluralize(@unannotated_examples.derived_count) %> here from the test's
+                own description — shown in the last column, and a weaker reading than an
+                <code>@intent</code>: no preconditions, and a layer inferred from the directory rather
+                than declared.
+                There is none here it cannot read at all.
+              <% end %>
+            <% end %>
             <%# Counted off THIS RUN's per-example rows. The Overview's figure is a subtraction over
                 the run's own counters, and while both sides read the same `status` the payload wrote,
                 the two populations are not guaranteed identical — and this list is narrowed on top of
@@ -136,7 +284,7 @@
             the suite size on the Overview panel above and may legitimately differ from it.
           </p>
 
-          <%= render UI::TableComponent.new(columns: ["Test", "Spec file"],
+          <%= render UI::TableComponent.new(columns: ["Test", "Spec file", "What SpecGuard reads"],
                                             describedby: "unannotated-examples-basis") do %>
             <% @unannotated_examples.rows.each do |observation| %>
               <tr>
@@ -214,6 +362,31 @@
                       site above sits somewhere else. %>
                   <%= observation.spec_file_path %>
                 </td>
+                <td class="px-3 py-2 text-xs text-app-content-secondary">
+                  <%# WHAT SPECGUARD GOT FROM THE DESCRIPTION, or a plain statement that it got
+                      nothing — the column that stops this list being captioned as tests the product
+                      cannot see.
+
+                      The three fields are shown rather than a badge reading "derived", because the
+                      reader's question is not "did a regex match" but "is what SpecGuard read
+                      actually right about my test". Shown, they can be checked; summarised, they
+                      have to be trusted. `layer` is deliberately absent from the cell: it is the
+                      guessed field (`DerivedIntent::DEFAULT_LAYER`) and the caption already says the
+                      layer is inferred, so printing it per row would spend the most space on the
+                      least evidence.
+
+                      No new query. `SpecObservation#derived_intent` runs the same rule the read
+                      counted with, in Ruby, over columns this row already carries. %>
+                  <% derived = observation.derived_intent %>
+                  <% if derived %>
+                    <span class="font-mono text-app-content"><%= derived.entity %></span>
+                    <span class="font-mono text-app-content"><%= derived.action %></span>
+                    <span class="block text-app-muted"><%= derived.behavior %></span>
+                  <% else %>
+                    <span class="text-app-muted">Nothing — no <code>@intent</code>, and the
+                      description does not give an entity, an action and a behavior.</span>
+                  <% end %>
+                </td>
               </tr>
             <% end %>
           <% end %>
@@ -252,7 +425,7 @@
               ) %>
         <% else %>
           <%# A run with no per-example rows AT ALL — ingested before those rows existed, or from a
-              client that sends only totals. The same pair "Where the unannotated tests are" keeps
+              client that sends only totals. The same pair "How SpecGuard reads this suite, by area" keeps
               apart one grain up, and the one thing this state may not do is read as the state above
               it: "nobody sent the detail" and "nothing is unannotated" are the same empty table and
               opposite news.

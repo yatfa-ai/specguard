@@ -44,11 +44,26 @@
 # no `#coverage_label` here and no threshold anywhere on the Row. An area at 40/40 is a module nobody
 # has annotated yet and equally a module of generated specs nobody intends to; nothing here decides
 # which. The reading is the reader's, and the operands are what let them have one.
+#
+# == IT NOW RANKS ON WHAT SPECGUARD CANNOT READ, and the debt ranking survives as the tiebreak
+#
+# Every row carries three counts — `SpecObservation::READINGS` over the area's examples — where it
+# used to carry one. Collapsing `derived` into `unreadable` under the single word "unannotated" is
+# what let the panel print N of N against every area of a suite that had simply never annotated
+# anything, beside a column header claiming SpecGuard could not see any of them. It could see almost
+# all of them; nobody had declared an intent for them, which is a different sentence.
+#
+# `SpecObservation.unannotated_directories_in` argues the ordering: unreadable first, because a
+# ten-row ranking led by debt on an unannotated suite is a ranking by area SIZE and the dark corners
+# never surface. `unannotated_count` still orders every area that ties at zero unreadable — which on
+# a well-written suite is all of them — so the debt ranking SPGD-623 built is intact underneath.
 class UnannotatedDirectories
   def self.for(test_run, limit: SpecObservation::UNANNOTATED_DIRECTORIES_LIMIT)
     tuples = SpecObservation.unannotated_directories_in(test_run, limit: limit)
-    rows = tuples.map do |path, unannotated, recorded, _directory_count|
-      Row.new(path: path, unannotated_count: unannotated.to_i, recorded_count: recorded.to_i)
+    rows = tuples.map do |path, unannotated, recorded, _directory_count, authored, derived, unreadable|
+      Row.new(path: path, unannotated_count: unannotated.to_i, recorded_count: recorded.to_i,
+              authored_count: authored.to_i, derived_count: derived.to_i,
+              unreadable_count: unreadable.to_i)
     end
 
     # Off any row, because the window carries the same total on all of them; `to_i` on the nil of an
@@ -72,8 +87,9 @@ class UnannotatedDirectories
     @directory_count = directory_count
   end
 
-  # The ranking, most unannotated examples first, ties broken by path. Never longer than the limit it
-  # was built with.
+  # The ranking, most UNREADABLE examples first, then most unannotated, ties broken by path — see
+  # `SpecObservation.unannotated_directories_in`, where the order is argued. Never longer than the
+  # limit it was built with.
   attr_reader :rows
 
   # How many areas the run touched IN TOTAL — the denominator `rows.size` is not. The list is capped,
@@ -104,7 +120,7 @@ class UnannotatedDirectories
   # predicate no surface calls is a claim this object makes that nothing has ever checked — and the
   # comment that removed it named the exact condition for its return: *"whoever builds the dashboard
   # panel should add what it calls, with the spec that runs it."* Both halves of that are now true.
-  # The "Where the unannotated tests are" panel branches its caption on this, and
+  # The "How SpecGuard reads this suite, by area" panel branches its caption on this, and
   # spec/models/unannotated_directories_spec.rb runs BOTH of its answers rather than only the cut
   # one. `SpecDirectoryDurations#truncated?` and `RepeatedDescriptions#truncated?` are this same
   # predicate over their own two operands, each phrasing the same disclosure for its own panel.
@@ -115,7 +131,13 @@ class UnannotatedDirectories
   # areas and a cut list of ten areas differ here and nowhere else on this object.
   def truncated? = directory_count > rows.size
 
-  # One area's annotation debt, and the population it was counted against.
+  # One area's readings, and the population they were counted against.
+  #
+  # `authored_count`, `derived_count` and `unreadable_count` are `SpecObservation::READINGS` over this
+  # area's rows and sum to `recorded_count`. `unannotated_count` is `derived + unreadable` and is kept
+  # as its own counted column rather than recomputed: it is the figure that reconciles against
+  # `total_specs - annotated_specs`, and a caller must be able to read it without having to know that
+  # identity — the same reason `SpecObservation.unannotated_directories_in` counts it separately.
   #
   # No `#coverage_label`, no `#fraction`, no `#complete?` — the Row ships OPERANDS and the reading is
   # the reader's, which is the class comment's rule and is untouched by the predicate above.
@@ -127,5 +149,6 @@ class UnannotatedDirectories
   # the two operands a client compares itself — and it is back because a caller and its spec now
   # exist. `SpecDirectoryDurations#truncated?` was never a counter-precedent: its panel partials call
   # it, and so, now, does this one's.
-  Row = Struct.new(:path, :unannotated_count, :recorded_count, keyword_init: true)
+  Row = Struct.new(:path, :unannotated_count, :recorded_count, :authored_count, :derived_count,
+                   :unreadable_count, keyword_init: true)
 end

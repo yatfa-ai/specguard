@@ -34,18 +34,38 @@ RSpec.describe "Repository unannotated directories", type: :request do
 
   def panel? = Capybara.string(response.body).has_css?("#unannotated-directories")
 
+  # The Overview panel one screen up. Read from this file for exactly one example — the pair that
+  # asserts the two surfaces now agree about a run with no per-example rows.
+  def overview = Capybara.string(response.body).find("#overview")
+
   # ELEMENT-scoped, never panel-scoped: the caption's two truncation branches share most of their
   # words, and a panel-level `have_text` would pass for the wrong branch with the deciding `if`
   # deleted.
   def basis_line = panel.find("#unannotated-directories-basis")
 
-  # One row as a reader meets it: the area, how much of it SpecGuard cannot see, and the population
-  # that was counted against.
+  # One row as a reader meets it: the area, its three READINGS, and the population they were counted
+  # against.
+  #
+  # `unannotated` is not a cell any more and is DERIVED here rather than dropped. SPGD-711 split that
+  # column in two — `derived` and `unreadable` — because "unannotated" and "what SpecGuard cannot see"
+  # stopped being one sentence, and the sum is what every ordering example in this file was written
+  # against. Reconstructing it keeps those examples asserting the quantity they were about, and the
+  # two operands are on the row beside it for the examples that are about the split itself.
   def rows
-    panel.all("tbody tr").map do |row|
-      path, unannotated, recorded = row.all("td").map { |cell| cell.text.gsub(/\s+/, " ").strip }
+    reading_rows.map do |row|
+      { path: row[:path], unannotated: (row[:derived].to_i + row[:unreadable].to_i).to_s,
+        recorded: row[:recorded] }
+    end
+  end
 
-      { path: path, unannotated: unannotated, recorded: recorded }
+  # The same rows with the split left intact, for the examples that are ABOUT the split.
+  def reading_rows
+    panel.all("tbody tr").map do |row|
+      path, authored, derived, unreadable, recorded =
+        row.all("td").map { |cell| cell.text.gsub(/\s+/, " ").strip }
+
+      { path: path, authored: authored, derived: derived, unreadable: unreadable,
+        recorded: recorded }
     end
   end
 
@@ -160,7 +180,8 @@ RSpec.describe "Repository unannotated directories", type: :request do
       get repository_path(twenty_five_directory_run)
 
       expect(basis_line).to have_text(
-        "The 10 areas carrying the most unannotated tests, of the 25 this run recorded examples in, most first",
+        "The 10 areas SpecGuard reads least of, of the 25 this run recorded examples in — " \
+        "most unreadable examples first, then most unannotated",
         normalize_ws: true
       )
     end
@@ -171,9 +192,11 @@ RSpec.describe "Repository unannotated directories", type: :request do
     it "says the list is all of them, where nothing was cut" do
       get repository_path(debt_run)
 
-      expect(basis_line).to have_text("All 3 directories this run recorded examples in, most unannotated first",
-                                      normalize_ws: true)
-      expect(basis_line).to have_no_text("carrying the most unannotated tests, of the")
+      expect(basis_line).to have_text(
+        "All 3 directories this run recorded examples in — most unreadable examples first, then most unannotated",
+        normalize_ws: true
+      )
+      expect(basis_line).to have_no_text("areas SpecGuard reads least of, of the")
     end
 
     # The denominator is the rows THIS RUN wrote here, never the Overview's suite size — that figure
@@ -271,14 +294,25 @@ RSpec.describe "Repository unannotated directories", type: :request do
       expect(panel).to have_no_text("No unannotated tests in this run")
     end
 
-    # The state this page can reach while the Overview one screen up is printing a five-figure
-    # invisible count off the run's own counters. The two are not in conflict — one reads totals and
-    # the other reads rows that were never written — and the panel has to be present and explicit for
-    # a reader to see that rather than infer a bug.
-    it "coexists with an Overview that reports invisible tests from the run's totals" do
+    # ⭐ THE TWO SURFACES NOW AGREE ON THIS RUN, where before SPGD-711 they could not.
+    #
+    # The Overview used to print a five-figure "Not visible to SpecGuard" off the run's counters while
+    # this panel said it had no rows to describe — two statements a reader had to reconcile. The
+    # Overview reads the same `IntentReadings#recorded?` this panel gates on, so on a totals-only run
+    # it declines to say how much of the suite it can read AT ALL, in the same terms this panel uses.
+    #
+    # What it still prints, and must: the @intent share off the counters. That is the figure the
+    # client did report, and the one question this correction was required to leave answering exactly
+    # as it did before.
+    it "coexists with an Overview that declines to report readings and still gives the @intent share" do
       get repository_path(totals_only_run)
 
-      expect(response.body).to include("Not visible to SpecGuard")
+      expect(overview).to have_text("Carrying an @intent 300", normalize_ws: true)
+      expect(overview).to have_text("33.3% — 300 of 900 tests carry an @intent", normalize_ws: true)
+      expect(overview).to have_text("nothing here to say how much of the rest it can make out", normalize_ws: true)
+      # And the claim that used to be made about the other 600 is made by neither surface now.
+      expect(response.body).not_to include("Not visible to SpecGuard")
+      expect(response.body).not_to include("SpecGuard cannot see the other")
       expect(panel).to have_text("Any count on the Overview above is taken from the run's own totals",
                                  normalize_ws: true)
     end
@@ -335,6 +369,111 @@ RSpec.describe "Repository unannotated directories", type: :request do
       # Both pages rendered the panel — an equality is satisfied by two pages that render nothing.
       expect(rows.size).to eq(SpecObservation::UNANNOTATED_DIRECTORIES_LIMIT)
       expect(large_queries.size).to eq(small_queries.size)
+    end
+  end
+
+  # ⭐ THE THREE-WAY SPLIT SPGD-711 PUT ON EVERY ROW, and the ranking it put in front of the debt one.
+  #
+  # The panel used to carry one column — "Not visible to SpecGuard" over `unannotated_count` — and on
+  # a suite that has never been annotated that column reads N of N for every area, under a header
+  # claiming SpecGuard could see none of them. It could see almost all of them. Now each area splits
+  # into what carries an `@intent`, what SpecGuard READ from the description, and what it could not
+  # read at all — and only the third is a count of tests the product may describe as invisible.
+  describe "how much of each area SpecGuard can read" do
+    # `spec/models` is READABLE and large; `spec/workers` is small and DARK. Under the old ranking
+    # the big readable area leads and the dark corner is second; under the new one it is the reverse,
+    # which is the whole point — a ten-row ranking led by debt on an unannotated suite is a ranking
+    # by area size.
+    def reading_run
+      repository = create_repository(user: @user)
+      ingest(repository,
+             [annotated_spec(file_path: "spec/models/invoice_spec.rb", line_number: 4),
+              unannotated_spec(file_path: "spec/models/order_spec.rb", line_number: 1,
+                               name: "Order#settle clears the outstanding balance"),
+              unannotated_spec(file_path: "spec/models/refund_spec.rb", line_number: 2,
+                               name: "Refund#issue returns the money to the payer"),
+              unannotated_spec(file_path: "spec/models/cart_spec.rb", line_number: 3,
+                               name: "Cart#total totals the cart"),
+              unannotated_spec(file_path: "spec/workers/sweep_spec.rb", line_number: 5,
+                               name: "the nightly sweep runs")])
+      repository
+    end
+
+    it "splits each area into what is authored, what it read, and what it could not read" do
+      get repository_path(reading_run)
+
+      expect(reading_rows)
+        .to eq([{ path: "spec/workers", authored: "0", derived: "0", unreadable: "1", recorded: "1" },
+                { path: "spec/models", authored: "1", derived: "3", unreadable: "0", recorded: "4" }])
+    end
+
+    # ⭐ THE RANKING. `spec/models` carries THREE unannotated examples to `spec/workers`'s one, so the
+    # old `unannotated_count DESC` order puts it first. It is second here, because SpecGuard reads
+    # every one of its three and cannot read the other area's one.
+    it "leads on the areas it cannot read, not on the ones carrying the most debt" do
+      get repository_path(reading_run)
+
+      expect(row_paths).to eq(["spec/workers", "spec/models"])
+      # And the debt ranking is intact underneath as the tiebreak: on a run with nothing unreadable,
+      # the area carrying the most unannotated examples leads exactly as it did before.
+      repository = create_repository(user: @user, github_full_name: "acme/all-readable")
+      ingest(repository,
+             [unannotated_spec(file_path: "spec/models/order_spec.rb", line_number: 1,
+                               name: "Order#settle clears the outstanding balance"),
+              unannotated_spec(file_path: "spec/models/refund_spec.rb", line_number: 2,
+                               name: "Refund#issue returns the money to the payer"),
+              unannotated_spec(file_path: "spec/workers/sweep_spec.rb", line_number: 5,
+                               name: "Sweep#run clears the expired sessions")])
+
+      get repository_path(repository)
+
+      expect(row_paths).to eq(["spec/models", "spec/workers"])
+    end
+
+    # The claim the column header used to make, made now about the one column that may make it — and
+    # the caption saying what a derived reading is MISSING, which is the honest version of it.
+    it "reserves the invisibility claim for the column that can carry it" do
+      get repository_path(reading_run)
+
+      expect(panel).to have_no_text("Not visible to SpecGuard")
+      expect(panel).to have_text("Carrying an @intent", normalize_ws: true)
+      expect(panel).to have_text("Read from the description", normalize_ws: true)
+      expect(panel).to have_text("Not readable", normalize_ws: true)
+      expect(basis_line).to have_text("Only the third column is a count of tests SpecGuard can say " \
+                                      "nothing about", normalize_ws: true)
+      expect(basis_line).to have_text("its layer is guessed from the directory rather than declared",
+                                      normalize_ws: true)
+    end
+
+    # The three columns PARTITION each area's population, which is what makes them safe to render
+    # side by side: a row whose parts did not sum to its total would be three columns of a four-way
+    # split.
+    it "splits each area exactly, with nothing counted twice and nothing left out" do
+      get repository_path(reading_run)
+
+      reading_rows.each do |row|
+        expect(row[:authored].to_i + row[:derived].to_i + row[:unreadable].to_i)
+          .to eq(row[:recorded].to_i)
+      end
+    end
+
+    # THE PANEL AND THE JSON BLOCK ARE TWO CONSUMERS OF ONE READ, and the split must not be able to
+    # differ between them — the same guard the sibling panel keeps for its rows.
+    it "splits the areas the same way, in the same order, as the API's unannotated_directories block" do
+      repository = reading_run
+      key = repository.api_keys.create!
+
+      get repository_path(repository)
+      web = reading_rows
+
+      get "/api/v1/repository", params: { unannotated_examples: "1" },
+                                headers: { "Authorization" => "Bearer #{key.raw_token}" }
+      api = response.parsed_body.dig("latest_run", "unannotated_directories", "rows").map do |row|
+        { path: row["path"], authored: row["authored_count"].to_s, derived: row["derived_count"].to_s,
+          unreadable: row["unreadable_count"].to_s, recorded: row["recorded_count"].to_s }
+      end
+
+      expect(web).to eq(api)
     end
   end
 end

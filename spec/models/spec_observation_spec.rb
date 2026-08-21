@@ -583,10 +583,15 @@ RSpec.describe SpecObservation do
       # asserts — one run reached through an index rather than every run's rows walked — and the
       # `status` predicate then filters the rows already read.
       #
-      # The ORDER BY leads on `spec_file_path`, which `index_spec_observations_on_test_run_id_and_spec_file_path`
-      # DOES lead on after the run, so the planner is free to take the sort from that index or to read
-      # the narrower one and sort afterwards; both are bounded by the RUN. The matcher tolerates
-      # either for that reason, exactly as it tolerates the two access methods its own comment names.
+      # THE ORDERING IS NOT PART OF WHAT THIS ASSERTS, and since SPGD-711 it cannot be. The ORDER BY
+      # leads on `(READING_EXPRESSION = 'derived')`, a per-row expression no index expresses, so the
+      # sort can never come from an index and every plan carries a `Sort` node — established with
+      # `enable_sort = off` in `SpecObservation.unannotated_in`'s own comment, which also measures
+      # what that costs. The matcher tolerates either index because either can serve the WHERE, which
+      # is the whole of the claim: one run reached through an index, bounded by the RUN. It is
+      # deliberately not widened to the plan's sort — a certification that pinned the ORDERING would
+      # have gone red on a planner's cost estimate rather than on a read that stopped being
+      # run-bounded, and the two access methods its own comment names are tolerated for that reason.
       #
       # Captured off the wire rather than EXPLAINed from a hand-written copy, for the reason the two
       # examples above give: the predicate alone is not the read the block makes, which adds a
@@ -2059,10 +2064,16 @@ RSpec.describe SpecObservation do
         observe(run, duration: 90.0, line_number: 5, status: "annotated",
                      spec_file_path: "spec/system/smoke_spec.rb")
 
+        # `[path, unannotated, recorded, directory_count, authored, derived, unreadable]` — the
+        # three READINGS appended by SPGD-711 rather than renumbering the tuple, so
+        # `UnannotatedDirectories::DIRECTORY_COUNT_INDEX` keeps pointing where it did. Every one of
+        # these names is a bare `example N`, which yields no reading, so `derived` is zero
+        # throughout and `unreadable` equals the debt — see `.reading_counts_in` for the split on
+        # descriptions that do derive.
         expect(described_class.unannotated_directories_in(run)).to eq(
-          [["spec/models", 2, 3, 3],
-           ["spec/requests", 1, 1, 3],
-           ["spec/system", 0, 1, 3]]
+          [["spec/models", 2, 3, 3, 1, 0, 2],
+           ["spec/requests", 1, 1, 3, 0, 0, 1],
+           ["spec/system", 0, 1, 3, 1, 0, 0]]
         )
         # The by-wall-clock rollup over the SAME rows leads with the area this one ranks last, which
         # is the difference that makes this its own read rather than a column on that one.
@@ -2081,7 +2092,7 @@ RSpec.describe SpecObservation do
         observe(run, duration: 0.1, line_number: 3, status: "annotated",
                      spec_file_path: "spec/models/refund_spec.rb")
 
-        expect(described_class.unannotated_directories_in(run)).to eq([["spec/models", 1, 3, 1]])
+        expect(described_class.unannotated_directories_in(run)).to eq([["spec/models", 1, 3, 1, 2, 0, 1]])
       end
 
       # A fully-annotated area is a ROW carrying a zero and sorted last, never an omission. It is the
@@ -2094,7 +2105,7 @@ RSpec.describe SpecObservation do
                      spec_file_path: "spec/requests/checkout_spec.rb")
 
         expect(described_class.unannotated_directories_in(run)).to eq(
-          [["spec/requests", 1, 1, 2], ["spec/models", 0, 1, 2]]
+          [["spec/requests", 1, 1, 2, 0, 0, 1], ["spec/models", 0, 1, 2, 1, 0, 0]]
         )
       end
 
@@ -2115,11 +2126,18 @@ RSpec.describe SpecObservation do
 
         # The skipped row is in the DENOMINATOR — it is one of the area's examples — and is not
         # counted as debt. `where.not(status: "annotated")` reports `2` for the numerator here.
-        expect(described_class.unannotated_directories_in(run)).to eq([["spec/models", 1, 2, 1]])
+        # AND THE SKIPPED ROW IS `unreadable`, NOT `authored` — the same guard one column over, and
+        # the safe direction. `SpecObservation::READING_EXPRESSION` tests `status = 'annotated'`
+        # literally too, so a status nobody has invented yet falls through to the description rather
+        # than being adopted into the count of tests somebody wrote an `@intent` for.
+        expect(described_class.unannotated_directories_in(run)).to eq([["spec/models", 1, 2, 1, 0, 0, 2]])
       end
 
-      # The tiebreak is TOTAL, so two identical asks return the same order. `unannotated_count DESC`
-      # alone leaves ties to the planner, and the cap makes that load-bearing rather than tidy — a
+      # The LAST tiebreak is TOTAL, so two identical asks return the same order. The three rows below
+      # tie on BOTH count terms — one unannotated example each, and each of them unreadable, since
+      # `observe` names them "example 1", "example 2" and "example 3", which carry no reading — so
+      # neither `unreadable_count DESC` nor `unannotated_count DESC` orders this, and the two of them
+      # together still leave ties to the planner. The cap makes that load-bearing rather than tidy: a
       # client comparing this ranking across two requests must not read a re-shuffle as a change in
       # the suite.
       it "breaks a tie on the directory expression, ascending" do
@@ -2148,7 +2166,7 @@ RSpec.describe SpecObservation do
                      spec_file_path: "spec/models/orders/discount_spec.rb")
 
         expect(described_class.unannotated_directories_in(run)).to eq(
-          [["spec/models/orders", 2, 2, 2], ["spec/models", 1, 1, 2]]
+          [["spec/models/orders", 2, 2, 2, 0, 0, 2], ["spec/models", 1, 1, 2, 0, 0, 1]]
         )
       end
 
@@ -2163,7 +2181,7 @@ RSpec.describe SpecObservation do
                      spec_file_path: "spec/models/order_spec.rb")
 
         expect(described_class.unannotated_directories_in(run))
-          .to eq([[".", 1, 1, 2], ["spec/models", 1, 1, 2]])
+          .to eq([[".", 1, 1, 2, 0, 0, 1], ["spec/models", 1, 1, 2, 0, 0, 1]])
       end
 
       # Grouped by the area that RAN the example, so a shared example group's debt lands on each
@@ -2179,7 +2197,7 @@ RSpec.describe SpecObservation do
 
         directories = described_class.unannotated_directories_in(run)
 
-        expect(directories).to eq([["spec/models", 1, 1, 1]])
+        expect(directories).to eq([["spec/models", 1, 1, 1, 0, 0, 1]])
         expect(directories.map(&:first)).not_to include("spec/support")
       end
 
@@ -2196,7 +2214,12 @@ RSpec.describe SpecObservation do
         directories = described_class.unannotated_directories_in(run, limit: 2)
 
         expect(directories.length).to eq(2)
-        expect(directories.map(&:last)).to eq([6, 6])
+        # BY INDEX, not by `.last` — the discipline `UnannotatedDirectories.for` states and the
+        # reason it names `DIRECTORY_COUNT_INDEX`. SPGD-711 appended three columns to this tuple, and
+        # `.last` silently became the unreadable count: a figure that is 1 where the disclosure is 6,
+        # renders a caption that is merely wrong, and breaks nothing.
+        expect(directories.map { |tuple| tuple[UnannotatedDirectories::DIRECTORY_COUNT_INDEX] })
+          .to eq([6, 6])
       end
 
       # One run, never the repository's history — the same narrow every read on this endpoint takes,
@@ -2208,9 +2231,9 @@ RSpec.describe SpecObservation do
         observe(other, duration: 0.1, line_number: 2, status: "unannotated",
                       spec_file_path: "spec/requests/checkout_spec.rb")
 
-        expect(described_class.unannotated_directories_in(run)).to eq([["spec/models", 1, 1, 1]])
+        expect(described_class.unannotated_directories_in(run)).to eq([["spec/models", 1, 1, 1, 0, 0, 1]])
         expect(described_class.unannotated_directories_in(other))
-          .to eq([["spec/requests", 1, 1, 1]])
+          .to eq([["spec/requests", 1, 1, 1, 0, 0, 1]])
       end
 
       it "reads no directories for a run that recorded nothing" do
@@ -3436,5 +3459,149 @@ RSpec.describe SpecObservation do
     unique = ActiveRecord::Base.connection.indexes(:spec_observations).select(&:unique)
 
     expect(unique.map(&:columns)).to eq([%w[test_run_id example_id]])
+  end
+
+  # ⭐ THE TWO ENGINES OF ONE RULE, ASKED THE SAME QUESTION.
+  #
+  # `DerivedIntent` is written once and evaluated twice — in Ruby for the row a surface renders, in
+  # Postgres for the tens of thousands a panel counts — and the two share ONE unanchored pattern
+  # precisely so they cannot drift. This is the example that runs both. It is the guard the model's
+  # own comment on {SpecObservation::READING_EXPRESSION} names, and the reason the corpus lives in
+  # `spec/support/derived_intent_corpus.rb` rather than in either file.
+  #
+  # A divergence here is invisible everywhere else: a panel counting a row as derived that
+  # `#derived_intent` returns nil for renders an empty cell under a caption saying SpecGuard read it,
+  # and no other example in this repository compares the two.
+  describe "the reading of a row, in SQL and in Ruby" do
+    let(:repository) { create_repository }
+    let(:run) { create_test_run(repository: repository) }
+
+    # One row per corpus entry, all unannotated, so the CASE reaches its regex arm on every one of
+    # them. `spec_file_path` is set because `#derived_intent` reads it for the layer — it cannot
+    # change whether a reading exists, which is itself part of what this asserts.
+    def observe_corpus
+      names = DerivedIntentCorpus::DERIVABLE.keys + DerivedIntentCorpus::UNREADABLE.keys
+
+      names.each_with_index do |name, index|
+        described_class.create!(
+          test_run: run, repository: repository, example_id: "./spec/a_spec.rb[1:#{index}]",
+          file_path: "spec/models/a_spec.rb", spec_file_path: "spec/models/a_spec.rb",
+          line_number: index + 1, name: name, status: "unannotated"
+        )
+      end
+    end
+
+    it "agrees, row for row, on which descriptions yield a reading" do
+      observe_corpus
+
+      in_sql = described_class.where(test_run_id: run.id)
+                              .pluck(:name, Arel.sql("#{described_class::READING_EXPRESSION} AS reading"))
+                              .to_h
+      in_ruby = described_class.where(test_run_id: run.id).to_h { |row| [row.name, row.reading] }
+
+      expect(in_sql).to eq(in_ruby)
+    end
+
+    # The verdicts themselves, not merely that the two engines agree on them — two engines can agree
+    # by both being wrong, and the corpus is what says which answer is right.
+    it "reads the corpus the way the corpus says it must" do
+      observe_corpus
+
+      readings = described_class.where(test_run_id: run.id).to_h { |row| [row.name, row.reading] }
+
+      DerivedIntentCorpus::DERIVABLE.each_key { |name| expect(readings[name]).to eq("derived") }
+      DerivedIntentCorpus::UNREADABLE.each_key { |name| expect(readings[name]).to eq("unreadable") }
+    end
+
+    # An AUTHORED row never reaches the regex arm, whatever its description says. The intent wins
+    # unconditionally — the same precedence `Ingest::SpecSignal` applies one grain down — and
+    # `#derived_intent` is nil for it, so no surface can put the platform's guess beside the author's
+    # declaration as though the two were comparable evidence.
+    it "reads an annotated row as authored and offers no derived intent for it" do
+      row = described_class.create!(
+        test_run: run, repository: repository, example_id: "./spec/a_spec.rb[1:1]",
+        file_path: "spec/models/a_spec.rb", spec_file_path: "spec/models/a_spec.rb", line_number: 1,
+        name: "Invoice#finalize locks the line items once the invoice is finalized",
+        intent_entity: "Invoice", intent_action: "finalize",
+        intent_behavior: "locks the line items once the invoice is finalized", status: "annotated"
+      )
+
+      expect(row.reading).to eq("authored")
+      expect(row.derived_intent).to be_nil
+      expect(described_class.where(id: row.id)
+                            .pick(Arel.sql(described_class::READING_EXPRESSION))).to eq("authored")
+    end
+
+    # A row that carries no description at all — `name` is nullable, and `NULL ~ '…'` is NULL rather
+    # than false, which a bare `WHEN` would fall through on but which is worth not relying on.
+    it "reads a row with no description as unreadable in both engines" do
+      row = described_class.create!(
+        test_run: run, repository: repository, example_id: "./spec/a_spec.rb[1:1]",
+        file_path: "spec/models/a_spec.rb", spec_file_path: "spec/models/a_spec.rb",
+        line_number: 1, name: nil, status: "unannotated"
+      )
+
+      expect(row.reading).to eq("unreadable")
+      expect(described_class.where(id: row.id)
+                            .pick(Arel.sql(described_class::READING_EXPRESSION))).to eq("unreadable")
+    end
+  end
+
+  describe ".reading_counts_in" do
+    let(:repository) { create_repository }
+    let(:run) { create_test_run(repository: repository) }
+
+    def observe(name:, status: "unannotated", line_number: 1, **attrs)
+      described_class.create!(
+        { test_run: run, repository: repository, example_id: "./spec/a_spec.rb[1:#{line_number}]",
+          file_path: "spec/models/a_spec.rb", spec_file_path: "spec/models/a_spec.rb",
+          line_number: line_number, name: name, status: status }.merge(attrs)
+      )
+    end
+
+    # The three states, over one run, from one aggregate — and `recorded` beside them so nothing has
+    # to divide by the run's counters, which count a different population.
+    it "splits the run's rows three ways and carries the population they were counted from" do
+      observe(name: "Invoice#finalize locks the line items once finalized", status: "annotated",
+              line_number: 1, intent_entity: "Invoice", intent_action: "finalize",
+              intent_behavior: "locks the line items once finalized")
+      observe(name: "Order#settle clears the outstanding balance", line_number: 2)
+      observe(name: "Refund#issue returns the money to the payer", line_number: 3)
+      observe(name: "the widget behaves itself", line_number: 4)
+
+      readings = described_class.reading_counts_in(run)
+
+      expect([readings.authored, readings.derived, readings.unreadable, readings.recorded])
+        .to eq([1, 2, 1, 4])
+      expect(readings.read).to eq(3)
+      expect(readings).to be_recorded
+      expect(readings).to be_unreadable
+    end
+
+    # ⭐ THE SCANNER-FAILURE GUARD THE TICKET DEMANDS. The known client-side failure classifies a
+    # whole run unannotated; those rows still have perfectly readable descriptions, so this read
+    # reports them as derived — and NOTHING here can move `annotated_specs_count`, so the run still
+    # reads 0% annotated. A derived reading cannot disguise a client failure as a healthy suite,
+    # because the two figures answer different questions and only one of them moved.
+    it "cannot make a run whose scanner failed look annotated" do
+      run.update!(total_specs_count: 2, annotated_specs_count: 0)
+      observe(name: "Order#settle clears the outstanding balance", line_number: 1)
+      observe(name: "Refund#issue returns the money to the payer", line_number: 2)
+
+      expect(described_class.reading_counts_in(run).derived).to eq(2)
+      expect(run.annotated_ratio).to eq(0.0)
+      expect(run.annotated_specs_count).to eq(0)
+    end
+
+    # A run that stored no per-example rows is three zeros AND `recorded: 0`, which is the pair that
+    # tells "nobody sent the detail" from "nothing is readable". Three zeros alone cannot.
+    it "answers a run with no rows with an unrecorded reading rather than a readable one" do
+      readings = described_class.reading_counts_in(run)
+
+      expect([readings.authored, readings.derived, readings.unreadable, readings.recorded])
+        .to eq([0, 0, 0, 0])
+      expect(readings).not_to be_recorded
+      expect(readings).not_to be_unreadable
+    end
   end
 end

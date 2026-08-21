@@ -354,7 +354,13 @@ RSpec.describe "GET /api/v1/repository — directory_growth", type: :request do
       # than seven since `directory_runtime_growth` was added: that pair is served unconditionally
       # too, but it issues `directory_runtime_growth_between` and lands in its OWN grain, so it moves
       # this total without touching the `growth` figures above.
-      expect(observation_reads { get_repository(key: api_key) }.length).to eq(8)
+      # ⭐ ONE MORE SINCE SPGD-711 — `latest_run.intent_readings`, an aggregate over the anchored
+      # run's rows splitting them into authored, derived and unreadable. It is the only UNGATED
+      # addition this endpoint has taken: every drill-in here costs nothing until a client asks, and
+      # this is served on every response, because a correction a client has to opt into leaves it
+      # reading `total_specs - annotated_specs` as the count of what SpecGuard cannot see. It lands
+      # in its own grain (`AS run_authored_count`) and touches none of the figures above.
+      expect(observation_reads { get_repository(key: api_key) }.length).to eq(9)
       expect(get_repository(key: api_key)["directory_growth"]).to be_nil
       # And the read that IS issued unfiltered belongs to the pair that answers unconditionally.
       expect(get_repository(key: api_key)["directory_run_growth"]).not_to be_nil
@@ -740,7 +746,7 @@ RSpec.describe "GET /api/v1/repository — directory_growth", type: :request do
       expect(observation_reads { get_repository(key: api_key, query: { branch: "main" }) }.length)
         .to eq(classified_observation_reads { get_repository(key: api_key, query: { branch: "main" }) })
       expect(observation_reads { get_repository(key: api_key, query: { branch: "main" }) }.length)
-        .to eq(12)
+        .to eq(13)
     end
 
     # NO RUN-WINDOW QUERY. The block is drawn on `history_runs`, which is materialized once and
