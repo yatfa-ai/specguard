@@ -5,6 +5,69 @@
 # and the repository they want is not in it, or a registration came back needing an installation
 # rather than a different pick.
 module GithubHelper
+  # The most bytes a `return_to` path may be before its repository names are dropped.
+  #
+  # Everything a `return_to` carries rides out through GitHub's `state` parameter, which is part of
+  # a URL on github.com — so the bound is not ours to set and not one we can raise. Derived:
+  #
+  #   * budget the whole outbound GitHub URL under 2,000 bytes (the conservative de-facto ceiling
+  #     across user agents and proxies);
+  #   * `GITHUB_HOST` + `/login/oauth/authorize?client_id=…&state=` is 93 bytes of that, leaving
+  #     ~1,900 for the escaped state. That term is deployment-dependent: it is measured here with
+  #     the 35-character `PLACEHOLDER` client_id, and a shorter real one only buys slack (a 20-
+  #     character client_id makes the prefix 78);
+  #   * `URI.encode_www_form` escapes these paths at 1.193x, so ~1,900 escaped is ~1,590 RAW.
+  #
+  # 1,500 keeps a margin under that and is the constant below.
+  #
+  # Measured against what this helper emits, with 25-character names (`acmecorp/repository-00001`),
+  # via `bulk_repositories_path` + `SpecGuard::GithubApp.authorization_url`:
+  #
+  #   names |   raw |  escaped
+  #       1 |    88 |      106
+  #      28 | 1,492 |    1,780   <- last size that carries names
+  #      29 | 1,544 |    1,842   <- first size that drops them
+  #     100 | 5,236 |    6,244   <- MAX_BATCH, comfortably over
+  #
+  # So the drop below is reached by ordinary batches rather than being theoretical, and `organization`
+  # alone is 36 raw / 44 escaped. Across the whole legal range of 1..MAX_BATCH the worst outbound
+  # GitHub URL this produces is 1,873 bytes — inside the 2,000 budget at every size.
+  MAX_RETURN_TO_BYTES = 1_500
+
+  # The bulk picker, with the batch that was just refused already selected — or as much of that
+  # context as fits.
+  #
+  # This is what the summary's two FIX buttons hand to `return_to:`, so that pressing the button
+  # which actually resolves the refusal costs the reader no more than pressing the one beside it
+  # that merely re-submits. Before this they carried a bare path: a reader whose batch was skipped
+  # for a dead credential saw "Reconnect to GitHub" (the correct fix, which discarded every tick)
+  # next to "Try these again" (which preserved all N ticks and fixed nothing), and had to press the
+  # one that worked and then re-pick N repositories by hand.
+  #
+  # ## Two rules, and both are about what the reader can trust
+  #
+  # `organization` is carried whenever there is one and is never dropped. It is 44 escaped bytes for
+  # the whole path and it alone is the difference between landing on the right picker and landing on
+  # the account chooser — so it outranks the names. Blank means the POST did not come from the
+  # picker and there is no account to name, and then this emits the bare path exactly as before: an
+  # `organization=` with nothing after it would send the reader somewhere no worse but no better,
+  # while claiming to know something we do not.
+  #
+  # Over the bound the names are dropped ENTIRELY rather than truncated, and that is deliberate. A
+  # picker that comes back partially ticked is WORSE than one that comes back unticked, because the
+  # reader submits believing it complete and silently loses the remainder without ever being told a
+  # list was shortened. Degraded to the account alone is still strictly better than what this
+  # replaced — right account, right list, ticks lost — and it is honest about it.
+  def bulk_picker_return_to(organization:, full_names: [])
+    return bulk_repositories_path if organization.blank?
+
+    names = Array(full_names)
+    carried = bulk_repositories_path(organization: organization, github_full_names: names)
+    return carried if carried.bytesize <= MAX_RETURN_TO_BYTES
+
+    bulk_repositories_path(organization: organization)
+  end
+
   # POSTs to the flow that sends the user to GitHub to install the App and choose repositories.
   #
   # POST rather than a link, and CSRF-protected as any other POST, so a third-party page cannot
