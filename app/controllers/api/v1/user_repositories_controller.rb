@@ -44,6 +44,12 @@
 # minted it, so this response body is the only copy that will ever be handed out. That is the same
 # reveal-once property the web page's flash has, delivered as JSON instead of as HTML.
 class Api::V1::UserRepositoriesController < Api::BaseController
+  # The two grouped reads behind `delivery_health` — the newest refusal and the newest accepted run,
+  # one query each for the whole list. Shared with `RepositoriesController`, whose card grid badges
+  # the same verdict for a person; see `#delivery_verdicts` for why this list carries the block at
+  # all, and the module for why the grid's shard priming did not come with it.
+  include DeliveryHealthLookups
+
   # THIS ENDPOINT NEEDS A PERSON. A `sgk_` repository key resolves no user and gets 401 — which is
   # the direction of the seam that is easy to get wrong, because a repository key IS a valid
   # credential and this list would otherwise have to invent an answer for one. See
@@ -58,11 +64,16 @@ class Api::V1::UserRepositoriesController < Api::BaseController
   # cannot be repaired later if it is skipped.
   FIRST_KEY_NAME = "Default CI Key"
 
+  # The delivery verdicts are resolved ONCE for the whole response and threaded into `#serialize`,
+  # which takes one repository and has no access to the collection. Resolving them per entry would
+  # be the N+1 `RejectedIngests.verdict` exists to avoid — two aggregates per listed repository
+  # instead of two for the list.
   def index
-    repositories = Repository.accessible_by(current_api_user).order(:github_full_name)
+    repositories = Repository.accessible_by(current_api_user).order(:github_full_name).to_a
+    verdicts = delivery_verdicts(repositories)
 
     render json: {
-      repositories: repositories.map { |repository| serialize(repository) }
+      repositories: repositories.map { |repository| serialize(repository, verdicts[repository.id]) }
     }
   end
 
@@ -162,13 +173,71 @@ class Api::V1::UserRepositoriesController < Api::BaseController
   # the person owns with repositories somebody shared with them, and no other field distinguishes
   # them. Without it a client cannot tell which of these it may expect to administer once the
   # mutating endpoints land, and would have to guess.
-  def serialize(repository)
+  #
+  # `delivery_health` is handed IN rather than looked up, because this method has one repository and
+  # the reads behind that block are grouped over the whole list — see `#delivery_verdicts`.
+  def serialize(repository, delivery_health)
     {
       id: repository.id,
       full_name: repository.github_full_name,
       name: repository.name,
       registered_at: repository.created_at.iso8601,
-      role: repository.user_id == current_api_user.id ? "owner" : "member"
+      role: repository.user_id == current_api_user.id ? "owner" : "member",
+      delivery_health: delivery_health
     }
+  end
+
+  # WHETHER EACH LISTED REPOSITORY'S DELIVERIES ARE BEING REFUSED — `repository_id =>` the same two
+  # scalars `Api::V1::RepositoriesController` serves under `delivery_health` on the singular
+  # endpoint, for every repository in the list, in two queries however long the list is.
+  #
+  # ## Why this list needs it at all
+  #
+  # The two credentials are disjoint (`config/routes.rb`): this endpoint takes a `sgu_` user key and
+  # `GET /api/v1/repository` takes a `sgk_` repository key, and each refuses the other's with a 401.
+  # So the singular endpoint is not a fallback an agent reading this list can reach for — that would
+  # need N separate repository keys held at once, and a `role: "member"` entry may hold none and
+  # have no way to mint one. The browser's card grid has badged a refused pipeline since SPGD-820;
+  # without this block the same account renders one way to a person and another to an agent, and the
+  # agent reads an ordinary-looking repository whose every run has been thrown away for a week.
+  #
+  # ## Served on EVERY entry, refused and clean alike
+  #
+  # `refusing: false` is a POSITIVE FINDING and an absent key would read as "SpecGuard does not
+  # track that", which is a different fact. That is the sibling endpoint's own stated rule for the
+  # same block (`repositories_controller.rb`: a repository with no accepted run "is not the empty
+  # case, it is the worst case"), and it is restated here rather than re-decided.
+  #
+  # ## The verdict is asked for, never re-spelled
+  #
+  # `RejectedIngests.verdict` is the row-free way in, built for exactly a caller like this one, and
+  # the comparison stays inside it: `rejected_ingests.rb` forbids a second inline expression of the
+  # ordering rule, and the rule has two `nil` limbs that do not both fall out of a bare `>` — a
+  # `nil` rejection is not refusing, and a `nil` accepted side WITH a rejection present is the most
+  # refusing state there is, which inverts. So there is no timestamp comparison anywhere in this
+  # controller.
+  #
+  # ## What is deliberately NOT here
+  #
+  # The verdict scalars and nothing else — no `rejections` array, no `rejections_window`, no
+  # `bounded`. Fanning up to `IngestRejection::PANEL_LIMIT` rejection rows, each with up to twenty
+  # reasons and a ~6 KB `details` column, across every repository in an unpaginated list is the
+  # wrong cost on the wrong surface. It is the same line the browser grid drew for itself: the card
+  # renders the marker and not the panel, because the thing it links to holds the panel.
+  #
+  # Key names are borrowed verbatim from `serialized_delivery_health`, on the rule `#serialize`
+  # states above — the two surfaces do not get to name the same facts differently — and the
+  # timestamp is serialized `&.iso8601` to match, `nil` when there has never been a rejection.
+  def delivery_verdicts(repositories)
+    repository_ids = repositories.map(&:id)
+    last_rejections = last_rejection_times_for(repository_ids)
+    latest_runs = latest_test_runs_for(repository_ids)
+
+    repository_ids.index_with do |repository_id|
+      verdict = RejectedIngests.verdict(last_rejection_at: last_rejections[repository_id],
+                                        last_accepted_run_at: latest_runs[repository_id]&.created_at)
+
+      { refusing: verdict.refusing?, last_rejection_at: verdict.last_rejection_at&.iso8601 }
+    end
   end
 end

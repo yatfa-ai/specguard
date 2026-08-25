@@ -6,6 +6,13 @@ class RepositoriesController < ApplicationController
   # `history` block on `GET /api/v1/repository`.
   include ShardCountPreloading
 
+  # The two grouped reads behind the card's "Deliveries refused" marker — the newest refusal and
+  # the newest accepted run, one query each for the whole grid. Shared with
+  # `Api::V1::UserRepositoriesController`, which needs the same two timestamps per repository to
+  # serve `delivery_health` on `GET /api/v1/repositories`. The verdict itself stays where it has
+  # always been, in `RejectedIngests`; this module only fetches.
+  include DeliveryHealthLookups
+
   # `?branch=` read as a branch name for the suite-trajectory panel. Shared with
   # `Api::V1::RepositoriesController`, which reads the same parameter under the same guard to narrow
   # the `history` block on `GET /api/v1/repository`.
@@ -897,35 +904,27 @@ class RepositoriesController < ApplicationController
   # `Repository#latest_test_run` per card would be an N+1, and the card only just stopped paying a
   # per-repository COUNT for the badge this replaces.
   #
-  # `DISTINCT ON` keeps the first row per repository under the ORDER BY, and that ORDER BY repeats
-  # `Repository#latest_test_run`'s tie-break exactly (created_at desc, then id desc) so a card and
-  # the page it links to can never name different runs. Scoped to the ids already on this page, so
-  # it never scans `test_runs` globally.
+  # The resolution itself — the `DISTINCT ON` and the tie-break that repeats
+  # `Repository#latest_test_run`'s exactly, so a card and the page it links to can never name
+  # different runs — is `DeliveryHealthLookups#latest_test_runs_for`, shared with
+  # `Api::V1::UserRepositoriesController`, which needs the same newest-run timestamp per repository
+  # for its own refusal verdict. Scoped there to the ids handed in, so it never scans `test_runs`
+  # globally, and it early-returns on an empty page.
   #
-  # Primed through `preload_shard_counts` at the point the rows are loaded, because the card asks
-  # each run whether it is `multi_shard?` and what it COST, and both `TestRun#shard_count` and
-  # `#machine_seconds` are memoized per-instance reads of one `pick` (`test_run.rb`) — asked in the
-  # card loop that is one `test_run_shards` query per card, the same N+1 shape this page has already
-  # been cleaned of twice. One grouped aggregate answers all of it for the whole grid in a single
-  # round trip, exactly as the Recent-runs table on `show` already does. The wall clock needs no
-  # priming at all: `duration_seconds` is a column on the rows selected below. Primed HERE and not
-  # in `#index`, so the aggregate is taken only when something actually reads the runs and a page of
-  # no repositories still pays nothing.
+  # ⚠️ THE PRIMING IS THIS CALLER'S AND STAYS HERE, which is the whole reason the shared method
+  # resolves runs and does not prime them. The card asks each run whether it is `multi_shard?` and
+  # what it COST, and both `TestRun#shard_count` and `#machine_seconds` are memoized per-instance
+  # reads of one `pick` (`test_run.rb`) — asked in the card loop that is one `test_run_shards` query
+  # per card, the same N+1 shape this page has already been cleaned of twice. One grouped aggregate
+  # answers all of it for the whole grid in a single round trip, exactly as the Recent-runs table on
+  # `show` already does. The machine-facing list reads `created_at` and nothing else, so lifting the
+  # priming with the resolution would have dragged a `test_run_shards` aggregate into a caller that
+  # never looks at a single primed value. The wall clock needs no priming at all: `duration_seconds`
+  # is a column on the rows selected. Primed HERE and not in `#index`, so the aggregate is taken
+  # only when something actually reads the runs and a page of no repositories still pays nothing.
   def latest_test_runs
-    @latest_test_runs ||= begin
-      repository_ids = @repositories.map(&:id)
-
-      if repository_ids.empty?
-        {}
-      else
-        runs = TestRun.where(repository_id: repository_ids)
-                      .select("DISTINCT ON (test_runs.repository_id) test_runs.*")
-                      .order(:repository_id, created_at: :desc, id: :desc)
-                      .index_by(&:repository_id)
-        preload_shard_counts(runs.values)
-        runs
-      end
-    end
+    @latest_test_runs ||= latest_test_runs_for(@repositories.map(&:id))
+                          .tap { |runs| preload_shard_counts(runs.values) }
   end
 
   # What one card says about its deliveries being REFUSED — the same object, answering the same two
@@ -955,35 +954,18 @@ class RepositoriesController < ApplicationController
   # than the usual N+1: that constructor reads `IngestRejection::PANEL_LIMIT + 1` ROWS per
   # repository, and the grid needs no rows at all — only the newest time.
   #
-  # A grouped `MAX(occurred_at)` and not a `DISTINCT ON` like `latest_test_runs`, because the two
-  # callers want different things: that one hands the card the whole run (its branch, its age, its
-  # shard composition all print), and this one is read by a predicate that compares one timestamp.
-  # Selecting rows here would be loading `details` — the client's verbatim error list, bounded at
-  # ~6 KB a row — for every card on the page to look at one column of it.
-  #
-  # Served with no migration by `index_ingest_rejections_on_repository_and_recency` on
-  # `(repository_id, occurred_at DESC, id DESC)`: the grouped max walks the head of each
-  # repository's run of that index. Scoped to the ids already on this page, so it never scans
-  # `ingest_rejections` globally.
-  #
-  # The retention rule needs no mention and gets none: `IngestRejection::REPOSITORY_RETENTION_ROWS`
-  # bounds the table, so a repository whose refusals have all aged out has no row here and reads as
-  # non-refusing — the model's documented "it is reporting what it can still see", arrived at by
-  # this method knowing nothing about it.
+  # The grouped `MAX(occurred_at)` itself is `DeliveryHealthLookups#last_rejection_times_for`, shared
+  # with `Api::V1::UserRepositoriesController` — which asks the same question of the same table for
+  # the `delivery_health` block on `GET /api/v1/repositories`, and would otherwise carry a second
+  # copy of this read free to drift from the grid's. That method carries the argument for the
+  # aggregate's shape, the index it is served by, and why the retention rule needs no mention here.
   #
   # Memoized on first call rather than assigned by `#index`, so the aggregate is taken only once a
   # card actually asks and a page of no repositories still pays nothing — the same laziness
-  # `latest_test_runs` carries for the same reason.
+  # `latest_test_runs` carries for the same reason, and the empty early return that makes it true
+  # lives in the shared method.
   def last_rejection_times
-    @last_rejection_times ||= begin
-      repository_ids = @repositories.map(&:id)
-
-      if repository_ids.empty?
-        {}
-      else
-        IngestRejection.where(repository_id: repository_ids).group(:repository_id).maximum(:occurred_at)
-      end
-    end
+    @last_rejection_times ||= last_rejection_times_for(@repositories.map(&:id))
   end
 
   # How many API keys one card should report. Reads the grouped count below rather than
