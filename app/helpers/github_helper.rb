@@ -12,15 +12,26 @@ module GithubHelper
   #
   #   * budget the whole outbound GitHub URL under 2,000 bytes (the conservative de-facto ceiling
   #     across user agents and proxies);
-  #   * `GITHUB_HOST` + `/login/oauth/authorize?client_id=…&state=` is ~120 bytes of that, leaving
-  #     ~1,880 for the escaped state;
-  #   * `URI.encode_www_form` escapes these paths at ~1.23x (every `/` `?` `&` `[` `]` in
-  #     `?organization=acme&github_full_names[]=acme/api` becomes three bytes), so 1,880 escaped is
-  #     ~1,500 RAW.
+  #   * `GITHUB_HOST` + `/login/oauth/authorize?client_id=…&state=` is 93 bytes of that, leaving
+  #     ~1,900 for the escaped state. That term is deployment-dependent: it is measured here with
+  #     the 35-character `PLACEHOLDER` client_id, and a shorter real one only buys slack (a 20-
+  #     character client_id makes the prefix 78);
+  #   * `URI.encode_www_form` escapes these paths at 1.193x, so ~1,900 escaped is ~1,590 RAW.
   #
-  # Measured on a full batch: 100 representative 25-character names assemble a 4,428-byte raw path
-  # that escapes to 4,936–5,436 — comfortably over, which is why the drop below exists rather than
-  # being theoretical. A single name is 92 escaped bytes, and ~20 names is where the bound bites.
+  # 1,500 keeps a margin under that and is the constant below.
+  #
+  # Measured against what this helper emits, with 25-character names (`acmecorp/repository-00001`),
+  # via `bulk_repositories_path` + `SpecGuard::GithubApp.authorization_url`:
+  #
+  #   names |   raw |  escaped
+  #       1 |    88 |      106
+  #      28 | 1,492 |    1,780   <- last size that carries names
+  #      29 | 1,544 |    1,842   <- first size that drops them
+  #     100 | 5,236 |    6,244   <- MAX_BATCH, comfortably over
+  #
+  # So the drop below is reached by ordinary batches rather than being theoretical, and `organization`
+  # alone is 36 raw / 44 escaped. Across the whole legal range of 1..MAX_BATCH the worst outbound
+  # GitHub URL this produces is 1,873 bytes — inside the 2,000 budget at every size.
   MAX_RETURN_TO_BYTES = 1_500
 
   # The bulk picker, with the batch that was just refused already selected — or as much of that
