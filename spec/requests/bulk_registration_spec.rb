@@ -811,6 +811,11 @@ RSpec.describe "Bulk organization registration", type: :request do
       expect(URI.parse(path).path).to eq(bulk_repositories_path)
       expect(query["organization"]).to eq("acme")
       expect(query["github_full_names"]).to match_array(%w[acme/theirs acme/ghost])
+
+      # The POSITIVE half of the promise, pinned so the two degraded examples below cannot be
+      # satisfied by simply deleting the clause everywhere. The names DID survive here, so the
+      # panel says so — the sentence is conditional on what the path carries, not withdrawn.
+      expect(response.body).to include("already selected")
     end
 
     # The other half of criterion 1, walked rather than asserted on a URL nothing is obliged to
@@ -921,6 +926,40 @@ RSpec.describe "Bulk organization registration", type: :request do
       expect(query["github_full_names"].to_a.length).to eq(0)
       expect(query["organization"]).to eq("acme")
       expect(path.bytesize).to be <= GithubHelper::MAX_RETURN_TO_BYTES
+
+      # And what the reader is TOLD in that state, which is the half this example used to leave
+      # unasserted while pinning the degraded path itself. The names were dropped, so the panel
+      # must not promise they come back ticked — a reader who takes the trip on that promise
+      # arrives at a completely unticked list and pays exactly the cost the sentence said it
+      # would save them, with nothing on either page saying a list was shortened.
+      expect(response.body).not_to include("already selected")
+      expect(response.body).to include("where you can pick them again and submit")
+    end
+
+    # The same sentence, the other reachable way it can go wrong. `bulk_picker_return_to` returns
+    # the BARE picker path when the POST carried no `organization` — so the reader lands on the
+    # account chooser, not on a ticked list.
+    #
+    # The button itself is deliberately NOT guarded on `submitted_organization.present?` (unlike
+    # the retry panel below): the bare path still lands the reader somewhere useful, which is the
+    # same reasoning the install and authorize panels rely on. This pins that the COPY follows that
+    # decision through rather than claiming a pre-selection the path cannot deliver.
+    it "promises no pre-selection when the submission carried no organization" do
+      configure_github_app
+      outcomes = [BulkRegistration::Outcome.new(full_name: "acme/theirs", status: :not_in_installation)]
+
+      allow(BulkRegistration).to receive(:call).and_return(BulkRegistration::Result.new(outcomes: outcomes))
+
+      post bulk_repositories_path, params: { github_full_names: %w[acme/theirs] }
+
+      expect(response.body).to include("Choose repositories on GitHub")
+
+      path = carried_return_to(response.body, github_installation_path)
+
+      # The bare picker path: no account to name, and so nothing ticked to promise.
+      expect(URI.parse(path).query).to be_blank
+      expect(response.body).not_to include("already selected")
+      expect(response.body).to include("where you can pick it again and submit")
     end
 
     # The helper under the two buttons, asked directly. The bound examples above are about SIZE
