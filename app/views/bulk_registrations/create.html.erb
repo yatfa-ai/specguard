@@ -3,7 +3,7 @@
 <%= render UI::PageComponent.new do %>
   <%= render UI::BreadcrumbComponent.new(items: [
         { label: "Repositories", href: repositories_path },
-        { label: "Register an organization", href: bulk_repositories_path },
+        { label: "Register several repositories", href: bulk_repositories_path },
         { label: "Summary" }
       ]) %>
 
@@ -92,6 +92,6 @@
 
   <div class="mt-4 flex items-center gap-2">
     <%= render UI::ButtonComponent.new(variant: :primary, href: repositories_path) { "Back to repositories" } %>
-    <%= render UI::ButtonComponent.new(variant: :ghost, href: bulk_repositories_path) { "Register another organization" } %>
+    <%= render UI::ButtonComponent.new(variant: :ghost, href: bulk_repositories_path) { "Register another batch" } %>
   </div>
 <% end %>

@@ -13,9 +13,9 @@
       ) do |header| %>
     <% header.with_actions do %>
       <%# The reciprocal of the link the bulk page carries back to here. Someone who arrived to
-          register one repository and realises they want the whole organization should not have to
-          go back to the index to find out that is possible. %>
-      <%= render UI::ButtonComponent.new(variant: :ghost, href: bulk_repositories_path) { "Register an organization" } %>
+          register one repository and realises they want the whole account should not have to go
+          back to the index to find out that is possible. %>
+      <%= render UI::ButtonComponent.new(variant: :ghost, href: bulk_repositories_path) { "Register several" } %>
     <% end %>
   <% end %>
 

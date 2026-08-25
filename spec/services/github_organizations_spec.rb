@@ -23,19 +23,92 @@ RSpec.describe GithubOrganizations do
       expect(orgs.first.repos.map(&:full_name)).to eq(%w[acme/api acme/web])
     end
 
-    # `owner.type` is the only field that answers this. The owner SEGMENT of `full_name` cannot:
-    # `octocat/dotfiles` and `acme/api` are the same shape, and a person may well be called `acme`.
-    it "leaves personal repositories out — a user's own namespace is not an organization" do
+    # SPGD-818 reversed this. It used to read "leaves personal repositories out — a user's own
+    # namespace is not an organization", and that filter was the whole of the bug: a solo developer
+    # with twenty repositories in their own namespace was told the batch page was not for them,
+    # while every step downstream of the chooser gated on `admin?` and would have taken all twenty.
+    #
+    # `admin?` is the sole gate and always was. Owner type now decides only what a card is
+    # LABELLED, which is what `#organization?` and `#personal?` below are for.
+    it "groups a personal namespace exactly as it groups an organization" do
       orgs = described_class.from(listing([github_repo("acme/api"),
                                            github_repo("octocat/dotfiles", owner_type: "User")]))
+
+      expect(orgs.map(&:login)).to eq(%w[acme octocat])
+      expect(orgs.map(&:administered_count)).to eq([1, 1])
+    end
+
+    # Criterion 1: the case the ticket opens with. A listing that is ENTIRELY personal used to
+    # produce an empty chooser and the "not for you" empty state; it now produces a real one.
+    it "offers a listing that is entirely personal" do
+      orgs = described_class.from(listing([github_repo("octocat/dotfiles", owner_type: "User"),
+                                           github_repo("octocat/blog", owner_type: "User")]))
+
+      expect(orgs.map(&:login)).to eq(%w[octocat])
+      expect(orgs.first.administered.map(&:full_name)).to eq(%w[octocat/blog octocat/dotfiles])
+    end
+
+    # Criterion 3: one order over both kinds, by downcased login — a personal namespace does not
+    # sort into a section of its own, because it is not a different kind of choice.
+    it "orders personal namespaces and organizations together, alphabetically" do
+      orgs = described_class.from(listing([github_repo("Zebra/x"),
+                                           github_repo("octocat/dotfiles", owner_type: "User"),
+                                           github_repo("acme/y")]))
+
+      expect(orgs.map(&:login)).to eq(%w[acme octocat Zebra])
+      expect(orgs.map(&:organization?)).to eq([true, false, true])
+      expect(orgs.map(&:personal?)).to eq([false, true, false])
+    end
+
+    # Criterion 4: the two counts are per NAMESPACE and computed identically for both kinds —
+    # `withheld_count` reads `admin?`, which never asked what sort of owner it was looking at.
+    it "counts what may be registered and what is withheld in a personal namespace too" do
+      orgs = described_class.from(listing([
+                                            github_repo("octocat/dotfiles", owner_type: "User"),
+                                            github_repo("octocat/theirs", owner_type: "User", admin: false)
+                                          ]))
+
+      expect(orgs.map(&:login)).to eq(%w[octocat])
+      expect(orgs.first.administered_count).to eq(1)
+      expect(orgs.first.withheld_count).to eq(1)
+    end
+
+    # Criterion 6: the negative control. Widening the chooser widened what is DISPLAYED and nothing
+    # about what is permitted — a personal repository the viewer does not administer is still not
+    # offered, exactly as an organization's is not.
+    it "still leaves out a personal namespace the viewer administers nothing in" do
+      orgs = described_class.from(listing([github_repo("acme/api"),
+                                           github_repo("octocat/theirs", owner_type: "User",
+                                                                         admin: false)]))
 
       expect(orgs.map(&:login)).to eq(%w[acme])
     end
 
-    # A repository GitHub reported without an owner type is not evidence of an organization. It
-    # withholds rather than inventing — the same fail-closed reflex the whole slice rests on.
-    it "leaves a repository whose owner type GitHub did not report out" do
-      unknown = GithubApi::Repo.new(full_name: "mystery/repo", private: false, archived: false)
+    # Criterion 5, and the one deliberate behaviour change SPGD-818 records under its own heading.
+    # This example used to read "leaves a repository whose owner type GitHub did not report out":
+    # a nil owner type read as "not an organization" and the repository was dropped entirely.
+    #
+    # Now nil decides nothing about whether a repository is OFFERED — `admin?` does — and it still
+    # decides nothing about the label either. The card carries NO marker rather than a "Personal"
+    # one, because `personal?` is a positive claim about what GitHub said and not the negation of
+    # `organization?`. Withholding rather than inventing, the doctrine `github_api.rb:145-149`
+    # states for that default, and the reason `Org` has two predicates instead of one.
+    it "offers a repository whose owner type GitHub did not report, and marks it as neither" do
+      unknown = GithubApi::Repo.new(full_name: "mystery/repo", private: false, archived: false,
+                                    admin: true)
+
+      org = described_class.from(listing([unknown])).first
+
+      expect(org.login).to eq("mystery")
+      expect(org.administered.map(&:full_name)).to eq(%w[mystery/repo])
+      expect(org).not_to be_organization
+      expect(org).not_to be_personal
+    end
+
+    # And the gate still applies to it: an unreported owner type is not a way around `admin?`.
+    it "leaves out an unreported namespace the viewer administers nothing in" do
+      unknown = GithubApi::Repo.new(full_name: "mystery/repo", private: false, archived: false,
+                                    admin: false)
 
       expect(described_class.from(listing([unknown]))).to be_empty
     end
@@ -113,6 +186,24 @@ RSpec.describe GithubOrganizations do
       expect(described_class.find(listing(repos), "strangers")).to be_nil
       expect(described_class.find(listing(repos), "")).to be_nil
       expect(described_class.find(listing(repos), nil)).to be_nil
+    end
+
+    # Criterion 7. `.find` reads whatever `.from` offers, so widening the chooser widened this too
+    # — the second step of the flow resolves a personal login on the same terms, and with the same
+    # case-insensitivity, or step one would offer a card that step two could not open.
+    it "finds a personal namespace by login, whatever its case" do
+      personal = listing([github_repo("octocat/dotfiles", owner_type: "User")])
+
+      expect(described_class.find(personal, "octocat").login).to eq("octocat")
+      expect(described_class.find(personal, "OCTOCAT").login).to eq("octocat")
+    end
+
+    # And the gate holds on this path too: a namespace whose repositories the viewer does not
+    # administer is not resolvable by typing its login into the query string.
+    it "answers nil for a personal namespace the viewer administers nothing in" do
+      personal = listing([github_repo("octocat/theirs", owner_type: "User", admin: false)])
+
+      expect(described_class.find(personal, "octocat")).to be_nil
     end
   end
 end
