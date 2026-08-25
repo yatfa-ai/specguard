@@ -29,6 +29,20 @@ class JsonParseErrorResponder
   rescue ActionDispatch::Http::Parameters::ParseError
     raise unless env["PATH_INFO"].to_s.start_with?(API_PREFIX)
 
+    # Recorded on the way out, and it cannot change the answer: `BODY` is a frozen constant built at
+    # load time, so the client's bytes are fixed before this line runs and nothing here can edit
+    # them. `Ingest::BoundaryRefusalRecorder` reports its own failures rather than raising, so a
+    # bookkeeping fault cannot turn this 400 into a 500. See that class for who a row is attributed
+    # to — a request that did not authenticate writes nothing, exactly as a 401 does.
+    #
+    # ⚠️ The constant is referenced HERE, at request time, and must never move to the class body or
+    # a `require`. `config/application.rb:24` loads this file while the middleware stack is being
+    # assembled — before the autoloaders are usable — and `lib/middleware` is excluded from
+    # `autoload_lib`, so a load-time reference to an `app/` constant fails at boot. It is also not
+    # memoized, deliberately: this middleware sits ABOVE `ActionDispatch::Reloader` in the stack, so
+    # a constant held across requests would pin a stale class in development.
+    Ingest::BoundaryRefusalRecorder.record(env, MESSAGE)
+
     [400,
      { "content-type" => "application/json; charset=utf-8", "content-length" => BODY.bytesize.to_s },
      [BODY]]
