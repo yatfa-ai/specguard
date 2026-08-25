@@ -71,9 +71,10 @@ class RepositoriesController < ApplicationController
 
   before_action :require_authentication
 
-  # The first four are per-card questions asked by repositories/index, once per repository in the
-  # list. The fifth is a per-row question asked by repositories/show, once per API key.
-  helper_method :owns_repository?, :key_count_visible?, :api_key_count, :latest_run, :former_member?
+  # The first five are per-card questions asked by repositories/index, once per repository in the
+  # list. The sixth is a per-row question asked by repositories/show, once per API key.
+  helper_method :owns_repository?, :key_count_visible?, :api_key_count, :latest_run,
+                :rejection_verdict, :former_member?
 
   # Everything the viewer can open, through the one seam that defines that set — see
   # `Repository.accessible_by`, which carries the union rule and the reason it stays a relation
@@ -923,6 +924,64 @@ class RepositoriesController < ApplicationController
                       .index_by(&:repository_id)
         preload_shard_counts(runs.values)
         runs
+      end
+    end
+  end
+
+  # What one card says about its deliveries being REFUSED — the same object, answering the same two
+  # questions, that the connection indicator on `show` reads (`refusing?` and `last_rejection_at`).
+  # That symmetry is the point: the grid and the page it links to reach one repository's refusal
+  # through one class's API, not through two readings that happen to agree.
+  #
+  # The verdict is `RejectedIngests`' own and is NOT re-derived here. That class's comment forbids a
+  # second inline expression of the rule ("holding the verdict beside the rows it is a verdict about
+  # is what stops the headline and the list under it describing different states of the same
+  # repository"), and the rule has two `nil` limbs that do not both fall out of a `>` — a repository
+  # with no rejection is not refusing, and one with a rejection and NO accepted run ever is the most
+  # refusing state there is. So this hands over two timestamps and asks; `RejectedIngests.verdict`
+  # is the row-free way in, built for exactly this caller.
+  #
+  # Both timestamps are already grouped for the whole page: the accepted side is `latest_test_runs`
+  # above, which the card is already reading for its size badge, and the refused side is the one
+  # aggregate below. So this costs no query per card, and the object it builds holds no rows.
+  def rejection_verdict(repository)
+    RejectedIngests.verdict(last_rejection_at: last_rejection_times[repository.id],
+                            last_accepted_run_at: latest_run(repository)&.created_at)
+  end
+
+  # `repository_id => newest refusal time` for every repository on this page, in one query no matter
+  # how long the list is — the same shape, and the same reason, as `shared_permissions`,
+  # `latest_test_runs` and `api_key_counts`. Asking `RejectedIngests.for` per card would be worse
+  # than the usual N+1: that constructor reads `IngestRejection::PANEL_LIMIT + 1` ROWS per
+  # repository, and the grid needs no rows at all — only the newest time.
+  #
+  # A grouped `MAX(occurred_at)` and not a `DISTINCT ON` like `latest_test_runs`, because the two
+  # callers want different things: that one hands the card the whole run (its branch, its age, its
+  # shard composition all print), and this one is read by a predicate that compares one timestamp.
+  # Selecting rows here would be loading `details` — the client's verbatim error list, bounded at
+  # ~6 KB a row — for every card on the page to look at one column of it.
+  #
+  # Served with no migration by `index_ingest_rejections_on_repository_and_recency` on
+  # `(repository_id, occurred_at DESC, id DESC)`: the grouped max walks the head of each
+  # repository's run of that index. Scoped to the ids already on this page, so it never scans
+  # `ingest_rejections` globally.
+  #
+  # The retention rule needs no mention and gets none: `IngestRejection::REPOSITORY_RETENTION_ROWS`
+  # bounds the table, so a repository whose refusals have all aged out has no row here and reads as
+  # non-refusing — the model's documented "it is reporting what it can still see", arrived at by
+  # this method knowing nothing about it.
+  #
+  # Memoized on first call rather than assigned by `#index`, so the aggregate is taken only once a
+  # card actually asks and a page of no repositories still pays nothing — the same laziness
+  # `latest_test_runs` carries for the same reason.
+  def last_rejection_times
+    @last_rejection_times ||= begin
+      repository_ids = @repositories.map(&:id)
+
+      if repository_ids.empty?
+        {}
+      else
+        IngestRejection.where(repository_id: repository_ids).group(:repository_id).maximum(:occurred_at)
       end
     end
   end

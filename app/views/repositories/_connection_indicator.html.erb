@@ -46,10 +46,19 @@
       nothing here is credential metadata — no key name, no hint, no token. %>
   <div class="flex flex-wrap items-center gap-2" id="connection-indicator">
     <% if @rejected_ingests.refusing? %>
-      <%= render UI::BadgeComponent.new(tone: :error) { "Deliveries refused" } %>
+      <%# THE SAME SEAMS THE REPOSITORIES GRID RENDERS — `refused_deliveries_label` and
+          `refused_deliveries_note` own the words, so a card and the page it links to cannot word
+          one repository's refusal two different ways, and the next rename of either cannot move one
+          surface without the other. That is the rule `test_run_delivery_note` and
+          `test_run_cost_rows` are already held to on this page's sibling.
+
+          The seams own the WORDING and not the markup: this surface and the card put the same
+          sentence in different containers, so each wraps it itself. The link below stays here
+          rather than going into the seam — it points at a panel that exists on THIS page only, and
+          the grid links to the page rather than to an anchor inside it. %>
+      <%= render UI::BadgeComponent.new(tone: :error) { refused_deliveries_label } %>
       <span class="text-xs text-app-muted">
-        Last refused <%= time_ago_in_words(@rejected_ingests.last_rejection_at) %> ago — the key
-        works, the payload did not. See
+        <%= refused_deliveries_note(@rejected_ingests.last_rejection_at) %> See
         <a href="#rejected-ingests" class="underline">Rejected deliveries</a>.
       </span>
     <% elsif @last_live_api_request_at.present? %>
