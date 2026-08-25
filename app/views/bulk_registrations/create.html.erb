@@ -109,13 +109,15 @@
       `already_registered`), but WHEN to re-submit is exactly the judgement a rate limit asks of a
       human, so this stops one step short and lets them press the button. %>
   <% if @result.retry? && submitted_organization.present? %>
+    <% carried = @result.retryable_names %>
+    <% one = carried.length == 1 %>
     <%= render UI::PanelComponent.new(class: "mt-4") do %>
       <%= render UI::EmptyStateComponent.new(
             title: "Try the skipped repositories again",
-            description: "#{pluralize(@result.retryable_names.length, 'repository', plural: 'repositories')} " \
-                         "#{@result.retryable_names.length == 1 ? 'was' : 'were'} skipped for a reason that " \
+            description: "#{pluralize(carried.length, 'repository', plural: 'repositories')} " \
+                         "#{one ? 'was' : 'were'} skipped for a reason that " \
                          "clears on its own. This takes you back to #{submitted_organization} with " \
-                         "#{@result.retryable_names.length == 1 ? 'it' : 'them'} already selected, so you can " \
+                         "#{one ? 'it' : 'them'} already selected, so you can " \
                          "submit again without picking them out a second time."
           ) do %>
         <%= render UI::ButtonComponent.new(

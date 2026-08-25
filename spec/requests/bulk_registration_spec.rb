@@ -545,8 +545,19 @@ RSpec.describe "Bulk organization registration", type: :request do
     # registration state still decides what is SELECTABLE — a carried name can never produce a tick
     # box whose only possible outcome is "skipped".
     it "shows a carried repository that has since been registered as already registered" do
-      submit_with_unreadable_installation(%w[acme/api globex/tools])
+      # `acme/web` is the name this example turns on, so it has to be the name that FAILS: it is
+      # absent from `readable`, so it is what the retry carries. Submitting a name that registers
+      # (or one from another account) would leave the carried list without it, and the assertion
+      # below would then be pinning the ordinary already-registered row — true of any taken
+      # repository, and true with the picker's `!taken &&` guard deleted.
+      submit_with_unreadable_installation(%w[acme/api acme/web])
       retry_link = Capybara.string(response.body).find_link("Try these again")[:href]
+
+      # The guard against exactly that drift: this example is only about a carried name, so if a
+      # future edit to `readable` (or to the fixture's split of the account) stops `acme/web` being
+      # carried, fail HERE and say why, rather than passing on a row that proves nothing.
+      carried = Rack::Utils.parse_nested_query(URI.parse(retry_link).query)["github_full_names"]
+      expect(carried).to include("acme/web")
 
       # Somebody else gets there first, in the gap between the summary and the retry. A distinct
       # `github_uid` because the signed-in user already holds the default one.
@@ -562,7 +573,10 @@ RSpec.describe "Bulk organization registration", type: :request do
 
       picker = Capybara.string(response.body)
       expect(picker).to have_field(type: "checkbox", with: "acme/web", disabled: true, checked: false)
-      expect(response.body).to include("Already registered")
+      # `acme/legacy` is the control: same page, same carried-name treatment available, but nobody
+      # took it — so it proves the row above is disabled because it is TAKEN rather than because
+      # the retry landed on a picker that disables everything.
+      expect(picker).to have_field(type: "checkbox", with: "acme/legacy", disabled: false)
     end
 
     # Criterion 5. The retry is an addition, not a replacement — the two exits that were already
