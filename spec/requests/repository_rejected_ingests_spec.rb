@@ -368,7 +368,8 @@ RSpec.describe "Repository rejected deliveries", type: :request do
 
   # A repository the viewer can see but does not own reads the same panel — it is delivery
   # telemetry, not a credential surface, and it names no key.
-  describe "a member who does not own the repository" do    let(:owner) { create_user(github_uid: "3003", github_handle: "hubot") }
+  describe "a member who does not own the repository" do
+    let(:owner) { create_user(github_uid: "3003", github_handle: "hubot") }
     let(:repository) { create_repository(user: owner, github_full_name: "acme/shared-service") }
 
     before do

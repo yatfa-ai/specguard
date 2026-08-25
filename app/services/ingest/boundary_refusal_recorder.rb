@@ -57,7 +57,9 @@ module Ingest
   # swallowed, on that class's standing rule that a loss which is invisible on the surface by
   # construction has to be loud somewhere.
   class BoundaryRefusalRecorder
-    # The one path a row may be attributed to. See "Why it is scoped to the ingest path" above.
+    # The one path a row may be attributed to, in its canonical spelling. See "Why it is scoped to
+    # the ingest path" above, and `#ingest_path?` for why the comparison strips trailing slashes
+    # rather than testing this string for equality outright.
     INGEST_PATH = "/api/v1/ingest"
 
     # `Api::BaseController#bearer_token`'s pattern, verbatim.
@@ -93,7 +95,19 @@ module Ingest
 
     private
 
-    def ingest_path? = @env["PATH_INFO"].to_s == INGEST_PATH
+    # Trailing slashes are STRIPPED rather than compared, because the router treats
+    # `/api/v1/ingest`, `/api/v1/ingest/` and `/api/v1/ingest//` as the same action — all three
+    # reach `ingests#create` (verified against `routes.recognize_path` and a real dispatch). An
+    # exact string match would therefore have re-created this ticket's own defect one grain over:
+    # a corrupt gzip POSTed to a trailing-slash spelling is a real delivery to the real endpoint,
+    # refused for its payload, and would have stored nothing — leaving the panel saying "No
+    # rejected deliveries" again, silently, for a URL a gem produces just by joining a configured
+    # base to a path. Note `\/+\z` and not `chomp`: `chomp` removes only ONE trailing slash and
+    # would still miss the doubled spelling the router accepts.
+    #
+    # It stays an equality test AFTER stripping, not a prefix test — `/api/v1/ingest/extra` is not
+    # this endpoint (the router 404s it) and must not be attributed to it.
+    def ingest_path? = @env["PATH_INFO"].to_s.sub(%r{/+\z}, "") == INGEST_PATH
 
     # Nil at every limb that `Api::BaseController` would have answered with a 401: no header, a
     # header that is not a Bearer, a token for the wrong table, or a token that resolves nothing.

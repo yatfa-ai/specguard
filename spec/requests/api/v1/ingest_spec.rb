@@ -6,8 +6,11 @@ RSpec.describe "POST /api/v1/ingest", type: :request do
   let(:repository) { create_repository }
   let(:api_key) { repository.api_keys.create! }
 
-  def ingest(body, key: api_key, headers: {})
-    post "/api/v1/ingest",
+  # `path:` defaults to the canonical spelling, so every existing caller is unchanged. It is a
+  # parameter at all because the router recognises `/api/v1/ingest/` as the SAME action, and the
+  # boundary-refusal seam has to be pinned against that spelling too.
+  def ingest(body, key: api_key, headers: {}, path: "/api/v1/ingest")
+    post path,
          params: body.is_a?(String) ? body : body.to_json,
          headers: { "Content-Type" => "application/json" }
            .merge(key ? { "Authorization" => "Bearer #{key.raw_token}" } : {})
@@ -1075,9 +1078,11 @@ RSpec.describe "POST /api/v1/ingest", type: :request do
 
     # `key:` is forwarded rather than fixed, because who the credential resolves to is the whole
     # subject of the attribution examples below — the same corrupt bytes have to be postable with a
-    # good key, no key, a bad one and a user key.
-    def ingest_raw_gzip(bytes, key: api_key)
-      ingest(bytes, key: key, headers: { "Content-Encoding" => "gzip" })
+    # good key, no key, a bad one and a user key. `path:` is forwarded for the same reason one
+    # spelling down: the router recognises the trailing-slash form as the same action, so the same
+    # corrupt bytes have to be postable at both spellings.
+    def ingest_raw_gzip(bytes, key: api_key, path: "/api/v1/ingest")
+      ingest(bytes, key: key, headers: { "Content-Encoding" => "gzip" }, path: path)
     end
 
     it "accepts it with 202" do
@@ -1229,6 +1234,38 @@ RSpec.describe "POST /api/v1/ingest", type: :request do
         expect(rejection.repository).to eq(repository)
         expect(rejection.details).to eq([GzipRequestBody::CORRUPT_MESSAGE])
         expect(rejection.total_reasons_count).to eq(1)
+      end
+
+      # The spelling the router treats as identical and an exact string match did not.
+      #
+      # `routes.recognize_path` resolves `/api/v1/ingest`, `/api/v1/ingest/` AND `/api/v1/ingest//`
+      # to the same `ingests#create`, and all three really dispatch. A gem that builds its URL by
+      # joining a configured base to a path is exactly how a trailing slash arrives in production,
+      # so a seam that recorded only the canonical spelling would have re-created this ticket's own
+      # defect one grain over — a real delivery, really refused, storing nothing, with an empty
+      # panel as the only symptom.
+      #
+      # The DOUBLED spelling is pinned deliberately alongside the single one: `chomp("/")` strips
+      # only one trailing slash and passes the example above while still failing this one.
+      ["/api/v1/ingest/", "/api/v1/ingest//"].each do |spelling|
+        it "records a corrupt gzip POSTed to #{spelling}, which routes to the same action" do
+          expect { ingest_raw_gzip("this is not gzip at all", path: spelling) }
+            .to change(IngestRejection, :count).by(1)
+
+          rejection = IngestRejection.sole
+          expect(rejection.repository).to eq(repository)
+          expect(rejection.details).to eq([GzipRequestBody::CORRUPT_MESSAGE])
+        end
+      end
+
+      # The other half of the biconditional, and the reason the trailing-slash fix is a STRIP
+      # followed by equality rather than a `start_with?`. `/api/v1/ingest/extra` is not this
+      # endpoint — the router 404s it — so no row may be attributed to it. Without this, widening
+      # the gate to a prefix match would pass every example above and quietly start billing
+      # refusals to a repository for requests that never reached the ingest action.
+      it "records nothing for a path that merely starts with the ingest path" do
+        expect { ingest_raw_gzip("this is not gzip at all", path: "/api/v1/ingest/extra") }
+          .not_to change(IngestRejection, :count)
       end
 
       it "records an over-cap inflate as its own reason" do
