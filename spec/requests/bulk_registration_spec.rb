@@ -127,10 +127,15 @@ RSpec.describe "Bulk organization registration", type: :request do
       expect(response.body).to include("missing an account")
     end
 
-    # The other way a whole organization goes missing: the installation it is connected through
-    # would not answer. This page and the single-repository picker say it through ONE definition
+    # The other way a whole account goes missing: the installation it is connected through would
+    # not answer. This page and the single-repository picker say it through ONE definition
     # (`GithubHelper#unreadable_accounts_sentence`), so the account is named identically on both and
-    # only the noun differs — ORGANIZATIONS here, because that is what is missing from this list.
+    # only the noun differs — ACCOUNTS here, because that is what is missing from this list.
+    #
+    # This pinned "Organizations" until the chooser started offering personal namespaces, and the
+    # noun was accurate while it filtered to organizations. It is not any more: a viewer whose
+    # chooser holds only their own namespace would be told ORGANIZATIONS are missing from it. The
+    # assertion moves with the noun rather than being deleted, so the reversal is on record.
     it "names the installation that could not be read" do
       add_github_installation(@user, installation_id: 6002, account_login: "globex")
       stub_github_per_installation do |id|
@@ -141,7 +146,7 @@ RSpec.describe "Bulk organization registration", type: :request do
 
       expect(response.body).to include("This list may be incomplete")
       expect(response.body).to include("SpecGuard could not read globex just now.")
-      expect(response.body).to include("Organizations connected through that account")
+      expect(response.body).to include("Accounts connected through that account")
       expect(response.body).not_to include("One of your GitHub App installations")
     end
 

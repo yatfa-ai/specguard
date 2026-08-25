@@ -159,9 +159,16 @@ module GithubHelper
   # organization they came to register.
   #
   # `missing:` is the only thing the two pages differ on and is a plural noun beginning its own
-  # sentence: the single-repository picker is missing REPOSITORIES, the organization chooser can be
-  # missing whole ORGANIZATIONS, which is the sharper version of the same warning. Everything else
-  # — which accounts, which failure, what to do — is decided here.
+  # sentence: the single-repository picker is missing REPOSITORIES, the bulk chooser can be missing
+  # whole ACCOUNTS, which is the sharper version of the same warning. Everything else — which
+  # accounts, which failure, what to do — is decided here.
+  #
+  # That second noun is ACCOUNTS and not ORGANIZATIONS because the bulk chooser groups every
+  # namespace the viewer administers something in, personal ones included. It said "organizations"
+  # while the chooser filtered to `owner_type == "Organization"`, and the noun was accurate then;
+  # once the filter went, a solo developer whose chooser holds nothing but their own namespace was
+  # being told that ORGANIZATIONS were missing from it. Withholding a true noun beats naming a
+  # subset the page no longer shows.
   #
   # The two failures are worded apart because their fixes are different. An installation that would
   # not answer is a transient thing and may well answer on the next page load. An installation
