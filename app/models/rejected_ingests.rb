@@ -62,10 +62,47 @@ class RejectedIngests
         last_accepted_run_at: last_accepted_run_at)
   end
 
-  def initialize(rows:, last_accepted_run_at:, bounded:)
+  # The same verdict with NO rows behind it, for a caller that wants only {#refusing?}.
+  #
+  # `.for` above loads `PANEL_LIMIT + 1` rows per repository, which is exactly right for the panel
+  # that renders them and exactly wrong for the repositories grid: that page renders N cards and
+  # needs no reason text, no `user_agent` and no `bounded?` — only whether each card's pipeline is
+  # being refused. Calling `.for` in a card loop would be one bounded row read per card, the N+1
+  # shape that page has already been cleaned of twice.
+  #
+  # So the grid takes ONE grouped `MAX(occurred_at)` for the whole page
+  # (`RepositoriesController#last_rejection_times`) and hands each card its two timestamps here.
+  # The comparison itself stays in this class — {#refusing?} is unchanged and both constructors
+  # reach it — because the class comment's rule is that the verdict lives beside the rows it is a
+  # verdict about, and the failure it names (a headline and the list under it describing different
+  # states of one repository) is exactly what a second copy of the ordering rule in a controller,
+  # helper or view would reintroduce. There is one expression of it, and this is a second way IN.
+  #
+  # Both `nil` limbs come along unchanged and are the reason this is a constructor rather than a
+  # bare `>` at the call site: a `nil` rejection is not refusing, and a `nil` accepted side with a
+  # rejection present is the most refusing state there is. A caller spelling the comparison itself
+  # would have to re-derive both, and the second one inverts.
+  #
+  # `rows` is `[]` and NOT the refusals — this object genuinely has none, rather than having them
+  # unloaded. So {#any?} reads false and {#last_rejection_at} answers off the timestamp passed in
+  # rather than off a head row it does not have. `bounded:` is false for the same reason: nothing
+  # was cut from a list that was never fetched. Neither is a claim the grid makes — it renders one
+  # marker and no panel — but they are the honest answers for an object built this way, not
+  # placeholders that would read as facts if a future caller asked.
+  def self.verdict(last_rejection_at:, last_accepted_run_at:)
+    new(rows: [],
+        bounded: false,
+        last_accepted_run_at: last_accepted_run_at,
+        last_rejection_at: last_rejection_at)
+  end
+
+  # @param last_rejection_at [Time, nil] only for {.verdict}, which has no rows to read the head of.
+  #   Left `nil` by `.for`, whose rows ARE the answer — see {#last_rejection_at}.
+  def initialize(rows:, last_accepted_run_at:, bounded:, last_rejection_at: nil)
     @rows = rows
     @last_accepted_run_at = last_accepted_run_at
     @bounded = bounded
+    @last_rejection_at = last_rejection_at
   end
 
   # The refusals, newest first, never longer than the limit this was built with. One query.
@@ -75,7 +112,13 @@ class RejectedIngests
 
   # The newest refusal, read off the head of the already-ordered list rather than as its own
   # aggregate — so the time the stat reports and the time at the top of the panel are the same row.
-  def last_rejection_at = rows.first&.occurred_at
+  #
+  # `.for`'s objects have rows and always answer off that head, which is the reading the sentence
+  # above describes and is unchanged. {.verdict}'s have none — not "none loaded", none — so they
+  # answer off the timestamp they were built with. The `||` cannot conflate the two: the passed-in
+  # value is `nil` on every `.for` object, and `rows` is empty on every {.verdict} one, so exactly
+  # one limb can ever be non-nil and neither constructor can shadow the other's answer.
+  def last_rejection_at = rows.first&.occurred_at || @last_rejection_at
 
   # Whether the connection indicator may still read healthy. See the class comment for the rule and for
   # both of its stated bounds.
