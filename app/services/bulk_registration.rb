@@ -83,6 +83,23 @@ class BulkRegistration
   SKIP_ORDER = %i[already_registered not_administered not_in_installation invalid not_installed
                   not_authorized rate_limited unavailable].freeze
 
+  # The skips a re-submission can actually resolve, and the only ones worth carrying back to the
+  # picker — exactly the three whose `InstallationRepositories::MESSAGES` sentence instructs the
+  # reader to try again: "Reconnect and try once more", "Try again in a few minutes", "Try again
+  # shortly". A batch that skipped for any of these was refused by something that clears on its own
+  # or with one click, and the same submission run a second time is expected to land.
+  #
+  # It lives here, next to `SKIP_ORDER` and `SKIP_LABELS`, rather than as a status list in the
+  # summary view, so the page and the service cannot end up disagreeing about which refusals are
+  # temporary — the sentence that promises a retry and the button that offers one are then answers
+  # to the same question.
+  #
+  # Everything absent from this list is terminal FOR A RE-SUBMISSION, which is not the same as
+  # unfixable: `already_registered` and `invalid` need nothing and can never succeed, while
+  # `not_installed` / `not_in_installation` / `not_administered` need a change on GitHub's side
+  # first and already have their own buttons. Re-running the identical batch fixes none of them.
+  RETRYABLE_SKIPS = %i[not_authorized rate_limited unavailable].freeze
+
   # What each skip reason is called in the summary. The heading names the CATEGORY; the per-row
   # sentence carries the explanation, so these stay short enough to scan.
   SKIP_LABELS = {
@@ -126,6 +143,22 @@ class BulkRegistration
     # ask GitHub with. Mirrors `InstallationRepositories::Verdict#authorize?`, which
     # `GithubRepositoryListing#github_authorization_needed?` asks either of for the capability.
     def authorize? = skipped.any? { |outcome| outcome.status == :not_authorized }
+
+    # The names a re-submission could plausibly land — the skips whose own sentence told the reader
+    # to try again (`RETRYABLE_SKIPS`), and nothing else. This is the third question of the same
+    # family as `install?` and `authorize?`: which control does the summary owe this batch. The
+    # other two ask whether to offer a fix ELSEWHERE (GitHub's installation, an OAuth round trip);
+    # this one asks whether to offer the batch ITSELF back.
+    #
+    # Names rather than outcomes, because the one thing the caller does with them is put them back
+    # in the picker's `@full_names` seam, which is a list of names. Registered repositories are not
+    # here by construction — this reads `skipped` — and neither is any terminal skip, so a batch
+    # carried back is the failed remainder rather than a re-run of the whole submission.
+    def retryable_names = skipped.filter_map { |outcome| outcome.full_name if RETRYABLE_SKIPS.include?(outcome.status) }
+
+    # Whether there is anything worth offering a retry for. Asked separately from `retryable_names`
+    # so the summary reads as a question rather than as an emptiness check on a list.
+    def retry? = retryable_names.any?
   end
 
   def self.call(...) = new(...).call

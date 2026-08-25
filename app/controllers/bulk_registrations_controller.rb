@@ -39,10 +39,19 @@ class BulkRegistrationsController < ApplicationController
 
   before_action :require_authentication
 
-  helper_method :organizations, :organization, :already_registered?
+  helper_method :organizations, :organization, :already_registered?, :submitted_organization
 
   def new
-    @full_names = []
+    # Normally empty — step two is a fresh list of unticked boxes. It is populated when the reader
+    # arrived by pressing the summary's "Try these again", which carries the transiently-skipped
+    # names back here as `github_full_names[]`; the picker's tick boxes read this seam, so those
+    # rows come back ticked. Normalised through the same class method `#create` uses, so a carried
+    # batch and a submitted one are the same batch.
+    #
+    # Nothing is trusted about these names: they only decide which of the rows this page was going
+    # to render anyway start out ticked, and every one of them is re-verified against GitHub when
+    # the form is submitted. A name that is not in the listing simply matches no row.
+    @full_names = BulkRegistration.normalized_names(submitted_full_names)
   end
 
   def create
@@ -81,6 +90,24 @@ class BulkRegistrationsController < ApplicationController
 
     @organization = GithubOrganizations.find(github_visible_listing, params[:organization])
   end
+
+  # The account this submission came from, as the browser sent it, so the summary can offer a way
+  # back to the picker for it. The picker posts it as `hidden_field_tag :organization` precisely so
+  # the 422 refusal path can re-render step two rather than dropping the reader at the chooser; the
+  # summary path is answering the same POST and the value is sitting in the same place.
+  #
+  # Deliberately the RAW param and not `#organization`, which resolves the login against
+  # `github_visible_listing`. Resolving it here would cost a second full walk of the user's
+  # installations — the create path has already read the listing once inside
+  # `InstallationRepositories.verify_batch`, and a spec pins that a registration asks GitHub exactly
+  # once. Nothing on the summary needs the resolved Org: this value only becomes a query parameter
+  # on a link, and the GET that follows resolves it exactly as a typed or bookmarked one is. A login
+  # this viewer cannot register from lands on the chooser there, which is already the answer for a
+  # stale bookmark.
+  #
+  # Blank when the POST carried no organization — a submission that did not come from the picker —
+  # and the summary then offers no retry rather than a link back to a nameless account.
+  def submitted_organization = params[:organization].presence
 
   # Which of the organization's repositories are already registered here, so the picker can say so
   # rather than offer a tick box whose only possible outcome is "skipped".

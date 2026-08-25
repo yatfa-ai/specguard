@@ -427,6 +427,185 @@ RSpec.describe "Bulk organization registration", type: :request do
     end
   end
 
+  # SPGD-824. Three skip reasons end their own sentence by telling the reader to try again, and the
+  # summary used to answer that instruction with two exits that both threw the batch away: the only
+  # way back to the picker was `bulk_repositories_path` with no organization — step ONE, the account
+  # chooser, with a fresh unticked list waiting behind it.
+  #
+  # The mechanism is not new. The 422 refusal path has round-tripped the account and the ticks since
+  # this feature shipped ("comes back to the same organization after refusing a submission", below),
+  # through `params[:organization]` and the picker's `@full_names` seam. These examples pin the same
+  # round trip on the 200 summary path, which is the one where losing the selection actually costs
+  # something — the reader has just watched N repositories fail.
+  describe "carrying a transiently-failed batch back to the picker" do
+    # A mixed batch is the ordinary multi-installation shape rather than a contrivance, and it is
+    # worth being precise about WHICH mechanism produces it, because the fixture is doing real work.
+    #
+    # `collect` concatenates the repositories of the installations that answered while recording the
+    # failure of the one that did not, so the reading is INCOMPLETE. `name_verdict` then splits the
+    # submitted names on exactly that: a name present in what was read, and administered, is
+    # `:verified` and registers; a name ABSENT from an incomplete reading cannot be refused as
+    # "not in the installation" — we do not know that — so it becomes `sources.error`, the transient
+    # status of whichever installation failed.
+    #
+    # So `readable` is the half of the account that answered, and any submitted name outside it is
+    # the half that transiently failed. Both belong to the same account, which is the case that
+    # matters: the retry has to carry them back to ONE picker.
+    def submit_with_unreadable_installation(names, failure: { unavailable: true },
+                                            readable: [github_repo("acme/api")])
+      add_github_installation(@user, installation_id: 6002, account_login: "globex")
+      stub_github_per_installation do |id|
+        FakeGithubApi.new(**(id == 6002 ? failure : { repos: readable }))
+      end
+
+      submit(names)
+    end
+
+    # Criterion 1 and criterion 3 together, and they belong in one example because the control is
+    # only correct if BOTH hold: it has to reach the picker for the right account, and carry the
+    # failed names WITHOUT dragging along the one that registered.
+    it "offers the skipped repositories back to the same account, and carries only those" do
+      submit_with_unreadable_installation(%w[acme/api acme/web acme/legacy])
+
+      expect(response.body).to include("Registered 1 repository.")
+      expect(response.body).to include("Try these again")
+
+      retry_link = Capybara.string(response.body).find_link("Try these again")[:href]
+      query = Rack::Utils.parse_nested_query(URI.parse(retry_link).query)
+
+      expect(URI.parse(retry_link).path).to eq(bulk_repositories_path)
+      expect(query["organization"]).to eq("acme")
+      expect(query["github_full_names"]).to match_array(%w[acme/web acme/legacy])
+      expect(query["github_full_names"]).not_to include("acme/api")
+    end
+
+    # The other half of criterion 1: following the control has to actually produce a pre-ticked
+    # picker. Asserting on the link alone would pin a URL that no page is obliged to honour — and
+    # `#new` seeding `@full_names` is the half of this change that makes the tick appear, so it is
+    # the half worth walking to.
+    #
+    # The second stub is the retry landing in a healthier moment — the installation answers now, so
+    # the picker offers the whole account. `acme/api` registered on the first pass, so it comes back
+    # as a disabled already-registered row rather than a tick: what is carried is the FAILED
+    # remainder, not the submission.
+    it "arrives at the picker with those repositories already ticked" do
+      submit_with_unreadable_installation(%w[acme/api acme/web])
+      retry_link = Capybara.string(response.body).find_link("Try these again")[:href]
+
+      stub_github(repos: [github_repo("acme/api"), github_repo("acme/web"), github_repo("acme/legacy")])
+      get retry_link
+
+      expect(response).to have_http_status(:ok)
+
+      picker = Capybara.string(response.body)
+      expect(picker).to have_field(type: "checkbox", with: "acme/web", checked: true)
+      expect(picker).to have_field(type: "checkbox", with: "acme/legacy", checked: false)
+      expect(picker).to have_field(type: "checkbox", with: "acme/api", disabled: true, checked: false)
+    end
+
+    # A rate limit is the reason that most literally instructs a retry — "Try again in a few
+    # minutes" — so it is the one this control exists for, and it must not read as an outage.
+    it "offers the retry for a rate-limited batch" do
+      submit_with_unreadable_installation(%w[acme/api acme/web], failure: { forbidden: :rate_limited })
+
+      expect(response.body).to include("GitHub rate limit reached")
+      expect(response.body).to include("Try these again")
+    end
+
+    # Criterion 2. A batch that failed only for reasons a re-run cannot fix must not offer one:
+    # `already_registered` needs nothing, and `not_in_installation` needs somebody to install the
+    # App on GitHub first. Offering "try these again" here would be promising something the second
+    # submission would refuse identically.
+    it "does not offer a retry when every skip is terminal" do
+      create_repository(user: @user, github_full_name: "acme/taken")
+      stub_github(repos: [github_repo("acme/api"), github_repo("acme/taken")])
+
+      submit(%w[acme/api acme/theirs acme/taken])
+
+      expect(response.body).to include("Skipped 2.")
+      expect(response.body).to include("Already registered (1)")
+      expect(response.body).to include("Not connected to the SpecGuard GitHub App (1)")
+      expect(response.body).not_to include("Try these again")
+    end
+
+    # And the batch where nothing was skipped at all has nothing to carry.
+    it "does not offer a retry when the whole batch registered" do
+      stub_github(repos: [github_repo("acme/api"), github_repo("acme/web")])
+
+      submit(%w[acme/api acme/web])
+
+      expect(response.body).to include("Registered 2 repositories.")
+      expect(response.body).not_to include("Try these again")
+    end
+
+    # Criterion 4. Carrying a name back does not exempt it from the picker's existing display
+    # concession: a repository somebody registered while this reader was reading the summary arrives
+    # as a disabled "Already registered" row rather than as a tick. The picker asks
+    # `!taken && @full_names.include?(...)`, so the carried list decides what is OFFERED and the
+    # registration state still decides what is SELECTABLE — a carried name can never produce a tick
+    # box whose only possible outcome is "skipped".
+    it "shows a carried repository that has since been registered as already registered" do
+      # `acme/web` is the name this example turns on, so it has to be the name that FAILS: it is
+      # absent from `readable`, so it is what the retry carries. Submitting a name that registers
+      # (or one from another account) would leave the carried list without it, and the assertion
+      # below would then be pinning the ordinary already-registered row — true of any taken
+      # repository, and true with the picker's `!taken &&` guard deleted.
+      submit_with_unreadable_installation(%w[acme/api acme/web])
+      retry_link = Capybara.string(response.body).find_link("Try these again")[:href]
+
+      # The guard against exactly that drift: this example is only about a carried name, so if a
+      # future edit to `readable` (or to the fixture's split of the account) stops `acme/web` being
+      # carried, fail HERE and say why, rather than passing on a row that proves nothing.
+      carried = Rack::Utils.parse_nested_query(URI.parse(retry_link).query)["github_full_names"]
+      expect(carried).to include("acme/web")
+
+      # Somebody else gets there first, in the gap between the summary and the retry. A distinct
+      # `github_uid` because the signed-in user already holds the default one.
+      create_repository(user: create_user(github_uid: "2002", github_handle: "hubot"),
+                        github_full_name: "acme/web")
+      # `acme/legacy` keeps a registerable row on the page: `acme/api` registered on the first pass
+      # and `acme/web` has just been taken, and a picker with nothing left to register renders the
+      # "Nothing left to register" empty state instead of the form — which would pass an assertion
+      # about the absence of a tick for the wrong reason entirely.
+      stub_github(repos: [github_repo("acme/web"), github_repo("acme/api"), github_repo("acme/legacy")])
+
+      get retry_link
+
+      picker = Capybara.string(response.body)
+      expect(picker).to have_field(type: "checkbox", with: "acme/web", disabled: true, checked: false)
+      # `acme/legacy` is the control: same page, same carried-name treatment available, but nobody
+      # took it — so it proves the row above is disabled because it is TAKEN rather than because
+      # the retry landed on a picker that disables everything.
+      expect(picker).to have_field(type: "checkbox", with: "acme/legacy", disabled: false)
+    end
+
+    # Criterion 5. The retry is an addition, not a replacement — the two exits that were already
+    # there still go where they went, and "Register another batch" still means the BARE picker (a
+    # fresh account choice) rather than a second door onto the carried batch.
+    it "keeps the two existing exits meaning what they meant" do
+      submit_with_unreadable_installation(%w[acme/api globex/tools])
+
+      page = Capybara.string(response.body)
+      expect(page.find_link("Back to repositories")[:href]).to eq(repositories_path)
+      expect(page.find_link("Register another batch")[:href]).to eq(bulk_repositories_path)
+    end
+
+    # The control is a GET to the picker rather than a re-submission. Re-registering behind the
+    # reader's back would be safe (the operation is idempotent — see the controller's header), but a
+    # rate limit is precisely the refusal that asks a human to decide WHEN, so the button stops one
+    # step short and hands them a form. Also keeps the summary's own promise honest: the panel says
+    # "you can submit this batch again", and this is what lets them.
+    it "returns the reader to the form rather than re-registering for them" do
+      submit_with_unreadable_installation(%w[acme/api globex/tools])
+      retry_link = Capybara.string(response.body).find_link("Try these again")[:href]
+
+      stub_github(repos: [github_repo("acme/api"), github_repo("acme/web")])
+
+      expect { get retry_link }.not_to change(Repository, :count)
+      expect(response.body).to include("Register selected repositories")
+    end
+  end
+
   describe "refusing a submission before it reaches GitHub" do
     it "asks again when nothing was selected" do
       fake = stub_github(repos: [github_repo("acme/api")])
