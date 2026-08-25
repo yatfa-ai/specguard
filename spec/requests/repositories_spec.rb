@@ -1845,7 +1845,19 @@ RSpec.describe "Repository registration and API keys", type: :request do
         # first-request-only work cannot land in it.
         get repository_path(repository)
 
-        expect(count_all_queries { get repository_path(repository) }).to eq(20)
+        # 21 and not 20 since SPGD-816: `run_anchor`'s retention disclosure adds exactly ONE
+        # indexed read to the page — `TestRun#observations_retained?` picks the anchored run's
+        # branch boundary off
+        # `index_test_runs_on_repository_id_and_branch_and_created_at`. Rebaselined by one rather
+        # than carved out, because this is an ABSOLUTE page budget: hiding a real new query behind
+        # a filter would be the regression this count exists to catch.
+        #
+        # ONE for the whole page, not one per row, and that is the property worth stating: the
+        # boundary is evaluated for the ANCHORED RUN only and no panel row asks it anything, so
+        # this number does not move with the suite, the window, or the run count. The invariance
+        # examples that pin it live beside the window budgets in
+        # spec/requests/api/v1/repository_latest_run_spec.rb.
+        expect(count_all_queries { get repository_path(repository) }).to eq(21)
         # And the page really did render the thing being counted — an absolute count is satisfied
         # by a page that renders nothing at all.
         expect(distribution.all("li").size).to eq(4)

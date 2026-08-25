@@ -554,13 +554,49 @@ class Api::V1::RepositoriesController < Api::BaseController
   # from the middle of that array or from behind its bound entirely. That is the contract rather than
   # a bug, and this block is what says so, the way `history_window.branch_scope` says it for the
   # branch-filtered case. A client that needs the identity back omits the parameter.
+  # `observations_retained` / `retention_runs` DISCLOSE THE OTHER WAY THIS BLOCK CAN BE EMPTY, and
+  # they are shaped on `rejections_window.retention_rows` key-for-key, under the same doctrine that
+  # block states in its own words: *the two truncation bounds are independent, and both are
+  # disclosed*, because a row ageing out changes the MEANING of the reading. `BRANCH_RETENTION_RUNS`
+  # changes the meaning of every per-example reading identically, and until now it was published
+  # nowhere.
+  #
+  # The state they name is one `resolved: true` could not distinguish. `Ingest::ObservationPruner`
+  # deletes `spec_observations` and never deletes the owning `test_runs` row, so a pruned run
+  # resolves, still reports `suite_size_measured: true` off its own untouched `total_specs_count`,
+  # and returns zero rows from every per-example rollup — byte-identical to a run that genuinely
+  # recorded nothing, and a lie in the CONFIDENT direction. This block already refuses that exact
+  # conflation one grain up (see `serialized_latest_run`: *a repository whose CI has never run must
+  # not serialize byte-identically to one that ran and genuinely found an empty suite*); these two
+  # keys are that same refusal one grain down. `RequestedCommitShaParam` names *a pruned run* among
+  # the ordinary ways to arrive here, and discloses only the not-found half of it.
+  #
+  # **`observations_retained` is a statement about the RULE, not a row count.** `false` means the
+  # retention rule no longer keeps this run's per-example rows — deleted, or eligible for deletion
+  # at any ingest. `TestRun#observations_retained?` carries the argument; the short version is that
+  # `Ingest::QuietBucketPruner` is opportunistic and names its own unreachable remainder, so a
+  # past-boundary run in a quiet bucket may still physically hold rows nothing has got round to
+  # deleting. A client must not read this as "the rows are gone", and the endpoint must not derive
+  # it from row absence — that would conflate retention with a run whose per-example rows were never
+  # delivered at all.
+  #
+  # `retention_runs` is the constant itself, published so the reading above is interpretable rather
+  # than a bare boolean: it is what makes `false` mean *older than the 60 most recent runs of this
+  # run's own branch* instead of *older than something*. Per BRANCH and never per repository — the
+  # constant's own comment carries why — so it bounds the branch named two keys up.
+  #
+  # ADDED BESIDE the existing five, which keep their names, types and values exactly: a default
+  # unparameterised GET is byte-identical to what it served before apart from these two, pinned in
+  # `spec/requests/api/v1/repositories_spec.rb`.
   def serialized_run_anchor
     {
       source: requested_commit_sha ? "requested" : "default",
       requested_commit_sha: requested_commit_sha,
       resolved: requested_commit_sha.nil? || !requested_test_run.nil?,
       commit_sha: latest_test_run&.commit_sha,
-      branch: latest_test_run&.branch
+      branch: latest_test_run&.branch,
+      observations_retained: latest_test_run&.observations_retained?,
+      retention_runs: SpecObservation::BRANCH_RETENTION_RUNS
     }
   end
 

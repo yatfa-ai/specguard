@@ -378,6 +378,167 @@ RSpec.describe TestRun do
     end
   end
 
+  # The state `#suite_size_measured?` above cannot express, and the reason this predicate exists:
+  # `Ingest::ObservationPruner` deletes `spec_observations` and never deletes the owning run, so a
+  # pruned run keeps answering off its own untouched counters while every per-example rollup goes
+  # empty — byte-identically to a run that genuinely recorded nothing.
+  #
+  # Every example here is about the RULE and never about row counts. Nothing below creates or
+  # deletes a single observation, deliberately: `Ingest::QuietBucketPruner` is opportunistic and
+  # names its own permanently unreachable remainder, so a past-boundary run may still physically
+  # hold rows, and an example asserting zero rows for one would be wrong on exactly the population
+  # that pruner exists for.
+  describe "#observations_retained?" do
+    # `created_at` is explicit on every run, one minute apart, for `Ingest::ObservationPruner`'s own
+    # reason: the boundary is `(created_at, id)`, and runs created inside the same millisecond would
+    # order by id alone — true, but it would stop these examples saying anything about the timestamp
+    # half of the comparison.
+    def history(branch:, count:, from: 100.days.ago)
+      (0...count).map do |index|
+        create_test_run(repository: repository, branch: branch, created_at: from + index.minutes,
+                        total_specs_count: 1)
+      end
+    end
+
+    describe "the window it reports" do
+      before { stub_const("SpecObservation::BRANCH_RETENTION_RUNS", 3) }
+
+      # The boundary run is the Nth and the Nth is RETAINED, mirroring the pruner's strict `<`. An
+      # off-by-one here would disclose a whole run of history as aged out a run early — or, worse,
+      # report a genuinely emptied run as retained.
+      it "reports the R most recent runs of the branch as retained and everything older as aged out" do
+        runs = history(branch: "main", count: 5)
+
+        expect(runs.map(&:observations_retained?)).to eq([false, false, true, true, true])
+      end
+
+      # The pruner's own "nothing to do" case: a nil boundary, which is every branch of every
+      # repository until it has run R times.
+      it "reports every run as retained on a branch that has run fewer than R times" do
+        runs = history(branch: "main", count: 2)
+
+        expect(runs.map(&:observations_retained?)).to all(be(true))
+      end
+
+      # Exactly R runs is the nil-boundary case too — `offset(R - 1)` picks the last row rather
+      # than running off the end — and it is the normal state of a branch that has just filled its
+      # window, not an edge case.
+      it "reports every run as retained on a branch holding exactly R runs" do
+        runs = history(branch: "main", count: 3)
+
+        expect(runs.map(&:observations_retained?)).to all(be(true))
+      end
+    end
+
+    # ⭐ The keying the rule is built on, asked of the DISCLOSURE. Recency across a repository is
+    # interleaved, so a predicate keyed on "the last N runs of this repository" would report
+    # `main`'s history as aged out first — and `main` is what every cross-run read is anchored to.
+    describe "branch keying" do
+      before { stub_const("SpecObservation::BRANCH_RETENTION_RUNS", 3) }
+
+      it "buckets each branch on its own though the other's runs are interleaved among them" do
+        start = 100.days.ago
+        main = (0...3).map do |i|
+          create_test_run(repository: repository, branch: "main", created_at: start + (i * 10).minutes,
+                          total_specs_count: 1)
+        end
+        features = (0...8).map do |i|
+          create_test_run(repository: repository, branch: "feature/#{i}",
+                          created_at: start + ((i * 3) + 1).minutes, total_specs_count: 1)
+        end
+
+        expect(main.map(&:observations_retained?)).to all(be(true))
+        expect(features.map(&:observations_retained?)).to all(be(true))
+      end
+
+      # `branch: nil` compiles to `branch IS NULL` — its own bucket, exactly as
+      # `Ingest::ObservationPruner#branch_runs` treats it, and NOT a bucket every unnamed run shares
+      # with the named ones. Pinned from both sides at once: the named branch is past its boundary
+      # while the anonymous bucket, holding fewer runs, is entirely inside its own.
+      it "buckets the runs that named no branch on their own, apart from a named branch past its boundary" do
+        start = 100.days.ago
+        named = history(branch: "main", count: 5, from: start)
+        anonymous = (0...2).map do |i|
+          create_test_run(repository: repository, branch: nil, created_at: start + ((i * 7) + 2).minutes,
+                          total_specs_count: 1)
+        end
+
+        expect(named.map(&:observations_retained?)).to eq([false, false, true, true, true])
+        expect(anonymous.map(&:observations_retained?)).to all(be(true))
+      end
+
+      # One repository's runs never bound another's, on the branch every repository has.
+      it "scopes the bucket to one repository" do
+        other = create_repository(user: create_user(github_uid: "2002", github_handle: "hubot"),
+                                  github_full_name: "acme/other-service")
+        start = 100.days.ago
+        4.times do |i|
+          create_test_run(repository: other, branch: "main", created_at: start + i.minutes, total_specs_count: 1)
+        end
+        mine = history(branch: "main", count: 2, from: start)
+
+        expect(mine.map(&:observations_retained?)).to all(be(true))
+      end
+    end
+
+    # ⭐ THE PROPERTY THE WHOLE DESIGN RESTS ON. The disclosure derives its boundary from the
+    # pruner's own spelling rather than from a marker column precisely so the two cannot disagree —
+    # so this asserts the two boundaries AGREE, at a stubbed constant, over the same
+    # `(repository, branch)`. Lowering `BRANCH_RETENTION_RUNS` cannot move one without the other,
+    # and a divergence would mean the endpoint publishing a rule the enforcement does not follow.
+    describe "agreement with the pruner that enforces the rule" do
+      before { stub_const("SpecObservation::BRANCH_RETENTION_RUNS", 3) }
+
+      it "draws its boundary where Ingest::ObservationPruner draws its own" do
+        runs = history(branch: "main", count: 6)
+
+        # The pruner's boundary, read through the object that enforces it rather than re-spelled.
+        pruner = Ingest::ObservationPruner.new(repository_id: repository.id, branch: "main")
+        boundary = pruner.send(:oldest_retained_run)
+
+        aged_out, retained = runs.partition { |run| !run.observations_retained? }
+
+        # Every run the predicate calls retained is at or after the pruner's boundary; every run it
+        # calls aged out is strictly before it — which is the pruner's own strict `<`.
+        expect(retained).to all(satisfy { |run| ([run.created_at, run.id] <=> boundary) >= 0 })
+        expect(aged_out).to all(satisfy { |run| ([run.created_at, run.id] <=> boundary).negative? })
+        expect(retained.length).to eq(SpecObservation::BRANCH_RETENTION_RUNS)
+      end
+
+      # The same agreement observed through the pruner's ACTUAL EFFECT rather than through its
+      # private boundary: the runs it really empties are exactly the ones the predicate reports as
+      # aged out. This is allowed to count rows — it is an assertion about `ObservationPruner`,
+      # which is not opportunistic and does delete on the branch it is handed.
+      it "reports as aged out exactly the runs a prune on that branch empties" do
+        runs = history(branch: "main", count: 5)
+        runs.each do |run|
+          run.spec_observations.create!(
+            repository: repository, file_path: "spec/models/a_spec.rb", line_number: 1,
+            status: "unannotated", example_id: "./spec/models/a_spec.rb[1:1]"
+          )
+        end
+
+        predicted_aged_out = runs.reject(&:observations_retained?)
+
+        Ingest::ObservationPruner.prune(runs.last)
+
+        emptied = runs.select { |run| run.spec_observations.count.zero? }
+
+        expect(emptied.map(&:id)).to eq(predicted_aged_out.map(&:id))
+        expect(emptied).not_to be_empty
+      end
+    end
+
+    # The constant is not stubbed here: the predicate has to be right at the shipping value, and a
+    # branch nowhere near 60 runs is the ordinary state of every repository.
+    it "reports a young branch's runs as retained at the real retention bound" do
+      runs = history(branch: "main", count: 3)
+
+      expect(SpecObservation::BRANCH_RETENTION_RUNS).to be > 3
+      expect(runs.map(&:observations_retained?)).to all(be(true))
+    end
+  end
+
   # The denominator each shard's duration was measured over. `test_run_shards.total_specs_count`
   # was written by `Ingest::RunRecorder#upsert_shard` on every sharded POST since sharding shipped
   # and read by nothing, so the panel could show four wall clocks and no way to tell a shard that

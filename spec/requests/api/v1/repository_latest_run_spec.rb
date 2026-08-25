@@ -2769,7 +2769,11 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
         "requested_commit_sha" => first.commit_sha,
         "resolved" => true,
         "commit_sha" => first.commit_sha,
-        "branch" => "main"
+        "branch" => "main",
+        # Read off the constant and never as a literal 60, so lowering the rule cannot leave this
+        # example asserting a bound the platform no longer enforces.
+        "observations_retained" => true,
+        "retention_runs" => SpecObservation::BRANCH_RETENTION_RUNS
       )
     end
 
@@ -2785,7 +2789,9 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
         "requested_commit_sha" => nil,
         "resolved" => true,
         "commit_sha" => third.commit_sha,
-        "branch" => "main"
+        "branch" => "main",
+        "observations_retained" => true,
+        "retention_runs" => SpecObservation::BRANCH_RETENTION_RUNS
       )
     end
 
@@ -2808,7 +2814,12 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
         "requested_commit_sha" => "deadbeefdead",
         "resolved" => false,
         "commit_sha" => third.commit_sha,
-        "branch" => "main"
+        "branch" => "main",
+        # The retention disclosure describes the run ACTUALLY SERVED, which under a fallback is the
+        # newest run and not the sha the client typed — the same rule `commit_sha`/`branch` two
+        # lines up already follow.
+        "observations_retained" => true,
+        "retention_runs" => SpecObservation::BRANCH_RETENTION_RUNS
       )
       expect(body["latest_run"]).to include("commit_sha" => third.commit_sha, "total_specs" => 30)
     end
@@ -2828,7 +2839,12 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
         "requested_commit_sha" => "deadbeefdead",
         "resolved" => false,
         "commit_sha" => nil,
-        "branch" => nil
+        "branch" => nil,
+        # `null`, not `true` and not `false`: there is no run to ask, and a boolean here would be a
+        # verdict about a run that does not exist — the same separation `commit_sha: null` draws one
+        # line up. `retention_runs` still ships, because the RULE exists whether or not a run does.
+        "observations_retained" => nil,
+        "retention_runs" => SpecObservation::BRANCH_RETENTION_RUNS
       )
     end
 
@@ -2916,7 +2932,9 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
         "requested_commit_sha" => nil,
         "resolved" => true,
         "commit_sha" => third.commit_sha,
-        "branch" => "main"
+        "branch" => "main",
+        "observations_retained" => true,
+        "retention_runs" => SpecObservation::BRANCH_RETENTION_RUNS
       )
     end
 
@@ -3406,10 +3424,25 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
 
       statements = executed_sql { get_repository(query: { branch: "main" }) }
 
+      # `run_anchor`'s retention boundary is excluded on the SAME rule the `shard_totals` pick is
+      # excluded by in the comment above: it is one indexed read ABOUT THE ANCHORED RUN, not part of
+      # this window, so counting it here would make the budget read as three and hide which of the
+      # two axes moved if one ever did. `TestRun#observations_retained?` emits it.
+      #
+      # Excluded STRUCTURALLY rather than by luck: it is the only branch-scoped read that selects
+      # two columns with an OFFSET, where every window read selects `test_runs.*`. And it is bounded
+      # at exactly ONE statement below rather than merely dropped — an exclusion that swallowed a
+      # per-row boundary read would be the very leak this example exists to catch, so the carve-out
+      # is asserted rather than assumed.
+      boundary_reads = statements.grep(/FROM "test_runs"/).grep(/OFFSET/)
       history_queries = statements.grep(/FROM "test_runs"/).grep(/"branch" = /)
                                   .grep_v(/\(test_runs\.created_at, test_runs\.id\) < /)
+                                  .grep_v(/OFFSET/)
       grouped_counts = statements.grep(/FROM "test_run_shards"/).grep(/GROUP BY/)
 
+      # One boundary read for the whole response, however many rows the window holds — the anchored
+      # run is asked once and no row is asked at all.
+      expect(boundary_reads.length).to eq(1)
       expect(history_queries.length).to eq(1)
       expect(history_queries.first).to include("LIMIT")
       expect(grouped_counts.length).to eq(1)
@@ -3444,13 +3477,17 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
       history = executed_sql { get_repository(query: { branch: "main" }) }
                 .grep(/FROM "test_runs"/).grep(/"branch" = /)
                 .grep_v(/\(test_runs\.created_at, test_runs\.id\) < /)
+                .grep_v(/OFFSET/)
 
       expect(history.length).to eq(1)
       # Both clauses, in that order, in one statement. `latest_run`'s own `LIMIT 1` read carries no
       # branch predicate and is filtered out above, and so is `directory_run_growth`'s previous-run
       # lookup, which DOES carry one — it is excluded on the row-value predicate
       # `Repository#previous_test_run_on_branch` emits and `recent_test_runs` does not, so this
-      # cannot pass by matching either.
+      # cannot pass by matching either. `run_anchor`'s retention boundary carries one too and is
+      # excluded on its OFFSET — it selects two columns where every window read selects
+      # `test_runs.*`, and the example above bounds it at exactly one statement so dropping it here
+      # cannot hide a per-row read.
       expect(history.first).to match(/"branch" = .*LIMIT/m)
     end
 
