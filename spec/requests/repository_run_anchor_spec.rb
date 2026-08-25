@@ -642,6 +642,20 @@ RSpec.describe "Repository run anchor", type: :request do
 
     def aged_out_notice = page.all("#observations-aged-out").first&.text&.squish
 
+    # ⚠️ A FLAT CLAIM OF EMPTINESS — the assertion the copy must never make, expressed as the CLAIM
+    # rather than as a list of words to avoid.
+    #
+    # The distinction this regex draws is the whole correctness argument of the sentence, so it is
+    # worth stating precisely. "...the panels below HAVE NOTHING LEFT to read" asserts a row count.
+    # "...may have LITTLE OR NOTHING LEFT to show" asserts the rule and hedges the rows. Both
+    # contain the word "nothing", which is why a guard written against vocabulary either lets the
+    # false sentence through (the original `/deleted|removed/` guard did exactly that) or fails the
+    # true one. What separates them is whether the emptiness is asserted FLATLY, so that is what is
+    # matched: `have nothing left` and not `have little or nothing left`.
+    def flat_emptiness_claim
+      /(have|has) nothing left|nothing to (read|show)|(are|is) empty|deleted|removed|no longer exist/i
+    end
+
     # `BRANCH_RETENTION_RUNS` runs plus one, so the oldest is strictly past its branch's boundary —
     # the pruner's own strict `<`. Stubbed rather than ingesting sixty runs, and the stub is what
     # keeps this example about the RULE rather than about a number.
@@ -670,13 +684,82 @@ RSpec.describe "Repository run anchor", type: :request do
       # the wording has to say so: the constant is a per-branch bound and a sentence implying a
       # repository-wide one would misdescribe the rule.
       expect(aged_out_notice).to include("most recent runs of its branch")
-      # ⚠️ The wording that must NOT appear. `QuietBucketPruner` is opportunistic and names its own
-      # permanently unreachable remainder, so a past-boundary run may still physically hold rows —
-      # "deleted" would be a false sentence on exactly that population.
-      expect(aged_out_notice).not_to match(/deleted|removed|no longer exist/i)
+      # ⚠️ The CLAIM that must not appear, which is a different assertion from a list of words to
+      # avoid. A vocabulary guard pins spellings and lets the claim through in a synonym: the first
+      # version of this sentence said the panels below "have nothing left to read", which asserts
+      # a row count exactly as "deleted" does and sailed straight through a /deleted|removed/ check.
+      # So the guard is written against the ASSERTION — any flat claim that there is nothing there —
+      # rather than against the vocabulary that happened to carry it once.
+      #
+      # `QuietBucketPruner` is opportunistic and names its own PERMANENTLY unreachable remainder, so
+      # a past-boundary run may still physically hold rows; the example below renders that state and
+      # is the one that makes this guard mean something rather than merely read well.
+      expect(aged_out_notice).not_to match(flat_emptiness_claim)
+      # And what it must say INSTEAD: hedged over both states, because both are real. A run whose
+      # rows a prune has emptied and a run holding the remainder get the same sentence, and it is
+      # true of each.
+      expect(aged_out_notice).to include("may have little or nothing left to show")
       # And it does not walk back the counts the run's own row still supports. This is the
       # conflation the whole ticket is about: the run measured a suite and still says so.
       expect(panel_text("overview")).to include("Measured on #{oldest.commit_sha.first(7)}")
+    end
+
+    # ⭐⭐ THE POPULATION THE SENTENCE IS MOST EASILY WRONG ABOUT, and until this example existed it
+    # was rendered nowhere in the suite.
+    #
+    # Every other example in this block builds its history through `ingest_run`, which invokes
+    # `Ingest::ObservationPruner` on the ingesting branch and really does empty the older runs' rows.
+    # So the fixture could only ever produce the DRAINED case — and a sentence claiming the panels
+    # below are empty is true of the drained case, which is precisely why the first version of this
+    # copy shipped saying exactly that and no example objected.
+    #
+    # `Ingest::QuietBucketPruner:47-57` names the other case and names it as PERMANENT — "out of
+    # reach PERMANENTLY, not until it grows". A merged `feature/*` branch that never ingests again
+    # sits past its boundary holding its rows, and nothing is coming to delete them. That is a
+    # steady state, so the page has to be true on it, not eventually true.
+    #
+    # Built DIRECTLY rather than through `ingest_run` for that exact reason: ingest would prune the
+    # state under test out of existence. This is the deliberate exception to the file's header rule
+    # — the rows are written in the shape `Ingest::ObservationRecorder` writes (see
+    # `spec/models/slowest_tests_spec.rb`), and `spec/models/test_run_spec.rb:512` builds runs the
+    # same way for the same reason.
+    it "does not tell the reader the panels are empty while a panel is rendering rows" do
+      stub_const("SpecObservation::BRANCH_RETENTION_RUNS", 3)
+      # A quiet bucket: four runs on a branch that has stopped ingesting, so the oldest is strictly
+      # past the boundary. Nothing prunes it, because nothing ingests here again.
+      quiet = (0...4).map do |index|
+        create_test_run(repository: repository, branch: "feature/checkout", total_specs_count: 1,
+                        commit_sha: "quiet00cafe000#{index}", created_at: (10 - index).hours.ago)
+      end
+      # The OLDEST of the four, which is the one strictly past a boundary of 3. `quiet.first` is
+      # backdated furthest (`(10 - index).hours.ago` counts DOWN toward the present, so index 0 is
+      # the eldest) — taking `.last` here picks the newest run and asserts nothing.
+      stranded = quiet.first
+      # The remainder: the past-boundary run STILL HOLDS its row. This is the assertion the drained
+      # fixture cannot make, and the whole point of the example.
+      stranded.spec_observations.create!(
+        repository: repository, file_path: "spec/models/order_spec.rb",
+        spec_file_path: "spec/models/order_spec.rb", line_number: 1, name: "Order totals the lines",
+        duration_seconds: 12.5, outcome: "passed", status: "unannotated",
+        example_id: "./spec/models/order_spec.rb[1:1]"
+      )
+
+      expect(stranded.observations_retained?).to be(false)
+      expect(stranded.spec_observations.count).to eq(1)
+
+      get repository_path(repository, commit_sha: stranded.commit_sha)
+
+      expect(response).to have_http_status(:ok)
+      # The disclosure still appears — the RULE no longer covers this run, which is true however
+      # many rows happen to survive. The predicate is not what is under test here; the copy is.
+      expect(aged_out_notice).to include("aged out of the retention window")
+      # ⛔ THE SELF-CONTRADICTION. The panel below is rendering a populated ranking, so any flat
+      # claim of emptiness above it is a false sentence sitting directly on top of its own
+      # counter-example. This is the assertion the vocabulary guard could not make.
+      expect(panel_text("slowest-examples")).to include("slowest test of the run named above")
+      expect(aged_out_notice).not_to match(flat_emptiness_claim)
+      # Hedged, and therefore true in BOTH states rather than in the one the other fixtures build.
+      expect(aged_out_notice).to include("may have little or nothing left to show")
     end
 
     # The other side of the branch, and the half that makes the example above mean anything: the
