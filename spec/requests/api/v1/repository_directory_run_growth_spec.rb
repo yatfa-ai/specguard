@@ -622,8 +622,17 @@ RSpec.describe "GET /api/v1/repository — directory_run_growth", type: :request
       get_repository(key: api_key)
 
       statements = executed_sql { get_repository(key: api_key) }.grep(/FROM "test_runs"/)
+      # `run_anchor`'s retention boundary is excluded from both counts, on the same rule the
+      # row-value predicate excludes the previous-run lookup by: it is one indexed read ABOUT THE
+      # ANCHORED RUN and not one of the three this example names, so folding it into the total would
+      # rebaseline the number and hide the unmemoized-anchor regression the count exists to catch.
+      # Told apart STRUCTURALLY — the only read carrying an OFFSET — and bounded at exactly ONE, so
+      # the carve-out cannot swallow a per-row read.
+      boundary = statements.grep(/OFFSET/)
+      statements = statements.grep_v(/OFFSET/)
       anchor_shaped = statements.grep_v(/\(test_runs\.created_at, test_runs\.id\) < /)
 
+      expect(boundary.length).to eq(1)
       expect(statements.length).to eq(3)
       expect(anchor_shaped.length).to eq(2)
     end

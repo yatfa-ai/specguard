@@ -799,6 +799,51 @@ class TestRun < ApplicationRecord
   # reported", which is the answer this predicate already gives for a reported zero.
   def suite_size_measured? = total_specs_count.to_i.positive?
 
+  # == Whether the retention rule still keeps this run's per-example rows
+  #
+  # `#suite_size_measured?` above reads this run's OWN column, in memory, and never the
+  # observations — so it stays `true` forever after {Ingest::ObservationPruner} has deleted them.
+  # That manufactures a state the product could not express: the run resolves, reports a measured
+  # suite, and every per-example rollup returns zero rows, byte-identically to a run that genuinely
+  # recorded nothing. This predicate is what separates the two.
+  #
+  # **It is a statement about the RULE, not a row count**, and the distinction is the whole
+  # correctness of it. `false` means *the retention rule no longer keeps this run's per-example
+  # rows* — they are deleted, or eligible for deletion at any ingest. It does not promise the rows
+  # are gone: {Ingest::QuietBucketPruner} exists precisely because `ObservationPruner` only runs on
+  # the branch being ingested, so a merged `feature/*` branch that never ingests again holds
+  # expired rows until an opportunistic sweep gets round to them, and that pruner names its own
+  # permanently-unreachable remainder. A past-boundary run may therefore still physically hold
+  # rows. Inferring the answer the other way — from row absence — would be wrong in the opposite
+  # direction, conflating retention with a run whose per-example rows were never delivered at all.
+  #
+  # Derived from `ObservationPruner`'s own boundary rather than from a marker column, so the
+  # disclosure and the enforcement cannot disagree: lowering `BRANCH_RETENTION_RUNS` moves both or
+  # neither. The spelling below is `Ingest::ObservationPruner#oldest_retained_run`'s, down to the
+  # `(created_at, id) DESC` total ordering — a bare `created_at` orders a same-instant pair
+  # arbitrarily, which would put the boundary either side of two runs ingested in the same second.
+  # `branch` may be nil, and `nil` here compiles to `branch IS NULL`, its own bucket scoped to one
+  # repository, exactly as `#branch_runs` treats it.
+  #
+  # Strictly `<`, mirroring `#expired_runs`: the Nth most recent run is the boundary and is
+  # RETAINED. A `nil` boundary is the pruner's "nothing to do" case — the branch holds fewer than N
+  # runs, which is every branch of every repository until it has run that many times — and every
+  # one of its runs is retained.
+  #
+  # One indexed `pick` on `index_test_runs_on_repository_id_and_branch_and_created_at`, evaluated
+  # for the anchored run only and never per row.
+  # `<=>` and not `>=`: `Array` defines the spaceship but does not include `Comparable`, so the
+  # operator form is a NoMethodError rather than a comparison. Both sides carry the column's own
+  # microsecond precision — ActiveRecord truncates `created_at` to the column's precision when it
+  # stamps the row, so the in-memory value and the picked one are the same value domain and a tie
+  # really does fall through to `id`, exactly as it does inside the pruner's SQL.
+  def observations_retained?
+    boundary = oldest_retained_run_on_branch
+    return true if boundary.nil?
+
+    ([created_at, id] <=> [boundary.first, boundary.last]) >= 0
+  end
+
   # Whether `other` was put together from the same number of parts as this run, so a difference
   # between their counts is a change in the *suite* rather than a change in *how much of it has
   # been reported*.
@@ -947,6 +992,28 @@ class TestRun < ApplicationRecord
     return nil unless every_shard_costed?
 
     humanized_seconds_per_spec(shard_seconds_per_spec.public_send(bound))
+  end
+
+  # The oldest run the retention rule KEEPS on THIS run's branch, as `[created_at, id]`, or `nil`
+  # when the branch holds fewer than `SpecObservation::BRANCH_RETENTION_RUNS` runs.
+  #
+  # `Ingest::ObservationPruner#oldest_retained_run` verbatim, reading the same constant and the
+  # same `(created_at, id) DESC` total ordering off the same
+  # `index_test_runs_on_repository_id_and_branch_and_created_at`. Copied deliberately rather than
+  # called: the pruner is constructed with an explicit `(repository_id, branch)` pair for a
+  # write-path sweep it then performs, and instantiating a deleter to ask a read-path question
+  # would put a service whose job is DELETING rows on the request path of a serializer. What must
+  # not drift is the RULE, and it cannot — both spellings read `BRANCH_RETENTION_RUNS`, and
+  # `#observations_retained?`'s spec asserts this boundary equals the pruner's for the same
+  # `(repository, branch)` under a stubbed constant.
+  #
+  # `branch` may be nil; `nil` compiles to `branch IS NULL`, the anonymous bucket, scoped to one
+  # repository exactly like every other bucket.
+  def oldest_retained_run_on_branch
+    TestRun.where(repository_id: repository_id, branch: branch)
+           .order(created_at: :desc, id: :desc)
+           .offset(SpecObservation::BRANCH_RETENTION_RUNS - 1)
+           .pick(:created_at, :id)
   end
 
   # One aggregate read, on `index_test_run_shards_on_test_run_id`, answering all four questions at

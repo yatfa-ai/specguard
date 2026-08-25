@@ -49,4 +49,88 @@ RSpec.describe "API v1 — Bearer authentication", type: :request do
 
     expect(response.parsed_body.dig("repository", "full_name")).to eq("acme/ledger")
   end
+
+  # ⭐ SPGD-816. The retention disclosure is ADDED BESIDE the anchor's existing keys, and this is the
+  # example that says the addition cost nothing: `run_anchor` grew by exactly two keys, no other
+  # block grew or shrank at all, and every pre-existing key kept its name, its type and its value.
+  #
+  # Asserted as an EXACT key set on both levels rather than key by key, on `repository_latest_run_
+  # spec`'s rule for the top level: `include` would pass a third key added by accident, and
+  # `have_key` would pass a key silently dropped. Bidirectional or it is not a contract.
+  describe "the retention disclosure on run_anchor" do
+    let(:headers) { { "Authorization" => "Bearer #{api_key.raw_token}" } }
+
+    def anchor_for(query = {})
+      get "/api/v1/repository", params: query, headers: headers
+      response.parsed_body
+    end
+
+    it "adds exactly two keys to run_anchor and leaves the other five as they were" do
+      run = create_test_run(repository: repository, branch: "main", commit_sha: "feedfacecafe",
+                            total_specs_count: 12)
+
+      anchor = anchor_for["run_anchor"]
+
+      expect(anchor.keys).to contain_exactly("source", "requested_commit_sha", "resolved",
+                                             "commit_sha", "branch",
+                                             "observations_retained", "retention_runs")
+      # The five, unchanged in name, type and value — a default call is what it always was.
+      expect(anchor.slice("source", "requested_commit_sha", "resolved", "commit_sha", "branch"))
+        .to eq("source" => "default", "requested_commit_sha" => nil, "resolved" => true,
+               "commit_sha" => run.commit_sha, "branch" => "main")
+    end
+
+    # The addition is local to `run_anchor`. Every other block is untouched, which is the half an
+    # example that only read `run_anchor` could not see.
+    it "leaves every other block's keys exactly where they were" do
+      create_test_run(repository: repository, branch: "main", total_specs_count: 12)
+
+      body = anchor_for
+
+      expect(body["latest_run"].keys).not_to include("observations_retained", "retention_runs")
+      expect(body["delivery_health"]["rejections_window"].keys)
+        .to contain_exactly("limit", "bounded", "retention_rows", "any_reasons_truncated")
+    end
+
+    # ⭐ THE DEFECT ITSELF, pinned as the direct comparison the ticket asks for. Before this key
+    # existed these two responses were byte-identical in every respect a client could act on: a run
+    # that RESOLVED and whose per-example rows aged out, and a run that genuinely RECORDED NOTHING.
+    # Both resolve, both report a run, and every per-example rollup under both returns zero rows —
+    # so the confident reading ("this suite has no slow tests") was indistinguishable from the
+    # retention reading ("this suite's slow tests are no longer on file").
+    #
+    # `total_specs_count` is deliberately EQUAL on the two sides. The point is not that the runs
+    # differ — it is that the RETENTION STATE differs and used to be unsayable, so anything the two
+    # bodies disagree about here is the disclosure doing its job and nothing else.
+    it "no longer serializes an aged-out run identically to one that recorded nothing" do
+      stub_const("SpecObservation::BRANCH_RETENTION_RUNS", 3)
+      start = 100.days.ago
+
+      # Five runs on `main`: the oldest is strictly past the boundary, so the rule no longer keeps
+      # its rows. It measured a suite — `total_specs_count` says 12 — and still says so.
+      aged_out = create_test_run(repository: repository, branch: "main", commit_sha: "a" * 12,
+                                 created_at: start, total_specs_count: 12)
+      4.times do |i|
+        create_test_run(repository: repository, branch: "main", commit_sha: "b#{i}#{'0' * 10}",
+                        created_at: start + (i + 1).minutes, total_specs_count: 12)
+      end
+      # A run on its own branch, well inside the window, whose rows were never pruned.
+      inside = create_test_run(repository: repository, branch: "quiet", commit_sha: "c" * 12,
+                               created_at: start + 10.minutes, total_specs_count: 12)
+
+      aged_body = anchor_for(commit_sha: aged_out.commit_sha)["run_anchor"]
+      inside_body = anchor_for(commit_sha: inside.commit_sha)["run_anchor"]
+
+      # Both resolved, both measured the same suite size — every axis that existed before today
+      # agrees, which is exactly why the conflation survived.
+      expect(aged_body["resolved"]).to be(true)
+      expect(inside_body["resolved"]).to be(true)
+      expect(aged_out.total_specs_count).to eq(inside.total_specs_count)
+
+      # And the one axis that now separates them.
+      expect(aged_body["observations_retained"]).to be(false)
+      expect(inside_body["observations_retained"]).to be(true)
+      expect(aged_body).not_to eq(inside_body)
+    end
+  end
 end

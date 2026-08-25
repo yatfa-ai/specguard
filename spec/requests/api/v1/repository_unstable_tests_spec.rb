@@ -766,9 +766,18 @@ RSpec.describe "GET /api/v1/repository — unstable_tests", type: :request do
       get_repository(key: api_key)
 
       statements = executed_sql { get_repository(key: api_key, query: { branch: "main" }) }
-      window_selects = statements.grep(/FROM "test_runs"/).grep(/"branch" = /)
-                                 .grep_v(/\(test_runs\.created_at, test_runs\.id\) < /)
+      branch_selects = statements.grep(/FROM "test_runs"/).grep(/"branch" = /)
+      # `run_anchor`'s retention boundary is a branch-scoped read too, and is excluded on the same
+      # rule the row-value predicate excludes the previous-run lookup by: it is one indexed read
+      # ABOUT THE ANCHORED RUN, not this window, so folding it in would widen the total rather than
+      # pin the window. Told apart STRUCTURALLY — the only branch-scoped read carrying an OFFSET —
+      # and bounded at exactly ONE, so the carve-out cannot swallow a per-row read.
+      # `TestRun#observations_retained?` emits it.
+      boundary_selects = branch_selects.grep(/OFFSET/)
+      window_selects = branch_selects.grep_v(/OFFSET/)
+                                     .grep_v(/\(test_runs\.created_at, test_runs\.id\) < /)
 
+      expect(boundary_selects.length).to eq(1)
       expect(window_selects.length).to eq(1)
       expect(window_selects.first).to include("LIMIT")
       # The block really was served over that one window, so the count above is not one because

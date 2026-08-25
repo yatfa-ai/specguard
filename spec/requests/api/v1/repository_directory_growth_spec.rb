@@ -757,8 +757,18 @@ RSpec.describe "GET /api/v1/repository — directory_growth", type: :request do
 
       statements = executed_sql { get_repository(key: api_key, query: { branch: "main" }) }
       branch_selects = statements.grep(/FROM "test_runs"/).grep(/"branch" = /)
+      # `run_anchor`'s retention boundary is a THIRD branch-scoped select and is excluded from both
+      # counts below, on the same rule the row-value predicate excludes the previous-run lookup by:
+      # it is one indexed read ABOUT THE ANCHORED RUN, not part of this window, so folding it in
+      # would widen the total and hide which axis moved. `TestRun#observations_retained?` emits it.
+      # Told apart STRUCTURALLY — it is the only branch-scoped read carrying an OFFSET, where every
+      # other selects `test_runs.*` — and bounded at exactly ONE below, so the carve-out cannot
+      # swallow a per-row regression, which is the leak this example exists to catch.
+      boundary_selects = branch_selects.grep(/OFFSET/)
+      branch_selects = branch_selects.grep_v(/OFFSET/)
       window_selects = branch_selects.grep_v(/\(test_runs\.created_at, test_runs\.id\) < /)
 
+      expect(boundary_selects.length).to eq(1)
       expect(window_selects.length).to eq(1)
       expect(branch_selects.length).to eq(2)
       expect(get_repository(key: api_key, query: { branch: "main" })

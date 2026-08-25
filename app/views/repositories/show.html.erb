@@ -441,6 +441,48 @@
             </p>
           <% end %>
 
+          <%# The per-example rows behind every panel further down this page have aged out of the
+              retention window, and until now nothing said so anywhere.
+
+              This is the same conflation the never-ingested branch above refuses, one grain down.
+              `Ingest::ObservationPruner` deletes `spec_observations` and never deletes the owning
+              `test_runs` row, so a pruned run still has a `total_specs_count`, still reports a
+              measured suite, and still renders every figure above — while "Slowest tests" and its
+              neighbours go empty, byte-identically to a run that genuinely recorded nothing. The
+              counts above and the blank panels below contradict each other, and a reader with no
+              sentence to go on has to guess which one is lying.
+
+              Worded as AGED OUT and never as "deleted", which is the correctness of it rather than
+              a nicety. `TestRun#observations_retained?` is a statement about the RULE, not a row
+              count: `Ingest::QuietBucketPruner` is opportunistic and names its own permanently
+              unreachable remainder, so a past-boundary run on a merged branch may still physically
+              hold rows nothing has got round to deleting. "These rows have been deleted" would be
+              a false sentence on exactly the population that pruner exists for.
+
+              Says the bound, for the reason the endpoint's `retention_runs` publishes it: a bare
+              "aged out" leaves a reader unable to place the run against the rule. Per BRANCH — the
+              constant's own comment carries why — so it is worded against this run's branch and
+              not against the repository.
+
+              Rendered on the anchored run, which under `?commit_sha=` is the run the reader
+              ASKED for, and that is the headline case: naming an old CI sha is exactly how a
+              reader arrives at a run this far back. `GET /api/v1/repository`'s `run_anchor` says
+              the same thing off the same predicate, so the page and the endpoint cannot disagree.
+
+              No row, ordering or cap on this panel changes: this is one sentence, in the same
+              muted register as the withheld-figure sentences above, and it appears only in the
+              state it describes. %>
+          <% unless @latest_test_run.observations_retained? %>
+            <p id="observations-aged-out" class="text-xs text-app-muted">
+              This run is older than the
+              <%= number_with_delimiter(SpecObservation::BRANCH_RETENTION_RUNS) %> most recent runs
+              of its branch, so its per-example observations have aged out of the retention window.
+              The counts above are read off the run's own record and stand; the per-test panels
+              below have nothing left to read, which is a fact about retention and not about what
+              this run found.
+            </p>
+          <% end %>
+
           <%# Say that the run arrived in pieces, which nothing on this page said before. Without it
               the two figures above are an unexplained pair; with it they are a wall clock and a
               bill. The count is worded as shard *reports* rather than as CI jobs on purpose — the

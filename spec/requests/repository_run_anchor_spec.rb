@@ -616,4 +616,105 @@ RSpec.describe "Repository run anchor", type: :request do
     expect(panel("recent-runs").all("a").map(&:text)).to include(older.commit_sha.first(7))
     expect(panel_text("overview")).to include("Measured on #{older.commit_sha.first(7)}")
   end
+
+  # ⭐ SPGD-816. The page's half of the retention disclosure. It belongs in THIS file rather than in
+  # any panel's for the reason stated at the top: this is not a fact about the Overview panel, it is
+  # a fact about the RUN every panel is describing — and `?commit_sha=` is how a reader reaches a run
+  # far enough back for it to be true. `RequestedCommitShaParam` names "a pruned run" among the
+  # ordinary ways to arrive here.
+  #
+  # The sentence is asserted by its own id (`#observations-aged-out`) AND by its wording, because
+  # the two can fail apart: an element that renders in the wrong state is a false claim, and the
+  # right state with the wrong words ("these rows have been deleted") is a false claim too — and
+  # that second one is wrong on exactly the population `Ingest::QuietBucketPruner` exists for.
+  describe "a run whose per-example observations have aged out" do
+    # `api_key` and the anchor read are declared locally rather than reached for, exactly as the
+    # delivery-health and parity blocks above declare their own: they are siblings, so nothing
+    # leaks between them.
+    let(:api_key) { repository.api_keys.create! }
+
+    def api_run_anchor(sha)
+      get "/api/v1/repository", params: { commit_sha: sha },
+                                headers: { "Authorization" => "Bearer #{api_key.raw_token}" }
+
+      response.parsed_body["run_anchor"]
+    end
+
+    def aged_out_notice = page.all("#observations-aged-out").first&.text&.squish
+
+    # `BRANCH_RETENTION_RUNS` runs plus one, so the oldest is strictly past its branch's boundary —
+    # the pruner's own strict `<`. Stubbed rather than ingesting sixty runs, and the stub is what
+    # keeps this example about the RULE rather than about a number.
+    def history_past_the_boundary
+      stub_const("SpecObservation::BRANCH_RETENTION_RUNS", 3)
+      start = 6.hours.ago
+      oldest = ingest_run(commit_sha: "0ldest00cafe0001", at: start,
+                          specs: [spec_in("spec/models/order_spec.rb", 1)])
+      newer = (0...3).map do |i|
+        ingest_run(commit_sha: "newer00cafe000#{i}", at: start + ((i + 1) * 30).minutes,
+                   specs: [spec_in("spec/requests/checkout_spec.rb", i + 2)])
+      end
+
+      [oldest, newer.last]
+    end
+
+    it "says so on the anchored run, and says it as retention rather than as an empty suite" do
+      oldest, = history_past_the_boundary
+
+      get repository_path(repository, commit_sha: oldest.commit_sha)
+
+      expect(response).to have_http_status(:ok)
+      expect(aged_out_notice).to include("aged out of the retention window")
+      # The bound is named, so a reader can place the run against the rule rather than reading a
+      # bare "aged out" — the same reason the endpoint publishes `retention_runs`. Per BRANCH, and
+      # the wording has to say so: the constant is a per-branch bound and a sentence implying a
+      # repository-wide one would misdescribe the rule.
+      expect(aged_out_notice).to include("most recent runs of its branch")
+      # ⚠️ The wording that must NOT appear. `QuietBucketPruner` is opportunistic and names its own
+      # permanently unreachable remainder, so a past-boundary run may still physically hold rows —
+      # "deleted" would be a false sentence on exactly that population.
+      expect(aged_out_notice).not_to match(/deleted|removed|no longer exist/i)
+      # And it does not walk back the counts the run's own row still supports. This is the
+      # conflation the whole ticket is about: the run measured a suite and still says so.
+      expect(panel_text("overview")).to include("Measured on #{oldest.commit_sha.first(7)}")
+    end
+
+    # The other side of the branch, and the half that makes the example above mean anything: the
+    # sentence is absent on a run inside the window. An element that renders unconditionally would
+    # satisfy every assertion above.
+    it "says nothing at all on a run still inside the retention window" do
+      _oldest, newest = history_past_the_boundary
+
+      get repository_path(repository, commit_sha: newest.commit_sha)
+
+      expect(aged_out_notice).to be_nil
+    end
+
+    # A default (unparameterised) page on an ordinary repository is untouched — no repository is
+    # near the real bound, and the sentence must not appear on one that is not.
+    it "says nothing on a default page at the real retention bound" do
+      two_run_history
+
+      get repository_path(repository)
+
+      expect(SpecObservation::BRANCH_RETENTION_RUNS).to be > 2
+      expect(aged_out_notice).to be_nil
+    end
+
+    # ⭐ The page and the endpoint read the SAME predicate, so they cannot disagree about a run —
+    # the property the ticket asks for, asserted as an agreement rather than as two separate
+    # renderings that happen to match today.
+    it "agrees with the API's run_anchor about whether the run's observations are retained" do
+      oldest, newest = history_past_the_boundary
+
+      expect(api_run_anchor(oldest.commit_sha)).to include("observations_retained" => false)
+      expect(api_run_anchor(newest.commit_sha)).to include("observations_retained" => true)
+
+      get repository_path(repository, commit_sha: oldest.commit_sha)
+      expect(aged_out_notice).to be_present
+
+      get repository_path(repository, commit_sha: newest.commit_sha)
+      expect(aged_out_notice).to be_nil
+    end
+  end
 end
