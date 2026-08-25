@@ -155,6 +155,14 @@ class GithubApi
     def admin? = admin
     def organization? = owner_type == "Organization"
 
+    # The other side GitHub reports, and NOT the negation of `organization?`. Both are positive
+    # claims about what GitHub actually said, so a repository whose `owner_type` is nil answers
+    # false to BOTH rather than being counted as personal by default — the same withhold-rather-
+    # than-invent reflex `organization?` applies in the other direction. Callers that need to say
+    # which kind of namespace something is must therefore ask, and get "GitHub did not say" as a
+    # third answer instead of a guess.
+    def personal? = owner_type == "User"
+
     # The owner segment of `full_name` — the GitHub account the repository lives under. A
     # *namespace*, not a SpecGuard user and not necessarily an organization; see `organization?`.
     def owner = full_name.to_s.split("/").first.to_s

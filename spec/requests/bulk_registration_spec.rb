@@ -50,22 +50,46 @@ RSpec.describe "Bulk organization registration", type: :request do
       expect(response.body).not_to include("readonly")
     end
 
-    # A personal namespace is not an organization, and this page says "organization".
-    it "does not offer the user's own repositories as an organization" do
+    # SPGD-818 reversed this. It used to read "does not offer the user's own repositories as an
+    # organization" — the filter that was the whole of the bug. A personal namespace is now a card
+    # like any other, and it carries a marker so the page still says which kind it is.
+    it "offers the user's own namespace alongside the organizations, marked as personal" do
       stub_github(repos: [github_repo("acme/api"),
                           github_repo("octocat/dotfiles", owner_type: "User")])
 
       get bulk_repositories_path
 
-      expect(response.body).not_to include("octocat/dotfiles")
+      expect(response.body).to include("acme")
+      expect(response.body).to include("octocat")
+      expect(response.body).to include(bulk_repositories_path(organization: "octocat"))
+      expect(response.body).to include("Personal")
     end
 
-    it "says so plainly when there is no organization to register from" do
-      stub_github(repos: [github_repo("octocat/dotfiles", owner_type: "User")])
+    # Criterion 1, end to end at this layer: the listing the ticket opens with — twenty repositories
+    # in one personal namespace and not an organization in sight — used to render the "not for you"
+    # empty state. It now renders a chooser.
+    it "offers a chooser for a listing that is entirely personal" do
+      stub_github(repos: [github_repo("octocat/api", owner_type: "User"),
+                          github_repo("octocat/blog", owner_type: "User")])
 
       get bulk_repositories_path
 
-      expect(response.body).to include("No organizations to register from")
+      expect(response).to have_http_status(:ok)
+      expect(response.body).to include("octocat")
+      expect(response.body).to include("2 repositories")
+      expect(response.body).not_to include("No repositories to register in a batch")
+    end
+
+    # Criterion 8's other half: the empty state is now reachable ONLY when the viewer administers
+    # nothing anywhere. A personal-only listing is no longer one of its causes.
+    it "says so plainly only when there is nothing at all to register" do
+      stub_github(repos: [github_repo("acme/api", admin: false),
+                          github_repo("octocat/theirs", owner_type: "User", admin: false)])
+
+      get bulk_repositories_path
+
+      expect(response.body).to include("No repositories to register in a batch")
+      expect(response.body).not_to include("registered one at a time")
     end
 
     # The card's badge counts what the reader may act on, and the sentence under it accounts for the
@@ -93,14 +117,14 @@ RSpec.describe "Bulk organization registration", type: :request do
       expect(response.body).not_to include("/repositories/bulk?organization=beta")
     end
 
-    # The listing cap is GLOBAL, so truncation can hide a whole organization rather than some of
-    # one organization's repositories — a different and worse failure than a short list.
-    it "says the organization list may be incomplete when GitHub's listing was truncated" do
+    # The listing cap is GLOBAL, so truncation can hide a whole account rather than some of one
+    # account's repositories — a different and worse failure than a short list.
+    it "says the account list may be incomplete when GitHub's listing was truncated" do
       stub_github(repos: [github_repo("acme/api")], truncated: true)
 
       get bulk_repositories_path
 
-      expect(response.body).to include("missing an organization")
+      expect(response.body).to include("missing an account")
     end
 
     # The other way a whole organization goes missing: the installation it is connected through
@@ -192,16 +216,44 @@ RSpec.describe "Bulk organization registration", type: :request do
       expect(response.body).to include("Nothing left to register")
     end
 
-    # A stale bookmark, a renamed organization and a typed query string are ordinary ways to arrive
+    # A stale bookmark, a renamed account and a typed query string are ordinary ways to arrive
     # here. None of them is an error page.
-    it "falls back to the chooser for an organization the user cannot register from" do
+    it "falls back to the chooser for an account the user cannot register from" do
       stub_github(repos: [github_repo("acme/api")])
 
       choose_organization("strangers")
 
       expect(response).to have_http_status(:ok)
       expect(response.body)
-        .to include("Organizations with repositories the SpecGuard GitHub App is installed on")
+        .to include("Accounts with repositories the SpecGuard GitHub App is installed on")
+    end
+
+    # Step two for a personal namespace — the half a chooser that offered the card would be a lie
+    # without. `GithubOrganizations.find` reads whatever `.from` offers, so this resolves on the
+    # same terms, and the picker itself never asked what kind of owner it was rendering.
+    it "lists a personal namespace's repositories when it is the one picked" do
+      stub_github(repos: [github_repo("octocat/api", owner_type: "User"),
+                          github_repo("octocat/blog", owner_type: "User"),
+                          github_repo("acme/elsewhere")])
+
+      choose_organization("octocat")
+
+      expect(response.body).to include("octocat/api")
+      expect(response.body).to include("octocat/blog")
+      expect(response.body).not_to include("acme/elsewhere")
+    end
+
+    # Criterion 4 at this layer: the withheld sentence is per NAMESPACE and says the same thing for
+    # a personal one, because it is computed from `admin?` and never read an owner type.
+    it "offers only what the viewer administers in a personal namespace, and says what it withheld" do
+      stub_github(repos: [github_repo("octocat/api", owner_type: "User"),
+                          github_repo("octocat/theirs", owner_type: "User", admin: false)])
+
+      choose_organization("octocat")
+
+      expect(response.body).to include("octocat/api")
+      expect(response.body).to include("1 repository you administer.")
+      expect(response.body).to include("1 connected repository you do not administer is not listed.")
     end
   end
 
@@ -214,6 +266,41 @@ RSpec.describe "Bulk organization registration", type: :request do
       expect(response).to have_http_status(:ok)
       expect(response.body).to include("Registered 2 repositories.")
       expect(@user.repositories.pluck(:github_full_name)).to match_array(%w[acme/api acme/web])
+    end
+
+    # Criterion 1's final half, and the whole point of the ticket: the batch actually REGISTERS a
+    # personal namespace's repositories. The pipeline could always do this — all three of
+    # `BulkRegistration`'s passes gate on `admin?` and read no owner type — so this example is here
+    # to pin that the chooser was the only thing standing in the way, and that nothing downstream
+    # quietly disagrees.
+    it "registers a personal namespace's repositories in one batch" do
+      stub_github(repos: [github_repo("octocat/api", owner_type: "User"),
+                          github_repo("octocat/blog", owner_type: "User")])
+
+      expect { submit(%w[octocat/api octocat/blog], organization: "octocat") }
+        .to change(Repository, :count).by(2)
+
+      expect(response).to have_http_status(:ok)
+      expect(response.body).to include("Registered 2 repositories.")
+      expect(@user.repositories.pluck(:github_full_name))
+        .to match_array(%w[octocat/api octocat/blog])
+    end
+
+    # Criterion 6 where it matters most: widening the CHOOSER widened nothing about what may be
+    # written. A personal repository the viewer does not administer is refused by the same
+    # re-verification that refuses an organization's, however it was submitted.
+    #
+    # The refusal is "not an administrator" rather than "not connected", and the difference is the
+    # point: the repository IS in the installation and GitHub answers about it happily — it is
+    # `permissions.admin` that says no. That is the gate the whole ticket rests on being untouched.
+    it "refuses a personal repository the viewer does not administer" do
+      stub_github(repos: [github_repo("octocat/theirs", owner_type: "User", admin: false)])
+
+      expect { submit(%w[octocat/theirs], organization: "octocat") }
+        .not_to change(Repository, :count)
+
+      expect(response.body).to include("You are not an administrator")
+      expect(response.body).to include("GitHub does not list you as an administrator of it")
     end
 
     # The honest summary the ticket asks for: two numbers that add up to the submission, with the

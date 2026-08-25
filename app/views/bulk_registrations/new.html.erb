@@ -1,16 +1,24 @@
-<% content_for :title, "Register an organization's repositories · SpecGuard" %>
+<%# "account" rather than "organization" throughout, because this page offers BOTH — a user's own
+    namespace groups and registers exactly as an organization does (SPGD-818). GitHub's own word for
+    the pair is "account", so it is the one that can be said once and stay true of every card.
+
+    The `?organization=` query parameter and the `bulk_repositories_path` route keep their names
+    deliberately: they are addressable surfaces a bookmark can carry, and renaming them is a
+    separate change. What a URL is spelled and what a page CLAIMS are different promises. %>
+<% content_for :title, "Register several repositories · SpecGuard" %>
 
 <%= render UI::PageComponent.new do %>
   <%= render UI::BreadcrumbComponent.new(items: [
         { label: "Repositories", href: repositories_path },
-        { label: "Register an organization" }
+        { label: "Register several repositories" }
       ]) %>
 
   <%= render UI::PageHeaderComponent.new(
-        title: "Register an organization's repositories",
-        subtitle: "Pick a GitHub organization and register its repositories in one action. " \
-                  "SpecGuard checks with GitHub that the App is installed on each one and that " \
-                  "you administer it, exactly as it does for a single repository."
+        title: "Register several repositories",
+        subtitle: "Pick a GitHub account — your own or an organization's — and register its " \
+                  "repositories in one action. SpecGuard checks with GitHub that the App is " \
+                  "installed on each one and that you administer it, exactly as it does for a " \
+                  "single repository."
       ) do |header| %>
     <% header.with_actions do %>
       <%= render UI::ButtonComponent.new(variant: :ghost, href: new_repository_path) { "Register one repository" } %>
@@ -65,15 +73,21 @@
         <%= render UI::ButtonComponent.new(variant: :ghost, href: repositories_path) { "Back" } %>
       </div>
     <% elsif organizations.empty? %>
-      <%# The installation covers repositories, but none of them is an organization repository this
-          viewer administers — they are all in personal namespaces, or all owned by organizations
-          where somebody else does the administering. Said plainly rather than rendered as an empty
-          chooser: neither case is fixed on this page. %>
+      <%# The installation covers repositories, but GitHub names this viewer an administrator of
+          none of them — somebody else does the administering everywhere the App is installed.
+          Said plainly rather than rendered as an empty chooser: that is not fixed on this page.
+
+          This is now reachable ONLY through that one condition. It used to catch a second and much
+          more common case — every repository sitting in a personal namespace — and sent those
+          readers off to the single-repository form, one submission per repository, while the batch
+          pipeline would have taken all of them at once. Personal namespaces are offered now
+          (SPGD-818), so the sentence that turned them away is gone rather than reworded: it was
+          false, not merely unfriendly. %>
       <%= render UI::EmptyStateComponent.new(
-            title: "No organizations to register from",
-            description: "GitHub does not list you as an administrator of any organization " \
-                         "repository the SpecGuard GitHub App is installed on. Personal " \
-                         "repositories are registered one at a time."
+            title: "No repositories to register in a batch",
+            description: "GitHub does not list you as an administrator of any repository the " \
+                         "SpecGuard GitHub App is installed on. Whoever administers them can " \
+                         "register them, or install the App on repositories you administer."
           ) do %>
         <%= render UI::ButtonComponent.new(variant: :primary, href: new_repository_path) { "Register one repository" } %>
       <% end %>

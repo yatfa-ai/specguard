@@ -7,9 +7,9 @@
       ) do |header| %>
     <% header.with_actions do %>
       <%# Two entry points rather than one, because they are different jobs and not two sizes of the
-          same one: registering the repository you came here for, and turning SpecGuard on across an
-          organization. Bulk is the secondary variant — most visits are the first job. %>
-      <%= render UI::ButtonComponent.new(variant: :secondary, href: bulk_repositories_path) { "Register an organization" } %>
+          same one: registering the repository you came here for, and turning SpecGuard on across a
+          whole GitHub account. Bulk is the secondary variant — most visits are the first job. %>
+      <%= render UI::ButtonComponent.new(variant: :secondary, href: bulk_repositories_path) { "Register several" } %>
       <%= render UI::ButtonComponent.new(variant: :primary, href: new_repository_path) { "Register a repository" } %>
     <% end %>
   <% end %>
@@ -145,12 +145,12 @@
           description: "Register a GitHub repository to start collecting spec intents from CI."
         ) do |empty| %>
       <% empty.with_action do %>
-        <%# Both entry points here too — a first-time visitor with a GitHub organization is exactly
-            the reader with twenty repositories to register, and this empty state is the one place
-            they are guaranteed to see. %>
+        <%# Both entry points here too — a first-time visitor who has just installed the App across
+            an account is exactly the reader with twenty repositories to register, and this empty
+            state is the one place they are guaranteed to see. %>
         <div class="flex flex-wrap items-center justify-center gap-2">
           <%= render UI::ButtonComponent.new(variant: :primary, href: new_repository_path) { "Register a repository" } %>
-          <%= render UI::ButtonComponent.new(variant: :secondary, href: bulk_repositories_path) { "Register an organization" } %>
+          <%= render UI::ButtonComponent.new(variant: :secondary, href: bulk_repositories_path) { "Register several" } %>
         </div>
       <% end %>
     <% end %>
