@@ -32,7 +32,15 @@
             title: "Connect your GitHub repositories",
             description: github_installation_disclosure
           ) do %>
-        <%= github_install_button return_to: bulk_repositories_path %>
+        <%# Carries the batch, so the trip that FIXES the refusal costs no more than the retry
+            button beside it. Wider than what "Try these again" carries by exactly the
+            `not_installed` names: installing the App is the trip that makes those registerable,
+            so a list omitting them would carry back everything except what the button just fixed.
+            `bulk_picker_return_to` decides how much fits; see it for the bound and the drop. %>
+        <%= github_install_button return_to: bulk_picker_return_to(
+              organization: submitted_organization,
+              full_names: @result.install_retryable_names
+            ) %>
       <% end %>
     <% end %>
   <% elsif github_authorization_needed? %>
@@ -46,7 +54,15 @@
                          "repositories you administer. Reconnecting takes you to GitHub and " \
                          "straight back, and you can submit this batch again."
           ) do %>
-        <%= github_authorize_button return_to: bulk_repositories_path %>
+        <%# Carries the batch, exactly as "Try these again" below does and for the same reason —
+            this is the button that actually RESOLVES a dead credential, and it used to be the one
+            that discarded the selection. It carries `retryable_names` unchanged: `not_authorized`
+            is itself a retryable skip, and `rate_limited` / `unavailable` are names a submission
+            after the round trip could equally land. %>
+        <%= github_authorize_button return_to: bulk_picker_return_to(
+              organization: submitted_organization,
+              full_names: @result.retryable_names
+            ) %>
       <% end %>
     <% end %>
   <% end %>

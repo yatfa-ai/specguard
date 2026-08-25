@@ -156,6 +156,28 @@ class BulkRegistration
     # carried back is the failed remainder rather than a re-run of the whole submission.
     def retryable_names = skipped.filter_map { |outcome| outcome.full_name if RETRYABLE_SKIPS.include?(outcome.status) }
 
+    # The same list for the OTHER button — the one that goes and installs the App — and it is
+    # deliberately WIDER than `retryable_names` by exactly the `not_installed` names.
+    #
+    # The difference is behavioural rather than tidy. A plain re-submission resolves nothing about
+    # `not_installed`, so `retryable_names` must not carry those: re-offering them would re-offer
+    # names the next submission refuses identically. But installing the App is PRECISELY the trip
+    # that turns a `not_installed` skip into a registerable repository, so a list that omitted them
+    # would carry back everything except the thing the button just fixed.
+    #
+    # The retryable names ride along too, because the install trip is a round trip like any other:
+    # a mixed batch's rate-limited names are still worth putting back in the picker when the reader
+    # returns, and they are the same names `retryable_names` would have carried.
+    #
+    # Terminal skips are still absent — `already_registered`, `invalid`, `not_administered` and
+    # `not_in_installation` are not resolved by installing the App either — and registered rows are
+    # absent by construction, because this reads `skipped`.
+    def install_retryable_names
+      skipped.filter_map do |outcome|
+        outcome.full_name if RETRYABLE_SKIPS.include?(outcome.status) || outcome.status == :not_installed
+      end
+    end
+
     # Whether there is anything worth offering a retry for. Asked separately from `retryable_names`
     # so the summary reads as a question rather than as an emptiness check on a list.
     def retry? = retryable_names.any?

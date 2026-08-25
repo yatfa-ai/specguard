@@ -606,6 +606,206 @@ RSpec.describe "Bulk organization registration", type: :request do
     end
   end
 
+  # SPGD-828. `06ec58f` taught ONE of the summary's three controls to preserve the batch and left
+  # the two beside it discarding it — so a reader whose batch was skipped for a dead credential saw
+  # "Reconnect to GitHub" (the correct fix, which threw every tick away) next to "Try these again"
+  # (which kept all N and fixed nothing, because the credential was still dead). Pressing the one
+  # that WORKED cost them the selection and a hand re-pick of N repositories: the precise labour the
+  # retry control had just been built to remove.
+  #
+  # These examples are about the two FIX buttons. What "Try these again" carries is pinned above and
+  # must not change — see "keeping the two carried lists apart".
+  describe "carrying the batch on the controls that fix a refusal" do
+    # The App is deliberately unconfigured across the suite (spec/support/github_api.rb), and an
+    # unconfigured instance renders the operator's notice INSTEAD of a button — so configuring it is
+    # what makes a button exist to read a `return_to` off at all. Same move as the install example
+    # further up this file.
+    def configure_github_app
+      allow(SpecGuard::GithubApp).to receive_messages(configured?: true, slug: "specguard")
+    end
+
+    # Both fix controls are `button_to`, so what carries the path is a FORM ACTION rather than an
+    # href — and the value under test is nested one level down inside it, as `?return_to=<path>`.
+    # Parsed rather than matched as a substring, twice, because a substring assertion passes on a
+    # path that merely CONTAINS the right characters: `?organization=acmecorp` contains
+    # `organization=acme`.
+    def carried_return_to(body, action_path)
+      form = Capybara.string(body).find("form[action*='#{action_path}']")
+      Rack::Utils.parse_nested_query(URI.parse(form[:action]).query).fetch("return_to")
+    end
+
+    def carried_query(body, action_path)
+      Rack::Utils.parse_nested_query(URI.parse(carried_return_to(body, action_path)).query)
+    end
+
+    # Criterion 1. A dead session credential is the case the whole ticket turns on: `:not_authorized`
+    # is in BOTH vocabularies at once — it drives `authorize?` AND is a member of `RETRYABLE_SKIPS` —
+    # so the reconnect panel and the retry panel render together, and the reader has to choose. Now
+    # both choices keep the batch.
+    it "carries the account and the skipped names on the reconnect button" do
+      configure_github_app
+      stub_github(unauthorized: true)
+
+      submit(%w[acme/api acme/web])
+
+      expect(response.body).to include("Reconnect to GitHub")
+
+      path = carried_return_to(response.body, github_installation_authorize_path)
+      query = carried_query(response.body, github_installation_authorize_path)
+
+      expect(URI.parse(path).path).to eq(bulk_repositories_path)
+      expect(query["organization"]).to eq("acme")
+      expect(query["github_full_names"]).to match_array(%w[acme/api acme/web])
+    end
+
+    # Criterion 2. Asserting on the emitted path alone would pin a URL nothing is obliged to honour,
+    # so this walks the whole round trip the button starts: out through GitHub's `state`, back
+    # through the callback's redirect, and onto the picker — and then reads the TICKS, which are the
+    # only thing the reader actually cares about. Same shape as SPGD-824's own walk for "Try these
+    # again", one control along.
+    it "arrives back at the picker with those repositories ticked after reconnecting" do
+      configure_github_app
+      stub_github(unauthorized: true)
+
+      submit(%w[acme/api acme/web])
+      state = carried_return_to(response.body, github_installation_authorize_path)
+
+      # GitHub's half of the trip, stubbed at the same service seam the callback's own specs use.
+      allow(GithubAppUserAuthorization).to receive(:authorize).and_return(
+        GithubAppUserAuthorization::Authorization.new(
+          token: "ghu_reconnected", expires_at: 1.hour.from_now,
+          installations: [GithubAppUserAuthorization::Installation.new(installation_id: 6001,
+                                                                       account_login: "acme")]
+        )
+      )
+      # The reconnect landing in a healthier moment: the credential works now, so the account reads.
+      stub_github(repos: [github_repo("acme/api"), github_repo("acme/web"), github_repo("acme/legacy")])
+
+      get github_installation_callback_path, params: { code: "abc", state: state }
+      expect(response).to redirect_to(state)
+
+      follow_redirect!
+
+      picker = Capybara.string(response.body)
+      expect(picker).to have_field(type: "checkbox", with: "acme/api", checked: true)
+      expect(picker).to have_field(type: "checkbox", with: "acme/web", checked: true)
+      # The control: a registerable row on the same page that was NOT carried, so the two ticks
+      # above are the carried batch rather than a picker that ticks everything.
+      expect(picker).to have_field(type: "checkbox", with: "acme/legacy", checked: false)
+    end
+
+    # Criterion 3, and the list it pins is the one the install button is owed: `not_installed` names
+    # are what installing the App actually makes registerable, so a list omitting them would carry
+    # back everything EXCEPT what the button just fixed.
+    #
+    # The ticket asked for this on a batch holding BOTH kinds of skip at once. That batch is not
+    # reachable: `InstallationRepositories.verify_batch` short-circuits on `sources.installed?` and
+    # answers `:not_installed` for every name or for none, so `install?` and `retry?` are never both
+    # true through the service. The asymmetry is still reachable, and this is where it bites — the
+    # two lists differ here, and an implementation that collapsed them into one carries ZERO names
+    # on this button and fails. The both-at-once case is pinned at the layer that decides it, in
+    # spec/services/bulk_registration_spec.rb.
+    it "carries the not-installed names on the install button" do
+      configure_github_app
+      uninstall_github_app(@user)
+
+      submit(%w[acme/api acme/web])
+
+      expect(response.body).to include("Connect your GitHub repositories")
+
+      query = carried_query(response.body, github_installation_path)
+
+      expect(query["organization"]).to eq("acme")
+      expect(query["github_full_names"]).to match_array(%w[acme/api acme/web])
+      # The retry control is not on this page to disagree with: nothing here is retryable, which is
+      # exactly why the install button carrying `retryable_names` would carry nothing.
+      expect(response.body).not_to include("Try these again")
+    end
+
+    # Criterion 4. An invariant in N rather than one pinned example, because the failure this guards
+    # is a size-dependent one: the batch rides out through GitHub's `state`, which is part of a URL
+    # on somebody else's site, and a path that grows without bound is a button that silently stops
+    # working somewhere past the example anyone happened to write.
+    it "keeps the emitted path within the byte bound at every batch size" do
+      configure_github_app
+
+      # Representative 25-character names, which is what the bound was derived against — the real
+      # cost is the escaping of `/` and the repeated `github_full_names[]=`, not the names.
+      names = (1..BulkRegistration::MAX_BATCH).map { |i| format("acmecorp/repository-%05d", i) }
+
+      (1..BulkRegistration::MAX_BATCH).each do |size|
+        path = helper_return_to(names.first(size))
+
+        expect(path.bytesize).to be <= GithubHelper::MAX_RETURN_TO_BYTES,
+                                 -> { "#{size} names emitted #{path.bytesize} bytes" }
+      end
+    end
+
+    # Criterion 5. Over the bound the names are dropped ENTIRELY, never truncated — asserted as
+    # exactly zero, so an implementation that carried "as many as fit" fails here rather than
+    # passing with fewer names than the reader submitted.
+    #
+    # A partially-ticked picker is WORSE than an unticked one: the reader submits believing it
+    # complete and loses the remainder without ever being told a list was shortened. Degraded to the
+    # account alone is honest, and still better than the account chooser this replaced.
+    it "drops the names rather than truncating them when the batch will not fit" do
+      configure_github_app
+
+      names = (1..BulkRegistration::MAX_BATCH).map { |i| format("acmecorp/repository-%05d", i) }
+      query = Rack::Utils.parse_nested_query(URI.parse(helper_return_to(names)).query)
+
+      expect(query["github_full_names"].to_a.length).to eq(0)
+      # And the half that is never dropped: the account alone is what lands the reader on the right
+      # picker instead of back at the chooser, which is the whole of the degraded promise.
+      expect(query["organization"]).to eq("acme")
+    end
+
+    # Criterion 6. A POST that did not come from the picker carries no organization, and then there
+    # is nothing to name — so the button emits the bare path exactly as it did before this change.
+    # Asserted as an exact equality, so an `organization=` with nothing after it (which would claim
+    # to know an account we do not) fails rather than passing an `include?`.
+    it "emits the bare path when the submission named no organization" do
+      configure_github_app
+      stub_github(unauthorized: true)
+
+      post bulk_repositories_path, params: { github_full_names: %w[acme/api] }
+
+      expect(response.body).to include("Reconnect to GitHub")
+      expect(carried_return_to(response.body, github_installation_authorize_path))
+        .to eq(bulk_repositories_path)
+    end
+
+    # Criterion 7. The unconfigured branch short-circuits before either helper builds a path, and
+    # that stays true: what a reader cannot do they are told about instead of offered, and carrying
+    # a batch on a button that cannot work would be the wrong half to fix.
+    it "still renders the operator notice rather than a button when the App is unconfigured" do
+      stub_github(unauthorized: true)
+
+      submit(%w[acme/api])
+
+      expect(response.body).to include("The SpecGuard GitHub App is not configured")
+      expect(response.body).not_to include(github_installation_authorize_path)
+    end
+
+    # The helper under the two buttons, asked directly. The bound examples above are about SIZE
+    # rather than about rendering, and driving them through a full POST per batch size would be 100
+    # registrations to measure a string.
+    #
+    # A bare context including the two modules the method actually needs, rather than
+    # `ApplicationController.helpers`: that proxy is an `ActionView::Base` without the route helpers
+    # mixed in, so `bulk_repositories_path` is undefined on it.
+    def helper_return_to(names, organization: "acme")
+      helper_context.bulk_picker_return_to(organization: organization, full_names: names)
+    end
+
+    def helper_context
+      @helper_context ||= Class.new do
+        include Rails.application.routes.url_helpers
+        include GithubHelper
+      end.new
+    end
+  end
+
   describe "refusing a submission before it reaches GitHub" do
     it "asks again when nothing was selected" do
       fake = stub_github(repos: [github_repo("acme/api")])
