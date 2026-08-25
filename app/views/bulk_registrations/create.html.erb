@@ -90,6 +90,43 @@
     <% end %>
   <% end %>
 
+  <%# Three of the skip reasons END their own sentence by telling the reader to try again — "Try
+      again in a few minutes", "Try again shortly", "Reconnect and try once more" — and the panel
+      above says it too ("you can submit this batch again"). Without this control that instruction
+      costs the reader the whole of step one and step two again: re-pick the account, then re-find
+      and re-tick N repositories from a fresh unticked list, with nothing on this page marking WHICH
+      ones to re-tick. So the batch is carried back rather than described.
+
+      Which reasons count as retryable is `BulkRegistration::RETRYABLE_SKIPS`, asked through
+      `retry?` — not a status list written out here, so the sentence promising a retry and the button
+      offering one cannot drift apart. Only the transient names ride along: what registered is done,
+      and a terminal skip re-submitted is refused identically.
+
+      It is a plain GET back to the picker, which means the reader lands on a form they can look at
+      and change — untick one, add another, submit when the rate limit has passed — rather than a
+      button that re-fires the batch behind their back. Re-submitting is safe for the reason the
+      controller's header states (registration is idempotent; anything that landed comes back as
+      `already_registered`), but WHEN to re-submit is exactly the judgement a rate limit asks of a
+      human, so this stops one step short and lets them press the button. %>
+  <% if @result.retry? && submitted_organization.present? %>
+    <%= render UI::PanelComponent.new(class: "mt-4") do %>
+      <%= render UI::EmptyStateComponent.new(
+            title: "Try the skipped repositories again",
+            description: "#{pluralize(@result.retryable_names.length, 'repository', plural: 'repositories')} " \
+                         "#{@result.retryable_names.length == 1 ? 'was' : 'were'} skipped for a reason that " \
+                         "clears on its own. This takes you back to #{submitted_organization} with " \
+                         "#{@result.retryable_names.length == 1 ? 'it' : 'them'} already selected, so you can " \
+                         "submit again without picking them out a second time."
+          ) do %>
+        <%= render UI::ButtonComponent.new(
+              variant: :primary,
+              href: bulk_repositories_path(organization: submitted_organization,
+                                           github_full_names: @result.retryable_names)
+            ) { "Try these again" } %>
+      <% end %>
+    <% end %>
+  <% end %>
+
   <div class="mt-4 flex items-center gap-2">
     <%= render UI::ButtonComponent.new(variant: :primary, href: repositories_path) { "Back to repositories" } %>
     <%= render UI::ButtonComponent.new(variant: :ghost, href: bulk_repositories_path) { "Register another batch" } %>
