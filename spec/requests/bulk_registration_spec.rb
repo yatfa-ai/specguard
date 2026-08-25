@@ -787,6 +787,142 @@ RSpec.describe "Bulk organization registration", type: :request do
       expect(response.body).not_to include(github_installation_authorize_path)
     end
 
+    # SPGD-833. The THIRD fix control, and the branch this cascade used to fall through entirely.
+    #
+    # `create.html.erb` renders one `if github_installation_needed? … elsif
+    # github_authorization_needed? … end`, and a batch skipped only for `:not_in_installation` makes
+    # BOTH false — the App is installed and the credential is fine. So the reader got the "Not
+    # connected to the SpecGuard GitHub App (N)" heading and no control at all, while that skip's
+    # own sentence told them to "Add it on GitHub, then pick it here."
+    #
+    # Criterion 1, and it asserts BOTH halves the way the reconnect example above does: the panel
+    # renders, and the path it carries reaches the right picker with the right names on it.
+    it "offers GitHub's repository picker when the batch is only outside the installation" do
+      configure_github_app
+      stub_github(repos: [github_repo("acme/api")])
+
+      submit(%w[acme/theirs acme/ghost])
+
+      expect(response.body).to include("Choose repositories on GitHub")
+
+      path = carried_return_to(response.body, github_installation_path)
+      query = carried_query(response.body, github_installation_path)
+
+      expect(URI.parse(path).path).to eq(bulk_repositories_path)
+      expect(query["organization"]).to eq("acme")
+      expect(query["github_full_names"]).to match_array(%w[acme/theirs acme/ghost])
+    end
+
+    # The other half of criterion 1, walked rather than asserted on a URL nothing is obliged to
+    # honour — same shape as the reconnect walk above, one control along. The trip out is GitHub's
+    # own repository picker, so the return leg is the installation callback (which documents itself
+    # as the setup URL "after an install OR a reconfigure"), and what the reader actually cares
+    # about at the end of it is the TICKS.
+    it "arrives back at the picker with those repositories ticked after choosing them" do
+      configure_github_app
+      stub_github(repos: [github_repo("acme/api")])
+
+      submit(%w[acme/theirs acme/api])
+      state = carried_return_to(response.body, github_installation_path)
+
+      # The reconfigure landing: the reader ticked `acme/theirs` on GitHub, so the App is now
+      # installed on it and the account reads in full.
+      stub_github(repos: [github_repo("acme/api"), github_repo("acme/theirs"),
+                          github_repo("acme/legacy")])
+
+      get github_installation_callback_path, params: { installation_id: 6001, state: state }
+      expect(response).to redirect_to(state)
+
+      follow_redirect!
+
+      picker = Capybara.string(response.body)
+      expect(picker).to have_field(type: "checkbox", with: "acme/theirs", checked: true)
+      # The control: a registerable row on the same page that was NOT carried, so the tick above is
+      # the carried batch rather than a picker that ticks everything.
+      expect(picker).to have_field(type: "checkbox", with: "acme/legacy", checked: false)
+      # `acme/api` registered on the first pass, so it comes back as a disabled already-registered
+      # row rather than a tick: what is carried is the failed remainder, not the submission.
+      expect(picker).to have_field(type: "checkbox", with: "acme/api", disabled: true, checked: false)
+    end
+
+    # Criterion 3, and the deliberate exclusion asserted rather than merely absent. The fix for
+    # `not_administered` belongs to somebody ELSE — the reader's selection on GitHub is already
+    # correct — so sending them to the picker would be sending them to fix something that is not
+    # broken while what is actually in their way stays untouched. `repositories/_form` states this
+    # reason in full at the same decision.
+    #
+    # Asserted as NO GitHub button at all rather than as an absent label, so an implementation that
+    # renders the panel with different wording fails here too.
+    it "offers no GitHub button for a batch skipped only because the user is not an administrator" do
+      configure_github_app
+      stub_github(repos: [github_repo("acme/vault", admin: false)])
+
+      submit(%w[acme/vault])
+
+      expect(response.body).to include("You are not an administrator (1)")
+      expect(response.body).not_to include("Choose repositories on GitHub")
+      expect(response.body).not_to include(github_installation_path)
+      expect(response.body).not_to include(github_installation_authorize_path)
+      expect(response.body).not_to include("Try these again")
+    end
+
+    # Criterion 4. The new branch is an `elsif` TAIL, never a second simultaneous panel: installing
+    # the App is the wider fix and lands the reader on the same GitHub picker, so a batch holding
+    # both takes the first branch and the narrower offer is not lost by being skipped.
+    #
+    # Driven through the VIEW with a hand-built result, deliberately, and for the reason the service
+    # spec's own both-at-once example states: `InstallationRepositories.verify_batch` short-circuits
+    # the whole batch on `sources.installed?` and answers `:not_installed` for every name or for
+    # none, so a submission mixing the two cannot currently be produced by the service at all. It is
+    # still what the cascade has to be right about — the day a per-installation verdict makes that
+    # reading reachable, this must already render ONE panel rather than two.
+    it "renders only the install panel for a batch holding both, never both panels" do
+      configure_github_app
+      outcomes = [BulkRegistration::Outcome.new(full_name: "acme/uninstalled", status: :not_installed),
+                  BulkRegistration::Outcome.new(full_name: "acme/theirs", status: :not_in_installation)]
+      result = BulkRegistration::Result.new(outcomes: outcomes)
+
+      # Both questions are true of this result, which is what makes the ORDER the thing under test
+      # rather than the branch conditions.
+      expect(result).to be_install
+      expect(result).to be_choose_repositories
+
+      allow(BulkRegistration).to receive(:call).and_return(result)
+
+      submit(%w[acme/uninstalled acme/theirs])
+
+      expect(response.body).to include("Connect your GitHub repositories")
+      expect(response.body).not_to include("Choose repositories on GitHub")
+    end
+
+    # Criterion 6. The bound belongs to `bulk_picker_return_to` and is INHERITED here rather than
+    # re-implemented, so an oversized batch degrades to the account alone with no partial tick list
+    # — a picker that comes back partially ticked is worse than one that comes back unticked,
+    # because the reader submits believing it complete.
+    #
+    # Asserted through the rendered button rather than through the helper, because the helper's own
+    # bound is already pinned above: what this adds is that the NEW call site goes through it.
+    it "degrades to the account alone when the carried batch will not fit" do
+      configure_github_app
+      names = (1..BulkRegistration::MAX_BATCH).map { |i| format("acmecorp/repository-%05d", i) }
+      outcomes = names.map do |name|
+        BulkRegistration::Outcome.new(full_name: name, status: :not_in_installation)
+      end
+
+      allow(BulkRegistration).to receive(:call).and_return(BulkRegistration::Result.new(outcomes: outcomes))
+
+      submit(names)
+
+      expect(response.body).to include("Choose repositories on GitHub")
+
+      path = carried_return_to(response.body, github_installation_path)
+      query = carried_query(response.body, github_installation_path)
+
+      expect(query["github_full_names"].to_a.length).to eq(0)
+      expect(query["organization"]).to eq("acme")
+      expect(path.bytesize).to be <= GithubHelper::MAX_RETURN_TO_BYTES
+    end
+
     # The helper under the two buttons, asked directly. The bound examples above are about SIZE
     # rather than about rendering, and driving them through a full POST per batch size would be 100
     # registrations to measure a string.
