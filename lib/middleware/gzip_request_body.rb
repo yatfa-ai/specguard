@@ -91,11 +91,11 @@ class GzipRequestBody
     begin
       inflated = inflate(env["rack.input"])
     rescue InflatedBodyTooLarge
-      return error_response(TOO_LARGE_MESSAGE)
+      return refuse(env, TOO_LARGE_MESSAGE)
     rescue Zlib::Error
       # Covers the whole family: not-gzip magic bytes, a truncated stream, a bad CRC. Every one of
       # them is the client's mistake, so every one of them is a 400 rather than an exception page.
-      return error_response(CORRUPT_MESSAGE)
+      return refuse(env, CORRUPT_MESSAGE)
     end
 
     @app.call(decoded(env, inflated))
@@ -146,6 +146,24 @@ class GzipRequestBody
     env["CONTENT_LENGTH"] = body.bytesize.to_s
     env["rack.input"] = StringIO.new(body)
     env
+  end
+
+  # Records the refusal, then answers it. The record is a side effect on the way out and cannot
+  # change what the client receives: `error_response` is built from `message` exactly as before, and
+  # `Ingest::BoundaryRefusalRecorder` reports its own failures rather than raising, so a bookkeeping
+  # fault cannot turn this 400 into a 500. See that class for who a row is attributed to — a request
+  # that did not authenticate writes nothing, exactly as a 401 does.
+  #
+  # ⚠️ The constant is referenced HERE, at request time, and must never move to the class body or a
+  # `require`. `config/application.rb:23` loads this file while the middleware stack is being
+  # assembled — before the autoloaders are usable — and `lib/middleware` is excluded from
+  # `autoload_lib`, so a load-time reference to an `app/` constant fails at boot. It is also not
+  # memoized, deliberately: this middleware sits ABOVE `ActionDispatch::Reloader` in the stack, so a
+  # constant held across requests would pin a stale class in development.
+  def refuse(env, message)
+    Ingest::BoundaryRefusalRecorder.record(env, message)
+
+    error_response(message)
   end
 
   # The shape `Api::BaseController#render_bad_request` emits, reproduced here because this runs
