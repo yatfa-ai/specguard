@@ -2818,7 +2818,7 @@ RSpec.describe "Repository registration and API keys", type: :request do
     end
   end
 
-  # SPGD-836 — the lapsed registration grant, stated on the page both return journeys land on.
+  # SPGD-836 — registration access, stated on the page both return journeys land on.
   #
   # The gap these pin: `InstallationRepositories::MESSAGES[:not_granted]` refuses an `sgu_`
   # registration by naming a fix ("reconnect GitHub in a browser"), and for the account it fires on
@@ -2829,105 +2829,205 @@ RSpec.describe "Repository registration and API keys", type: :request do
   #
   # ## The population, and why it is invisible to every existing gate
   #
-  # This reader's App is installed and their session holds a live token. Only the SNAPSHOT aged out
-  # (`GithubRegistrationGrant::MAX_AGE` is seven days). So `github_authorization_needed?` is false in
-  # all three of its limbs and `github_installation_needed?` is false too — both existing controls
-  # are correctly absent, which is precisely why a THIRD state had to be read rather than an existing
-  # one reused.
-  describe "the lapsed registration grant on the repositories index" do
+  # This reader's App is installed and their session holds a live token. Only the SNAPSHOT is
+  # missing or aged out (`GithubRegistrationGrant::MAX_AGE` is seven days). So
+  # `github_authorization_needed?` is false in all three of its limbs and `github_installation_needed?`
+  # is false too — both existing controls are correctly absent, which is precisely why a THIRD state
+  # had to be read rather than an existing one reused.
+  #
+  # ## TWO STORIES, and the examples are split on that line rather than sharing one assertion
+  #
+  # `GrantVerifier` merges absent and stale into one verdict, correctly: it is answering "may this
+  # request register?" and the answer is no either way. A landing page is not a refusal, and to a
+  # READER the two are different facts — one snapshot AGED OUT, the other has NEVER BEEN TAKEN and
+  # will be taken for free on the reader's next click. The `:never_taken` reader is not an edge
+  # case: a grant is minted nowhere but a picker render, so EVERY newly-connected account is in that
+  # state on its first visit, and the callback lands them precisely here.
+  #
+  # An earlier draft of this slice told both of them the same thing, and every example it carried
+  # asserted on `lapsed_state` alone — the one sentence true of both — so nothing could see that the
+  # prose composed AROUND it said "again" twice to somebody for whom nothing had happened yet. The
+  # examples below therefore assert on the TITLE and the TAIL, which are the halves that differ.
+  describe "registration access on the repositories index" do
     # The rendered state sentence, READ FROM THE SEAM rather than typed out here — the rule this
     # file already holds the refusal marker and the cost rows to, for the reason stated at
     # `refusal_label`: a literal copied into a spec is agreement that merely HOLDS TODAY, and would
     # go on passing against a page rendering the old words.
     def lapsed_state = ApplicationController.helpers.github_registration_lapsed_state
 
-    # Criterion 1. Absent grant and stale grant are ONE verdict to `GrantVerifier` — its first line
-    # is `return verdict(:not_granted, name) if @grant.nil? || @grant.stale?` — so they are one
-    # verdict here, and both are stated rather than one being trusted to imply the other.
-    #
-    # Neither of these registers anything and neither opens a picker, which IS the criterion: the
-    # state is legible from the landing page alone.
-    it "tells a person with no grant at all that their registration access has lapsed" do
-      expect(GithubRegistrationGrant.find_by(user_id: @user.id)).to be_nil
-
-      get repositories_path
-
-      expect(page_text).to include(lapsed_state)
+    # The panel itself and not the whole page, because the claims below are about what THIS panel
+    # says: a bare `page_text` assertion on a word as ordinary as "again" would be answered by any
+    # other sentence on the index. Identified by the one sentence both branches share. `nil` when no
+    # panel rendered, which is what the silence examples assert.
+    def registration_panel
+      Capybara.string(response.body)
+              .all(".rounded-md.border")
+              .map { |node| node.text.gsub(/\s+/, " ").strip }
+              .find { |text| text.include?(lapsed_state) }
     end
 
-    it "tells a person whose grant has aged past MAX_AGE the same thing" do
-      create_registration_grant(user: @user,
-                                captured_at: GithubRegistrationGrant::MAX_AGE.ago - 1.hour)
+    # The App configured is the ordinary case and the one every example here is about. It is NOT the
+    # default in this suite, and the unconfigured case has its own examples at the bottom — where
+    # the point is that nothing renders at all.
+    before { allow(SpecGuard::GithubApp).to receive_messages(configured?: true, slug: "specguard") }
 
-      get repositories_path
+    # Criterion 1, for the reader the ticket describes: a snapshot was taken and has aged out.
+    # Registering nothing and opening no picker IS the criterion — the state is legible from the
+    # landing page alone.
+    describe "when the grant has aged out" do
+      before do
+        create_registration_grant(user: @user,
+                                  captured_at: GithubRegistrationGrant::MAX_AGE.ago - 1.hour)
+      end
 
-      expect(page_text).to include(lapsed_state)
+      it "says the permissions need checking again" do
+        get repositories_path
+
+        expect(registration_panel).to include(lapsed_state)
+        expect(registration_panel).to include("needs to check your GitHub permissions again")
+      end
+
+      # Criterion 2 — the existing action, reached through the existing helper. No new route was
+      # minted, so this asserts against the ROUTE HELPER rather than a path spelled out here.
+      it "offers the existing authorize action as the fix" do
+        get repositories_path
+
+        expect(response.body).to include(github_installation_authorize_path)
+        expect(registration_panel).to include("Reconnect to GitHub")
+      end
+
+      # ⚠ THE HALF THAT MAKES THE FIX A FIX, and the one deviation from the ticket's own build note.
+      #
+      # `github_authorize_button` defaults `return_to:` to `request.fullpath`, and the ticket read
+      # that default as already correct here. It is not: a grant is taken in EXACTLY ONE place —
+      # `GithubRepositoryListing#github_sources`, the sole `GithubRegistrationGrant.capture` site —
+      # and this page deliberately never touches it. So a reconnect returning to `/repositories`
+      # would hand back a credential the session already had, change nothing, and land the reader on
+      # the same banner offering the same button.
+      #
+      # Driven to the OUTCOME rather than asserted as a `return_to=` string, because the claim is
+      # that the grant stops being stale — a spec reading only the query parameter would pass
+      # against a destination that repairs nothing.
+      it "ends the reconnect journey where the grant is actually retaken" do
+        stub_github(repos: [github_repo("acme/billing-service")])
+        grant = GithubRegistrationGrant.find_by(user_id: @user.id)
+
+        get repositories_path
+        expect(response.body).to include(CGI.escapeHTML("return_to=#{CGI.escape(new_repository_path)}"))
+
+        expect { get new_repository_path }.to change { grant.reload.stale? }.from(true).to(false)
+
+        # And the page they were sent from now says nothing, because the state genuinely resolved.
+        get repositories_path
+        expect(registration_panel).to be_nil
+      end
+    end
+
+    # ⚠ THE REGRESSION GUARD FOR THE DEFECT THIS REWORK EXISTS TO FIX.
+    #
+    # A grant is minted only on a picker render — not at sign-in and not by the App callback, which
+    # is the deliberate decision at `github_repository_listing.rb:43-49`. So this is the state of
+    # somebody who connected the App ONE REDIRECT AGO, and of every fully-onboarded account on its
+    # first visit. The earlier draft told them, directly beneath "Connected acme.", that SpecGuard
+    # needed to check their permissions AGAIN and would refuse UNTIL IT IS TAKEN AGAIN. Both are
+    # false: nothing has been taken, so nothing can have expired.
+    describe "when no grant has ever been taken" do
+      it "does not claim anything expired or needs re-checking" do
+        expect(GithubRegistrationGrant.find_by(user_id: @user.id)).to be_nil
+
+        get repositories_path
+
+        expect(registration_panel).to include(lapsed_state)
+        expect(registration_panel).not_to include("again")
+      end
+
+      # ⚠ AND THE CONSEQUENCE THAT WEIGHS HEAVIEST: for this reader the reconnect is not merely
+      # mis-worded, it is WORSE than what the page already had. They hold a live token; nothing
+      # about their credential is missing, and the only thing needed is that somebody calls
+      # `github_sources`. "Reconnect to GitHub" would send them out to github.com and back — while
+      # "Register a repository", already in this page's header, reaches the same picker with no
+      # external round trip at all. Offering it would talk them out of a one-hop fix into a
+      # three-hop one.
+      it "offers no external reconnect round trip" do
+        get repositories_path
+
+        expect(response.body).not_to include(github_installation_authorize_path)
+        expect(registration_panel).not_to include("Reconnect to GitHub")
+      end
+
+      it "points at the picker the page already offers" do
+        get repositories_path
+
+        expect(registration_panel).to include("Register a repository")
+      end
+
+      # The promise that copy makes, driven to its outcome: opening the picker once really is the
+      # whole fix. Without this the sentence above would be an unverified instruction.
+      it "is resolved by opening that picker once" do
+        stub_github(repos: [github_repo("acme/billing-service")])
+
+        expect { get new_repository_path }
+          .to change { GithubRegistrationGrant.find_by(user_id: @user.id) }.from(nil)
+
+        get repositories_path
+        expect(registration_panel).to be_nil
+      end
     end
 
     # The bound itself, from the inside — a grant one hour short of MAX_AGE still redeems, so it
-    # must not be drawn as lapsed. Without this the two examples above would pass just as happily
-    # against a page that showed the banner to everybody.
-    it "says nothing to a person whose grant is inside the bound" do
-      create_registration_grant(user: @user,
-                                captured_at: GithubRegistrationGrant::MAX_AGE.ago + 1.hour)
+    # must not be drawn as lapsed. Without this the examples above would pass just as happily
+    # against a page that showed the panel to everybody.
+    describe "when the grant is current" do
+      before { create_registration_grant(user: @user) }
 
-      get repositories_path
+      it "says nothing to a person whose grant is inside the bound" do
+        get repositories_path
 
-      expect(page_text).not_to include(lapsed_state)
+        expect(registration_panel).to be_nil
+      end
+
+      # Criterion 4, stated as the absence of the CONTROL and not only of the sentence. A
+      # current-grant reader's page is unchanged, which means no button either — asserting the
+      # sentence alone would let a stray reconnect button survive on every render.
+      it "offers a person with a current grant no new chrome" do
+        get repositories_path
+
+        expect(page_text).not_to include(lapsed_state)
+        expect(response.body).not_to include(github_installation_authorize_path)
+      end
     end
 
-    # Criterion 4, stated as the absence of the CONTROL and not only of the sentence. A current-grant
-    # reader's page is unchanged, which means no button either — asserting the sentence alone would
-    # let a stray reconnect button survive on every render.
-    it "offers a person with a current grant no new chrome" do
-      create_registration_grant(user: @user)
-
-      get repositories_path
-
-      expect(page_text).not_to include(lapsed_state)
-      expect(response.body).not_to include(github_installation_authorize_path)
-    end
-
-    # Criterion 2 — the existing action, reached through the existing helper. No new route was
-    # minted, so this asserts against the ROUTE HELPER rather than against a path spelled out here.
-    it "offers the existing authorize action as the fix" do
-      allow(SpecGuard::GithubApp).to receive_messages(configured?: true, slug: "specguard")
-
-      get repositories_path
-
-      expect(response.body).to include(github_installation_authorize_path)
-      expect(page_text).to include("Reconnect to GitHub")
-    end
-
-    # ⚠ THE HALF THAT MAKES THE FIX A FIX, and the one deviation from the ticket's own build note.
+    # ⚠ THE SECOND DEFECT THIS REWORK FIXES: an alert rendered INSIDE an alert.
     #
-    # `github_authorize_button` defaults `return_to:` to `request.fullpath`, and the ticket read that
-    # default as already correct here. It is not, and this example is why: a grant is taken in
-    # EXACTLY ONE place — `GithubRepositoryListing#github_sources`, the sole
-    # `GithubRegistrationGrant.capture` site — and this page deliberately never touches it. So a
-    # reconnect that returned to `/repositories` would hand back a credential the session already
-    # had, change nothing, and land the reader on the same banner offering the same button.
+    # `github_authorize_button` returns `github_app_unconfigured_notice` — itself a rendered
+    # `UI::AlertComponent` — when the App is unconfigured, and the earlier draft invoked it inside
+    # the panel's own alert. That produced a warning panel bordered inside a warning panel, with a
+    # reader-facing sentence wrapped around an operator-facing one. The three pre-existing call
+    # sites never hit it: `_form.html.erb` and `bulk_registrations/new.html.erb` both render the
+    # button inside an `EmptyStateComponent`.
     #
-    # Returning them to the PICKER ends the journey where the snapshot is actually retaken, at no
-    # extra click and with no second capture site. The whole round trip is driven here rather than
-    # asserted as a `return_to=` string, because the claim is about the OUTCOME — a grant exists
-    # afterwards — and a spec that only reads the query parameter would pass against a destination
-    # that repairs nothing.
-    it "ends the reconnect journey where the grant is actually retaken" do
-      stub_github(repos: [github_repo("acme/billing-service")])
-      allow(SpecGuard::GithubApp).to receive_messages(configured?: true, slug: "specguard")
+    # It escaped the suite entirely because `configured?` is FALSE by default in this environment
+    # and every example above stubs it true. So these two do not stub it — which is the only reason
+    # they can see this at all.
+    describe "when the GitHub App is not configured" do
+      before { allow(SpecGuard::GithubApp).to receive(:configured?).and_call_original }
 
-      get repositories_path
-      expect(page_text).to include(lapsed_state)
+      it "renders no panel, because there is no control to offer anyone" do
+        expect(SpecGuard::GithubApp).not_to be_configured
 
-      # The destination the banner's button carries the reader to, followed for real.
-      expect(response.body).to include(CGI.escapeHTML("return_to=#{CGI.escape(new_repository_path)}"))
-      expect { get new_repository_path }
-        .to change { GithubRegistrationGrant.find_by(user_id: @user.id) }.from(nil)
+        get repositories_path
 
-      # And the page they were sent from now says nothing, because the state genuinely resolved.
-      get repositories_path
-      expect(page_text).not_to include(lapsed_state)
+        expect(page_text).not_to include(lapsed_state)
+      end
+
+      # The specific shape of the breakage, pinned rather than left to the assertion above: the
+      # operator notice must not appear WRAPPED IN the reader's panel. It has its own home on the
+      # connect paths, where an operator meets it without a reader-facing sentence around it.
+      it "does not nest the operator notice inside a reader-facing alert" do
+        get repositories_path
+
+        expect(page_text).not_to include("The SpecGuard GitHub App is not configured")
+      end
     end
 
     # Criterion 5 — the load-bearing one, and the reason this page reads the GRANT and not the
@@ -2936,37 +3036,49 @@ RSpec.describe "Repository registration and API keys", type: :request do
     # GitHub round trip to the most-visited page in the product AND silently repair the grant,
     # making the very state under test unobservable on the page that renders it.
     #
-    # Asserted for BOTH populations, per the `repository_github_verification_spec.rb:232` precedent:
-    # a zero that only holds for the current-grant reader would miss exactly the branch this slice
-    # adds.
-    it "adds no GitHub round trip for a lapsed-grant reader" do
-      fake = stub_github(repos: [github_repo("acme/billing-service")])
+    # Asserted for ALL THREE populations, per the `repository_github_verification_spec.rb:232`
+    # precedent: a zero that only holds for one of them would miss exactly the branches this adds.
+    describe "its cost" do
+      it "adds no GitHub round trip for a reader who has never had a grant" do
+        fake = stub_github(repos: [github_repo("acme/billing-service")])
 
-      get repositories_path
+        get repositories_path
 
-      expect(page_text).to include(lapsed_state)
-      expect(fake.calls_to(:repositories)).to eq(0)
-    end
+        expect(registration_panel).to be_present
+        expect(fake.calls_to(:repositories)).to eq(0)
+      end
 
-    it "adds no GitHub round trip for a current-grant reader" do
-      create_registration_grant(user: @user)
-      fake = stub_github(repos: [github_repo("acme/billing-service")])
+      it "adds no GitHub round trip for a lapsed-grant reader" do
+        create_registration_grant(user: @user,
+                                  captured_at: GithubRegistrationGrant::MAX_AGE.ago - 1.hour)
+        fake = stub_github(repos: [github_repo("acme/billing-service")])
 
-      get repositories_path
+        get repositories_path
 
-      expect(fake.calls_to(:repositories)).to eq(0)
-    end
+        expect(registration_panel).to be_present
+        expect(fake.calls_to(:repositories)).to eq(0)
+      end
 
-    # The other half of "no round trip", and NOT a restatement of it: the round-trip examples above
-    # would still pass if the render had repaired the grant from some other reading. The state a
-    # lapsed reader is shown must survive being looked at — a page that healed the grant as a side
-    # effect of rendering it would show the banner once and never again, with nothing else in the
-    # suite able to see it.
-    it "does not repair the grant as a side effect of rendering it" do
-      stub_github(repos: [github_repo("acme/billing-service")])
+      it "adds no GitHub round trip for a current-grant reader" do
+        create_registration_grant(user: @user)
+        fake = stub_github(repos: [github_repo("acme/billing-service")])
 
-      expect { 2.times { get repositories_path } }.not_to change(GithubRegistrationGrant, :count)
-      expect(page_text).to include(lapsed_state)
+        get repositories_path
+
+        expect(fake.calls_to(:repositories)).to eq(0)
+      end
+
+      # The other half of "no round trip", and NOT a restatement of it: the round-trip examples
+      # above would still pass if the render had repaired the grant from some other reading. The
+      # state a reader is shown must survive being looked at — a page that healed the grant as a
+      # side effect of rendering it would show the panel once and never again, with nothing else in
+      # the suite able to see it.
+      it "does not repair the grant as a side effect of rendering it" do
+        stub_github(repos: [github_repo("acme/billing-service")])
+
+        expect { 2.times { get repositories_path } }.not_to change(GithubRegistrationGrant, :count)
+        expect(registration_panel).to be_present
+      end
     end
 
     # Criterion 3 — the wording, pinned to the constant from BOTH directions so the browser sentence
@@ -2987,8 +3099,13 @@ RSpec.describe "Repository registration and API keys", type: :request do
         expect(lapsed_state).not_to include("browser")
       end
 
-      it "states the shared fact both surfaces are about" do
+      # The shared sentence has to be true of BOTH populations, which is what lets one slice serve
+      # two branches: "no current record" is a statement about what SpecGuard holds, and it is
+      # equally true of a snapshot that expired and one that was never taken. Anything stronger
+      # would be a lie to one of them — which is the whole reason the prose AROUND it is split.
+      it "states the shared fact both surfaces and both readers are about" do
         expect(lapsed_state).to include("no current record")
+        expect(lapsed_state).not_to include("again")
       end
     end
 

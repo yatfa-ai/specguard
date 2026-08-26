@@ -102,7 +102,7 @@ class RepositoriesController < ApplicationController
     @repositories = Repository.accessible_by(current_user)
                               .includes(:user)
                               .order(:github_full_name)
-    @registration_grant_lapsed = registration_grant_lapsed?
+    @registration_grant_story = registration_grant_story
   end
 
   def show
@@ -1061,15 +1061,42 @@ class RepositoriesController < ApplicationController
   # cannot know that happened.
   def github_verdict = @github_verdict
 
-  # Whether this person's registration grant redeems nothing any more — the state
-  # `RepositoryRegistration::GrantVerifier` refuses an `sgu_` registration with, asked here so that
-  # the page that refusal sends them to can say so and offer the fix.
+  # WHICH STORY this person's registration grant tells: `:lapsed` when a snapshot was taken and has
+  # aged out, `:never_taken` when none has ever been taken, `nil` when there is nothing to say. The
+  # state `RepositoryRegistration::GrantVerifier` refuses an `sgu_` registration with, asked here so
+  # that the page that refusal sends them to can say so and offer the fix.
   #
   # THE SAME EXPRESSION THE GATE USES. `GrantVerifier#verdict_for` opens with `return
   # verdict(:not_granted, name) if @grant.nil? || @grant.stale?`, and this is that line and not a
   # second opinion about it: a page drawing a different bound from the gate would tell somebody
   # their registration access was fine while the API went on refusing them, or the reverse. Absent
   # and stale are ONE verdict there and are one here for the same reason — neither redeems anything.
+  #
+  # ## One VERDICT, two FACTS — and a landing page owes the reader the FACT
+  #
+  # The merge is right where `GrantVerifier` does it: that method is answering "may this `sgu_`
+  # request register?" at the instant of a refusal, and the answer is no either way. This page is
+  # not a refusal, and to a READER the two halves are different facts with different fixes — so the
+  # verdict is kept whole and the two are told apart for what is SAID and OFFERED, not re-bounded:
+  #
+  #   * `:lapsed` — a snapshot existed and aged past `MAX_AGE`. A week-old grant frequently sits
+  #     beside a week-old session, and nothing on this path has asked (asking is what would cost a
+  #     round trip), so the fix is the reconnect the API's own refusal names.
+  #   * `:never_taken` — no snapshot has EVER been taken. That is the ordinary state of somebody who
+  #     connected the App one redirect ago: `GithubInstallationsController#destination` lands them
+  #     here, and a grant is minted nowhere but a picker render, so their FIRST visit is always this
+  #     one. Nothing lapsed and nothing is missing from their session. Telling them SpecGuard needs
+  #     to check their permissions "again" is false, and sending them to github.com would be a
+  #     WORSE fix than the "Register a repository" button already in this page's header — they hold
+  #     a live token, and the only thing anybody needs to do is open a picker once.
+  #
+  # ## Nothing to offer means nothing to say
+  #
+  # Both stories end in a control, and with the App unconfigured neither control can work —
+  # `github_authorize_button` renders `github_app_unconfigured_notice` in place of itself, and the
+  # picker cannot reach GitHub either. So the panel is suppressed rather than wrapped around an
+  # operator-facing notice a reader can do nothing with; that notice already meets the operator on
+  # the connect paths, and it is an alert, which inside this page's alert would nest one in another.
   #
   # ## Read off the grant, never off the listing — this controller makes that easy to get wrong
   #
@@ -1085,10 +1112,15 @@ class RepositoriesController < ApplicationController
   #     the state this page exists to render could never be observed on the page that renders it.
   #
   # `has_one :github_registration_grant` is one row on a unique index, and costs one query.
-  def registration_grant_lapsed?
+  def registration_grant_story
+    return nil unless SpecGuard::GithubApp.configured?
+
     grant = current_user.github_registration_grant
 
-    grant.nil? || grant.stale?
+    return :never_taken if grant.nil?
+    return :lapsed if grant.stale?
+
+    nil
   end
 
   # Submitting the form unchanged is a valid save, so don't claim a rename that didn't happen.
