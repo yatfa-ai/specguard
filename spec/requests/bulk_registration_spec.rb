@@ -1319,6 +1319,167 @@ RSpec.describe "Bulk organization registration", type: :request do
       end
     end
 
+    # SPGD-845. The other half of the example directly above — and they are deliberately two
+    # examples rather than one, because they pin two DIFFERENT properties of the same state.
+    #
+    # That one pins SAFETY: a carried name the listing does not contain renders no field and
+    # registers nothing. It asserts `have_no_field` and stops. This pins HONESTY: the reader is TOLD
+    # the list they carried came back short. Safety was answered from the start; honesty was not
+    # answered at all, and a page can have the first without the second — which is exactly the state
+    # this describe block was written against. A reader who ticked five, went to GitHub, added three
+    # and came back saw three ticks, no row for the other two, and not one word about it.
+    describe "reporting a carried selection that came back short" do
+      # The listing is the same two repositories throughout, so what varies between these examples
+      # is only what was CARRIED — which is the variable the sentence is supposed to key on.
+      def picker_carrying(names, organization: "acme")
+        stub_github(repos: [github_repo("acme/api"), github_repo("acme/web")])
+        get bulk_repositories_path(organization: organization, github_full_names: names)
+      end
+
+      # The load-bearing phrase, in one place. A method rather than a constant: a constant assigned
+      # inside a block takes the FILE's lexical scope, not the example group's, so it would land on
+      # `Object` and be visible to every other spec in the suite.
+      def shortfall = "still not connected to the SpecGuard GitHub App"
+
+      # Criterion 3, and the case the ticket exists for: some of what came back has no row, and the
+      # page NAMES those repositories rather than counting them or staying quiet. Named because the
+      # reader's next action is specific to them — these are the ones to go back and add.
+      it "names the carried repositories the listing does not contain" do
+        picker_carrying(%w[acme/api acme/ledger acme/payments])
+
+        expect(response).to have_http_status(:ok)
+        expect(response.body).to include(shortfall)
+        # Both absentees are named...
+        expect(response.body).to include("acme/ledger")
+        expect(response.body).to include("acme/payments")
+        # ...and the sentence carries the action, not just the diagnosis.
+        expect(response.body).to include("Add them to the App on GitHub")
+
+        # The control, and the reason this is not merely asserting on a string: the name that IS in
+        # the listing still ticks, so the carry demonstrably happened and the page is short by
+        # exactly the two it says it is.
+        picker = Capybara.string(response.body)
+        expect(picker).to have_field(type: "checkbox", with: "acme/api", checked: true)
+        expect(picker).to have_no_field(type: "checkbox", with: "acme/ledger")
+        expect(picker).to have_no_field(type: "checkbox", with: "acme/payments")
+      end
+
+      # Criterion 1. A carry in which EVERY name matched is not short, and a page that says so
+      # anyway is crying wolf at the reader who did exactly what they were asked to.
+      it "says nothing when every carried name matched a row" do
+        picker_carrying(%w[acme/api acme/web])
+
+        picker = Capybara.string(response.body)
+        expect(picker).to have_field(type: "checkbox", with: "acme/api", checked: true)
+        expect(picker).to have_field(type: "checkbox", with: "acme/web", checked: true)
+        expect(response.body).not_to include(shortfall)
+      end
+
+      # Criterion 2, and the condition the ticket warns hardest about getting wrong. The trigger is
+      # "names were carried AND some matched no row" — NOT "some listing rows are missing". A picker
+      # reached fresh took no trip and has no shortfall; a sentence there would be noise about
+      # something that never happened.
+      it "says nothing on a picker reached with no carried selection at all" do
+        stub_github(repos: [github_repo("acme/api"), github_repo("acme/web")])
+
+        choose_organization("acme")
+
+        expect(response).to have_http_status(:ok)
+        expect(response.body).not_to include(shortfall)
+      end
+
+      # ...including when the listing is genuinely missing things. This is the same page state as
+      # the example above from the LISTING's point of view and differs only in what was carried, so
+      # a condition wired to the listing rather than to the carry passes that one and fails here.
+      it "says nothing on a fresh picker even when repositories are withheld from the listing" do
+        stub_github(repos: [github_repo("acme/api"),
+                            github_repo("acme/locked-down", admin: false)])
+
+        choose_organization("acme")
+
+        # The listing IS short, and the page says so in its own words — the sibling sentence.
+        expect(response.body).to include("you do not administer")
+        # But nothing was carried, so there is no shortfall to report.
+        expect(response.body).not_to include(shortfall)
+      end
+
+      # Criterion 4. THE ONE THAT PINS THE COMPARISON, and it is a real divergence rather than a
+      # hypothetical: `BulkRegistration.normalized_names` de-duplicates with `uniq(&:downcase)` but
+      # PRESERVES each name's original case, and `Repository.normalize_full_name` does not downcase
+      # either — so a carried `Acme/API` reaches the template spelled exactly that way.
+      #
+      # The checkbox asks `@full_names.include?(repo.full_name)` — case-SENSITIVE — so that name
+      # does not tick today. A subtraction written case-INSENSITIVELY would call it matched and stay
+      # silent, leaving the reader with an unticked row the page insists is fine. The two assertions
+      # below are therefore ONE claim in two halves, and it is the disagreement between them that
+      # this example exists to make impossible.
+      it "reports a carried name that differs from a listing row only by case, and does not tick it" do
+        picker_carrying(%w[Acme/API])
+
+        picker = Capybara.string(response.body)
+        # The row is there, spelled the listing's way, and it is NOT ticked...
+        expect(picker).to have_field(type: "checkbox", with: "acme/api", checked: false)
+        # ...and the page says so, naming the carried spelling the reader would recognise.
+        expect(response.body).to include(shortfall)
+        expect(response.body).to include("Acme/API")
+      end
+
+      # An already-registered repository is NOT a shortfall. It has a row, that row is rendered
+      # disabled with a badge that says exactly what happened to it, and reporting it a second time
+      # as "not connected" would be false twice over — it is connected, and it is listed.
+      it "does not report a carried name whose row is present but already registered" do
+        create_repository(user: @user, github_full_name: "acme/web")
+
+        picker_carrying(%w[acme/api acme/web])
+
+        expect(response.body).to include("Already registered")
+        expect(response.body).not_to include(shortfall)
+      end
+
+      # Criterion 5. The subtraction is over two things `#new` already had in hand, so it costs
+      # nothing at the boundary. Asserted as a COMPARISON against the same page rendered without a
+      # carry, rather than against a hard-coded number: what matters is that carrying a short
+      # selection adds no read, and a literal would silently re-pass if the page's own listing read
+      # changed underneath it.
+      it "asks GitHub no more times than the same picker rendered with nothing carried" do
+        fake = stub_github(repos: [github_repo("acme/api"), github_repo("acme/web")])
+
+        # What the page costs with NOTHING carried — the control.
+        choose_organization("acme")
+        baseline = fake.calls_to(:repositories)
+        # Guards the comparison against being vacuous: if the picker read nothing at all, the
+        # equality below would hold at zero no matter what the carried render did.
+        expect(baseline).to be_positive
+
+        before_carry = fake.calls_to(:repositories)
+        get bulk_repositories_path(organization: "acme",
+                                   github_full_names: %w[acme/api acme/ledger acme/payments])
+        carried_reads = fake.calls_to(:repositories) - before_carry
+
+        expect(response.body).to include(shortfall)
+        expect(carried_reads).to eq(baseline)
+      end
+
+      # The handle leg reaches the identical seam — `submitted_full_names + redeemed_full_names`
+      # feed one `@full_names` and the picker "never learns which of the two they were ticked by"
+      # — so the sentence must not learn either. This is the leg the summary's three FIX buttons
+      # actually use, and the `not_in_installation` button carries, by construction, precisely the
+      # names that cannot tick until GitHub's own picker is changed.
+      it "reports the shortfall for a selection carried by handle, not only by query string" do
+        selection = PendingBulkSelection.capture(user: @user, organization: "acme",
+                                                 full_names: %w[acme/api acme/ledger])
+
+        stub_github(repos: [github_repo("acme/api"), github_repo("acme/web")])
+        get bulk_repositories_path(organization: "acme",
+                                   GithubHelper::SELECTION_PARAM => selection.token)
+
+        expect(response.body).to include(shortfall)
+        expect(response.body).to include("acme/ledger")
+        expect(Capybara.string(response.body))
+          .to have_field(type: "checkbox", with: "acme/api", checked: true)
+      end
+    end
+
     # The helper under the two buttons, asked directly. The bound examples above are about SIZE
     # rather than about rendering, and driving them through a full POST per batch size would be 100
     # registrations to measure a string.

@@ -25,6 +25,23 @@
         <% end %>
         <%= withheld_repositories_sentence(organization.withheld_count) %>
       </p>
+      <%# The carried batch came back SHORT — said here, beside the other "your list is short, here
+          is why" sentence, because it is the same kind of fact and a reader scanning for one should
+          find the other. `administered` and not `registerable` is the set it is measured against:
+          this asks which carried names have NO ROW, and an already-registered one HAS a row (it is
+          rendered below, disabled, with a badge saying so), which is the page accounting for it.
+
+          `@full_names` is read directly rather than passed in, because the checkbox at line ~101
+          reads exactly that and the two must be asking about one list. Same for the comparison
+          itself — see the helper, which mirrors `Array#include?` case-sensitively on purpose.
+
+          A separate paragraph rather than another clause in the one above: that one describes the
+          LISTING ("12 repositories you administer"), while this describes what happened to the
+          READER'S SELECTION on a trip they just took, and it carries an action for them. %>
+      <% shortfall = unmatched_carried_repositories_sentence(@full_names, administered.map(&:full_name)) %>
+      <% if shortfall %>
+        <p class="mt-1 text-sm text-app-content-secondary"><%= shortfall %></p>
+      <% end %>
     </div>
     <%= render UI::ButtonComponent.new(variant: :ghost, size: :sm, href: bulk_repositories_path) do %>
       Change account

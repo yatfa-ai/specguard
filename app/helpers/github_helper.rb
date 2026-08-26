@@ -346,6 +346,73 @@ module GithubHelper
       "administer #{count == 1 ? 'is' : 'are'} not listed."
   end
 
+  # "acme/api and acme/web are still not connected to the SpecGuard GitHub App…" — the sentence
+  # that tells a reader their carried selection came back SHORT, and `nil` when it came back whole.
+  #
+  # ## What it is for
+  #
+  # The bulk summary's three fix buttons send the reader to GitHub and carry their batch back, and
+  # the page promises them the batch will "already be selected, so you can submit again without
+  # picking them out a second time". The button that carries the `not_in_installation` names is
+  # carrying, by construction, exactly the names that CANNOT tick until GitHub's own picker is
+  # changed — which is the trip's entire purpose. If the reader adds three of the five, or GitHub's
+  # picker paginates, or they cancel, they come back to a list where three rows tick and two have no
+  # row at all. Nothing rendered that shortfall: an unmatched name is not a row, so it is not drawn,
+  # not counted, and — until this — not reported. The reader submits believing they submitted five.
+  #
+  # This is the same failure `bulk_picker_return_to` refuses to ship above, reached by a different
+  # route. There the remedy is all-or-nothing (see the comment at the byte bound: "a picker that
+  # comes back partially ticked is WORSE than one that comes back unticked … without ever being told
+  # a list was shortened"). Here the shortening happens on GITHUB's side, after every predicate on
+  # the outbound leg has already answered, so it cannot be prevented — only noticed on ARRIVAL,
+  # which is the one place both sides are in hand. Hence a sentence rather than a guard.
+  #
+  # ## The comparison is the CHECKBOX's, deliberately
+  #
+  # `_picker.html.erb` ticks a row with `@full_names.include?(repo.full_name)` — plain
+  # `Array#include?`, i.e. case-SENSITIVE String equality. This asks the same question in the same
+  # words, from the other side, so the sentence and the tick boxes cannot contradict each other on
+  # one page.
+  #
+  # That matters because the carried names are NOT downcased on the way in:
+  # `BulkRegistration.normalized_names` de-duplicates with `uniq(&:downcase)` but preserves each
+  # name's original case, and `Repository.normalize_full_name` strips a URL prefix, a `.git` suffix,
+  # a trailing slash and whitespace without touching case. So a carried `Acme/API` against a listed
+  # `acme/api` already fails to tick today. A case-INSENSITIVE subtraction here would call that name
+  # matched and stay silent about a row the reader can see is unticked and cannot fix — reporting
+  # one fewer repository than the page is actually short. The case-sensitive reading reports it, and
+  # is the only reading that keeps the two halves of the page saying the same thing.
+  #
+  # ## What it does NOT report
+  #
+  # A carried name whose repository IS listed but is already registered is not here. It has a row,
+  # that row carries an "Already registered" badge, and the page has therefore said what happened to
+  # it. This sentence is about names with no row AT ALL, which are the only ones nothing else on the
+  # page accounts for.
+  #
+  # An empty `carried` yields `nil` — a picker reached fresh carries no batch and has no shortfall
+  # to report, and a sentence there would be noise about a trip that never happened.
+  #
+  # Every name is named rather than counted, and that is the difference from
+  # `withheld_repositories_sentence` above: a withheld repository is somebody else's to register and
+  # the reader's next action does not depend on which one it is, where here the next action is
+  # specific to these repositories — they are the ones to go back and add.
+  #
+  # Composed as one String rather than assembled across ERB lines, for the reason
+  # `withheld_repositories_sentence` states in full: a newline inside a sentence renders fine in a
+  # browser and is invisible to anything matching on the text.
+  def unmatched_carried_repositories_sentence(carried, listed)
+    listed = Array(listed)
+    missing = Array(carried).reject { |name| listed.include?(name) }
+    return nil if missing.empty?
+
+    one = missing.one?
+
+    "#{missing.to_sentence} #{one ? 'is' : 'are'} still not connected to the SpecGuard GitHub " \
+      "App, so #{one ? 'it is' : 'they are'} not listed below and #{one ? 'has' : 'have'} not been " \
+      "selected. Add #{one ? 'it' : 'them'} to the App on GitHub, then come back to this page."
+  end
+
   # "SpecGuard could not read acme just now. Repositories connected through that account are
   # missing from this list. Anything shown here can still be registered." — the short-list notice,
   # with the account NAMED, and `nil` when nothing is missing.
