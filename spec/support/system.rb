@@ -42,6 +42,44 @@ module SystemSpecBrowser
   end
 end
 
+# Capybara already absorbs the ordinary "the page moved under me" races: `Node::Base#synchronize`
+# retries anything in `driver.invalid_element_errors` until `Capybara.default_max_wait_time`, which
+# is why a `StaleElementReferenceError` never reaches an example. This driver widens that list by
+# exactly one class, and the reason is a chromedriver REPORTING choice rather than a new race.
+#
+# A node that is detached between being found and being acted on — the Turbo Drive `<body>` swap
+# behind every `click_link` on this app does precisely that — is reported by chromedriver as:
+#
+#   Selenium::WebDriver::Error::UnknownError:
+#     unhandled inspector error: {"code":-32000,
+#                                 "message":"Node with given id does not belong to the document"}
+#
+# That is a stale element by any other name, but it arrives as `UnknownError`, which is NOT in
+# Capybara's list. So `catch_error?` returns false, `synchronize` re-raises on the FIRST attempt,
+# and the example dies on a race the wait window exists to absorb (SPGD-834: one such failure in
+# 3,430 examples, on a run where nothing about the application had changed).
+#
+# Capybara sets the precedent for this shape of fix in its own default list, which carries
+# `InvalidSelectorError` with the comment "Work around chromedriver go_back/go_forward race
+# condition" — a driver-specific misreport, tolerated in the same place for the same reason.
+#
+# ## Why widening here does not hide a real failure
+#
+# `synchronize` calls `session.raise_server_error!` BEFORE it consults this list, so an exception
+# raised inside the application is re-raised untouched and never enters the retry loop — this can
+# only ever affect errors raised by the BROWSER, never by the app.
+#
+# And a genuine `UnknownError` (a crashed tab, a dead renderer) is not swallowed: it is retried for
+# the wait window and then raised, with its original message, failing the example exactly as before.
+# The cost of the widening is therefore up to `default_max_wait_time` of extra wall-clock on a
+# failure that was going to happen anyway, and the benefit is that a transient detachment resolves
+# on the retry instead of reddening a clean suite.
+class DetachedNodeTolerantDriver < Capybara::Selenium::Driver
+  def invalid_element_errors
+    @invalid_element_errors ||= super + [Selenium::WebDriver::Error::UnknownError]
+  end
+end
+
 Capybara.register_driver :headless_chromium do |app|
   options = Selenium::WebDriver::Chrome::Options.new(binary: SystemSpecBrowser::CHROMIUM)
   options.add_argument("--headless=new")
@@ -52,7 +90,9 @@ Capybara.register_driver :headless_chromium do |app|
 
   service = Selenium::WebDriver::Service.chrome(path: SystemSpecBrowser::CHROMEDRIVER)
 
-  Capybara::Selenium::Driver.new(app, browser: :chrome, options: options, service: service)
+  # The tolerant subclass rather than `Capybara::Selenium::Driver` itself — registering the base
+  # class here is exactly how this fix would silently become a no-op.
+  DetachedNodeTolerantDriver.new(app, browser: :chrome, options: options, service: service)
 end
 
 # Silent so a failing example's output is the failure rather than a page of Puma logging.
