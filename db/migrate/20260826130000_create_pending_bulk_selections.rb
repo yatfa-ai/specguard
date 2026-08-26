@@ -57,7 +57,14 @@ class CreatePendingBulkSelections < ActiveRecord::Migration[8.1]
   def change
     create_table :pending_bulk_selections do |t|
       # NOT unique — see the header. The scope of every read, never the key of one.
-      t.references :user, null: false, foreign_key: true
+      #
+      # `index: false` because the composite below already leads with `user_id` and therefore
+      # serves every lookup a standalone index on it would, including the foreign key's own cascade
+      # check. `t.references` would otherwise add a second index over a strict PREFIX of the first:
+      # more to write on every render of a refused summary — a path a refresh repeats — and nothing
+      # that can be asked of it which the composite cannot answer. `ingest_rejections` and
+      # `repository_memberships` make the same call for the same reason.
+      t.references :user, null: false, foreign_key: true, index: false
 
       # The handle, and the only part of this row that appears in a URL.
       t.string :token, null: false, index: { unique: true }

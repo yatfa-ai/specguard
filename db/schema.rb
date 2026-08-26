@@ -79,7 +79,6 @@ ActiveRecord::Schema[8.1].define(version: 2026_08_26_130000) do
     t.bigint "user_id", null: false
     t.index ["token"], name: "index_pending_bulk_selections_on_token", unique: true
     t.index ["user_id", "captured_at"], name: "index_pending_bulk_selections_on_user_id_and_captured_at"
-    t.index ["user_id"], name: "index_pending_bulk_selections_on_user_id"
   end
 
   create_table "repositories", force: :cascade do |t|

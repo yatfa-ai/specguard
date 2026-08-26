@@ -125,12 +125,41 @@ class PendingBulkSelection < ApplicationRecord
     selection.full_names
   end
 
-  # Expired rows for this person, cleared when they take their next trip.
+  # This person's rows that are past `MAX_AGE`, cleared on their next capture.
   #
-  # Here rather than in a scheduled job because the growth is bounded by the same thing that causes
-  # it: a row is only written when somebody presses a fix button, and the next press clears the last
-  # one. A person who never comes back leaves at most the rows of one summary behind them, and there
-  # is no cadence to configure, deploy or forget.
+  # Note what this does NOT do: it does not clear the previous row. A capture sweeps only what is
+  # already EXPIRED, so a person who renders a refused summary ten times inside the hour leaves ten
+  # live rows, and they are cleared an hour later by a capture that may never come. That is not an
+  # oversight to be read past — `create` fires once per summary RENDER, and this controller
+  # documents re-rendering as ordinary ("the cost is that a refresh re-submits, and that is
+  # survivable precisely because the operation is idempotent by construction"), so a reader who
+  # refreshes is the expected case rather than the odd one.
+  #
+  # The growth that permits is bounded by TIME, not by the next press: at most one person's renders
+  # within one `MAX_AGE` window, each holding at most `BulkRegistration::MAX_BATCH` names. That is
+  # the bound this design accepts, and it is acceptable for three reasons worth stating rather than
+  # leaving to be re-derived:
+  #
+  #   - It cannot accumulate ACROSS windows. Whatever a person leaves behind stops being redeemable
+  #     after an hour and is deleted by their next capture, so the steady state for somebody who
+  #     keeps using the feature is an hour's worth of their own renders, not a lifetime's.
+  #   - The rows are small and hold nothing granted. A selection decides which checkboxes start
+  #     ticked; every name is re-verified against GitHub on submit, so a row left lying about is
+  #     inert rather than dangerous.
+  #   - Nothing here is per-request or per-visitor. A row is written only on the REFUSED summary of
+  #     a signed-in person who ticked repositories — a page reached deliberately, by somebody who
+  #     already authenticated.
+  #
+  # The one case this leaves is the person who refreshes a refused summary and never returns: their
+  # rows expire on schedule but are deleted by nobody, because deletion is carried by their next
+  # capture. Those rows are unredeemable within the hour and are a bounded per-person residue, which
+  # is why a scheduled job is not warranted rather than merely not present. Should this table ever
+  # grow past that reasoning — a periodic `where(captured_at: ...(Time.current - MAX_AGE))
+  # .delete_all` across all users is the whole of the job, and it needs no state of its own.
+  #
+  # Sweeping the person's OTHER rows unconditionally here would make the growth bound tighter, and
+  # is deliberately NOT done: it would reintroduce exactly the two-tabs clobber the "one row per
+  # TRIP" decision above exists to prevent.
   def self.sweep_expired(user, now: Time.current)
     where(user_id: user.id).where(captured_at: ...(now - MAX_AGE)).delete_all
   end
