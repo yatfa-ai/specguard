@@ -36,10 +36,13 @@
             button beside it. Wider than what "Try these again" carries by exactly the
             `not_installed` names: installing the App is the trip that makes those registerable,
             so a list omitting them would carry back everything except what the button just fixed.
-            `bulk_picker_return_to` decides how much fits; see it for the bound and the drop. %>
+            `bulk_picker_return_to` decides how it is carried; see it. It carries a HANDLE to a
+            selection held server-side rather than the names themselves, which is what makes the
+            sentence above true at every size in 1..MAX_BATCH rather than at the first 28. %>
         <%= github_install_button return_to: bulk_picker_return_to(
               organization: submitted_organization,
-              full_names: @result.install_retryable_names
+              full_names: @result.install_retryable_names,
+              user: current_user
             ) %>
       <% end %>
     <% end %>
@@ -58,10 +61,16 @@
             this is the button that actually RESOLVES a dead credential, and it used to be the one
             that discarded the selection. It carries `retryable_names` unchanged: `not_authorized`
             is itself a retryable skip, and `rate_limited` / `unavailable` are names a submission
-            after the round trip could equally land. %>
+            after the round trip could equally land.
+
+            The sentence above says "you can submit this batch again", and it is unconditioned
+            because `bulk_picker_return_to` now carries a HANDLE rather than the names: the whole
+            path is about 51 bytes at MAX_BATCH as at one name, so there is no size at which the
+            batch fails to survive the trip and no size at which that sentence becomes false. %>
         <%= github_authorize_button return_to: bulk_picker_return_to(
               organization: submitted_organization,
-              full_names: @result.retryable_names
+              full_names: @result.retryable_names,
+              user: current_user
             ) %>
       <% end %>
     <% end %>
@@ -101,22 +110,28 @@
     <%# Carries the batch exactly as the two fix buttons above do, and NARROWER than either: only
         the `not_in_installation` names, because reopening the picker for an installation that
         already exists changes the answer for those and for nothing else.
-        `bulk_picker_return_to` owns the byte bound and the all-or-nothing drop; see it.
+        `bulk_picker_return_to` owns how the batch is carried; see it.
 
         Built HERE rather than inline at the button because the sentence above it makes a claim
         about this path's contents, and the two have to be answers to the same object. %>
     <% picker_return_to = bulk_picker_return_to(organization: submitted_organization,
-                                                full_names: outside_installation) %>
+                                                full_names: outside_installation,
+                                                user: current_user) %>
     <%# Whether the reader is promised ticks is decided by what that path ACTUALLY carries, not by
-        what was handed to it. `bulk_picker_return_to` returns a path with no names on it in two
-        ordinary cases — an over-bound list is dropped ENTIRELY (28 names of a possible MAX_BATCH
-        of 100 is the last size that fits), and a POST that carried no `organization` yields the
-        bare picker path — and in both the reader arrives at an unticked list. Promising ticks
-        anyway would cost them precisely what the sentence said it would save them, and would spend
-        the honesty the all-or-nothing drop was chosen to buy.
+        what was handed to it. `bulk_picker_return_to` can still return a path carrying no selection
+        — a POST that carried no `organization` yields the bare picker path, and a capture that did
+        not land falls through to the byte-bounded name carry, which drops an over-bound list
+        ENTIRELY — and in both the reader arrives at an unticked list. Promising ticks anyway would
+        cost them precisely what the sentence said it would save them, and would spend the honesty
+        the all-or-nothing drop was chosen to buy.
 
-        Asked through `bulk_picker_carries_names?`, which PARSES the emitted path. The bound stays
-        in one place: this does not know it, measure it, or re-derive it. %>
+        The ORDINARY case is now the true one at every size in 1..MAX_BATCH: the path carries a
+        ~22-byte handle to a selection held server-side rather than a list that grows, so the size
+        at which this used to go false (29 of a possible 100) no longer exists. The question is kept
+        rather than deleted because the branches above it did not go away — see the helper.
+
+        Asked through `bulk_picker_carries_names?`, which PARSES the emitted path. The rules stay in
+        one place: this does not know the bound, measure it, re-derive it, or resolve the handle. %>
     <% carries_names = bulk_picker_carries_names?(picker_return_to) %>
     <%= render UI::PanelComponent.new(class: "mt-4") do %>
       <%= render UI::EmptyStateComponent.new(

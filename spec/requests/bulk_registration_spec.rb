@@ -638,6 +638,35 @@ RSpec.describe "Bulk organization registration", type: :request do
       Rack::Utils.parse_nested_query(URI.parse(carried_return_to(body, action_path)).query)
     end
 
+    # WHICH REPOSITORIES THE BUTTON ACTUALLY CARRIES BACK, however it carries them.
+    #
+    # SPGD-840 moved the fix buttons from carrying the NAMES in the query string to carrying a
+    # HANDLE to a selection held server-side, because the names rode out through GitHub's `state`
+    # and only 28 of the 100 legal batch sizes fit — above which every name was dropped. So the
+    # examples below stopped being able to read `query["github_full_names"]` and get an answer.
+    #
+    # They are re-aimed HERE rather than at each call site, and re-aimed rather than deleted,
+    # because what they were pinning was never the mechanism: it was "this button carries THIS
+    # batch, and not the one the button beside it carries". That question is unchanged, and it is
+    # the question this answers. An example that asserted the parameter name instead would have
+    # been pinning an implementation detail the ticket's whole remedy was to change.
+    #
+    # Reads EITHER carry deliberately. The name carry is still live — `bulk_picker_return_to`
+    # falls back to it for a caller with no user to scope a handle to, and for a capture that did
+    # not land — so an assertion that could only read handles would go quietly vacuous on those
+    # paths rather than failing.
+    #
+    # Resolves through `PendingBulkSelection.redeem` with the signed-in user, which is exactly the
+    # call `BulkRegistrationsController#new` makes. That is the point: a handle scoped to somebody
+    # else redeems nothing HERE for the same reason it redeems nothing THERE, so an example using
+    # this cannot accidentally pass by reading a row the reader could not have read.
+    def carried_names(body, action_path)
+      query = carried_query(body, action_path)
+      return query["github_full_names"].to_a if query["github_full_names"].present?
+
+      PendingBulkSelection.redeem(user: @user, token: query[GithubHelper::SELECTION_PARAM.to_s])
+    end
+
     # Criterion 1. A dead session credential is the case the whole ticket turns on: `:not_authorized`
     # is in BOTH vocabularies at once — it drives `authorize?` AND is a member of `RETRYABLE_SKIPS` —
     # so the reconnect panel and the retry panel render together, and the reader has to choose. Now
@@ -655,7 +684,8 @@ RSpec.describe "Bulk organization registration", type: :request do
 
       expect(URI.parse(path).path).to eq(bulk_repositories_path)
       expect(query["organization"]).to eq("acme")
-      expect(query["github_full_names"]).to match_array(%w[acme/api acme/web])
+      expect(carried_names(response.body, github_installation_authorize_path))
+        .to match_array(%w[acme/api acme/web])
     end
 
     # Criterion 2. Asserting on the emitted path alone would pin a URL nothing is obliged to honour,
@@ -716,7 +746,7 @@ RSpec.describe "Bulk organization registration", type: :request do
       query = carried_query(response.body, github_installation_path)
 
       expect(query["organization"]).to eq("acme")
-      expect(query["github_full_names"]).to match_array(%w[acme/api acme/web])
+      expect(carried_names(response.body, github_installation_path)).to match_array(%w[acme/api acme/web])
       # The retry control is not on this page to disagree with: nothing here is retryable, which is
       # exactly why the install button carrying `retryable_names` would carry nothing.
       expect(response.body).not_to include("Try these again")
@@ -810,7 +840,7 @@ RSpec.describe "Bulk organization registration", type: :request do
 
       expect(URI.parse(path).path).to eq(bulk_repositories_path)
       expect(query["organization"]).to eq("acme")
-      expect(query["github_full_names"]).to match_array(%w[acme/theirs acme/ghost])
+      expect(carried_names(response.body, github_installation_path)).to match_array(%w[acme/theirs acme/ghost])
 
       # The POSITIVE half of the promise, pinned so the two degraded examples below cannot be
       # satisfied by simply deleting the clause everywhere. The names DID survive here, so the
@@ -900,14 +930,27 @@ RSpec.describe "Bulk organization registration", type: :request do
       expect(response.body).not_to include("Choose repositories on GitHub")
     end
 
-    # Criterion 6. The bound belongs to `bulk_picker_return_to` and is INHERITED here rather than
-    # re-implemented, so an oversized batch degrades to the account alone with no partial tick list
-    # — a picker that comes back partially ticked is worse than one that comes back unticked,
-    # because the reader submits believing it complete.
+    # SPGD-840 REVERSED THIS EXAMPLE, and the reversal is the whole ticket.
     #
-    # Asserted through the rendered button rather than through the helper, because the helper's own
-    # bound is already pinned above: what this adds is that the NEW call site goes through it.
-    it "degrades to the account alone when the carried batch will not fit" do
+    # It used to read "degrades to the account alone when the carried batch will not fit", and it
+    # pinned a full-size batch arriving with ZERO names carried and the panel correctly declining to
+    # promise ticks. That was an honest answer to a real bound: the names rode out through GitHub's
+    # `state`, and only 28 of the 100 legal sizes fit.
+    #
+    # The names no longer ride out at all — `bulk_picker_return_to` carries a HANDLE to a selection
+    # held server-side — so at MAX_BATCH the batch SURVIVES, and the degraded state this example was
+    # written to pin is no longer reachable from this call site at any legal size. Re-aimed rather
+    # than deleted, because the thing worth pinning was never the drop: it was that the path and the
+    # SENTENCE agree. They still have to, and now they agree the other way.
+    #
+    # The rule the old version protected is not lost. "A path carrying no selection must never
+    # promise ticks" still bites on the no-organization branch, and the example directly below is
+    # where it is pinned; the all-or-nothing drop itself is still pinned at the helper, where it is
+    # still reachable and still correct.
+    #
+    # Criteria 1 and 3 at MAX_BATCH — the largest batch the product accepts, and 72 sizes past the
+    # last one that used to work.
+    it "carries the whole batch and promises the ticks at the largest legal size" do
       configure_github_app
       names = (1..BulkRegistration::MAX_BATCH).map { |i| format("acmecorp/repository-%05d", i) }
       outcomes = names.map do |name|
@@ -923,17 +966,20 @@ RSpec.describe "Bulk organization registration", type: :request do
       path = carried_return_to(response.body, github_installation_path)
       query = carried_query(response.body, github_installation_path)
 
-      expect(query["github_full_names"].to_a.length).to eq(0)
+      # EVERY name, not "as many as fit": a partially-carried batch is the failure the all-or-
+      # nothing drop existed to prevent, and a handle must not reintroduce it by another route.
+      expect(carried_names(response.body, github_installation_path)).to match_array(names)
       expect(query["organization"]).to eq("acme")
+
+      # Criterion 2 at this call site. The bound is unchanged and still met — by carrying something
+      # that does not grow, rather than by raising it.
       expect(path.bytesize).to be <= GithubHelper::MAX_RETURN_TO_BYTES
 
-      # And what the reader is TOLD in that state, which is the half this example used to leave
-      # unasserted while pinning the degraded path itself. The names were dropped, so the panel
-      # must not promise they come back ticked — a reader who takes the trip on that promise
-      # arrives at a completely unticked list and pays exactly the cost the sentence said it
-      # would save them, with nothing on either page saying a list was shortened.
-      expect(response.body).not_to include("already selected")
-      expect(response.body).to include("where you can pick them again and submit")
+      # Criterion 3. The panel's sentence now agrees with what its path delivers, which is what the
+      # old version asserted the other way round. A reader taking this trip is promised ticks and
+      # gets them.
+      expect(response.body).to include("already selected")
+      expect(response.body).not_to include("where you can pick them again and submit")
     end
 
     # The same sentence, the other reachable way it can go wrong. `bulk_picker_return_to` returns
@@ -960,6 +1006,255 @@ RSpec.describe "Bulk organization registration", type: :request do
       expect(URI.parse(path).query).to be_blank
       expect(response.body).not_to include("already selected")
       expect(response.body).to include("where you can pick it again and submit")
+    end
+
+    # SPGD-840. THE POPULATION THIS TICKET EXISTS FOR: batch sizes ABOVE 28.
+    #
+    # The fix buttons used to carry the reader's selection as `github_full_names[]` inside a path
+    # that rides out through GitHub's `state`. That met its byte budget at 28 of the 100 sizes the
+    # product accepts, and above 28 it dropped EVERY name — so a person who ticked thirty, was
+    # refused, pressed the button that fixes it and came back landed on an unticked list and
+    # re-picked thirty by hand. Precisely the cost the button exists to remove.
+    #
+    # These examples are all asserted ABOVE 28, because 28 and below already worked and an example
+    # written there would have passed before this change too.
+    describe "carrying a batch too large to fit in the URL" do
+      # 25-CHARACTER names, which is what the byte bound was derived against — the real cost of the
+      # old carry was the escaping of `/` and the repeated `github_full_names[]=`, not the names.
+      # These reproduce the helper's own measurement table exactly: 28 of them emit a 1,492-byte
+      # path and 29 emit 1,544, which are the last size that used to carry and the first that used
+      # to drop.
+      #
+      # Owned by `acme` rather than by the table's `acmecorp`, and that is load-bearing here where
+      # it was not there: these examples WALK the trip and read the ticks off the picker, and the
+      # picker renders one organization. Names under a different owner than the `organization` the
+      # batch was submitted for match no row, so the example would assert against an empty list and
+      # fail for a reason that has nothing to do with the carry.
+      def batch(size) = (1..size).map { |i| format("acme/repository-%09d", i) }
+
+      # A batch refused for a DEAD CREDENTIAL, which is the case the reconnect button answers.
+      # `:not_authorized` is what every name comes back as when the session has nothing to ask
+      # GitHub with, and it is a member of `RETRYABLE_SKIPS`, so `retryable_names` is the whole
+      # batch.
+      def submit_unauthorized(size)
+        configure_github_app
+        stub_github(unauthorized: true)
+        submit(batch(size))
+      end
+
+      # Criterion 1, walked rather than asserted on a URL nothing is obliged to honour — same shape
+      # as the reconnect walk above, at a size that used to lose everything. What the reader
+      # actually cares about at the end of the trip is the TICKS, so that is what this reads.
+      #
+      # 29 is not an arbitrary "big number": it is the FIRST size the old carry dropped, named in
+      # the helper's own measurement table. An example at 30 or at 50 would pass just as well and
+      # would not say where the boundary was.
+      [29, BulkRegistration::MAX_BATCH].each do |size|
+        it "brings all #{size} names back ticked after reconnecting" do
+          names = batch(size)
+          submit_unauthorized(size)
+
+          state = carried_return_to(response.body, github_installation_authorize_path)
+
+          # GitHub's half of the trip, stubbed at the same service seam the callback's own specs use.
+          allow(GithubAppUserAuthorization).to receive(:authorize).and_return(
+            GithubAppUserAuthorization::Authorization.new(
+              token: "ghu_reconnected", expires_at: 1.hour.from_now,
+              installations: [GithubAppUserAuthorization::Installation.new(installation_id: 6001,
+                                                                          account_login: "acme")]
+            )
+          )
+          # The reconnect landing in a healthier moment: the credential works now, so the account
+          # reads. `acme/legacy` is the CONTROL — a registerable row on the same page that was not
+          # carried, so the ticks below are the carried batch rather than a picker ticking
+          # everything it renders.
+          stub_github(repos: (names + ["acme/legacy"]).map { |name| github_repo(name) })
+
+          get github_installation_callback_path, params: { code: "abc", state: state }
+          expect(response).to redirect_to(state)
+
+          follow_redirect!
+
+          picker = Capybara.string(response.body)
+          # EVERY name, not "as many as fit". A partially-ticked picker is the failure the
+          # all-or-nothing drop existed to prevent, and a handle must not reintroduce it by another
+          # route: the reader submits believing it complete and silently loses the remainder.
+          names.each do |name|
+            expect(picker).to have_field(type: "checkbox", with: name, checked: true)
+          end
+          expect(picker).to have_field(type: "checkbox", with: "acme/legacy", checked: false)
+        end
+      end
+
+      # Criterion 3, on BOTH unconditioned panels, at the last size that used to work and at the
+      # largest legal one.
+      #
+      # These two panels state their promise FLATLY — the authorize panel says "you can submit this
+      # batch again" in so many words — where the third panel asks `bulk_picker_carries_names?`
+      # first and words itself accordingly. That asymmetry was the defect: above 28 the page told
+      # the reader their batch survived the trip, and it did not.
+      #
+      # Asserted as agreement between the SENTENCE and the PATH, which is the rule the third panel
+      # already applied and these two did not. Making the sentence conditional would satisfy the
+      # letter of that rule; the ticket asks for the sentence to be TRUE instead, so the assertion
+      # is that the promise is made AND kept.
+      [28, BulkRegistration::MAX_BATCH].each do |size|
+        it "keeps the reconnect panel's promise at #{size} names" do
+          names = batch(size)
+          submit_unauthorized(size)
+
+          expect(response.body).to include("Reconnect to GitHub")
+          # The sentence, unconditioned — it is on the page at both sizes.
+          expect(response.body).to include("you can submit this batch again")
+
+          path = carried_return_to(response.body, github_installation_authorize_path)
+
+          # And the path keeps it: every name, and the account to come back to.
+          expect(carried_names(response.body, github_installation_authorize_path)).to match_array(names)
+          expect(carried_query(response.body, github_installation_authorize_path)["organization"]).to eq("acme")
+
+          # Criterion 2 at this call site: the bound is unchanged and still met, by carrying
+          # something that does not grow rather than by raising it.
+          expect(path.bytesize).to be <= GithubHelper::MAX_RETURN_TO_BYTES
+        end
+
+        it "keeps the install panel's promise at #{size} names" do
+          configure_github_app
+          uninstall_github_app(@user)
+          names = batch(size)
+
+          submit(names)
+
+          expect(response.body).to include("Connect your GitHub repositories")
+
+          path = carried_return_to(response.body, github_installation_path)
+
+          expect(carried_names(response.body, github_installation_path)).to match_array(names)
+          expect(carried_query(response.body, github_installation_path)["organization"]).to eq("acme")
+          expect(path.bytesize).to be <= GithubHelper::MAX_RETURN_TO_BYTES
+        end
+      end
+
+      # Criterion 2, stated as the thing it is really about. The remedy was NOT to raise the bound —
+      # the bound belongs to GitHub's URL, not to us — so an implementation that fixed the ticket by
+      # editing the constant must fail here.
+      #
+      # The invariant over every size `1..MAX_BATCH` is pinned separately and deliberately
+      # UNMODIFIED (see "keeps the emitted path within the byte bound at every batch size"); this is
+      # the half that says the constant itself did not move.
+      it "meets the byte bound without the bound having moved" do
+        expect(GithubHelper::MAX_RETURN_TO_BYTES).to eq(1_500)
+      end
+
+      # Criterion 5. The session is where the GitHub credential lives, and it is a COOKIE session
+      # with a 4KB ceiling — which is exactly why the batch is not stashed there. A hundred names is
+      # ~2.6KB raw before encryption, and a near miss is worse than an overflow: it quietly evicts
+      # the token instead of raising, breaking verification with nothing said anywhere.
+      #
+      # Asserted after a FULL round trip at MAX_BATCH, because a batch-sized cookie would survive
+      # the summary render and only fail once the callback wrote the reconnected token beside it.
+      it "leaves the session's GitHub credential intact across a full-size round trip" do
+        names = batch(BulkRegistration::MAX_BATCH)
+        submit_unauthorized(BulkRegistration::MAX_BATCH)
+
+        state = carried_return_to(response.body, github_installation_authorize_path)
+
+        allow(GithubAppUserAuthorization).to receive(:authorize).and_return(
+          GithubAppUserAuthorization::Authorization.new(
+            token: "ghu_reconnected", expires_at: 1.hour.from_now,
+            installations: [GithubAppUserAuthorization::Installation.new(installation_id: 6001,
+                                                                        account_login: "acme")]
+          )
+        )
+        stub_github(repos: names.map { |name| github_repo(name) })
+
+        get github_installation_callback_path, params: { code: "abc", state: state }
+        follow_redirect!
+
+        # Both keys present and READABLE — the token the callback just wrote, and its expiry. A
+        # `CookieOverflow` would have raised before here; a near miss would have silently dropped
+        # one of these two.
+        expect(session[GithubUserSession::TOKEN_KEY]).to eq("ghu_reconnected")
+        expect(session[GithubUserSession::EXPIRES_KEY]).to be_present
+        # And the names are NOT in the cookie: they are the thing that would have overflowed it.
+        expect(session.to_hash.to_s).not_to include(names.first)
+      end
+    end
+
+    # SPGD-840. What a handle does when it does NOT name a live selection of this person's.
+    #
+    # Criterion 4. All of these degrade to the SAME place — the right account, an unticked list —
+    # which is precisely what an over-bound batch delivered before handles existed. That is the
+    # floor this change is built on: it never does worse than the behaviour it replaced.
+    describe "redeeming a handle that names nothing" do
+      def picker_with(token)
+        stub_github(repos: [github_repo("acme/api"), github_repo("acme/web")])
+        get bulk_repositories_path(organization: "acme", GithubHelper::SELECTION_PARAM => token)
+      end
+
+      def unticked_picker_for_acme
+        expect(response).to have_http_status(:ok)
+        picker = Capybara.string(response.body)
+        # The right ACCOUNT — the half that is never dropped, and the whole of the degraded promise.
+        expect(picker).to have_field(type: "checkbox", with: "acme/api", checked: false)
+        expect(picker).to have_field(type: "checkbox", with: "acme/web", checked: false)
+      end
+
+      it "ticks nothing for a handle nobody minted" do
+        picker_with("no-such-handle")
+
+        unticked_picker_for_acme
+      end
+
+      it "ticks nothing for a handle that has expired mid-trip" do
+        selection = PendingBulkSelection.capture(user: @user, organization: "acme",
+                                                 full_names: %w[acme/api acme/web])
+        selection.update!(captured_at: PendingBulkSelection::MAX_AGE.ago - 1.minute)
+
+        picker_with(selection.token)
+
+        unticked_picker_for_acme
+      end
+
+      # THE ONE THAT IS ABOUT SOMEBODY ELSE'S DATA, and it is asserted explicitly rather than being
+      # left to the unknown-id case above — an implementation that resolved handles GLOBALLY would
+      # pass every other example on this page and leak here.
+      #
+      # `acme/api` is deliberately a name BOTH people could plausibly hold, and it is on the listing
+      # this reader is shown: if the scope were missing, the other person's selection would tick a
+      # real row on this page and the leak would be visible as a tick. The control is the line below
+      # it — the same handle DOES redeem for its owner — so this pins the SCOPE rather than passing
+      # on a handle that redeems for nobody at all.
+      it "ticks nothing for a handle belonging to somebody else" do
+        other = create_user(github_uid: "2002", github_handle: "hubot")
+        theirs = PendingBulkSelection.capture(user: other, organization: "acme",
+                                              full_names: %w[acme/api acme/web])
+
+        picker_with(theirs.token)
+
+        unticked_picker_for_acme
+        expect(PendingBulkSelection.redeem(user: other, token: theirs.token))
+          .to match_array(%w[acme/api acme/web])
+      end
+
+      # Criterion 6. Nothing is trusted about a resolved name beyond deciding which rows START
+      # ticked — the same rule `BulkRegistrationsController#new` already states about the names it
+      # accepts in the query string, and the reason a handle is safe to hand out at all.
+      #
+      # A name the listing does not contain matches no row: it is not rendered, not registered, and
+      # not reported. `BulkRegistration` re-verifies every name against GitHub on submit regardless.
+      it "matches no row for a resolved name the listing does not contain" do
+        selection = PendingBulkSelection.capture(user: @user, organization: "acme",
+                                                 full_names: %w[acme/api acme/not-in-the-listing])
+
+        picker_with(selection.token)
+
+        picker = Capybara.string(response.body)
+        # The name that IS in the listing ticks, so the redemption demonstrably happened...
+        expect(picker).to have_field(type: "checkbox", with: "acme/api", checked: true)
+        # ...and the one that is not simply has no row to tick.
+        expect(picker).to have_no_field(type: "checkbox", with: "acme/not-in-the-listing")
+      end
     end
 
     # The helper under the two buttons, asked directly. The bound examples above are about SIZE

@@ -10,7 +10,7 @@
 #
 # It's strongly recommended that you check this file into your version control system.
 
-ActiveRecord::Schema[8.1].define(version: 2026_08_19_130000) do
+ActiveRecord::Schema[8.1].define(version: 2026_08_26_130000) do
   # These are extensions that must be enabled in order to support this database
   enable_extension "pg_catalog.plpgsql"
   enable_extension "vector"
@@ -67,6 +67,18 @@ ActiveRecord::Schema[8.1].define(version: 2026_08_19_130000) do
     t.integer "total_reasons_count", default: 0, null: false
     t.string "user_agent"
     t.index ["repository_id", "occurred_at", "id"], name: "index_ingest_rejections_on_repository_and_recency", order: { occurred_at: :desc, id: :desc }
+  end
+
+  create_table "pending_bulk_selections", force: :cascade do |t|
+    t.datetime "captured_at", null: false
+    t.datetime "created_at", null: false
+    t.jsonb "full_names", default: [], null: false
+    t.string "organization", null: false
+    t.string "token", null: false
+    t.datetime "updated_at", null: false
+    t.bigint "user_id", null: false
+    t.index ["token"], name: "index_pending_bulk_selections_on_token", unique: true
+    t.index ["user_id", "captured_at"], name: "index_pending_bulk_selections_on_user_id_and_captured_at"
   end
 
   create_table "repositories", force: :cascade do |t|
@@ -340,6 +352,7 @@ ActiveRecord::Schema[8.1].define(version: 2026_08_19_130000) do
   add_foreign_key "github_installations", "users"
   add_foreign_key "github_registration_grants", "users"
   add_foreign_key "ingest_rejections", "repositories"
+  add_foreign_key "pending_bulk_selections", "users"
   add_foreign_key "repositories", "users"
   add_foreign_key "repository_memberships", "repositories"
   add_foreign_key "repository_memberships", "users"
