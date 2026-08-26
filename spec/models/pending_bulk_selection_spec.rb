@@ -86,10 +86,11 @@ RSpec.describe PendingBulkSelection do
       expect(described_class.redeem(user: user, token: second.token)).to eq(%w[acme/web])
     end
 
-    # The sweep is here rather than in a scheduled job because the growth is bounded by the same
-    # thing that causes it. Asserted on the EXPIRED row only, with a live one beside it, so a sweep
-    # that simply deleted everything for the user would fail rather than pass — that implementation
-    # is exactly the two-tab bug above, arriving by another route.
+    # The sweep clears only what is already past `MAX_AGE`; see `PendingBulkSelection.sweep_expired`
+    # for why that time bound is accepted rather than tightened. Asserted on the EXPIRED row only,
+    # with a live one beside it, so a sweep that simply deleted everything for the user would fail
+    # rather than pass — that implementation is exactly the two-tab bug above, arriving by another
+    # route.
     it "clears this person's expired rows when they take their next trip, and only those" do
       stale = described_class.capture(user: user, organization: "acme", full_names: %w[acme/old])
       stale.update!(captured_at: described_class::MAX_AGE.ago - 1.minute)
