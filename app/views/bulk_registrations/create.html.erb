@@ -65,6 +65,77 @@
             ) %>
       <% end %>
     <% end %>
+  <% elsif @result.choose_repositories? %>
+    <%# The third step along, and the one this cascade used to fall through. Nothing is wrong with
+        the installation and nothing is wrong with the credential — the App is installed and it
+        answered — so both branches above are false. GitHub was simply never asked to include these
+        repositories in the installation, which is the reader's OWN selection to change and the one
+        thing GitHub's picker exists to change.
+
+        Their skip sentence already tells them to do it ("Add it on GitHub, then pick it here."), so
+        before this the page issued an instruction and offered no way to take it: the reader got the
+        "Not connected to the SpecGuard GitHub App (N)" heading below and no control at all.
+
+        Read off `@result` directly rather than through `github_verdict` like the two above.
+        That seam's contract is that either an `InstallationRepositories::Verdict` or a
+        `BulkRegistration::Result` may be returned and the caller asks for the CAPABILITY — and
+        `Verdict` does not answer this one, so a concern method wrapping it would raise on one of
+        its two documented callers.
+
+        This is an `elsif` tail rather than a branch of its own, and the ordering is load-bearing: a
+        batch mixing `not_installed` with `not_in_installation` takes the FIRST branch, because
+        installing the App is the WIDER fix — it is the trip that has to happen first, and it lands
+        the reader on the same GitHub picker this panel would have sent them to, so the narrower
+        offer is not lost by being skipped. Two simultaneous panels pointing at one destination
+        would make the reader choose between them with nothing on the page to choose by.
+
+        That branch carries `install_retryable_names`, which does NOT include the
+        `not_in_installation` names — installing the App does not resolve that skip, so they are
+        absent from it by the same rule that keeps every other terminal skip out. The reader arrives
+        at GitHub's picker able to tick them regardless, which is the whole of what this panel
+        offers; widening that list is a different question from this one and is left alone here. %>
+    <%# NOT `uninstalled`: `not_installed` is a DIFFERENT status with a different panel five lines
+        up, and conflating those two names in a comment is the whole reason this ticket exists. %>
+    <% outside_installation = @result.choose_repositories_names %>
+    <% one_outside = outside_installation.length == 1 %>
+    <%# Carries the batch exactly as the two fix buttons above do, and NARROWER than either: only
+        the `not_in_installation` names, because reopening the picker for an installation that
+        already exists changes the answer for those and for nothing else.
+        `bulk_picker_return_to` owns the byte bound and the all-or-nothing drop; see it.
+
+        Built HERE rather than inline at the button because the sentence above it makes a claim
+        about this path's contents, and the two have to be answers to the same object. %>
+    <% picker_return_to = bulk_picker_return_to(organization: submitted_organization,
+                                                full_names: outside_installation) %>
+    <%# Whether the reader is promised ticks is decided by what that path ACTUALLY carries, not by
+        what was handed to it. `bulk_picker_return_to` returns a path with no names on it in two
+        ordinary cases — an over-bound list is dropped ENTIRELY (28 names of a possible MAX_BATCH
+        of 100 is the last size that fits), and a POST that carried no `organization` yields the
+        bare picker path — and in both the reader arrives at an unticked list. Promising ticks
+        anyway would cost them precisely what the sentence said it would save them, and would spend
+        the honesty the all-or-nothing drop was chosen to buy.
+
+        Asked through `bulk_picker_carries_names?`, which PARSES the emitted path. The bound stays
+        in one place: this does not know it, measure it, or re-derive it. %>
+    <% carries_names = bulk_picker_carries_names?(picker_return_to) %>
+    <%= render UI::PanelComponent.new(class: "mt-4") do %>
+      <%= render UI::EmptyStateComponent.new(
+            title: "Add #{one_outside ? 'this repository' : 'these repositories'} on GitHub",
+            description: "#{pluralize(outside_installation.length, 'repository', plural: 'repositories')} " \
+                         "#{one_outside ? 'is' : 'are'} not among the ones the SpecGuard " \
+                         "GitHub App is installed on. This takes you to GitHub's own repository " \
+                         "picker, where you choose what the App can see, and straight back" \
+                         "#{if carries_names
+                              " — with #{one_outside ? 'it' : 'them'} already selected, so you " \
+                              "can submit again without picking #{one_outside ? 'it' : 'them'} " \
+                              'out a second time.'
+                            else
+                              ", where you can pick #{one_outside ? 'it' : 'them'} again and submit."
+                            end}"
+          ) do %>
+        <%= github_install_button "Choose repositories on GitHub", return_to: picker_return_to %>
+      <% end %>
+    <% end %>
   <% end %>
 
   <% if @result.any_registered? %>

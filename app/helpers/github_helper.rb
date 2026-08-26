@@ -68,6 +68,30 @@ module GithubHelper
     bulk_repositories_path(organization: organization)
   end
 
+  # Did the names actually survive the trip out? Asked of what `bulk_picker_return_to` EMITTED,
+  # never of the batch that went into it.
+  #
+  # This exists because a caller may want to say "and they will come back already selected", and
+  # that sentence is not always true. The method above has two ways of returning a path with no
+  # names on it — a blank `organization` yields the bare picker path, and an over-bound list is
+  # dropped entirely — and a reader promised ticks who arrives at an unticked list pays exactly the
+  # cost the promise told them they would not. So the promise is made conditional on the answer.
+  #
+  # One predicate rather than two because the two states are one state to the READER: whatever the
+  # reason, the list comes back unticked and the sentence must not claim otherwise. The reasons
+  # differ and the remedy does not.
+  #
+  # It PARSES rather than re-deriving: it does not know `MAX_RETURN_TO_BYTES`, does not measure a
+  # path, and does not ask whether an organization was present. Those rules stay in exactly one
+  # place, and this reads their result — so a change to the bound moves the sentence with it and
+  # the two cannot drift into disagreeing on the same page.
+  def bulk_picker_carries_names?(return_to)
+    query = URI.parse(return_to.to_s).query
+    return false if query.blank?
+
+    Rack::Utils.parse_nested_query(query)["github_full_names"].present?
+  end
+
   # POSTs to the flow that sends the user to GitHub to install the App and choose repositories.
   #
   # POST rather than a link, and CSRF-protected as any other POST, so a third-party page cannot
