@@ -43,15 +43,24 @@ class BulkRegistrationsController < ApplicationController
 
   def new
     # Normally empty — step two is a fresh list of unticked boxes. It is populated when the reader
-    # arrived by pressing the summary's "Try these again", which carries the transiently-skipped
-    # names back here as `github_full_names[]`; the picker's tick boxes read this seam, so those
-    # rows come back ticked. Normalised through the same class method `#create` uses, so a carried
-    # batch and a submitted one are the same batch.
+    # arrived by pressing one of the summary's controls, which carry the batch back here so those
+    # rows come back ticked: "Try these again" carries the names themselves as `github_full_names[]`,
+    # and the three FIX buttons — the ones that take a trip to GitHub first — carry a HANDLE to a
+    # selection held server-side, because a trip through GitHub's `state` has a byte budget a batch
+    # does not fit in. See `GithubHelper#bulk_picker_return_to` and `PendingBulkSelection`.
     #
-    # Nothing is trusted about these names: they only decide which of the rows this page was going
-    # to render anyway start out ticked, and every one of them is re-verified against GitHub when
-    # the form is submitted. A name that is not in the listing simply matches no row.
-    @full_names = BulkRegistration.normalized_names(submitted_full_names)
+    # Both are normalised through the same class method `#create` uses, so a carried batch and a
+    # submitted one are the same batch, and the picker's tick boxes never learn which of the two
+    # they were ticked by.
+    #
+    # Nothing is trusted about these names, from either source: they only decide which of the rows
+    # this page was going to render anyway start out ticked, and every one of them is re-verified
+    # against GitHub when the form is submitted. A name that is not in the listing simply matches no
+    # row. That is what makes a handle safe to hand out — the worst a redeemed selection can do is
+    # pre-tick boxes — and it is why redemption needs no ownership check beyond the scope it is read
+    # through. A handle belonging to somebody else, or one already expired, redeems nothing and the
+    # reader lands on the right account with an unticked list.
+    @full_names = BulkRegistration.normalized_names(submitted_full_names + redeemed_full_names)
   end
 
   def create
@@ -140,6 +149,23 @@ class BulkRegistrationsController < ApplicationController
                     .pluck(:github_full_name).map(&:downcase).to_set
         end
       end
+  end
+
+  # The names a HANDLE redeems for, or none.
+  #
+  # `[]` for every way a handle can fail to name a live selection of this person's — absent,
+  # unknown, expired, or belonging to somebody else — and the four are deliberately one answer,
+  # because they are one state to the reader: the list comes back unticked, at the right account,
+  # which is exactly what an over-bound batch delivered before handles existed. Degrading rather
+  # than erroring is the point; a stale bookmark is an ordinary way to arrive here, and the two GETs
+  # at the top of this file already answer a stale `organization` by landing on the chooser rather
+  # than on an error page.
+  #
+  # Scoping is `PendingBulkSelection.redeem`'s, and it is a WHERE rather than a check applied to a
+  # row already found — see the model. Nothing else about the handle is trusted: what it yields
+  # decides which rows start ticked and nothing more, exactly as `submitted_full_names` does.
+  def redeemed_full_names
+    PendingBulkSelection.redeem(user: current_user, token: params[GithubHelper::SELECTION_PARAM])
   end
 
   # The submitted names, as strings, and nothing else.

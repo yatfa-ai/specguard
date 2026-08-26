@@ -34,15 +34,34 @@ module GithubHelper
   # GitHub URL this produces is 1,873 bytes — inside the 2,000 budget at every size.
   MAX_RETURN_TO_BYTES = 1_500
 
-  # The bulk picker, with the batch that was just refused already selected — or as much of that
-  # context as fits.
+  # The query parameter a pending selection's handle rides back on. Named for what it IS to the
+  # receiving page rather than for the row behind it: `BulkRegistrationsController#new` redeems it
+  # into the same `@full_names` seam the `github_full_names[]` carry already populates, and the
+  # picker's tick boxes never learn which of the two they were ticked by.
+  SELECTION_PARAM = :selection
+
+  # The bulk picker, with the batch that was just refused already selected.
   #
-  # This is what the summary's two FIX buttons hand to `return_to:`, so that pressing the button
+  # This is what the summary's three FIX buttons hand to `return_to:`, so that pressing the button
   # which actually resolves the refusal costs the reader no more than pressing the one beside it
   # that merely re-submits. Before this they carried a bare path: a reader whose batch was skipped
   # for a dead credential saw "Reconnect to GitHub" (the correct fix, which discarded every tick)
   # next to "Try these again" (which preserved all N ticks and fixed nothing), and had to press the
   # one that worked and then re-pick N repositories by hand.
+  #
+  # ## A HANDLE, not the list — and that is what makes the promise true at every size
+  #
+  # Everything here rides out through GitHub's `state`, so the byte bound above applies to whatever
+  # this emits. Putting the NAMES in the path met that bound at 28 of the 100 sizes the product
+  # accepts, and above 28 the whole list was dropped: a reader who ticked thirty, was refused,
+  # pressed the button that fixes it and came back landed on an unticked list and re-picked thirty
+  # by hand. The bound is not ours to raise, so the remedy is to stop measuring a batch against it.
+  #
+  # `PendingBulkSelection.capture` persists the selection and returns a ~22-byte handle. The path is
+  # then `organization` + handle — about 51 bytes at ONE name and about 51 bytes at MAX_BATCH,
+  # because it no longer carries a thing that grows. So the all-or-nothing drop below is no longer
+  # reachable from this leg at any legal size, and a caller may say "already selected" without
+  # asking how many.
   #
   # ## Two rules, and both are about what the reader can trust
   #
@@ -58,38 +77,64 @@ module GithubHelper
   # reader submits believing it complete and silently loses the remainder without ever being told a
   # list was shortened. Degraded to the account alone is still strictly better than what this
   # replaced — right account, right list, ticks lost — and it is honest about it.
-  def bulk_picker_return_to(organization:, full_names: [])
+  #
+  # ## `user:` is optional, and its absence is a live path rather than a courtesy
+  #
+  # A handle has to be scoped to somebody to be redeemable, so a caller with nobody to scope it to
+  # cannot have one. That is not the only way to arrive at the URL carry, though, and the others are
+  # ordinary: `capture` answers `nil` for an empty name list, and answers `nil` rather than raising
+  # when the write does not land — a summary is a page that has already got what it came for, and a
+  # database that will not take a row is not a reason to fail the render. Every one of those falls
+  # through to the bounded name carry below, which still delivers the ticks at the 28 sizes it fits
+  # and still degrades honestly above them. The old behaviour is the floor, not the ceiling.
+  def bulk_picker_return_to(organization:, full_names: [], user: nil)
     return bulk_repositories_path if organization.blank?
 
     names = Array(full_names)
+    handle = PendingBulkSelection.capture(user: user, organization: organization, full_names: names)
+    return bulk_repositories_path(organization: organization, SELECTION_PARAM => handle.token) if handle
+
     carried = bulk_repositories_path(organization: organization, github_full_names: names)
     return carried if carried.bytesize <= MAX_RETURN_TO_BYTES
 
     bulk_repositories_path(organization: organization)
   end
 
-  # Did the names actually survive the trip out? Asked of what `bulk_picker_return_to` EMITTED,
+  # Did a selection actually survive the trip out? Asked of what `bulk_picker_return_to` EMITTED,
   # never of the batch that went into it.
   #
   # This exists because a caller may want to say "and they will come back already selected", and
-  # that sentence is not always true. The method above has two ways of returning a path with no
-  # names on it — a blank `organization` yields the bare picker path, and an over-bound list is
-  # dropped entirely — and a reader promised ticks who arrives at an unticked list pays exactly the
-  # cost the promise told them they would not. So the promise is made conditional on the answer.
+  # that sentence is not always true. The method above has ways of returning a path that carries no
+  # selection — a blank `organization` yields the bare picker path, and an over-bound name list with
+  # no handle behind it is dropped entirely — and a reader promised ticks who arrives at an unticked
+  # list pays exactly the cost the promise told them they would not. So the promise is made
+  # conditional on the answer.
   #
-  # One predicate rather than two because the two states are one state to the READER: whatever the
-  # reason, the list comes back unticked and the sentence must not claim otherwise. The reasons
-  # differ and the remedy does not.
+  # ONE predicate rather than one per reason, because the reasons are one state to the READER:
+  # whatever the cause, the list comes back unticked and the sentence must not claim otherwise. The
+  # same holds on the true side, and that is why this asks about EITHER carry: a handle and a name
+  # list deliver the identical thing to the reader — a ticked picker — and a predicate that knew
+  # only about names would call a handle-carrying path unticked and withdraw a sentence that is
+  # true. What it must never do is answer from the batch that went IN, which is the one reading that
+  # can promise ticks a path cannot deliver.
   #
   # It PARSES rather than re-deriving: it does not know `MAX_RETURN_TO_BYTES`, does not measure a
-  # path, and does not ask whether an organization was present. Those rules stay in exactly one
-  # place, and this reads their result — so a change to the bound moves the sentence with it and
-  # the two cannot drift into disagreeing on the same page.
+  # path, does not ask whether an organization was present, and does not resolve the handle. Those
+  # rules stay in exactly one place, and this reads their result — so a change to the bound moves
+  # the sentence with it and the two cannot drift into disagreeing on the same page.
+  #
+  # Not resolving the handle is deliberate rather than lazy. This answers "did the path carry a
+  # selection", which is a question about the PATH; whether that selection still redeems is a
+  # question about the far side of a trip that has not happened yet, and a page that answered it
+  # here would be answering it an unknown number of minutes early. A handle that expires mid-trip
+  # degrades on arrival to the right account and an unticked list — the same place every other
+  # failure lands.
   def bulk_picker_carries_names?(return_to)
     query = URI.parse(return_to.to_s).query
     return false if query.blank?
 
-    Rack::Utils.parse_nested_query(query)["github_full_names"].present?
+    parsed = Rack::Utils.parse_nested_query(query)
+    parsed["github_full_names"].present? || parsed[SELECTION_PARAM.to_s].present?
   end
 
   # POSTs to the flow that sends the user to GitHub to install the App and choose repositories.
