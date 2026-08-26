@@ -102,6 +102,7 @@ class RepositoriesController < ApplicationController
     @repositories = Repository.accessible_by(current_user)
                               .includes(:user)
                               .order(:github_full_name)
+    @registration_grant_lapsed = registration_grant_lapsed?
   end
 
   def show
@@ -1059,6 +1060,36 @@ class RepositoriesController < ApplicationController
   # refused because the App is not installed must offer the install button, and the listing alone
   # cannot know that happened.
   def github_verdict = @github_verdict
+
+  # Whether this person's registration grant redeems nothing any more — the state
+  # `RepositoryRegistration::GrantVerifier` refuses an `sgu_` registration with, asked here so that
+  # the page that refusal sends them to can say so and offer the fix.
+  #
+  # THE SAME EXPRESSION THE GATE USES. `GrantVerifier#verdict_for` opens with `return
+  # verdict(:not_granted, name) if @grant.nil? || @grant.stale?`, and this is that line and not a
+  # second opinion about it: a page drawing a different bound from the gate would tell somebody
+  # their registration access was fine while the API went on refusing them, or the reverse. Absent
+  # and stale are ONE verdict there and are one here for the same reason — neither redeems anything.
+  #
+  # ## Read off the grant, never off the listing — this controller makes that easy to get wrong
+  #
+  # `include GithubRepositoryListing` (above) puts `github_sources`, `github_listing`,
+  # `github_listing_error`, `github_authorization_needed?` and `github_installation_needed?` all in
+  # scope on this action, and every one of them forces `github_sources`. That would do two things,
+  # both unacceptable on this page:
+  #
+  #   * It CALLS GITHUB — a round trip added to the most-visited page in the product, on every
+  #     render, to answer a question one indexed row already answers.
+  #   * `github_sources` is the sole site that CAPTURES a grant (see `GithubRegistrationGrant` and
+  #     the concern's own comment). Asking it would REPAIR the grant as a side effect of asking, so
+  #     the state this page exists to render could never be observed on the page that renders it.
+  #
+  # `has_one :github_registration_grant` is one row on a unique index, and costs one query.
+  def registration_grant_lapsed?
+    grant = current_user.github_registration_grant
+
+    grant.nil? || grant.stale?
+  end
 
   # Submitting the form unchanged is a valid save, so don't claim a rename that didn't happen.
   def rename_notice

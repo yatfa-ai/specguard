@@ -242,6 +242,43 @@ module GithubHelper
     end
   end
 
+  # WHAT THE API REFUSAL SAYS, said on the page that refusal sends the reader to.
+  #
+  # `InstallationRepositories::MESSAGES[:not_granted]` is the sentence `POST /api/v1/repositories`
+  # answers a lapsed grant with, and it names its fix out loud: reconnect GitHub in a browser. This
+  # is that fix's other end, so the two must not be two independently-maintained descriptions of one
+  # state — that is the property `GrantVerifier`'s class comment is built around ("the refusal
+  # wording ... SHARED with the web path rather than duplicated beside it").
+  #
+  # ## Why a SLICE of the constant and not the whole of it
+  #
+  # That constant is a FRAGMENT, phrased to be printed after a repository name — "acme/billing
+  # cannot be registered from an API key — …" — and this page holds no repository name. Printed bare
+  # it would also close by telling a reader who is signed in, in a browser, looking at this page, to
+  # sign in to SpecGuard in a browser. Both halves of that tail are about the surface the refusal
+  # arrived on, and this is the other surface.
+  #
+  # What the two surfaces genuinely share is the STATE, and the constant states it in one sentence
+  # sitting between the two: everything after the em-dash, up to the first full stop. That sentence
+  # is true of both readers, and it is true of BOTH the people this page renders for — somebody
+  # whose snapshot aged out and somebody who has never had one are one verdict to
+  # `GrantVerifier#verdict_for`, and "no current record" is the only wording that is not a lie to one
+  # of them.
+  #
+  # The FIX is deliberately not taken from the constant, because on this surface it is a different
+  # fix: over there it is a sentence pointing at a browser, and here it is the button below.
+  #
+  # Extracted rather than re-typed, so rewording the API's refusal rewords this. The extraction is
+  # pinned in `spec/requests/repositories_spec.rb` from both directions — that what renders is a
+  # substring of the constant, and that it is the state half rather than the whole fragment — so a
+  # future edit that breaks the shape fails there instead of quietly printing "cannot be registered
+  # from an API key" to somebody who is not using one.
+  def github_registration_lapsed_state
+    InstallationRepositories::MESSAGES[:not_granted]
+      .split(" — ", 2).last
+      .split(/(?<=\.)\s+/, 2).first
+  end
+
   # What the picker offers: exactly the repositories in the user's installation(s).
   #
   # There is no filtering left to do HERE, and that is a statement about this method rather than

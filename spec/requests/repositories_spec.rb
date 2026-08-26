@@ -2818,6 +2818,203 @@ RSpec.describe "Repository registration and API keys", type: :request do
     end
   end
 
+  # SPGD-836 — the lapsed registration grant, stated on the page both return journeys land on.
+  #
+  # The gap these pin: `InstallationRepositories::MESSAGES[:not_granted]` refuses an `sgu_`
+  # registration by naming a fix ("reconnect GitHub in a browser"), and for the account it fires on
+  # the product offered that fix on no page. `/repositories` is where both ways back into the
+  # browser land — `SessionsController#post_authorization_path` and
+  # `GithubInstallationsController#destination` each fall back to `repositories_path` — and it said
+  # nothing about GitHub connection state.
+  #
+  # ## The population, and why it is invisible to every existing gate
+  #
+  # This reader's App is installed and their session holds a live token. Only the SNAPSHOT aged out
+  # (`GithubRegistrationGrant::MAX_AGE` is seven days). So `github_authorization_needed?` is false in
+  # all three of its limbs and `github_installation_needed?` is false too — both existing controls
+  # are correctly absent, which is precisely why a THIRD state had to be read rather than an existing
+  # one reused.
+  describe "the lapsed registration grant on the repositories index" do
+    # The rendered state sentence, READ FROM THE SEAM rather than typed out here — the rule this
+    # file already holds the refusal marker and the cost rows to, for the reason stated at
+    # `refusal_label`: a literal copied into a spec is agreement that merely HOLDS TODAY, and would
+    # go on passing against a page rendering the old words.
+    def lapsed_state = ApplicationController.helpers.github_registration_lapsed_state
+
+    # Criterion 1. Absent grant and stale grant are ONE verdict to `GrantVerifier` — its first line
+    # is `return verdict(:not_granted, name) if @grant.nil? || @grant.stale?` — so they are one
+    # verdict here, and both are stated rather than one being trusted to imply the other.
+    #
+    # Neither of these registers anything and neither opens a picker, which IS the criterion: the
+    # state is legible from the landing page alone.
+    it "tells a person with no grant at all that their registration access has lapsed" do
+      expect(GithubRegistrationGrant.find_by(user_id: @user.id)).to be_nil
+
+      get repositories_path
+
+      expect(page_text).to include(lapsed_state)
+    end
+
+    it "tells a person whose grant has aged past MAX_AGE the same thing" do
+      create_registration_grant(user: @user,
+                                captured_at: GithubRegistrationGrant::MAX_AGE.ago - 1.hour)
+
+      get repositories_path
+
+      expect(page_text).to include(lapsed_state)
+    end
+
+    # The bound itself, from the inside — a grant one hour short of MAX_AGE still redeems, so it
+    # must not be drawn as lapsed. Without this the two examples above would pass just as happily
+    # against a page that showed the banner to everybody.
+    it "says nothing to a person whose grant is inside the bound" do
+      create_registration_grant(user: @user,
+                                captured_at: GithubRegistrationGrant::MAX_AGE.ago + 1.hour)
+
+      get repositories_path
+
+      expect(page_text).not_to include(lapsed_state)
+    end
+
+    # Criterion 4, stated as the absence of the CONTROL and not only of the sentence. A current-grant
+    # reader's page is unchanged, which means no button either — asserting the sentence alone would
+    # let a stray reconnect button survive on every render.
+    it "offers a person with a current grant no new chrome" do
+      create_registration_grant(user: @user)
+
+      get repositories_path
+
+      expect(page_text).not_to include(lapsed_state)
+      expect(response.body).not_to include(github_installation_authorize_path)
+    end
+
+    # Criterion 2 — the existing action, reached through the existing helper. No new route was
+    # minted, so this asserts against the ROUTE HELPER rather than against a path spelled out here.
+    it "offers the existing authorize action as the fix" do
+      allow(SpecGuard::GithubApp).to receive_messages(configured?: true, slug: "specguard")
+
+      get repositories_path
+
+      expect(response.body).to include(github_installation_authorize_path)
+      expect(page_text).to include("Reconnect to GitHub")
+    end
+
+    # ⚠ THE HALF THAT MAKES THE FIX A FIX, and the one deviation from the ticket's own build note.
+    #
+    # `github_authorize_button` defaults `return_to:` to `request.fullpath`, and the ticket read that
+    # default as already correct here. It is not, and this example is why: a grant is taken in
+    # EXACTLY ONE place — `GithubRepositoryListing#github_sources`, the sole
+    # `GithubRegistrationGrant.capture` site — and this page deliberately never touches it. So a
+    # reconnect that returned to `/repositories` would hand back a credential the session already
+    # had, change nothing, and land the reader on the same banner offering the same button.
+    #
+    # Returning them to the PICKER ends the journey where the snapshot is actually retaken, at no
+    # extra click and with no second capture site. The whole round trip is driven here rather than
+    # asserted as a `return_to=` string, because the claim is about the OUTCOME — a grant exists
+    # afterwards — and a spec that only reads the query parameter would pass against a destination
+    # that repairs nothing.
+    it "ends the reconnect journey where the grant is actually retaken" do
+      stub_github(repos: [github_repo("acme/billing-service")])
+      allow(SpecGuard::GithubApp).to receive_messages(configured?: true, slug: "specguard")
+
+      get repositories_path
+      expect(page_text).to include(lapsed_state)
+
+      # The destination the banner's button carries the reader to, followed for real.
+      expect(response.body).to include(CGI.escapeHTML("return_to=#{CGI.escape(new_repository_path)}"))
+      expect { get new_repository_path }
+        .to change { GithubRegistrationGrant.find_by(user_id: @user.id) }.from(nil)
+
+      # And the page they were sent from now says nothing, because the state genuinely resolved.
+      get repositories_path
+      expect(page_text).not_to include(lapsed_state)
+    end
+
+    # Criterion 5 — the load-bearing one, and the reason this page reads the GRANT and not the
+    # LISTING. `RepositoriesController` already includes `GithubRepositoryListing`, so every listing
+    # helper is in scope on this action and reaching for the obvious-looking one would both add a
+    # GitHub round trip to the most-visited page in the product AND silently repair the grant,
+    # making the very state under test unobservable on the page that renders it.
+    #
+    # Asserted for BOTH populations, per the `repository_github_verification_spec.rb:232` precedent:
+    # a zero that only holds for the current-grant reader would miss exactly the branch this slice
+    # adds.
+    it "adds no GitHub round trip for a lapsed-grant reader" do
+      fake = stub_github(repos: [github_repo("acme/billing-service")])
+
+      get repositories_path
+
+      expect(page_text).to include(lapsed_state)
+      expect(fake.calls_to(:repositories)).to eq(0)
+    end
+
+    it "adds no GitHub round trip for a current-grant reader" do
+      create_registration_grant(user: @user)
+      fake = stub_github(repos: [github_repo("acme/billing-service")])
+
+      get repositories_path
+
+      expect(fake.calls_to(:repositories)).to eq(0)
+    end
+
+    # The other half of "no round trip", and NOT a restatement of it: the round-trip examples above
+    # would still pass if the render had repaired the grant from some other reading. The state a
+    # lapsed reader is shown must survive being looked at — a page that healed the grant as a side
+    # effect of rendering it would show the banner once and never again, with nothing else in the
+    # suite able to see it.
+    it "does not repair the grant as a side effect of rendering it" do
+      stub_github(repos: [github_repo("acme/billing-service")])
+
+      expect { 2.times { get repositories_path } }.not_to change(GithubRegistrationGrant, :count)
+      expect(page_text).to include(lapsed_state)
+    end
+
+    # Criterion 3 — the wording, pinned to the constant from BOTH directions so the browser sentence
+    # and the API's 400 cannot drift apart.
+    #
+    # Substring alone is too weak a claim to leave alone: it would hold for a helper that returned
+    # the WHOLE fragment, which on this page would tell a signed-in reader looking at a browser that
+    # their repository "cannot be registered from an API key" and then instruct them to sign in to
+    # SpecGuard in a browser. Both of those clauses are about the surface the refusal arrived on, so
+    # the second and third expectations pin that the slice is the STATE half and nothing else.
+    describe "its wording" do
+      it "is read from InstallationRepositories::MESSAGES rather than written again" do
+        expect(InstallationRepositories::MESSAGES[:not_granted]).to include(lapsed_state)
+      end
+
+      it "carries only the half that is true of a browser reader" do
+        expect(lapsed_state).not_to include("API key")
+        expect(lapsed_state).not_to include("browser")
+      end
+
+      it "states the shared fact both surfaces are about" do
+        expect(lapsed_state).to include("no current record")
+      end
+    end
+
+    # Criterion 6, and the invariant the whole slice rests on: the grant still has exactly one mint
+    # point. A second capture site is the failure mode this design exists to avoid, and it is the
+    # kind that is invisible in behaviour — the page would work, and the mechanism's stated cost
+    # ("adds ZERO GitHub round trips") would quietly stop being true.
+    #
+    # Comment lines are stripped before counting, and that is a correction rather than a loophole.
+    # The criterion is written as a verbatim `git grep`, which this tree also satisfies — but a grep
+    # counts PROSE, so writing the method's own name in a comment explaining why it must not be
+    # called a second time would fail this example while adding no call site at all. (That is not
+    # hypothetical: the first draft of this slice did exactly that, twice.) What must stay at one is
+    # the number of places that CALL it, so that is what is counted.
+    it "leaves the grant with exactly one capture call site" do
+      sites = Dir.glob(Rails.root.join("{app,lib}/**/*.rb")).flat_map do |path|
+        File.readlines(path)
+            .reject { |line| line.strip.start_with?("#") }
+            .grep(/GithubRegistrationGrant\.capture/)
+      end
+
+      expect(sites.size).to eq(1)
+      expect(sites.first).to include("sources: sources")
+    end
+  end
+
   describe "renaming a repository" do
     it "updates the name without touching keys, runs or intents" do
       repository = create_repository(user: @user, github_full_name: "acme/billing-servce")

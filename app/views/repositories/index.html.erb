@@ -14,6 +14,58 @@
     <% end %>
   <% end %>
 
+  <%# THE LAPSED REGISTRATION GRANT, on the page both return journeys land on.
+      `SessionsController#post_authorization_path` and `GithubInstallationsController#destination`
+      both fall back to `repositories_path`, so this is where somebody sent here by the `sgu_` API's
+      `:not_granted` refusal arrives — and until now this page said nothing about GitHub connection
+      state and offered no control that touches it.
+
+      Nothing is broken for this reader and the wording must not suggest otherwise. Their App is
+      installed and their browser session holds a token; `GithubRegistrationGrant::MAX_AGE` is seven
+      days, so the whole of what has happened is that nobody has opened a picker in a week and the
+      SNAPSHOT aged out. The browser path is unaffected — it asks GitHub live — and only registration
+      from an API key is refused, which is what the sentence below says and no more.
+
+      Rendered ABOVE the grid rather than inside it, and outside the `@repositories.any?` branch on
+      purpose: the reader most likely to be here is the one being refused by the API, and their
+      account may hold no repositories at all. Gating it on the grid would hide it from exactly the
+      person the refusal sent. %>
+  <% if @registration_grant_lapsed %>
+    <%= render UI::AlertComponent.new(
+          tone: :warning, title: "SpecGuard needs to check your GitHub permissions again",
+          class: "space-y-3"
+        ) do %>
+      <p>
+        <%# Read from `InstallationRepositories::MESSAGES[:not_granted]` — the API's own refusal —
+            so the sentence a reader meets here cannot drift from the one that sent them. See
+            `github_registration_lapsed_state` for why it is a slice of that constant. %>
+        <%= github_registration_lapsed_state %>
+        Registering a repository with an API key needs one, so
+        <%= tag.code("POST /api/v1/repositories") %> will refuse until it is taken again. Registering
+        here in the browser is unaffected.
+      </p>
+      <div>
+        <%# The EXISTING action — `github_installation_authorize`, through the existing
+            `github_authorize_button`. No new route and no new helper; this is the same control the
+            picker offers when a session has no credential, offered here for a different missing
+            thing.
+
+            ⚠ `return_to:` IS PASSED, AND IT IS THE HALF THAT MAKES THIS WORK. The helper would
+            otherwise default to `request.fullpath` and return the reader to `/repositories` — where
+            nothing would have changed, because a grant is taken in exactly one place
+            (`GithubRepositoryListing#github_sources`, the one place a grant is captured)
+            site) and this page deliberately never reads it. That round trip would hand back a
+            credential this reader's session already had, land them on this banner a second time,
+            and offer them the same button again.
+
+            The picker is where the snapshot is actually retaken, at no cost and with no further
+            click — so the button ends the journey THERE, and the state resolves itself on arrival.
+            Still one capture call site; still zero GitHub calls added to this page. %>
+        <%= github_authorize_button return_to: new_repository_path %>
+      </div>
+    <% end %>
+  <% end %>
+
   <% if @repositories.any? %>
     <div class="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
       <% @repositories.each do |repository| %>
