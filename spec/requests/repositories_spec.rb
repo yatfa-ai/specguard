@@ -2923,7 +2923,149 @@ RSpec.describe "Repository registration and API keys", type: :request do
       end
     end
 
-    # ⚠ THE REGRESSION GUARD FOR THE DEFECT THIS REWORK EXISTS TO FIX.
+    # ⚠ THE REGRESSION GUARD FOR THE DEFECT THIS ROUND EXISTS TO FIX — THE TOKEN AXIS.
+    #
+    # Every example in this describe until now signed in through `sign_in_via_github` with its
+    # default `authorize: true`, so all of them sat on ONE side of an axis nothing here asserted on.
+    # That is the same shape of blindness twice running: last round the invisible axis was `lapsed`
+    # vs `never_taken`, and the examples asserted on the sentence common to both; this round it is
+    # `token` vs `no token`, and the branch promised something only a token-holder can do.
+    #
+    # ## What was false, and why the suite could not see it
+    #
+    # A grant is minted in exactly one place, a picker render — and that render mints NOTHING
+    # without a credential. `InstallationRepositories.sources` answers a blank token with
+    # `error: :not_authorized`; `Sources#complete?` is `!truncated && error.nil?` and so is false;
+    # and `GithubRegistrationGrant.capture` opens `return nil unless sources.complete?`. So the old
+    # `:never_taken` copy — "open Register a repository once and SpecGuard will take one" — sent
+    # this reader to a picker that mints nothing, asks them to reconnect, and returns them to the
+    # identical panel. A LOOP, and the copy told them there was nothing else to do.
+    #
+    # The state is ordinary, not an edge case: a user-to-server token is short-lived and lives only
+    # in the session (`GithubUserSession`), so this is where a returning reader starts every new
+    # browser session — App installed, nothing to read it with.
+    #
+    # These examples drive the JOURNEY to its OUTCOME rather than reading the panel's words, because
+    # the defect was precisely a true-looking sentence with a false destination.
+    describe "when the session holds no GitHub credential" do
+      # The real state, produced by the real path: re-signing in with `authorize: false` records the
+      # installation WITHOUT the credential, which is what the helper's own comment advertises. Same
+      # user throughout — this is one person's second browser session, not a second account.
+      before { @user = sign_in_via_github(authorize: false) }
+
+      it "does not tell a reader with no credential to go and open the picker" do
+        get repositories_path
+
+        expect(registration_panel).to include(lapsed_state)
+        expect(registration_panel).to include("Reconnect GitHub")
+        expect(registration_panel).not_to include("Open Register a repository")
+      end
+
+      # THE LOOP ITSELF, CLOSED — the example the old branch could not have passed. Following the
+      # instruction now ends with a grant, where before the panel redrew unchanged forever.
+      #
+      # Driven to the OUTCOME rather than read off the button, and the journey is driven in its two
+      # real halves: the reconnect restores the CREDENTIAL, and the picker it returns to is where
+      # the SNAPSHOT is taken. `return_to` is asserted because it is what joins them — a reconnect
+      # landing back here would restore the credential and mint nothing, which is the same loop one
+      # step further along.
+      it "offers a fix that actually mints the grant" do
+        stub_github(repos: [github_repo("acme/billing-service")])
+        get repositories_path
+
+        expect(response.body).to include(github_installation_authorize_path)
+        expect(registration_panel).to include("Reconnect to GitHub")
+        expect(response.body).to include(CGI.escapeHTML("return_to=#{CGI.escape(new_repository_path)}"))
+
+        authorize_github_app
+
+        expect { get new_repository_path }
+          .to change { GithubRegistrationGrant.find_by(user_id: @user.id) }.from(nil)
+
+        # ⚠ RE-STUBBED DELIBERATELY. `authorize_github_app` restores `configured?` to its real value
+        # in an `ensure` block, and in this environment that is FALSE — which suppresses the whole
+        # panel. Without this line the assertion below would pass because no panel can render at
+        # all, rather than because the state resolved: a vacuous green dressed as the real one.
+        allow(SpecGuard::GithubApp).to receive_messages(configured?: true, slug: "specguard")
+
+        get repositories_path
+        expect(registration_panel).to be_nil
+      end
+
+      # The counterfactual that gives the example above its teeth: BEFORE the credential comes
+      # back, opening the picker mints nothing however many times it is opened. This is the dead end
+      # the old copy walked the reader into, pinned so it cannot be re-introduced as advice.
+      it "cannot be resolved by opening the picker, which is why it is not offered" do
+        stub_github(repos: [github_repo("acme/billing-service")])
+
+        expect { 3.times { get new_repository_path } }
+          .not_to change { GithubRegistrationGrant.find_by(user_id: @user.id) }.from(nil)
+      end
+
+      # ⚠ THE SECOND FALSE CLAUSE, which was on the OTHER branch and is fixed by the same split.
+      # `:lapsed` reassures the reader that "registering here in the browser is unaffected". For a
+      # credential-less reader that is untrue — the picker offers them a reconnect, not a
+      # repository — and before this split a lapsed grant plus a dead session rendered exactly that
+      # sentence. Routing on the credential FIRST is what makes the reassurance true where it is
+      # still said.
+      it "does not promise the browser path is unaffected when it is not" do
+        create_registration_grant(user: @user,
+                                  captured_at: GithubRegistrationGrant::MAX_AGE.ago - 1.hour)
+
+        get repositories_path
+
+        expect(registration_panel).not_to include("browser is unaffected")
+        expect(registration_panel).to include("Reconnect GitHub")
+      end
+
+      # Criterion 5 for this population too. The credential is read from the SIGNED SESSION —
+      # `github_user_token`, not `github_authorization_needed?`, whose `GithubRepositoryListing`
+      # override would force `github_sources` and both call GitHub and repair the grant.
+      it "adds no GitHub round trip" do
+        fake = stub_github(repos: [github_repo("acme/billing-service")])
+
+        get repositories_path
+
+        expect(registration_panel).to be_present
+        expect(fake.calls_to(:repositories)).to eq(0)
+      end
+    end
+
+    # ⚠ AND THE POPULATION THAT MUST *NOT* BE SWEPT INTO THE BRANCH ABOVE.
+    #
+    # Reconnecting is the fix only for somebody who HAS an installation to read. Somebody with none
+    # holds no credential either, so a predicate written on the token ALONE would hand them a
+    # reconnect that resolves nothing they need. `github_installed?` is the second term — the same
+    # pairing `GithubUserSession#github_authorization_needed?` makes, for the same reason — and this
+    # is what pins it: for this reader the picker DOES mint (an empty grant), so the cheaper
+    # `:never_taken` advice is correct and must survive.
+    describe "when no installation has been connected at all" do
+      # Re-signing in clears the session credential (`SessionsController` resets the session on the
+      # way IN, per `GithubUserSession`), but `installation: false` only declines to record a NEW
+      # row — the one the outer sign-in already wrote survives, and `github_installed?` would still
+      # be true. Removing it is what actually produces "no installation", and asserting that here
+      # keeps the example honest about which state it is really in.
+      before do
+        @user = sign_in_via_github(authorize: false, installation: false)
+        @user.github_installations.destroy_all
+        expect(@user.reload.github_installed?).to be(false)
+      end
+
+      it "is not told to reconnect a credential that would not help" do
+        get repositories_path
+
+        expect(registration_panel).not_to include("Reconnect GitHub to finish")
+      end
+
+      it "is pointed at the picker, which does mint a grant for this reader" do
+        stub_github(repos: [github_repo("acme/billing-service")])
+
+        expect { get new_repository_path }
+          .to change { GithubRegistrationGrant.find_by(user_id: @user.id) }.from(nil)
+      end
+    end
+
+    # ⚠ THE REGRESSION GUARD FOR THE DEFECT THE PREVIOUS ROUND EXISTED TO FIX.
     #
     # A grant is minted only on a picker render — not at sign-in and not by the App callback, which
     # is the deliberate decision at `github_repository_listing.rb:43-49`. So this is the state of
@@ -3036,8 +3178,10 @@ RSpec.describe "Repository registration and API keys", type: :request do
     # GitHub round trip to the most-visited page in the product AND silently repair the grant,
     # making the very state under test unobservable on the page that renders it.
     #
-    # Asserted for ALL THREE populations, per the `repository_github_verification_spec.rb:232`
-    # precedent: a zero that only holds for one of them would miss exactly the branches this adds.
+    # Asserted for ALL FOUR populations — never-taken, session-expired, lapsed and current — per the
+    # `repository_github_verification_spec.rb:232` precedent: a zero that only holds for one of them
+    # would miss exactly the branches this adds. The session-expired one is pinned in its own
+    # describe above, beside the rest of that branch's claims.
     describe "its cost" do
       it "adds no GitHub round trip for a reader who has never had a grant" do
         fake = stub_github(repos: [github_repo("acme/billing-service")])

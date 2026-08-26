@@ -1089,6 +1089,16 @@ class RepositoriesController < ApplicationController
   #     to check their permissions "again" is false, and sending them to github.com would be a
   #     WORSE fix than the "Register a repository" button already in this page's header — they hold
   #     a live token, and the only thing anybody needs to do is open a picker once.
+  #   * `:session_expired` — the App is installed, but this SESSION holds no credential to read it
+  #     with. Split out because both branches above tell this reader something FALSE, for one
+  #     shared reason: each promises the picker will take a snapshot, and for this reader it cannot.
+  #     `InstallationRepositories.sources` answers a blank token with `error: :not_authorized`,
+  #     `Sources#complete?` is therefore false, and the grant's own capture method opens with
+  #     `return nil unless sources.complete?` — so the picker mints NOTHING and the panel redraws
+  #     unchanged, however many times the instruction is followed. It also falsifies the other
+  #     branch's reassurance that registering in the browser is unaffected: the picker offers this
+  #     reader a reconnect rather than a repository. The credential is the missing thing, so the
+  #     reconnect is the whole fix — and after it the picker mints on arrival as it does for anyone.
   #
   # ## Nothing to offer means nothing to say
   #
@@ -1111,16 +1121,40 @@ class RepositoriesController < ApplicationController
   #     the concern's own comment). Asking it would REPAIR the grant as a side effect of asking, so
   #     the state this page exists to render could never be observed on the page that renders it.
   #
+  # ## The CREDENTIAL is asked about before the SNAPSHOT, because it decides whether the fix works
+  #
+  # Both stories above end by promising a picker render will take a snapshot, and that promise is
+  # only keepable while the session holds a token to read GitHub with. Without one,
+  # `InstallationRepositories.sources` returns `error: :not_authorized`, `Sources#complete?` is
+  # false, and `capture` opens with `return nil unless sources.complete?` — so the picker mints
+  # NOTHING and this page redraws unchanged however many times its instruction is followed. So the
+  # credential is asked about first: it is the more proximate missing thing, and it is the one whose
+  # absence makes the other two branches' advice untrue.
+  #
+  # ⚠ ASKED AS `github_user_token.nil?` AND DELIBERATELY NOT AS `github_authorization_needed?`. The
+  # two name the same idea, and on this controller the cheap one is not the one that would resolve:
+  # `GithubRepositoryListing` OVERRIDES that predicate, and the override forces `github_sources` —
+  # the round trip and the self-repair this whole method exists to avoid. `github_user_token` is a
+  # signed-session read costing no query and no round trip; `github_installed?` is one `EXISTS`
+  # against our own table. The second term is what `GithubUserSession#github_authorization_needed?`
+  # pairs with the first for, and it matters here: reconnecting is the fix only for somebody who HAS
+  # an installation to read. Somebody with none is not helped by a credential and is left to
+  # `:never_taken`, whose picker does mint for them.
+  #
   # `has_one :github_registration_grant` is one row on a unique index, and costs one query.
   def registration_grant_story
     return nil unless SpecGuard::GithubApp.configured?
 
     grant = current_user.github_registration_grant
 
-    return :never_taken if grant.nil?
-    return :lapsed if grant.stale?
+    # A grant inside the bound redeems, so there is nothing to say — whatever the session holds.
+    # This page is about registration access, and theirs has not lapsed.
+    return nil unless grant.nil? || grant.stale?
 
-    nil
+    return :session_expired if github_user_token.nil? && current_user.github_installed?
+    return :never_taken if grant.nil?
+
+    :lapsed
   end
 
   # Submitting the form unchanged is a valid save, so don't claim a rename that didn't happen.

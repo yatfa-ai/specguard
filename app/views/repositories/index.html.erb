@@ -20,21 +20,76 @@
       `:not_granted` refusal arrives — and until now this page said nothing about GitHub connection
       state and offered no control that touches it.
 
-      TWO STORIES, NOT ONE. `RepositoriesController#registration_grant_story` keeps `GrantVerifier`'s
-      verdict whole and then tells apart what that verdict is ABOUT, because a refusal and a landing
-      page owe the reader different things. Over there the question is "may this request register?"
-      and absent and stale answer it identically. Here they are different facts with different
-      fixes, and the wording below is the reason the distinction is drawn at all — see that method.
+      THREE STORIES, NOT ONE. `RepositoriesController#registration_grant_story` keeps
+      `GrantVerifier`'s verdict whole and then tells apart what that verdict is ABOUT, because a
+      refusal and a landing page owe the reader different things. Over there the question is "may
+      this request register?" and absent and stale answer it identically. Here they are different
+      facts with different fixes, and the wording below is the reason the distinction is drawn at
+      all — see that method.
 
-      Nothing is broken for EITHER reader and neither branch may suggest otherwise. Both hold a live
-      browser session and an installed App; the browser path asks GitHub live and is unaffected, so
-      what is refused is registration from an API key and nothing more.
+      EVERY BRANCH BELOW ENDS IN A PICKER RENDER, because that is the sole place a grant is minted —
+      so each one is only honest while the session holds a credential the picker can read GitHub
+      with. `:session_expired` is the branch for when it does not, and it exists because without it
+      the other two tell that reader to do something that cannot work: a blank token makes
+      `Sources#complete?` false, `capture` returns nil, and the page redraws unchanged however many
+      times its own instruction is followed.
+
+      So the two branches below `:session_expired` may assume a live credential, and they say so
+      plainly — nothing is broken for either of those readers, the browser path asks GitHub live and
+      is unaffected, and what is refused is registration from an API key and nothing more. That
+      sentence is TRUE THERE ONLY BECAUSE the credential-less reader was routed away first.
 
       Rendered ABOVE the grid rather than inside it, and outside the `@repositories.any?` branch on
       purpose: the reader most likely to be here is the one being refused by the API, and their
       account may hold no repositories at all. Gating it on the grid would hide it from exactly the
       person the refusal sent. %>
-  <% if @registration_grant_story == :lapsed %>
+  <% if @registration_grant_story == :session_expired %>
+    <%# NO CREDENTIAL TO READ WITH — the App is installed, and this session holds no usable token.
+        The most ordinary state there is: a returning reader at the start of a new browser session,
+        because a user-to-server token is short-lived and lives only in the session
+        (`GithubUserSession`).
+
+        THIS BRANCH EXISTS BECAUSE THE OTHER TWO LIE TO THIS READER. Both of them end by promising a
+        picker render will take a snapshot. For this reader it cannot: `InstallationRepositories`
+        answers a blank token with `:not_authorized`, so `Sources#complete?` is false and
+        that capture method returns nil before writing anything. Following that
+        instruction lands them on a picker that offers a reconnect instead of a repository, and
+        returns them here to the identical panel — a loop, not a fix.
+
+        So this says the one true thing and offers the one control that resolves it. No "again" and
+        no expiry claim: the snapshot may never have existed, and the reader is not being told about
+        the snapshot at all — they are being told about the credential, which is the nearer missing
+        thing and the one blocking every route to the other. It also makes no promise about the
+        browser path, because unlike the branches below it, the browser path is NOT unaffected for
+        this reader — the picker will ask them for exactly this before it lists anything. %>
+    <%= render UI::AlertComponent.new(
+          tone: :warning, title: "Reconnect GitHub to finish setting up API-key registration",
+          class: "space-y-3"
+        ) do %>
+      <p>
+        <%# The same slice of `InstallationRepositories::MESSAGES[:not_granted]` the other branches
+            read, for the same reason: one vocabulary across the API's refusal and this page. It is
+            the half true of every reader here — a statement about what SpecGuard HOLDS, which is
+            equally true of a snapshot that expired and one that was never taken. %>
+        <%= github_registration_lapsed_state %>
+        Your browser session no longer holds permission for SpecGuard to ask GitHub for one, so
+        reconnect below — SpecGuard takes a fresh record the moment you land back on the picker.
+        Until then <%= tag.code("POST /api/v1/repositories") %> will refuse.
+      </p>
+      <div>
+        <%# The EXISTING action, through the EXISTING helper — same as the `:lapsed` branch below,
+            and `return_to:` is passed for the same load-bearing reason stated there: the picker is
+            the sole place a grant is minted, so the journey must END there rather than back here.
+            For this reader that destination does double duty — the reconnect restores the
+            credential, and the picker it lands on then mints the grant with the credential it just
+            got back. One journey, both missing things.
+
+            Safe inside this alert for the reason the panel is gated on
+            `SpecGuard::GithubApp.configured?` — see `registration_grant_story`. %>
+        <%= github_authorize_button return_to: new_repository_path %>
+      </div>
+    <% end %>
+  <% elsif @registration_grant_story == :lapsed %>
     <%# AGED OUT — a snapshot was taken and has passed `GithubRegistrationGrant::MAX_AGE` (seven
         days). "again" is true of this reader and only of this reader: something was checked once,
         and it has expired. %>
@@ -91,8 +146,8 @@
       <p>
         <%= github_registration_lapsed_state %>
         Open <%= link_to "Register a repository", new_repository_path, class: "underline" %> once and
-        SpecGuard will take one — there is nothing else to do, and registering here in the browser
-        works now. Until then <%= tag.code("POST /api/v1/repositories") %> will refuse.
+        SpecGuard will take one, and registering here in the browser works now. Until then
+        <%= tag.code("POST /api/v1/repositories") %> will refuse.
       </p>
     <% end %>
   <% end %>
