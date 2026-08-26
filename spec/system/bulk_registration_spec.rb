@@ -110,6 +110,20 @@ RSpec.describe "Bulk organization registration", type: :system do
 
       click_link "octocat"
 
+      # The picker for octocat has genuinely ARRIVED before anything is ticked.
+      #
+      # This is the only navigation in the system suite followed by interaction — every other
+      # example reaches its page with `visit`, which blocks until the load completes. `click_link`
+      # does not: it returns as soon as the click is dispatched, and Turbo Drive then replaces
+      # `<body>` asynchronously. So `check` below could find its node on the OUTGOING chooser and
+      # act on it after the swap had detached it, which chromedriver reports as
+      # `Node with given id does not belong to the document` (SPGD-834).
+      #
+      # `have_button` waits for a control that exists only on the picker, so the swap is complete
+      # before the first `check` looks for anything. It is also a real assertion rather than a
+      # sleep: the chooser link must actually lead to a registerable picker.
+      expect(page).to have_button("Register selected repositories")
+
       check "octocat/api"
       check "octocat/blog"
       click_button "Register selected repositories"
