@@ -120,6 +120,24 @@ Rails.application.routes.draw do
       # `accepts_user_credential` declaration and would be one omission away from a 401 nobody can
       # explain. The GitHub ownership check is NOT skipped here — see the controller.
       post "repositories", to: "user_repositories#create"
+      # ONE REPOSITORY, BY NAME, FOR THE PERSON HOLDING THE KEY — the reading `get "repositories"`
+      # above stops one grain short of. That one lists what a person may open and serves six identity
+      # fields per row; this opens one and serves the whole overview.
+      #
+      # ⚠️ THE MEMBER ROUTE IS DECLARED LAST, AND THAT IS LOAD-BEARING RATHER THAN COSMETIC. Rails
+      # matches in declaration order, and `:id` is a greedy dynamic segment that would happily
+      # swallow the literal `registrable` above — `/repositories/registrable` would resolve to
+      # `#show` with `params[:id] == "registrable"`, answer 404, and take a shipped endpoint off the
+      # air. The note on `get "repositories/registrable"` says a literal "cannot be swallowed as an
+      # id (there is no `:id` member route in this namespace)"; that parenthesis stops being true on
+      # this line, so the ordering is now what keeps it safe. Do not sort these routes.
+      #
+      # PLURAL, and therefore the `sgu_` side: `GET /api/v1/repository` (singular) answers to a
+      # `sgk_` repository key and is left exactly as it was. The two credentials stay disjoint —
+      # `Api::BaseController`'s `accepted_credential` is one `class_attribute` per controller, so a
+      # surface answering to both is not expressible and deliberately so. The BODY is shared anyway,
+      # by `RepositoryOverview` rather than by a shared credential; see that class.
+      get "repositories/:id", to: "user_repositories#show"
     end
   end
 
