@@ -653,8 +653,15 @@ class SpecObservation < ApplicationRecord
   # shard is replaced by the delete on `test_run_shard_id` whether or not it sent ids, and without
   # a `ci_run_id` every POST is its own run with nothing to collide with; both are enumerated in
   # `Ingest::ObservationRecorder`'s "the three shapes, and the one that has no answer", which this
-  # paraphrases rather than widens. The ids remain what carries an example's identity ACROSS runs
-  # in every shape. The doubling is a known gap with no platform-side fix — the only other
+  # paraphrases rather than widens. What the ids buy a named shard is the ability to REPLACE a
+  # re-delivered slice's rows rather than append them, and they are the only thing that would
+  # protect those slices if the `shard_id` were ever dropped. They are NOT what carries an example
+  # across runs — see "The key is run-local, and says so" at the top of this class: `example_id` is
+  # positional, unique within a run, and `unique_by: %i[test_run_id example_id]` is nothing wider.
+  # Cross-run identity is `SpecIdentity`'s, resolved from the row's TEXT (`#signal`, which reads
+  # `intent_*` and `name`) via `Ingest::IdentityResolver` — neither of which reads `example_id` —
+  # so an id-less run still gets it, `Ingest::Payload#validate_name` requiring a name or an intent
+  # on every spec. The doubling is a known gap with no platform-side fix — the only other
   # candidate key is `(file_path, line_number)`, the coordinate a table-driven loop puts N examples
   # on — so the fix is client-side, and a client can only apply it if something tells it the ids
   # are missing. This is that something.

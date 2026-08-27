@@ -75,9 +75,16 @@ class Api::V1::IngestsController < Api::BaseController
       # (`ci_run_id` present, `shard_id` nil) an id-less redelivery has nothing to conflict with
       # and doubles the run's rows — that shape only, per that class's "the three shapes, and the
       # one that has no answer": a named shard is replaced by the delete on `test_run_shard_id`
-      # regardless of ids, and without a `ci_run_id` every POST is its own run. The ids still carry
-      # an example's identity ACROSS runs in every shape. The fix is client-side, and these two
-      # operands are what let a client see that it needs to apply it.
+      # regardless of ids, and without a `ci_run_id` every POST is its own run. What the ids buy a
+      # named shard is the ability to REPLACE a re-delivered slice's rows rather than append them,
+      # and they are the only thing that would protect those slices if the `shard_id` were ever
+      # dropped. They are NOT what carries an example across runs: `example_id` is run-local by
+      # construction (`SpecObservation`, "The key is run-local, and says so" — positional, unique
+      # within a run, `unique_by: %i[test_run_id example_id]` and nothing wider). Cross-run identity
+      # is `SpecIdentity`'s, resolved from the row's TEXT via `Ingest::IdentityResolver` — which
+      # never reads `example_id` — so an id-less run still gets it, `Ingest::Payload#validate_name`
+      # requiring a name or an intent on every spec. The fix is client-side, and these two operands
+      # are what let a client see that it needs to apply it.
       #
       # THE TWO ARE ONE GRAIN AND THE PAIR IS THE POINT. Both are counted over the rows this run
       # wrote to `spec_observations`; the shortfall is `recorded_specs - identified_specs` and it
