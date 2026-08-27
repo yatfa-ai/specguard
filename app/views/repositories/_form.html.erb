@@ -52,19 +52,8 @@
     <% end %>
   <% elsif github_listing.nil? %>
     <%# Nothing to pick from and nothing the user can fix by typing, so the form is withheld rather
-        than shown empty. Two different reasons land here and they must not read the same: GitHub
-        being down is waitable, GitHub *refusing* is not. `github_listing_error_message` is nil
-        only for the genuine outage, which is the one case "try again shortly" is true of. %>
-    <% if github_listing_error_message %>
-      <%= render UI::AlertComponent.new(tone: :warning, title: "GitHub refused the request") do %>
-        <%= github_listing_error_message %>
-      <% end %>
-    <% else %>
-      <%= render UI::AlertComponent.new(tone: :warning, title: "GitHub is not answering right now") do %>
-        Your repository list could not be loaded, so there is nothing to pick from yet. Try again
-        shortly.
-      <% end %>
-    <% end %>
+        than shown empty. %>
+    <%= github_listing_unavailable_alert %>
 
     <div class="mt-4">
       <%= render UI::ButtonComponent.new(variant: :ghost, href: cancel_href) { "Back" } %>
