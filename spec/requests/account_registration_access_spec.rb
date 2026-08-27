@@ -122,12 +122,25 @@ RSpec.describe "Account registration access", type: :request do
       )
     end
 
+    # GitHub's answer to "who is this and what do they hold", stubbed at the service the callback
+    # exchanges through — the same seam and the same shape `github_installation_spec.rb` uses, so
+    # no example here reaches github.com or needs a real code.
+    def stub_user_authorization(installation_id: 777, account_login: "acme")
+      row = GithubAppUserAuthorization::Installation.new(installation_id: installation_id,
+                                                         account_login: account_login)
+      allow(GithubAppUserAuthorization).to receive(:authorize).and_return(
+        GithubAppUserAuthorization::Authorization.new(token: "ghu_from_callback",
+                                                      expires_at: 1.hour.from_now,
+                                                      installations: [row])
+      )
+    end
+
     before { with_configured_app }
 
     it "posts to the existing `github_installation_authorize` action" do
       get account_path
 
-      expect(response.body).to include(github_installation_authorize_path(return_to: account_path))
+      expect(response.body).to include(github_installation_authorize_path(return_to: new_repository_path))
       expect(response.body).to include("Reconnect GitHub")
     end
 
@@ -143,6 +156,51 @@ RSpec.describe "Account registration access", type: :request do
             .update!(captured_at: (GithubRegistrationGrant::MAX_AGE + 1.minute).ago)
       get account_path
       expect(response.body).to include("Reconnect GitHub")
+    end
+
+    # THE EXAMPLE THAT PINS THE PROMISE RATHER THAN THE LINK.
+    #
+    # The panel tells a lapsed reader "Reconnect GitHub to refresh it", and asserting that the href
+    # exists cannot tell whether that sentence is true — an earlier revision of this page rendered a
+    # button that completed a full GitHub round trip and refreshed NOTHING, with every affordance
+    # example green. So this walks the loop the reader actually walks: render the panel, POST the
+    # button EXACTLY as rendered (the `return_to` is read back out of the body rather than written
+    # in here, so pointing the button somewhere that does not capture fails HERE), carry `state`
+    # through the callback, and assert the STATE MOVED.
+    it "refreshes the grant when the reader follows it, and the panel stops reading lapsed" do
+      grant = create_registration_grant(user: person, registrable: ["acme/billing-service"],
+                                        captured_at: (GithubRegistrationGrant::MAX_AGE + 1.minute).ago)
+      was_captured_at = grant.captured_at
+      stub_github
+      stub_user_authorization
+
+      get account_path
+      expect(panel_state).to eq("lapsed")
+      # The button as the page actually renders it — not a path this example chose.
+      return_to = CGI.unescape(response.body[%r{authorize\?return_to=([^"]*)}, 1])
+
+      post github_installation_authorize_path(return_to: return_to)
+      state = CGI.unescape(response.location[/state=([^&]*)/, 1])
+      get github_installation_callback_path, params: { installation_id: 777, code: "abc", state: state }
+      follow_redirect!
+
+      expect(grant.reload.captured_at).to be > was_captured_at
+
+      get account_path
+      expect(panel_state).to eq("current")
+    end
+
+    # WHY THE BUTTON DOES NOT RETURN TO THIS PAGE, stated as a test rather than only as a comment,
+    # because it reads like an oversight and would be "tidied" back. Capture is memoized and LAZY
+    # inside `GithubRepositoryListing#github_sources`, so it fires only where a view renders a
+    # picker — and `AccountsController` does not include that concern. Returning here would look
+    # correct and refresh nothing.
+    it "returns to a page that can actually capture, which this one cannot" do
+      get account_path
+
+      expect(response.body).to include(github_installation_authorize_path(return_to: new_repository_path))
+      expect(response.body).not_to include(github_installation_authorize_path(return_to: account_path))
+      expect(AccountsController.include?(GithubRepositoryListing)).to be(false)
     end
   end
 

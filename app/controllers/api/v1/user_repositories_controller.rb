@@ -204,14 +204,17 @@ class Api::V1::UserRepositoriesController < Api::BaseController
   # block whose meaning depended on which response carried it would be a worse contract than one
   # scalar that is simply true or false wherever it appears.
   #
-  # Both stamps are `&.`-guarded on the same column. `captured_at` is `NOT NULL` and validated, so
-  # a persisted grant always carries one — but `stale?` nevertheless answers a nil one rather than
-  # raising ("I cannot tell how old this is" reads as "too old"), and a serializer that raised on
-  # the state its own `stale` field reports would turn that deliberate answer into a 500.
+  # Both stamps are read UNGUARDED, and that is a statement about the column rather than an
+  # oversight: `captured_at` is `NOT NULL` in the schema AND validated for presence, and this
+  # method is only ever reached with a grant loaded from the database. It cannot be nil here. A
+  # `&.` would read to the next maintainer as "this can be nil" — the opposite of the truth — and
+  # would buy a shape (`captured_at: null, expires_at: null, stale: true`) that no client is told
+  # to expect and no example asserts. `GithubRegistrationGrant#stale?` does answer a nil one, but
+  # that is for the UNSAVED row it documents, which never reaches a serializer.
   def grant_state(grant)
     {
-      captured_at: grant.captured_at&.iso8601,
-      expires_at: grant.captured_at&.then { |at| (at + GithubRegistrationGrant::MAX_AGE).iso8601 },
+      captured_at: grant.captured_at.iso8601,
+      expires_at: (grant.captured_at + GithubRegistrationGrant::MAX_AGE).iso8601,
       stale: grant.stale?
     }
   end

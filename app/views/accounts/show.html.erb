@@ -69,20 +69,14 @@
     <% end %>
   <% end %>
 
-  <%# REGISTRATION ACCESS — the one credential on this page that expires ON ITS OWN.
+  <%# REGISTRATION ACCESS — the one credential on this page that expires ON ITS OWN, and the reason
+      it had to become visible here: see `AccountsController#show`, which carries that rationale and
+      the invariant that this is a READ.
 
-      The keys above are revoked or they work. A `GithubRegistrationGrant` lapses after
-      `GithubRegistrationGrant::MAX_AGE` with nothing to show for it: `GET /api/v1/repositories`
-      needs no grant and keeps answering, and the key's own "Last used" keeps updating, so a person
-      who mints a key, hands it to an agent and does not open SpecGuard in a browser for a week
-      loses the ability to register and sees no sign of it anywhere. This page is where that had to
-      become visible — beside the credential it is a precondition of, since the two are only ever
-      read together.
-
-      It sits BELOW the key table on purpose: a reader arrives for their keys, and this is a
-      property of the person rather than a second credential to mint. Everything shown is read from
-      the stored grant — rendering this page makes no GitHub call and refreshes nothing (see
-      AccountsController#show). %>
+      Two things that are this VIEW's own and are not repeated from there: the panel sits BELOW the
+      key table because a reader arrives for their keys and this is a property of the person rather
+      than a second credential to mint, and the three states below (`absent`, `current`, `lapsed`)
+      are told apart in prose because they have different fixes. %>
   <%= render UI::PanelComponent.new(title: "Registration access", id: "registration-access",
                                     class: "mt-6") do %>
     <p class="mb-3 text-sm text-app-content-secondary">
@@ -128,12 +122,32 @@
     <% end %>
 
     <%# The EXISTING affordance, not a new one: the same button the repository picker offers, which
-        posts to `github_installation_authorize` and returns here. Nothing on this page can refresh
-        the grant by itself — the capture needs a live GitHub token, and only that round trip brings
-        one back. `github_authorize_button` answers with its own notice when the GitHub App is
-        unconfigured, so this needs no guard of its own. %>
+        posts to `github_installation_authorize`. `github_authorize_button` answers with its own
+        notice when the GitHub App is unconfigured, so this needs no guard of its own.
+
+        ⚠️ IT RETURNS TO THE PICKER, NOT HERE, and that is the whole reason the button works.
+        Capturing a grant needs a live GitHub token AND a render that actually reads the
+        installations: the sole capture site is `GithubRepositoryListing#github_sources`, which is
+        memoized and LAZY, so it fires only where a view renders a picker. That concern is included
+        by `RepositoriesController` and `BulkRegistrationsController` and NOT by `AccountsController`
+        — so returning to `/account` would complete a full GitHub round trip and re-render a page
+        that reads the grant and can never refresh it. Measured, one lapsed grant, callback followed
+        to the page the user lands on:
+
+          return_to=/account          landed=200  grant refreshed? false
+          return_to=/repositories     landed=200  grant refreshed? false
+          return_to=/repositories/new landed=200  grant refreshed? true
+
+        Only the third is a fix, because `repositories/_form` is the view that reads
+        `github_listing`. Sending the reader to the picker is deliberate rather than incidental:
+        this panel promises "Reconnect GitHub to refresh it", and a button that returns them here
+        unchanged would leave them believing they had fixed it. Landing them BACK here afterwards is
+        a separate design decision — GitHub's `state` carries exactly one destination — and is not
+        this slice's to make. Pinned by the click-through example in
+        `spec/requests/account_registration_access_spec.rb`, which asserts the STATE MOVED rather
+        than that the href exists. %>
     <div class="mt-4">
-      <%= github_authorize_button("Reconnect GitHub", return_to: account_path,
+      <%= github_authorize_button("Reconnect GitHub", return_to: new_repository_path,
                                   variant: @registration_grant&.stale? == false ? :secondary : :primary) %>
     </div>
   <% end %>

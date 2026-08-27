@@ -57,7 +57,7 @@ RSpec.describe "API v1 — GET /api/v1/repositories/registrable", type: :request
     # read `false` and send them at a name that cannot be registered by anyone.
     it "marks a name registered by somebody else as taken, without disclosing anything about it" do
       stranger = create_user(github_uid: "2002", github_handle: "hubot")
-      theirs = create_repository(user: stranger, github_full_name: "acme/checkout")
+      create_repository(user: stranger, github_full_name: "acme/checkout")
 
       get_registrable
 
@@ -65,7 +65,17 @@ RSpec.describe "API v1 — GET /api/v1/repositories/registrable", type: :request
         .to include("full_name" => "acme/checkout", "registered" => true)
       # The name and the fact that it is taken, and nothing else about the record — no id, no
       # owner. Both are already GitHub's answer about this person's own admin access.
-      expect(response.body).not_to include(theirs.id.to_s)
+      #
+      # Asserted on the PARSED KEYS rather than as `not_to include(theirs.id.to_s)` against the raw
+      # body. That substring form was a guard that could not fail for the right reason and could
+      # fail for a wrong one: this response carries no id-shaped field at all, so no code path could
+      # emit one — while the body is mostly ISO-8601 timestamps, so a short id matches by accident.
+      # Measured on this very request: id=8587 -> absent, id=3 -> PRESENT, inside
+      # "2026-09-03T13:28:27Z". Whether it passed depended on how many digits the sequence had
+      # handed out, which is why it survived alone and failed in a multi-file run. Pinning the key
+      # set is exact, order-independent, and actually states the property — anything beyond these
+      # two fields is a disclosure, whatever it is named and whatever digits it contains.
+      expect(response.parsed_body["repositories"].flat_map(&:keys).uniq).to eq(%w[full_name registered])
       expect(response.body).not_to include("hubot")
     end
 
@@ -234,15 +244,16 @@ RSpec.describe "API v1 — GET /api/v1/repositories/registrable", type: :request
                  "stale" => true)
       end
 
-      # The bound is the model's, not a second copy of it living in the controller.
-      it "reads staleness through the model rather than re-comparing the timestamp" do
-        expect_any_instance_of(GithubRegistrationGrant).to receive(:stale?).at_least(:once)
-                                                                          .and_call_original
-
-        get_registrable
-
-        expect(response).to have_http_status(:forbidden)
-      end
+      # The bound is the model's, not a second copy of it living in the controller — asserted by
+      # the fixture above, which is written as `MAX_AGE + 1.minute` rather than as a literal eight
+      # days. A controller that re-compared the timestamp against a hard-coded seven days would
+      # answer this fixture identically today and diverge the moment the constant moved.
+      #
+      # Deliberately NOT `expect_any_instance_of(...).to receive(:stale?)`: that pins the NUMBER OF
+      # CALL SITES on an arbitrary instance rather than the behaviour, so a refactor that read the
+      # same model method one more or one fewer time would fail an example about staleness for a
+      # reason that has nothing to do with staleness. (`any_instance_of` appears 5 times in this
+      # whole suite, and this is not one of the cases that needs it.)
     end
   end
 
