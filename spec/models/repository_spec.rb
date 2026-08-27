@@ -864,7 +864,7 @@ RSpec.describe Repository do
 
     # An unrecognised sha is an ordinary thing for a reader to arrive with — a stale bookmark, a
     # pruned run, a commit whose CI never reported — and it is the caller's job to fall back, which
-    # `Api::V1::RepositoriesController#latest_test_run` does while disclosing it on `run_anchor`.
+    # `RepositoryOverview#latest_test_run` does while disclosing it on `run_anchor`.
     it "has no run for a sha it has never seen" do
       repository = create_repository
       run(repository, "trunk0")

@@ -722,7 +722,7 @@ class SpecObservation < ApplicationRecord
   # number standing for both would make that a single edit nobody meant to make.
   #
   # Per branch and never per repository: recency across a repository is interleaved (see
-  # `Api::V1::RepositoriesController#serialized_branches` — on a repository whose CI reports on
+  # `RepositoryOverview#serialized_branches` — on a repository whose CI reports on
   # every PR, the ten most recent runs are routinely all `feature/*`), so a repository-wide bound
   # would evict `main`'s history first, and `main` is what every cross-run read is anchored to.
   BRANCH_RETENTION_RUNS = 2 * Repository::TRAJECTORY_LIMIT

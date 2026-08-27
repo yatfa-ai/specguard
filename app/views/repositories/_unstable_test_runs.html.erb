@@ -203,7 +203,7 @@
                 </td>
                 <td class="px-3 py-2 text-app-content-secondary">
                   <%# Per-row rather than borrowed from the window, on the rule
-                      `Api::V1::RepositoriesController#serialized_history_row` states for the same
+                      `RepositoryOverview#serialized_history_row` states for the same
                       field: a row should carry its own branch so it is readable on its own. Every
                       row here carries the same value — the window is branch-scoped by construction
                       — and `branch` is nullable in the schema besides, so a blank cell would be a

@@ -210,7 +210,7 @@ class RepositoriesController < ApplicationController
     #
     # ⭐ ANCHORED ON `newest_test_run` AND NEVER ON `@latest_test_run`. This is the one non-obvious
     # thing about this block and a later reader must not "simplify" it — the API states the same
-    # rule over the same comparison at `Api::V1::RepositoriesController#rejected_ingests`.
+    # rule over the same comparison at `RepositoryOverview#rejected_ingests`.
     #
     # That ivar is RE-ANCHORED BY `?commit_sha=`, deliberately, so every run-grain panel describes
     # the named run coherently. Handing it here would compare the newest REFUSAL against an

@@ -333,7 +333,7 @@ module RepositoriesHelper
   # == The run every panel on this page is anchored on
 
   # WHICH RUN this page is describing, said out loud whenever `?commit_sha=` named one — the web's
-  # counterpart to the `run_anchor` block `Api::V1::RepositoriesController#serialized_run_anchor`
+  # counterpart to the `run_anchor` block `RepositoryOverview#serialized_run_anchor`
   # serializes on every call.
   #
   # `nil` on the ordinary no-ask page, which is the whole of the difference between this and the

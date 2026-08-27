@@ -35,7 +35,7 @@ module ShardCountPreloading
   # `COUNT(duration_seconds)` rides along as a second column of the aggregate the `GROUP BY` was
   # already computing, so the query budget is unchanged — two, not three, and the same two at one
   # row as at thirty (`spec/requests/api/v1/repository_latest_run_spec.rb` asserts exactly that).
-  # It is here because `Api::V1::RepositoriesController#serialized_history_row` serves a
+  # It is here because `RepositoryOverview#serialized_history_row` serves a
   # `duration_seconds` that is a MAX over the shards that REPORTED: its denominator is the timed
   # count, and inferring it from `shard_count` is wrong on precisely the runs where a shard went
   # silent. That caller is the one this comment used to say "needs its own remedy".

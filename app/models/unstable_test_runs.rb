@@ -145,7 +145,7 @@ class UnstableTestRuns
 
     def commit_sha = run.commit_sha
 
-    # Per-row, on the rule `Api::V1::RepositoriesController#serialized_history_row` states for the
+    # Per-row, on the rule `RepositoryOverview#serialized_history_row` states for the
     # same field: a row should carry its own branch rather than borrow it from the window it
     # arrived in. Every row here carries the same value — the window is branch-scoped by
     # construction — and it is served anyway, so a row is readable on its own.

@@ -21,13 +21,13 @@
 # `.presence` SECOND, which is what makes `?branch=` mean "no ask" rather than `WHERE branch = ''`
 # — and, critically, keeps any input at all from reaching a `WHERE branch IS NULL`. `branch` is
 # nullable and an anonymous run is an ordinary live state, so NULL is "the reporter did not say"
-# (the meaning `Api::V1::RepositoriesController#serialized_history_row` pins) and not a branch
+# (the meaning `RepositoryOverview#serialized_history_row` pins) and not a branch
 # anyone can ask for. `Repository#recent_test_runs` makes the same guard on its own side; this one
 # is here so the model is never handed a blank in the first place.
 #
 # No validation branch and no 400: an unknown branch is not a malformed request, it is a request
 # whose answer is zero rows on the API and the unfiltered fallback on the page. See
-# `Api::V1::RepositoriesController#serialized_history` for why `[]` is the right answer there and
+# `RepositoryOverview#serialized_history` for why `[]` is the right answer there and
 # why a substituted branch's rows would be the dangerous one. `repositories#show` keeps the raw ask
 # in `@trajectory_branch_request` for the same reason — so the panel can SAY the fallback happened,
 # rather than quietly drawing a different branch from the one the URL names.

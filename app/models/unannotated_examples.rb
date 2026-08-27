@@ -38,7 +38,7 @@
 # narrows WITH the rows, because the window rides the WHERE. A client is explicitly invited to
 # reconcile that figure against `total_specs - annotated_specs`, and a silently-narrowed count breaks
 # that reconciliation with nothing in the body to explain why — so the body carries what it was
-# narrowed by. See `Api::V1::RepositoriesController#serialized_unannotated_examples`.
+# narrowed by. See `RepositoryOverview#serialized_unannotated_examples`.
 #
 # == Why the list and its count are one object
 #
