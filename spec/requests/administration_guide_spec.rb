@@ -309,9 +309,16 @@ RSpec.describe "The public administration guide", type: :request do
       expect(token).not_to include(hint.delete_prefix("#{ApiKey::TOKEN_PREFIX}…"))
 
       # And it is the hint the SERVER would produce for that token, so the shape a reader learns
-      # here — prefix, ellipsis, six characters of the digest — is the shape they will meet in the
-      # key list. Derived from `ApiKey.digest` so it follows a change to `#token_hint`.
-      expect(hint).to eq("#{ApiKey::TOKEN_PREFIX}…#{ApiKey.digest(token).last(6)}")
+      # here is the shape they will meet in the key list.
+      #
+      # The expectation ASKS `#token_hint` rather than restating what it does. It used to spell the
+      # algorithm out — `TOKEN_PREFIX + "…" + ApiKey.digest(token).last(6)` — which made this pin
+      # and the constant it pins share the same hand-typed `6`, so the two agreed with each other
+      # under every change to `#token_hint` and with the server under none: moving the method to
+      # `.last(8)` left the page publishing a hint the server could not produce and this example
+      # green. Calling the method is what makes the assertion about the SERVER instead of about a
+      # second copy of its arithmetic.
+      expect(hint).to eq(ApiKey.new(token_digest: ApiKey.digest(token)).token_hint)
     end
 
     # The non-goals, as an assertion. The guide's charter is that it promises no capability the API
