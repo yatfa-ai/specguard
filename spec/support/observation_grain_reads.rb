@@ -331,10 +331,30 @@ module ObservationGrainReads
   # of `spec_observations` should expect exactly one of these on any request that resolves a run.
   RUN_READINGS_PROJECTION = /AS run_authored_count/
 
+  # The IDENTITY grain — `SlowestTests`' three reads, and the only reads on this table that mention
+  # `spec_identity_id` AT ALL. One pattern rather than the per-read family the flakiness grain
+  # carries, because the column IS the discriminator: `.identity_presence_in`,
+  # `.slowest_identity_candidates_in` and `.identity_duration_composition_in` are the application's
+  # only `spec_identity_id` reads (verified by grep over `app/models` and `app/services`), and no
+  # other read of this table projects, groups or filters on it.
+  #
+  # ONE pattern is also what keeps this grain SAFE, and that is not a stylistic choice. Two of the
+  # three statements group on `spec_identity_id` and would both be caught by a `GROUP BY` pattern
+  # AND by an `ORDER BY` one, so a per-read family here would double-count them WITHIN the grain and
+  # make the parts sum to more than the total — the exact failure `classified_observation_reads`
+  # exists to catch. A single match per statement cannot.
+  #
+  # ⚠️ THIS GRAIN IS GATED ON `?branch=`, like the flakiness grain and unlike the run-readings one.
+  # Unfiltered, `SlowestTests.for` is never constructed and this grain is EMPTY. Under a branch it is
+  # THREE on a ranked window and ONE on a gating state — the object asks its presence probe first and
+  # returns before the candidate and composition reads, so an unresolved or unrecorded window costs
+  # one. A block bounding this endpoint's reads should expect 0, 1 or 3 and never 2.
+  IDENTITY_ORDER = /spec_identity_id/
+
   # `[area, file, example, description, flakiness, growth, directory_files, file_examples,
   # repeated_description_examples, directory_file_growth, runtime_growth,
   # directory_file_runtime_growth, unstable_test_runs, unannotated_examples,
-  # unannotated_directories, run_readings]` — the sixteen grains,
+  # unannotated_directories, run_readings, identity]` — the seventeen grains,
   # each an array of the
   # statements matched. The single-run grains come first, in the order `serialized_latest_run` serves
   # them, and the two CROSS-RUN grains after them in the order `show` serves them — so a
@@ -386,7 +406,8 @@ module ObservationGrainReads
      reads.grep(/AS unstable_test_recorded_count/),
      reads.grep(/AS unannotated_recorded_count/),
      reads.grep(UNANNOTATED_DEBT_ORDER),
-     reads.grep(RUN_READINGS_PROJECTION)]
+     reads.grep(RUN_READINGS_PROJECTION),
+     reads.grep(IDENTITY_ORDER)]
   end
 
   # `UnstableTests.for`'s four reads, in the order it issues them: the gating outcome-reporting
@@ -419,6 +440,7 @@ module ObservationGrainReads
   def unannotated_examples_grain_reads(&) = observation_reads_by_grain(&)[13]
   def unannotated_directories_grain_reads(&) = observation_reads_by_grain(&)[14]
   def run_readings_grain_reads(&) = observation_reads_by_grain(&)[15]
+  def identity_grain_reads(&) = observation_reads_by_grain(&)[16]
 end
 
 RSpec.configure do |config|

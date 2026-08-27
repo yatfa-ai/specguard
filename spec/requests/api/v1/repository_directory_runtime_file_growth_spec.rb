@@ -537,7 +537,13 @@ RSpec.describe "GET /api/v1/repository — directory_runtime_file_growth", type:
       # it sends no `?unstable_test=`, and no `?branch=` either — and the annotation WORKLIST and the
       # annotation RANKING, which share one gate and take no `?unannotated_examples=`. Each reads
       # nothing, which is exactly the claim its own file makes about it from the other side.
-      expect(grains.map(&:length)).to eq([1, 1, 2, 2, 0, 1, 1, 0, 0, 1, 1, 1, 0, 0, 0, 1])
+      #
+      # THE FINAL ZERO IS THE IDENTITY GRAIN, and it is zero for the FIRST of those reasons rather
+      # than for a gate of its own: `SlowestTests` is constructed only under `?branch=`, and this
+      # fixture names an AREA. So the window-grain duration read is never issued at all here — not
+      # gated mid-flight and returning early, but never built — which is the same "no `?branch=`"
+      # fact the flakiness zero four places to its left rests on.
+      expect(grains.map(&:length)).to eq([1, 1, 2, 2, 0, 1, 1, 0, 0, 1, 1, 1, 0, 0, 0, 1, 0])
       expect(observation_reads { get_repository(key: api_key, query: query) }.length)
         .to eq(classified_observation_reads { get_repository(key: api_key, query: query) })
       # And the three neighbouring growth grains are each a different statement from this one.

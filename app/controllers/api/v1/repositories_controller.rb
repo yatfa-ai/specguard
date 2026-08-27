@@ -249,6 +249,17 @@ class Api::V1::RepositoriesController < Api::BaseController
       # `history` is served over. See `serialized_unstable_tests_window`.
       unstable_tests_window: serialized_unstable_tests_window,
       unstable_tests: serialized_unstable_tests,
+      # BESIDE `unstable_tests` and NOT inside `latest_run`, on that block's own membership rule:
+      # `latest_run` is single-run facts by construction, and this is a statement about ONE TEST
+      # ACROSS SEVERAL RUNS. `latest_run.slowest_examples` is the same question at single-run grain
+      # and stays exactly where it is — this is its complement, not its replacement.
+      #
+      # It is the DURATION axis of what `unstable_tests` does for the OUTCOME axis, one grain finer:
+      # that block groups on `name`, so a renamed test is two tests there, and this one groups on
+      # `spec_identity_id`, so a test that MOVED or was REWORDED keeps its runtime history. See
+      # `serialized_slowest_tests_window`.
+      slowest_tests_window: serialized_slowest_tests_window,
+      slowest_tests: serialized_slowest_tests,
       # BESIDE `unstable_tests` and for the same structural reason it sits out here: a statement
       # about the WINDOW rather than about one run. `history` serves how the suite grew — one total
       # per run, no area grain on any row — and `latest_run.spec_directories` serves the area grain
@@ -2406,6 +2417,275 @@ class Api::V1::RepositoriesController < Api::BaseController
       multi_file: row.multi_file?,
       shared_description: row.shared_description?
     }
+  end
+
+  # The contract the runtime rows below are served under — and, when they are `null`, the reason
+  # they are. Served UNCONDITIONALLY, on the key-always-present rule `latest_run.shards` and
+  # `serialized_unstable_tests_window` both argue for in full and which is not repeated here: a
+  # client tests one thing rather than distinguishing an absent key from a null one, and a block
+  # that explains a `null` is worthless if it is itself absent whenever the `null` happens.
+  #
+  # `grouped` IS THE LOAD-BEARING KEY, and it exists for the branch reason its flakiness sibling
+  # gives, which binds at least as hard here. `SlowestTests#branch` states the rule for itself:
+  # *"Runtimes compared across branches are runtimes of different code, so the window is
+  # branch-anchored exactly as those are."* Unfiltered, `history_runs` is the INTERLEAVED
+  # all-branch window `serialized_history_window` spends a paragraph warning about — and this
+  # object is ANCHORED, so the damage is worse than a mixed total. The anchor would be whichever
+  # branch happened to run last, and the ⭐ partition it decides would rank THAT branch's tests
+  # against the window's other branch's history. So unfiltered, `SlowestTests.for` IS NOT CALLED AT
+  # ALL — no anchor, no reads — and this boolean is what says so.
+  #
+  # It is read off whether the object was CONSTRUCTED, never re-spelled as `requested_branch ?
+  # true : false`, on the rule the sibling states: a second copy of the gate is a second thing to
+  # keep true. So `grouped` is exactly `slowest_tests != null`, in every response.
+  #
+  # `order` DESCRIBES `SlowestTests::Row#sort_key` TRUTHFULLY, all three keys and the nil rule:
+  # `[total_seconds.nil? ? 1 : 0, -(total_seconds || 0.0), -recorded_count, spec_identity_id]`. The
+  # NULLS LAST clause is named rather than left implicit because it is the one part a client would
+  # get backwards by defaulting — a test nobody timed is not a test that cost nothing, and sorting
+  # its nil as a zero would put it at whichever end the client's language happens to put nils.
+  #
+  # `tie_break_served: true`, and it is true because `spec_identity_id` GOES OUT ON THE ROW. All
+  # four operands of the sort — the nil flag, the total, the appearance count and the identity —
+  # are served, so a client CAN reproduce this exact order from what it holds. Had the identity
+  # been withheld this would have had to say `false`: the final tie-break would not be
+  # reproducible, and two tests totalling identically over the same number of runs would be a pair
+  # a client could not order. That is the same honesty `serialized_history_window` shows in the
+  # other direction, where the tie-break is an ingest sequence no row carries.
+  #
+  # `branch_scope` and `branch` are TWO keys rather than one interpolated token, and `branch` is
+  # always served (`null` when the window was not narrowed) — `serialized_history_window` makes
+  # both arguments in full. They carry the same values `history_window` and `unstable_tests_window`
+  # carry in the same response, because all three describe the SAME window.
+  def serialized_slowest_tests_window
+    {
+      order: "total_seconds_desc_nulls_last,recorded_count_desc,spec_identity_id_asc",
+      tie_break_served: true,
+      branch_scope: requested_branch ? "single_branch" : "all_branches",
+      branch: requested_branch,
+      grouped: !slowest_tests.nil?
+    }
+  end
+
+  # WHICH TESTS COST THE MOST WALL CLOCK ACROSS RUNS — the agent-readable half of the "Slowest tests
+  # over the window" panel `repositories#show` renders, and the roadmap's first axis of suite
+  # intelligence ("per-test duration") at the grain the Project Goals pin as semantic.
+  #
+  # A DIFFERENT GRAIN FROM `latest_run.slowest_examples`, which is why it is served beside
+  # `unstable_tests` rather than inside that block. `slowest_examples` reaches the per-example grain
+  # of ONE run — `SlowestExamples.for(test_run)` is bounded to one run by construction — and this is
+  # the same question over a window, matched to a DURABLE TEST rather than to a coordinate. An agent
+  # holding thirty responses could not assemble it: no identity crosses the wire on that block, so
+  # grouping client-side means grouping on `(file_path, line_number)`, which splits a moved test's
+  # history in two, or on `name`, which survives a move but not a rename. `SlowestTests`' class
+  # comment states both failure modes and what the identity grain buys instead: *"a test that moved
+  # keeps its runtime history."*
+  #
+  # AND A DIFFERENT GRAIN FROM `unstable_tests`, which is the neighbour it most resembles. That
+  # block groups on `name` — deliberately, for a question about outcomes — so a REWORDED test is two
+  # tests there and its history restarts midway through the window. `renamed` on the row below is
+  # the disclosure that block structurally cannot make.
+  #
+  # THE SAME OBJECT THE PANEL READS, never a hand-written query — this file's governing rule, stated
+  # in full on `serialized_spec_files`. `SlowestTests` is view-free, so the API and the panel name
+  # the same tests in the same order off the same rows of the same window.
+  #
+  # OFF THE ALREADY-MEMOIZED WINDOW, so this adds NO run-window query — see `slowest_tests` below,
+  # where the ⭐ ORDERING HAZARD that distinguishes this call site from the flakiness one is stated
+  # in full. It is not a copy of that gate and must not be read as one.
+  #
+  # `null` — THE KEY STILL PRESENT — under an unfiltered window, and the argument for that is on
+  # `serialized_slowest_tests_window` above where the boolean that explains it lives.
+  #
+  # AN EMPTY `rows` IS A REAL ANSWER HERE and is not the same state. Under a branch-scoped window
+  # the object IS constructed, and `rows: []` beside `state: "ranked"` means "we ranked and this
+  # suite holds nothing slow". The two must never serialize identically, which is what `state` is
+  # for.
+  #
+  # ⭐ `state` IS LOAD-BEARING, not a convenience. An empty list has FOUR meanings here and
+  # `SlowestTests`' class comment separates them: `no_runs` (the window is empty), `unrecorded` (the
+  # anchor wrote no per-example rows), `unresolved` (it wrote rows and none of them has been matched
+  # to a durable test yet) and `ranked`. Only the last may be read as "nothing in this suite is
+  # slow". `Ingest::IdentityResolutionJob` is asynchronous, so `unresolved` is the ORDINARY state
+  # for the seconds after an ingest — Vacuous Green exactly, in the shape this project keeps finding
+  # it, and a block that served those four as one empty array would report a clean result for work
+  # it did not do.
+  #
+  # `anchor_run` NAMES THE RUN THAT DECIDED MEMBERSHIP. The candidates are the newest run's slowest
+  # tests and the window merely supplies their history, so a test that ran in the first twenty runs
+  # of the window and not in the newest is NOT HERE — a partition the rows cannot be read to
+  # discover. `test_run_id` goes out BESIDE `commit_sha` for the reason `unstable_test_runs` states:
+  # a commit is not a key, since the same commit is legitimately ingested more than once.
+  #
+  # `recorded` / `resolved` / `excluded_unresolved_rows` are read off the object's OWN predicates,
+  # CALLED rather than re-spelled here, on the rule `serialized_spec_files`' `#recorded?` gate
+  # states: a controller-side copy of a predicate is free to drift the day the presenter's changes.
+  # The same goes for `truncated`, `complete` and `untimed_count`.
+  #
+  # `truncated` / `unexamined_count` DISCLOSE THE CANDIDATE CAP, with both OPERANDS
+  # (`candidate_count`, and `rows.length` the client already holds) beside the boolean so a client
+  # can check the comparison rather than take it. `limit` is read off `SpecObservation::SLOWEST_LIMIT`
+  # rather than restated here, on the precedent `serialized_slowest_examples` sets, so the response
+  # cannot claim a bound the query did not apply.
+  #
+  # ⚠️ `null` VERSUS `0` IS CONTRACTUAL ON FIVE KEYS, and it is `SlowestTests::UNREAD` serialized
+  # through rather than a shape to be tidied. `recorded_count`, `unresolved_count`,
+  # `candidate_count`, `resolved_count` and `timed_count` are `nil` in every state that returned
+  # before the read that would have produced them, and a `0` there would be wire-indistinguishable
+  # from a window MEASURED to have excluded nothing — which is exactly the distinction these keys
+  # exist to let a client draw. `serialized_unstable_tests` makes the identical split for its
+  # `unnamed_count`.
+  #
+  # STRUCTURED COUNTS AND BOOLEANS, NOT PROSE — this endpoint's standing rule. `RepositoriesHelper`
+  # words this same coverage for the panel and `SlowestTests` exposes four label readers
+  # (`duration_label`, `slowest_label`, `coverage_label`, `appearance_label`); not one of them is
+  # served. A machine client cannot act on "9 of 12" without parsing it, so the OPERANDS go out and
+  # the client divides.
+  #
+  # AT MOST THREE READS of `spec_observations`, and ONE in the gating states — none of them new, and
+  # none growing with the size of the suite or the length of the window. They are the panel's own
+  # reads, `EXPLAIN`-certified in `spec/models/spec_observation_spec.rb`, so that certification
+  # transfers rather than needing to be repeated in a request spec (the precedent
+  # `serialized_slowest_examples` and `serialized_unstable_tests` both rely on). An unfiltered
+  # request costs NONE, because the object is never constructed.
+  def serialized_slowest_tests
+    slowest = slowest_tests
+
+    return nil if slowest.nil?
+
+    {
+      rows: slowest.rows.map { |row| serialized_slowest_test_row(row) },
+      state: slowest.state.to_s,
+      anchor_run: serialized_slowest_tests_anchor_run(slowest.anchor_run),
+      run_count: slowest.run_count,
+      recorded: slowest.recorded?,
+      resolved: slowest.resolved?,
+      excluded_unresolved_rows: slowest.excluded_unresolved_rows?,
+      recorded_count: slowest.recorded_count,
+      unresolved_count: slowest.unresolved_count,
+      resolved_count: slowest.resolved_count,
+      candidate_count: slowest.candidate_count,
+      timed_count: slowest.timed_count,
+      untimed_count: slowest.untimed_count,
+      complete: slowest.complete?,
+      truncated: slowest.truncated?,
+      unexamined_count: slowest.unexamined_count,
+      limit: SpecObservation::SLOWEST_LIMIT
+    }
+  end
+
+  # The run the ⭐ partition was taken from, named as a REFERENCE rather than restated as a run
+  # block. `test_run_id` leads and `commit_sha` rides beside it on `unstable_test_runs`' rule — a
+  # commit is not a key, because a re-run, a retry or a second workflow ingests the same commit
+  # again — and `branch` is served because the anchor is the one run whose branch decided which
+  # tests are on the list at all.
+  #
+  # `null` — the key still present — in `:no_runs`, where the window held no run to anchor on. That
+  # is the one state where there is no run to name, and it is exactly the state `state` reports.
+  def serialized_slowest_tests_anchor_run(run)
+    return nil if run.nil?
+
+    {
+      test_run_id: run.id,
+      commit_sha: run.commit_sha,
+      branch: run.branch,
+      ingested_at: run.created_at.iso8601
+    }
+  end
+
+  # ONE durable test's runtime across the window.
+  #
+  # `spec_identity_id` IS THE FIELD THIS WHOLE BLOCK EXISTS FOR, and it is the only stable join key
+  # a client can carry between two responses. Neither `slowest_examples` nor `unstable_tests` serves
+  # an identity, which is precisely why a client holding them cannot rebuild this ranking. It is
+  # also what makes `tie_break_served: true` on the window block honest.
+  #
+  # `total_seconds` BESIDE `slowest_seconds`, never one without the other: sixty seconds is one
+  # minute-long test or sixty runs of a one-second one, and a ranking ordered on the sum alone
+  # cannot tell a reader which they are looking at. Neither is coalesced to `0.0` — a group nothing
+  # timed serves `null`, on the rule `serialized_spec_files` states, because a zero there is an
+  # invented measurement.
+  #
+  # ⭐ `moved` AND `renamed` ARE THE POINT OF THE IDENTITY GRAIN and no other key on this endpoint
+  # can express either. `moved` is this test recorded under more than one spec file across the
+  # window — the guarantee being KEPT rather than an anomaly, and a fact about where to go looking.
+  # `renamed` is its description changing while its identity did not, which `unstable_tests` is
+  # structurally incapable of reporting: grouped on `name`, a rename is two tests there.
+  #
+  # `descriptions` and `files_seen` are the OPERANDS behind those two booleans, so a client can see
+  # what the flag is claiming rather than take it. Both are read through the Struct's own readers
+  # and never off the raw attributes: the aggregates are `ARRAY_AGG(…) FILTER (…)`, i.e. SQL NULL
+  # for a group with nothing to collect, and the readers are where the `Array()` wrap and the sort
+  # live — so two rows carrying the same set serialize the same way.
+  #
+  # `repeated_within_run` says this test ran more than once in at least one run — a table-driven
+  # loop or a shared example group — which is what separates "slow in twelve runs" from "run three
+  # times in each of four". `recorded_count` and `run_count` are the two operands beside it.
+  #
+  # `timed` / `timed_count` / `untimed_count` keep a blank duration from being read as a zero. A row
+  # that reaches this list untimed is ordinary, not a defect: an example that never ran has no
+  # duration to report.
+  def serialized_slowest_test_row(row)
+    {
+      spec_identity_id: row.spec_identity_id,
+      total_seconds: row.total_seconds,
+      slowest_seconds: row.slowest_seconds,
+      run_count: row.run_count,
+      recorded_count: row.recorded_count,
+      timed_count: row.timed_count,
+      untimed_count: row.untimed_count,
+      timed: row.timed?,
+      repeated_within_run: row.repeated_within_run?,
+      moved: row.moved?,
+      renamed: row.renamed?,
+      descriptions: row.descriptions,
+      files_seen: row.files_seen
+    }
+  end
+
+  # The presenter, or `nil` when no ranking was allowed — memoized across the nil with `defined?`
+  # rather than `||=`, for the reason `unstable_tests` states below and under the same double read
+  # (`show` asks for the window block's `grouped` and then for the rows).
+  #
+  # ⭐ THE WINDOW IS HANDED IN REVERSED, AND THAT IS THIS METHOD'S WHOLE SUBTLETY — the one place
+  # this gate is NOT a copy of its flakiness sibling, which sits ten lines below and is otherwise
+  # line-for-line identical.
+  #
+  # `SlowestTests.for` documents its parameter as *"the window, ALREADY LOADED and OLDEST FIRST"*
+  # and takes `runs.last` as its ANCHOR — the run that decides WHICH TESTS ARE IN THE LIST AT ALL
+  # (its ⭐ PARTITION section). `history_runs` is `Repository#recent_test_runs`, ordered
+  # `(created_at, id) DESC` — NEWEST first. Handing it in unreversed DOES NOT RAISE:
+  # `validate_anchor!` checks tenancy only, and an old run of the same repository passes it. What
+  # comes back is a fully-populated, plausible block that ranks the OLDEST run's slowest tests,
+  # reports THAT run's figures in `recorded_count` / `resolved_count` / `timed_count`, and names it
+  # in `anchor_run` — an answer to a question nobody asked, wearing the shape of the right one.
+  # `spec/requests/api/v1/repository_slowest_tests_spec.rb` guards it by asserting the served
+  # `anchor_run` is the NEWEST run of the window, which fails if this `.reverse` is dropped.
+  #
+  # The adjacent precedent is what makes it easy to walk into and is NOT a licence: `UnstableTests.for`
+  # documents the same parameter with no ordering clause and is order- and anchor-indifferent — it
+  # reads `runs.map(&:id)` and `runs.size` and nothing else, and says so — so `unstable_tests` hands
+  # `history_runs` straight in and is right to. `spec_directory_window_growth` further down is the
+  # OTHER call site that must reverse, and carries the same warning.
+  #
+  # `.reverse` AND NEVER `.reverse!`. `serialized_history` maps the same memoized array and
+  # `serialized_history_window` declares `order: "ingested_at_desc,ingest_sequence_desc"` over it;
+  # reversing in place would make the endpoint's own ordering contract a lie, in the same response
+  # body, for every client reading `history`.
+  #
+  # NO SECOND WINDOW QUERY, and that is deliberate rather than incidental: `history_runs` is
+  # materialized once, and both `UnstableTests` and `SlowestTests` document their window as handed
+  # in precisely so two surfaces cannot come to be drawn on two windows that agree today with no
+  # structural reason to keep agreeing.
+  #
+  # The branch gate lives HERE, in one place, so the boolean the window serves and the decision that
+  # produced it cannot come apart — see `serialized_slowest_tests_window` for why an unfiltered
+  # window is refused rather than answered.
+  def slowest_tests
+    return @slowest_tests if defined?(@slowest_tests)
+
+    @slowest_tests =
+      requested_branch && SlowestTests.for(current_repository, history_runs.reverse, branch: requested_branch)
   end
 
   # The presenter, or `nil` when no comparison was allowed — memoized, because `show` reads it
