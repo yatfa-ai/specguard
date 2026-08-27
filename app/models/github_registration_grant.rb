@@ -66,6 +66,30 @@ class GithubRegistrationGrant < ApplicationRecord
     # An incomplete reading is our ignorance, not GitHub's answer. See the class comment: writing it
     # would convert a truncated page walk into a refusal of repositories this person administers.
     return nil unless sources.complete?
+    # NO INSTALLATION IS NOT AN ANSWER EITHER, and `complete?` cannot see that on its own.
+    #
+    # `InstallationRepositories.sources` returns `blank_sources(installed: false)` when the person
+    # holds no installation, and that is `truncated: false, error: nil` — so it is COMPLETE, and
+    # without this line it is captured as a grant saying GitHub reports them an administrator of
+    # nothing. That is a different sentence from the true one, and the difference is load-bearing:
+    # `GrantVerifier#verdict_for` reads a nil-or-stale grant as `:not_granted` ("SpecGuard has no
+    # current record of your GitHub permissions… reconnect GitHub" — true, and it names the fix),
+    # while a FRESH but empty grant falls past both `registrable?` and `visible?` onto
+    # `:not_in_installation` ("Add it on GitHub, then pick it here") — which sends an agent to add a
+    # repository that is already there, or that they never removed.
+    #
+    # Reachable from two directions, which is why the guard lives HERE rather than at either of
+    # them: a person who disconnects their last account on `/account`, and one who uninstalls the
+    # App on github.com and is left with rows nothing syncs. The first deletes its own grant at the
+    # moment of the act (`GithubInstallationsController#destroy`), but that alone cannot hold the
+    # invariant — `capture` is lazy and memoized and fires on the NEXT picker render, long after
+    # any controller has finished, so a delete without this would be undone by the reader's next
+    # page view. The second has no such moment at all.
+    #
+    # Deliberately NOT a deletion of the existing row: the same discipline the incomplete reading
+    # above follows. This says "do not write a statement we cannot make", and whoever holds a grant
+    # keeps it until it lapses on `MAX_AGE` or is dropped by the act that made it false.
+    return nil unless sources.installed?
 
     grant = find_or_initialize_by(user_id: user.id)
     grant.registrable_full_names = downcased(sources.registrable)

@@ -43,6 +43,17 @@ Rails.application.routes.draw do
   get  "/github/installation/callback",  to: "github_installations#callback",
                                          as: :github_installation_callback
 
+  # Dropping SpecGuard's record of one connected account, from `/account`. The only one of the four
+  # that talks to nobody: `create` and `authorize` send the user to github.com and `callback` reads
+  # what GitHub answered, while this deletes a row we wrote and stops there.
+  #
+  # DELETE on a member path, so the id is a path segment rather than a query parameter and Rails'
+  # CSRF check applies — the same shape the account key's own Revoke takes. The id is scoped through
+  # `current_user.github_installations` in the action, so one typed into the URL bar reaches nobody
+  # else's row.
+  delete "/github/installation/:id", to: "github_installations#destroy",
+                                     as: :github_installation_disconnect
+
   # --- Dashboard ----------------------------------------------------------------
   resources :repositories, only: %i[index new create show edit update destroy] do
     # Registering a whole GitHub organization at once (SPGD-355). A COLLECTION route deliberately:

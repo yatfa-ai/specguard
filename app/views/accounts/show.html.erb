@@ -151,4 +151,77 @@
                                   variant: @registration_grant&.stale? == false ? :secondary : :primary) %>
     </div>
   <% end %>
+
+  <%# CONNECTED GITHUB ACCOUNTS — the rows the App callback writes, which appeared on no page until
+      now and which the person they belong to could remove only by deleting their whole SpecGuard
+      account. See `AccountsController#show` for why this is a read and not a live GitHub walk.
+
+      Deliberately does NOT restate the grant sentence above it: this panel is about which GitHub
+      accounts SpecGuard has a record of, and the panel above is about what GitHub last said those
+      accounts let this person do. Two different facts about the same connection, with two different
+      fixes, and merging them would leave a reader unable to tell which one had gone wrong. %>
+  <%= render UI::PanelComponent.new(title: "Connected GitHub accounts", id: "github-installations",
+                                    class: "mt-6") do %>
+    <%# Named by the table below through `describedby`, on the same rule the key table follows: it
+        states what a row IS, and the second sentence is the one a reader needs BEFORE they reach a
+        Disconnect button — that their registered repositories are not what this touches. That is
+        not reassurance for its own sake: ingest authenticates on a repository's own `sgk_` key and
+        reads GitHub not at all, and nothing outside this table references an installation. %>
+    <p id="github-installations-caption" class="mb-3 text-sm text-app-content-secondary">
+      The GitHub accounts and organizations you reached SpecGuard through. SpecGuard reads what is
+      in them with <strong>your</strong> credential, each time, so a row here is where to look
+      rather than a claim on anything.
+      <strong>Disconnecting one does not affect repositories you have already registered</strong> —
+      they keep resolving and keep ingesting on their own
+      <code class="font-mono text-xs">sgk_</code> keys, which do not touch GitHub at all.
+    </p>
+
+    <% if @github_installations.any? %>
+      <%= render UI::TableComponent.new(columns: ["Account", "Connected", ""],
+                                        describedby: "github-installations-caption") do %>
+        <% @github_installations.each do |installation| %>
+          <tr>
+            <%# `display_name`, which falls back to the id: a row recorded from a callback that
+                carried no login must still be nameable rather than rendering a blank cell. %>
+            <td class="px-3 py-2"><%= installation.display_name %></td>
+            <td class="px-3 py-2 text-app-content-secondary tabular-nums">
+              <%= time_ago_in_words(installation.created_at) %> ago
+            </td>
+            <td class="px-3 py-2 text-right">
+              <%# The same `button_to … method: :delete` + `turbo_confirm` shape the key Revoke above
+                  takes, and the same disclosure discipline: that button says what stops working, so
+                  this one says what does NOT.
+
+                  Both halves are load-bearing. "Does not uninstall the App on GitHub" is the fact a
+                  reader would otherwise get wrong in the dangerous direction — believing they had
+                  revoked SpecGuard's access at the source when they had not. And naming that the
+                  App being still installed means the next Connect brings the row back is what makes
+                  this a reversible gesture rather than one to hesitate over: `callback` records
+                  every installation GitHub reports. %>
+              <%= button_to "Disconnect", github_installation_disconnect_path(installation),
+                            method: :delete,
+                            class: UI::ButtonComponent.classes(variant: :danger, size: :xs),
+                            form: { data: { turbo_confirm:
+                              "Disconnect #{installation.display_name}? This removes SpecGuard's " \
+                              "record of it. It does NOT uninstall the SpecGuard App on GitHub — " \
+                              "if it is still installed there, connecting again brings this back. " \
+                              "Repositories you have already registered are unaffected." } } %>
+            </td>
+          </tr>
+        <% end %>
+      <% end %>
+    <% else %>
+      <%# The ordinary state of anyone who has not connected the App, and of anyone who has just
+          disconnected their last account — not an error, and phrased so neither reader is told
+          something false about which of the two they are. %>
+      <%= render UI::EmptyStateComponent.new(
+            title: "No connected GitHub accounts",
+            description: "Connect the SpecGuard GitHub App to pick repositories to register."
+          ) do |empty| %>
+        <% empty.with_action do %>
+          <%= github_install_button("Connect GitHub", return_to: new_repository_path) %>
+        <% end %>
+      <% end %>
+    <% end %>
+  <% end %>
 <% end %>

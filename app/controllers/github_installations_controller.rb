@@ -55,7 +55,12 @@ class GithubInstallationsController < ApplicationController
   include GithubUserSession
 
   before_action :require_authentication
-  before_action :require_configured_app
+  # Every action here but `destroy` either sends the user to github.com or reads what GitHub
+  # answered, and an instance with no App credentials can do none of that. `destroy` deletes a row
+  # this app wrote and talks to nobody, so guarding it would strand the one gesture that still
+  # makes sense on an instance whose App configuration has been removed — precisely the reader
+  # holding rows they can no longer act on.
+  before_action :require_configured_app, except: :destroy
 
   # Off to GitHub. `allow_other_host` is required and is the point: the whole action is a redirect
   # to github.com.
@@ -107,7 +112,72 @@ class GithubInstallationsController < ApplicationController
     redirect_to destination, alert: connection_failed_alert
   end
 
+  # Drop SpecGuard's record of one connected account — the reverse of the callback, and the only
+  # action here that talks to GitHub not at all.
+  #
+  # ## What it is not
+  #
+  # It does NOT uninstall the App on github.com. If the App is still installed there, the next trip
+  # through `create` or `authorize` re-records this row, because `callback` records every
+  # installation GitHub reports. The confirm dialog on `/account` says so — a reader who believes
+  # this revoked SpecGuard's access on GitHub's side has been told something false, and the honest
+  # version is also the reassuring one: it is recoverable.
+  #
+  # Registered repositories are untouched. Nothing references this table (the sole foreign key is
+  # `github_installations` → `users`), and ingest authenticates on a repository's own `sgk_` key
+  # and reads GitHub not at all.
+  #
+  # ## Found through the association, which is the authorization
+  #
+  # `current_user.github_installations.find_by(id:)` and not `GithubInstallation.find` — the id
+  # arrives in a path segment a person can type, and scoping the LOOKUP is what makes a stranger's
+  # id unreachable rather than a check somebody can later forget to write. A miss is reported as
+  # the same "no longer connected" outcome an already-deleted row gets, because to this reader the
+  # two are the same fact and distinguishing them would confirm to a forger that an id exists.
+  def destroy
+    installation = current_user.github_installations.find_by(id: params[:id])
+    return redirect_to account_path, notice: already_gone_notice if installation.nil?
+
+    installation.destroy
+    forget_registration_grant_if_last_installation
+
+    redirect_to account_path, notice: "Disconnected #{installation.display_name}."
+  end
+
   private
+
+  # ⚠️ THE MIRRORED INVARIANT. Removing the last installation must remove the grant WITH it, and
+  # this is not tidiness — it is the difference between a true refusal and a false one.
+  #
+  # `GithubRegistrationGrant.capture` gates on `sources.complete?` alone, and with no installations
+  # `InstallationRepositories.sources` answers `blank_sources(installed: false)` — `truncated:
+  # false, error: nil`, so `complete?` is TRUE. Left alone, the reader's next render of a picker
+  # page would therefore overwrite the grant with empty arrays and a FRESH `captured_at`, and
+  # `GrantVerifier#verdict_for` reads that as neither `registrable?` nor `visible?` and answers
+  # `:not_in_installation` — "Add it on GitHub, then pick it here", which sends an agent to add a
+  # repository that is already there.
+  #
+  # Deleting it lands the reader on `:not_granted` instead — "SpecGuard has no current record of
+  # your GitHub permissions… reconnect GitHub" — which is true and names the fix.
+  #
+  # NOT the same thing as letting the empty grant be forged and deleting it afterwards: the forging
+  # is lazy and happens on the reader's next picker render (`GithubRepositoryListing#github_sources`
+  # is memoized and lazy, and `AccountsController` does not include that concern), so there is no
+  # later moment here to clean up in. Absent is the state that must be reached NOW.
+  #
+  # Guarded on the last installation rather than run unconditionally: with an installation left,
+  # the next picker render captures a real reading, and throwing away a still-redeemable grant in
+  # the meantime would break registration for an agent holding a key that worked a moment ago.
+  def forget_registration_grant_if_last_installation
+    return if current_user.github_installations.exists?
+
+    current_user.github_registration_grant&.destroy
+  end
+
+  # The same sentence a real disconnect gets, deliberately. A person who double-submitted the form
+  # or came back to a stale page wanted this row gone and it is gone; and a person guessing at ids
+  # learns nothing about whether one existed.
+  def already_gone_notice = "That GitHub account is no longer connected to SpecGuard."
 
   # An unconfigured instance says so instead of bouncing the user to a github.com URL built from
   # placeholders, which would 404 on GitHub and leave them with no idea why. The same absent-

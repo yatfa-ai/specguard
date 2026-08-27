@@ -44,5 +44,23 @@ class AccountsController < ApplicationController
     # the browser was making anyway. Refreshing from here would add a page-walk per installation to
     # a page that lists no repositories.
     @registration_grant = current_user.github_registration_grant
+
+    # CONNECTED GITHUB ACCOUNTS — the rows `GithubInstallationsController#callback` writes, which
+    # until now appeared on no page at all and could be removed by nothing short of deleting the
+    # whole user. `User#github_installations` says the principle outright while justifying its
+    # `dependent: :destroy`: connecting GitHub is not the sort of act that should quietly become
+    # irreversible. The cascade was the only satisfier funded; this list and its Disconnect are the
+    # other half.
+    #
+    # `recent_first` rather than a fresh `order` here — its own comment already names this list as
+    # the reason it exists, so the ordering rule lives with the model instead of being restated at
+    # the one call site that could drift from it.
+    #
+    # ⚠️ A READ, on the same terms as the grant above and for a sharper reason: these rows are not
+    # synced with GitHub (see `GithubInstallation`), and the honest way to show what is really there
+    # would be a live page-walk per installation. That is the cost `/repositories/new` already pays
+    # and this page deliberately does not — listing SpecGuard's own record is what the panel claims
+    # to show, and it is what the Disconnect acts on.
+    @github_installations = current_user.github_installations.recent_first
   end
 end
