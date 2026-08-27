@@ -212,6 +212,36 @@ module GithubHelper
               class: UI::ButtonComponent.classes(variant: variant)
   end
 
+  # What to say when there is no repository list to show at all, said once for the two pages that
+  # have to say it (the single-repository form, the bulk picker).
+  #
+  # Two different reasons land here and they must not read the same: GitHub being down is
+  # waitable, GitHub *refusing* is not. `github_listing_error_message` is nil only for the
+  # genuine outage, which is the one case "try again shortly" is true of.
+  #
+  # No arguments, and that is a fact about the seam rather than a convenience. Everything this
+  # branches on is `github_listing_error_message`, a `helper_method` declared on
+  # `GithubRepositoryListing`, which both controller trees that render this include — which is why
+  # the two copies this replaces were byte-identical rather than merely similar, and why one
+  # definition can serve both without a caller passing anything down.
+  #
+  # The outage sentence is composed as one String rather than assembled across ERB lines, for the
+  # reason `withheld_repositories_sentence` states in full: a sentence broken over template lines
+  # carries a newline inside itself, which reads fine in a browser and is invisible to anything
+  # matching on the text.
+  def github_listing_unavailable_alert
+    if github_listing_error_message
+      render UI::AlertComponent.new(tone: :warning, title: "GitHub refused the request") do
+        github_listing_error_message
+      end
+    else
+      render UI::AlertComponent.new(tone: :warning, title: "GitHub is not answering right now") do
+        "Your repository list could not be loaded, so there is nothing to pick from yet. " \
+          "Try again shortly."
+      end
+    end
+  end
+
   # What the picker offers: exactly the repositories in the user's installation(s).
   #
   # There is no filtering left to do HERE, and that is a statement about this method rather than

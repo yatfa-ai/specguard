@@ -55,19 +55,7 @@
         <%= github_authorize_button return_to: bulk_repositories_path %>
       <% end %>
     <% elsif github_listing.nil? %>
-      <%# Two different reasons land here and they must not read the same: GitHub being down is
-          waitable, GitHub *refusing* is not. `github_listing_error_message` is nil only for the
-          genuine outage, which is the one case "try again shortly" is true of. %>
-      <% if github_listing_error_message %>
-        <%= render UI::AlertComponent.new(tone: :warning, title: "GitHub refused the request") do %>
-          <%= github_listing_error_message %>
-        <% end %>
-      <% else %>
-        <%= render UI::AlertComponent.new(tone: :warning, title: "GitHub is not answering right now") do %>
-          Your repository list could not be loaded, so there is nothing to pick from yet. Try again
-          shortly.
-        <% end %>
-      <% end %>
+      <%= github_listing_unavailable_alert %>
 
       <div class="mt-4">
         <%= render UI::ButtonComponent.new(variant: :ghost, href: repositories_path) { "Back" } %>
