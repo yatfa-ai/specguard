@@ -27,6 +27,9 @@
       one repository. They start <code class="font-mono text-xs">sgu_</code>, and a repository's own
       <code class="font-mono text-xs">sgk_</code> key will not work in their place, or the reverse.
       Hold as many as you need and revoke them one at a time: revoking one leaves the rest working.
+      The <%= link_to "administration guide", administration_guide_path,
+                      class: "text-app-cta hover:underline" %>
+      covers what one can do — including the browser step registering over the API depends on.
     </p>
 
     <% if @user_api_keys.any? %>
@@ -62,9 +65,14 @@
         <% end %>
       <% end %>
     <% else %>
+      <%# "read" alone was true when this was written and is an undercount now: an `sgu_` key also
+          REGISTERS repositories, and receives that repository's first `sgk_` CI key back in the
+          same response. A description that still called the credential read-only would understate
+          the one thing about it a person most needs to know before minting one. %>
       <%= render UI::EmptyStateComponent.new(
             title: "No personal API keys",
-            description: "Mint one to let an agent read the repositories you can see."
+            description: "Mint one to let an agent list the repositories you can see and register " \
+                         "new ones for you."
           ) %>
     <% end %>
   <% end %>

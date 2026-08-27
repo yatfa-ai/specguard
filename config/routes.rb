@@ -14,6 +14,20 @@ Rails.application.routes.draw do
   # must not be able to drift apart through a hand-written string.
   get "docs/integrate", to: "pages#integrate", as: :integration_guide
 
+  # The administration guide (SPGD-762) — the document the reservation above anticipated.
+  #
+  # Same charter and same reason for being ungated as `integrate`, but a different SCOPE: that page
+  # documents the CI-facing `sgk_` surface, this one documents the `sgu_` administration surface —
+  # `get "repositories"` and `post "repositories"` below, the ones a PERSON's key answers. Splitting
+  # them by credential rather than by count is what lets each page state its boundary as something
+  # that stays true when a fifth route lands.
+  #
+  # It exists because registering over the API has a precondition stated nowhere in advance: a
+  # `GithubRegistrationGrant` is captured only when a browser lists repositories, and expires after
+  # `GithubRegistrationGrant::MAX_AGE`. Until this page, the only surface that ever said so was the
+  # 400 that had already refused the request.
+  get "docs/administer", to: "pages#administer", as: :administration_guide
+
   # --- Human auth: GitHub OAuth -------------------------------------------------
   # Identity only. This asks GitHub for a handle, an avatar and an email address, and has never
   # asked for more — repository access is a separate thing entirely, below.
