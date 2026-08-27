@@ -177,6 +177,58 @@ RSpec.describe Repository do
     end
   end
 
+  describe "#github_commit_url" do
+    # The third peer beside `#github_url` and `#github_blob_url`. Those answer "which repository"
+    # and "which line"; this answers WHICH CHANGE — the question a panel that prints a sha leaves
+    # the reader holding, and the one the product could not open at all before this method.
+    it "composes a commit URL at the ref it was given" do
+      repository = create_repository(github_full_name: "acme/billing-service")
+
+      expect(repository.github_commit_url("feedfacecafe0001"))
+        .to eq("https://github.com/acme/billing-service/commit/feedfacecafe0001")
+    end
+
+    # A COMMIT, never a range: it describes the ref it is handed and says nothing about what came
+    # before it. A `/compare/` link would need a second ref that only row adjacency could supply,
+    # and row adjacency is not commit adjacency — naming the wrong range is worse than naming none.
+    it "links one commit rather than a range" do
+      repository = create_repository(github_full_name: "acme/billing-service")
+
+      url = repository.github_commit_url("abc123")
+
+      expect(url).to include("/commit/abc123")
+      expect(url).not_to include("compare")
+      expect(url).not_to include("...")
+    end
+
+    # The ref is the CALLER's and there is no default, on the same rule `#github_blob_url` states:
+    # a per-row caller must be able to pin each row to its own sha, so two refs must give two URLs.
+    it "pins to whatever ref the caller names" do
+      repository = create_repository(github_full_name: "acme/billing-service")
+
+      expect(repository.github_commit_url("0ff10e")).to end_with("/commit/0ff10e")
+      expect(repository.github_commit_url("main")).to end_with("/commit/main")
+    end
+
+    # The same segment-wise rule as the ref above, for the same reason: a sha needs no escaping at
+    # all, but a ref is a caller's string and a branch name legitimately carries slashes that must
+    # survive as structure rather than be flattened into one unresolvable segment.
+    it "keeps the slashes in a branch-shaped ref while escaping the rest" do
+      repository = create_repository(github_full_name: "acme/billing-service")
+
+      expect(repository.github_commit_url("feature/deep links"))
+        .to eq("https://github.com/acme/billing-service/commit/feature/deep%20links")
+    end
+
+    # It COMPOSES and asks GitHub nothing — no probe, no existence check, so no query even when a
+    # panel calls it once per row. An unpushed sha answers 404, which is GitHub telling the truth.
+    it "issues no query" do
+      repository = create_repository(github_full_name: "acme/billing-service")
+
+      expect(count_queries { repository.github_commit_url("abc") }).to eq(0)
+    end
+  end
+
   describe "#latest_test_run" do
     # The anchor every suite figure on the Overview panel and the API's `latest_run` block is read
     # off, so what "latest" means is pinned here directly rather than inferred through a figure
