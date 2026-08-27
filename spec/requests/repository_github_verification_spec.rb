@@ -404,6 +404,114 @@ RSpec.describe "Installation-verified repository registration", type: :request d
       expect(response.body).not_to include("<select")
     end
 
+    # THE case this page was silent in, and the population none of the notice's own examples reach:
+    # every one of them stubs an admin repository for the healthy installation, so a list renders and
+    # the notice sits above it. Here there is NO list — and an unreadable account is the likeliest
+    # reason for that rather than an unrelated aside, because a 404'd installation contributes zero
+    # registrable repositories by construction.
+    #
+    # The SOLE-installation shape: the user's only installation was uninstalled on GitHub. There is
+    # no webhook and no uninstall cleanup in this codebase, so the local row survives forever and
+    # this is the steady state rather than a blip. `read` returns an EMPTY listing and `:unreadable`
+    # for it, so `error` stays nil and `complete?` stays true — which is why the page could reach the
+    # "you selected nothing" panel and say a sentence about an installation that does not exist.
+    it "names the sole installation GitHub no longer lists rather than blaming the selection" do
+      stub_github(not_found: true)
+
+      get new_repository_path
+
+      expect(response.body).to include("GitHub no longer lists acme as connected to SpecGuard")
+      # The false sentence, pinned by its own words rather than only by its title: the App is NOT
+      # installed on that account any more, so "no repositories are selected for it" describes an
+      # installation GitHub 404s, and the button under it went to a picker for the same.
+      expect(response.body).not_to include("No repositories connected yet")
+      expect(response.body).not_to include("no repositories are selected for it")
+    end
+
+    # The closing clause is the half of the sentence that cannot be shared with the picker's notice.
+    # "Anything shown here can still be registered" is an offer about what is on the page, and this
+    # page is showing nothing — so an empty-state branch that reused the picker's wording would name
+    # the account correctly and then close with a claim about a list that is not there.
+    it "does not close an empty page by offering what it is not showing" do
+      stub_github(not_found: true)
+
+      get new_repository_path
+
+      expect(response.body).to include("could not be listed, so this page may be empty for that " \
+                                       "reason rather than because there is nothing to register")
+      expect(response.body).not_to include("Anything shown here can still be registered")
+    end
+
+    # The OTHER reachable empty shape, and it needs its own example because it renders a different
+    # panel through a different branch: one installation answers with repositories this viewer does
+    # not administer (so `withheld_count` is positive and the "ask an administrator" panel wins),
+    # while a second 404s. The advice is about repositories this page CAN see, and without the notice
+    # it sends the reader to ask an administrator about an account nobody can read at all.
+    it "names an unread account beside the nothing-is-yours panel" do
+      add_github_installation(@user, installation_id: 6002, account_login: "globex")
+      stub_github_per_installation do |id|
+        FakeGithubApi.new(**(id == 6002 ? { not_found: true } : { repos: [github_repo("acme/api", admin: false)] }))
+      end
+
+      get new_repository_path
+
+      expect(response.body).to include("Nothing here is yours to register")
+      expect(response.body).to include("GitHub no longer lists globex as connected to SpecGuard")
+      expect(response.body).not_to include("Anything shown here can still be registered")
+    end
+
+    # Which failures can reach an empty page at all — asserted rather than assumed, because it is
+    # what makes the branch above tractable. `github_listing` is nil exactly when `registrable` is
+    # empty AND `error` is set, so an empty page that RENDERS is one where `error` is nil, and the
+    # only unread outcome that leaves `error` nil is the 404. A transiently-failing installation
+    # with nothing else to show therefore does NOT land in the empty state: it lands on the panel
+    # that names the refusal, which already explains it in its own words.
+    #
+    # So the 404 is not merely the likeliest thing the empty branches have to name — over the empty
+    # page it is the ONLY one, which is precisely why the reading keyed on `error` could never see
+    # it and the page fell silent.
+    it "sends a transiently-failing empty listing to the refusal panel rather than the empty state" do
+      add_github_installation(@user, installation_id: 6002, account_login: "globex")
+      stub_github_per_installation do |id|
+        FakeGithubApi.new(**(id == 6002 ? { unavailable: true } : { repos: [] }))
+      end
+
+      get new_repository_path
+
+      expect(response.body).to include("GitHub is not answering right now")
+      expect(response.body).not_to include("No repositories connected yet")
+      expect(response.body).not_to include("An account could not be read")
+    end
+
+    # The negative that keeps the fix from being "always warn". A viewer who genuinely selected
+    # nothing has every installation ANSWERING, so there is no account to name and the original
+    # sentence is the true one — it must still be what they are told.
+    it "still blames the selection when the empty installation answered" do
+      stub_github(repos: [])
+
+      get new_repository_path
+
+      expect(response.body).to include("No repositories connected yet")
+      expect(response.body).to include("no repositories are selected for it")
+      expect(response.body).not_to include("An account could not be read")
+      expect(response.body).not_to include("GitHub no longer lists")
+      expect(response.body).not_to include("SpecGuard could not read")
+    end
+
+    # And the other guard the method kept: when there is no listing AT ALL the page has its own
+    # dedicated panel naming GitHub's refusal, and that is not a short-list case — there is no page
+    # for an account to be missing from. `github_unread_accounts` must stay empty there, or the
+    # refusal panel grows a second, differently-worded explanation of the same request.
+    it "leaves the no-listing panel alone, which explains the refusal in its own words" do
+      stub_github(unavailable: true)
+
+      get new_repository_path
+
+      expect(response.body).to include("GitHub is not answering right now")
+      expect(response.body).not_to include("An account could not be read")
+      expect(response.body).not_to include("SpecGuard could not read")
+    end
+
     # A user with two installations, one of which will not answer. What WAS read is GitHub's own
     # answer and is still registerable, so the picker renders — but the page says the list is short
     # rather than letting "my repository is not here" read as "SpecGuard is broken".

@@ -92,6 +92,68 @@ RSpec.describe "Bulk organization registration", type: :request do
       expect(response.body).not_to include("registered one at a time")
     end
 
+    # The same silence as the single-repository picker's, on the same mechanism, in the branch that
+    # never asked. A 404'd installation contributes no registrable repositories, so it can empty this
+    # chooser BY ITSELF — and the sentence below would then explain that emptiness as somebody else's
+    # admin rights over an account nobody could read.
+    #
+    # The sole-installation shape, where the emptiness and the unread account are the same event.
+    it "names the sole installation GitHub no longer lists rather than blaming admin rights" do
+      stub_github(not_found: true)
+
+      get bulk_repositories_path
+
+      expect(response.body).to include("GitHub no longer lists acme as connected to SpecGuard")
+      # The claim that must be withheld: it quantifies over EVERY account the App is installed on,
+      # and one of them was not read, so it is not a thing this page knows.
+      expect(response.body).not_to include("No repositories to register in a batch")
+      expect(response.body).not_to include("does not list you as an administrator of any repository")
+    end
+
+    # The closing clause, which is the one part of the sentence that cannot be shared with the
+    # chooser's own notice: this page is showing nothing, so an offer about what is shown is false.
+    # Worded identically to the single-repository picker's empty state — one helper decides it, which
+    # is the whole reason the helper exists.
+    it "does not close an empty chooser by offering what it is not showing" do
+      stub_github(not_found: true)
+
+      get bulk_repositories_path
+
+      expect(response.body).to include("could not be listed, so this page may be empty for that " \
+                                       "reason rather than because there is nothing to register")
+      expect(response.body).not_to include("Anything shown here can still be registered")
+    end
+
+    # Empty for the ORIGINAL reason plus an unread account: one installation answers with
+    # repositories this viewer administers none of, and a second 404s. The chooser is empty either
+    # way, and the reader is owed both facts rather than only the one this page could already see.
+    it "names an unread account when another installation emptied the chooser" do
+      add_github_installation(@user, installation_id: 6002, account_login: "globex")
+      stub_github_per_installation do |id|
+        FakeGithubApi.new(**(id == 6002 ? { not_found: true } : { repos: [github_repo("acme/api", admin: false)] }))
+      end
+
+      get bulk_repositories_path
+
+      expect(response.body).to include("GitHub no longer lists globex as connected to SpecGuard")
+      expect(response.body).not_to include("does not list you as an administrator of any repository")
+    end
+
+    # The negative that keeps this from being "always warn". A viewer who genuinely administers
+    # nothing has every installation ANSWERING, so there is no account to name and the original
+    # sentence is the true one — it must still be exactly what they are told.
+    it "still says nothing is theirs to register when every installation answered" do
+      stub_github(repos: [github_repo("acme/api", admin: false)])
+
+      get bulk_repositories_path
+
+      expect(response.body).to include("No repositories to register in a batch")
+      expect(response.body).to include("does not list you as an administrator of any repository")
+      expect(response.body).not_to include("An account could not be read")
+      expect(response.body).not_to include("GitHub no longer lists")
+      expect(response.body).not_to include("SpecGuard could not read")
+    end
+
     # The card's badge counts what the reader may act on, and the sentence under it accounts for the
     # rest. Per card rather than per page, because the answer differs for every organization: `acme`
     # is mostly theirs and `beta` is mostly not.

@@ -61,23 +61,46 @@
         <%= render UI::ButtonComponent.new(variant: :ghost, href: repositories_path) { "Back" } %>
       </div>
     <% elsif organizations.empty? %>
-      <%# The installation covers repositories, but GitHub names this viewer an administrator of
-          none of them — somebody else does the administering everywhere the App is installed.
-          Said plainly rather than rendered as an empty chooser: that is not fixed on this page.
+      <%# Nothing to choose from — and as on the single-repository picker, an account that could not
+          be read is a likely CAUSE of that rather than an unrelated aside. A 404'd installation
+          contributes no registrable repositories at all, so it can empty this chooser by itself
+          while the sentence below explains the emptiness as somebody else's admin rights. %>
+      <% if github_listing_incomplete? %>
+        <%# Empty AND an account is unread: the emptiness is not the settled fact the branch below
+            states it as, so that branch's sentence is withheld rather than printed beside a notice
+            contradicting it. "GitHub does not list you as an administrator of any repository" is a
+            claim about every account the App is installed on, and one of them was not read. %>
+        <%= render "shared/unreadable_accounts_notice", missing: "Accounts" %>
+        <%= render UI::EmptyStateComponent.new(
+              title: "No accounts to show",
+              description: "Nothing could be listed for you to choose from. That may be because " \
+                           "an account above could not be read rather than because there is " \
+                           "nothing you administer."
+            ) do %>
+          <%= render UI::ButtonComponent.new(variant: :primary, href: new_repository_path) { "Register one repository" } %>
+        <% end %>
+      <% else %>
+        <%# The installation covers repositories, but GitHub names this viewer an administrator of
+            none of them — somebody else does the administering everywhere the App is installed.
+            Said plainly rather than rendered as an empty chooser: that is not fixed on this page.
 
-          This is now reachable ONLY through that one condition. It used to catch a second and much
-          more common case — every repository sitting in a personal namespace — and sent those
-          readers off to the single-repository form, one submission per repository, while the batch
-          pipeline would have taken all of them at once. Personal namespaces are offered now
-          (SPGD-818), so the sentence that turned them away is gone rather than reworded: it was
-          false, not merely unfriendly. %>
-      <%= render UI::EmptyStateComponent.new(
-            title: "No repositories to register in a batch",
-            description: "GitHub does not list you as an administrator of any repository the " \
-                         "SpecGuard GitHub App is installed on. Whoever administers them can " \
-                         "register them, or install the App on repositories you administer."
-          ) do %>
-        <%= render UI::ButtonComponent.new(variant: :primary, href: new_repository_path) { "Register one repository" } %>
+            Reachable only when every installation ANSWERED, which is what makes the sentence safe
+            to make about all of them.
+
+            This is now reachable ONLY through that one condition. It used to catch a second and much
+            more common case — every repository sitting in a personal namespace — and sent those
+            readers off to the single-repository form, one submission per repository, while the batch
+            pipeline would have taken all of them at once. Personal namespaces are offered now
+            (SPGD-818), so the sentence that turned them away is gone rather than reworded: it was
+            false, not merely unfriendly. %>
+        <%= render UI::EmptyStateComponent.new(
+              title: "No repositories to register in a batch",
+              description: "GitHub does not list you as an administrator of any repository the " \
+                           "SpecGuard GitHub App is installed on. Whoever administers them can " \
+                           "register them, or install the App on repositories you administer."
+            ) do %>
+          <%= render UI::ButtonComponent.new(variant: :primary, href: new_repository_path) { "Register one repository" } %>
+        <% end %>
       <% end %>
     <% elsif organization.nil? %>
       <% if github_listing_incomplete? %>

@@ -59,12 +59,24 @@
       <%= render UI::ButtonComponent.new(variant: :ghost, href: cancel_href) { "Back" } %>
     </div>
   <% elsif choices.blank? %>
+    <%# NOTHING to pick from — and an account that could not be read is the likeliest reason for
+        that, not an exotic one. An installation GitHub answers 404 for contributes zero registrable
+        repositories BY CONSTRUCTION, so this is the population where an unreadable account is most
+        likely to be the CAUSE of the emptiness, and it was the one population that heard nothing
+        about it. The notice is asked for in every branch below, above whatever the branch's own
+        explanation is, because an explanation of an empty page that omits the account GitHub would
+        not answer for is an explanation of the wrong thing. %>
     <% if github_withheld_count.positive? %>
       <%# The installation DOES cover repositories and this viewer administers none of them — the
           ordinary position of a read-only member of an organization that installed the App. Told
           apart from the branch below deliberately: sending them to GitHub's picker would be sending
           them to fix something that is not broken, and what is actually in their way is not theirs
-          to change. %>
+          to change.
+          
+          The notice matters especially here: "ask an administrator" is advice about repositories
+          this page CAN see, and it would be sending the reader to ask about an account nobody can
+          read at all. %>
+      <%= render "shared/unreadable_accounts_notice", missing: "Repositories" %>
       <%= render UI::EmptyStateComponent.new(
             title: "Nothing here is yours to register",
             description: "#{withheld_repositories_sentence(github_withheld_count)} Registering a " \
@@ -73,10 +85,34 @@
           ) do %>
         <%= render UI::ButtonComponent.new(variant: :primary, href: cancel_href) { "Back" } %>
       <% end %>
+    <% elsif github_listing_incomplete? %>
+      <%# Empty, and an account could not be read — so the emptiness is not the settled fact the
+          branch below states it as. This is the sole-installation uninstall in particular: the row
+          survives locally (there is no webhook and no uninstall cleanup), GitHub 404s it, and it
+          contributes an empty listing and no error. Told that the App "is installed, but no
+          repositories are selected for it", the reader would be reading a sentence about an
+          installation that does not exist any more.
+
+          The button still goes to GitHub, and it is not the same offer: installing the App again is
+          exactly how an uninstalled account is put back, so the fix on offer matches the reason the
+          notice gives. %>
+      <% form_return_to = repository.persisted? ? edit_repository_path(repository) : new_repository_path %>
+      <%= render "shared/unreadable_accounts_notice", missing: "Repositories" %>
+      <%= render UI::EmptyStateComponent.new(
+            title: "No repositories to show",
+            description: "Nothing could be listed for you to pick from. That may be because an " \
+                         "account above could not be read rather than because nothing is selected."
+          ) do %>
+        <%= github_install_button "Choose repositories on GitHub", return_to: form_return_to %>
+        <%= render UI::ButtonComponent.new(variant: :ghost, href: cancel_href) { "Back" } %>
+      <% end %>
     <% else %>
       <%# The App is installed and covers no repositories at all — the user completed the flow and
           selected nothing, or has since deselected everything. The fix IS on GitHub here, so the
-          button goes back there rather than offering a field that has nothing to offer. %>
+          button goes back there rather than offering a field that has nothing to offer.
+
+          Every account answered, which is what makes this sentence safe to say: it is the branch
+          above that has an unread account to account for, not this one. %>
       <% form_return_to = repository.persisted? ? edit_repository_path(repository) : new_repository_path %>
       <%= render UI::EmptyStateComponent.new(
             title: "No repositories connected yet",

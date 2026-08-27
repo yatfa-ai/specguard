@@ -338,7 +338,23 @@ module GithubHelper
   # stale, and reinstalling is done on GitHub. That second case is the one this page said NOTHING
   # about until now — a 404 contributes an empty listing and records no error by design, so there
   # was no error for a notice to key on and an entire account could leave the picker in silence.
-  def unreadable_accounts_sentence(outcomes, missing:)
+  #
+  # ## `closing:` — the one clause that cannot be true on every page that shows this
+  #
+  # The account-naming sentences above are facts about GitHub and read identically wherever they
+  # appear. The clause that FOLLOWS them is not: "Anything shown here can still be registered" is
+  # an offer, and an EMPTY page is showing nothing to make it about. That page is now the sharpest
+  # place this notice appears — a 404'd installation contributes no registrable repositories, so it
+  # is most likely to be the reason the page is empty at all — and telling a reader with nothing in
+  # front of them that what is in front of them is registerable is the kind of sentence that makes
+  # them stop believing the rest of the panel.
+  #
+  # So the closing clause is selected rather than hardcoded, and it is selected HERE rather than
+  # passed in as a string, which is the whole reason this helper exists: five call sites each
+  # writing their own version is five chances to word the same fact differently. `:short_list` is
+  # the default and is byte-for-byte what this method always emitted, so the two call sites that
+  # render a picker are unchanged. `:empty_state` is what the branches with nothing to show pass.
+  def unreadable_accounts_sentence(outcomes, missing:, closing: :short_list)
     unread = Array(outcomes).reject(&:read?)
     return nil if unread.empty?
 
@@ -356,13 +372,43 @@ module GithubHelper
                    "your GitHub settings."
     end
 
-    sentences << "#{missing} connected through #{unread.one? ? 'that account' : 'those accounts'} " \
-                 "are missing from this list. Anything shown here can still be registered."
+    sentences << unreadable_accounts_closing(closing, missing: missing, unread: unread)
 
     sentences.join(" ")
   end
 
   private
+
+  # The clause that closes `unreadable_accounts_sentence`, chosen by what the page around it is
+  # actually showing. Both forms say the same two things — WHAT is missing, and what the reader can
+  # still do — and they differ only because the answer to the second is different when the page is
+  # empty.
+  #
+  # `:short_list` is the picker's: something WAS read, it is on the page, and it is registerable.
+  #
+  # `:empty_state` is for the branches that render no list at all. It must not close with "anything
+  # shown here can still be registered", which is a claim about a page that is showing nothing —
+  # and on the sole-installation 404 it is worse than merely vacuous, because the panel it sits in
+  # is already offering to fix an installation GitHub says is gone. Instead it says the plainest
+  # true thing: the account may be the whole reason this page is empty, so the emptiness is not
+  # necessarily the settled answer it looks like.
+  #
+  # Anything else raises rather than silently falling through to the short-list wording, which
+  # would put the false sentence back on an empty page by typo.
+  def unreadable_accounts_closing(closing, missing:, unread:)
+    account_phrase = unread.one? ? "that account" : "those accounts"
+
+    case closing
+    when :short_list
+      "#{missing} connected through #{account_phrase} are missing from this list. " \
+        "Anything shown here can still be registered."
+    when :empty_state
+      "#{missing} connected through #{account_phrase} could not be listed, so this page may be " \
+        "empty for that reason rather than because there is nothing to register."
+    else
+      raise ArgumentError, "unknown closing #{closing.inspect}"
+    end
+  end
 
   # `private` and `archived` change what registering the repository will *mean* — an archived one
   # will never push another CI run — so they are on the option itself rather than discoverable only

@@ -1,0 +1,24 @@
+<%# The "an account of yours is not in this" notice, for the branches that render NO list.
+
+    locals: missing — the plural noun this page is missing (`GithubHelper#unreadable_accounts_sentence`)
+
+    A partial rather than three copies of the alert for the same reason the sentence itself is one
+    helper: the empty-state branches are on two pages and three code paths, and three hand-written
+    copies of a warning is three chances for one of them to word the fact differently, or to keep
+    the picker's `closing:` and tell a reader looking at an empty page that "anything shown here can
+    still be registered".
+
+    Distinct from the notice the picker branches render inline, and deliberately so — that one sits
+    ABOVE a working control and says the control is short. This one sits above an explanation of an
+    empty page and says the explanation may be the wrong one. Same facts, different title, different
+    closing clause; sharing a partial between them would mean sharing the sentence that is only true
+    of one.
+
+    Renders NOTHING when every installation answered: `unreadable_accounts_sentence` is nil then, and
+    a branch that asks for this unconditionally must not get an empty warning box for its trouble. %>
+<% sentence = unreadable_accounts_sentence(github_unread_accounts, missing: missing, closing: :empty_state) %>
+<% if sentence %>
+  <%= render UI::AlertComponent.new(tone: :warning, title: "An account could not be read", class: "mb-4") do %>
+    <%= sentence %>
+  <% end %>
+<% end %>
