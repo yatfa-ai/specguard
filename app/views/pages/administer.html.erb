@@ -1,0 +1,375 @@
+<% content_for :title, "Administration guide · SpecGuard" %>
+
+<%# == The public administration guide (SPGD-762)
+    ================================================================================================
+
+    WHO THIS PAGE IS FOR. The person who has just minted an `sgu_` key on `/account`, and the agent
+    they hand it to. It inherits the integration guide's charter verbatim — ungated, complete, and
+    wrong-by-definition wherever it disagrees with the server — and differs from it in SCOPE: that
+    page documents the CI-facing `sgk_` surface, this one documents the `sgu_` administration
+    surface. See `config/routes.rb`, which draws the same line for the same reason.
+
+    THE FINDING IT EXISTS TO CLOSE, and the reason the grant section is not an appendix.
+
+    `POST /api/v1/repositories` redeems a `GithubRegistrationGrant` — what GitHub said about this
+    person, snapshotted while a browser session still held a token that could ask. That snapshot is
+    captured in exactly one place (`GithubRepositoryListing#github_sources`, reached only from the
+    two controllers that render a repository list in a BROWSER) and it expires after
+    `GithubRegistrationGrant::MAX_AGE`. So the headline gesture — mint a key, hand it to an agent —
+    fails for anybody who has not opened their repository list in a browser recently, and until this
+    page existed that precondition was stated NOWHERE in advance: only afterwards, in the 400, and
+    only to the agent rather than to the person who minted the key.
+
+    That is why it is section two, above the exchange it gates, and why the bound is published from
+    the constant rather than typed. A page that buried it under the curl snippet would reproduce the
+    original defect in a more comfortable location.
+
+    WHAT IT DOES NOT DO. It promises no capability the API does not currently have. Revoking a key
+    and minting one over the API are not endpoints today, and the MCP bridge does not carry these
+    tools; none of the three is described here as though it were coming. Where a reader needs a
+    gesture that only the browser has, the page says so plainly and sends them there.
+%>
+
+<% endpoint = administration_guide_endpoint %>
+
+<%= render UI::PageComponent.new do %>
+  <%= render UI::PageHeaderComponent.new(
+        title: "Administration guide",
+        subtitle: "Register repositories and manage them with a personal API key — from an agent, " \
+                  "or from curl."
+      ) %>
+
+  <%= render UI::PanelComponent.new(title: "Start here", id: "start-here") do %>
+    <div class="space-y-4">
+      <p class="text-sm text-app-content-secondary">
+        A <strong class="text-app-content">personal API key</strong> authenticates as
+        <em>you</em> — across every repository you can open, rather than as one repository. It is
+        what lets an agent register a repository on your behalf and list what you already have.
+        It is a different credential from the one CI uses, and the two are not interchangeable.
+      </p>
+
+      <%= render UI::DefListComponent.new(rows: [
+            ["You need an endpoint", endpoint],
+            ["You need a personal key", "Mint one on your account page"],
+            ["You need a current grant", "Open your repository list in a browser first"]
+          ]) %>
+
+      <%# The third row is the one nothing else on any surface says in advance, so it is stated
+          twice: once here as a precondition alongside the other two, and once in full below. A
+          reader who skims only this list still learns it exists. %>
+
+      <div class="space-y-2">
+        <p class="section-label text-app-content-secondary">The two endpoints this page covers</p>
+        <%= render UI::TableComponent.new(columns: ["Endpoint", "What it is for"]) do %>
+          <tr>
+            <td class="px-3 py-2 font-mono text-xs break-all text-app-content">GET <%= endpoint %>/api/v1/repositories</td>
+            <td class="px-3 py-2 text-app-content-secondary">
+              Everything you can open, owned and shared alike, with each one's delivery health.
+              It changes nothing.
+            </td>
+          </tr>
+          <tr>
+            <td class="px-3 py-2 font-mono text-xs break-all text-app-content">POST <%= endpoint %>/api/v1/repositories</td>
+            <td class="px-3 py-2 text-app-content-secondary">
+              Registering one. Returns a <code>201</code> carrying the repository and a freshly
+              minted CI key for it.
+            </td>
+          </tr>
+        <% end %>
+      </div>
+
+      <%# The credential seam. Stated as a table because the failure it prevents is a 401 that looks
+          like an authentication bug and is really a wrong-credential one — and because "which key
+          answers which endpoint" is a lookup, not a paragraph. %>
+      <div class="space-y-2">
+        <p class="section-label text-app-content-secondary">The two credentials</p>
+        <%= render UI::TableComponent.new(columns: ["Key", "Speaks for", "Answers", "Minted on"]) do %>
+          <tr>
+            <td class="px-3 py-2 font-mono text-xs text-app-content">sgu_…</td>
+            <td class="px-3 py-2 text-app-content-secondary">You, the person</td>
+            <td class="px-3 py-2 font-mono text-xs text-app-content-secondary break-all">/api/v1/repositories</td>
+            <td class="px-3 py-2 text-app-content-secondary">
+              <%= link_to "Your account page", account_path, class: "text-app-cta hover:underline" %>
+            </td>
+          </tr>
+          <tr>
+            <td class="px-3 py-2 font-mono text-xs text-app-content">sgk_…</td>
+            <td class="px-3 py-2 text-app-content-secondary">One repository</td>
+            <td class="px-3 py-2 font-mono text-xs text-app-content-secondary break-all">
+              /api/v1/repository, /api/v1/ingest
+            </td>
+            <td class="px-3 py-2 text-app-content-secondary">That repository's page</td>
+          </tr>
+        <% end %>
+        <p class="text-xs text-app-muted">
+          They refuse each other. A <code>sgu_</code> key sent to an endpoint expecting
+          <code>sgk_</code> gets a <code>401</code>, and the reverse is also a <code>401</code> —
+          not a permissions error, and not a sign the key is broken. The near-identical paths
+          <code>/repository</code> and <code>/repositories</code> are separate surfaces for exactly
+          this reason, so neither can quietly serve the wrong thing.
+        </p>
+      </div>
+    </div>
+  <% end %>
+
+  <%= render UI::PanelComponent.new(title: "Your personal key", id: "personal-key") do %>
+    <div class="space-y-4">
+      <p class="text-sm text-app-content-secondary">
+        Mint one on
+        <%= link_to "your account page", account_path, class: "text-app-cta hover:underline" %>.
+        Hold as many as you need — one per agent, per laptop, per anything — and revoke them one at
+        a time; revoking one leaves the rest working.
+      </p>
+
+      <%= render UI::AlertComponent.new(tone: :warning, title: "Shown once, and replaced rather than rotated") do %>
+        <p class="mt-1">
+          The token is displayed at the moment you mint it and never again — SpecGuard stores only a
+          SHA-256 digest, so it cannot show you an existing key even if you ask. Store it where the
+          agent that needs it will read it from.
+        </p>
+        <p class="mt-2">
+          There is also <strong>no rotation</strong> for this credential, unlike a repository's CI
+          key. Replacing one is two gestures in a browser: mint the new key, then revoke the old.
+          Doing it in that order means nothing is ever without a working credential.
+        </p>
+      <% end %>
+    </div>
+  <% end %>
+
+  <%# ---------------------------------------------------------------------------------------------
+      THE SECTION THIS PAGE WAS WRITTEN FOR. Above the exchange it gates, deliberately.
+  --------------------------------------------------------------------------------------------- %>
+  <%= render UI::PanelComponent.new(title: "Before you register: the browser step", id: "grant") do %>
+    <div class="space-y-4">
+      <%= render UI::AlertComponent.new(
+            tone: :warning,
+            title: "Registering over the API needs something a key alone cannot give it"
+          ) do %>
+        <p class="mt-1">
+          Open your repository list in a browser at least once every
+          <strong><%= administration_guide_grant_max_age %></strong>. Without that, registration is
+          refused however valid your key is.
+        </p>
+      <% end %>
+
+      <p class="text-sm text-app-content-secondary">
+        SpecGuard will not register a repository without checking with GitHub that you administer
+        it. Asking GitHub that question needs a credential that speaks for <em>you</em> on GitHub —
+        and a request carrying only an API key does not have one, by design: that credential lives
+        in a browser session and is deliberately stored nowhere else.
+      </p>
+
+      <p class="text-sm text-app-content-secondary">
+        So the check is not skipped, and it is not asked live either. When you view your repository
+        list in a browser, SpecGuard records <strong class="text-app-content">what GitHub said about
+        you at that moment</strong> — which repositories you can see, and which of those you
+        administer. Registering over the API redeems that recording. It costs no extra GitHub
+        request and happens whether or not you were thinking about it.
+      </p>
+
+      <%= render UI::DefListComponent.new(rows: [
+            ["What captures it", "Viewing your repository list in a browser"],
+            ["How long it lasts", administration_guide_grant_max_age],
+            ["What happens past that", "Registration is refused until you look again"]
+          ]) %>
+
+      <p class="text-sm text-app-content-secondary">
+        The bound exists because a recording can go stale in a way a live check cannot: somebody who
+        has lost admin on a repository would otherwise keep a recording that says otherwise. After
+        <%= administration_guide_grant_max_age %> it grants nothing. Signing in and opening the list
+        again replaces it, and an account somebody uses regularly never meets the expiry at all.
+      </p>
+
+      <%= render UI::AlertComponent.new(tone: :neutral, title: "The refusal, so you can recognise it") do %>
+        <p class="mt-1">
+          A registration attempted without a current recording comes back as a <code>400</code>
+          saying the repository
+          <em><%= InstallationRepositories::MESSAGES.fetch(:not_granted) %></em>
+        </p>
+        <p class="mt-2">
+          That is this precondition and nothing else — the key is fine, the repository name is fine.
+          Open your repository list in a browser and post the same request again. It is deliberately
+          a different sentence from the refusals that mean GitHub answered and the answer was no.
+        </p>
+      <% end %>
+    </div>
+  <% end %>
+
+  <%= render UI::PanelComponent.new(title: "Registering a repository", id: "register") do %>
+    <div class="space-y-4">
+      <p class="text-sm text-app-content-secondary">
+        One request registers the repository <strong class="text-app-content">and mints its first CI
+        key</strong>, because a repository with no key is one nothing can deliver to. Both come back
+        in the same response.
+      </p>
+
+      <div class="space-y-2">
+        <p class="section-label text-app-content-secondary">The request</p>
+        <%= render UI::TableComponent.new(columns: ["Field", "Type", "Required", "What it is"]) do %>
+          <tr>
+            <td class="px-3 py-2 font-mono text-xs text-app-content">github_full_name</td>
+            <td class="px-3 py-2 text-app-content-secondary">string</td>
+            <td class="px-3 py-2 text-app-content-secondary">yes</td>
+            <td class="px-3 py-2 text-app-content-secondary">
+              <code>org/repo</code>, exactly as GitHub spells it. Matched case-insensitively.
+              Anything that is not two segments is refused.
+            </td>
+          </tr>
+        <% end %>
+      </div>
+
+      <%# The fixture. `id` on the WRAPPER rather than on the <code> element, for the reason its
+          sibling on the integration guide gives: the Copy button is a sibling inside it, and the
+          verification spec wants the block rather than the button.
+
+          The id wrapper holds the fixture ALONE — the label and the caption are siblings outside
+          it, not children. That is deliberate and it is a correction of the sibling's shape rather
+          than a copy of it: the spec finds the payload as `#<id> code`, and prose sitting inside
+          the wrapper is free to contain a <code> tag of its own, which turns that find into an
+          ambiguous match. The caption below does exactly that. Keeping the wrapper down to the
+          copyable block means the fixture stays unambiguous however the surrounding prose is
+          edited. %>
+      <div class="space-y-2">
+        <p class="section-label text-app-content-secondary">A complete, accepted request body</p>
+        <div data-controller="copy-text" id="<%= AdministrationGuideHelper::EXAMPLE_REQUEST_ELEMENT_ID %>">
+          <%= render UI::CopyableCodeComponent.new(multiline: true) do %><%= administration_guide_example_request %><% end %>
+        </div>
+        <p class="text-xs text-app-muted">
+          Top-level, not nested under a <code>repository</code> key — this is a JSON API driven by
+          an agent, not a Rails form. This exact document is posted to the live endpoint by
+          SpecGuard's own test suite, so it is the contract rather than an illustration of it.
+        </p>
+      </div>
+
+      <div class="space-y-2" data-controller="copy-text">
+        <p class="section-label text-app-content-secondary">Posting it</p>
+        <%= render UI::CopyableCodeComponent.new(multiline: true) do %><%= administration_guide_register_curl_snippet(endpoint) %><% end %>
+      </div>
+
+      <div class="space-y-2">
+        <p class="section-label text-app-content-secondary">What comes back</p>
+        <%= render UI::TableComponent.new(columns: ["Status", "Meaning"]) do %>
+          <tr>
+            <td class="px-3 py-2 font-mono text-xs text-app-content">201</td>
+            <td class="px-3 py-2 text-app-content-secondary">
+              Registered. The body carries a <code>repository</code> block and an
+              <code>api_key</code> block.
+            </td>
+          </tr>
+          <tr>
+            <td class="px-3 py-2 font-mono text-xs text-app-content">400</td>
+            <td class="px-3 py-2 text-app-content-secondary">
+              Refused, with the reason in <code>message</code>. One response for every cause: no
+              current recording of your GitHub permissions, GitHub does not list you as an
+              administrator, the App is not installed on it, the name is not
+              <code>org/repo</code>, or it is already registered. Read the sentence — each names its
+              own fix.
+            </td>
+          </tr>
+          <tr>
+            <td class="px-3 py-2 font-mono text-xs text-app-content">401</td>
+            <td class="px-3 py-2 text-app-content-secondary">
+              The credential is missing, revoked, or is a <code>sgk_</code> repository key rather
+              than a <code>sgu_</code> personal one.
+            </td>
+          </tr>
+        <% end %>
+      </div>
+
+      <div class="space-y-2" data-controller="copy-text">
+        <p class="section-label text-app-content-secondary">The 201 body</p>
+        <%= render UI::CopyableCodeComponent.new(multiline: true) do %><%= administration_guide_example_response %><% end %>
+        <p class="text-xs text-app-muted">
+          The values are illustrative — an id, a timestamp and a token do not exist before the
+          request is made. The field names are the contract.
+        </p>
+      </div>
+
+      <%= render UI::AlertComponent.new(tone: :warning, title: "api_key.token is the only copy that will ever exist") do %>
+        <p class="mt-1">
+          That value appears in this response and nowhere else, ever. Nothing stores it — SpecGuard
+          keeps a digest — and no endpoint can re-serve it. An agent that registers a repository and
+          discards the response has minted a credential it cannot recover and cannot look up; the
+          only way back is to mint a replacement on the repository's page in a browser.
+        </p>
+        <p class="mt-2">
+          Write it straight into wherever CI reads its secrets, in the same run that made the
+          request. The <code>hint</code> beside it is a display fragment for recognising the key
+          later in a list — it is not the credential and cannot be used as one.
+        </p>
+      <% end %>
+
+      <p class="text-sm text-app-content-secondary">
+        That token is a repository CI key, and wiring it up is the other guide's subject: see the
+        <%= link_to "integration guide", integration_guide_path, class: "text-app-cta hover:underline" %>
+        for the reporter, the environment variables and the wire contract for posting runs.
+      </p>
+    </div>
+  <% end %>
+
+  <%= render UI::PanelComponent.new(title: "Listing what you can open", id: "list") do %>
+    <div class="space-y-4">
+      <p class="text-sm text-app-content-secondary">
+        Everything you own, plus everything shared with you through a membership. A repository you
+        neither own nor are a member of never enters this response.
+      </p>
+
+      <div class="space-y-2" data-controller="copy-text">
+        <%= render UI::CopyableCodeComponent.new(multiline: true) do %><%= administration_guide_list_curl_snippet(endpoint) %><% end %>
+      </div>
+
+      <div class="space-y-2">
+        <p class="section-label text-app-content-secondary">What each entry carries</p>
+        <%= render UI::TableComponent.new(columns: ["Field", "What it is"]) do %>
+          <tr>
+            <td class="px-3 py-2 font-mono text-xs text-app-content">id, full_name, name, registered_at</td>
+            <td class="px-3 py-2 text-app-content-secondary">
+              The same four fields, under the same names, that every other repository block on the
+              API serves.
+            </td>
+          </tr>
+          <tr>
+            <td class="px-3 py-2 font-mono text-xs text-app-content">role</td>
+            <td class="px-3 py-2 text-app-content-secondary">
+              <code>owner</code> or <code>member</code>. The list mixes both and nothing else
+              distinguishes them.
+            </td>
+          </tr>
+          <tr>
+            <td class="px-3 py-2 font-mono text-xs text-app-content">delivery_health</td>
+            <td class="px-3 py-2 text-app-content-secondary">
+              <code>refusing</code> and <code>last_rejection_at</code> — whether this repository's
+              CI deliveries are currently being thrown away. Served on every entry, refused and
+              clean alike: <code>refusing: false</code> is a finding, not an absence.
+            </td>
+          </tr>
+        <% end %>
+      </div>
+
+      <p class="text-sm text-app-content-secondary">
+        Ordered by <code>full_name</code>, which is stable enough to diff two readings against each
+        other. Nothing here promises an ordering by id.
+      </p>
+    </div>
+  <% end %>
+
+  <%= render UI::PanelComponent.new(title: "What this key cannot do yet", id: "limits") do %>
+    <div class="space-y-4">
+      <p class="text-sm text-app-content-secondary">
+        Stated so you do not go looking. These are gestures the browser has and the API does not,
+        today:
+      </p>
+      <ul class="list-disc space-y-1 pl-5 text-sm text-app-content-secondary">
+        <li>Minting or revoking a repository's CI key — the first key arrives with the
+            registration, and any further one is a browser gesture.</li>
+        <li>Minting or revoking personal <code>sgu_</code> keys.</li>
+        <li>Un-registering a repository, or changing who it is shared with.</li>
+      </ul>
+      <p class="text-sm text-app-content-secondary">
+        Everything on this page is something the API does now. Where you need one of the above,
+        <%= link_to "your account page", account_path, class: "text-app-cta hover:underline" %>
+        and the repository's own page are where they live.
+      </p>
+    </div>
+  <% end %>
+<% end %>
