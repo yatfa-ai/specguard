@@ -173,6 +173,25 @@ RSpec.describe "The public integration guide", type: :request do
                       "the guide documents annotated_ratio without its null case"
     end
 
+    # The mirror at `/schemas/open-test-intent.v1.json` exists for exactly one reader — the one on
+    # SpecGuard's own documentation who wants the contract as a file rather than as HTML — and it
+    # shipped with no page linking it, so the only way to reach it was to already know the URL. The
+    # assertion is on the ANCHOR's href, not on the text: a sentence naming the path would read the
+    # same to a human and still leave a non-Ruby adopter scraping JSON out of rendered markup.
+    it "offers the schema as a downloadable document, not only as reproduced HTML" do
+      page = Capybara.string(response.body)
+
+      expect(page).to have_css("a[href='#{open_test_intent_schema_path}']"),
+                      "the guide no longer links the schema mirror at " \
+                      "#{open_test_intent_schema_path}; a reader wanting the machine-readable " \
+                      "contract is back to scraping it out of this HTML"
+
+      anchor_text = page.first("a[href='#{open_test_intent_schema_path}']").text.strip
+
+      expect(anchor_text).not_to be_empty,
+                                "the schema link renders with no text for a reader to click"
+    end
+
     # Every field of the envelope and of a spec entry, so a reader never has to open server source.
     # Asserted as a set because the failure this guards against is a field going missing during an
     # edit, which no single-field assertion would catch.
