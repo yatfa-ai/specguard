@@ -1,0 +1,58 @@
+<%# The "Example" cell's definition-site link, shared by the three panels that print an example's
+    own coordinate: "Unannotated examples", "Slowest tests" and "Examples in this spec file".
+
+    ONE partial rather than three copies. The three carried this block byte-identical — the residue
+    of SPGD-695, which propagated one convention into three panels by hand. The cost of that is
+    already on the page: when "Unstable test runs" later needed the same cell it hand-wrote a fourth
+    variant. A convention copied is a convention that drifts, and this one has a specific way of
+    drifting badly — the class string, the `rel`, and above all WHICH of the two branches carries
+    the link are decisions the panels must not answer differently.
+
+    A PARTIAL AND NOT A HELPER, deliberately. `RepositoriesHelper` states the rule this would break:
+    its readers "return a plain String and not `html_safe` markup, so escaping is ERB's". Markup
+    belongs in a view; the helper file has no `link_to`/`tag.`/`safe_join` in it and this change
+    does not introduce the first one.
+
+    `observation` is the ONLY local, and that is load-bearing rather than terse. `@repository` and
+    `@latest_test_run` are read as ivars — they are already in scope at all three call sites, both
+    loaded long before any of these partials render. Passing a `repository:` local instead would
+    invite a caller to re-resolve it per row, which is exactly what the two `count_queries` budget
+    examples ("costs the same number of queries for a hundred linked rows as for three", and its
+    ten-row sibling) exist to catch. A partial render itself issues no queries, and
+    `#github_blob_url` is string composition that asks GitHub nothing, so the per-row cost of this
+    cell stays zero.
+
+    WHICH LINE CARRIES THE LINK is the branch below. `SpecObservation#label` falls back to the
+    definition site for a nameless row, so on that branch the coordinate IS the row's whole
+    identity and wears the link alone — rendering the location line underneath as well would make
+    it wear the same text twice. A named row shows the name plainly and the coordinate beneath it
+    as the link. Either way the coordinate is the link, and exactly one of them appears.
+
+    `#location_label` is `file_path` + `line_number` — the DEFINITION site, never `spec_file_path`,
+    which for a shared example group would pair two halves from different files.
+
+    Pinned against `@latest_test_run.commit_sha`: the sha of the run the page is anchored to, so the
+    link lands on the code as it was when it ran. That is the shared rule here and NOT a universal —
+    "Unstable test runs" is run-by-run and pins each row to its own `row.commit_sha`, which is why
+    it is not a caller of this partial.
+
+    NEW TAB: the reader is mid-worklist, and losing a list narrowed by two asks to follow one link
+    would make the panel worse to use the more of it you work through. `rel` is written out rather
+    than left to the browsers that imply it. %>
+<% definition_site_url = @repository.github_blob_url(observation.file_path,
+                                                     observation.line_number,
+                                                     @latest_test_run.commit_sha) %>
+<% if observation.name.present? %>
+  <%= observation.label %>
+  <span class="block font-mono text-xs text-app-muted">
+    <%= link_to observation.location_label, definition_site_url,
+                class: "underline underline-offset-2 decoration-app-border-light " \
+                       "text-app-content hover:decoration-app-content",
+                target: "_blank", rel: "noopener noreferrer" %>
+  </span>
+<% else %>
+  <%= link_to observation.label, definition_site_url,
+              class: "underline underline-offset-2 decoration-app-border-light " \
+                     "text-app-content hover:decoration-app-content",
+              target: "_blank", rel: "noopener noreferrer" %>
+<% end %>
