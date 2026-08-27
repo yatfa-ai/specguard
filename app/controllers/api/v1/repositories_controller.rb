@@ -817,6 +817,54 @@ class Api::V1::RepositoriesController < Api::BaseController
       rows: decomposable ? serialized_shard_rows(test_run) : nil,
       balanced_wall_clock_seconds: decomposable ? test_run.balanced_wall_clock_seconds : nil,
       wall_clock_excess_seconds: decomposable ? test_run.wall_clock_excess_seconds : nil,
+      # WHEN the three keys above come back — the one input to `#wall_clock_decomposable?` a client
+      # cannot reconstruct from anything else in this body.
+      #
+      # Two of that gate's three conditions are already derivable here: `multi_shard?` is
+      # `count > 1` and `!some_shard_untimed?` is `timed_count == count`. So a client reading
+      # `rows: null` beside those two can already conclude by elimination that delivery is still
+      # settling — WHICH condition failed was never the gap. The gap is WHEN to come back, and the
+      # moment is `#last_shard_arrived_at + SHARD_DELIVERY_SETTLING_PERIOD`: one term of it is a
+      # column served nowhere, and the other is a constant a client would have to hardcode.
+      # Both go out, so the moment is arithmetic over this body rather than a poll on a guess.
+      #
+      # This is the state EVERY sharded run passes through rather than an edge case:
+      # `Repository#latest_test_run` picks a run up the instant its FIRST shard lands, so
+      # `latest_run` renders half-delivered runs routinely. The Overview panel has said "we are
+      # still waiting" in English since SPGD-192 (`repositories/show.html.erb`, the
+      # `#wall_clock_decomposition_pending?` branch); this is the same fact as OPERANDS, on
+      # `serialized_history_row`'s rule that a machine-readable client cannot act on a sentence
+      # without parsing it. No verdict key and no prose: a client that wants "still settling" has
+      # the three conditions and can word it however it likes.
+      #
+      # PRESENT ON BOTH BRANCHES, valued, on this block's own null-not-absent contract — and here
+      # that is stronger than a convention. A key served only under `if decomposable` is invisible
+      # to every pin in `spec/requests/api/v1/repository_latest_run_spec.rb`, which is exactly how
+      # SPGD-234's three keys shipped named by nothing; a key served only while the gate is CLOSED
+      # would reintroduce the same invisibility from the other side. Serving it unconditionally
+      # also means a settled run says when it settled, which is a fact a reader wants after the
+      # decomposition opens and not only before.
+      #
+      # `iso8601`, and `null` — never `0`, never an epoch — for a run with no shards at all, which
+      # `TestRun#last_shard_arrived_at` documents as its nil case. (`serialized_shards` returns
+      # `nil` wholesale below `multi_shard?`, so that nil cannot reach a client through this
+      # endpoint today; the safe navigation is what keeps that true if the gate above ever widens.)
+      #
+      # ZERO ADDED QUERIES. `#last_shard_arrived_at` is `shard_totals[3]`, the `MAX(updated_at)`
+      # that already rides along in the single memoized `pick` `count` and `timed_count` above have
+      # just taken. That is also why this slice is `latest_run`-only: `ShardCountPreloading` primes
+      # `shard_totals[0..2]` and says the shards' `MAX(updated_at)` "is still one `pick` per row",
+      # so serving this on the 30-row `history` block is a real N+1 and a different slice.
+      last_shard_arrived_at: test_run.last_shard_arrived_at&.iso8601,
+      # The other term of that sum, PUBLISHED FROM THE CONSTANT and never typed as a literal, so
+      # the panel and this endpoint cannot drift apart about how long settling takes. Seconds, an
+      # integer, on the rule every other duration on this endpoint follows — a client adds it to
+      # the timestamp above and gets the moment the decomposition becomes available.
+      #
+      # A configuration fact rather than a measurement, so it is served whether or not this run has
+      # a `last_shard_arrived_at` to add it to: a client that reads the two keys together needs
+      # both to be present to know it may compute at all.
+      settling_period_seconds: TestRun::SHARD_DELIVERY_SETTLING_PERIOD.to_i,
       # The denominator of every duration above, per shard — the block's own STRUCTURED COUNTS,
       # NOT PROSE rule taken one level down. `machine_seconds` says what the run cost and
       # `coverage` says over how many shards; neither says whether the expensive shard was
