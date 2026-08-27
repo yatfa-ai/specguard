@@ -30,10 +30,21 @@
     and the worked payload is deliberately a PYTHON suite — an example whose every path ended in
     `_spec.rb` would teach by illustration the opposite of what the prose says.
 
-    WHAT IT DOES NOT DO. It promises no capability the API does not currently have. There are
-    exactly two routes under `api/v1` (`get "repository"`, `post "ingest"`), and this page names
-    those two and nothing else. The JSON Schema is reproduced here rather than linked at its `$id`,
-    because that `$id` names a host this app is not served from and routing it is separate work.
+    WHAT IT DOES NOT DO. It promises no capability the API does not currently have. Its SCOPE is
+    the CI-facing `sgk_` surface — `get "repository"` and `post "ingest"`, the two routes a
+    repository's own key answers — and this page names those and nothing else. The `sgu_`
+    administration surface is a different credential answering different routes, and it is
+    documented at its own address (`/docs/administer`, SPGD-762).
+
+    Stated as a SCOPE rather than as a COUNT deliberately. This paragraph used to read "there are
+    exactly two routes under `api/v1`", which was true when written and stopped being true the
+    moment `get "repositories"` and `post "repositories"` landed beside them — a load-bearing claim
+    quietly going false inside the very file whose premise is that where this page and the server
+    disagree, THIS PAGE IS WRONG. A boundary drawn by credential survives the next route; one drawn
+    by counting the routes has to be re-counted by whoever adds the fifth, and will not be.
+
+    The JSON Schema is reproduced here rather than linked at its `$id`, because that `$id` names a
+    host this app is not served from and routing it is separate work.
 %>
 
 <% endpoint = integration_guide_endpoint %>
