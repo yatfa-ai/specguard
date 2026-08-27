@@ -3,8 +3,15 @@
 **Executed:** 2026-08-19, for `yatfa-ai/specguard`.
 **Result:** repository `#4`, API key `#4`, verified with a live `HTTP 200` against the public API.
 
-This runbook exists because the product has no way for an agent to do this. See **SPGD-750** — when
-that lands, sections 3 and 4 below are replaced by two API calls and this file becomes history.
+> ⚠️ **Superseded by `POST /api/v1/repositories`**, shipped as **SPGD-756** (`772fb4f`, merged
+> 2026-08-19) — the day before this runbook itself merged. That endpoint is the supported way for
+> an agent to register a repository, and unlike sections 3 and 4 below it **keeps** the GitHub
+> ownership check. Reach for it first; §7 gives its contract, its precondition, and the two places
+> it diverges from what this runbook asked of it. Sections 3 and 4 are the **fallback** for when
+> that path is unavailable — see §2 for exactly when that is.
+
+This file is kept because it is a dated record of a procedure that actually ran, which is what
+`.agents/` is for. Read §3 and §4 as history plus a fallback, not as the current path.
 
 ---
 
@@ -30,14 +37,24 @@ replaced by revoking the key and minting another, not by looking it up.
 A person registers a repository in the web UI at `/repositories/new`. The picker lists their GitHub
 repositories and the server verifies ownership with GitHub before saving.
 
-**Prefer that path whenever a browser session is available.** It performs a real ownership check;
-this runbook does not.
+An agent or a script registers a repository with `POST /api/v1/repositories`, authenticated by a
+user-scoped `sgu_` key. It has no browser session and therefore no GitHub token of its own, so it
+does not ask GitHub live; it redeems the **registration grant** recorded the last time that person
+viewed their repository list in a browser. That is the API path's precondition, not a gap in it —
+§7 states it in full.
 
-Use this runbook when:
+**Prefer one of those two paths.** Both perform a real ownership check; this runbook does not.
 
-- the caller is an agent or a script, which has no session and therefore no GitHub token — the
-  whole reason SPGD-750 exists; or
-- the registration must be scripted or replayed.
+Fall back to this runbook only when neither is available — that is, when all of the following hold:
+
+- no browser session, so `/repositories/new` is out of reach;
+- no usable `sgu_` key, or the person has no grant on file / their grant has aged out, so
+  `POST /api/v1/repositories` refuses; and
+- the registration still must be scripted or replayed.
+
+If the API path refuses for a reason a person can clear — signing in and opening their repository
+list refreshes the grant — clear it and use the API path. That is a supported registration; this
+one is not.
 
 > ⚠️ **This procedure bypasses the GitHub ownership check.** It writes the row that the check would
 > have gated. Only run it for a repository the target user genuinely administers and that appears in
@@ -207,25 +224,45 @@ this runbook was written against the same world they are in.
 > installation. This does not affect the runbook — it writes rows directly — but any reasoning about
 > the *verification* code must be done against the deployed tag, not against `main`.
 
-## 7. What replaces this
+## 7. What replaced this
 
-SPGD-750 (*A user-scoped API key: let an agent administer SpecGuard on a person's behalf*). Sections
-3 and 4 collapse into:
+`POST /api/v1/repositories`, shipped as **SPGD-756** (`772fb4f`, merged 2026-08-19) under the
+**SPGD-750** roadmap. Sections 3 and 4 collapse into:
 
 ```
 POST /api/v1/repositories   { "github_full_name": "yatfa-ai/specguard" }
   → 201, body carries the repository and its first ingest key, revealed once
 ```
 
-Two properties this runbook has that the API must keep:
+Every clause of that is true of the shipped endpoint today: the body is top-level rather than
+nested under a `repository` key, the success status is `201`, and the first ingest key is minted in
+the same transaction and returned in that response.
 
-1. **Idempotence** — registering an already-registered repository is not an error and does not mint
-   a second key.
-2. **The ownership check comes back.** The API path must satisfy the GitHub conjunction (repository
-   in the caller's App installation **and** `permissions.admin`) that this runbook bypasses.
-   Convenience is not a reason to ship the bypass.
+**Precondition.** The endpoint authenticates a `sgu_` user key, and the ownership check it runs is
+not a live call to GitHub — it redeems the `GithubRegistrationGrant` recorded when that person last
+viewed their repository list in a browser. A grant older than `GithubRegistrationGrant::MAX_AGE`
+(see the constant and the reasoning beside it in `app/models/github_registration_grant.rb`) is not
+redeemable, and a person who has never opened SpecGuard in a browser has no grant at all. Both are
+ordinary states with an ordinary fix — sign in and open the repository list — not reasons this
+runbook must survive.
 
-And one this runbook does *not* have that the API should: **the four distinct refusal states**
-(`:not_installed`, `:not_in_installation`, `:not_administered`, `:not_authorized`) reaching the
-caller as separate answers, since they are the difference between "install the App", "ask an admin"
-and "re-authorise".
+Two properties this runbook has that it asked the API to keep, and how they actually shipped:
+
+1. **Idempotence** — this runbook's find-or-create means re-registering an already-registered
+   repository is not an error and does not mint a second key. **The endpoint diverges.** A
+   duplicate is refused with `400` and `has already been taken`, and there is no API path to mint a
+   key over an existing repository, so a caller that loses its first key cannot recover through
+   this endpoint. Recorded, not retracted: the property is still the one worth having.
+2. **The ownership check comes back.** **Kept.** The endpoint verifies against the caller's grant
+   before saving, so the GitHub conjunction this runbook bypasses is enforced on the supported
+   path. Convenience is not a reason to ship the bypass.
+
+And one this runbook does *not* have that it asked the API for: **the four distinct refusal
+states** (`:not_installed`, `:not_in_installation`, `:not_administered`, `:not_authorized`)
+reaching the caller as separate answers, since they are the difference between "install the App",
+"ask an admin" and "re-authorise". **The endpoint diverges, deliberately.** All refusals — the
+record's own validation failures and the ownership gate alike — collapse into a single `400`
+response path, on the stated reasoning that a refusal is a refusal and the response should not
+branch on which produced it. The messages still carry the detail; the *status* does not
+distinguish. Recorded here because the difference between those answers is a real difference for
+the caller, whatever the response shape does with it.

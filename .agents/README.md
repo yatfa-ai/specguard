@@ -21,6 +21,6 @@ if a step is in here, it ran.
 
 ## Index
 
-| Runbook | What it does | Replaced by |
+| Runbook | What it does | Status |
 | --- | --- | --- |
-| [`add-repository.md`](add-repository.md) | Registers a GitHub repository on the platform and issues its ingest key | SPGD-750 |
+| [`add-repository.md`](add-repository.md) | Registers a GitHub repository on the platform and issues its ingest key | Superseded 2026-08-19 by `POST /api/v1/repositories` (SPGD-756). Kept as a dated record and as the fallback when that path is unavailable — see its §2 and §7 |
