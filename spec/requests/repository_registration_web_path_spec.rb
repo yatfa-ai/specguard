@@ -121,4 +121,35 @@ RSpec.describe "Registering in a browser, after the gate moved", type: :request 
       expect(response.body).to include(InstallationRepositories::MESSAGES.fetch(:not_installed))
     end
   end
+
+  # SPGD-775 criterion 2 — the same refusal, arrived at the other way.
+  #
+  # "Refuses an already-registered name" above is the SEQUENTIAL path: the uniqueness validation's
+  # SELECT sees the row and answers before anything is written. When the row appears AFTER that
+  # SELECT — a double-submitted form, a re-post on a slow connection — the validation passes and the
+  # unique index refuses instead, as `ActiveRecord::RecordNotUnique`. Nothing caught that, and with
+  # no `rescue_from` anywhere in this app it reached the 500 handler: a crash for the exact
+  # condition the sequential path answers with a sentence.
+  #
+  # The point of the assertion is that the person sees the SAME form and the SAME words either way,
+  # so this deliberately re-states the sequential example's expectations rather than settling for
+  # "not a 500". The race is simulated by silencing the uniqueness validation, which is exactly what
+  # it does on its own when it cannot see the winning row yet (spec/support/uniqueness_race.rb) — a
+  # spec that merely posted the same name twice would prove nothing, because the validation catches
+  # that unaided.
+  describe "losing the uniqueness race to a concurrent registration" do
+    it "re-renders the form with the duplicate message instead of raising" do
+      create_repository(user: create_user(github_uid: "9999", github_handle: "someone-else"),
+                        github_full_name: "acme/taken")
+      stub_github(repos: [github_repo("acme/taken")])
+      allow(uniqueness_validator(Repository)).to receive(:validate_each)
+
+      expect {
+        post repositories_path, params: { repository: { github_full_name: "acme/taken" } }
+      }.not_to change(Repository, :count)
+
+      expect(response).to have_http_status(:unprocessable_content)
+      expect(response.body).to include("has already been taken")
+    end
+  end
 end
