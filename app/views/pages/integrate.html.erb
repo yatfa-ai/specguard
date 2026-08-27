@@ -32,8 +32,11 @@
 
     WHAT IT DOES NOT DO. It promises no capability the API does not currently have. There are
     exactly two routes under `api/v1` (`get "repository"`, `post "ingest"`), and this page names
-    those two and nothing else. The JSON Schema is reproduced here rather than linked at its `$id`,
-    because that `$id` names a host this app is not served from and routing it is separate work.
+    those two and nothing else. The JSON Schema is reproduced here in full AND offered as a
+    download: `$id` names the canonical document in the vendor-neutral repository, which this app
+    is not served from, so the page links SpecGuard's own byte-identical mirror at
+    `open_test_intent_schema_path` — a reader who wants to feed the contract to a validator can
+    fetch it from the domain they are already on rather than scraping it out of this HTML.
 %>
 
 <% endpoint = integration_guide_endpoint %>
@@ -260,6 +263,18 @@
         <strong class="text-app-content">OpenTestIntent v1</strong> protocol, which is
         vendor-neutral and language-agnostic: nothing in it assumes RSpec, Minitest or a particular
         language, and the comment marker is whatever your language already uses.
+      </p>
+
+      <%# The machine-readable half of this panel. Everything below describes the schema in prose and
+          in tables, which is what a human reads; a reader writing their own reporter wants the
+          document itself, to feed a JSON Schema validator. This links SpecGuard's byte-identical
+          mirror rather than the canonical `$id`, so the fetch stays on the domain the reader is
+          already on — that is the entire reason the mirror exists. %>
+      <p class="text-xs text-app-muted">
+        The full schema is reproduced in the tables below, and is also downloadable as
+        <a href="<%= open_test_intent_schema_path %>" class="underline">the machine-readable
+        OpenTestIntent v1 JSON Schema</a> — served as <code>application/schema+json</code>, with no
+        API key, byte-identical to the canonical document its <code>$id</code> names.
       </p>
 
       <div class="space-y-2">
