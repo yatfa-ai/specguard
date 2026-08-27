@@ -102,10 +102,14 @@
     <% if github_listing_incomplete? %>
       <%# Rendered ABOVE the picker rather than instead of it: what is listed was read from GitHub
           moments ago and is registerable, so withholding the whole control would be refusing a
-          working choice over an unrelated installation's failure. %>
+          working choice over an unrelated installation's failure.
+
+          The wording — including WHICH accounts are missing — comes from
+          `unreadable_accounts_sentence` rather than from this template, so this page and the
+          organization chooser cannot word the same fact differently. `missing:` is the one thing
+          each of them contributes itself. %>
       <%= render UI::AlertComponent.new(tone: :warning, title: "This list may be incomplete", class: "mb-4") do %>
-        One of your GitHub App installations could not be read, so repositories connected through it
-        are missing from this list. Anything shown here can still be registered.
+        <%= unreadable_accounts_sentence(github_unread_accounts, missing: "Repositories") %>
       <% end %>
     <% end %>
     <%= form_with model: repository do |form| %>

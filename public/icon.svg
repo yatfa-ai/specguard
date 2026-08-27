@@ -1,3 +1,41 @@
-<svg width="512" height="512" xmlns="http://www.w3.org/2000/svg">
-  <circle cx="256" cy="256" r="256" fill="red"/>
+<!--
+  SpecGuard app icon / favicon.
+
+  The mark: a shield (Guard) whose interior knocks out three ascending bars (the suite metrics
+  SpecGuard exists to report). Geometry is tuned for the 16px tab favicon, not just the 512px
+  app icon — the bar width (7) and the shield scale (0.92) are the largest values at which the
+  three bars still resolve as three at 16x16 instead of merging into one blob. Changing either
+  without re-checking a 16px render will silently turn the favicon into a green smudge.
+
+  The bars are a MASK, not drawn shapes: knocked out, they read against the tile at any size and
+  never need a second fill colour kept in sync with the tile.
+-->
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 64 64"
+     role="img" aria-label="SpecGuard">
+  <defs>
+    <linearGradient id="sg-shield" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#4ade80"/>
+      <stop offset="1" stop-color="#16a34a"/>
+    </linearGradient>
+
+    <mask id="sg-bars" maskUnits="userSpaceOnUse" x="0" y="0" width="64" height="64">
+      <rect width="64" height="64" fill="#fff"/>
+      <g fill="none" stroke="#000" stroke-width="7" stroke-linecap="round">
+        <path d="M20.8 40 V33"/>
+        <path d="M32 40 V26"/>
+        <path d="M43.2 40 V19"/>
+      </g>
+    </mask>
+  </defs>
+
+  <!-- Self-contained dark tile: the favicon must hold its own contrast against both a light and
+       a dark browser chrome, so the mark is never drawn bare here. -->
+  <rect width="64" height="64" rx="14" fill="#0f172a"/>
+
+  <g transform="translate(32,32) scale(0.92) translate(-32,-32)">
+    <path d="M30.9 4.7 Q32 4.3 33.1 4.7 L52.8 11.6 Q54.4 12.1 54.4 13.8 V30.2
+             C54.4 43.4 45.6 53.6 33.1 59.3 Q32 59.8 30.9 59.3
+             C18.4 53.6 9.6 43.4 9.6 30.2 V13.8 Q9.6 12.1 11.2 11.6 Z"
+          fill="url(#sg-shield)" mask="url(#sg-bars)"/>
+  </g>
 </svg>

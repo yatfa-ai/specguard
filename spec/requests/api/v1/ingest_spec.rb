@@ -6,8 +6,11 @@ RSpec.describe "POST /api/v1/ingest", type: :request do
   let(:repository) { create_repository }
   let(:api_key) { repository.api_keys.create! }
 
-  def ingest(body, key: api_key, headers: {})
-    post "/api/v1/ingest",
+  # `path:` defaults to the canonical spelling, so every existing caller is unchanged. It is a
+  # parameter at all because the router recognises `/api/v1/ingest/` as the SAME action, and the
+  # boundary-refusal seam has to be pinned against that spelling too.
+  def ingest(body, key: api_key, headers: {}, path: "/api/v1/ingest")
+    post path,
          params: body.is_a?(String) ? body : body.to_json,
          headers: { "Content-Type" => "application/json" }
            .merge(key ? { "Authorization" => "Bearer #{key.raw_token}" } : {})
@@ -1073,8 +1076,13 @@ RSpec.describe "POST /api/v1/ingest", type: :request do
       ingest(Zlib.gzip(raw), key: key, headers: { "Content-Encoding" => "gzip" })
     end
 
-    def ingest_raw_gzip(bytes)
-      ingest(bytes, headers: { "Content-Encoding" => "gzip" })
+    # `key:` is forwarded rather than fixed, because who the credential resolves to is the whole
+    # subject of the attribution examples below — the same corrupt bytes have to be postable with a
+    # good key, no key, a bad one and a user key. `path:` is forwarded for the same reason one
+    # spelling down: the router recognises the trailing-slash form as the same action, so the same
+    # corrupt bytes have to be postable at both spellings.
+    def ingest_raw_gzip(bytes, key: api_key, path: "/api/v1/ingest")
+      ingest(bytes, key: key, headers: { "Content-Encoding" => "gzip" }, path: path)
     end
 
     it "accepts it with 202" do
@@ -1207,6 +1215,203 @@ RSpec.describe "POST /api/v1/ingest", type: :request do
 
       expect(response).to have_http_status(:unauthorized)
       expect(TestRun.count).to eq(0)
+    end
+
+    # The refusals decided ABOVE the controller, and the row each one now leaves behind.
+    #
+    # `Ingest::RejectionRecorder` is called from inside `IngestsController#create`, so the three
+    # families that never reach it — a corrupt gzip, an over-cap inflate, and a body that will not
+    # parse — used to store NOTHING. `RejectedIngests#refusing?` stayed false on the strength of an
+    # absent row and the panel rendered "No rejected deliveries", which was a positive claim and a
+    # false one. That is the design point rather than an edge: a gem gzipping against an
+    # installation older than `GzipRequestBody` 400s here on every run.
+    describe "the row a boundary refusal leaves behind" do
+      it "records the corrupt-gzip refusal against the repository whose token it carried" do
+        expect { ingest_raw_gzip("this is not gzip at all") }
+          .to change(IngestRejection, :count).by(1)
+
+        rejection = IngestRejection.sole
+        expect(rejection.repository).to eq(repository)
+        expect(rejection.details).to eq([GzipRequestBody::CORRUPT_MESSAGE])
+        expect(rejection.total_reasons_count).to eq(1)
+      end
+
+      # The spelling the router treats as identical and an exact string match did not.
+      #
+      # `routes.recognize_path` resolves `/api/v1/ingest`, `/api/v1/ingest/` AND `/api/v1/ingest//`
+      # to the same `ingests#create`, and all three really dispatch. A gem that builds its URL by
+      # joining a configured base to a path is exactly how a trailing slash arrives in production,
+      # so a seam that recorded only the canonical spelling would have re-created this ticket's own
+      # defect one grain over — a real delivery, really refused, storing nothing, with an empty
+      # panel as the only symptom.
+      #
+      # The DOUBLED spelling is pinned deliberately alongside the single one: `chomp("/")` strips
+      # only one trailing slash and passes the example above while still failing this one.
+      ["/api/v1/ingest/", "/api/v1/ingest//"].each do |spelling|
+        it "records a corrupt gzip POSTed to #{spelling}, which routes to the same action" do
+          expect { ingest_raw_gzip("this is not gzip at all", path: spelling) }
+            .to change(IngestRejection, :count).by(1)
+
+          rejection = IngestRejection.sole
+          expect(rejection.repository).to eq(repository)
+          expect(rejection.details).to eq([GzipRequestBody::CORRUPT_MESSAGE])
+        end
+      end
+
+      # The other half of the biconditional, and the reason the trailing-slash fix is a STRIP
+      # followed by equality rather than a `start_with?`. `/api/v1/ingest/extra` is not this
+      # endpoint — the router 404s it — so no row may be attributed to it. Without this, widening
+      # the gate to a prefix match would pass every example above and quietly start billing
+      # refusals to a repository for requests that never reached the ingest action.
+      it "records nothing for a path that merely starts with the ingest path" do
+        expect { ingest_raw_gzip("this is not gzip at all", path: "/api/v1/ingest/extra") }
+          .not_to change(IngestRejection, :count)
+      end
+
+      it "records an over-cap inflate as its own reason" do
+        stub_const("GzipRequestBody::MAX_INFLATED_BYTES", 1024)
+
+        expect { ingest_raw_gzip(Zlib.gzip("a" * (4 * 1024 * 1024))) }
+          .to change(IngestRejection, :count).by(1)
+
+        expect(IngestRejection.sole.details).to eq([GzipRequestBody::TOO_LARGE_MESSAGE])
+      end
+
+      # Valid gzip wrapping invalid JSON: inflates cleanly, then dies at the parser. A different
+      # middleware answers this one, so it is a genuinely separate limb rather than the same code
+      # reached twice.
+      it "records an unparseable body as its own reason" do
+        expect { ingest_gzipped("{ not json") }
+          .to change(IngestRejection, :count).by(1)
+
+        expect(IngestRejection.sole.details).to eq([JsonParseErrorResponder::MESSAGE])
+      end
+
+      # The parse-error limb is not gzip-specific and must record on a plain identity-encoded body
+      # too — which is the form every client that never compresses sends.
+      it "records an unparseable body that was never gzipped at all" do
+        expect { ingest("{ not json") }.to change(IngestRejection, :count).by(1)
+
+        expect(IngestRejection.sole.details).to eq([JsonParseErrorResponder::MESSAGE])
+      end
+
+      # The column the table was built to make legible: `CreateIngestRejections` names the design
+      # failure as a VERSION FLOOR, and without the gem's version on the row "every delivery is
+      # refused" and "every delivery from the OLD GEM is refused" are the same picture. This is the
+      # path that most needs it, since a version floor 400s here rather than at the controller.
+      it "stores the sending gem's user agent, which is what makes a version floor legible" do
+        ingest("this is not gzip at all",
+               headers: { "Content-Encoding" => "gzip", "User-Agent" => "specguard-rspec/0.1.0" })
+
+        expect(IngestRejection.sole.user_agent).to eq("specguard-rspec/0.1.0")
+      end
+
+      # The attribution rule, which this ticket fixes the ORDERING of without widening. A row is
+      # owned by a repository or it is not written — `repository_id` stays `null: false` and a
+      # nullable one would turn a per-repository panel into a global error log.
+      #
+      # Table-driven so the three ways to fail authentication are asserted on the same terms.
+      {
+        "no token at all" => -> { nil },
+        "a well-formed token that resolves nothing" => -> { instance_double(ApiKey, raw_token: "sgk_nope") },
+        "a valid user key for the other table" => -> { create_user_api_key }
+      }.each do |description, build_key|
+        it "writes no row for #{description}" do
+          expect { ingest_raw_gzip("this is not gzip at all", key: instance_exec(&build_key)) }
+            .not_to change(IngestRejection, :count)
+
+          expect(response).to have_http_status(:bad_request)
+        end
+      end
+
+      # The prefix gate, pinned by the claim it actually makes.
+      #
+      # ⚠️ The row-count example above does NOT cover this, and believing it did would be the whole
+      # mistake: a `sgu_` token writes no row whether or not the gate exists, because its digest is
+      # not in `api_keys` and the lookup returns nil on its own. Deleting the gate leaves that
+      # example green — measured, not assumed. So the gate cannot be pinned by its OUTCOME, only by
+      # its MECHANISM, which is what `Api::BaseController` states it as: "The prefix decides WHICH
+      # table before any of them is read — and, on a mismatch, that no table is read at all."
+      it "reads no table at all for a token belonging to the other credential" do
+        allow(ApiKey).to receive(:authenticate).and_call_original
+
+        ingest_raw_gzip("this is not gzip at all", key: create_user_api_key)
+
+        expect(ApiKey).not_to have_received(:authenticate)
+      end
+
+      # Criterion 4, and the reason it is asserted by COMPARISON rather than against copied
+      # literals: the recorded and unrecorded paths are posted in the same example and their
+      # answers compared to each other, so the two cannot drift apart silently. The no-key request
+      # takes the identical 400 limb and writes no row, which makes it the exact control for "did
+      # bookkeeping edit the client's answer".
+      it "answers the same bytes whether or not the refusal was recorded" do
+        ingest_raw_gzip("this is not gzip at all", key: nil)
+        unrecorded = [response.status, response.body, response.headers["content-length"]]
+        expect(IngestRejection.count).to eq(0)
+
+        ingest_raw_gzip("this is not gzip at all")
+        recorded = [response.status, response.body, response.headers["content-length"]]
+
+        expect(IngestRejection.count).to eq(1)
+        expect(recorded).to eq(unrecorded)
+      end
+
+      # `Ingest::RejectionRecorder`'s standing decision, which has to hold at this layer too: a
+      # write that fails must not turn a clean 400 into a 500, and must not fail silently either.
+      # Provoked rather than asserted in the abstract, exactly as the controller path's own spec
+      # does it.
+      describe "when the rejection cannot be written" do
+        before do
+          allow(IngestRejection).to receive(:create!).and_raise(ActiveRecord::StatementInvalid, "boom")
+        end
+
+        it "still answers the client the 400 it had already determined" do
+          ingest_raw_gzip("this is not gzip at all")
+
+          expect(response).to have_http_status(:bad_request)
+          expect(response.parsed_body["message"]).to eq(GzipRequestBody::CORRUPT_MESSAGE)
+        end
+
+        it "reports the failure rather than swallowing it" do
+          expect(Rails.error).to receive(:report)
+            .with(instance_of(ActiveRecord::StatementInvalid), hash_including(handled: true))
+
+          ingest_raw_gzip("this is not gzip at all")
+
+          expect(response).to have_http_status(:bad_request)
+        end
+      end
+
+      # The resolution half is this layer's OWN failure mode — the controller path never had it,
+      # because it is handed a `current_repository` that is already resolved. If the lookup that
+      # decides who to bill the refusal to raises, the client must still get its 400.
+      it "does not let a failing credential lookup turn the 400 into a 500" do
+        allow(ApiKey).to receive(:authenticate).and_raise(ActiveRecord::StatementInvalid, "boom")
+        allow(Rails.error).to receive(:report)
+
+        ingest_raw_gzip("this is not gzip at all")
+
+        expect(response).to have_http_status(:bad_request)
+        expect(response.parsed_body["message"]).to eq(GzipRequestBody::CORRUPT_MESSAGE)
+        expect(Rails.error).to have_received(:report)
+          .with(instance_of(ActiveRecord::StatementInvalid), hash_including(handled: true))
+      end
+
+      # An `IngestRejection` means a DELIVERY that authenticated and was then refused for its
+      # payload, which is narrower than the `/api/` scope both middlewares carry. `/api/v1/repository`
+      # takes the same `sgk_` credential, so a corrupt body sent there resolves a perfectly good
+      # repository — and recording it would claim a delivery was refused when none was attempted,
+      # replacing the false "No rejected deliveries" with a false row instead.
+      it "writes no row for a boundary refusal on a non-ingest endpoint" do
+        expect do
+          post "/api/v1/repository",
+               params: "this is not gzip at all",
+               headers: { "Content-Type" => "application/json",
+                          "Content-Encoding" => "gzip",
+                          "Authorization" => "Bearer #{api_key.raw_token}" }
+        end.not_to change(IngestRejection, :count)
+      end
     end
   end
 

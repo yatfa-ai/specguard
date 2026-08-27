@@ -1,4 +1,52 @@
 module ApplicationHelper
+  # Filename for the reveal-once token download. Named after the key, so somebody who mints two of
+  # them in a sitting can tell the files apart; `parameterize` is also what stops a user-controlled
+  # key name from reaching the browser's `download` attribute as a path.
+  #
+  # Here rather than in `RepositoriesHelper`, where it started, because there are now TWO reveal
+  # panels rendering it — a repository's `sgk_` key on repositories#show, and a person's `sgu_` key
+  # on accounts#show — and neither surface owns the rule. Nothing about it was ever repository-
+  # shaped.
+  def revealed_token_filename(name)
+    ["specguard", name.to_s.parameterize.presence, "api-key"].compact.join("-") + ".txt"
+  end
+
+  # What a repository whose deliveries are being REFUSED is called, in the one place both surfaces
+  # that say it read from.
+  #
+  # Two surfaces state this now: the connection indicator on repositories#show, and the card on the
+  # repositories grid. They put it in different containers — a header row and a card badge row — so
+  # what is shared is the WORDING and not the markup, which is exactly the split
+  # `test_run_delivery_note` below already makes for its own two callers and the reason it returns a
+  # plain String rather than a `tag`.
+  #
+  # A seam and not the same literal typed twice, for the reason `test_run_cost_rows` states in full:
+  # two copies are agreement that merely HOLDS TODAY. Rename this on the indicator, update the
+  # indicator's own specs, and the grid keeps rendering the old word against green literals of its
+  # own — one repository's refusal worded two ways on the page and the page it links to, with
+  # nothing in the suite able to see it. The `:error` tone is deliberately NOT here: it is markup,
+  # each caller picks its own badge, and both pick error for the reason the indicator gives — work
+  # is being destroyed, not merely absent.
+  def refused_deliveries_label = "Deliveries refused"
+
+  # The sentence under that label: WHEN the last refusal landed, and the one thing a reader who has
+  # just seen a green "Connected" needs told — that the credential is fine and the payload was not.
+  #
+  # Shared for the same reason the label above is, and split from it because the two callers place
+  # them differently: the indicator renders both, and the grid's card renders them in two separate
+  # containers. `show` appends its own "See Rejected deliveries" link after this, which is markup
+  # pointing at a panel that exists on that page only — the grid links to the page, not to an anchor
+  # inside it, so the pointer stays at the caller rather than becoming a fact this seam asserts
+  # about every surface.
+  #
+  # Takes the timestamp rather than a `RejectedIngests`, so the caller with no rows loaded — the
+  # grid, which reads one grouped `MAX(occurred_at)` for the whole page — can render it without
+  # constructing an object it has no other use for.
+  def refused_deliveries_note(last_rejection_at)
+    "Last refused #{time_ago_in_words(last_rejection_at)} ago — " \
+      "the key works, the payload did not."
+  end
+
   # The one rendering of a run's wall clock. `TestRun#duration_label` settles the wording; this
   # settles the treatment that goes with it, so the Overview panel's header figure and the
   # Recent-runs table cell cannot drift into two different renderings of the same column.

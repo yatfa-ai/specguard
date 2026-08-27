@@ -3,7 +3,7 @@
 <%= render UI::PageComponent.new do %>
   <%= render UI::BreadcrumbComponent.new(items: [
         { label: "Repositories", href: repositories_path },
-        { label: "Register an organization", href: bulk_repositories_path },
+        { label: "Register several repositories", href: bulk_repositories_path },
         { label: "Summary" }
       ]) %>
 
@@ -32,7 +32,18 @@
             title: "Connect your GitHub repositories",
             description: github_installation_disclosure
           ) do %>
-        <%= github_install_button return_to: bulk_repositories_path %>
+        <%# Carries the batch, so the trip that FIXES the refusal costs no more than the retry
+            button beside it. Wider than what "Try these again" carries by exactly the
+            `not_installed` names: installing the App is the trip that makes those registerable,
+            so a list omitting them would carry back everything except what the button just fixed.
+            `bulk_picker_return_to` decides how it is carried; see it. It carries a HANDLE to a
+            selection held server-side rather than the names themselves, which is what makes the
+            sentence above true at every size in 1..MAX_BATCH rather than at the first 28. %>
+        <%= github_install_button return_to: bulk_picker_return_to(
+              organization: submitted_organization,
+              full_names: @result.install_retryable_names,
+              user: current_user
+            ) %>
       <% end %>
     <% end %>
   <% elsif github_authorization_needed? %>
@@ -46,7 +57,98 @@
                          "repositories you administer. Reconnecting takes you to GitHub and " \
                          "straight back, and you can submit this batch again."
           ) do %>
-        <%= github_authorize_button return_to: bulk_repositories_path %>
+        <%# Carries the batch, exactly as "Try these again" below does and for the same reason —
+            this is the button that actually RESOLVES a dead credential, and it used to be the one
+            that discarded the selection. It carries `retryable_names` unchanged: `not_authorized`
+            is itself a retryable skip, and `rate_limited` / `unavailable` are names a submission
+            after the round trip could equally land.
+
+            The sentence above says "you can submit this batch again", and it is unconditioned
+            because `bulk_picker_return_to` now carries a HANDLE rather than the names: the whole
+            path is about 51 bytes at MAX_BATCH as at one name, so there is no size at which the
+            batch fails to survive the trip and no size at which that sentence becomes false. %>
+        <%= github_authorize_button return_to: bulk_picker_return_to(
+              organization: submitted_organization,
+              full_names: @result.retryable_names,
+              user: current_user
+            ) %>
+      <% end %>
+    <% end %>
+  <% elsif @result.choose_repositories? %>
+    <%# The third step along, and the one this cascade used to fall through. Nothing is wrong with
+        the installation and nothing is wrong with the credential — the App is installed and it
+        answered — so both branches above are false. GitHub was simply never asked to include these
+        repositories in the installation, which is the reader's OWN selection to change and the one
+        thing GitHub's picker exists to change.
+
+        Their skip sentence already tells them to do it ("Add it on GitHub, then pick it here."), so
+        before this the page issued an instruction and offered no way to take it: the reader got the
+        "Not connected to the SpecGuard GitHub App (N)" heading below and no control at all.
+
+        Read off `@result` directly rather than through `github_verdict` like the two above.
+        That seam's contract is that either an `InstallationRepositories::Verdict` or a
+        `BulkRegistration::Result` may be returned and the caller asks for the CAPABILITY — and
+        `Verdict` does not answer this one, so a concern method wrapping it would raise on one of
+        its two documented callers.
+
+        This is an `elsif` tail rather than a branch of its own, and the ordering is load-bearing: a
+        batch mixing `not_installed` with `not_in_installation` takes the FIRST branch, because
+        installing the App is the WIDER fix — it is the trip that has to happen first, and it lands
+        the reader on the same GitHub picker this panel would have sent them to, so the narrower
+        offer is not lost by being skipped. Two simultaneous panels pointing at one destination
+        would make the reader choose between them with nothing on the page to choose by.
+
+        That branch carries `install_retryable_names`, which does NOT include the
+        `not_in_installation` names — installing the App does not resolve that skip, so they are
+        absent from it by the same rule that keeps every other terminal skip out. The reader arrives
+        at GitHub's picker able to tick them regardless, which is the whole of what this panel
+        offers; widening that list is a different question from this one and is left alone here. %>
+    <%# NOT `uninstalled`: `not_installed` is a DIFFERENT status with a different panel five lines
+        up, and conflating those two names in a comment is the whole reason this ticket exists. %>
+    <% outside_installation = @result.choose_repositories_names %>
+    <% one_outside = outside_installation.length == 1 %>
+    <%# Carries the batch exactly as the two fix buttons above do, and NARROWER than either: only
+        the `not_in_installation` names, because reopening the picker for an installation that
+        already exists changes the answer for those and for nothing else.
+        `bulk_picker_return_to` owns how the batch is carried; see it.
+
+        Built HERE rather than inline at the button because the sentence above it makes a claim
+        about this path's contents, and the two have to be answers to the same object. %>
+    <% picker_return_to = bulk_picker_return_to(organization: submitted_organization,
+                                                full_names: outside_installation,
+                                                user: current_user) %>
+    <%# Whether the reader is promised ticks is decided by what that path ACTUALLY carries, not by
+        what was handed to it. `bulk_picker_return_to` can still return a path carrying no selection
+        — a POST that carried no `organization` yields the bare picker path, and a capture that did
+        not land falls through to the byte-bounded name carry, which drops an over-bound list
+        ENTIRELY — and in both the reader arrives at an unticked list. Promising ticks anyway would
+        cost them precisely what the sentence said it would save them, and would spend the honesty
+        the all-or-nothing drop was chosen to buy.
+
+        The ORDINARY case is now the true one at every size in 1..MAX_BATCH: the path carries a
+        ~22-byte handle to a selection held server-side rather than a list that grows, so the size
+        at which this used to go false (29 of a possible 100) no longer exists. The question is kept
+        rather than deleted because the branches above it did not go away — see the helper.
+
+        Asked through `bulk_picker_carries_names?`, which PARSES the emitted path. The rules stay in
+        one place: this does not know the bound, measure it, re-derive it, or resolve the handle. %>
+    <% carries_names = bulk_picker_carries_names?(picker_return_to) %>
+    <%= render UI::PanelComponent.new(class: "mt-4") do %>
+      <%= render UI::EmptyStateComponent.new(
+            title: "Add #{one_outside ? 'this repository' : 'these repositories'} on GitHub",
+            description: "#{pluralize(outside_installation.length, 'repository', plural: 'repositories')} " \
+                         "#{one_outside ? 'is' : 'are'} not among the ones the SpecGuard " \
+                         "GitHub App is installed on. This takes you to GitHub's own repository " \
+                         "picker, where you choose what the App can see, and straight back" \
+                         "#{if carries_names
+                              " — with #{one_outside ? 'it' : 'them'} already selected, so you " \
+                              "can submit again without picking #{one_outside ? 'it' : 'them'} " \
+                              'out a second time.'
+                            else
+                              ", where you can pick #{one_outside ? 'it' : 'them'} again and submit."
+                            end}"
+          ) do %>
+        <%= github_install_button "Choose repositories on GitHub", return_to: picker_return_to %>
       <% end %>
     <% end %>
   <% end %>
@@ -90,8 +192,47 @@
     <% end %>
   <% end %>
 
+  <%# Three of the skip reasons END their own sentence by telling the reader to try again — "Try
+      again in a few minutes", "Try again shortly", "Reconnect and try once more" — and the panel
+      above says it too ("you can submit this batch again"). Without this control that instruction
+      costs the reader the whole of step one and step two again: re-pick the account, then re-find
+      and re-tick N repositories from a fresh unticked list, with nothing on this page marking WHICH
+      ones to re-tick. So the batch is carried back rather than described.
+
+      Which reasons count as retryable is `BulkRegistration::RETRYABLE_SKIPS`, asked through
+      `retry?` — not a status list written out here, so the sentence promising a retry and the button
+      offering one cannot drift apart. Only the transient names ride along: what registered is done,
+      and a terminal skip re-submitted is refused identically.
+
+      It is a plain GET back to the picker, which means the reader lands on a form they can look at
+      and change — untick one, add another, submit when the rate limit has passed — rather than a
+      button that re-fires the batch behind their back. Re-submitting is safe for the reason the
+      controller's header states (registration is idempotent; anything that landed comes back as
+      `already_registered`), but WHEN to re-submit is exactly the judgement a rate limit asks of a
+      human, so this stops one step short and lets them press the button. %>
+  <% if @result.retry? && submitted_organization.present? %>
+    <% carried = @result.retryable_names %>
+    <% one = carried.length == 1 %>
+    <%= render UI::PanelComponent.new(class: "mt-4") do %>
+      <%= render UI::EmptyStateComponent.new(
+            title: "Try the skipped repositories again",
+            description: "#{pluralize(carried.length, 'repository', plural: 'repositories')} " \
+                         "#{one ? 'was' : 'were'} skipped for a reason that " \
+                         "clears on its own. This takes you back to #{submitted_organization} with " \
+                         "#{one ? 'it' : 'them'} already selected, so you can " \
+                         "submit again without picking them out a second time."
+          ) do %>
+        <%= render UI::ButtonComponent.new(
+              variant: :primary,
+              href: bulk_repositories_path(organization: submitted_organization,
+                                           github_full_names: @result.retryable_names)
+            ) { "Try these again" } %>
+      <% end %>
+    <% end %>
+  <% end %>
+
   <div class="mt-4 flex items-center gap-2">
     <%= render UI::ButtonComponent.new(variant: :primary, href: repositories_path) { "Back to repositories" } %>
-    <%= render UI::ButtonComponent.new(variant: :ghost, href: bulk_repositories_path) { "Register another organization" } %>
+    <%= render UI::ButtonComponent.new(variant: :ghost, href: bulk_repositories_path) { "Register another batch" } %>
   </div>
 <% end %>

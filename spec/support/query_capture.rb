@@ -18,7 +18,9 @@
 #     a cached repeat costs no round trip, so it is not work the page chose to do. This is what a
 #     budget on a PAGE or on a MODEL CALL counts.
 #   - `queries_against(table)` drops only `SCHEMA`, so cached repeats and TRANSACTIONs are in its
-#     count.
+#     count. Its argument is a String matched as a SUBSTRING, or a Regexp matched against the
+#     statement — see the note on the method itself for why the second spelling exists and why
+#     adding it changed no existing count.
 #   - `captured_sql(table)` drops only `SCHEMA` like `queries_against`, but keeps the FIRST match
 #     rather than a list and runs under `unprepared_statement`; it counts nothing, it captures a
 #     statement to be planned.
@@ -33,10 +35,23 @@
 # none of these, add it beside them with the same kind of note rather than bending one of them to
 # fit.
 module QueryCapture
+  # `table` is a String (matched as a substring, the original and still the common spelling) or a
+  # Regexp (matched against the statement). The Regexp spelling exists because a table is not always
+  # the right POPULATION: a guard on what AUTHENTICATION costs has to see the credential table and
+  # `users` together, since the two failure modes it watches for — probing the second credential
+  # table, and reading the resolved person a second time — land on different tables and a filter
+  # naming either one alone reports a clean count while the other regresses. See
+  # `authentication_reads` in spec/requests/api/v1/credential_seam_spec.rb.
+  #
+  # This WIDENS what can be matched, not what is COUNTED: the `SCHEMA`-only exclusion above is
+  # untouched, and every String caller matches exactly the statements it matched before. So the
+  # header's caution about established counts is not in play here — no existing expectation moves.
   def queries_against(table)
+    matches = table.is_a?(Regexp) ? ->(sql) { table.match?(sql) } : ->(sql) { sql.include?(table) }
+
     queries = []
     subscriber = ActiveSupport::Notifications.subscribe("sql.active_record") do |_, _, _, _, payload|
-      queries << payload[:sql] if payload[:name] != "SCHEMA" && payload[:sql].to_s.include?(table)
+      queries << payload[:sql] if payload[:name] != "SCHEMA" && matches.call(payload[:sql].to_s)
     end
     yield
     queries

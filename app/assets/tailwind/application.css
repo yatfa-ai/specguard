@@ -17,8 +17,8 @@
  * `source(none)` disables Tailwind v4's automatic source detection, which otherwise scans the
  * whole repository — including `.rb` and `.md` files. Ruby method names and ordinary English
  * words that collide with DaisyUI component names (`select`, `table`, `link`, `badge`, `join`,
- * `rounded`, …) would then generate CSS, so a backend-only or docs-only change silently rewrites
- * the committed `app/assets/builds/tailwind.css` and reds `bin/rails lint:stylesheet`.
+ * `rounded`, …) would then generate CSS, so a backend-only or docs-only change silently grows
+ * `app/assets/builds/application.css` with rules nothing can ever apply.
  *
  * The four directories below are the only places this app emits class names. Components keep
  * their class lists as whole literal strings in constants (`UI::BadgeComponent::TONES`), which
@@ -49,12 +49,12 @@
  * hypothetical: the repository picker added `def select_input`, `form.select`, `@as == :select`,
  * `repository_picker_target: "select"` and a Stimulus `filter()` action — none of them an HTML
  * class, none of them reachable by any page — and Tailwind emitted DaisyUI's `select` and `filter`
- * components anyway, 10.4 KB of CSS that nothing could ever apply, reddening `lint:stylesheet` on a
- * change that touched no styling at all.
+ * components anyway, 10.4 KB of CSS that nothing could ever apply, on a change that touched no
+ * styling at all.
  *
  * Naming the unused components is what makes that structurally impossible rather than fixed once.
  * The list is verified, not guessed: building with it produces a byte-identical
- * `app/assets/builds/tailwind.css`, so nothing here is load-bearing today.
+ * `app/assets/builds/application.css`, so nothing here is load-bearing today.
  *
  * If you start using one of these, DELETE IT FROM THIS LIST — its classes will not exist
  * otherwise. Adding a DaisyUI component is meant to be a deliberate act, not something an English

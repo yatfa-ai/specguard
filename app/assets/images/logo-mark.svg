@@ -1,0 +1,32 @@
+<!--
+  The SpecGuard mark on its own — no tile, transparent ground, viewBox cropped tight to the
+  shield so callers control its size with height alone.
+
+  This is the in-app lockup companion to public/icon.svg (which carries the dark tile the favicon
+  needs). Same geometry, same gradient: the green reads against both themes' sidebar surfaces
+  (dark #0f172a, light #ffffff), and the bars knock out to transparent so whatever surface is
+  behind it shows through rather than a hardcoded tile colour going stale against the token.
+-->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="9.6 4.3 44.8 55.5"
+     role="img" aria-label="SpecGuard">
+  <defs>
+    <linearGradient id="sg-mark-shield" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#4ade80"/>
+      <stop offset="1" stop-color="#16a34a"/>
+    </linearGradient>
+
+    <mask id="sg-mark-bars" maskUnits="userSpaceOnUse" x="0" y="0" width="64" height="64">
+      <rect width="64" height="64" fill="#fff"/>
+      <g fill="none" stroke="#000" stroke-width="7" stroke-linecap="round">
+        <path d="M20.8 40 V33"/>
+        <path d="M32 40 V26"/>
+        <path d="M43.2 40 V19"/>
+      </g>
+    </mask>
+  </defs>
+
+  <path d="M30.9 4.7 Q32 4.3 33.1 4.7 L52.8 11.6 Q54.4 12.1 54.4 13.8 V30.2
+           C54.4 43.4 45.6 53.6 33.1 59.3 Q32 59.8 30.9 59.3
+           C18.4 53.6 9.6 43.4 9.6 30.2 V13.8 Q9.6 12.1 11.2 11.6 Z"
+        fill="url(#sg-mark-shield)" mask="url(#sg-mark-bars)"/>
+</svg>

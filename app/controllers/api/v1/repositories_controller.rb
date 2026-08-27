@@ -11,6 +11,11 @@
 # (`Repository#latest_test_run` and `#recent_test_runs`, which share an ordering tie-break
 # included), so the API and the dashboard cannot name different commits for the same repository.
 class Api::V1::RepositoriesController < Api::BaseController
+  # THIS ENDPOINT NEEDS A REPOSITORY, and says so rather than discovering it. Every figure this
+  # controller serves is read off `current_repository`, so a credential that resolves no repository
+  # has nothing to be served here — a `sgu_` user key gets 401. See `Api::BaseController`.
+  accepts_repository_credential
+
   # How each `history` row was assembled, in one aggregate for the whole window. The same four
   # lines the human Recent-runs panel primes its rows with — see `ShardCountPreloading`, which is
   # one module rather than two copies because nothing in it needs anything an
@@ -549,13 +554,49 @@ class Api::V1::RepositoriesController < Api::BaseController
   # from the middle of that array or from behind its bound entirely. That is the contract rather than
   # a bug, and this block is what says so, the way `history_window.branch_scope` says it for the
   # branch-filtered case. A client that needs the identity back omits the parameter.
+  # `observations_retained` / `retention_runs` DISCLOSE THE OTHER WAY THIS BLOCK CAN BE EMPTY, and
+  # they are shaped on `rejections_window.retention_rows` key-for-key, under the same doctrine that
+  # block states in its own words: *the two truncation bounds are independent, and both are
+  # disclosed*, because a row ageing out changes the MEANING of the reading. `BRANCH_RETENTION_RUNS`
+  # changes the meaning of every per-example reading identically, and until now it was published
+  # nowhere.
+  #
+  # The state they name is one `resolved: true` could not distinguish. `Ingest::ObservationPruner`
+  # deletes `spec_observations` and never deletes the owning `test_runs` row, so a pruned run
+  # resolves, still reports `suite_size_measured: true` off its own untouched `total_specs_count`,
+  # and returns zero rows from every per-example rollup — byte-identical to a run that genuinely
+  # recorded nothing, and a lie in the CONFIDENT direction. This block already refuses that exact
+  # conflation one grain up (see `serialized_latest_run`: *a repository whose CI has never run must
+  # not serialize byte-identically to one that ran and genuinely found an empty suite*); these two
+  # keys are that same refusal one grain down. `RequestedCommitShaParam` names *a pruned run* among
+  # the ordinary ways to arrive here, and discloses only the not-found half of it.
+  #
+  # **`observations_retained` is a statement about the RULE, not a row count.** `false` means the
+  # retention rule no longer keeps this run's per-example rows — deleted, or eligible for deletion
+  # at any ingest. `TestRun#observations_retained?` carries the argument; the short version is that
+  # `Ingest::QuietBucketPruner` is opportunistic and names its own unreachable remainder, so a
+  # past-boundary run in a quiet bucket may still physically hold rows nothing has got round to
+  # deleting. A client must not read this as "the rows are gone", and the endpoint must not derive
+  # it from row absence — that would conflate retention with a run whose per-example rows were never
+  # delivered at all.
+  #
+  # `retention_runs` is the constant itself, published so the reading above is interpretable rather
+  # than a bare boolean: it is what makes `false` mean *older than the 60 most recent runs of this
+  # run's own branch* instead of *older than something*. Per BRANCH and never per repository — the
+  # constant's own comment carries why — so it bounds the branch named two keys up.
+  #
+  # ADDED BESIDE the existing five, which keep their names, types and values exactly: a default
+  # unparameterised GET is byte-identical to what it served before apart from these two, pinned in
+  # `spec/requests/api/v1/repositories_spec.rb`.
   def serialized_run_anchor
     {
       source: requested_commit_sha ? "requested" : "default",
       requested_commit_sha: requested_commit_sha,
       resolved: requested_commit_sha.nil? || !requested_test_run.nil?,
       commit_sha: latest_test_run&.commit_sha,
-      branch: latest_test_run&.branch
+      branch: latest_test_run&.branch,
+      observations_retained: latest_test_run&.observations_retained?,
+      retention_runs: SpecObservation::BRANCH_RETENTION_RUNS
     }
   end
 
@@ -799,6 +840,54 @@ class Api::V1::RepositoriesController < Api::BaseController
       rows: decomposable ? serialized_shard_rows(test_run) : nil,
       balanced_wall_clock_seconds: decomposable ? test_run.balanced_wall_clock_seconds : nil,
       wall_clock_excess_seconds: decomposable ? test_run.wall_clock_excess_seconds : nil,
+      # WHEN the three keys above come back — the one input to `#wall_clock_decomposable?` a client
+      # cannot reconstruct from anything else in this body.
+      #
+      # Two of that gate's three conditions are already derivable here: `multi_shard?` is
+      # `count > 1` and `!some_shard_untimed?` is `timed_count == count`. So a client reading
+      # `rows: null` beside those two can already conclude by elimination that delivery is still
+      # settling — WHICH condition failed was never the gap. The gap is WHEN to come back, and the
+      # moment is `#last_shard_arrived_at + SHARD_DELIVERY_SETTLING_PERIOD`: one term of it is a
+      # column served nowhere, and the other is a constant a client would have to hardcode.
+      # Both go out, so the moment is arithmetic over this body rather than a poll on a guess.
+      #
+      # This is the state EVERY sharded run passes through rather than an edge case:
+      # `Repository#latest_test_run` picks a run up the instant its FIRST shard lands, so
+      # `latest_run` renders half-delivered runs routinely. The Overview panel has said "we are
+      # still waiting" in English since SPGD-192 (`repositories/show.html.erb`, the
+      # `#wall_clock_decomposition_pending?` branch); this is the same fact as OPERANDS, on
+      # `serialized_history_row`'s rule that a machine-readable client cannot act on a sentence
+      # without parsing it. No verdict key and no prose: a client that wants "still settling" has
+      # the three conditions and can word it however it likes.
+      #
+      # PRESENT ON BOTH BRANCHES, valued, on this block's own null-not-absent contract — and here
+      # that is stronger than a convention. A key served only under `if decomposable` is invisible
+      # to every pin in `spec/requests/api/v1/repository_latest_run_spec.rb`, which is exactly how
+      # SPGD-234's three keys shipped named by nothing; a key served only while the gate is CLOSED
+      # would reintroduce the same invisibility from the other side. Serving it unconditionally
+      # also means a settled run says when it settled, which is a fact a reader wants after the
+      # decomposition opens and not only before.
+      #
+      # `iso8601`, and `null` — never `0`, never an epoch — for a run with no shards at all, which
+      # `TestRun#last_shard_arrived_at` documents as its nil case. (`serialized_shards` returns
+      # `nil` wholesale below `multi_shard?`, so that nil cannot reach a client through this
+      # endpoint today; the safe navigation is what keeps that true if the gate above ever widens.)
+      #
+      # ZERO ADDED QUERIES. `#last_shard_arrived_at` is `shard_totals[3]`, the `MAX(updated_at)`
+      # that already rides along in the single memoized `pick` `count` and `timed_count` above have
+      # just taken. That is also why this slice is `latest_run`-only: `ShardCountPreloading` primes
+      # `shard_totals[0..2]` and says the shards' `MAX(updated_at)` "is still one `pick` per row",
+      # so serving this on the 30-row `history` block is a real N+1 and a different slice.
+      last_shard_arrived_at: test_run.last_shard_arrived_at&.iso8601,
+      # The other term of that sum, PUBLISHED FROM THE CONSTANT and never typed as a literal, so
+      # the panel and this endpoint cannot drift apart about how long settling takes. Seconds, an
+      # integer, on the rule every other duration on this endpoint follows — a client adds it to
+      # the timestamp above and gets the moment the decomposition becomes available.
+      #
+      # A configuration fact rather than a measurement, so it is served whether or not this run has
+      # a `last_shard_arrived_at` to add it to: a client that reads the two keys together needs
+      # both to be present to know it may compute at all.
+      settling_period_seconds: TestRun::SHARD_DELIVERY_SETTLING_PERIOD.to_i,
       # The denominator of every duration above, per shard — the block's own STRUCTURED COUNTS,
       # NOT PROSE rule taken one level down. `machine_seconds` says what the run cost and
       # `coverage` says over how many shards; neither says whether the expensive shard was

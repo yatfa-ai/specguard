@@ -6,6 +6,13 @@ class RepositoriesController < ApplicationController
   # `history` block on `GET /api/v1/repository`.
   include ShardCountPreloading
 
+  # The two grouped reads behind the card's "Deliveries refused" marker — the newest refusal and
+  # the newest accepted run, one query each for the whole grid. Shared with
+  # `Api::V1::UserRepositoriesController`, which needs the same two timestamps per repository to
+  # serve `delivery_health` on `GET /api/v1/repositories`. The verdict itself stays where it has
+  # always been, in `RejectedIngests`; this module only fetches.
+  include DeliveryHealthLookups
+
   # `?branch=` read as a branch name for the suite-trajectory panel. Shared with
   # `Api::V1::RepositoriesController`, which reads the same parameter under the same guard to narrow
   # the `history` block on `GET /api/v1/repository`.
@@ -71,9 +78,10 @@ class RepositoriesController < ApplicationController
 
   before_action :require_authentication
 
-  # The first four are per-card questions asked by repositories/index, once per repository in the
-  # list. The fifth is a per-row question asked by repositories/show, once per API key.
-  helper_method :owns_repository?, :key_count_visible?, :api_key_count, :latest_run, :former_member?
+  # The first five are per-card questions asked by repositories/index, once per repository in the
+  # list. The sixth is a per-row question asked by repositories/show, once per API key.
+  helper_method :owns_repository?, :key_count_visible?, :api_key_count, :latest_run,
+                :rejection_verdict, :former_member?
 
   # Everything the viewer can open, through the one seam that defines that set — see
   # `Repository.accessible_by`, which carries the union rule and the reason it stays a relation
@@ -896,35 +904,68 @@ class RepositoriesController < ApplicationController
   # `Repository#latest_test_run` per card would be an N+1, and the card only just stopped paying a
   # per-repository COUNT for the badge this replaces.
   #
-  # `DISTINCT ON` keeps the first row per repository under the ORDER BY, and that ORDER BY repeats
-  # `Repository#latest_test_run`'s tie-break exactly (created_at desc, then id desc) so a card and
-  # the page it links to can never name different runs. Scoped to the ids already on this page, so
-  # it never scans `test_runs` globally.
+  # The resolution itself — the `DISTINCT ON` and the tie-break that repeats
+  # `Repository#latest_test_run`'s exactly, so a card and the page it links to can never name
+  # different runs — is `DeliveryHealthLookups#latest_test_runs_for`, shared with
+  # `Api::V1::UserRepositoriesController`, which needs the same newest-run timestamp per repository
+  # for its own refusal verdict. Scoped there to the ids handed in, so it never scans `test_runs`
+  # globally, and it early-returns on an empty page.
   #
-  # Primed through `preload_shard_counts` at the point the rows are loaded, because the card asks
-  # each run whether it is `multi_shard?` and what it COST, and both `TestRun#shard_count` and
-  # `#machine_seconds` are memoized per-instance reads of one `pick` (`test_run.rb`) — asked in the
-  # card loop that is one `test_run_shards` query per card, the same N+1 shape this page has already
-  # been cleaned of twice. One grouped aggregate answers all of it for the whole grid in a single
-  # round trip, exactly as the Recent-runs table on `show` already does. The wall clock needs no
-  # priming at all: `duration_seconds` is a column on the rows selected below. Primed HERE and not
-  # in `#index`, so the aggregate is taken only when something actually reads the runs and a page of
-  # no repositories still pays nothing.
+  # ⚠️ THE PRIMING IS THIS CALLER'S AND STAYS HERE, which is the whole reason the shared method
+  # resolves runs and does not prime them. The card asks each run whether it is `multi_shard?` and
+  # what it COST, and both `TestRun#shard_count` and `#machine_seconds` are memoized per-instance
+  # reads of one `pick` (`test_run.rb`) — asked in the card loop that is one `test_run_shards` query
+  # per card, the same N+1 shape this page has already been cleaned of twice. One grouped aggregate
+  # answers all of it for the whole grid in a single round trip, exactly as the Recent-runs table on
+  # `show` already does. The machine-facing list reads `created_at` and nothing else, so lifting the
+  # priming with the resolution would have dragged a `test_run_shards` aggregate into a caller that
+  # never looks at a single primed value. The wall clock needs no priming at all: `duration_seconds`
+  # is a column on the rows selected. Primed HERE and not in `#index`, so the aggregate is taken
+  # only when something actually reads the runs and a page of no repositories still pays nothing.
   def latest_test_runs
-    @latest_test_runs ||= begin
-      repository_ids = @repositories.map(&:id)
+    @latest_test_runs ||= latest_test_runs_for(@repositories.map(&:id))
+                          .tap { |runs| preload_shard_counts(runs.values) }
+  end
 
-      if repository_ids.empty?
-        {}
-      else
-        runs = TestRun.where(repository_id: repository_ids)
-                      .select("DISTINCT ON (test_runs.repository_id) test_runs.*")
-                      .order(:repository_id, created_at: :desc, id: :desc)
-                      .index_by(&:repository_id)
-        preload_shard_counts(runs.values)
-        runs
-      end
-    end
+  # What one card says about its deliveries being REFUSED — the same object, answering the same two
+  # questions, that the connection indicator on `show` reads (`refusing?` and `last_rejection_at`).
+  # That symmetry is the point: the grid and the page it links to reach one repository's refusal
+  # through one class's API, not through two readings that happen to agree.
+  #
+  # The verdict is `RejectedIngests`' own and is NOT re-derived here. That class's comment forbids a
+  # second inline expression of the rule ("holding the verdict beside the rows it is a verdict about
+  # is what stops the headline and the list under it describing different states of the same
+  # repository"), and the rule has two `nil` limbs that do not both fall out of a `>` — a repository
+  # with no rejection is not refusing, and one with a rejection and NO accepted run ever is the most
+  # refusing state there is. So this hands over two timestamps and asks; `RejectedIngests.verdict`
+  # is the row-free way in, built for exactly this caller.
+  #
+  # Both timestamps are already grouped for the whole page: the accepted side is `latest_test_runs`
+  # above, which the card is already reading for its size badge, and the refused side is the one
+  # aggregate below. So this costs no query per card, and the object it builds holds no rows.
+  def rejection_verdict(repository)
+    RejectedIngests.verdict(last_rejection_at: last_rejection_times[repository.id],
+                            last_accepted_run_at: latest_run(repository)&.created_at)
+  end
+
+  # `repository_id => newest refusal time` for every repository on this page, in one query no matter
+  # how long the list is — the same shape, and the same reason, as `shared_permissions`,
+  # `latest_test_runs` and `api_key_counts`. Asking `RejectedIngests.for` per card would be worse
+  # than the usual N+1: that constructor reads `IngestRejection::PANEL_LIMIT + 1` ROWS per
+  # repository, and the grid needs no rows at all — only the newest time.
+  #
+  # The grouped `MAX(occurred_at)` itself is `DeliveryHealthLookups#last_rejection_times_for`, shared
+  # with `Api::V1::UserRepositoriesController` — which asks the same question of the same table for
+  # the `delivery_health` block on `GET /api/v1/repositories`, and would otherwise carry a second
+  # copy of this read free to drift from the grid's. That method carries the argument for the
+  # aggregate's shape, the index it is served by, and why the retention rule needs no mention here.
+  #
+  # Memoized on first call rather than assigned by `#index`, so the aggregate is taken only once a
+  # card actually asks and a page of no repositories still pays nothing — the same laziness
+  # `latest_test_runs` carries for the same reason, and the empty early return that makes it true
+  # lives in the shared method.
+  def last_rejection_times
+    @last_rejection_times ||= last_rejection_times_for(@repositories.map(&:id))
   end
 
   # How many API keys one card should report. Reads the grouped count below rather than
@@ -964,50 +1005,34 @@ class RepositoriesController < ApplicationController
     params.expect(repository: [:github_full_name])
   end
 
-  # The single gate every write of `github_full_name` passes through — and it is written as a save
-  # rather than as a `before_action` guard for a structural reason: `repository_params` has two
-  # callers (`#create` and `#update`), so a check bolted onto one action leaves the other one
-  # writing the identity column unverified. Squatting would simply have moved from POST
-  # /repositories to PATCH /repositories/:id and the gap would have read as closed.
+  # The single gate every write of `github_full_name` passes through. The gate itself — the
+  # `valid?` -> ownership -> `save` order, and why it is a save rather than a `before_action` —
+  # now lives in `RepositoryRegistration`, because a second caller with no browser session needs
+  # exactly the same gate and must not reimplement it. Read that class for the order and its
+  # reasons; what stays here is the WEB tree's answer to "who is asking, and with what evidence".
   #
-  # Order is load-bearing:
+  # `LiveVerifier` is that answer: this person, this session's GitHub credential, and this
+  # request's own read of their installations. The machine surface passes a different verifier and
+  # gets the same gate.
   #
-  #   1. `valid?` first, so a slug that is not `org/repo` — or one already registered — is refused
-  #      from the record's own rules and never becomes a GitHub round trip. It also runs
-  #      `normalize_full_name`, so step 2 asks GitHub about the value that would actually be
-  #      stored rather than about whatever was pasted.
-  #   2. Ownership, and only when the identity is actually changing. A rename form submitted
-  #      unchanged, like the one `rename_notice` exists to describe, must not re-ask GitHub — and
-  #      must not fail closed on a GitHub outage for a write that changes nothing.
-  #   3. `save`.
-  #
-  # Fails closed at every step: a verdict that is not `verified?` — including "GitHub could not be
-  # reached" — does not save.
+  # `sources:` is passed as a LAMBDA rather than as a value, and that is not style. `github_sources`
+  # is memoized and lazy precisely so a registration that verifies costs one GitHub round trip
+  # rather than two, and so a rename form submitted unchanged costs none at all — see
+  # `rename_notice`. Evaluating it here, at construction, would force the read before the gate has
+  # decided whether the name is even changing.
   def save_with_verified_ownership(repository)
-    return false unless repository.valid?
-    return false unless verify_github_ownership(repository)
-
-    repository.save
+    registration = RepositoryRegistration.new(repository: repository, verifier: live_verifier)
+    saved = registration.save
+    # Kept for the view, which offers an install button instead of an error when the fix is
+    # installing the App rather than picking something else. `nil` when nothing was asked.
+    @github_verdict = registration.verdict
+    saved
   end
 
-  # Records the refusal on the attribute it is about, so the form shows it under the field the user
-  # has to change, exactly as a format or uniqueness failure does. The verdict is also kept for the
-  # view, which offers an install button instead of an error when the fix is installing the App
-  # rather than picking something else.
-  def verify_github_ownership(repository)
-    return true unless repository.will_save_change_to_github_full_name?
-
-    # `sources:` is this request's own read, shared with the picker the 422 re-render builds — see
-    # `InstallationRepositories.verify_batch`. It is the same live GitHub answer either way; what it
-    # saves is fetching it twice on the one path that needs it twice.
-    @github_verdict = InstallationRepositories.verify(user: current_user,
-                                                      user_token: github_user_token,
-                                                      full_name: repository.github_full_name,
-                                                      sources: github_sources)
-    return true if @github_verdict.verified?
-
-    repository.errors.add(:github_full_name, @github_verdict.message)
-    false
+  def live_verifier
+    RepositoryRegistration::LiveVerifier.new(user: current_user,
+                                             user_token: github_user_token,
+                                             sources: -> { github_sources })
   end
 
   # The repositories this user may pick from, straight off GitHub. Memoized and lazy — read by the

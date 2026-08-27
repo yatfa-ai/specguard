@@ -14,8 +14,11 @@ gem "importmap-rails"
 gem "turbo-rails"
 # Hotwire's modest JavaScript framework [https://stimulus.hotwired.dev]
 gem "stimulus-rails"
-# Use Tailwind CSS [https://github.com/rails/tailwindcss-rails]
-gem "tailwindcss-rails"
+# Bundle and process CSS [https://github.com/rails/cssbundling-rails]
+# Tailwind comes from npm (`@tailwindcss/cli`) rather than from tailwindcss-rails, so the build is
+# pinned by package-lock.json and `css:build` hooks into `assets:precompile`. The built stylesheet
+# is NOT committed — see .gitignore and the README.
+gem "cssbundling-rails"
 
 # Use Active Model has_secure_password [https://guides.rubyonrails.org/active_model_basics.html#securepassword]
 # gem "bcrypt", "~> 3.1.7"
@@ -63,6 +66,12 @@ gem "faraday"
 group :development, :test do
   # Test framework
   gem "rspec-rails", "~> 8.0"
+  # SpecGuard's own Ruby client, so this suite reports itself to the platform it is. `require:
+  # false` because nothing in the app loads it: the formatter is pulled in by `--require` from
+  # SPEC_OPTS, which only CI sets. A local `bin/rspec` therefore behaves exactly as it did before —
+  # deliberate, because an unconfigured formatter does not stay quiet, it appends one JSON object
+  # per line to `SPECGUARD_OUTPUT_PATH` (see the gem's formatter: api_key set → POST, unset → file).
+  gem "specguard-rspec", "~> 0.2.3", require: false
   # Node matchers for ViewComponent unit specs (render_inline + have_css), and the browser-driven
   # system specs in spec/system.
   gem "capybara"

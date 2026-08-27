@@ -7,9 +7,9 @@
       ) do |header| %>
     <% header.with_actions do %>
       <%# Two entry points rather than one, because they are different jobs and not two sizes of the
-          same one: registering the repository you came here for, and turning SpecGuard on across an
-          organization. Bulk is the secondary variant — most visits are the first job. %>
-      <%= render UI::ButtonComponent.new(variant: :secondary, href: bulk_repositories_path) { "Register an organization" } %>
+          same one: registering the repository you came here for, and turning SpecGuard on across a
+          whole GitHub account. Bulk is the secondary variant — most visits are the first job. %>
+      <%= render UI::ButtonComponent.new(variant: :secondary, href: bulk_repositories_path) { "Register several" } %>
       <%= render UI::ButtonComponent.new(variant: :primary, href: new_repository_path) { "Register a repository" } %>
     <% end %>
   <% end %>
@@ -24,6 +24,17 @@
                 both read this one already-loaded row, and it is read here so the two cannot end
                 up naming different runs. %>
             <% run = latest_run(repository) %>
+            <%# Whether this repository's deliveries are being REFUSED — the verdict the connection
+                indicator on `show` renders, which until now this grid had no access to at all. Read
+                once here beside the run, on the same rule: both facts are read at the top so the
+                badge row and the sentence under it cannot end up describing different states.
+
+                The same `RejectedIngests` API `show` reads — `refusing?` and `last_rejection_at` —
+                reached through RepositoriesController#rejection_verdict. The comparison is never
+                re-spelled here; see that method and the model's class comment for why there is
+                exactly one expression of the rule. Costs no query per card: the refused side is one
+                grouped MAX for the whole page, the accepted side is the run already loaded above. %>
+            <% rejections = rejection_verdict(repository) %>
             <div class="flex items-start justify-between gap-2">
               <%= render UI::HeadingComponent.new(level: 3, class: "text-app-content min-w-0") { repository.github_full_name } %>
               <%# The list now mixes owned and shared repositories, and nothing else on the card
@@ -63,13 +74,51 @@
                   `nil` means CI has never reported, and gets its own words rather than `0 tests`:
                   "never ingested" and "the suite is empty" are different facts and the card has to
                   be able to tell them apart. `show` draws the same line in its Overview panel. %>
+              <%# `nil` run has TWO readings and they are opposite facts, which is the distinction
+                  this branch exists to draw a second time. "No runs yet" is right for a repository
+                  nobody has wired CI to. It is a falsehood for one whose CI is posting and being
+                  REFUSED: deliveries are arriving, and the reason there is no run to show is that
+                  every one of them is being thrown away. `RejectedIngests#refusing?` calls that
+                  case "the most refusing state there is" — a rejection with no accepted run behind
+                  it — and before this the grid drew it byte-identically to the never-wired card.
+
+                  So the refusing variant says what is actually true of the row — no run was ever
+                  ACCEPTED — in error tone, beside the marker above that says why. Same rule the
+                  neutral wording itself follows: "never ingested" and "the suite is empty" are
+                  different facts, and so are "nothing has been sent" and "nothing has been kept". %>
               <% if run.nil? %>
-                <%= render UI::BadgeComponent.new(tone: :neutral) { "No runs yet" } %>
+                <% if rejections.refusing? %>
+                  <%= render UI::BadgeComponent.new(tone: :error) { "No runs accepted" } %>
+                <% else %>
+                  <%= render UI::BadgeComponent.new(tone: :neutral) { "No runs yet" } %>
+                <% end %>
               <% else %>
                 <% suite_size = run.total_specs_count.to_i %>
                 <%= render UI::BadgeComponent.new(tone: :info) { "#{number_with_delimiter(suite_size)} #{'test'.pluralize(suite_size)}" } %>
               <% end %>
             </div>
+            <%# THE REFUSAL MARKER — the verdict this grid could not reach until now, in the error
+                tone the connection indicator gives it and for the same stated reason: work is being
+                destroyed, not merely absent.
+
+                Both surfaces word it through `refused_deliveries_label` / `refused_deliveries_note`
+                in ApplicationHelper, so this card and the page it links to cannot describe one
+                repository's refusal two ways, and the next rename of either cannot move one surface
+                without the other. That is the rule `test_run_delivery_note` and `test_run_cost_rows`
+                below already hold this same card to. The seams own the WORDING; the containers
+                differ — a header row there, a badge row and a paragraph here — so the markup stays
+                at each caller.
+
+                Rendered ABOVE the basis paragraph rather than inside it, because that paragraph is
+                gated on `run` and the never-accepted case has no run at all — the state that most
+                needs the sentence is exactly the one that would not have printed it. No link to the
+                rejection panel: the whole card already links to the page that holds it. %>
+            <% if rejections.refusing? %>
+              <div class="flex flex-wrap items-center gap-2">
+                <%= render UI::BadgeComponent.new(tone: :error) { refused_deliveries_label } %>
+              </div>
+              <p class="text-xs text-app-muted"><%= refused_deliveries_note(rejections.last_rejection_at) %></p>
+            <% end %>
             <%# The badge's basis, on the surface beside it — the rule `show` and the API already
                 hold this column to, and this grid needs it more than either of them does, because
                 it renders N repositories at once and a row of badges is a comparison by
@@ -145,12 +194,12 @@
           description: "Register a GitHub repository to start collecting spec intents from CI."
         ) do |empty| %>
       <% empty.with_action do %>
-        <%# Both entry points here too — a first-time visitor with a GitHub organization is exactly
-            the reader with twenty repositories to register, and this empty state is the one place
-            they are guaranteed to see. %>
+        <%# Both entry points here too — a first-time visitor who has just installed the App across
+            an account is exactly the reader with twenty repositories to register, and this empty
+            state is the one place they are guaranteed to see. %>
         <div class="flex flex-wrap items-center justify-center gap-2">
           <%= render UI::ButtonComponent.new(variant: :primary, href: new_repository_path) { "Register a repository" } %>
-          <%= render UI::ButtonComponent.new(variant: :secondary, href: bulk_repositories_path) { "Register an organization" } %>
+          <%= render UI::ButtonComponent.new(variant: :secondary, href: bulk_repositories_path) { "Register several" } %>
         </div>
       <% end %>
     <% end %>

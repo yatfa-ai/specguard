@@ -1,11 +1,14 @@
 {
   "name": "specguard",
   "private": true,
-  "description": "CSS build dependencies for SpecGuard's inherited design system. Tailwind itself ships with the tailwindcss-rails gem (standalone binary); DaisyUI is the only npm dependency, loaded by `@plugin \"daisyui\"` in app/assets/tailwind/application.css.",
+  "description": "The CSS build. Tailwind and DaisyUI both come from npm and are pinned by package-lock.json; app/assets/builds/ is generated and never committed. cssbundling-rails runs build:css from assets:precompile, so the image build produces its own stylesheet.",
   "devDependencies": {
-    "daisyui": "^5.7.16"
+    "@tailwindcss/cli": "^4.3.3",
+    "daisyui": "^5.7.19",
+    "tailwindcss": "^4.3.3"
   },
   "scripts": {
-    "build:css": "bin/rails tailwindcss:build"
+    "build:css": "tailwindcss -i ./app/assets/tailwind/application.css -o ./app/assets/builds/application.css --minify",
+    "watch:css": "tailwindcss -i ./app/assets/tailwind/application.css -o ./app/assets/builds/application.css --watch"
   }
 }

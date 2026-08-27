@@ -8,6 +8,12 @@
 # One request is one *shard*, not necessarily one run: a sharded suite POSTs once per process, and
 # `Ingest::RunRecorder` is what folds those back into the single `TestRun` they came from.
 class Api::V1::IngestsController < Api::BaseController
+  # THIS ENDPOINT NEEDS A REPOSITORY, and says so rather than discovering it. `current_repository`
+  # is passed straight into the recorders below on the strength of "authentication resolved one" —
+  # a `sgu_` user key reaching that line would arrive as `nil` and be recorded as telemetry against
+  # nothing, or blow up as a 500. It is refused at the door instead. See `Api::BaseController`.
+  accepts_repository_credential
+
   def create
     payload = Ingest::Payload.new(request.request_parameters)
 

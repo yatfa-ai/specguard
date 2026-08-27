@@ -321,6 +321,169 @@ RSpec.describe BulkRegistration do
 
       expect(register("acme/api")).not_to be_install
     end
+
+    # SPGD-833. The third control of the same family, and the skip whose own sentence has always
+    # been an instruction to the reader ("Add it on GitHub, then pick it here.") with no way to
+    # take it. The App is installed and the credential is fine, so neither `install?` nor
+    # `authorize?` is true — this is the question that was missing between them.
+    it "reports when the fix on offer is choosing more repositories on GitHub" do
+      stub_github(repos: [github_repo("acme/api")])
+
+      expect(register("acme/theirs")).to be_choose_repositories
+    end
+
+    # The deliberate exclusion, asserted rather than merely absent. `not_administered` is equally
+    # terminal for a re-submission, but its fix belongs to somebody ELSE: the reader's selection on
+    # GitHub is already correct, and sending them to change it would be sending them to fix
+    # something that is not broken while what is actually in their way stays untouched.
+    it "does not offer it for a repository the user does not administer" do
+      stub_github(repos: [github_repo("acme/vault", admin: false)])
+
+      result = register("acme/vault")
+
+      expect(result.skipped.map(&:status)).to eq(%i[not_administered])
+      expect(result).not_to be_choose_repositories
+      expect(result.choose_repositories_names).to be_empty
+    end
+
+    # Nor for the skips that have their own controls, so this predicate cannot quietly become a
+    # third panel on a page that already offers the right one.
+    it "does not offer it when the App is not installed at all" do
+      uninstall_github_app(user)
+
+      expect(register("acme/api")).not_to be_choose_repositories
+    end
+
+    it "does not offer it when the session credential is dead" do
+      stub_github(unauthorized: true)
+
+      expect(register("acme/api")).not_to be_choose_repositories
+    end
+  end
+
+  # SPGD-833. The names the "Choose repositories on GitHub" button carries back, and the third
+  # list of the family `install_retryable_names` / `retryable_names` already belong to.
+  describe "which names the choose-repositories control carries back" do
+    # The narrowest of the three, and narrow because the TRIP is narrow: reopening GitHub's picker
+    # for an installation that already exists changes the answer for exactly these names and for
+    # nothing else. Every other skip on the page is untouched by it.
+    it "carries only the not-in-installation names" do
+      create_repository(user: user, github_full_name: "acme/taken")
+      stub_github(repos: [github_repo("acme/api"), github_repo("acme/taken"),
+                          github_repo("acme/vault", admin: false)])
+
+      result = register("acme/api", "acme/theirs", "acme/ghost", "acme/taken", "acme/vault", "nope")
+
+      expect(result.choose_repositories_names).to eq(%w[acme/theirs acme/ghost])
+      # The controls this one must not become: neither of the other two lists claims these names,
+      # because neither of those trips resolves them.
+      expect(result.retryable_names).to be_empty
+      expect(result.install_retryable_names).to be_empty
+    end
+
+    # Nothing that registered rides along — free from starting at `skipped`, and asserted because a
+    # carried batch is the failed remainder rather than a re-run of the submission.
+    it "carries nothing that registered" do
+      stub_github(repos: [github_repo("acme/api")])
+
+      result = register("acme/api", "acme/theirs")
+
+      expect(result.registered.map(&:full_name)).to eq(%w[acme/api])
+      expect(result.choose_repositories_names).to eq(%w[acme/theirs])
+    end
+
+    # A transient skip is not carried here even though it IS carried by the other two controls.
+    # Coming back from GitHub's picker with a rate-limited name ticked would offer it as fixed by a
+    # trip that could not have fixed it.
+    it "does not carry a transiently-skipped name" do
+      stub_github(unauthorized: true)
+
+      result = register("acme/api")
+
+      expect(result.choose_repositories_names).to be_empty
+      expect(result.retryable_names).to eq(%w[acme/api])
+    end
+  end
+
+  # SPGD-828. The summary's two FIX buttons carry the batch back to the picker the way "Try these
+  # again" already does, and the two lists they carry are deliberately NOT the same list. This is
+  # the service half of that: which names each button is owed.
+  describe "which names each control carries back" do
+    # The install button's list is WIDER than the retry button's by exactly the `not_installed`
+    # names, and this is the case that proves the widening is load-bearing rather than cosmetic.
+    # Installing the App is the trip that makes these registerable, so a list that omitted them
+    # would carry back everything EXCEPT what the button just fixed — here, nothing at all.
+    it "carries the not-installed names on the install control and nothing on the retry control" do
+      uninstall_github_app(user)
+
+      result = register("acme/api", "acme/web")
+
+      expect(result.install_retryable_names).to eq(%w[acme/api acme/web])
+      expect(result.retryable_names).to be_empty
+    end
+
+    # The other side of the same asymmetry, and the reason `retryable_names` must not simply become
+    # the union: a re-submission genuinely does resolve these, so both controls owe them.
+    it "carries a transiently-skipped name on both controls" do
+      stub_github(unauthorized: true)
+
+      result = register("acme/api")
+
+      expect(result.retryable_names).to eq(%w[acme/api])
+      expect(result.install_retryable_names).to eq(%w[acme/api])
+    end
+
+    # Neither list carries a terminal skip, because neither button resolves one: installing the App
+    # does not un-register an already-registered repository or make an invalid name valid, and a
+    # re-submission refuses both identically.
+    it "carries no terminal skip on either control" do
+      create_repository(user: user, github_full_name: "acme/taken")
+      stub_github(repos: [github_repo("acme/api"), github_repo("acme/taken")])
+
+      result = register("acme/taken", "acme/theirs", "nope")
+
+      expect(result.retryable_names).to be_empty
+      expect(result.install_retryable_names).to be_empty
+    end
+
+    # And nothing that REGISTERED is carried by either, which both readers get for free by starting
+    # from `skipped` — a carried batch is the failed remainder, not a re-run of the submission.
+    it "carries nothing that registered" do
+      add_github_installation(user, installation_id: 6002, account_login: "globex")
+      stub_github_per_installation do |id|
+        FakeGithubApi.new(**(id == 6002 ? { unavailable: true } : { repos: [github_repo("acme/api")] }))
+      end
+
+      result = register("acme/api", "acme/web")
+
+      expect(result.registered.map(&:full_name)).to eq(%w[acme/api])
+      expect(result.retryable_names).to eq(%w[acme/web])
+      expect(result.install_retryable_names).to eq(%w[acme/web])
+    end
+
+    # A Result assembled by hand, and deliberately so: `InstallationRepositories.verify_batch`
+    # answers `:not_installed` for EVERY name or for none (it short-circuits the whole batch on
+    # `sources.installed?`), so a result holding `:not_installed` ALONGSIDE a retryable skip cannot
+    # currently be produced by the service at all.
+    #
+    # It is still what the reader has to be right about. `install?` and `retry?` are independent
+    # questions asked by two independent `if`s in the summary, so the day a partially-installed
+    # reading becomes reachable — a per-installation verdict, say — this reader must already carry
+    # the union rather than quietly dropping one side. Pinning it here says which answer is
+    # intended, at the layer that decides it, instead of leaving it to be discovered later.
+    it "carries the union when a single batch holds both, and keeps the two lists apart" do
+      outcomes = [BulkRegistration::Outcome.new(full_name: "acme/uninstalled", status: :not_installed),
+                  BulkRegistration::Outcome.new(full_name: "acme/limited", status: :rate_limited),
+                  BulkRegistration::Outcome.new(full_name: "acme/taken", status: :already_registered)]
+
+      result = BulkRegistration::Result.new(outcomes: outcomes)
+
+      expect(result).to be_install
+      expect(result).to be_retry
+      expect(result.install_retryable_names).to eq(%w[acme/uninstalled acme/limited])
+      expect(result.retryable_names).to eq(%w[acme/limited])
+      expect(result.install_retryable_names).not_to eq(result.retryable_names)
+    end
   end
 
   # A second batch running concurrently is the realistic way this happens, and it must read as

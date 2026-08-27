@@ -5,6 +5,138 @@
 # and the repository they want is not in it, or a registration came back needing an installation
 # rather than a different pick.
 module GithubHelper
+  # The most bytes a `return_to` path may be before its repository names are dropped.
+  #
+  # Everything a `return_to` carries rides out through GitHub's `state` parameter, which is part of
+  # a URL on github.com — so the bound is not ours to set and not one we can raise. Derived:
+  #
+  #   * budget the whole outbound GitHub URL under 2,000 bytes (the conservative de-facto ceiling
+  #     across user agents and proxies);
+  #   * `GITHUB_HOST` + `/login/oauth/authorize?client_id=…&state=` is 93 bytes of that, leaving
+  #     ~1,900 for the escaped state. That term is deployment-dependent: it is measured here with
+  #     the 35-character `PLACEHOLDER` client_id, and a shorter real one only buys slack (a 20-
+  #     character client_id makes the prefix 78);
+  #   * `URI.encode_www_form` escapes these paths at 1.193x, so ~1,900 escaped is ~1,590 RAW.
+  #
+  # 1,500 keeps a margin under that and is the constant below.
+  #
+  # Measured against what this helper emits, with 25-character names (`acmecorp/repository-00001`),
+  # via `bulk_repositories_path` + `SpecGuard::GithubApp.authorization_url`:
+  #
+  #   names |   raw |  escaped
+  #       1 |    88 |      106
+  #      28 | 1,492 |    1,780   <- last size that carries names
+  #      29 | 1,544 |    1,842   <- first size that drops them
+  #     100 | 5,236 |    6,244   <- MAX_BATCH, comfortably over
+  #
+  # So the drop below is reached by ordinary batches rather than being theoretical, and `organization`
+  # alone is 36 raw / 44 escaped. Across the whole legal range of 1..MAX_BATCH the worst outbound
+  # GitHub URL this produces is 1,873 bytes — inside the 2,000 budget at every size.
+  MAX_RETURN_TO_BYTES = 1_500
+
+  # The query parameter a pending selection's handle rides back on. Named for what it IS to the
+  # receiving page rather than for the row behind it: `BulkRegistrationsController#new` redeems it
+  # into the same `@full_names` seam the `github_full_names[]` carry already populates, and the
+  # picker's tick boxes never learn which of the two they were ticked by.
+  SELECTION_PARAM = :selection
+
+  # The bulk picker, with the batch that was just refused already selected.
+  #
+  # This is what the summary's three FIX buttons hand to `return_to:`, so that pressing the button
+  # which actually resolves the refusal costs the reader no more than pressing the one beside it
+  # that merely re-submits. Before this they carried a bare path: a reader whose batch was skipped
+  # for a dead credential saw "Reconnect to GitHub" (the correct fix, which discarded every tick)
+  # next to "Try these again" (which preserved all N ticks and fixed nothing), and had to press the
+  # one that worked and then re-pick N repositories by hand.
+  #
+  # ## A HANDLE, not the list — and that is what makes the promise true at every size
+  #
+  # Everything here rides out through GitHub's `state`, so the byte bound above applies to whatever
+  # this emits. Putting the NAMES in the path met that bound at 28 of the 100 sizes the product
+  # accepts, and above 28 the whole list was dropped: a reader who ticked thirty, was refused,
+  # pressed the button that fixes it and came back landed on an unticked list and re-picked thirty
+  # by hand. The bound is not ours to raise, so the remedy is to stop measuring a batch against it.
+  #
+  # `PendingBulkSelection.capture` persists the selection and returns a ~22-byte handle. The path is
+  # then `organization` + handle — about 51 bytes at ONE name and about 51 bytes at MAX_BATCH,
+  # because it no longer carries a thing that grows. So the all-or-nothing drop below is no longer
+  # reachable from this leg at any legal size, and a caller may say "already selected" without
+  # asking how many.
+  #
+  # ## Two rules, and both are about what the reader can trust
+  #
+  # `organization` is carried whenever there is one and is never dropped. It is 44 escaped bytes for
+  # the whole path and it alone is the difference between landing on the right picker and landing on
+  # the account chooser — so it outranks the names. Blank means the POST did not come from the
+  # picker and there is no account to name, and then this emits the bare path exactly as before: an
+  # `organization=` with nothing after it would send the reader somewhere no worse but no better,
+  # while claiming to know something we do not.
+  #
+  # Over the bound the names are dropped ENTIRELY rather than truncated, and that is deliberate. A
+  # picker that comes back partially ticked is WORSE than one that comes back unticked, because the
+  # reader submits believing it complete and silently loses the remainder without ever being told a
+  # list was shortened. Degraded to the account alone is still strictly better than what this
+  # replaced — right account, right list, ticks lost — and it is honest about it.
+  #
+  # ## `user:` is optional, and its absence is a live path rather than a courtesy
+  #
+  # A handle has to be scoped to somebody to be redeemable, so a caller with nobody to scope it to
+  # cannot have one. That is not the only way to arrive at the URL carry, though, and the others are
+  # ordinary: `capture` answers `nil` for an empty name list, and answers `nil` rather than raising
+  # when the write does not land — a summary is a page that has already got what it came for, and a
+  # database that will not take a row is not a reason to fail the render. Every one of those falls
+  # through to the bounded name carry below, which still delivers the ticks at the 28 sizes it fits
+  # and still degrades honestly above them. The old behaviour is the floor, not the ceiling.
+  def bulk_picker_return_to(organization:, full_names: [], user: nil)
+    return bulk_repositories_path if organization.blank?
+
+    names = Array(full_names)
+    handle = PendingBulkSelection.capture(user: user, organization: organization, full_names: names)
+    return bulk_repositories_path(organization: organization, SELECTION_PARAM => handle.token) if handle
+
+    carried = bulk_repositories_path(organization: organization, github_full_names: names)
+    return carried if carried.bytesize <= MAX_RETURN_TO_BYTES
+
+    bulk_repositories_path(organization: organization)
+  end
+
+  # Did a selection actually survive the trip out? Asked of what `bulk_picker_return_to` EMITTED,
+  # never of the batch that went into it.
+  #
+  # This exists because a caller may want to say "and they will come back already selected", and
+  # that sentence is not always true. The method above has ways of returning a path that carries no
+  # selection — a blank `organization` yields the bare picker path, and an over-bound name list with
+  # no handle behind it is dropped entirely — and a reader promised ticks who arrives at an unticked
+  # list pays exactly the cost the promise told them they would not. So the promise is made
+  # conditional on the answer.
+  #
+  # ONE predicate rather than one per reason, because the reasons are one state to the READER:
+  # whatever the cause, the list comes back unticked and the sentence must not claim otherwise. The
+  # same holds on the true side, and that is why this asks about EITHER carry: a handle and a name
+  # list deliver the identical thing to the reader — a ticked picker — and a predicate that knew
+  # only about names would call a handle-carrying path unticked and withdraw a sentence that is
+  # true. What it must never do is answer from the batch that went IN, which is the one reading that
+  # can promise ticks a path cannot deliver.
+  #
+  # It PARSES rather than re-deriving: it does not know `MAX_RETURN_TO_BYTES`, does not measure a
+  # path, does not ask whether an organization was present, and does not resolve the handle. Those
+  # rules stay in exactly one place, and this reads their result — so a change to the bound moves
+  # the sentence with it and the two cannot drift into disagreeing on the same page.
+  #
+  # Not resolving the handle is deliberate rather than lazy. This answers "did the path carry a
+  # selection", which is a question about the PATH; whether that selection still redeems is a
+  # question about the far side of a trip that has not happened yet, and a page that answered it
+  # here would be answering it an unknown number of minutes early. A handle that expires mid-trip
+  # degrades on arrival to the right account and an unticked list — the same place every other
+  # failure lands.
+  def bulk_picker_carries_names?(return_to)
+    query = URI.parse(return_to.to_s).query
+    return false if query.blank?
+
+    parsed = Rack::Utils.parse_nested_query(query)
+    parsed["github_full_names"].present? || parsed[SELECTION_PARAM.to_s].present?
+  end
+
   # POSTs to the flow that sends the user to GitHub to install the App and choose repositories.
   #
   # POST rather than a link, and CSRF-protected as any other POST, so a third-party page cannot
@@ -145,6 +277,59 @@ module GithubHelper
 
     "#{pluralize(count, 'connected repository', plural: 'connected repositories')} you do not " \
       "administer #{count == 1 ? 'is' : 'are'} not listed."
+  end
+
+  # "SpecGuard could not read acme just now. Repositories connected through that account are
+  # missing from this list. Anything shown here can still be registered." — the short-list notice,
+  # with the account NAMED, and `nil` when nothing is missing.
+  #
+  # One definition for the two pages that show it (the single-repository picker, the organization
+  # chooser), for the reason `withheld_repositories_sentence` states in full: it is the same fact
+  # on both, and two copies is two chances for one to disagree about what it means. Before this
+  # they both said "One of your GitHub App installations could not be read", which named nothing —
+  # a user with `acme` and `globex` connected could not tell whether the one that failed was the
+  # organization they came to register.
+  #
+  # `missing:` is the only thing the two pages differ on and is a plural noun beginning its own
+  # sentence: the single-repository picker is missing REPOSITORIES, the bulk chooser can be missing
+  # whole ACCOUNTS, which is the sharper version of the same warning. Everything else — which
+  # accounts, which failure, what to do — is decided here.
+  #
+  # That second noun is ACCOUNTS and not ORGANIZATIONS because the bulk chooser groups every
+  # namespace the viewer administers something in, personal ones included. It said "organizations"
+  # while the chooser filtered to `owner_type == "Organization"`, and the noun was accurate then;
+  # once the filter went, a solo developer whose chooser holds nothing but their own namespace was
+  # being told that ORGANIZATIONS were missing from it. Withholding a true noun beats naming a
+  # subset the page no longer shows.
+  #
+  # The two failures are worded apart because their fixes are different. An installation that would
+  # not answer is a transient thing and may well answer on the next page load. An installation
+  # GitHub reports as GONE will not come back on its own: an uninstall is the ordinary way one goes
+  # stale, and reinstalling is done on GitHub. That second case is the one this page said NOTHING
+  # about until now — a 404 contributes an empty listing and records no error by design, so there
+  # was no error for a notice to key on and an entire account could leave the picker in silence.
+  def unreadable_accounts_sentence(outcomes, missing:)
+    unread = Array(outcomes).reject(&:read?)
+    return nil if unread.empty?
+
+    gone, failed = unread.partition(&:unreadable?)
+
+    sentences = []
+
+    if failed.any?
+      sentences << "SpecGuard could not read #{failed.map(&:account).to_sentence} just now."
+    end
+
+    if gone.any?
+      sentences << "GitHub no longer lists #{gone.map(&:account).to_sentence} as connected to " \
+                   "SpecGuard — the App may have been uninstalled there, which is put right in " \
+                   "your GitHub settings."
+    end
+
+    sentences << "#{missing} connected through #{unread.one? ? 'that account' : 'those accounts'} " \
+                 "are missing from this list. Anything shown here can still be registered."
+
+    sentences.join(" ")
   end
 
   private

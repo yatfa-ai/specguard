@@ -83,6 +83,39 @@ class BulkRegistration
   SKIP_ORDER = %i[already_registered not_administered not_in_installation invalid not_installed
                   not_authorized rate_limited unavailable].freeze
 
+  # The skips a re-submission can actually resolve, and the only ones worth carrying back to the
+  # picker — exactly the three whose `InstallationRepositories::MESSAGES` sentence instructs the
+  # reader to try again: "Reconnect and try once more", "Try again in a few minutes", "Try again
+  # shortly". A batch that skipped for any of these was refused by something that clears on its own
+  # or with one click, and the same submission run a second time is expected to land.
+  #
+  # It lives here, next to `SKIP_ORDER` and `SKIP_LABELS`, rather than as a status list in the
+  # summary view, so the page and the service cannot end up disagreeing about which refusals are
+  # temporary — the sentence that promises a retry and the button that offers one are then answers
+  # to the same question.
+  #
+  # Everything absent from this list is terminal FOR A RE-SUBMISSION, which is not the same as
+  # unfixable: `already_registered` and `invalid` need nothing and can never succeed, while
+  # `not_installed` / `not_in_installation` / `not_administered` need a change on GitHub's side
+  # first. Re-running the identical batch fixes none of them.
+  #
+  # Two of those three are offered a trip that DOES change GitHub's answer, and the third is
+  # deliberately not:
+  #
+  #   * `not_installed` — the install button (`install?`), which installs the App.
+  #   * `not_in_installation` — the "Choose repositories on GitHub" button
+  #     (`choose_repositories?`), which reopens GitHub's own repository picker for an installation
+  #     that already exists.
+  #   * `not_administered` — NOTHING, and correctly so. The fix is somebody ELSE granting the
+  #     reader admin on that repository; sending them to GitHub's picker would be sending them to
+  #     fix something that is not broken, and what is actually in their way is not theirs to
+  #     change. `repositories/_form` states this in full at the same decision.
+  #
+  # Those buttons are a different question from this list. They offer a different TRIP, not a
+  # re-run: re-submitting the identical batch still resolves none of these three, which is why
+  # none of them is a member here and why the retry control must not render for them.
+  RETRYABLE_SKIPS = %i[not_authorized rate_limited unavailable].freeze
+
   # What each skip reason is called in the summary. The heading names the CATEGORY; the per-row
   # sentence carries the explanation, so these stay short enough to scan.
   SKIP_LABELS = {
@@ -126,6 +159,77 @@ class BulkRegistration
     # ask GitHub with. Mirrors `InstallationRepositories::Verdict#authorize?`, which
     # `GithubRepositoryListing#github_authorization_needed?` asks either of for the capability.
     def authorize? = skipped.any? { |outcome| outcome.status == :not_authorized }
+
+    # The THIRD skip a button resolves, and a third button again: the App is installed and this
+    # session's credential is fine — GitHub simply was not asked to include this repository in the
+    # installation. Its own sentence is already an instruction to the reader ("Add it on GitHub,
+    # then pick it here."), and until now the summary gave them no way to take it.
+    #
+    # Deliberately NOT a mirror of anything on `InstallationRepositories::Verdict`, which is why it
+    # is read straight off `@result` in the summary rather than through
+    # `GithubRepositoryListing`'s `github_verdict` seam. That seam's contract is that EITHER class
+    # may be returned, so a concern method asking this of it would raise on one of its two
+    # documented callers.
+    #
+    # `not_administered` is absent on purpose and is the sibling case this must not swallow: it is
+    # equally terminal for a re-submission, but its fix belongs to somebody else. Offering GitHub's
+    # picker there would send the reader to change a selection that is already correct while what
+    # is actually in their way — admin rights they do not hold — stays untouched.
+    def choose_repositories? = skipped.any? { |outcome| outcome.status == :not_in_installation }
+
+    # The names for THAT button, and the narrowest of the three carried lists: exactly the
+    # `not_in_installation` names and nothing else.
+    #
+    # Narrow because the trip is narrow. Installing the App changes the answer for the transient
+    # skips too (`install_retryable_names` carries them for that reason), but reopening GitHub's
+    # repository picker for an installation that already exists changes the answer for one thing
+    # only — whether these repositories are in it. A rate-limited name riding along would come back
+    # ticked having been fixed by nothing, and `already_registered` / `invalid` / `not_administered`
+    # are no more resolvable after this trip than before it.
+    #
+    # Names rather than outcomes for the reason `retryable_names` states: the caller puts them back
+    # in the picker's `@full_names` seam, which is a list of names.
+    def choose_repositories_names
+      skipped.filter_map { |outcome| outcome.full_name if outcome.status == :not_in_installation }
+    end
+
+    # The names a re-submission could plausibly land — the skips whose own sentence told the reader
+    # to try again (`RETRYABLE_SKIPS`), and nothing else. This is the third question of the same
+    # family as `install?` and `authorize?`: which control does the summary owe this batch. The
+    # other two ask whether to offer a fix ELSEWHERE (GitHub's installation, an OAuth round trip);
+    # this one asks whether to offer the batch ITSELF back.
+    #
+    # Names rather than outcomes, because the one thing the caller does with them is put them back
+    # in the picker's `@full_names` seam, which is a list of names. Registered repositories are not
+    # here by construction — this reads `skipped` — and neither is any terminal skip, so a batch
+    # carried back is the failed remainder rather than a re-run of the whole submission.
+    def retryable_names = skipped.filter_map { |outcome| outcome.full_name if RETRYABLE_SKIPS.include?(outcome.status) }
+
+    # The same list for the OTHER button — the one that goes and installs the App — and it is
+    # deliberately WIDER than `retryable_names` by exactly the `not_installed` names.
+    #
+    # The difference is behavioural rather than tidy. A plain re-submission resolves nothing about
+    # `not_installed`, so `retryable_names` must not carry those: re-offering them would re-offer
+    # names the next submission refuses identically. But installing the App is PRECISELY the trip
+    # that turns a `not_installed` skip into a registerable repository, so a list that omitted them
+    # would carry back everything except the thing the button just fixed.
+    #
+    # The retryable names ride along too, because the install trip is a round trip like any other:
+    # a mixed batch's rate-limited names are still worth putting back in the picker when the reader
+    # returns, and they are the same names `retryable_names` would have carried.
+    #
+    # Terminal skips are still absent — `already_registered`, `invalid`, `not_administered` and
+    # `not_in_installation` are not resolved by installing the App either — and registered rows are
+    # absent by construction, because this reads `skipped`.
+    def install_retryable_names
+      skipped.filter_map do |outcome|
+        outcome.full_name if RETRYABLE_SKIPS.include?(outcome.status) || outcome.status == :not_installed
+      end
+    end
+
+    # Whether there is anything worth offering a retry for. Asked separately from `retryable_names`
+    # so the summary reads as a question rather than as an emptiness check on a list.
+    def retry? = retryable_names.any?
   end
 
   def self.call(...) = new(...).call

@@ -2031,10 +2031,28 @@ RSpec.describe "Repository registration and API keys", type: :request do
         # first-request-only work cannot land in it.
         get repository_path(repository)
 
-        # 21 rather than 20 since SPGD-711: `TestRun#intent_readings` is one aggregate over the latest
-      # run's rows, served on every page load because the Overview's reading rows and the sentence
-      # beside them both read it. Memoized on the run, so it is one query and not one per reader.
-      expect(count_all_queries { get repository_path(repository) }).to eq(21)
+        # 22 rather than the 20 this budget carried at the merge base, and it is TWO independent
+        # +1s that happened to land in the same rebaseline rather than one recount done twice.
+        # Keeping both paragraphs is deliberate: each names a different read, and a merge that kept
+        # only one would leave the surviving comment silently accounting for a query it does not
+        # describe.
+        #
+        # +1 from SPGD-816: `run_anchor`'s retention disclosure adds exactly ONE indexed read to
+        # the page — `TestRun#observations_retained?` picks the anchored run's branch boundary off
+        # `index_test_runs_on_repository_id_and_branch_and_created_at`. ONE for the whole page, not
+        # one per row, and that is the property worth stating: the boundary is evaluated for the
+        # ANCHORED RUN only and no panel row asks it anything, so this number does not move with
+        # the suite, the window, or the run count. The invariance examples that pin it live beside
+        # the window budgets in spec/requests/api/v1/repository_latest_run_spec.rb.
+        #
+        # +1 from SPGD-711: `TestRun#intent_readings` is one aggregate over the latest run's rows,
+        # served on every page load because the Overview's reading rows and the sentence beside
+        # them both read it. Memoized on the run, so it is one query and not one per reader.
+        #
+        # Rebaselined by two rather than carved out, because this is an ABSOLUTE page budget:
+        # hiding a real new query behind a filter would be the regression this count exists to
+        # catch.
+        expect(count_all_queries { get repository_path(repository) }).to eq(22)
         # And the page really did render the thing being counted — an absolute count is satisfied
         # by a page that renders nothing at all.
         expect(distribution.all("li").size).to eq(4)
@@ -2510,6 +2528,293 @@ RSpec.describe "Repository registration and API keys", type: :request do
         expect(page_text).not_to include("Wall clock")
         expect(page_text).not_to include("Machine time")
       end
+    end
+  end
+
+  # `RejectedIngests#refusing?` — "the last delivery this repository is known to have completed was
+  # refused" — rendered on the grid that draws N repositories side by side. It had lived on
+  # repositories#show alone, so the one surface built for comparison was the one surface that could
+  # not say which of the listed pipelines was having its work thrown away.
+  #
+  # Two readings were reachable without it, and the first is the worse one. A repository being
+  # refused with no accepted run EVER has no `TestRun` row, so the grid drew it through the `run.nil?`
+  # branch — a neutral "No runs yet", byte-identical to a repository nobody has wired CI to, over
+  # the state the model itself calls "the most refusing state there is". And a repository that
+  # ingested cleanly for months and is now refusing everything kept printing its last accepted
+  # figure with nothing marking the silence as a refusal rather than a quiet week.
+  describe "the refusal marker on the repositories index" do
+    # A refused delivery, stated directly.
+    #
+    # The panel specs on `show` build theirs with a real POST, and say why: the defect THAT surface
+    # exists for is an ordering one inside `authenticate_api_key!` — the key is stamped on the way
+    # IN, so a refused delivery records a use — and a hand-built row would skip the stamp and leave
+    # those examples asserting against a state the production path cannot reach.
+    #
+    # Nothing this grid renders reads that column. The card compares one refusal's `occurred_at`
+    # against its newest run's `created_at`, and both sides are stated here, so the fixture is
+    # faithful rather than merely convenient. The last example in this block drives the whole real
+    # path anyway — POST, refusal, grid — which is what pins this shortcut against the producer
+    # instead of leaving the two trusted separately.
+    def refuse(repository, at: Time.current)
+      IngestRejection.create!(repository: repository, occurred_at: at,
+                              details: ["commit_sha can't be blank"], total_reasons_count: 1)
+    end
+
+    # The wording, READ FROM THE SEAM both surfaces render rather than typed out here.
+    #
+    # This is the rule the cost rows above are already held to, and the reason is the same: a
+    # literal spelled out in the spec is agreement that merely HOLDS TODAY. Rename the badge and
+    # update the indicator's own literals, and an assertion against a copy here would still pass
+    # against a card rendering the old word — the grid and the page it links to wording one
+    # repository's refusal two ways, with nothing in the suite able to see it. Asserting the card's
+    # markup against the seam's output makes the card, not a copy of it, the thing under test.
+    def refusal_label = ApplicationController.helpers.refused_deliveries_label
+
+    # Criterion 1, and the ordering that IS the rule: this compares two recorded facts rather than
+    # asking whether a refusal is recent, so the newest thing that happened decides.
+    it "marks a repository whose newest refusal lands after its newest accepted run" do
+      repository = create_repository(user: @user)
+      create_test_run(repository: repository, commit_sha: "cafe0001", total_specs_count: 900,
+                      created_at: 2.hours.ago)
+      refuse(repository, at: 10.minutes.ago)
+
+      get repositories_path
+
+      expect(page_text).to include(refusal_label)
+      # The card still states what it last managed to ingest — the marker is added beside the
+      # figure, not in place of it. A reader needs both: the suite is 900 tests, and that number is
+      # no longer being kept current.
+      expect(response.body).to include("900 tests")
+      expect(page_text).to include(
+        ApplicationController.helpers.refused_deliveries_note(repository.ingest_rejections.first.occurred_at)
+      )
+    end
+
+    # The other half of criterion 1. A repository that hit a bad payload and has ingested cleanly
+    # since is healthy again, with no window to expire and no threshold anybody had to pick.
+    it "marks nothing when the newest accepted run is on top of the refusal" do
+      repository = create_repository(user: @user)
+      refuse(repository, at: 3.days.ago)
+      create_test_run(repository: repository, commit_sha: "cafe0002", total_specs_count: 12,
+                      created_at: 1.hour.ago)
+
+      get repositories_path
+
+      expect(page_text).not_to include(refusal_label)
+      expect(response.body).to include("12 tests")
+    end
+
+    # CRITERION 2 — the case the grid got outright wrong, and the reason this is not only a badge.
+    #
+    # Both repositories here have no `TestRun` at all, so both reach the same `run.nil?` branch. One
+    # has never been wired to CI and one is having every delivery thrown away, and before this they
+    # rendered the identical neutral "No runs yet". The assertion is not merely that the refusing
+    # card gained a marker: it is that the two cards no longer read the same, which is the actual
+    # defect.
+    it "tells a never-wired repository apart from one whose every delivery is refused" do
+      never_wired = create_repository(user: @user, github_full_name: "acme/never-wired")
+      refused = create_repository(user: @user, github_full_name: "acme/refused")
+      refuse(refused, at: 5.minutes.ago)
+
+      get repositories_path
+
+      cards = Capybara.string(response.body)
+      never_wired_card = cards.find_link(href: repository_path(never_wired))
+      refused_card = cards.find_link(href: repository_path(refused))
+
+      expect(refused_card.text).to include(refusal_label)
+      expect(never_wired_card.text).not_to include(refusal_label)
+
+      # ...and the neutral badge does not stay on the refusing card wearing the meaning it has on
+      # the other one. "No runs yet" says nothing has been sent; this repository is sending, and
+      # nothing is being KEPT.
+      expect(never_wired_card.text).to include("No runs yet")
+      expect(refused_card.text).not_to include("No runs yet")
+      expect(refused_card.text).to include("No runs accepted")
+    end
+
+    # CRITERION 4 — the guard this preload exists to satisfy, in the shape the sibling guards above
+    # use. There is no absolute page budget on this page (the `count_queries` budgets in this file
+    # wrap `get repository_path(...)`, i.e. SHOW), so the instrument is the per-table one.
+    #
+    # Every card here is refusing, which is the difference between this and a green-for-the-wrong-
+    # reason guard: a budget whose page never renders the read it is guarding passes trivially. The
+    # marker count is asserted first, so the page provably ASKED before the count says how often.
+    it "asks the refusal question once for the whole grid, however long the list is" do
+      %w[acme/one acme/two acme/three].each_with_index do |full_name, index|
+        repository = create_repository(user: @user, github_full_name: full_name)
+        create_test_run(repository: repository, commit_sha: "cafe030#{index}",
+                        total_specs_count: 10, created_at: 2.days.ago)
+        refuse(repository, at: 1.hour.ago)
+      end
+
+      rejection_queries = queries_against("ingest_rejections") { get repositories_path }
+
+      expect(response).to have_http_status(:ok)
+      # Every card really did render the verdict, so every card really did ask.
+      expect(page_text.scan(refusal_label).size).to eq(3)
+      # One grouped aggregate for the whole page — three cards must not cost three SELECTs.
+      expect(rejection_queries.size).to eq(1)
+
+      # And the count is a bound rather than a coincidence of this fixture's size: double the grid,
+      # and the same single aggregate answers all six cards. An absolute number asserted at one N
+      # is satisfied by a page whose cost is N/2.
+      %w[acme/four acme/five acme/six].each_with_index do |full_name, index|
+        repository = create_repository(user: @user, github_full_name: full_name)
+        create_test_run(repository: repository, commit_sha: "cafe040#{index}",
+                        total_specs_count: 10, created_at: 2.days.ago)
+        refuse(repository, at: 1.hour.ago)
+      end
+
+      doubled = queries_against("ingest_rejections") { get repositories_path }
+
+      expect(page_text.scan(refusal_label).size).to eq(6)
+      expect(doubled.size).to eq(1)
+    end
+
+    # CRITERION 5. One query is not on its own the same claim as a bounded one: a single SELECT
+    # that read the whole table would satisfy the count above and get slower for every refusal
+    # anybody's CI has ever suffered.
+    #
+    # ⚠️ ASSERTED ON THE STATEMENT, NOT ON `rows_touched`, and the reason is worth keeping. The
+    # `EXPLAIN (ANALYZE)` reading is the sharper instrument in principle and it is the WRONG one
+    # here: at fixture scale this table holds twenty-odd rows, and Postgres correctly picks a Seq
+    # Scan over an index for that, so the plan reports every row as "Rows Removed by Filter" and the
+    # measurement reads 21 for a query whose WHERE clause names exactly one repository. That is the
+    # planner's choice at a size no deployment has, not a scoping defect — and an example that
+    # "fixed" it by seeding enough rows to flip the plan would be pinning a cost-model threshold.
+    #
+    # What criterion 5 actually claims is about the READ: it is restricted to the ids already on
+    # this page. That is a property of the statement, and the statement is what this reads —
+    # captured off the wire by the shared subscriber rather than copied from the controller, so a
+    # read that stopped being narrowed cannot pass by agreeing with a hand-written duplicate.
+    # `index_ingest_rejections_on_repository_and_recency` is what serves it once the table is big
+    # enough for the planner to prefer an index; the guard here is that there is something to serve.
+    it "reads only the repositories on this page, never the whole table" do
+      mine = create_repository(user: @user, github_full_name: "acme/mine")
+      also_mine = create_repository(user: @user, github_full_name: "acme/also-mine")
+      refuse(mine, at: 1.hour.ago)
+
+      stranger = create_user(github_uid: "7777", github_handle: "stranger")
+      other = create_repository(user: stranger, github_full_name: "other/theirs")
+      20.times { |index| refuse(other, at: (index + 1).minutes.ago) }
+
+      sql = captured_sql("ingest_rejections") { get repositories_path }
+
+      expect(page_text).to include(refusal_label)
+      # Narrowed by repository at all — the shape a global aggregate would not have.
+      expect(sql).to match(/WHERE .*"repository_id" IN /)
+
+      # ...and narrowed to exactly the ids this page is rendering. Read as a SET, deliberately: the
+      # ids arrive in the page's own `github_full_name` order, so pinning the sequence would assert
+      # the grid's sort order from inside a scoping guard and break on a rename that reorders the
+      # cards. What criterion 5 claims is WHICH ids are in the read, not in what order.
+      scoped_ids = sql[/IN \(([^)]*)\)/, 1].split(",").map { |id| id.strip.to_i }
+      # Both of this viewer's repositories, INCLUDING the one with no refusals: the scope is the
+      # page, not the subset that happens to have rows.
+      expect(scoped_ids).to match_array([mine.id, also_mine.id])
+      # And the repository this viewer cannot see is absent from the read entirely. A global
+      # aggregate would answer this page correctly today and read every refusal in the deployment
+      # to do it.
+      expect(scoped_ids).not_to include(other.id)
+    end
+
+    # CRITERION 6 — the marker is purely additive for the population that is not refusing. This is
+    # the whole non-refusing grid asserted at once: no marker, no note, and nothing about the words
+    # the cards already printed has moved.
+    it "leaves a repository with no refusals rendering exactly what it rendered before" do
+      repository = create_repository(user: @user)
+      create_test_run(repository: repository, commit_sha: "cafe0005", total_specs_count: 4_321,
+                      branch: "main")
+
+      get repositories_path
+
+      expect(response.body).to include("4,321 tests")
+      expect(page_text).to include("Ingested less than a minute ago on main")
+      expect(page_text).not_to include(refusal_label)
+      expect(page_text).not_to include("the key works, the payload did not")
+      expect(page_text).not_to include("No runs accepted")
+    end
+
+    # CRITERION 7. The seam is what stops the grid and the page it links to wording one
+    # repository's refusal two different ways, and the assertion has to be able to SEE that — so it
+    # renders both surfaces for the same repository and holds each to the seam's output rather than
+    # to a literal typed twice here.
+    #
+    # A literal would pass on a rename that moved only one of them, which is the exact failure the
+    # seam exists to make impossible.
+    it "words the card and the page it links to from one seam" do
+      repository = create_repository(user: @user)
+      refuse(repository, at: 20.minutes.ago)
+
+      get repositories_path
+      card_text = page_text
+
+      get repository_path(repository)
+      indicator_text = Capybara.string(response.body).find("#connection-indicator").text.squish
+
+      expect(card_text).to include(refusal_label)
+      expect(indicator_text).to include(refusal_label)
+      # ...and the sentence under it, which carries the one thing a reader who has just seen a green
+      # "Connected" needs told — that the credential is fine and the payload was not.
+      note = ApplicationController.helpers.refused_deliveries_note(
+        repository.ingest_rejections.first.occurred_at
+      )
+      expect(card_text).to include(note)
+      expect(indicator_text).to include(note)
+    end
+
+    # CRITERION 8. `IngestRejection::REPOSITORY_RETENTION_ROWS` bounds the table, so a repository
+    # that was refused and then went silent long enough loses the rows — and the model's documented
+    # reading is that the verdict "is reporting what it can still see". The grid inherits that by
+    # knowing nothing about it: no rows, no key in the grouped MAX, no marker.
+    #
+    # Asserted with NO accepted run, which is the strict case: this repository is not non-refusing
+    # because something was ingested on top, it is non-refusing because there is no longer any
+    # evidence of refusal. No new retention rule is introduced here or in the code under it.
+    it "reads as non-refusing once its refusals have aged out of the retained window" do
+      repository = create_repository(user: @user)
+      refuse(repository, at: 1.hour.ago)
+
+      get repositories_path
+      expect(page_text).to include(refusal_label)
+
+      # What retention does, at the point it has done it.
+      repository.ingest_rejections.delete_all
+
+      get repositories_path
+
+      expect(page_text).not_to include(refusal_label)
+      # ...and the card falls back to the neutral state, not to the refusing variant of it.
+      expect(page_text).to include("No runs yet")
+      expect(page_text).not_to include("No runs accepted")
+    end
+
+    # The fixture in this block states its rows directly, so this is the example that pins it
+    # against the thing that actually writes them: a real POST that authenticates and is then
+    # refused for its payload, straight through to the marker on the grid.
+    #
+    # It also re-establishes, at this surface, the ordering fact the whole feature rests on —
+    # `authenticate_api_key!` stamps the key on the way IN, so this refused delivery DID record a
+    # use. That is why the card cannot read this signal off the credential, and why the refusal has
+    # to be carried beside the rows instead.
+    it "marks a card from a delivery the real endpoint refused" do
+      repository = create_repository(user: @user)
+      key = repository.api_keys.create!(name: "CI")
+
+      post "/api/v1/ingest",
+           params: { specs: [] }.to_json,
+           headers: { "Content-Type" => "application/json",
+                      "Authorization" => "Bearer #{key.raw_token}" }
+
+      expect(repository.ingest_rejections.count).to eq(1)
+      # The delivery authenticated. A card reading `last_used_at` would call this pipeline healthy.
+      expect(key.reload.last_used_at).to be_present
+
+      get repositories_path
+
+      expect(page_text).to include(refusal_label)
+      expect(page_text).to include("No runs accepted")
     end
   end
 

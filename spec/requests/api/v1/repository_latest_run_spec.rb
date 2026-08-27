@@ -7,6 +7,13 @@ require "rails_helper"
 # figures `repositories#show` renders — and the `history` array beside it, the agent-readable twin
 # of the "Recent runs" panel.
 RSpec.describe "GET /api/v1/repository — latest_run and history", type: :request do
+  # For the settling-axis example, which asserts the moment a client computes from the body really
+  # is the moment `TestRun#wall_clock_decomposable?` flips — a claim about a CLOCK, and the only
+  # way to make it is to move one. Included on this group rather than configured globally in
+  # `rails_helper`: no other spec in the suite travels time today, and a project-wide include for
+  # one example would put `travel_to` in reach of every spec that has done without it.
+  include ActiveSupport::Testing::TimeHelpers
+
   let(:repository) { create_repository }
   let(:api_key) { repository.api_keys.create! }
 
@@ -486,9 +493,14 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
     # above pin these names only as a side effect of asserting one fixture's arithmetic, and they
     # read as cost-figure examples; a guard whose stated subject IS the key set survives a fixture
     # whose numbers change, and says out loud what a new key owes this list before it ships.
+    # SPGD-849 appended `last_shard_arrived_at` and `settling_period_seconds` and turned BOTH
+    # examples below red on the way in — which is this guard working rather than a regression, and
+    # is the whole reason it was stated on the open gate. Neither assertion was weakened to
+    # accommodate them and neither key is branch-conditional: they are served on both gates, so the
+    # one list still describes both states.
     def contract_shard_keys
       %w[count timed_count machine_seconds coverage rows balanced_wall_clock_seconds
-         wall_clock_excess_seconds per_shard]
+         wall_clock_excess_seconds last_shard_arrived_at settling_period_seconds per_shard]
     end
 
     it "serves exactly the latest_run keys this contract pins, on a sharded run" do
@@ -530,7 +542,7 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
 
       shards = get_repository.dig("latest_run", "shards")
 
-      # The same eight names as the open gate, from the same list: withholding a figure withholds
+      # The same ten names as the open gate, from the same list: withholding a figure withholds
       # its VALUE, not its name. That is `serialized_shards`' stated contract and the reason a
       # client tests one thing (`rows == null`) rather than distinguishing an absent key from a
       # null one — and a guard written only against the open gate would pass a change that made
@@ -543,7 +555,7 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
     # The defect, stated as an expectation. 74.25s of waiting against 253.75s of machine time is a
     # 3.4× gap on this fixture, and until now the endpoint served only the smaller number.
     it "serves the machine time beside the wall clock, and states what each was computed over" do
-      sharded_run([61.0, 58.5, 74.25, 60.0], commit_sha: "feedfacecafe0179")
+      run = sharded_run([61.0, 58.5, 74.25, 60.0], commit_sha: "feedfacecafe0179")
 
       block = get_repository["latest_run"]
 
@@ -563,6 +575,13 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
         "rows" => nil,
         "balanced_wall_clock_seconds" => nil,
         "wall_clock_excess_seconds" => nil,
+        # The settling axis, SERVED WHILE THE THREE ABOVE ARE NULL — the state this fixture is in
+        # is the one the pair exists for. Read off the run's own accessor and off the constant
+        # rather than written as literals: a hardcoded timestamp would pin the fixture's clock, and
+        # a hardcoded `900` is precisely the drift between the panel and the endpoint that
+        # publishing from `SHARD_DELIVERY_SETTLING_PERIOD` exists to prevent.
+        "last_shard_arrived_at" => run.last_shard_arrived_at.iso8601,
+        "settling_period_seconds" => TestRun::SHARD_DELIVERY_SETTLING_PERIOD.to_i,
         # ADDED BESIDE the keys above, which keep their names, their types and their values.
         # The pin is extended rather than rewritten, so the byte-for-byte guarantee those keys
         # carried is still the same guarantee: `eq` over the whole hash fails on a changed value
@@ -682,7 +701,7 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
     # usually is. Both figures are then computed over three rows: the SUM is a floor, and the MAX
     # is a maximum over a subset that excluded the very shard that would have set it.
     it "reports both figures' coverage when a shard reported no timing" do
-      sharded_run([61.0, 58.5, nil, 60.0], commit_sha: "feedfacecafe0181")
+      run = sharded_run([61.0, 58.5, nil, 60.0], commit_sha: "feedfacecafe0181")
 
       block = get_repository["latest_run"]
 
@@ -702,6 +721,10 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
         "rows" => nil,
         "balanced_wall_clock_seconds" => nil,
         "wall_clock_excess_seconds" => nil,
+        # Served on this fixture too, and its value does not depend on WHICH condition closed the
+        # gate: the pair is a delivery fact, not a decomposition one.
+        "last_shard_arrived_at" => run.last_shard_arrived_at.iso8601,
+        "settling_period_seconds" => TestRun::SHARD_DELIVERY_SETTLING_PERIOD.to_i,
         # The silent shard keeps its row and its `total_specs`, with `duration_seconds` null. This
         # is why the array is served in DELIVERY order rather than ranked: a duration-ranked read
         # is NULLS FIRST in Postgres, so `"3"` — the shard that reported nothing — would sit at
@@ -738,7 +761,7 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
     # four-shard run where nothing reported still ran, and serializing its cost as a measured zero
     # would be the endpoint asserting the suite was free.
     it "keeps machine_seconds null, not zero, when no shard reported a timing" do
-      sharded_run([nil, nil, nil, nil], commit_sha: "feedfacecafe0183")
+      run = sharded_run([nil, nil, nil, nil], commit_sha: "feedfacecafe0183")
 
       block = get_repository["latest_run"]
 
@@ -756,6 +779,18 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
         "rows" => nil,
         "balanced_wall_clock_seconds" => nil,
         "wall_clock_excess_seconds" => nil,
+        # Served even here, where every OTHER figure the shards could have carried is null. The
+        # pair says when the rows ARRIVED, which is known whether or not they said anything when
+        # they did — `Ingest::RunRecorder#upsert_shard` stamps a row on every delivery, timed or
+        # silent. This is the fixture that separates "no shard reported a duration" from "no shard
+        # arrived": the first is this run, and the second is NOT ASSERTED ANYWHERE because it is
+        # unreachable through this endpoint — `serialized_shards` returns `nil` wholesale below
+        # `multi_shard?`, so a run with no shard rows never reaches this serializer and its `null`
+        # cannot be observed by a client. The `&.iso8601` in the controller is insurance for a gate
+        # that widens later, not a branch a fixture here can exercise; don't go looking for the
+        # example, and don't add one by bypassing `multi_shard?`.
+        "last_shard_arrived_at" => run.last_shard_arrived_at.iso8601,
+        "settling_period_seconds" => TestRun::SHARD_DELIVERY_SETTLING_PERIOD.to_i,
         # Every row still served, every duration still null. A run that reported no timings still
         # reported its SIZE, and those counts are the one half of the cost picture that survived —
         # zeroing the durations here would be the same assertion-that-the-suite-was-free the
@@ -897,6 +932,79 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
         # The API withholds exactly where the panel does, and not one figure further: the four
         # keys that never depended on the decomposition are still served.
         expect(shards.values_at("count", "timed_count", "machine_seconds")).to eq([4, 4, 253.75])
+      end
+
+      # AC1. The gap this slice closes, stated as the arithmetic a client would actually perform
+      # rather than as the shape of the block: from the withheld body ALONE, compute the moment the
+      # decomposition comes back. Both operands are required for that — the timestamp without the
+      # period makes the client hardcode 15 minutes, and the period without the timestamp gives it
+      # nothing to add to — so the assertion is on the SUM, which fails if either one is wrong.
+      #
+      # WHICH condition failed was never the gap and is deliberately not asserted here: `count > 1`
+      # and `timed_count == count` are both in this same body, so a client reading `rows: null`
+      # beside them already concludes by elimination that delivery is settling. Only the WHEN was
+      # unreachable.
+      it "carries enough to compute when the withheld decomposition returns, while it is withheld" do
+        run = sharded_run([61.0, 58.5, 74.25, 60.0], commit_sha: "feedfacecafe0233")
+        expect(repository.latest_test_run).to be_wall_clock_decomposition_pending
+
+        shards = get_repository.dig("latest_run", "shards")
+
+        # The client's own computation, over parsed JSON and nothing else.
+        available_at = Time.iso8601(shards["last_shard_arrived_at"]) + shards["settling_period_seconds"]
+
+        # `#floor`, and the truncation is REAL rather than a tolerance loosened to make this pass:
+        # `iso8601` is second-granular on this endpoint (`ingested_at`, `rotated_at` and
+        # `occurred_at` all serialize the same way), so a client's computed moment is the true one
+        # floored by up to a second. Stated here rather than hidden behind `be_within`, because a
+        # reader is entitled to know which direction the error runs — EARLY, never late, which is
+        # the safe direction for a poll: coming back a second too soon costs one more request, and
+        # a moment rounded the other way would tell a client the decomposition was ready before the
+        # gate opened.
+        expect(available_at).to eq(run.last_shard_arrived_at.floor + TestRun::SHARD_DELIVERY_SETTLING_PERIOD)
+        # And the moment it computes really is the GATE's own moment, not merely a well-formed
+        # time: the run is still withheld the second before it and decomposable the second after.
+        # Without this the example passes against any serializer emitting a plausible timestamp
+        # beside a plausible integer. The `+ 1.second` is that same floor and not a fudge — at
+        # exactly `available_at` a run carrying sub-second precision is still a fraction short.
+        travel_to(available_at - 1.second) { expect(run).not_to be_wall_clock_decomposable }
+        travel_to(available_at + 1.second) { expect(run).to be_wall_clock_decomposable }
+      end
+
+      # AC3. The period is PUBLISHED FROM THE CONSTANT, so the endpoint and the Overview panel
+      # cannot drift about how long settling takes.
+      #
+      # Asserted by MOVING the constant, not by comparing the served value to it — a serializer
+      # with `900` typed into it satisfies an equality against `SHARD_DELIVERY_SETTLING_PERIOD` for
+      # exactly as long as nobody changes the constant, which is the drift this criterion is about.
+      # Under a stubbed period the literal implementation goes red and the constant-reading one
+      # tracks it.
+      it "serves the settling period from the constant, so a changed constant changes the body" do
+        sharded_run([61.0, 58.5, 74.25, 60.0], commit_sha: "feedfacecafe0234")
+
+        expect(get_repository.dig("latest_run", "shards", "settling_period_seconds")).to eq(900)
+
+        stub_const("TestRun::SHARD_DELIVERY_SETTLING_PERIOD", 42.minutes)
+
+        expect(get_repository.dig("latest_run", "shards", "settling_period_seconds")).to eq(2520)
+      end
+
+      # AC2, from the other side of the gate. The key-set guards above prove both names are PRESENT
+      # on both branches; this proves the timestamp is VALUED on the open one too, because a
+      # present-but-null-once-settled key would satisfy every key-set assertion in this file while
+      # answering nothing. A settled run saying WHEN it settled is a fact a reader wants after the
+      # decomposition opens and not only before.
+      it "keeps serving the arrival moment once the decomposition has opened" do
+        run = sharded_run([61.0, 58.5, 74.25, 60.0], commit_sha: "feedfacecafe0235", settled: true)
+        expect(repository.latest_test_run).to be_wall_clock_decomposable
+
+        shards = get_repository.dig("latest_run", "shards")
+
+        expect(shards["last_shard_arrived_at"]).to eq(run.last_shard_arrived_at.iso8601)
+        expect(shards["settling_period_seconds"]).to eq(900)
+        # The decomposition really is open, so this is the settled branch and not a second copy of
+        # the pending example above.
+        expect(shards["rows"]).to be_present
       end
 
       # `shard_id` is nullable and a nil one is an ordinary state — `Ingest::RunRecorder#upsert_shard`
@@ -2788,7 +2896,11 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
         "requested_commit_sha" => first.commit_sha,
         "resolved" => true,
         "commit_sha" => first.commit_sha,
-        "branch" => "main"
+        "branch" => "main",
+        # Read off the constant and never as a literal 60, so lowering the rule cannot leave this
+        # example asserting a bound the platform no longer enforces.
+        "observations_retained" => true,
+        "retention_runs" => SpecObservation::BRANCH_RETENTION_RUNS
       )
     end
 
@@ -2804,7 +2916,9 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
         "requested_commit_sha" => nil,
         "resolved" => true,
         "commit_sha" => third.commit_sha,
-        "branch" => "main"
+        "branch" => "main",
+        "observations_retained" => true,
+        "retention_runs" => SpecObservation::BRANCH_RETENTION_RUNS
       )
     end
 
@@ -2827,7 +2941,12 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
         "requested_commit_sha" => "deadbeefdead",
         "resolved" => false,
         "commit_sha" => third.commit_sha,
-        "branch" => "main"
+        "branch" => "main",
+        # The retention disclosure describes the run ACTUALLY SERVED, which under a fallback is the
+        # newest run and not the sha the client typed — the same rule `commit_sha`/`branch` two
+        # lines up already follow.
+        "observations_retained" => true,
+        "retention_runs" => SpecObservation::BRANCH_RETENTION_RUNS
       )
       expect(body["latest_run"]).to include("commit_sha" => third.commit_sha, "total_specs" => 30)
     end
@@ -2847,7 +2966,12 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
         "requested_commit_sha" => "deadbeefdead",
         "resolved" => false,
         "commit_sha" => nil,
-        "branch" => nil
+        "branch" => nil,
+        # `null`, not `true` and not `false`: there is no run to ask, and a boolean here would be a
+        # verdict about a run that does not exist — the same separation `commit_sha: null` draws one
+        # line up. `retention_runs` still ships, because the RULE exists whether or not a run does.
+        "observations_retained" => nil,
+        "retention_runs" => SpecObservation::BRANCH_RETENTION_RUNS
       )
     end
 
@@ -2935,7 +3059,9 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
         "requested_commit_sha" => nil,
         "resolved" => true,
         "commit_sha" => third.commit_sha,
-        "branch" => "main"
+        "branch" => "main",
+        "observations_retained" => true,
+        "retention_runs" => SpecObservation::BRANCH_RETENTION_RUNS
       )
     end
 
@@ -3425,10 +3551,25 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
 
       statements = executed_sql { get_repository(query: { branch: "main" }) }
 
+      # `run_anchor`'s retention boundary is excluded on the SAME rule the `shard_totals` pick is
+      # excluded by in the comment above: it is one indexed read ABOUT THE ANCHORED RUN, not part of
+      # this window, so counting it here would make the budget read as three and hide which of the
+      # two axes moved if one ever did. `TestRun#observations_retained?` emits it.
+      #
+      # Excluded STRUCTURALLY rather than by luck: it is the only branch-scoped read that selects
+      # two columns with an OFFSET, where every window read selects `test_runs.*`. And it is bounded
+      # at exactly ONE statement below rather than merely dropped — an exclusion that swallowed a
+      # per-row boundary read would be the very leak this example exists to catch, so the carve-out
+      # is asserted rather than assumed.
+      boundary_reads = statements.grep(/FROM "test_runs"/).grep(/OFFSET/)
       history_queries = statements.grep(/FROM "test_runs"/).grep(/"branch" = /)
                                   .grep_v(/\(test_runs\.created_at, test_runs\.id\) < /)
+                                  .grep_v(/OFFSET/)
       grouped_counts = statements.grep(/FROM "test_run_shards"/).grep(/GROUP BY/)
 
+      # One boundary read for the whole response, however many rows the window holds — the anchored
+      # run is asked once and no row is asked at all.
+      expect(boundary_reads.length).to eq(1)
       expect(history_queries.length).to eq(1)
       expect(history_queries.first).to include("LIMIT")
       expect(grouped_counts.length).to eq(1)
@@ -3463,13 +3604,17 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
       history = executed_sql { get_repository(query: { branch: "main" }) }
                 .grep(/FROM "test_runs"/).grep(/"branch" = /)
                 .grep_v(/\(test_runs\.created_at, test_runs\.id\) < /)
+                .grep_v(/OFFSET/)
 
       expect(history.length).to eq(1)
       # Both clauses, in that order, in one statement. `latest_run`'s own `LIMIT 1` read carries no
       # branch predicate and is filtered out above, and so is `directory_run_growth`'s previous-run
       # lookup, which DOES carry one — it is excluded on the row-value predicate
       # `Repository#previous_test_run_on_branch` emits and `recent_test_runs` does not, so this
-      # cannot pass by matching either.
+      # cannot pass by matching either. `run_anchor`'s retention boundary carries one too and is
+      # excluded on its OFFSET — it selects two columns where every window read selects
+      # `test_runs.*`, and the example above bounds it at exactly one statement so dropping it here
+      # cannot hide a per-row read.
       expect(history.first).to match(/"branch" = .*LIMIT/m)
     end
 

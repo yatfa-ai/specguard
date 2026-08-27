@@ -34,6 +34,18 @@ RSpec.describe "Repository rejected deliveries", type: :request do
                     "Authorization" => "Bearer #{api_key.raw_token}" }
   end
 
+  # A delivery refused at the RACK BOUNDARY rather than by the controller: the body claims gzip and
+  # is not gzip, so `GzipRequestBody` answers its own 400 and `IngestsController#create` never runs.
+  # This is the family the panel could not see at all until the boundary seam existed.
+  def refuse_a_delivery_at_the_boundary(user_agent: "specguard-rspec/0.3.1")
+    post "/api/v1/ingest",
+         params: "this is not gzip at all",
+         headers: { "Content-Type" => "application/json",
+                    "Content-Encoding" => "gzip",
+                    "User-Agent" => user_agent,
+                    "Authorization" => "Bearer #{api_key.raw_token}" }
+  end
+
   def visit_repository = get repository_path(repository)
 
   def panel = Capybara.string(response.body).find("#rejected-ingests")
@@ -303,6 +315,54 @@ RSpec.describe "Repository rejected deliveries", type: :request do
       expect(panel.all("li").size)
         .to eq(IngestRejection::PANEL_LIMIT * IngestRejection::RETAINED_REASONS_PER_ROW)
       expect(panel.native.to_html.bytesize).to be < 200_000
+    end
+  end
+
+  # Success criterion 6 — the observable end-to-end proof that a refusal decided ABOVE the
+  # controller reaches the surfaces, not merely the table.
+  #
+  # This is the whole point of the seam rather than a restatement of the examples above. The row is
+  # written by a middleware that answers its own 400 and never calls the app, so before it existed
+  # this repository's page rendered "No rejected deliveries" — a positive claim, and a false one —
+  # over a pipeline having every delivery thrown away. Both surfaces already read `RejectedIngests`,
+  # so nothing here is new rendering: what is new is that there is now a row for them to read.
+  describe "when the refusal was decided at the Rack boundary" do
+    before { refuse_a_delivery_at_the_boundary }
+
+    describe "on the repository page" do
+      before { visit_repository }
+
+      it "reports that deliveries are being refused" do
+        expect(connect_text).to include("Deliveries refused")
+      end
+
+      # The exact falsehood this ticket removes.
+      it "no longer claims there are no rejected deliveries" do
+        expect(panel_text).not_to include("No rejected deliveries")
+      end
+
+      # Stored in the middleware's own words, never re-worded into a verdict — the same rule the
+      # controller path is held to.
+      it "names the reason the middleware gave, verbatim" do
+        expect(panel_text).to include(GzipRequestBody::CORRUPT_MESSAGE)
+      end
+
+      # The column that makes a VERSION FLOOR diagnosable, on the path where it matters most: a gem
+      # gzipping at an installation older than `GzipRequestBody` is refused exactly here.
+      it "names the client that reported" do
+        expect(panel_text).to include("specguard-rspec/0.3.1")
+      end
+    end
+
+    # The card grid reads the same verdict through a different query, so it is asserted separately
+    # rather than assumed to follow from `show`.
+    it "shows the refusal marker on the repositories card grid" do
+      get repositories_path
+
+      expect(response.body).to include("Deliveries refused")
+      # The never-wired reading of a nil run, which this repository is NOT: deliveries are arriving
+      # and being destroyed.
+      expect(response.body).not_to include("No runs yet")
     end
   end
 

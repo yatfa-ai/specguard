@@ -67,6 +67,23 @@ class User < ApplicationRecord
   has_many :created_api_keys, class_name: "ApiKey", foreign_key: :created_by_user_id,
                               dependent: :nullify, inverse_of: :created_by_user
 
+  # The account-level credentials this person holds — `sgu_` keys, which authenticate AS them across
+  # every repository they may open. See `UserApiKey`.
+  #
+  # `:destroy`, and the contrast with `created_api_keys` directly above is the whole reason this
+  # line needs a comment. That association is `:nullify` because an `ApiKey` belongs to the
+  # repository and merely RECORDS who minted it: degrading it to "unknown creator" costs a name and
+  # keeps a colleague's CI running. None of that reasoning survives the move to a credential whose
+  # entire meaning is the person. Nullifying here is not even expressible — `user_api_keys.user_id`
+  # is `NOT NULL` — and if it were, it would leave a token authenticating as nobody, holding
+  # whatever access its owner had on the day they left. So the rows go when the person does.
+  #
+  # ARCHIVING is the path that actually gets walked, and `:dependent` says nothing about it:
+  # archiving destroys nothing by design (see the `active` scope below). Refusing an archived
+  # owner's token is `UserApiKey.authenticate`'s job, done at the resolution site, for the reason
+  # given there.
+  has_many :user_api_keys, dependent: :destroy
+
   # `:nullify` for the same reason as `created_api_keys`, one step further: a membership is somebody
   # *else's* access. Deleting the person who granted it must forget who granted it, never revoke the
   # colleague who was granted it — and it must not be confused with `repository_memberships` above,
@@ -88,6 +105,19 @@ class User < ApplicationRecord
   # no orphan. It also cannot keep a user undestroyable for a reason they cannot see: connecting
   # GitHub is not the sort of act that should quietly become irreversible.
   has_many :github_installations, dependent: :destroy
+
+  # The recording of what GitHub said about this person's repositories, taken while a browser
+  # session held a token that could ask — the evidence `POST /api/v1/repositories` redeems, since a
+  # request carrying an API key has no such token. See `GithubRegistrationGrant`.
+  #
+  # `has_one`, because the grant is a statement about the PERSON and there is exactly one of them
+  # (the unique index on `user_id` is the schema half of that rule). A second row would be a second,
+  # divergent opinion about the same GitHub account.
+  #
+  # `:destroy` on `github_installations`' argument, which applies here more strongly: this holds no
+  # credential at all, only repository names GitHub already told this person, and it is derived —
+  # the next page render takes it again. Nothing of anyone else's is in it.
+  has_one :github_registration_grant, dependent: :destroy
 
   before_validation :normalize_github_handle
 

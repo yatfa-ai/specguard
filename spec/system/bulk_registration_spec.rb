@@ -84,4 +84,52 @@ RSpec.describe "Bulk organization registration", type: :system do
     expect(page).to have_content("Registered 1 repository.")
     expect(Repository.pluck(:github_full_name)).to eq(%w[acme/api])
   end
+
+  # SPGD-818, criterion 1, driven the way the person in the ticket actually hits it: a solo
+  # developer whose repositories are ALL in their own namespace, starting from the chooser rather
+  # than from a hand-built `?organization=` URL.
+  #
+  # Every layer below this already passes for a personal namespace, and that is exactly why the
+  # browser example is worth having — the bug was never in the machinery. It was that the page did
+  # not offer the card, so the flow could not be STARTED. This walks the whole flow through the two
+  # clicks a user makes, which is the only place that failure was ever visible.
+  context "when every repository is in the user's own namespace" do
+    before do
+      stub_github(repos: [github_repo("octocat/api", owner_type: "User"),
+                          github_repo("octocat/blog", owner_type: "User")])
+    end
+
+    it "offers the personal namespace and registers a batch from it" do
+      visit bulk_repositories_path
+
+      # The chooser is reachable at all — this is the assertion that used to be impossible. Before
+      # the filter came out, this page rendered the "not for you" empty state and offered exactly
+      # one button: register them one at a time.
+      expect(page).to have_no_content("No repositories to register in a batch")
+      expect(page).to have_content("Personal")
+
+      click_link "octocat"
+
+      # The picker for octocat has genuinely ARRIVED before anything is ticked.
+      #
+      # This is the only navigation in the system suite followed by interaction — every other
+      # example reaches its page with `visit`, which blocks until the load completes. `click_link`
+      # does not: it returns as soon as the click is dispatched, and Turbo Drive then replaces
+      # `<body>` asynchronously. So `check` below could find its node on the OUTGOING chooser and
+      # act on it after the swap had detached it, which chromedriver reports as
+      # `Node with given id does not belong to the document` (SPGD-834).
+      #
+      # `have_button` waits for a control that exists only on the picker, so the swap is complete
+      # before the first `check` looks for anything. It is also a real assertion rather than a
+      # sleep: the chooser link must actually lead to a registerable picker.
+      expect(page).to have_button("Register selected repositories")
+
+      check "octocat/api"
+      check "octocat/blog"
+      click_button "Register selected repositories"
+
+      expect(page).to have_content("Registered 2 repositories.")
+      expect(Repository.pluck(:github_full_name)).to match_array(%w[octocat/api octocat/blog])
+    end
+  end
 end

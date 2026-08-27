@@ -1,7 +1,11 @@
 <aside class="app-sidebar hidden shrink-0 flex-col border-r border-app-border bg-app-surface md:flex">
-  <div class="app-topbar flex items-center gap-2 border-b border-app-border px-4">
-    <span class="inline-block size-2 rounded-full bg-app-cta"></span>
-    <%= link_to "SpecGuard", root_path, class: "text-app-h3 text-app-content" %>
+  <div class="app-topbar flex items-center border-b border-app-border px-4">
+    <%# The mark is decorative here: the wordmark beside it already names the app, so alt="" keeps
+        a screen reader from announcing "SpecGuard" twice for one link. %>
+    <%= link_to root_path, class: "flex items-center gap-2 text-app-h3 text-app-content" do %>
+      <%= image_tag "logo-mark.svg", alt: "", aria: { hidden: true }, class: "h-6 w-auto" %>
+      SpecGuard
+    <% end %>
   </div>
 
   <nav class="flex-1 space-y-1 p-3">
@@ -10,6 +14,11 @@
       <%= link_to "Repositories", repositories_path,
                   class: "block rounded-md px-2 py-1.5 text-sm text-app-content-secondary hover:bg-app-neutral-surface hover:text-app-content" %>
       <%= link_to "Register a repository", new_repository_path,
+                  class: "block rounded-md px-2 py-1.5 text-sm text-app-content-secondary hover:bg-app-neutral-surface hover:text-app-content" %>
+      <%# The account page, and the first nav item that is not about repositories. It exists because
+          `sgu_` user API keys belong to the person rather than to any one repository, so there is
+          no repository page they could have lived on. %>
+      <%= link_to "Account", account_path,
                   class: "block rounded-md px-2 py-1.5 text-sm text-app-content-secondary hover:bg-app-neutral-surface hover:text-app-content" %>
     <% else %>
       <p class="px-2 py-2 text-sm text-app-content-secondary">
