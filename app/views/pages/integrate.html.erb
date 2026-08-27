@@ -722,8 +722,13 @@ specguard-lint: checked 3 @intent annotations, 1 malformed</pre>
               are always integers — <code>0</code>, never <code>null</code>, since “no row carried
               an id” is something measured rather than undefined. Your id shortfall is
               <code>recorded_specs − identified_specs</code>; anything above zero means part of the
-              run has no upsert key, so re-delivering it appends duplicate rows instead of
-              replacing them. <strong class="text-app-content">Do not subtract from
+              run has no upsert key. What that costs depends on how you deliver: post slices with a
+              <code>ci_run_id</code> but no <code>shard_id</code> and re-delivering one appends
+              duplicate rows instead of replacing them
+              (<a href="#sharding" class="underline">below</a>). Named shards replace themselves
+              either way — but the ids are still what carries an example's identity from one run to
+              the next, and they are the only thing that would protect those slices if you ever
+              dropped the <code>shard_id</code>. <strong class="text-app-content">Do not subtract from
               <code>total_specs</code></strong> — that is the run's reported suite size across all
               shards, and it counts what you <em>sent</em>, while these count what was
               <em>stored</em>. The two legitimately differ: repeat an <code>id</code> within one

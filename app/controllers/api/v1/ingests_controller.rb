@@ -71,8 +71,12 @@ class Api::V1::IngestsController < Api::BaseController
       #
       # `example_id` is the upsert key (`Ingest::ObservationRecorder`, `unique_by: %i[test_run_id
       # example_id]`) and it arrives unvalidated, so a payload omitting every id is accepted and
-      # used to return a body byte-identical to one sending them all. An id-less redelivery has
-      # nothing to conflict with and doubles the run's rows; the fix is client-side, and these two
+      # used to return a body byte-identical to one sending them all. For an ANONYMOUS SLICE
+      # (`ci_run_id` present, `shard_id` nil) an id-less redelivery has nothing to conflict with
+      # and doubles the run's rows — that shape only, per that class's "the three shapes, and the
+      # one that has no answer": a named shard is replaced by the delete on `test_run_shard_id`
+      # regardless of ids, and without a `ci_run_id` every POST is its own run. The ids still carry
+      # an example's identity ACROSS runs in every shape. The fix is client-side, and these two
       # operands are what let a client see that it needs to apply it.
       #
       # THE TWO ARE ONE GRAIN AND THE PAIR IS THE POINT. Both are counted over the rows this run

@@ -647,10 +647,17 @@ class SpecObservation < ApplicationRecord
   # carrying no ids at all is accepted and stores a nil in this column on every row. Postgres
   # treats those nulls as distinct, which is what lets an id-less producer keep one row per example
   # instead of collapsing to one row per run, and is equally what leaves an id-less REDELIVERY
-  # nothing to conflict with: the rows double. That is a known gap with no platform-side fix — the
-  # only other candidate key is `(file_path, line_number)`, the coordinate a table-driven loop puts
-  # N examples on — so the fix is client-side, and a client can only apply it if something tells it
-  # the ids are missing. This is that something.
+  # nothing to conflict with. In an ANONYMOUS SLICE (`ci_run_id` present, `shard_id` nil) that is
+  # the only thing standing between a redelivery and a doubled run, so there the rows double —
+  # that shape ALONE, and that precondition is the whole reason this paragraph exists. A named
+  # shard is replaced by the delete on `test_run_shard_id` whether or not it sent ids, and without
+  # a `ci_run_id` every POST is its own run with nothing to collide with; both are enumerated in
+  # `Ingest::ObservationRecorder`'s "the three shapes, and the one that has no answer", which this
+  # paraphrases rather than widens. The ids remain what carries an example's identity ACROSS runs
+  # in every shape. The doubling is a known gap with no platform-side fix — the only other
+  # candidate key is `(file_path, line_number)`, the coordinate a table-driven loop puts N examples
+  # on — so the fix is client-side, and a client can only apply it if something tells it the ids
+  # are missing. This is that something.
   #
   # Counted here rather than answered by a second read for the same reason the outcome counters
   # are: the scan below already has the rows. The three nullable per-example wire columns that
