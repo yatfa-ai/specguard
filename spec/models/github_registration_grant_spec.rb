@@ -106,21 +106,25 @@ RSpec.describe GithubRegistrationGrant do
     # The SAME race, refused by POSTGRES rather than by the Rails validation — the half that only
     # exists because the validation is a read-then-write check both renders can pass.
     #
-    # The raise is stated rather than provoked, and that is a limit of the harness rather than a
-    # choice: a genuine duplicate INSERT aborts the surrounding transactional example, so the
-    # `find_by` this branch exists to perform could not run afterwards. What the example pins is
-    # `RecordNotUnique`'s membership of the rescue list — drop it from `:76` and this fails, while
-    # nothing else in the suite notices.
+    # The collision is PROVOKED, not stated: only the uniqueness SELECT is stubbed away, which is
+    # exactly what a real race removes — the loser's validation ran before the winner's row existed,
+    # so `valid?` genuinely answers true and the INSERT is what collides. Postgres raises the real
+    # `PG::UniqueViolation` against `index_github_registration_grants_on_user_id`, and `find_by`
+    # afterwards is an ordinary read (the transaction is not aborted, because the error is caught).
+    # Drop `RecordNotUnique` from the rescue list in `github_registration_grant.rb:76` and only this
+    # example fails — naming the constraint, so it is also the example that notices if the index
+    # itself goes away.
     it "hands back the winner's row when Postgres is the one that refuses the duplicate" do
       winner = create_registration_grant(user: user, registrable: ["acme/billing-service"])
       loser = described_class.new(user_id: user.id)
+      allow(loser).to receive(:valid?).and_return(true)
       allow(described_class).to receive(:find_or_initialize_by).with(user_id: user.id).and_return(loser)
-      allow(loser).to receive(:save!).and_raise(ActiveRecord::RecordNotUnique, "duplicate key value")
 
       result = described_class.capture(user: user, sources: sources(repos: [repo("acme/ledger")]))
 
       expect(result).to eq(winner)
       expect(result.registrable_full_names).to eq(["acme/billing-service"])
+      expect(described_class.where(user_id: user.id).count).to eq(1)
     end
   end
 
@@ -197,8 +201,11 @@ RSpec.describe GithubRegistrationGrant do
   # record rather than a cosmetic one, and the unique index is the only thing that refuses it.
   #
   # The index is asserted directly rather than through a write, because no write CAN reach it: the
-  # validation always answers first. Drop `unique: true` from the migration and only this example
-  # fails.
+  # validation always answers first. Drop `unique: true` from the migration and this example fails,
+  # together with the Postgres half of the race in `.capture` above — that one provokes a real
+  # duplicate INSERT, so it stops seeing a violation the moment the index stops refusing one. The
+  # two are deliberately coupled: this example says the index EXISTS and is unique, the other says
+  # the code does the right thing when it FIRES.
   it "is the unique index on user_id that enforces that rule under concurrency" do
     index = ActiveRecord::Base.connection.indexes("github_registration_grants")
                               .find { |candidate| candidate.columns == ["user_id"] }
