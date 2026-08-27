@@ -635,6 +635,49 @@ RSpec.describe "GET /api/v1/repository — slowest_tests", type: :request do
     end
   end
 
+  # What this block costs the endpoint, ON A RESOLVED WINDOW — the case no other file can pin.
+  #
+  # ⚠️ THIS EXAMPLE EXISTS BECAUSE THE OTHER TWO CANNOT REACH THE STATE IT MEASURES, and that is a
+  # property of their fixtures rather than an oversight in them. `repository_unstable_tests_spec.rb`
+  # and `repository_directory_growth_spec.rb` both assert `identity.length == 1`, and both say in
+  # their own comments WHY: they ingest through `Ingest::RunRecorder` WITHOUT
+  # `Ingest::IdentityResolver`, so every `spec_identity_id` is NULL, `SlowestTests` stops at its
+  # presence probe, and the two GROUPED reads are never issued. Between them they pin the `1` of the
+  # grain's "0, 1 or 3 and never 2" contract and neither can pin the `3`.
+  #
+  # That left `ObservationGrainReads::IDENTITY_GROUPING` matched by NO committed example —
+  # mutation-verified: replacing it with a pattern that cannot match leaves both of those files
+  # green, while breaking `IDENTITY_PRESENCE` fails them both. A grain pattern that silently matches
+  # nothing is the exact failure that file's header is an argument against, and it reports zero reads
+  # for a grain that fired rather than a red example. This example is the guard for the half of the
+  # partition the unresolved fixtures structurally cannot exercise.
+  describe "what the block costs the endpoint on a window it can rank" do
+    it "issues three identity reads — the presence probe, then the two grouped reads" do
+      window_repository
+
+      reads = observation_reads { get_repository(query: { branch: "main" }) }
+
+      # THE SPLIT, not merely the total: asserted per pattern so a read migrating from one statement
+      # family to the other cannot hide inside a still-correct `3`.
+      expect(reads.grep(ObservationGrainReads::IDENTITY_PRESENCE).length).to eq(1)
+      expect(reads.grep(ObservationGrainReads::IDENTITY_GROUPING).length).to eq(2)
+      expect(identity_grain_reads { get_repository(query: { branch: "main" }) }.length).to eq(3)
+      # And the two patterns are DISJOINT over these statements — the property that lets one grain
+      # carry two patterns without double-counting, which `classified_observation_reads` would
+      # otherwise catch as parts summing to more than the total.
+      expect(reads.grep(ObservationGrainReads::IDENTITY_PRESENCE)
+                  .grep(ObservationGrainReads::IDENTITY_GROUPING)).to eq([])
+    end
+
+    # The gated half of the same contract, stated here beside the ranked one rather than inferred:
+    # unfiltered, `SlowestTests` is never constructed and the grain is EMPTY.
+    it "issues none at all when no branch was asked for" do
+      window_repository
+
+      expect(identity_grain_reads { get_repository }).to eq([])
+    end
+  end
+
   # The block sits BESIDE `unstable_tests` and NOT inside `latest_run`, on that block's own
   # membership rule: `latest_run` is single-run facts by construction, and this is a statement about
   # one test across several runs. Pinned, because a later hand moving it would break every client's
