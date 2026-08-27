@@ -103,13 +103,22 @@ module AdministrationGuideHelper
   # comparing the hint to a stored token's tail, and would never match anything.
   EXAMPLE_TOKEN = "sgk_R0zVvQx7mK2pL9nT4wY6bJ8cH3dF5gA1"
 
-  # The hint for {EXAMPLE_TOKEN}, produced the way the server produces one.
+  # The hint for {EXAMPLE_TOKEN}, produced by ASKING THE SERVER for one rather than by reproducing
+  # how it makes them.
   #
-  # Derived rather than transcribed, so it cannot drift from `ApiKey#token_hint`: change the digest
-  # or the fragment length there and this follows. It is a fingerprint of the DIGEST, so it is not a
-  # substring of the token by construction — the property the page's prose depends on, and the one
-  # the spec pins.
-  EXAMPLE_TOKEN_HINT = "#{ApiKey::TOKEN_PREFIX}…#{ApiKey.digest(EXAMPLE_TOKEN).last(6)}"
+  # The unsaved record is the whole point: `#token_hint` reads only `token_digest`, so handing it a
+  # digest is enough to get the real answer without touching the database or needing a repository.
+  #
+  # This once reimplemented the method instead of calling it — `TOKEN_PREFIX + "…" + digest.last(6)`
+  # — under a comment claiming it therefore could not drift. Half of that was true: both sides went
+  # through `ApiKey.digest`, so a change of hash algorithm did carry over. The fragment length did
+  # not, because the `6` was re-typed here. Changing `#token_hint` to `.last(8)` moved the server and
+  # left the page publishing `sgk_…bec81d`, a hint the server can no longer produce, on a page whose
+  # inherited charter is that where it and the server disagree, THE PAGE IS WRONG. Nothing reported
+  # it, because the spec re-typed the same `6` and so agreed with this constant under every change to
+  # the method and with the server under none. Calling the method closes both halves at once: there
+  # is no second copy of the algorithm left to drift.
+  EXAMPLE_TOKEN_HINT = ApiKey.new(token_digest: ApiKey.digest(EXAMPLE_TOKEN)).token_hint
 
   # The `201` body, shown in full.
   #
