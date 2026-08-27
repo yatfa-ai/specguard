@@ -726,10 +726,10 @@ specguard-lint: checked 3 @intent annotations, 1 malformed</pre>
               <code>ci_run_id</code> but no <code>shard_id</code> and re-delivering one appends
               duplicate rows instead of replacing them
               (<a href="#sharding" class="underline">below</a>). Named shards replace themselves
-              either way — but the ids are what lets a re-delivered slice <em>replace</em> its rows
-              instead of appending them, and they are the only thing that would protect those slices
-              if you ever dropped the <code>shard_id</code>. They are not what carries a test from
-              one run to the next: <code>id</code> is RSpec's positional
+              either way — the delete does that, not the ids. What the ids buy you there is
+              insurance: drop the <code>shard_id</code> and those slices become the case above,
+              where the ids are the only thing keeping a re-delivery from duplicating rows. They
+              are not what carries a test from one run to the next: <code>id</code> is RSpec's positional
               <code>Example#id</code>, unique within a run only, and SpecGuard follows a test across
               runs by its <em>text</em> — its name and intent — not by its id. <strong class="text-app-content">Do not subtract from
               <code>total_specs</code></strong> — that is the run's reported suite size across all

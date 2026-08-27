@@ -653,11 +653,12 @@ class SpecObservation < ApplicationRecord
   # shard is replaced by the delete on `test_run_shard_id` whether or not it sent ids, and without
   # a `ci_run_id` every POST is its own run with nothing to collide with; both are enumerated in
   # `Ingest::ObservationRecorder`'s "the three shapes, and the one that has no answer", which this
-  # paraphrases rather than widens. What the ids buy a named shard is the ability to REPLACE a
-  # re-delivered slice's rows rather than append them, and they are the only thing that would
-  # protect those slices if the `shard_id` were ever dropped. They are NOT what carries an example
-  # across runs — see "The key is run-local, and says so" at the top of this class: `example_id` is
-  # positional, unique within a run, and `unique_by: %i[test_run_id example_id]` is nothing wider.
+  # paraphrases rather than widens. So a named shard's replace-on-redelivery comes from that
+  # delete, not from the ids. What the ids buy it is INSURANCE: drop the `shard_id` and its slices
+  # become anonymous ones, where the key is the only thing standing between a redelivery and a
+  # doubled run. They are NOT what carries an example across runs either — see "The key is
+  # run-local, and says so" at the top of this class: `example_id` is positional, unique within a
+  # run, and `unique_by: %i[test_run_id example_id]` is nothing wider.
   # Cross-run identity is `SpecIdentity`'s, resolved from the row's TEXT (`#signal`, which reads
   # `intent_*` and `name`) via `Ingest::IdentityResolver` — neither of which reads `example_id` —
   # so an id-less run still gets it, `Ingest::Payload#validate_name` requiring a name or an intent
