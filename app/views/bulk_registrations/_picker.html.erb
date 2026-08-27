@@ -51,6 +51,14 @@
                           not listed — about the same repository.
             account       whose picker this is, so a carried name from another account is not
                           bucketed against a list that was never about it.
+            registered    what is already IN SpecGuard, so it is not reported as a shortfall at
+                          all — it is connected, and the reader's goal for it is already met.
+                          Derived from `organization.repos` and not from `administered`, because
+                          the exclusion has to cover the withheld bucket too: a repository
+                          somebody else registered can be visible-but-not-administered here, and
+                          telling this reader to "ask an administrator to register it" would be
+                          asking for a thing already done. Same set `already_registered?` is
+                          computed from four lines up, so it costs no read of its own.
             complete      whether ABSENCE is GitHub's answer or merely ours. The page-side reading
                           of the rule `name_verdict` enforces on the server; with the listing short,
                           the "not connected — add it on GitHub" claim is withheld rather than
@@ -61,7 +69,8 @@
            @full_names, administered.map(&:full_name),
            visible: organization.repos.map(&:full_name),
            account: organization.login,
-           complete: github_listing_complete?
+           complete: github_listing_complete?,
+           registered: organization.repos.map(&:full_name).select { |name| already_registered?(name) }
          ) %>
       <% if shortfall %>
         <p class="mt-1 text-sm text-app-content-secondary"><%= shortfall %></p>

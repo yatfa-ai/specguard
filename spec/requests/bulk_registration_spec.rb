@@ -1360,6 +1360,11 @@ RSpec.describe "Bulk organization registration", type: :request do
       def withheld_claim = "does not list you as an administrator"
       def unconfirmed_claim = "could not confirm"
       def capitalisation_claim = "listed under a different capitalisation"
+      # The capitalisation bucket's INSTRUCTION, asserted apart from its claim because they can fail
+      # independently: the round-2 defect was a true diagnosis carrying an instruction the page
+      # could not offer, so a fix that reworded the claim while keeping the "tick" would pass an
+      # assertion on the claim alone.
+      def tick_instruction = "Tick the matching"
 
       # ── The bucket the ticket was filed for: GitHub's own answer, from a COMPLETE reading ──────
 
@@ -1515,6 +1520,80 @@ RSpec.describe "Bulk organization registration", type: :request do
         picker_carrying(%w[acme/api acme/web])
 
         expect(response.body).to include("Already registered")
+        expect(response.body).not_to include(absent_claim)
+      end
+
+      # ── The same property, asked of the SPELLING that used to escape it ────────────────────────
+      #
+      # The example directly above carries names spelled exactly as the listing spells them, so the
+      # property it asserts was only ever true case-sensitively: `missing` is the checkbox's
+      # case-SENSITIVE subtraction, so `acme/web` never reached the buckets at all and the silence
+      # above was free. The SAME repository carried as `Acme/API` did reach them, landed in the
+      # capitalisation bucket, and was answered with "Tick the matching row below" — an instruction
+      # naming a row that renders `disabled` because it is already registered.
+      #
+      # Two examples rather than one because the row is unclickable in two DIFFERENT ways, through
+      # two different branches of the template, and an exclusion wired to `registerable` rather than
+      # to the registration fact could pass either one alone.
+      it "does not tell the reader to tick a row that is disabled because it is already registered" do
+        create_repository(user: @user, github_full_name: "acme/api")
+
+        # Spelled the way GitHub DISPLAYS it, which is an ordinary way for this to arrive: names are
+        # carried case-preserved, so submitting `Acme/API`, adding it on GitHub, registering it and
+        # returning to the picker on that same handle reaches exactly this state.
+        picker_carrying(%w[Acme/API])
+
+        picker = Capybara.string(response.body)
+        # The row is there and the page has already accounted for it — with a badge, not a sentence.
+        expect(picker).to have_field(type: "checkbox", with: "acme/api", disabled: true)
+        expect(response.body).to include("Already registered")
+        # So no clause claims a shortfall about it, and in particular none issues an instruction the
+        # reader cannot carry out on a disabled row.
+        expect(response.body).not_to include(capitalisation_claim)
+        expect(response.body).not_to include(tick_instruction)
+        expect(response.body).not_to include(absent_claim)
+      end
+
+      # THE HARDER SUB-STATE, and the one that reads worst: when EVERY administered repository is
+      # registered, `registerable.empty?` swaps the whole list for the "Nothing left to register"
+      # empty state and NO checkbox renders at all. The clause was printing "Tick the matching row
+      # below" directly above a paragraph saying there is nothing left to do — two paragraphs, one
+      # page, opposite instructions.
+      it "does not tell the reader to tick a row when the picker has no rows left to offer" do
+        create_repository(user: @user, github_full_name: "acme/api")
+        create_repository(user: @user, github_full_name: "acme/web")
+
+        picker_carrying(%w[Acme/API])
+
+        # The page is in its empty state — this is the branch that renders no fields at all, so the
+        # assertions below are about a page with nothing to tick rather than a merely disabled row.
+        expect(response.body).to include("Nothing left to register")
+        expect(Capybara.string(response.body)).to have_no_field(type: "checkbox", with: "acme/api")
+        expect(response.body).not_to include(capitalisation_claim)
+        expect(response.body).not_to include(tick_instruction)
+      end
+
+      # The capitalisation bucket is not the only one an already-registered name could reach, so the
+      # exclusion is done BEFORE the partition rather than inside that one clause. A repository
+      # somebody else registered can be visible-but-not-administered by this reader, which lands in
+      # the withheld bucket — "ask an administrator of that repository to register it", about a
+      # repository that is already registered. That instruction is wrong in the same way: it asks
+      # for work that is already done.
+      it "does not ask for an administrator to register a repository that is already registered" do
+        other = create_user(github_uid: "3003", github_handle: "octocat")
+        create_repository(user: other, github_full_name: "acme/web")
+        stub_github(repos: [github_repo("acme/api"), github_repo("acme/web", admin: false)])
+
+        get bulk_repositories_path(organization: "acme", github_full_names: %w[acme/web])
+
+        expect(response).to have_http_status(:ok)
+        # The listing is still short and still says so in its own counting words — the sibling
+        # sentence is untouched, which is what makes this about the per-name clause and not about
+        # suppressing the page's honesty generally.
+        expect(response.body).to include("you do not administer")
+        # But the per-name clause does not ask for a registration that has already happened.
+        expect(response.body).not_to include(withheld_claim)
+        expect(response.body).not_to include("Ask an administrator")
         expect(response.body).not_to include(absent_claim)
       end
 

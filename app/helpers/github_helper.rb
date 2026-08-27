@@ -416,8 +416,37 @@ module GithubHelper
   # ## What it does NOT report
   #
   # A carried name whose repository IS listed and ticked is not here at all, and neither is one that
-  # is listed but already REGISTERED: that has a row, the row carries an "Already registered" badge,
-  # and the page has said what happened to it.
+  # is already REGISTERED — whatever the reader spelled it, and whether or not it has a row.
+  #
+  # That exclusion is `registered:`, and it happens BEFORE the buckets rather than falling out of
+  # one of them, because an already-registered repository is not a shortfall by any of the four
+  # readings below: it is connected, it is in SpecGuard, and the reader's goal for it is already
+  # met. Doing it case-INSENSITIVELY is the load-bearing part. `missing` above is the checkbox's
+  # case-SENSITIVE subtraction, so an already-registered name spelled the listing's way never
+  # reached the buckets anyway, while the SAME repository spelled `Acme/API` did — and came out of
+  # `mis_spelled` with "tick the matching row below", an instruction naming a row that renders
+  # `disabled` (`_picker.html.erb`, `taken`) and therefore cannot be ticked. Worse, when EVERY
+  # administered repository is registered there is no row at all: `registerable.empty?` swaps the
+  # whole list for the "Nothing left to register" empty state, and the clause printed a "tick the
+  # row below" directly above a paragraph saying there is nothing left to do. One spelling was
+  # silent and the other issued an impossible instruction, about one repository.
+  #
+  # It is not only `mis_spelled` that this saves. A repository somebody else registered can be
+  # visible-but-not-administered by this reader, and that lands in `withheld` — "ask an
+  # administrator of that repository to register it", about a repository that is already
+  # registered. Excluding before the partition retires both, which is why it is here and not a
+  # guard inside one clause.
+  #
+  # The page has already accounted for these either way: a listed one carries an "Already
+  # registered" badge on its own row, and an unlisted one was reported as `already_registered` by
+  # the summary the reader arrived from.
+  #
+  # The exclusion reaches exactly as far as the page's own knowledge, which is the whole of what it
+  # needs: `registered:` is the caller's `already_registered?` over the account's slice of the
+  # listing, and that predicate is itself only ever true for a name IN that slice. A carried name
+  # absent from the listing altogether is therefore never excluded here — correctly, because a
+  # repository registered in SpecGuard whose installation has since been removed genuinely IS "not
+  # connected to the App", which is the only claim the absent bucket makes about it.
   #
   # Neither is a name belonging to some OTHER account. This page is one account's, every row on it
   # is that account's, and `visible` is that account's slice of the listing — so a foreign name is
@@ -444,10 +473,16 @@ module GithubHelper
   # `withheld_repositories_sentence` states in full: a newline inside a sentence renders fine in a
   # browser and is invisible to anything matching on the text.
   def unmatched_carried_repositories_sentence(carried, listed, visible: [], account: nil,
-                                              complete: true)
+                                              complete: true, registered: [])
     listed = Array(listed)
     missing = Array(carried).reject { |name| listed.include?(name) }
     missing = missing.select { |name| owned_by?(name, account) } if account.present?
+    # Case-INSENSITIVELY, and before the partition — see "What it does NOT report" above. This is
+    # the one exclusion that must not be spelling-sensitive: the whole defect it retires is that
+    # `missing` already drops the case-same spelling and only the case-divergent one survived to be
+    # told to tick a row it cannot tick.
+    done = Array(registered).to_set(&:downcase)
+    missing = missing.reject { |name| done.include?(name.downcase) }
     return nil if missing.empty?
 
     by_name = listed.index_by(&:downcase)
@@ -629,6 +664,13 @@ module GithubHelper
   # name from somewhere else cannot be bucketed against a list that was never about it — see the
   # method above. Case-insensitively, because GitHub logins are, and every other layer that matches
   # one does the same (`GithubOrganizations.find` uses `casecmp?`).
+  #
+  # A SLASHLESS name (`"foo"`, never a real full name) takes `split("/").first` → `"foo"`, which
+  # matches no login, so it is dropped and reported about by nothing. That is the safe outcome and
+  # the one every real caller gets, since the view always passes an account. Note the `nil`-account
+  # default in the method above behaves differently — it skips this filter entirely rather than
+  # applying it permissively — so the two are not interchangeable, and the caller that means "this
+  # page belongs to an account" must say which.
   def owned_by?(full_name, account)
     full_name.to_s.split("/").first.to_s.casecmp?(account.to_s)
   end
