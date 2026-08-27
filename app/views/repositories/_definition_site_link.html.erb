@@ -39,11 +39,50 @@
     NEW TAB: the reader is mid-worklist, and losing a list narrowed by two asks to follow one link
     would make the panel worse to use the more of it you work through. `rel` is written out rather
     than left to the browsers that imply it. %>
+<%# `link_name:` — OFF unless a caller asks for it, which is why it is read through `local_assigns`
+    rather than as a required local: "Unannotated examples" and "Examples in this spec file" pass
+    nothing and print the name plainly, exactly as they did before this flag existed.
+
+    It turns the NAMED branch's first line into a link into "This test, run by run"
+    (`_unstable_test_runs.html.erb`), which already carries a Duration column and is already keyed
+    on the name. "Slowest tests" opts in because it ranks ten wall clocks against ONE run, so its
+    reader's first question about any row — is this test always this slow, or was it slow today —
+    is answered by that panel and by nothing on this one. The other two panels are not ranked by
+    duration and their readers are not asking it, so the flag stays a CALLER's claim about its own
+    reader rather than a decision this shared cell makes for all three.
+
+    THE LABEL IS LINKED AND THE NAME IS ASKED. `#label` falls back to the definition site for a
+    nameless row — a coordinate the destination cannot resolve — so the ask is keyed on `name`.
+    Inside this branch `name.present?` is already true and the two read alike; keying on `name` is
+    what keeps that true rather than leaving it to hold by coincidence.
+
+    NOT a new tab and NO `rel`, unlike the coordinate below it: this one stays on the page, because
+    the destination is another panel of the page the reader is already on.
+
+    Through `drill_down_path`, so opening a test closes no file, area, description, branch or run
+    the reader opened separately. `aria-current` on the row whose test is open, for the reason
+    `_unstable_tests.html.erb` gives: the destination is a long way down the page and a reader
+    arriving back here needs to be told which row they are already looking at.
+
+    ZERO NEW QUERIES: `drill_down_path` reads request ivars already in scope and composes a path.
+
+    The `else` branch is untouched by the flag — a nameless row has no name to key an ask on, and
+    its label already IS the coordinate. %>
+<% link_name = local_assigns.fetch(:link_name, false) %>
 <% definition_site_url = @repository.github_blob_url(observation.file_path,
                                                      observation.line_number,
                                                      @latest_test_run.commit_sha) %>
 <% if observation.name.present? %>
-  <%= observation.label %>
+  <% if link_name %>
+    <%= link_to observation.label,
+                drill_down_path(@repository, unstable_test: observation.name,
+                                anchor: "unstable-test-runs"),
+                class: "underline underline-offset-2 decoration-app-border-light " \
+                       "text-app-content hover:decoration-app-content",
+                aria: { current: observation.name == @unstable_test_request ? "true" : nil } %>
+  <% else %>
+    <%= observation.label %>
+  <% end %>
   <span class="block font-mono text-xs text-app-muted">
     <%= link_to observation.location_label, definition_site_url,
                 class: "underline underline-offset-2 decoration-app-border-light " \
