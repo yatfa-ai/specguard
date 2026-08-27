@@ -149,7 +149,7 @@ class UnstableTests
   # CALLER rather than over it: it is reached only through `#unstable_tests_exclusion_sentence`,
   # which the repository page renders inside the `<% if @unstable_tests.comparable? %>` branch of its
   # "Tests whose outcome changed" panel (`id: "unstable-tests"`). The API serializer
-  # (`Api::V1::RepositoriesController#serialized_unstable_tests`, which emits the `unnamed_count:`
+  # (`RepositoryOverview#serialized_unstable_tests`, which emits the `unnamed_count:`
   # key) is the latter — it serves the nil through as `null`.
   attr_reader :unnamed_count
 

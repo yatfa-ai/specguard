@@ -77,6 +77,55 @@ class Api::V1::UserRepositoriesController < Api::BaseController
     }
   end
 
+  # ONE REPOSITORY, IN FULL — the same overview `GET /api/v1/repository` serves an `sgk_` caller,
+  # for a repository this PERSON may open, named by id rather than by a credential.
+  #
+  # ## Why the body is not written here
+  #
+  # It is `RepositoryOverview`'s, and that object is handed a repository and the ask. Reproducing
+  # sixty serializers on this side would be two bodies for one contract, drifting the first time
+  # either was touched — the failure this endpoint's own `#serialize` calls out for a four-field
+  # block, at fifty times the surface. The singular route renders the same object, so the two
+  # cannot come to describe the same repository differently.
+  #
+  # ## `api_key` is ABSENT here, not null
+  #
+  # That block describes the credential that made the request. This request was made with a USER
+  # key, which is not a repository key and has no `last_used_at` or `rotated_at` to report; and the
+  # repository's own `sgk_` keys are not the caller's to describe. A block of nulls would be a
+  # sentence about a credential that does not exist, so the key is simply not served — see
+  # `RepositoryOverview#body`, which takes the block from the caller that has one.
+  #
+  # `credential_health` DOES answer, and is arguably worth more here than on the singular route: it
+  # reports on the repository's keys as a SET, which under a user key is a set the caller holds none
+  # of and could not otherwise ask about (an `sgk_` key is reveal-once and unrecoverable).
+  #
+  # ## The read boundary is `accessible_by`, and there is no policy object
+  #
+  # `Repository.accessible_by(current_api_user)` is this application's read-side boundary — owned
+  # UNION shared-through-a-membership — and the scope IS the authorization. `#index` two methods
+  # above serves the same relation; a repository outside it does not enter this query, so there is
+  # nothing here that could leak one.
+  #
+  # ⭐ NIL IS 404, NEVER 403, and the two cases are deliberately indistinguishable. A repository the
+  # person cannot open and a repository that was never registered arrive here identically — as `nil`
+  # from a scoped `find_by` — and separating them would mean asking a second, UNSCOPED question for
+  # the sole purpose of telling a caller that something they may not see nevertheless exists. That
+  # turns id enumeration into a census of the platform. `Api::BaseController#render_not_found`
+  # carries the same argument at the surface it is rendered from.
+  #
+  # `find_by` rather than `find`: a `RecordNotFound` from an `ActionController::API` with no rescue
+  # registered is a 500, and "no such id" is an ordinary answer rather than an exception. It also
+  # makes criterion 4 fall out for free — a malformed id (`"abc"`, `"9' OR 1=1"`) casts to no
+  # integer, matches no row and lands on the same 404, with no raise and no special-casing.
+  def show
+    repository = Repository.accessible_by(current_api_user).find_by(id: params[:id])
+
+    return render_not_found("No repository with that id is available to this key.") if repository.nil?
+
+    render json: RepositoryOverview.new(repository: repository, params: params).body
+  end
+
   # WHAT MAY BE REGISTERED — the reading `#index` cannot give, because that one serves
   # `Repository.accessible_by` and a repository nobody has registered yet is by definition not in
   # it. Without this an agent holding an `sgu_` key can only guess a name and POST it blind, one at

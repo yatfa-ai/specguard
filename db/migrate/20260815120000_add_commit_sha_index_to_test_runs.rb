@@ -2,7 +2,7 @@
 
 # The index `?commit_sha=` would otherwise read without.
 #
-# `Repository#latest_test_run_for_commit` — the finder `Api::V1::RepositoriesController#latest_test_run`
+# `Repository#latest_test_run_for_commit` — the finder `RepositoryOverview#latest_test_run`
 # re-anchors on when a client names a run — is an equality on `(repository_id, commit_sha)` ordered
 # by `(created_at, id)` DESC, taking one row. `test_runs` carried no index able to serve it:
 # `[repository_id, branch, created_at, id]` is prefixed by a column this query does not constrain,

@@ -106,7 +106,7 @@ RSpec.describe "GET /api/v1/repository — delivery_health", type: :request do
 
   # ── ⭐ THE REGRESSION THIS FEATURE IS ONE MISTAKE AWAY FROM ───────────────────────────────────
   #
-  # `Api::V1::RepositoriesController#latest_test_run` is RE-ANCHORED by `?commit_sha=`, deliberately,
+  # `RepositoryOverview#latest_test_run` is RE-ANCHORED by `?commit_sha=`, deliberately,
   # so every run-grain block describes the named run coherently. Handing that memo to
   # `RejectedIngests` would compare the newest refusal against an arbitrary PINNED OLDER run — so a
   # client bookmarking an old commit on a perfectly healthy repository would be told its pipeline is

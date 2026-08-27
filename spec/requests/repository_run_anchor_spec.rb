@@ -380,7 +380,7 @@ RSpec.describe "Repository run anchor", type: :request do
   end
 
   # Success criterion 5. ⭐ The trap the JSON endpoint hit first and wrote the rule out for, at
-  # `Api::V1::RepositoriesController#rejected_ingests`: delivery health is a fact about the
+  # `RepositoryOverview#rejected_ingests`: delivery health is a fact about the
   # repository's DELIVERY STREAM and not about whichever run the reader anchored to. Handing the
   # re-anchored run to `RejectedIngests` compares the newest REFUSAL against an arbitrary pinned
   # OLDER run, so any reader bookmarking an old commit on a perfectly healthy repository is told

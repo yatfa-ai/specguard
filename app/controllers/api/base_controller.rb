@@ -130,6 +130,21 @@ class Api::BaseController < ActionController::API
            status: :unauthorized
   end
 
+  # ⭐ THE ANSWER FOR "YOU MAY NOT SEE THIS", AND FOR "THIS DOES NOT EXIST", DELIBERATELY THE SAME
+  # ONE. A member route scoped through `Repository.accessible_by(current_api_user)` never has the
+  # forbidden row in hand to refuse — it was not in the relation — so there is no 403 to render and
+  # no query that would establish one. Answering 403 would require asking a SECOND, unscoped
+  # question purely to tell a caller that something they cannot open is nevertheless there, which
+  # discloses the existence of every repository on the platform to anyone willing to enumerate ids.
+  #
+  # So the two states are indistinguishable from outside, and that is the property rather than a
+  # limitation of the implementation. See `Api::V1::UserRepositoriesController#show`.
+  #
+  # No `details`: a 404 has nothing per-field to say, and the id is already in the caller's URL.
+  def render_not_found(message = "The requested resource could not be found.")
+    render json: { error: "not_found", message: message }, status: :not_found
+  end
+
   # `details` carries every validation failure; `message` repeats the first so a client that reads
   # only the two conventional keys still learns which spec is at fault.
   def render_bad_request(details)

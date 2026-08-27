@@ -5,7 +5,7 @@
 # The sixth `Requested*Param`, and the first that re-anchors WHICH RUN the response describes rather
 # than narrowing what is served about the run it already picked. The five siblings all take the
 # anchor as given: `?branch=` narrows a history, and the three drill-in parameters open one area,
-# one file or one description OF THE RUN `Api::V1::RepositoriesController#latest_test_run` had
+# one file or one description OF THE RUN `RepositoryOverview#latest_test_run` had
 # already chosen. This one chooses that run — which is why it is read in exactly one place, the
 # memo itself, and why every dependent block follows without reading it at all.
 #
@@ -36,7 +36,7 @@
 #
 # No validation branch and no 404, and no shape check on the sha either. A sha this repository has
 # no run for is not a malformed request — a stale bookmark, a pruned run and a commit whose CI never
-# reported are all ordinary ways to arrive, and `Api::V1::RepositoriesController#serialized_run_anchor`
+# reported are all ordinary ways to arrive, and `RepositoryOverview#serialized_run_anchor`
 # answers them by falling back to the newest run and SAYING SO (`source: "requested"`,
 # `resolved: false`). That is the stance `RepositoriesController`'s `@trajectory_branch_request`
 # takes for the same shape of ask on the human page. Nor does this care whether the string looks
