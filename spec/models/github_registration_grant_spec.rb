@@ -81,6 +81,51 @@ RSpec.describe GithubRegistrationGrant do
     it "answers nil rather than raising when there is nobody to grant to" do
       expect(described_class.capture(user: nil, sources: sources(repos: []))).to be_nil
     end
+
+    # The LOSER of the race the rescue names: two concurrent page renders for the same person, one
+    # of which read `find_or_initialize_by` before the other's row existed and so holds a `new`
+    # record that is about to collide.
+    #
+    # Staged deterministically rather than with threads — handing `.capture` a fresh unsaved row for
+    # a `user_id` that already has one IS the loser's state, and no amount of scheduling makes it
+    # more so. The contract the rescue's own comment states is that the loser was writing the same
+    # GitHub answer, so it has "nothing to add and nothing to report": it neither raises nor
+    # overwrites, and hands back the row that won.
+    it "hands back the winner's row when it loses a race for the same person" do
+      winner = create_registration_grant(user: user, registrable: ["acme/billing-service"])
+      allow(described_class).to receive(:find_or_initialize_by)
+        .with(user_id: user.id).and_return(described_class.new(user_id: user.id))
+
+      result = described_class.capture(user: user, sources: sources(repos: [repo("acme/ledger")]))
+
+      expect(result).to eq(winner)
+      expect(result.registrable_full_names).to eq(["acme/billing-service"])
+      expect(described_class.where(user_id: user.id).count).to eq(1)
+    end
+
+    # The SAME race, refused by POSTGRES rather than by the Rails validation — the half that only
+    # exists because the validation is a read-then-write check both renders can pass.
+    #
+    # The collision is PROVOKED, not stated: only the uniqueness SELECT is stubbed away, which is
+    # exactly what a real race removes — the loser's validation ran before the winner's row existed,
+    # so `valid?` genuinely answers true and the INSERT is what collides. Postgres raises the real
+    # `PG::UniqueViolation` against `index_github_registration_grants_on_user_id`, and `find_by`
+    # afterwards is an ordinary read (the transaction is not aborted, because the error is caught).
+    # Drop `RecordNotUnique` from the rescue list in `github_registration_grant.rb:76` and only this
+    # example fails — naming the constraint, so it is also the example that notices if the index
+    # itself goes away.
+    it "hands back the winner's row when Postgres is the one that refuses the duplicate" do
+      winner = create_registration_grant(user: user, registrable: ["acme/billing-service"])
+      loser = described_class.new(user_id: user.id)
+      allow(loser).to receive(:valid?).and_return(true)
+      allow(described_class).to receive(:find_or_initialize_by).with(user_id: user.id).and_return(loser)
+
+      result = described_class.capture(user: user, sources: sources(repos: [repo("acme/ledger")]))
+
+      expect(result).to eq(winner)
+      expect(result.registrable_full_names).to eq(["acme/billing-service"])
+      expect(described_class.where(user_id: user.id).count).to eq(1)
+    end
   end
 
   describe "#stale?" do
@@ -134,12 +179,38 @@ RSpec.describe GithubRegistrationGrant do
     end
   end
 
-  # One row per person, and the database is what says so — not whichever code path happens to be
-  # writing. A per-key grant would narrow a key's reach below its holder's, and would let one
-  # person hold several divergent opinions about their own GitHub access.
-  it "permits only one grant per person" do
+  # One row per person. A per-key grant would narrow a key's reach below its holder's, and would let
+  # one person hold several divergent opinions about their own GitHub access.
+  #
+  # The rule is enforced TWICE and the two halves are pinned separately, because neither example
+  # can observe the other's half. This one is the RAILS VALIDATION: the factory writes through
+  # `create!`, so `validates :user_id, uniqueness: true` refuses before an INSERT is ever issued and
+  # Postgres is never consulted. The next example is the database half.
+  it "permits only one grant per person — the Rails validation refuses the second" do
     create_registration_grant(user: user)
 
     expect { create_registration_grant(user: user) }.to raise_error(ActiveRecord::RecordInvalid)
+  end
+
+  # The DATABASE half of that same rule, and the half that actually holds the line.
+  #
+  # `validates :user_id, uniqueness: true` is a read-then-write check — SELECT, then INSERT — so two
+  # concurrent page renders both pass it, both INSERT, and one person ends up holding two divergent
+  # grant rows that `find_by(user_id:)` then picks between arbitrarily. Since a grant is what
+  # authorizes `POST /api/v1/repositories` for a session-less `sgu_` key, that is an authorization
+  # record rather than a cosmetic one, and the unique index is the only thing that refuses it.
+  #
+  # The index is asserted directly rather than through a write, because no write CAN reach it: the
+  # validation always answers first. Drop `unique: true` from the migration and this example fails,
+  # together with the Postgres half of the race in `.capture` above — that one provokes a real
+  # duplicate INSERT, so it stops seeing a violation the moment the index stops refusing one. The
+  # two are deliberately coupled: this example says the index EXISTS and is unique, the other says
+  # the code does the right thing when it FIRES.
+  it "is the unique index on user_id that enforces that rule under concurrency" do
+    index = ActiveRecord::Base.connection.indexes("github_registration_grants")
+                              .find { |candidate| candidate.columns == ["user_id"] }
+
+    expect(index).to be_present
+    expect(index.unique).to be(true)
   end
 end
