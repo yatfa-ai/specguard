@@ -152,14 +152,22 @@ RSpec.describe "GET /api/v1/repository — latest_run.repeated_description_examp
       expect(block(query: { repeated_description: looped })).to eq(
         "name" => looped,
         "rows" => [
+          # `intent_layer` is null on every row: this fixture is built from unannotated examples,
+          # which declare no layer, so a null is the honest reading rather than a gap. What this
+          # block owes the endpoint is the SHAPE — the key present on every row — and the value axis
+          # (a declared token beside an honest null) is pinned in `repository_latest_run_spec.rb`.
           { "name" => looped, "file_path" => order_spec, "line_number" => 4,
-            "spec_file_path" => order_spec, "duration_seconds" => 4.0, "outcome" => "passed" },
+            "spec_file_path" => order_spec, "duration_seconds" => 4.0, "outcome" => "passed",
+            "intent_layer" => nil },
           { "name" => looped, "file_path" => order_spec, "line_number" => 12,
-            "spec_file_path" => order_spec, "duration_seconds" => 1.5, "outcome" => "failed" },
+            "spec_file_path" => order_spec, "duration_seconds" => 1.5, "outcome" => "failed",
+            "intent_layer" => nil },
           { "name" => looped, "file_path" => billable_shared, "line_number" => 7,
-            "spec_file_path" => refund_spec, "duration_seconds" => 0.5, "outcome" => "passed" },
+            "spec_file_path" => refund_spec, "duration_seconds" => 0.5, "outcome" => "passed",
+            "intent_layer" => nil },
           { "name" => looped, "file_path" => order_spec, "line_number" => 20,
-            "spec_file_path" => order_spec, "duration_seconds" => nil, "outcome" => "pending" }
+            "spec_file_path" => order_spec, "duration_seconds" => nil, "outcome" => "pending",
+            "intent_layer" => nil }
         ],
         "recorded_count" => 4,
         "timed_count" => 3,
@@ -178,7 +186,7 @@ RSpec.describe "GET /api/v1/repository — latest_run.repeated_description_examp
         .to contain_exactly("name", "rows", "recorded_count", "timed_count", "limit")
       expect(served["rows"].first.keys)
         .to contain_exactly("name", "file_path", "line_number", "spec_file_path",
-                            "duration_seconds", "outcome")
+                            "duration_seconds", "outcome", "intent_layer")
     end
 
     # AC5 again, and the assertion neither block's own contract can make alone: this endpoint now has

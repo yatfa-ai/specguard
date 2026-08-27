@@ -40,6 +40,22 @@ RSpec.describe Ingest::SpecSignal do
       expect(described_class.for(annotated).text)
         .to eq("Invoice finalize locks the line items once the invoice is finalized")
     end
+
+    # THE CONSTANT ITSELF, pinned as its own subject rather than left to the behaviour above.
+    #
+    # This became worth guarding the day `spec_observations.intent_layer` shipped (SPGD-851). Before
+    # that the layer was nowhere in storage, so folding it into the identity text was not a change
+    # anyone could make casually; now the column exists, sits beside the three fields this list
+    # names, and reads like the obvious fourth member of an incomplete set. It is not one.
+    #
+    # Adding `"layer"` here would put the SAME TOKEN in the text of every unit test in the suite —
+    # silently re-pointing the embeddings that back duplicate detection at a field that classifies
+    # tests instead of describing them, and corrupting semantic identity for every annotated example
+    # already stored. The text assertion above would catch it, but only while someone reads it as
+    # being about the constant; this says so directly.
+    it "represents a test by entity, action and behavior — and by nothing else" do
+      expect(Ingest::SpecSignal::INTENT_PARTS).to eq(%w[entity action behavior])
+    end
   end
 
   describe "an unannotated spec carrying a name" do

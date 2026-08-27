@@ -83,14 +83,20 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
   # makes `RepeatedDescriptions::Row#files_seen` differ from the raw `ARRAY_AGG … FILTER` it wraps:
   # with every row of a group carrying nil, that aggregate is SQL NULL rather than an empty array,
   # and the serialized key would be `null` instead of `[]`.
+  # `intent_layer:` is the DECLARED layer of an annotated example — one of the four
+  # `open-test-intent` enum tokens — and defaults to nil because this helper's rows are
+  # `status: "unannotated"`, which is precisely the population that declares none. Passing one makes
+  # the row an annotated example's stored declaration, which is the only way a fixture here can put
+  # a real token and an honest null in the same ranking.
   def observe(run, path:, duration:, line_number:, name: nil, outcome: nil, defined_in: nil,
-              included_by: path)
+              included_by: path, intent_layer: nil)
     run.spec_observations.create!(
       repository: run.repository, example_id: "./#{path}[1:#{line_number}]",
       file_path: defined_in || path,
       spec_file_path: included_by,
       line_number: line_number,
-      status: "unannotated", duration_seconds: duration, name: name, outcome: outcome
+      status: "unannotated", duration_seconds: duration, name: name, outcome: outcome,
+      intent_layer: intent_layer
     )
   end
 
@@ -1414,9 +1420,9 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
       run = create_test_run(repository: repository, commit_sha: "slowest00001",
                             branch: "main", total_specs_count: 4, duration_seconds: 30.0)
       observe(run, path: "spec/models/user_spec.rb", duration: 2.0, line_number: 11,
-              name: "User validates its email", outcome: "passed")
+              name: "User validates its email", outcome: "passed", intent_layer: "unit")
       observe(run, path: "spec/requests/checkout_spec.rb", duration: 9.5, line_number: 3,
-              name: "Checkout completes an order", outcome: "failed")
+              name: "Checkout completes an order", outcome: "failed", intent_layer: "request")
       observe(run, path: "spec/models/invoice_spec.rb", duration: 0.5, line_number: 7,
               name: "Invoice totals its line items", outcome: "pending")
       observe(run, path: "spec/requests/search_spec.rb", duration: 6.25, line_number: 2,
@@ -1426,27 +1432,33 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
 
     def slowest_examples = get_repository.dig("latest_run", "slowest_examples")
 
-    # AC1 + AC2. Every row carries all six operands, and the array is asserted as a SEQUENCE — `eq`,
-    # not `match_array` — against a fixture whose insertion order it does not match.
+    # AC1 + AC2. Every row carries all seven operands, and the array is asserted as a SEQUENCE —
+    # `eq`, not `match_array` — against a fixture whose insertion order it does not match.
+    #
+    # `intent_layer` runs the whole width of its own axis here: two rows carry a DECLARED enum token
+    # and two carry `null`, interleaved rather than grouped at one end. A serializer that defaulted
+    # the column, guessed a layer from the file's directory, or dropped the key on the rows that
+    # have none is red on this one assertion — and the interleaving is what makes it so, since a
+    # ranking whose values happened to sit in a block could be satisfied by a zip that slipped.
     it "serves each slow example's raw operands, slowest first" do
       expect(slowest_examples["rows"]).to eq(
         [
           { "name" => "Checkout completes an order",
             "file_path" => "spec/requests/checkout_spec.rb", "line_number" => 3,
             "spec_file_path" => "spec/requests/checkout_spec.rb",
-            "duration_seconds" => 9.5, "outcome" => "failed" },
+            "duration_seconds" => 9.5, "outcome" => "failed", "intent_layer" => "request" },
           { "name" => "Search ranks by relevance",
             "file_path" => "spec/requests/search_spec.rb", "line_number" => 2,
             "spec_file_path" => "spec/requests/search_spec.rb",
-            "duration_seconds" => 6.25, "outcome" => nil },
+            "duration_seconds" => 6.25, "outcome" => nil, "intent_layer" => nil },
           { "name" => "User validates its email",
             "file_path" => "spec/models/user_spec.rb", "line_number" => 11,
             "spec_file_path" => "spec/models/user_spec.rb",
-            "duration_seconds" => 2.0, "outcome" => "passed" },
+            "duration_seconds" => 2.0, "outcome" => "passed", "intent_layer" => "unit" },
           { "name" => "Invoice totals its line items",
             "file_path" => "spec/models/invoice_spec.rb", "line_number" => 7,
             "spec_file_path" => "spec/models/invoice_spec.rb",
-            "duration_seconds" => 0.5, "outcome" => "pending" }
+            "duration_seconds" => 0.5, "outcome" => "pending", "intent_layer" => nil }
         ]
       )
     end
@@ -1472,13 +1484,18 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
     # up: the run-level outcome counters `SlowestExamples` also holds — `failed_count`,
     # `pending_count`, `other_outcome_count` — describe the run's composition rather than this
     # ranking's coverage, and this is the guard that keeps them out.
+    #
+    # `intent_layer` is named here as a key this block OWES every row, which is the half a value
+    # assertion cannot state: `.first` is a row that HAS a layer, so a serializer that omitted the
+    # key on the rows without one would still satisfy this guard — the `eq` above is what closes
+    # that, and the two are deliberately read together.
     it "serves exactly the slowest_examples keys this contract pins" do
       expect(slowest_examples.keys)
         .to contain_exactly("rows", "recorded_count", "timed_count", "reported_outcome_count",
                             "limit")
       expect(slowest_examples["rows"].first.keys)
         .to contain_exactly("name", "file_path", "line_number", "spec_file_path",
-                            "duration_seconds", "outcome")
+                            "duration_seconds", "outcome", "intent_layer")
     end
 
     # AC6. Read off the same presenter `repositories#show` assigns to `@slowest_examples` rather
@@ -1495,6 +1512,7 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
       expect(slowest_examples["rows"].map { it["spec_file_path"] }).to eq(shown.rows.map(&:spec_file_path))
       expect(slowest_examples["rows"].map { it["duration_seconds"] }).to eq(shown.rows.map(&:duration_seconds))
       expect(slowest_examples["rows"].map { it["outcome"] }).to eq(shown.rows.map(&:outcome))
+      expect(slowest_examples["rows"].map { it["intent_layer"] }).to eq(shown.rows.map(&:intent_layer))
       expect(slowest_examples["recorded_count"]).to eq(shown.recorded_count)
       expect(slowest_examples["timed_count"]).to eq(shown.timed_count)
       expect(slowest_examples["reported_outcome_count"]).to eq(shown.reported_outcome_count)

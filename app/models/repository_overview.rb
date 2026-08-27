@@ -1201,7 +1201,39 @@ class RepositoryOverview
           line_number: observation.line_number,
           spec_file_path: observation.spec_file_path,
           duration_seconds: observation.duration_seconds,
-          outcome: observation.outcome
+          outcome: observation.outcome,
+          # THE LAYER THE TEST'S OWN ANNOTATION DECLARED — one of the four `open-test-intent` enum
+          # tokens (`unit` / `integration` / `request` / `system`), or `null`.
+          #
+          # THIS IS THE COLUMN'S FIRST AND ONLY READER, AND IT SHIPPED WITH THE COLUMN ON PURPOSE.
+          # `db/migrate/20260811120000_create_spec_identities.rb` refused the field with a condition
+          # rather than a flat no — *"a column nothing reads is a column that will be read wrongly
+          # later"* — so `intent_layer` was not allowed to exist without a caller. Serving it here
+          # is that condition being met, not a convenience bolted onto a storage change.
+          #
+          # SERVED RAW, NEVER WORDED. The stored string is already a bounded token that
+          # `Ingest::Payload#validate_intent` checked against the schema's enum before the run was
+          # accepted, so a client can branch on it, group by it, and compare it across runs. Passing
+          # it through a humanising helper the way `outcome` has `SpecObservation#outcome_label`
+          # would turn a machine-readable axis into prose an agent has to parse back — and this
+          # endpoint exists for the reader that cannot look at a panel.
+          #
+          # WHY THIS BLOCK AND NOT `unannotated_examples`. That block's population is BY DEFINITION
+          # the rows carrying no layer, so serving the key there would be a column of guaranteed
+          # nulls. This ranking spans annotated and unannotated rows alike — it ranks on duration and
+          # filters on nothing else — so the key is informative on some rows and honestly null on
+          # others, which is the only shape in which "which layers is this suite's slowest work in?"
+          # is answerable at all.
+          #
+          # `null` IS A REAL ANSWER AND IS KEPT DISTINGUISHABLE FROM A VALUE — the key is always
+          # present, never omitted for a row that has no layer. It carries TWO readings this block
+          # cannot separate and must not pretend to: the example is unannotated (it declared no
+          # layer, and the envelope requires `intent` to be ABSENT when `status` is `"unannotated"`),
+          # or it was ingested before this column existed and cannot be given one retroactively. In
+          # neither case is a default admissible: substituting a directory guess would serve an
+          # inference in the field reserved for a declaration, and substituting `""` would make "not
+          # declared" indistinguishable from a layer named by the empty string.
+          intent_layer: observation.intent_layer
         }
       end,
       recorded_count: slowest.recorded_count,
@@ -1431,9 +1463,12 @@ class RepositoryOverview
   # `Row#coverage_label`, so the API and the panel list the same examples of the same file of the
   # same run, in the same order, off the one read.
   #
-  # THE ROW SHAPE IS `serialized_slowest_examples`' SIX FIELDS, field for field, because this
+  # THE ROW SHAPE IS `serialized_slowest_examples`' SEVEN FIELDS, field for field, because this
   # endpoint's two per-example blocks describe the same rows of the same table and a client that
-  # learned to read one must not have to learn a second shape to read the other. `duration_seconds`
+  # learned to read one must not have to learn a second shape to read the other. The seventh is
+  # `intent_layer` (SPGD-851), which arrived on the run-wide ranking and reached this block through
+  # exactly that rule rather than because this block asked for it — the field list below says so at
+  # the rows themselves. `duration_seconds`
   # is nullable and NEVER coalesced to `0.0`: an example this run recorded and did not time has no
   # duration to report — `Ingest::ObservationRecorder#attributes` writes the nil faithfully — and a
   # zero there would assert an example that cost nothing. Those rows are LISTED rather than
@@ -1477,7 +1512,7 @@ class RepositoryOverview
       # `history_window.branch`'s rule: a malformed shape is no ask at all and reaches no block, so
       # what is served here is always the path the rows were actually gathered under.
       path: examples.path,
-      # THE SAME SIX FIELDS `serialized_slowest_examples` SERVES, AND THE REPETITION IS CHOSEN. The
+      # THE SAME SEVEN FIELDS `serialized_slowest_examples` SERVES, AND THE REPETITION IS CHOSEN. The
       # two per-example blocks on this endpoint must agree field for field, and a shared
       # `serialized_example_row` would make that structural rather than asserted — the stronger
       # guarantee, and it is declined here for this file's standing reason: each block states its
@@ -1485,6 +1520,13 @@ class RepositoryOverview
       # block's comment can explain why it holds what it holds. What enforces the agreement instead
       # is a `contain_exactly` over these names in each block's request spec, so a field added to
       # one and not the other goes red rather than shipping a client two per-example shapes.
+      #
+      # `intent_layer` is here BECAUSE OF THAT RULE, not because this block asked for it. It was
+      # added to `serialized_slowest_examples` (SPGD-851) and the cross-block guard in
+      # `repository_repeated_description_examples_spec.rb` went red — which is the guard working:
+      # one shape, served by every block that describes these rows. It is the DECLARED layer, null
+      # for an unannotated row and for one ingested before the column existed; see
+      # `serialized_slowest_examples` for why it is served raw and never worded.
       rows: examples.rows.map do |observation|
         {
           name: observation.name,
@@ -1492,7 +1534,8 @@ class RepositoryOverview
           line_number: observation.line_number,
           spec_file_path: observation.spec_file_path,
           duration_seconds: observation.duration_seconds,
-          outcome: observation.outcome
+          outcome: observation.outcome,
+          intent_layer: observation.intent_layer
         }
       end,
       recorded_count: examples.recorded_count,
@@ -1540,7 +1583,7 @@ class RepositoryOverview
   # `#coverage_label`, which is skipped here exactly as the two rungs above skip `Row#duration_label`
   # and `SpecFileExamples#coverage_label`: `"25 of 40"` is two integers a client cannot subtract.
   #
-  # THE ROW SHAPE IS `serialized_slowest_examples`' SIX FIELDS, field for field, on the rule
+  # THE ROW SHAPE IS `serialized_slowest_examples`' SEVEN FIELDS, field for field, on the rule
   # `serialized_spec_file_examples` states: this endpoint's now THREE per-example blocks describe the
   # same rows of the same table, and a client that learned to read one must not have to learn a
   # second shape to read the others. `duration_seconds` is nullable and NEVER coalesced to `0.0` —
@@ -1589,11 +1632,16 @@ class RepositoryOverview
       # block, so what is served here is always the description the rows were actually gathered
       # under.
       name: examples.name,
-      # THE SAME SIX FIELDS the two per-example blocks above serve, and the repetition is chosen for
+      # THE SAME SEVEN FIELDS the two per-example blocks above serve, and the repetition is chosen for
       # the reason `serialized_spec_file_examples` states in full: each block states its own contract
       # beside its own rows, and what enforces the agreement is a `contain_exactly` over these names
       # in each block's request spec, so a field added to one and not the others goes red rather than
       # shipping a client three per-example shapes.
+      #
+      # `intent_layer` is here BECAUSE OF THAT RULE (SPGD-851): it was added to the run-wide ranking
+      # and the cross-block guard in this block's own request spec — the one assertion that reads all
+      # three shapes off a single response — went red until the field reached all three. The DECLARED
+      # layer, null for an unannotated row and for one ingested before the column existed.
       rows: examples.rows.map do |observation|
         {
           name: observation.name,
@@ -1601,7 +1649,8 @@ class RepositoryOverview
           line_number: observation.line_number,
           spec_file_path: observation.spec_file_path,
           duration_seconds: observation.duration_seconds,
-          outcome: observation.outcome
+          outcome: observation.outcome,
+          intent_layer: observation.intent_layer
         }
       end,
       recorded_count: examples.recorded_count,
@@ -1772,11 +1821,13 @@ class RepositoryOverview
       # new query.
       spec_file: examples.spec_file,
       spec_directory: examples.spec_directory,
-      # FOUR ROW FIELDS, NOT THE OTHER PER-EXAMPLE BLOCKS' SIX, and the difference is asserted rather
-      # than structural on purpose — the same way their agreement is. A `contain_exactly` over these
-      # names in this block's request spec goes red if `duration_seconds` or `outcome` is added here,
-      # and the siblings' own `contain_exactly`s go red if one of theirs is dropped to match, so
-      # neither set can drift into the other unnoticed.
+      # SIX ROW FIELDS, NOT THE OTHER PER-EXAMPLE BLOCKS' SEVEN, and the difference is asserted rather
+      # than structural on purpose — the same way their agreement is. The two sets are not nested:
+      # this block withholds three of theirs and carries two — `reading` and `derived_intent` — that
+      # none of them serves. A `contain_exactly` over these
+      # names in this block's request spec goes red if `duration_seconds`, `outcome` or `intent_layer`
+      # is added here, and the siblings' own `contain_exactly`s go red if one of theirs is dropped to
+      # match, so neither set can drift into the other unnoticed.
       rows: examples.rows.map do |observation|
         {
           name: observation.name,
