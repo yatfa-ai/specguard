@@ -535,7 +535,7 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
 
       shards = get_repository.dig("latest_run", "shards")
 
-      # The same eight names as the open gate, from the same list: withholding a figure withholds
+      # The same ten names as the open gate, from the same list: withholding a figure withholds
       # its VALUE, not its name. That is `serialized_shards`' stated contract and the reason a
       # client tests one thing (`rows == null`) rather than distinguishing an absent key from a
       # null one — and a guard written only against the open gate would pass a change that made
@@ -776,8 +776,12 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
         # pair says when the rows ARRIVED, which is known whether or not they said anything when
         # they did — `Ingest::RunRecorder#upsert_shard` stamps a row on every delivery, timed or
         # silent. This is the fixture that separates "no shard reported a duration" from "no shard
-        # arrived": the first is this run, the second has no shard rows at all and is the `null`
-        # case one block down.
+        # arrived": the first is this run, and the second is NOT ASSERTED ANYWHERE because it is
+        # unreachable through this endpoint — `serialized_shards` returns `nil` wholesale below
+        # `multi_shard?`, so a run with no shard rows never reaches this serializer and its `null`
+        # cannot be observed by a client. The `&.iso8601` in the controller is insurance for a gate
+        # that widens later, not a branch a fixture here can exercise; don't go looking for the
+        # example, and don't add one by bypassing `multi_shard?`.
         "last_shard_arrived_at" => run.last_shard_arrived_at.iso8601,
         "settling_period_seconds" => TestRun::SHARD_DELIVERY_SETTLING_PERIOD.to_i,
         # Every row still served, every duration still null. A run that reported no timings still
