@@ -23,8 +23,9 @@ module GithubRepositoryListing
 
   included do
     helper_method :github_listing, :github_listing_error, :github_listing_error_message,
-                  :github_listing_incomplete?, :github_installation_needed?,
-                  :github_visible_listing, :github_withheld_count, :github_unread_accounts
+                  :github_listing_incomplete?, :github_listing_complete?,
+                  :github_installation_needed?, :github_visible_listing, :github_withheld_count,
+                  :github_unread_accounts
   end
 
   private
@@ -134,6 +135,33 @@ module GithubRepositoryListing
   # a picker people stop trusting, and "my repository is not in the list" is indistinguishable from
   # "SpecGuard is broken" unless the page says which it is.
   def github_listing_incomplete? = github_unread_accounts.any?
+
+  # Whether the listing on the page is the WHOLE answer — nothing truncated, and no account missing
+  # from it. The positive form of the two questions above, asked as one because a caller that wants
+  # to say something about a name's ABSENCE needs both halves to be true and neither alone is enough.
+  #
+  # This is the page-side reading of the rule `InstallationRepositories#name_verdict` already
+  # enforces on the server, in its own words: "Absent from a COMPLETE reading is GitHub's own
+  # answer. Absent from an incomplete one is our page walk's or a broken installation's, and those
+  # must not read the same." A page that reports a missing name as "GitHub does not have it" from a
+  # reading that was cut short is stating our ignorance as GitHub's refusal — which is the one thing
+  # the verification path refuses to do, so a view must not do it either.
+  #
+  # Both halves, and they fail differently. `github_listing_incomplete?` catches an installation
+  # that would not answer or that GitHub 404s, and is deliberately keyed on the OUTCOMES rather than
+  # on `error` so an uninstall is not invisible. `truncated?` catches our own page walk stopping at
+  # `GithubApi::MAX_PAGES`, which sets no error at all and would otherwise sail past that check —
+  # a viewer with one healthy installation of two thousand repositories has no unread account and
+  # still has a short list.
+  #
+  # False when there is no listing, which is the safe answer: a caller asking whether absence is
+  # meaningful must not be told "yes" by a page that read nothing.
+  def github_listing_complete?
+    listing = github_listing
+    return false if listing.nil?
+
+    !listing.truncated? && !github_listing_incomplete?
+  end
 
   # WHICH of the viewer's connected accounts are missing from the list being shown — one
   # `InstallationRepositories::Outcome` each, carrying the account's display name and what came

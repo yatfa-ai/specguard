@@ -346,8 +346,8 @@ module GithubHelper
       "administer #{count == 1 ? 'is' : 'are'} not listed."
   end
 
-  # "acme/api and acme/web are still not connected to the SpecGuard GitHub App…" — the sentence
-  # that tells a reader their carried selection came back SHORT, and `nil` when it came back whole.
+  # What became of a carried selection that came back SHORT — one sentence per REASON a carried
+  # name has no ticked row, and `nil` when every one of them ticked.
   #
   # ## What it is for
   #
@@ -367,50 +367,98 @@ module GithubHelper
   # the outbound leg has already answered, so it cannot be prevented — only noticed on ARRIVAL,
   # which is the one place both sides are in hand. Hence a sentence rather than a guard.
   #
-  # ## The comparison is the CHECKBOX's, deliberately
+  # ## WHICH name did not tick is one question; WHY is a different one, and they take different
+  # ## comparisons. Getting that backwards is how this method states a falsehood.
   #
+  # **Which** is the CHECKBOX's question, and this asks it in the checkbox's own words.
   # `_picker.html.erb` ticks a row with `@full_names.include?(repo.full_name)` — plain
-  # `Array#include?`, i.e. case-SENSITIVE String equality. This asks the same question in the same
-  # words, from the other side, so the sentence and the tick boxes cannot contradict each other on
-  # one page.
+  # `Array#include?`, i.e. case-SENSITIVE String equality — so `missing` below is that same
+  # subtraction from the other side, and the sentence and the tick boxes cannot contradict each
+  # other on one page. That divergence is real rather than hypothetical: the carried names are NOT
+  # downcased on the way in (`BulkRegistration.normalized_names` de-duplicates with `uniq(&:downcase)`
+  # but preserves each name's original case, and `Repository.normalize_full_name` touches everything
+  # except case), so a carried `Acme/API` against a listed `acme/api` does not tick today. A
+  # case-INSENSITIVE subtraction here would call it matched and stay silent about a row the reader
+  # can see is unticked.
   #
-  # That matters because the carried names are NOT downcased on the way in:
-  # `BulkRegistration.normalized_names` de-duplicates with `uniq(&:downcase)` but preserves each
-  # name's original case, and `Repository.normalize_full_name` strips a URL prefix, a `.git` suffix,
-  # a trailing slash and whitespace without touching case. So a carried `Acme/API` against a listed
-  # `acme/api` already fails to tick today. A case-INSENSITIVE subtraction here would call that name
-  # matched and stay silent about a row the reader can see is unticked and cannot fix — reporting
-  # one fewer repository than the page is actually short. The case-sensitive reading reports it, and
-  # is the only reading that keeps the two halves of the page saying the same thing.
+  # **Why** is a question about the REPOSITORY, and every other layer resolves a repository
+  # case-insensitively: `name_verdict` looks it up as `seen[name.downcase]`, `dedupe` uniques on
+  # `downcase`, and `GithubOrganizations.find` matches a login with `casecmp?`. So the buckets below
+  # are keyed case-insensitively, and that is not an inconsistency with the paragraph above — it is
+  # the reason the case-divergent name gets a TRUE sentence ("it is listed, spelled differently")
+  # instead of the false one a case-sensitive bucketing would produce ("it is not connected").
+  #
+  # ## Each bucket says only what its own evidence supports — the `name_verdict` rule, page-side
+  #
+  # A bare "carried minus what has a row" is NOT the same proposition as "not connected to the App",
+  # and the difference is not academic: `administered` is narrowed by two independent gates (in the
+  # installation AND `admin?`) and is contingent on the reading having been COMPLETE. So the four
+  # states are told apart here exactly as `InstallationRepositories#name_verdict` tells them apart
+  # on the server, and for the reason it states twelve lines above the method that does it:
+  #
+  #   "Absent from a COMPLETE reading is GitHub's own answer. Absent from an incomplete one is our
+  #    page walk's or a broken installation's, and those must not read the same."
+  #
+  #   listed, different case  → it IS there, under another spelling. Tick it. (`:verified`)
+  #   visible, not adminstered→ GitHub does not name you an administrator. (`:not_administered`)
+  #   not visible, COMPLETE   → GitHub's own answer: add it on GitHub. (`:not_in_installation`)
+  #   not visible, INCOMPLETE → our ignorance, not GitHub's. Withhold the claim, and INSTRUCT
+  #                             NOTHING. (`sources.error`)
+  #
+  # The last two are the pair that must never merge. Telling a reader whose installation just
+  # rate-limited that their repository "is not connected — add it on GitHub" sends them to add a
+  # repository that is already there, and contradicts the summary page they arrived from, which had
+  # just told them to wait a few minutes. The third bucket is likewise not a rewording of the second:
+  # `not_administered` exists precisely because "it is not in the installation" would be "a false
+  # statement to make to them" (`InstallationRepositories`, class comment), and this page would make
+  # it four lines under a sibling sentence saying the repository IS connected.
   #
   # ## What it does NOT report
   #
-  # A carried name whose repository IS listed but is already registered is not here. It has a row,
-  # that row carries an "Already registered" badge, and the page has therefore said what happened to
-  # it. This sentence is about names with no row AT ALL, which are the only ones nothing else on the
-  # page accounts for.
+  # A carried name whose repository IS listed and ticked is not here at all, and neither is one that
+  # is listed but already REGISTERED: that has a row, the row carries an "Already registered" badge,
+  # and the page has said what happened to it.
+  #
+  # Neither is a name belonging to some OTHER account. This page is one account's, every row on it
+  # is that account's, and `visible` is that account's slice of the listing — so a foreign name is
+  # not absent from GitHub, it is absent from the page the reader happens to be standing on, and
+  # this method has no standing to say anything about it. (The picker builds every batch from one
+  # account, so this is a hand-made POST rather than an ordinary path; the point is that it cannot
+  # produce a false sentence when it happens.)
   #
   # An empty `carried` yields `nil` — a picker reached fresh carries no batch and has no shortfall
   # to report, and a sentence there would be noise about a trip that never happened.
   #
-  # Every name is named rather than counted, and that is the difference from
-  # `withheld_repositories_sentence` above: a withheld repository is somebody else's to register and
-  # the reader's next action does not depend on which one it is, where here the next action is
-  # specific to these repositories — they are the ones to go back and add.
+  # ## Named rather than counted, and why that is safe at the sizes reachable
   #
-  # Composed as one String rather than assembled across ERB lines, for the reason
+  # The difference from `withheld_repositories_sentence` above, which deliberately counts: a
+  # withheld repository is somebody else's to register and the reader's next action does not depend
+  # on WHICH one it is, where here the next action is specific to these repositories — they are the
+  # ones to go back and add. The bound on how many can be named is `BulkRegistration::MAX_BATCH`
+  # (100), and it is not reachable in practice from the carrying paths: the handle carry is created
+  # from a batch that already passed that bound, and the URL carry is all-or-nothing above
+  # `MAX_RETURN_TO_BYTES`, so an over-bound batch arrives carrying NOTHING and this returns `nil`.
+  # A worst case is therefore a long paragraph on a page the reader asked for, not an unbounded one.
+  #
+  # Composed as one String per clause rather than assembled across ERB lines, for the reason
   # `withheld_repositories_sentence` states in full: a newline inside a sentence renders fine in a
   # browser and is invisible to anything matching on the text.
-  def unmatched_carried_repositories_sentence(carried, listed)
+  def unmatched_carried_repositories_sentence(carried, listed, visible: [], account: nil,
+                                              complete: true)
     listed = Array(listed)
     missing = Array(carried).reject { |name| listed.include?(name) }
+    missing = missing.select { |name| owned_by?(name, account) } if account.present?
     return nil if missing.empty?
 
-    one = missing.one?
+    by_name = listed.index_by(&:downcase)
+    seen = Array(visible).to_set(&:downcase)
 
-    "#{missing.to_sentence} #{one ? 'is' : 'are'} still not connected to the SpecGuard GitHub " \
-      "App, so #{one ? 'it is' : 'they are'} not listed below and #{one ? 'has' : 'have'} not been " \
-      "selected. Add #{one ? 'it' : 'them'} to the App on GitHub, then come back to this page."
+    mis_spelled, unrowed = missing.partition { |name| by_name.key?(name.downcase) }
+    withheld, unlisted = unrowed.partition { |name| seen.include?(name.downcase) }
+    absent, unconfirmed = complete ? [unlisted, []] : [[], unlisted]
+
+    [mis_spelled_clause(mis_spelled, by_name), absent_clause(absent),
+     withheld_clause(withheld), unconfirmed_clause(unconfirmed)].compact.join(" ").presence
   end
 
   # "SpecGuard could not read acme just now. Repositories connected through that account are
@@ -512,6 +560,77 @@ module GithubHelper
     else
       raise ArgumentError, "unknown closing #{closing.inspect}"
     end
+  end
+
+  # The four clauses of `unmatched_carried_repositories_sentence`, one per bucket. Separate methods
+  # rather than a `case` inside one string, because the whole point of the split is that these are
+  # four DIFFERENT claims with four different fixes, and keeping them apart is what stops a later
+  # edit quietly wording one of them as another.
+
+  # It is listed — the reader simply spelled it differently, and the tick box compares spellings.
+  # The only clause that names TWO forms, because the second is the answer: the row is right there
+  # under the other spelling, so the fix is "tick that one", not a trip to GitHub. It is the one
+  # bucket that instructs the reader to do something ON THIS PAGE.
+  def mis_spelled_clause(names, by_name)
+    return nil if names.empty?
+
+    pairs = names.map { |name| "#{name} (listed as #{by_name.fetch(name.downcase)})" }
+    one = names.one?
+
+    "#{pairs.to_sentence} #{one ? 'is' : 'are'} listed under a different capitalisation, so " \
+      "#{one ? 'it has' : 'they have'} not been selected. Tick the matching " \
+      "#{one ? 'row' : 'rows'} below."
+  end
+
+  # GitHub's own answer, and the only clause entitled to say "not connected" or to send the reader
+  # back to GitHub. Reachable ONLY from a complete reading — see the method above for why the
+  # incomplete case must not borrow this wording.
+  def absent_clause(names)
+    return nil if names.empty?
+
+    one = names.one?
+
+    "#{names.to_sentence} #{one ? 'is' : 'are'} still not connected to the SpecGuard GitHub " \
+      "App, so #{one ? 'it is' : 'they are'} not listed below and #{one ? 'has' : 'have'} not " \
+      "been selected. Add #{one ? 'it' : 'them'} to the App on GitHub, then come back to this page."
+  end
+
+  # Connected, and this viewer does not administer it. `withheld_repositories_sentence` already
+  # counts these in the paragraph above; this NAMES the ones the reader actually asked for, which
+  # is the difference between "one is not listed" and knowing whether it was the one they came for.
+  # It says "connected" out loud so it cannot be read as the clause above, and its fix is a person
+  # rather than a page — the same fix `MESSAGES[:not_administered]` names on the summary.
+  def withheld_clause(names)
+    return nil if names.empty?
+
+    one = names.one?
+
+    "#{names.to_sentence} #{one ? 'is' : 'are'} connected to the SpecGuard GitHub App, but " \
+      "GitHub does not list you as an administrator of #{one ? 'it' : 'them'}, so " \
+      "#{one ? 'it is' : 'they are'} not shown below. Ask an administrator of " \
+      "#{one ? 'that repository' : 'those repositories'} to register #{one ? 'it' : 'them'}."
+  end
+
+  # We do not know. The reading was truncated or an installation would not answer, so this name's
+  # absence is OURS and not GitHub's, and the clause is written to say exactly that and to instruct
+  # NOTHING — a reader told to go and add a repository that is already there has been sent to
+  # perform a no-op, which is worse than the silence this whole feature replaces.
+  def unconfirmed_clause(names)
+    return nil if names.empty?
+
+    one = names.one?
+
+    "SpecGuard could not confirm #{names.to_sentence} just now — your repository list came back " \
+      "incomplete, so #{one ? 'it is' : 'they are'} not shown below and #{one ? 'has' : 'have'} " \
+      "not been selected. This may resolve on its own; try this page again shortly."
+  end
+
+  # Does this full name belong to the account whose picker is being rendered? Asked so a carried
+  # name from somewhere else cannot be bucketed against a list that was never about it — see the
+  # method above. Case-insensitively, because GitHub logins are, and every other layer that matches
+  # one does the same (`GithubOrganizations.find` uses `casecmp?`).
+  def owned_by?(full_name, account)
+    full_name.to_s.split("/").first.to_s.casecmp?(account.to_s)
   end
 
   # `private` and `archived` change what registering the repository will *mean* — an archived one
