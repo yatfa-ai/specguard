@@ -50,6 +50,16 @@ RSpec.describe "The public administration guide", type: :request do
     JSON.parse(node.text)
   end
 
+  # The worked `201` body, read back off the rendered page.
+  #
+  # Carries the same ⚠️ as `published_request_body`: only meaningful while the guide IS the response.
+  def published_response_body
+    id = AdministrationGuideHelper::EXAMPLE_RESPONSE_ELEMENT_ID
+    node = Capybara.string(response.body).find(:css, "##{id} code")
+
+    JSON.parse(node.text)
+  end
+
   def page_text = Capybara.string(response.body).text.gsub(/\s+/, " ")
 
   describe "reachability" do
@@ -280,6 +290,30 @@ RSpec.describe "The public administration guide", type: :request do
       expect(page_text).to match(/no.{0,20}rotation|rather than rotated/i)
     end
 
+    # The page prints a token and a `hint` side by side and then asserts in prose that the hint "is
+    # not the credential and cannot be used as one". These are the two properties that sentence
+    # rests on, pinned against the values the TEMPLATE publishes rather than against the constants
+    # they are built from — a pin read from what it pins would pass while the page showed anything.
+    #
+    # The published pair once said the opposite of the prose: the hint was the last three characters
+    # of the token beside it, so the example taught exactly the misreading the paragraph denies —
+    # that a hint is a truncation of the credential. A reader who trusted the example would try to
+    # recognise a key by comparing the hint to a stored token's tail and would never match anything.
+    it "publishes a hint that is a fingerprint of the token rather than a piece of it" do
+      api_key = published_response_body.fetch("api_key")
+      token = api_key.fetch("token")
+      hint = api_key.fetch("hint")
+
+      # The load-bearing one: not a suffix, and not findable anywhere in the credential.
+      expect(token).not_to end_with(hint.delete_prefix("#{ApiKey::TOKEN_PREFIX}…"))
+      expect(token).not_to include(hint.delete_prefix("#{ApiKey::TOKEN_PREFIX}…"))
+
+      # And it is the hint the SERVER would produce for that token, so the shape a reader learns
+      # here — prefix, ellipsis, six characters of the digest — is the shape they will meet in the
+      # key list. Derived from `ApiKey.digest` so it follows a change to `#token_hint`.
+      expect(hint).to eq("#{ApiKey::TOKEN_PREFIX}…#{ApiKey.digest(token).last(6)}")
+    end
+
     # The non-goals, as an assertion. The guide's charter is that it promises no capability the API
     # does not currently have, and the two nearest unlanded surfaces are key management over the API
     # and the MCP tools. This is the fence that stops a later edit describing either as available.
@@ -304,13 +338,27 @@ RSpec.describe "The public administration guide", type: :request do
     # The empty-state sentence, which described the credential as read-only. True when written and
     # an undercount since registering over the API landed — the one thing a person deciding whether
     # to mint a key most needs to know about what it can do.
+    #
+    # Scoped to the `EmptyStateComponent`'s own description rather than to the page. Matching
+    # /register/i against the whole document passed against the UNCORRECTED sentence: the layout's
+    # own "Register a repository" nav link satisfies it, and so does the guide caption THIS ticket
+    # added a few lines above — so the guard's sibling change guaranteed its own match and it could
+    # not fail through the edit it exists to catch. A guard's reach is its selector.
+    #
+    # Both limbs are needed and neither is redundant. The positive says the sentence now names what
+    # the credential does; the negative is the claim the ticket actually makes — that it no longer
+    # describes it as read-only — which no positive assertion can express, since a sentence can name
+    # registering and still carry the old read-only wording beside it.
     it "does not describe the credential as read-only where there are no keys yet" do
       sign_in_via_github
 
       get account_path
 
-      expect(Capybara.string(response.body).text.gsub(/\s+/, " "))
-        .to match(/register/i)
+      empty_state = Capybara.string(response.body)
+                            .find(:css, "p.max-w-prose").text.gsub(/\s+/, " ")
+
+      expect(empty_state).to match(/register/i)
+      expect(empty_state).not_to match(/read the repositories/i)
     end
   end
 end

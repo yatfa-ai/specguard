@@ -276,9 +276,14 @@
         <% end %>
       </div>
 
-      <div class="space-y-2" data-controller="copy-text">
+      <%# The id wraps the copyable block ALONE, for the reason given at the request fixture above:
+          a wrapper that also held prose could contain a <code> tag of its own and turn the spec's
+          `#<id> code` find into an ambiguous match. The caption below carries one. %>
+      <div class="space-y-2">
         <p class="section-label text-app-content-secondary">The 201 body</p>
-        <%= render UI::CopyableCodeComponent.new(multiline: true) do %><%= administration_guide_example_response %><% end %>
+        <div data-controller="copy-text" id="<%= AdministrationGuideHelper::EXAMPLE_RESPONSE_ELEMENT_ID %>">
+          <%= render UI::CopyableCodeComponent.new(multiline: true) do %><%= administration_guide_example_response %><% end %>
+        </div>
         <p class="text-xs text-app-muted">
           The values are illustrative — an id, a timestamp and a token do not exist before the
           request is made. The field names are the contract.

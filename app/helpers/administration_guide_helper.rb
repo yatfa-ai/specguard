@@ -31,6 +31,15 @@ module AdministrationGuideHelper
   # from the template by a typo.
   EXAMPLE_REQUEST_ELEMENT_ID = "registration-example-request"
 
+  # The element id the worked `201` body is rendered under.
+  #
+  # Same purpose as its sibling above, for the other half of the exchange: it lets the spec read the
+  # published response back off the RENDERED page. That matters for the `hint`/`token` relationship
+  # in particular — asserting it against {EXAMPLE_TOKEN} and {EXAMPLE_TOKEN_HINT} would prove two
+  # constants relate correctly while the template published something else entirely, which is the
+  # same "pin derived from what it pins" trap the request fixture is read off the page to avoid.
+  EXAMPLE_RESPONSE_ELEMENT_ID = "registration-example-response"
+
   # The name used throughout the worked example.
   #
   # It is one constant rather than a string repeated across the request body, the curl snippet and
@@ -82,6 +91,26 @@ module AdministrationGuideHelper
     SHELL
   end
 
+  # The token shown in the worked `201`, and the source the `hint` beside it is DERIVED from.
+  #
+  # A constant because the two values must be computed from one string. They were once typed
+  # independently, and the hint that resulted (`sgk_…gA1`) was the last three characters of THIS
+  # token — which is neither what `ApiKey#token_hint` produces nor the right length, and, far worse,
+  # made the hint a literal suffix of the credential printed directly above it. That is the exact
+  # misreading `#administration_guide_example_response` says it chose the token format to avoid, and
+  # it falsified the page's own sentence that the hint "is not the credential and cannot be used as
+  # one". A reader who trusted the example over the paragraph would try to recognise a key by
+  # comparing the hint to a stored token's tail, and would never match anything.
+  EXAMPLE_TOKEN = "sgk_R0zVvQx7mK2pL9nT4wY6bJ8cH3dF5gA1"
+
+  # The hint for {EXAMPLE_TOKEN}, produced the way the server produces one.
+  #
+  # Derived rather than transcribed, so it cannot drift from `ApiKey#token_hint`: change the digest
+  # or the fragment length there and this follows. It is a fingerprint of the DIGEST, so it is not a
+  # substring of the token by construction — the property the page's prose depends on, and the one
+  # the spec pins.
+  EXAMPLE_TOKEN_HINT = "#{ApiKey::TOKEN_PREFIX}…#{ApiKey.digest(EXAMPLE_TOKEN).last(6)}"
+
   # The `201` body, shown in full.
   #
   # Illustrative rather than verified, and it is the ONE thing on this page that is — the values
@@ -103,8 +132,8 @@ module AdministrationGuideHelper
       },
       "api_key" => {
         "name" => Api::V1::UserRepositoriesController::FIRST_KEY_NAME,
-        "token" => "sgk_R0zVvQx7mK2pL9nT4wY6bJ8cH3dF5gA1",
-        "hint" => "sgk_…gA1",
+        "token" => EXAMPLE_TOKEN,
+        "hint" => EXAMPLE_TOKEN_HINT,
         "created_at" => "2026-01-15T09:24:11Z"
       }
     )
