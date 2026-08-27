@@ -92,6 +92,32 @@
 # residual definition: `file` still means "the whole-run by-file rollup" and still adopts nothing,
 # because a read has to group by `spec_file_path` to be a candidate at all.
 #
+# THE IDENTITY PATTERN WAS TIGHTENED THE FOURTH TIME THE SAME LESSON ARRIVED — in REVIEW this time,
+# before the residual could adopt anything, which is the only reason this one cost nothing. It
+# shipped as `/spec_identity_id/`: the loosest possible pattern, matching any statement on this
+# table that mentions the column anywhere. Its defence was that `.identity_presence_in`,
+# `.slowest_identity_candidates_in` and `.identity_duration_composition_in` are the application's
+# ONLY reads of that column. THAT UNIVERSAL WAS FALSE, and the grep it cited returns the two
+# counterexamples, both inside the directories it claimed to have searched:
+# `SpecObservation.unresolved` filters on the column for `Ingest::IdentityResolver`'s work list, and
+# `SpecIdentity.near_duplicate_pairs_in`'s raw SQL joins on `o.spec_identity_id = a.id`. Both match
+# the residual pattern — confirmed by generating their SQL, not by reading them.
+#
+# The pattern was correct ONLY because neither counterexample happens to fire on this endpoint
+# today, which is the reasoning from today's call sites this file rejects in every paragraph above.
+# The adoption was concrete rather than hypothetical: `NearDuplicateClusters` is a built reader with
+# ZERO controller callers — the shipped-the-reader-never-filed-the-consumer shape SPGD-790 itself
+# exists to close for `SlowestTests` — so the day it is wired to this endpoint its read lands in the
+# identity grain silently, and the `identity.length` pins and the sibling specs' read totals start
+# certifying work they did not measure, with no red example naming it.
+#
+# The fix is TWO disjoint patterns that each match exactly one statement family, on the by-description
+# grain's precedent: the two GROUPED reads on the quoted `GROUP BY` Arel emits, and the gating probe
+# on the `FILTER` aggregate it alone selects. The concern that motivated one loose pattern — that a
+# GROUP BY/ORDER BY family would double-count the two grouped statements WITHIN the grain — is real
+# and is answered by matching them with ONE shared pattern rather than a per-read family, since a
+# statement matching it is matched once. See `IDENTITY_GROUPING` / `IDENTITY_PRESENCE`.
+#
 # == The fourth arrival, where the lesson did NOT have to be relearned
 #
 # The drill-in into ONE file's examples is the only grain here matched on a SELECT ALIAS rather than
@@ -331,10 +357,59 @@ module ObservationGrainReads
   # of `spec_observations` should expect exactly one of these on any request that resolves a run.
   RUN_READINGS_PROJECTION = /AS run_authored_count/
 
+  # The IDENTITY grain — `SlowestTests`' three reads: `.identity_presence_in`'s gating probe,
+  # `.slowest_identity_candidates_in`'s capped candidate list and `.identity_duration_composition_in`'s
+  # composition over those candidates.
+  #
+  # TWO patterns, and the pair is not interchangeable — the split is the same one the by-description
+  # grain makes. The presence probe is the round trip that answers for the rows the other two CANNOT
+  # see: both of those exclude unresolved rows (one in its WHERE, one by grouping over resolved
+  # candidates only), so no window over either could have counted what they dropped. The two grouped
+  # reads share one pattern for the reason the flakiness grain's four do NOT: they group identically
+  # by construction, and separating them would have to rest on their ORDER BY — the candidate read
+  # ranks, the composition does not — which is the accident-shaped match this file rejects everywhere
+  # else. Sharing one GROUPING pattern also cannot double-count them, because a statement matching it
+  # is matched ONCE.
+  #
+  # ⚠️ THIS PATTERN WAS THE FOURTH TIGHTENING — the full account is in the tightenings section above,
+  # and this is the short form. It was `/spec_identity_id/`, a residual match on the
+  # bare column, defended by the claim that these three are the application's only reads mentioning
+  # it. THAT CLAIM WAS FALSE, and the grep it cited returns the counterexamples:
+  # `SpecObservation.unresolved` (`spec_observation.rb`) filters on the column for
+  # `Ingest::IdentityResolver`'s work list, and `SpecIdentity.near_duplicate_pairs_in`'s raw SQL joins
+  # on `o.spec_identity_id = a.id`. Neither fires on this endpoint TODAY, which is exactly the
+  # reasoning from today's call sites this file exists to refuse — `NearDuplicateClusters` is a built
+  # reader with no controller caller yet, and the day it is wired here its read would have been
+  # ADOPTED into this grain silently, with every `identity.length` pin certifying work it did not
+  # measure. Both patterns below are matched POSITIVELY, on SQL only their own read produces:
+  # verified by generating each of the five statements and testing the patterns against the emitted
+  # strings — each real read matches exactly one pattern, and NEITHER counterexample matches either.
+  #
+  # ⚠️ THIS GRAIN IS GATED ON `?branch=`, like the flakiness grain and unlike the run-readings one.
+  # Unfiltered, `SlowestTests.for` is never constructed and this grain is EMPTY. Under a branch it is
+  # THREE on a ranked window and ONE on a gating state — the object asks its presence probe first and
+  # returns before the candidate and composition reads, so an unresolved or unrecorded window costs
+  # one. A block bounding this endpoint's reads should expect 0, 1 or 3 and never 2.
+
+  # The two GROUPED reads. `GROUP BY "spec_observations"."spec_identity_id"` is emitted by
+  # `.slowest_identity_candidates_in` and `.identity_duration_composition_in` and by no other read of
+  # this table — the quoted-column form Arel emits for `.group(:spec_identity_id)`, which neither
+  # counterexample produces: one is an unquoted join predicate in raw SQL, the other a bare `IS NULL`
+  # filter with no grouping at all.
+  IDENTITY_GROUPING = /GROUP BY "spec_observations"\."spec_identity_id"/
+
+  # The gating PRESENCE probe — `.identity_presence_in`, matched on the FILTER aggregate it alone
+  # selects. The unquoted `spec_identity_id` here is not incidental: it is an `Arel.sql` literal,
+  # where `SpecObservation.unresolved` spells the same condition through the query builder and so
+  # emits the QUOTED `"spec_observations"."spec_identity_id" IS NULL`. The resolver's work list
+  # therefore cannot collide with this even on the `IS NULL` the two share — verified by generating
+  # both statements rather than by reading them.
+  IDENTITY_PRESENCE = /COUNT\(\*\) FILTER \(WHERE spec_identity_id IS NULL\)/
+
   # `[area, file, example, description, flakiness, growth, directory_files, file_examples,
   # repeated_description_examples, directory_file_growth, runtime_growth,
   # directory_file_runtime_growth, unstable_test_runs, unannotated_examples,
-  # unannotated_directories, run_readings]` — the sixteen grains,
+  # unannotated_directories, run_readings, identity]` — the seventeen grains,
   # each an array of the
   # statements matched. The single-run grains come first, in the order `serialized_latest_run` serves
   # them, and the two CROSS-RUN grains after them in the order `show` serves them — so a
@@ -386,7 +461,8 @@ module ObservationGrainReads
      reads.grep(/AS unstable_test_recorded_count/),
      reads.grep(/AS unannotated_recorded_count/),
      reads.grep(UNANNOTATED_DEBT_ORDER),
-     reads.grep(RUN_READINGS_PROJECTION)]
+     reads.grep(RUN_READINGS_PROJECTION),
+     reads.grep(IDENTITY_PRESENCE) + reads.grep(IDENTITY_GROUPING)]
   end
 
   # `UnstableTests.for`'s four reads, in the order it issues them: the gating outcome-reporting
@@ -419,6 +495,7 @@ module ObservationGrainReads
   def unannotated_examples_grain_reads(&) = observation_reads_by_grain(&)[13]
   def unannotated_directories_grain_reads(&) = observation_reads_by_grain(&)[14]
   def run_readings_grain_reads(&) = observation_reads_by_grain(&)[15]
+  def identity_grain_reads(&) = observation_reads_by_grain(&)[16]
 end
 
 RSpec.configure do |config|

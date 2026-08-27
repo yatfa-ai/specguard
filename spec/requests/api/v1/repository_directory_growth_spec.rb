@@ -723,19 +723,26 @@ RSpec.describe "GET /api/v1/repository — directory_growth", type: :request do
     end
 
     # And that one read is ALL this block adds — the assertion a per-grain count cannot make,
-    # because a read matching no grain's pattern is invisible to every one of them. Twelve here is
+    # because a read matching no grain's pattern is invisible to every one of them. Fourteen here is
     # the endpoint's six single-run reads, plus THREE for flakiness, plus this block's one and the
-    # run-over-run pair's one, plus the RUNTIME pair's one: nothing failed in this fixture, so
-    # `UnstableTests` finds no candidate and never issues its composition read. That is a fact about
-    # this window rather than about the block, which is exactly why the total is also asserted as the
-    # SUM OF THE PARTS — a read that stopped being issued and a different one that started cannot
-    # cancel out into a passing number.
+    # run-over-run pair's one, plus the RUNTIME pair's one, plus the IDENTITY grain's one: nothing
+    # failed in this fixture, so `UnstableTests` finds no candidate and never issues its composition
+    # read. That is a fact about this window rather than about the block, which is exactly why the
+    # total is also asserted as the SUM OF THE PARTS — a read that stopped being issued and a
+    # different one that started cannot cancel out into a passing number.
+    #
+    # ⚠️ THE IDENTITY GRAIN CONTRIBUTES ONE HERE AND NOT THREE, for the same fixture reason
+    # `repository_unstable_tests_spec.rb` states beside its own total: these runs are ingested
+    # without `Ingest::IdentityResolver`, so every `spec_identity_id` is NULL, `SlowestTests` stops
+    # at its presence probe in `:unresolved`, and one read is its whole cost. Asserted as its own
+    # term below so a fixture that starts resolving fails THERE rather than drifting this total.
     it "adds exactly that one to the table's total, and no second" do
       asymmetric_window
       get_repository(key: api_key)
 
       area, file, example, description, flakiness, growth =
         observation_reads_by_grain { get_repository(key: api_key, query: { branch: "main" }) }
+      identity = identity_grain_reads { get_repository(key: api_key, query: { branch: "main" }) }
 
       # TWO in the growth grain, and they are this block's and the run-over-run pair's — the split
       # is pinned by the difference example above, which this one cannot make. STILL TWO after
@@ -743,10 +750,11 @@ RSpec.describe "GET /api/v1/repository — directory_growth", type: :request do
       # COUNT, so it is matched by its own pattern and adopted into no grain here.
       expect([area.length, file.length, example.length, description.length, flakiness.length,
               growth.length]).to eq([1, 1, 2, 2, 3, 2])
+      expect(identity.length).to eq(1)
       expect(observation_reads { get_repository(key: api_key, query: { branch: "main" }) }.length)
         .to eq(classified_observation_reads { get_repository(key: api_key, query: { branch: "main" }) })
       expect(observation_reads { get_repository(key: api_key, query: { branch: "main" }) }.length)
-        .to eq(13)
+        .to eq(14)
     end
 
     # NO RUN-WINDOW QUERY. The block is drawn on `history_runs`, which is materialized once and

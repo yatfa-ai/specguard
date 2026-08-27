@@ -730,16 +730,25 @@ RSpec.describe "GET /api/v1/repository — unstable_tests", type: :request do
     end
 
     # And the four are ALL of the reads this window adds — the assertion the per-grain count cannot
-    # make, because a read matching no grain's pattern is invisible to every one of them. Thirteen is
+    # make, because a read matching no grain's pattern is invisible to every one of them. Fourteen is
     # the endpoint's six single-run reads, plus these four, plus the TWO the growth-by-area grain
     # adds on the same branch-scoped window — one for `directory_growth` (the branch window's two
     # endpoints) and one for `directory_run_growth` (the latest run against the previous one on its
     # branch) — plus the ONE the RUNTIME grain adds, which is `directory_runtime_growth` ranking the
-    # same two runs' areas by summed duration rather than by example count. Those three are counted
-    # here rather than folded into the four, because the whole point of this example is that a read
-    # belonging to no grain is caught by the total:
+    # same two runs' areas by summed duration rather than by example count, plus the ONE the
+    # IDENTITY grain adds. Those four are counted here rather than folded into the four, because the
+    # whole point of this example is that a read belonging to no grain is caught by the total:
     # `spec/requests/api/v1/repository_directory_growth_spec.rb` and its two run-over-run siblings
     # bound them, this line only refuses to let them disappear.
+    #
+    # ⚠️ THE IDENTITY GRAIN CONTRIBUTES ONE HERE AND NOT THREE, and the reason is this fixture rather
+    # than that block. `SlowestTests.for` asks its presence probe FIRST and returns before the
+    # candidate and composition reads unless the anchor holds a RESOLVED row; these runs are ingested
+    # through `Ingest::RunRecorder` without `Ingest::IdentityResolver`, so every row's
+    # `spec_identity_id` is NULL, the object stops in `:unresolved`, and one read is its whole cost.
+    # A window whose identities resolved costs three — which is why this is stated as a fact about
+    # the fixture and asserted as its own term below rather than folded into a total that would go
+    # quietly wrong the day this fixture started resolving.
     it "adds exactly those four to the table's total, and no fifth" do
       repository_with(%w[passed failed passed])
       get_repository(key: api_key)
@@ -748,15 +757,22 @@ RSpec.describe "GET /api/v1/repository — unstable_tests", type: :request do
         observation_reads_by_grain { get_repository(key: api_key, query: { branch: "main" }) }
       runtime_growth =
         runtime_growth_grain_reads { get_repository(key: api_key, query: { branch: "main" }) }
+      identity =
+        identity_grain_reads { get_repository(key: api_key, query: { branch: "main" }) }
 
       expect([area.length, file.length, example.length, description.length, flakiness.length])
         .to eq([1, 1, 2, 2, 4])
       expect(growth.length).to eq(2)
       expect(runtime_growth.length).to eq(1)
+      # ONE, not three — the gating probe alone, on the unresolved fixture reasoned about above.
+      # Stated as its own term so the day this fixture starts resolving identities, THIS line fails
+      # and names the reason rather than the total drifting by two under a comment that still reads
+      # as if it were right.
+      expect(identity.length).to eq(1)
       expect(observation_reads { get_repository(key: api_key, query: { branch: "main" }) }.length)
         .to eq(classified_observation_reads { get_repository(key: api_key, query: { branch: "main" }) })
       expect(observation_reads { get_repository(key: api_key, query: { branch: "main" }) }.length)
-        .to eq(14)
+        .to eq(15)
     end
 
     # NO RUN-WINDOW QUERY. The block is drawn on `history_runs`, which is materialized once and
