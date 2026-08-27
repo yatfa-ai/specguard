@@ -137,20 +137,34 @@ module GithubRepositoryListing
 
   # WHICH of the viewer's connected accounts are missing from the list being shown — one
   # `InstallationRepositories::Outcome` each, carrying the account's display name and what came
-  # back. Empty when every installation answered, and empty when there is no list on the page for
-  # a missing account to qualify.
+  # back. Empty when every installation answered.
   #
-  # This is what `github_listing_incomplete?` is now asked of, and it widens that question in one
-  # way that matters: an installation GitHub answers 404 for records no error, so the old reading
+  # This is what `github_listing_incomplete?` is asked of, and it widens that question in one way
+  # that matters: an installation GitHub answers 404 for records no error, so the old reading
   # (`error.present?`) was false and NOTHING was said — a whole account could leave the picker in
   # silence. Every other case it admits is the one it admitted before, because an installation that
   # failed is an installation that set `error`.
+  #
+  # ## It is deliberately NOT gated on there being something to show
+  #
+  # It was, once — `registrable.empty?` returned `[]`, carried forward from the `error.present? &&
+  # registrable.any?` predicate this replaced — and that clause put the silence straight back in
+  # the one population it hurts most. A 404'd installation contributes ZERO registrable
+  # repositories by construction, so it is most likely to be the CAUSE of an empty page; gating on
+  # a non-empty page meant the viewer whose only installation was uninstalled on GitHub was told
+  # "the App is installed, but no repositories are selected for it" — a sentence about an
+  # installation that no longer exists. The empty-state branches ask this now, so the fact reaches
+  # exactly the reader who most needs it.
+  #
+  # The `github_listing.nil?` guard stays. That case is not a short list — there is no page to be
+  # short — and it already has its own dedicated panel, which names the refusal rather than an
+  # account.
   #
   # Free: `github_sources` is memoized, the outcomes are built during the read the page already
   # made, and naming an account costs no GitHub call and no query — the installation rows were
   # loaded to make the read in the first place.
   def github_unread_accounts
-    return [] if github_listing.nil? || github_sources.registrable.empty?
+    return [] if github_listing.nil?
 
     github_sources.unread_outcomes
   end
