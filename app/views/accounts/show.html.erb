@@ -68,4 +68,87 @@
           ) %>
     <% end %>
   <% end %>
+
+  <%# REGISTRATION ACCESS — the one credential on this page that expires ON ITS OWN, and the reason
+      it had to become visible here: see `AccountsController#show`, which carries that rationale and
+      the invariant that this is a READ.
+
+      Two things that are this VIEW's own and are not repeated from there: the panel sits BELOW the
+      key table because a reader arrives for their keys and this is a property of the person rather
+      than a second credential to mint, and the three states below (`absent`, `current`, `lapsed`)
+      are told apart in prose because they have different fixes. %>
+  <%= render UI::PanelComponent.new(title: "Registration access", id: "registration-access",
+                                    class: "mt-6") do %>
+    <p class="mb-3 text-sm text-app-content-secondary">
+      Registering a repository through an <code class="font-mono text-xs">sgu_</code> key redeems
+      what GitHub last told SpecGuard about your permissions, recorded the last time you listed
+      repositories here in a browser. That record lapses after
+      <%= distance_of_time_in_words(GithubRegistrationGrant::MAX_AGE) %>, and your keys go on
+      working for everything else when it does.
+    </p>
+
+    <% if @registration_grant.nil? %>
+      <%# Never captured — the ordinary state of anyone who has not listed repositories in a browser
+          since this shipped. Deliberately NOT the lapsed sentence below: "yours expired" would be
+          false and would send the reader looking for when it did. %>
+      <p class="text-sm text-app-content-secondary" data-grant-state="absent">
+        <strong>No current record.</strong> SpecGuard has not recorded your GitHub permissions yet,
+        so an API key cannot register repositories for you. Reconnect GitHub to record them.
+      </p>
+    <% else %>
+      <%# Derived from the same MAX_AGE `GithubRegistrationGrant#stale?` divides on, so the date
+          shown here and the bound actually enforced cannot drift apart. %>
+      <% lapses_at = @registration_grant.captured_at + GithubRegistrationGrant::MAX_AGE %>
+      <% lapsed = @registration_grant.stale? %>
+
+      <%= render UI::DefListComponent.new(rows: [
+            ["Last refreshed", "#{time_ago_in_words(@registration_grant.captured_at)} ago"],
+            ["Repositories covered", @registration_grant.registrable_full_names.size],
+            [lapsed ? "Lapsed" : "Lapses",
+             lapsed ? "#{time_ago_in_words(lapses_at)} ago" : "in #{time_ago_in_words(lapses_at)}"]
+          ]) %>
+
+      <% if lapsed %>
+        <p class="mt-3 text-sm text-app-content-secondary" data-grant-state="lapsed">
+          <strong>This record has lapsed.</strong> An API key cannot register repositories until it
+          is refreshed. Reconnect GitHub to refresh it.
+        </p>
+      <% else %>
+        <p class="mt-3 text-sm text-app-content-secondary" data-grant-state="current">
+          Reconnecting refreshes this record and its expiry — you do not have to wait for it to
+          lapse.
+        </p>
+      <% end %>
+    <% end %>
+
+    <%# The EXISTING affordance, not a new one: the same button the repository picker offers, which
+        posts to `github_installation_authorize`. `github_authorize_button` answers with its own
+        notice when the GitHub App is unconfigured, so this needs no guard of its own.
+
+        ⚠️ IT RETURNS TO THE PICKER, NOT HERE, and that is the whole reason the button works.
+        Capturing a grant needs a live GitHub token AND a render that actually reads the
+        installations: the sole capture site is `GithubRepositoryListing#github_sources`, which is
+        memoized and LAZY, so it fires only where a view renders a picker. That concern is included
+        by `RepositoriesController` and `BulkRegistrationsController` and NOT by `AccountsController`
+        — so returning to `/account` would complete a full GitHub round trip and re-render a page
+        that reads the grant and can never refresh it. Measured, one lapsed grant, callback followed
+        to the page the user lands on:
+
+          return_to=/account          landed=200  grant refreshed? false
+          return_to=/repositories     landed=200  grant refreshed? false
+          return_to=/repositories/new landed=200  grant refreshed? true
+
+        Only the third is a fix, because `repositories/_form` is the view that reads
+        `github_listing`. Sending the reader to the picker is deliberate rather than incidental:
+        this panel promises "Reconnect GitHub to refresh it", and a button that returns them here
+        unchanged would leave them believing they had fixed it. Landing them BACK here afterwards is
+        a separate design decision — GitHub's `state` carries exactly one destination — and is not
+        this slice's to make. Pinned by the click-through example in
+        `spec/requests/account_registration_access_spec.rb`, which asserts the STATE MOVED rather
+        than that the href exists. %>
+    <div class="mt-4">
+      <%= github_authorize_button("Reconnect GitHub", return_to: new_repository_path,
+                                  variant: @registration_grant&.stale? == false ? :secondary : :primary) %>
+    </div>
+  <% end %>
 <% end %>
