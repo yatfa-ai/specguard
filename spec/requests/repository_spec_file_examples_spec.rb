@@ -678,7 +678,7 @@ RSpec.describe "Repository spec file examples", type: :request do
       # because the grouping excludes them in its WHERE clause — counting the rows that carry none.
       # Neither is a per-file read and neither moves with a file being open, which is why the
       # drill-down's own delta below is still exactly one.
-      # RECOUNTED AT 9 by SPGD-649, which added the "Where the unannotated tests are" panel: ONE
+      # RECOUNTED AT 9 by SPGD-649, which added the by-area annotation panel: ONE
       # further read of the same run's rows, grouped by AREA on the ANNOTATION axis. Like the two
       # above it is not a per-file read and does not move with a file being open, which is why the
       # drill-down's own delta below is still exactly one.
@@ -699,7 +699,12 @@ RSpec.describe "Repository spec file examples", type: :request do
       # the size of the suite nor the length of the window, since it counts one run's rows.
       # It is not a per-file read and does not move with a file being open, which is why the
       # drill-down's own delta below is still exactly two.
-      expect(large_queries.size).to eq(11)
+      # RECOUNTED AT 12 by SPGD-711, which added the run's INTENT READINGS: ONE further read of
+      # the same run's rows, an ungated aggregate splitting them into authored, derived and
+      # unreadable. Like the by-area and by-description reads above — and like SPGD-728's gate —
+      # it is not a per-file read and does not move with a file being open, which is why the
+      # drill-down's own delta below is still exactly two.
+      expect(large_queries.size).to eq(12)
     end
 
     # The whole drill-down is off the default page's budget. A reader who never opens a file pays
@@ -708,7 +713,7 @@ RSpec.describe "Repository spec file examples", type: :request do
     # TWO reads now sit behind the `?spec_file=` gate rather than one — SPGD-658's per-example
     # annotation worklist reads the same ask — so the delta is 2. Both sides are pinned absolutely
     # as well as differenced: a page that stopped taking BOTH narrowed reads would still satisfy the
-    # subtraction, and 8 is the figure that says the unopened page did not move.
+    # subtraction, and 10 is the figure that says the unopened page did not move.
     it "asks nothing of the table when no file was asked for" do
       repository = repository_with(200, name: "acme/unopened-suite")
 
@@ -718,7 +723,7 @@ RSpec.describe "Repository spec file examples", type: :request do
       unopened = queries_against("spec_observations") { get repository_path(repository) }
 
       expect(unopened.size).to eq(opened.size - 2)
-      expect(unopened.size).to eq(9)
+      expect(unopened.size).to eq(10)
     end
   end
 end

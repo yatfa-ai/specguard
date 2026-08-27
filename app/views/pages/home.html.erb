@@ -69,7 +69,12 @@
     <%= render UI::PanelComponent.new(title: "What SpecGuard answers today", id: "answers-today") do %>
       <div class="space-y-3">
         <%= render UI::DefListComponent.new(rows: [
-              ["How much of the suite can SpecGuard see?", "Annotated share, over the run's own total"],
+              # TWO ROWS RATHER THAN ONE, because they were one sentence and are two questions.
+              # "Annotated share" is the adoption metric and answers what a HUMAN has declared; it
+              # never answered how much of the suite SpecGuard can say anything about, which on a
+              # suite that has never been annotated is most of it. See `DerivedIntent`.
+              ["How much of the suite carries a written @intent?", "Annotated share, over the run's own total"],
+              ["How much of it can SpecGuard read at all?", "Authored, derived from the test's own description, or neither"],
               ["Where does the wall-clock go?", "Per run and per shard"],
               ["Which tests are slow, and which areas dominate the clock?", "Per test, per spec file and per directory"],
               ["Is the suite growing, and how fast?", "Run over run, per branch"],

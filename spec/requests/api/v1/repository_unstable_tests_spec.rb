@@ -686,7 +686,13 @@ RSpec.describe "GET /api/v1/repository — unstable_tests", type: :request do
       # on its branch and are served UNCONDITIONALLY, so they read on an unfiltered window where both
       # branch-gated blocks decline. They are counted here rather than excluded, because the point of
       # this line is that a read belonging to another grain cannot disappear into this one's zero.
-      expect(observation_reads { get_repository(key: api_key) }.length).to eq(8)
+      # ⭐ ONE MORE SINCE SPGD-711 — `latest_run.intent_readings`, an aggregate over the anchored
+      # run's rows splitting them into authored, derived and unreadable. It is the only UNGATED
+      # addition this endpoint has taken: every drill-in here costs nothing until a client asks, and
+      # this is served on every response, because a correction a client has to opt into leaves it
+      # reading `total_specs - annotated_specs` as the count of what SpecGuard cannot see. It lands
+      # in its own grain (`AS run_authored_count`) and touches none of the figures above.
+      expect(observation_reads { get_repository(key: api_key) }.length).to eq(9)
       expect(get_repository(key: api_key)["unstable_tests"]).to be_nil
     end
 
@@ -750,7 +756,7 @@ RSpec.describe "GET /api/v1/repository — unstable_tests", type: :request do
       expect(observation_reads { get_repository(key: api_key, query: { branch: "main" }) }.length)
         .to eq(classified_observation_reads { get_repository(key: api_key, query: { branch: "main" }) })
       expect(observation_reads { get_repository(key: api_key, query: { branch: "main" }) }.length)
-        .to eq(13)
+        .to eq(14)
     end
 
     # NO RUN-WINDOW QUERY. The block is drawn on `history_runs`, which is materialized once and

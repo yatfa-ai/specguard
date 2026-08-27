@@ -22,8 +22,9 @@
 # read, so the ask is the line's own key and the block restates it back — `path`, `name`, `branch`.
 #
 # This one opens a POPULATION rather than a pick. The figure it drills out of is not a ranking at all
-# but a subtraction on the run itself (`total_specs_count - annotated_specs_count`, rendered on the
-# dashboard as *"SpecGuard cannot see the other N tests"*), and a subtraction has no rows to have keys.
+# but a subtraction on the run itself (`total_specs_count - annotated_specs_count`, which the dashboard
+# rendered as *"SpecGuard cannot see the other N tests"* until SPGD-711 corrected the claim), and a
+# subtraction has no rows to have keys.
 # There is exactly one answer the client can be asking for, so there is nothing for the parameter to
 # carry and nothing for the block to restate. The predicate spelling here — `requested_unannotated_examples?`
 # rather than a `requested_*` reader — is what says so at every call site: the six siblings answer

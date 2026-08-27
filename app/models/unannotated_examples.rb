@@ -3,8 +3,17 @@
 # ONE run's UNANNOTATED examples — the rows behind the only headline figure on this product that had
 # no rung under it, and the drill-in the dashboard's own sentence asks for and cannot answer.
 #
-# `app/views/repositories/show.html.erb` prints *"SpecGuard cannot see the other N tests"* under a
-# stat labelled "Not visible to SpecGuard", and computes N as `total_specs - annotated_specs`. A
+# ⚠️ **"Unannotated" is what this population is, and it is NOT "what SpecGuard cannot see."** Those
+# were one sentence until SPGD-711 and are two now. Every row here lacks an authored `@intent` — that
+# much is exact, and it is the same predicate `total_specs - annotated_specs` evaluates. What the
+# panel and the MCP bridge then said about the rows — that SpecGuard could not see them — was false
+# of the ordinary `Class#method behavior` description, from which {DerivedIntent} reads an entity, an
+# action and a behavior. So the population is unchanged, the ordering now leads with the rows nothing
+# could be read from, and {#derived_count} / {#unreadable_count} split the total the caption used to
+# spend whole on the wrong claim.
+#
+# `app/views/repositories/show.html.erb` printed *"SpecGuard cannot see the other N tests"* under a
+# stat labelled "Not visible to SpecGuard", and computed N as `total_specs - annotated_specs`. A
 # subtraction is the whole answer a reader gets: told to raise annotation coverage — the product's
 # stated primary adoption metric — neither a human nor an agent could name ONE of the tests it is
 # counting. This object names them.
@@ -90,10 +99,10 @@ class UnannotatedExamples
   # absence of a precedence rule is argued.
   attr_reader :spec_file, :spec_directory
 
-  # These examples, in the order somebody would open the files in — by `spec_file_path`, then
-  # `line_number`, then `id`. Never longer than the limit it was built with, and stable across two
-  # identical asks, which the cap makes load-bearing: see `SpecObservation.unannotated_in`, where the
-  # ordering is argued.
+  # These examples, the ones nothing could be read from FIRST, and within each group in the order
+  # somebody would open the files in — by `spec_file_path`, then `line_number`, then `id`. Never longer
+  # than the limit it was built with, and stable across two identical asks, which the cap makes
+  # load-bearing: see `SpecObservation.unannotated_in`, where both halves of the order are argued.
   attr_reader :rows
 
   # How many examples this run recorded WITHOUT an annotation IN THE POPULATION THESE ROWS WERE CUT
@@ -105,6 +114,26 @@ class UnannotatedExamples
   # an empty read, where zero is the honest count — and here the empty read is the SUCCESS case rather
   # than the exotic one, since a fully-annotated run is what the metric exists to reach.
   def recorded_count = rows.first&.[]("unannotated_recorded_count").to_i
+
+  # HOW MANY OF THEM SPECGUARD NONETHELESS READ — the examples in this population whose own
+  # description yields an entity, an action and a behavior (see {DerivedIntent}), and the examples it
+  # could not get those from.
+  #
+  # The two split {#recorded_count} exactly, and they are the whole reason SPGD-711 touched this
+  # object. "Unannotated" is a true word for every row here — none of them carries an `@intent`. "The
+  # tests SpecGuard cannot see" was not, and it was the sentence this list was built to answer: a
+  # test called `Invoice#total sums the line items` is described, stored, and ranked by that
+  # description on three other panels. Only {#unreadable_count} may be spoken about that way.
+  #
+  # Off the same windows as {#recorded_count}, on the same rows, riding the same WHERE — so all three
+  # narrow together under `spec_file` / `spec_directory` and a caller can never hold a derived count
+  # for one population beside a total for another. See `SpecObservation::UNANNOTATED_POPULATION_COUNTS`,
+  # including for why there is no `authored_count` here.
+  def derived_count = rows.first&.[]("unannotated_derived_count").to_i
+
+  # See {#derived_count}. This is the ONE figure on this object any "SpecGuard cannot see these
+  # tests" language may describe.
+  def unreadable_count = rows.first&.[]("unannotated_unreadable_count").to_i
 
   # == No `recorded?` and no `truncated?`, on the API-only sibling's precedent
   #

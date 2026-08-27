@@ -1,9 +1,16 @@
-    <%# == WHERE the tests SpecGuard cannot see actually are
+    <%# == HOW MUCH OF EACH AREA SPECGUARD CAN ACTUALLY READ
         The discharge of the one figure on the Overview panel that named a problem and offered no
-        route into it. That panel prints "Not visible to SpecGuard" as
-        `total_specs_count - annotated_specs_count` and then says, in as many words, *"SpecGuard
-        cannot see the other 12,403 tests."* A subtraction is the entire answer it can give: a
-        five-figure count, and not one path a reader could open. This panel is the rows behind it.
+        route into it. That panel used to print `total_specs_count - annotated_specs_count` as "Not
+        visible to SpecGuard" and then say, in as many words, *"SpecGuard cannot see the other 12,403
+        tests."* A subtraction was the entire answer it could give: a five-figure count, and not one
+        path a reader could open. This panel is the rows behind it.
+
+        SPGD-711 then corrected the claim on both surfaces. The subtraction counts the examples
+        carrying no AUTHORED `@intent`, which is exact; SpecGuard nonetheless READS most of them,
+        from the `Class#method behavior` description the client has been sending and this platform
+        has been storing all along (see `DerivedIntent`). So each area is split three ways here —
+        authored, derived, unreadable — and only the third is a count of tests the product may
+        describe as ones it cannot see.
 
         The same rows have had a ranked, scoped worklist on the API since SPGD-591/608/623 and on
         the MCP bridge since SPGD-599. The dashboard — the surface the owner actually opens — was
@@ -39,18 +46,26 @@
         "Unannotated tests here", opened with `?spec_directory=`, which is the SAME ask the duration
         drill-downs read rather than a second parameter minted for this one. %>
     <% if @unannotated_directories %>
-      <%= render UI::PanelComponent.new(title: "Where the unannotated tests are", id: "unannotated-directories",
+      <%= render UI::PanelComponent.new(title: "How SpecGuard reads this suite, by area",
+                                        id: "unannotated-directories",
                                         class: "lg:col-span-3") do %>
         <% if @unannotated_directories.recorded? %>
           <%# Whether any LISTED area carries debt — and the reason that is allowed to be read as a
               statement about the RUN, which for a capped list it usually is not.
 
-              The ranking is `COUNT(*) FILTER (WHERE status = 'unannotated') DESC`, so the maximum is
-              at the HEAD by construction: if the first row carries none, no row below it and no row
-              cut by the limit can carry any either. That inference is the only thing that makes a
-              run-scoped sentence safe under a caption that says "the 10 of 84"; it is a fold over
-              the listed rows and it is stated here rather than assumed, because the same fold under
-              any OTHER ordering would be a claim about ten areas dressed as a claim about eighty.
+              The ranking is unreadable-count DESC, then `COUNT(*) FILTER (WHERE status =
+              'unannotated') DESC`, so the maximum DEBT is still at the HEAD — which takes one step
+              more to see than it used to and is still exact. If no area has an unreadable example
+              the first term ties everywhere and the second orders the list, so the head carries the
+              maximum debt outright. If some area does, that area's unreadable examples are
+              unannotated ones by construction — a reading is derived or unreadable only when no
+              `@intent` was authored — so the head carries debt too. Either way: head carries none ⇒
+              no row below it and no row cut by the limit carries any.
+
+              That inference is the only thing that makes a run-scoped sentence safe under a caption
+              that says "the 10 of 84"; it is stated here rather than assumed, because the same fold
+              under any OTHER ordering would be a claim about ten areas dressed as a claim about
+              eighty.
 
               In the view and not on the object on purpose: `UnannotatedDirectories` ships operands
               and no verdicts, and "this run has debt" is exactly the kind of reading its class
@@ -69,14 +84,14 @@
                   aggregate and `#truncated?` decides which sentence is true. A cut list that does
                   not say it was cut is read as the whole story. %>
               <% if @unannotated_directories.truncated? %>
-                The <%= number_with_delimiter(@unannotated_directories.rows.size) %> areas carrying
-                the most unannotated tests, of the
+                The <%= number_with_delimiter(@unannotated_directories.rows.size) %> areas SpecGuard
+                reads least of, of the
                 <%= number_with_delimiter(@unannotated_directories.directory_count) %> this run
-                recorded examples in, most first
+                recorded examples in — most unreadable examples first, then most unannotated
               <% else %>
                 All <%= number_with_delimiter(@unannotated_directories.directory_count) %>
                 <%= "directory".pluralize(@unannotated_directories.directory_count) %> this run
-                recorded examples in, most unannotated first
+                recorded examples in — most unreadable examples first, then most unannotated
               <% end %>
               — grouped on the immediate parent of the file that RAN each example, so a shared
               example group counts against the area including it rather than against
@@ -86,15 +101,25 @@
                   the two operands are what a reader decides FROM. Said here as well because a reader
                   scanning a column of counts needs to know what the second one is before the first
                   means anything. %>
-              Each area shows how many of its examples carry no <code>@intent</code> and how many
-              this run recorded there in total — the operands, never a percentage: an area at 40 of
-              40 is equally a module nobody has annotated yet and a module of generated specs nobody
-              intends to, and nothing on this page decides which.
+              Each area splits its examples three ways — those carrying an <code>@intent</code> a
+              human wrote, those SpecGuard read from the test's own description instead, and those it
+              could not read at all — beside how many this run recorded there in total. Operands,
+              never a percentage: an area at 40 of 40 unannotated is equally a module nobody has
+              annotated yet and a module of generated specs nobody intends to, and nothing on this
+              page decides which.
+              <%# The distinction SPGD-711 exists to draw, said in the caption and not left to the
+                  column headers. A reader who has been looking at this panel reading N of N for
+                  every area needs to be told what changed, and the honest version of "derived" is
+                  the sentence that says what it is missing rather than the one that sells it. %>
+              A derived reading is real but weaker: it is inferred from prose somebody wrote for a
+              test runner's output, it carries no preconditions, and its layer is guessed from the
+              directory rather than declared. Only the third column is a count of tests SpecGuard can
+              say nothing about.
               <%# An area with no debt is a ROW here, which surprises a reader who expected a list of
                   problems. Stated, because a `0` in a panel titled "where the unannotated tests are"
                   otherwise reads as a rendering bug. %>
-              An area whose examples all carry one is listed at 0 rather than dropped, so this is
-              where the run's areas stand and not only where its debt is.
+              An area whose examples all carry an <code>@intent</code> is listed at 0 rather than
+              dropped, so this is where the run's areas stand and not only where its debt is.
               <%# Counted off THIS RUN'S per-example rows. The Overview's figure is a subtraction over
                   the run's own counters, and while both sides read the same `status` the payload
                   wrote, the two populations are not guaranteed identical — a client that reports
@@ -105,7 +130,8 @@
               from the suite size on the Overview panel above and may legitimately differ from it.
             </p>
 
-            <%= render UI::TableComponent.new(columns: ["Directory", "Not visible to SpecGuard",
+            <%= render UI::TableComponent.new(columns: ["Directory", "Carrying an @intent",
+                                                        "Read from the description", "Not readable",
                                                         "Examples this run recorded"],
                                               describedby: "unannotated-directories-basis") do %>
               <% @unannotated_directories.rows.each do |directory| %>
@@ -138,12 +164,23 @@
                                        "text-app-content hover:decoration-app-content",
                                 aria: { current: directory.path == @spec_directory_request ? "true" : nil } %>
                   </td>
-                  <%# Both operands, side by side and both bare integers. No fraction, no percentage,
+                  <%# The operands, side by side and all bare integers. No fraction, no percentage,
                       no threshold and no colour on the row — `UnannotatedDirectories` states that
                       boundary twice and it governs this partial too. `tabular-nums` so a column of
-                      counts lines up the way every other numeric column on this page does. %>
+                      counts lines up the way every other numeric column on this page does.
+
+                      "Not readable" is the emphasised column and the one the ranking leads on, and
+                      it is deliberately NOT the old "Not visible to SpecGuard" figure under a new
+                      name: that one was `unannotated_count` and collapsed the middle column into
+                      this one. `SpecObservation.unannotated_directories_in` argues the ordering. %>
+                  <td class="px-3 py-2 text-app-content-secondary tabular-nums">
+                    <%= number_with_delimiter(directory.authored_count) %>
+                  </td>
+                  <td class="px-3 py-2 text-app-content-secondary tabular-nums">
+                    <%= number_with_delimiter(directory.derived_count) %>
+                  </td>
                   <td class="px-3 py-2 text-app-content tabular-nums">
-                    <%= number_with_delimiter(directory.unannotated_count) %>
+                    <%= number_with_delimiter(directory.unreadable_count) %>
                   </td>
                   <td class="px-3 py-2 text-app-content-secondary tabular-nums">
                     <%= number_with_delimiter(directory.recorded_count) %>
@@ -176,7 +213,7 @@
 
               The panel stays rather than disappearing, because its absence would be a third
               indistinguishable thing on a page where the Overview may be printing a five-figure
-              invisible count at the same time — the reader would be told the debt exists and shown
+              unreadable count at the same time — the reader would be told the debt exists and shown
               no reason this panel is not describing it. %>
           <%= render UI::EmptyStateComponent.new(
                 title: "No per-example detail on this run",

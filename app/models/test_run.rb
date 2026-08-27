@@ -26,6 +26,26 @@ class TestRun < ApplicationRecord
 
   validates :commit_sha, presence: true
 
+  # HOW THIS RUN READS — `IntentReadings` over its per-example rows: how many carry an author's
+  # `@intent`, how many SpecGuard read from the test's own description, and how many it could not
+  # read at all.
+  #
+  # **Deliberately beside {#annotated_ratio} and never a replacement for it.** That method answers
+  # "how much of this suite has a human-written intent" off the run's own counters, and it answers it
+  # today exactly as it did before SPGD-711 — a requirement of that ticket rather than an accident.
+  # This answers a different question the dashboard used to conflate with it: how much of the suite
+  # SpecGuard can say anything about. On a suite that has never been annotated the first is 0% and
+  # the second is most of it, and printing the first while claiming the second is what this pair
+  # exists to stop.
+  #
+  # The two also count DIFFERENT POPULATIONS, and `IntentReadings` states why: the counters are
+  # re-derived by SUM over `test_run_shards` from what each shard REPORTED, these are the rows
+  # actually STORED. `IntentReadings#recorded` is the denominator that belongs to these three.
+  #
+  # Memoized, because the Overview panel, the API's `latest_run` block and the areas panel all ask on
+  # one page load and the answer is one aggregate over one run.
+  def intent_readings = @intent_readings ||= SpecObservation.reading_counts_in(self)
+
   # Share of this run's suite that carries an @intent annotation — the headline dashboard metric.
   #
   # Read off this run's own counters, not from `spec_intents`, and a row count could not stand in

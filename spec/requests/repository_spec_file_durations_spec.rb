@@ -305,7 +305,7 @@ RSpec.describe "Repository heaviest spec files", type: :request do
       # description, which that grouping excludes in its WHERE clause and therefore cannot count for
       # itself. Only the first of the two is a `GROUP BY`, which is why the grouping tally below
       # moves to three rather than four: the presence count is a plain aggregate over one run.
-      # RECOUNTED AT 8 by SPGD-649, which added the "Where the unannotated tests are" panel: ONE
+      # RECOUNTED AT 8 by SPGD-649, which added the by-area annotation panel: ONE
       # further read, the same run's rows grouped by AREA on the ANNOTATION axis rather than on the
       # wall clock the by-directory rollup ranks them by. It IS a `GROUP BY`, so the grouping tally
       # below moves with it — from three to four — where SPGD-344's presence count did not.
@@ -322,7 +322,16 @@ RSpec.describe "Repository heaviest spec files", type: :request do
       # The grouping tally below does NOT move with it: the gate is a plain two-column aggregate
       # over one run with no `GROUP BY` at all, which is exactly what makes it cheap enough to ask
       # before deciding whether to ask anything else.
-      expect(large_queries.size).to eq(9)
+      # RECOUNTED AT 10 by SPGD-711, which added the run's INTENT READINGS: ONE further read of
+      # this table, an ungated aggregate over the same run's rows splitting them into authored,
+      # derived and unreadable. It is not the by-area annotation read counted above under another
+      # name — that one GROUPS and ranks, this one does neither, and it answers the Overview's own
+      # sentence rather than a panel's list. Ungated unlike every drill-in on this page, because a
+      # correction a client has to opt into leaves the Overview printing the subtraction it replaced.
+      # Its own budget is asserted in spec/requests/api/v1/repository_intent_readings_spec.rb.
+      # The grouping tally below does not move with this one either, and for the same reason
+      # SPGD-728's gate does not: it is a plain aggregate over one run with no `GROUP BY`.
+      expect(large_queries.size).to eq(10)
       expect(large_queries.count { |sql| sql.include?("GROUP BY") }).to eq(4)
     end
   end

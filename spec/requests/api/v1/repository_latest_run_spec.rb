@@ -114,6 +114,12 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
         "total_specs" => 40,
         "annotated_specs" => 10,
         "annotated_ratio" => 0.25,
+        # THE THREE READINGS, and four zeros is the honest answer on this fixture rather than a
+        # null. The three keys above are the run's COUNTERS and say what the client REPORTED; these
+        # are counted over the per-example ROWS, and this run wrote none — so `recorded: 0` is what
+        # separates "nobody sent the detail" from "nothing is readable", and three zeros without it
+        # could not. A null would say "you did not ask", and there is nothing here to ask.
+        "intent_readings" => { "authored" => 0, "derived" => 0, "unreadable" => 0, "recorded" => 0 },
         "duration_seconds" => 42.5,
         # Null, not an empty block: this fixture has no shards, so there is no composition to
         # explain and the MAX the key above reports *is* the SUM. The key is still present, on the
@@ -506,7 +512,8 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
 
       expect(get_repository["latest_run"].keys)
         .to contain_exactly("commit_sha", "branch", "total_specs", "annotated_specs",
-                            "annotated_ratio", "duration_seconds", "shards", "spec_files",
+                            "annotated_ratio", "intent_readings", "duration_seconds", "shards",
+                            "spec_files",
                             "spec_directories", "slowest_examples", "repeated_descriptions",
                             "spec_directory_files", "spec_file_examples",
                             "repeated_description_examples", "unannotated_examples",
@@ -2121,6 +2128,12 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
         # The 0–1 fraction `/ingest` reports, never the 0–100 percentage the dashboard renders.
         # The 100× gap between the two is invisible in a JSON body.
         "annotated_ratio" => 0.25,
+        # ⚠️ NO `intent_readings` HERE, and its absence is the point of this line rather than an
+        # omission. `latest_run` carries it; a HISTORY row does not. It is one aggregate over one
+        # run's per-example rows, and a window of thirty history rows would be thirty of them — the
+        # N+1 every "reads it once whatever the history holds" example in this file exists to
+        # refuse. The history's job is to be DIFFERENCED, and the counters above are what a client
+        # differences; a reading is a fact about the run in front of you.
         "duration_seconds" => 42.5,
         # Zero, not null: this run named no `ci_run_id`, and "reported in one piece" is a fact
         # about its composition rather than a missing measurement.
@@ -2367,7 +2380,13 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
 
       expect(body["latest_run"]).to eq(
         "commit_sha" => third.commit_sha, "branch" => "main", "total_specs" => 40,
-        "annotated_specs" => 10, "annotated_ratio" => 0.25, "duration_seconds" => 42.5,
+        "annotated_specs" => 10, "annotated_ratio" => 0.25,
+        # Present and four zeros, unlike the eight nulls below it, and the difference is what each
+        # key's absence would MEAN. Those are null because nothing was asked or nothing was
+        # recorded; this is always served, because a correction a client has to opt into leaves it
+        # reading `total_specs - annotated_specs` as the count of what SpecGuard cannot see.
+        "intent_readings" => { "authored" => 0, "derived" => 0, "unreadable" => 0, "recorded" => 0 },
+        "duration_seconds" => 42.5,
         "shards" => nil, "spec_files" => nil, "spec_directories" => nil,
         "slowest_examples" => nil, "repeated_descriptions" => nil,
         # Null because this request asked for no area — the key present and unasked, exactly as it
@@ -3853,7 +3872,7 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
       # one. A gate in front of the read would buy this run its query back at the price of a second
       # one on every run that does record.
       expect(area_grain_reads { get_repository }.length).to eq(1)
-      # And the UNRECORDED path reads the table SIX times IN TOTAL — no seventh. Asserted here and
+      # And the UNRECORDED path reads the table SEVEN times IN TOTAL — no eighth. Asserted here and
       # not only on the recorded fixture below, because a read matching no grain's pattern is
       # invisible to every per-grain guard by construction, and the unrecorded branch is exactly
       # where an `exists?` gate or a preload would be tempting to add.
@@ -3863,8 +3882,8 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
       # scope to sum, and putting them in scope would re-narrow the one assertion that has to stay
       # UNclassified to catch the read matching no grain's pattern. The sum-of-grains form belongs
       # at the site that already does the classifying, where it is written ALONGSIDE the literal
-      # and not in place of it — see "reads spec_observations exactly six times in total" below.
-      expect(observation_reads { get_repository }.length).to eq(6)
+      # and not in place of it — see "reads spec_observations exactly seven times in total" below.
+      expect(observation_reads { get_repository }.length).to eq(7)
       expect(get_repository.dig("latest_run", "spec_directories")).to be_nil
 
       small = create_test_run(repository: repository, commit_sha: "acost0000002", duration_seconds: 42.5)
@@ -3901,7 +3920,7 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
       # The N+1 this example exists to catch need not land on any grain's pattern — a per-run
       # preload of `spec_observations` matches none of them, so the per-grain count alone would
       # stay at 1 through sixteen extra reads. The total is what names it.
-      expect(observation_reads { get_repository }.length).to eq(6)
+      expect(observation_reads { get_repository }.length).to eq(7)
     end
 
     # "GAINS EXACTLY ONE" — the half neither per-grain block can state, and the reason it is stated
@@ -3909,13 +3928,21 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
     # added by anything else on this endpoint unnamed; the table-level total is what closes that,
     # and it is the criterion this ticket was written against.
     #
-    # SIX, as `1 + 1 + 2 + 2 + 0`: one aggregate per rollup grain, two for the per-example ranking —
-    # whose presenter issues a capped scan and a coverage aggregate — two for the by-description
-    # ranking, whose presenter issues a grouped aggregate and the presence count it cannot window
-    # over, and NONE for the cross-run flakiness grain, which is not constructed on an unfiltered
-    # window. Restated as the sum of the five classified lists rather than as a literal, so a grain
-    # that stopped reading and another that started reading twice cannot cancel out into a passing
-    # total.
+    # SEVEN, as `1 + 1 + 2 + 2 + 0 + 1`: one aggregate per rollup grain, two for the per-example
+    # ranking — whose presenter issues a capped scan and a coverage aggregate — two for the
+    # by-description ranking, whose presenter issues a grouped aggregate and the presence count it
+    # cannot window over, NONE for the cross-run flakiness grain, which is not constructed on an
+    # unfiltered window, and ONE for the run's intent readings. Restated as the sum of the classified
+    # lists rather than as a literal, so a grain that stopped reading and another that started
+    # reading twice cannot cancel out into a passing total.
+    #
+    # ⭐ THE LAST TERM IS THE ONLY UNGATED ADDITION THIS ENDPOINT HAS TAKEN. Every drill-in here
+    # costs nothing until a client asks for it; `latest_run.intent_readings` is served on every
+    # response, and SPGD-711 took that cost deliberately — it is four integers off one aggregate over
+    # one run, and the correction it carries (that most unannotated tests are READ, not invisible) is
+    # worthless to a client that has to opt into it. The figure moved from six to seven here and
+    # nowhere else on this file's fixtures, which is what says the addition is one read rather than
+    # one per grain.
     #
     # The flakiness list is destructured and asserted EMPTY rather than dropped on the floor. Two
     # separate things break if it is not: a grain silently added to this request would be adopted by
@@ -3925,23 +3952,25 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
     # The by-description patterns were chosen against that same trap: two of the flakiness grain's
     # four also `GROUP BY name`, so this fixture's empty flakiness list is what would catch a
     # description pattern loose enough to adopt them.
-    it "reads spec_observations exactly six times in total — one per rollup grain, two per ranking, and no other" do
+    it "reads spec_observations exactly seven times in total — one per rollup grain, two per ranking, and no other" do
       run = create_test_run(repository: repository, commit_sha: "acosttotal01", duration_seconds: 42.5)
       observe(run, path: "spec/models/a_spec.rb", duration: 0.5, line_number: 1)
       observe(run, path: "spec/requests/b_spec.rb", duration: 0.5, line_number: 1)
 
-      area, file, example, description, flakiness = observation_reads_by_grain { get_repository }
+      area, file, example, description, flakiness, _growth, _dfiles, _fex, _dex, _dfg, _rtg, _dfrtg,
+        _utr, _unann, _debt, readings = observation_reads_by_grain { get_repository }
 
       expect(area.length).to eq(1)
       expect(file.length).to eq(1)
       expect(example.length).to eq(2)
       expect(description.length).to eq(2)
       expect(flakiness).to be_empty
+      expect(readings.length).to eq(1)
       # And the classified reads are ALL of them — the assertion the per-grain blocks cannot make,
       # because a read matching no grain's pattern is invisible to every one of them.
       expect(observation_reads { get_repository }.length)
         .to eq(classified_observation_reads { get_repository })
-      expect(observation_reads { get_repository }.length).to eq(6)
+      expect(observation_reads { get_repository }.length).to eq(7)
     end
   end
 
@@ -4027,7 +4056,7 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
 
       expect(repository.test_runs.count).to eq(16)
       expect(example_grain_reads { get_repository }.length).to eq(2)
-      expect(observation_reads { get_repository }.length).to eq(6)
+      expect(observation_reads { get_repository }.length).to eq(7)
     end
   end
 
@@ -4120,7 +4149,7 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
 
       expect(repository.test_runs.count).to eq(16)
       expect(description_grain_reads { get_repository }.length).to eq(2)
-      expect(observation_reads { get_repository }.length).to eq(6)
+      expect(observation_reads { get_repository }.length).to eq(7)
     end
   end
 end
