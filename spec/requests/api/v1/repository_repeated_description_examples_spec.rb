@@ -143,7 +143,7 @@ RSpec.describe "GET /api/v1/repository — latest_run.repeated_description_examp
   end
 
   describe "a description that was asked for" do
-    # AC2. The block exists, its rows carry the six operands the endpoint's other two per-example
+    # AC2. The block exists, its rows carry the seven operands the endpoint's other two per-example
     # blocks already serve, and the GROUP's two population figures sit beside them. The array is
     # asserted as a SEQUENCE — `eq`, not `match_array` — because "slowest first, untimed last" is
     # half of what this key promises, and the untimed row's position is the half a set comparison

@@ -1720,15 +1720,21 @@ class RepositoryOverview
   # adopting repository asks after every push, so asking it of an older commit is the ordinary use
   # rather than the exotic one.
   #
-  # THE ROW SHAPE IS FOUR FIELDS AND DELIBERATELY NOT THE OTHER BLOCKS' SIX. The three per-example
+  # THE ROW SHAPE IS SIX FIELDS AND DELIBERATELY NOT THE OTHER BLOCKS' SEVEN. The three per-example
   # blocks above agree field for field on purpose — `serialized_spec_file_examples` states why, and a
   # `contain_exactly` in each of their request specs enforces it — and this block is not a fourth
   # member of that set. Those three list examples a reader has come to MEASURE, so they carry
   # `duration_seconds` and `outcome`; this one lists examples a reader has come to OPEN AND EDIT, so it
-  # carries exactly what opens a file and nothing else. `outcome` would be worse than surplus here: an
+  # carries what opens a file plus what SpecGuard already read of the row, and nothing else. `outcome`
+  # would be worse than surplus here: an
   # unannotated example's outcome is a fact about the last run, and a worklist sorted for editing that
-  # also whispers "this one failed" invites the reader to do the other job. The four are `name`,
-  # `spec_file_path`, `file_path` and `line_number` — and the last three are the pair
+  # also whispers "this one failed" invites the reader to do the other job. The third withheld field is
+  # `intent_layer` (SPGD-851), and it is withheld for a STRUCTURAL reason rather than an editorial one:
+  # this block's population is BY DEFINITION the rows carrying no layer — an unannotated example
+  # declared none, and the envelope requires `intent` to be ABSENT when `status` is `"unannotated"` —
+  # so the key would be a column of guaranteed nulls, saying nothing on every row it appeared on. The
+  # six are `name`, `spec_file_path`, `file_path` and `line_number`, plus `reading` and
+  # `derived_intent` (SPGD-711) — and of the locating four the last three are the pair
   # `serialized_spec_file_examples` keeps apart plus the line: `file_path` is where the example is
   # DEFINED and `spec_file_path` is the file that RAN it, which differ for a shared example group, and
   # a reader opening the wrong one of the two finds nothing to annotate.

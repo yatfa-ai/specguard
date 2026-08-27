@@ -113,7 +113,7 @@ RSpec.describe "GET /api/v1/repository — latest_run.spec_file_examples", type:
   end
 
   describe "a spec file that was asked for" do
-    # AC1. The block exists, its rows carry the six operands the endpoint's other per-example block
+    # AC1. The block exists, its rows carry the seven operands the endpoint's other per-example block
     # already serves, and the FILE's two population figures sit beside them. The array is asserted
     # as a SEQUENCE — `eq`, not `match_array` — because "slowest first, untimed last" is half of
     # what this key promises, and the untimed row's position is the half a set comparison drops.
