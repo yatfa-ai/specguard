@@ -100,6 +100,35 @@
               that needs it is three lines away. %>
           <% derived_on_page = @unannotated_examples.rows.count { |observation| observation.derived_intent } %>
 
+          <%# AGREEMENT AT N = 1, decided once here rather than inside four arms. Each of these three
+              counts is an independent operand of the sentences below — they do not move together —
+              so each gets its own predicate, and a shared `one` would silently make one clause agree
+              with a different clause's noun.
+
+              NONE OF THE THREE IS A CONTRIVED STATE, which is the argument for spending four lines
+              on them:
+
+              * `derived_past_cap == 1` is the population one past the cap. `derived_count -
+                derived_on_page` is exactly `recorded_count - UNANNOTATED_EXAMPLES_LIMIT` whenever
+                any reading renders (the unreadable rows lead, so the page fills with them first),
+                so an area of 101 lands here — the most ordinary truncation there is, and the state
+                a reader meets FIRST as an area crosses the cap.
+              * `one_derived` is a suite with a single derived reading left, and `one_unreadable` a
+                single dark one. Those are the states this ticket is steering adopters TOWARD, so
+                the good outcome must not be the one that reads badly.
+
+              The rule is the one `RepositoriesHelper#unstable_tests_unexamined_caveat` states for
+              the same cap on the same page — verb and pronoun agree with the noun, and the count is
+              a pre-LIMIT total so `LIMIT + 1` is reachable. Following it here rather than restating
+              it: that helper carries the argument, this is a second site for it.
+
+              `derived_past_cap` is also NAMED rather than subtracted twice inline, because it is the
+              operand of both the figure and the verb beside it — spelling the subtraction out at each
+              would be two places for one of them to keep the old form. %>
+          <% derived_past_cap = @unannotated_examples.derived_count - derived_on_page %>
+          <% one_derived = @unannotated_examples.derived_count == 1 %>
+          <% one_unreadable = @unannotated_examples.unreadable_count == 1 %>
+
           <%# What the list IS, before the list — the discipline every panel on this page keeps. Every
               figure is counted off THE SAME READ that returned the rows: the population count rides
               back as a window (`SpecObservation::UNANNOTATED_POPULATION_COUNTS`) and the window is
@@ -240,19 +269,23 @@
                 <code>@intent</code>: no preconditions, and a layer inferred from the directory
                 rather than declared.
                 The other <%= number_with_delimiter(@unannotated_examples.unreadable_count) %>
-                it cannot read at all, and those are listed first — so the last column shows
-                <%= number_with_delimiter(derived_on_page) %> of those
-                <%= number_with_delimiter(@unannotated_examples.derived_count) %> readings on this
+                it cannot read at all, and <%= one_unreadable ? "that one is" : "those are" %>
+                listed first — so the last column shows
+                <%= number_with_delimiter(derived_on_page) %> of
+                <%= one_derived ? "that" : "those" %>
+                <%= number_with_delimiter(@unannotated_examples.derived_count) %>
+                <%= "reading".pluralize(@unannotated_examples.derived_count) %> on this
                 page, and the other
-                <%= number_with_delimiter(@unannotated_examples.derived_count - derived_on_page) %>
-                are past the cap.
+                <%= number_with_delimiter(derived_past_cap) %>
+                <%= derived_past_cap == 1 ? "is" : "are" %> past the cap.
               <% else %>
                 SpecGuard reads <%= number_with_delimiter(@unannotated_examples.derived_count) %>
                 of them from the test's own description — shown in the last column, and a weaker
                 reading than an <code>@intent</code>: no preconditions, and a layer inferred from the
                 directory rather than declared.
                 The other <%= number_with_delimiter(@unannotated_examples.unreadable_count) %>
-                it cannot read at all, and those are listed first.
+                it cannot read at all, and <%= one_unreadable ? "that one is" : "those are" %>
+                listed first.
               <% end %>
             <% else %>
               <% if truncated %>
@@ -261,11 +294,13 @@
                 own description — a weaker reading than an <code>@intent</code>: no preconditions,
                 and a layer inferred from the directory rather than declared.
                 There is none here it cannot read at all.
-                The last column shows <%= number_with_delimiter(derived_on_page) %> of those
-                <%= number_with_delimiter(@unannotated_examples.derived_count) %> readings on this
+                The last column shows <%= number_with_delimiter(derived_on_page) %> of
+                <%= one_derived ? "that" : "those" %>
+                <%= number_with_delimiter(@unannotated_examples.derived_count) %>
+                <%= "reading".pluralize(@unannotated_examples.derived_count) %> on this
                 page, and the other
-                <%= number_with_delimiter(@unannotated_examples.derived_count - derived_on_page) %>
-                are past the cap.
+                <%= number_with_delimiter(derived_past_cap) %>
+                <%= derived_past_cap == 1 ? "is" : "are" %> past the cap.
               <% else %>
                 SpecGuard reads all <%= number_with_delimiter(@unannotated_examples.derived_count) %>
                 <%= "example".pluralize(@unannotated_examples.derived_count) %> here from the test's

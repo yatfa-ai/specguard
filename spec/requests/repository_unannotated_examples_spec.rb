@@ -644,12 +644,18 @@ RSpec.describe "Repository unannotated examples", type: :request do
     # so it cannot describe a different slice from the table under it. It also says what a derived
     # reading is MISSING, because the honest version of "derived" is the one that does not sell it as
     # an annotation.
+    #
+    # ⭐ AND IT IS A ONE-AND-ONE FIXTURE, so it is also this file's pin on AGREEMENT at N = 1. It
+    # asserted "those are listed first" over a single unreadable row until SPGD-711 round 8 — the
+    # ordinary two-row area, the shape a reader meets first, pinning the wording that does not
+    # agree. Nothing exotic was needed to reach it, which is why the count-off-by-one examples below
+    # are not the whole guard: this one holds the sentence at the grain a real area has.
     it "says how many of them it read and how many it could not, and what a derived reading lacks" do
       get repository_path(mixed_reading_run, spec_directory: area)
 
       expect(basis_line).to have_text("SpecGuard reads 1 of them from the test's own description",
                                       normalize_ws: true)
-      expect(basis_line).to have_text("The other 1 it cannot read at all, and those are listed first",
+      expect(basis_line).to have_text("The other 1 it cannot read at all, and that one is listed first",
                                       normalize_ws: true)
       expect(basis_line).to have_text("no preconditions", normalize_ws: true)
       # And the claim the panel used to make about every row on it is made about none of them.
@@ -837,6 +843,69 @@ RSpec.describe "Repository unannotated examples", type: :request do
       )
       expect(basis_line).to have_no_text("past the cap")
       expect(basis_line).to have_no_text("readings on this page")
+    end
+
+    # ⭐ AGREEMENT AT N = 1, and the reason it gets examples of its own rather than a note: every
+    # example above pins an operand of 5, 30, 40, 60, 90, 100, 112 or 130. The N = 1 column of that
+    # table was EMPTY, which is exactly how the caption shipped saying "the other 1 are past the
+    # cap" — the arms were correct about the arithmetic and wrong about the English, and no
+    # assertion in this file could tell the difference.
+    #
+    # `recorded_count == 101` IS THE ORDINARY TRUNCATION, not a contrived state. `derived_count -
+    # derived_on_page` is exactly `recorded_count - UNANNOTATED_EXAMPLES_LIMIT` whenever any reading
+    # renders — the unreadable rows lead, so the page fills with them first — so one example past
+    # the cap puts a 1 in the remainder, and this is the FIRST state a growing area reaches as it
+    # crosses the cap rather than the last.
+    #
+    # The three operands are asserted APART, in three examples, because they are independent counts
+    # that do not move together: a single `one` flag shared across the arms would make one clause
+    # agree with another clause's noun and every one of these would still pass.
+    it "agrees with itself where exactly one reading is past the cap" do
+      derivable = SpecObservation::UNANNOTATED_EXAMPLES_LIMIT + 1
+      get repository_path(capped_mixed_run(unreadable: 0, derived: derivable), spec_directory: area)
+
+      expect(rows.size).to eq(SpecObservation::UNANNOTATED_EXAMPLES_LIMIT)
+      expect(derived_rows_on_page).to eq(SpecObservation::UNANNOTATED_EXAMPLES_LIMIT)
+      expect(basis_line).to have_text(
+        "The last column shows 100 of those 101 readings on this page, and the other 1 is past the cap",
+        normalize_ws: true
+      )
+      # The verb it used to carry, pinned as an absence so a revert of the predicate goes red here
+      # rather than only in the positive assertion above.
+      expect(basis_line).to have_no_text("the other 1 are past the cap", normalize_ws: true)
+    end
+
+    # THE NOUN AND THE DEMONSTRATIVE, on the arm where the population itself is one. The cap cannot
+    # be what makes this reachable — a single reading is never truncated — so it is the UNREADABLE
+    # rows that fill the page, and the sentence still has to count the one reading it did get.
+    # This is the state SPGD-711 is steering suites toward, one dark test at a time, so it is the
+    # one that must not read badly.
+    it "agrees with itself where exactly one reading exists at all" do
+      get repository_path(capped_mixed_run(unreadable: 120, derived: 1), spec_directory: area)
+
+      expect(rows.size).to eq(SpecObservation::UNANNOTATED_EXAMPLES_LIMIT)
+      expect(derived_rows_on_page).to eq(0)
+      expect(basis_line).to have_text(
+        "the last column shows 0 of that 1 reading on this page, and the other 1 is past the cap",
+        normalize_ws: true
+      )
+      expect(basis_line).to have_no_text("of those 1 readings", normalize_ws: true)
+    end
+
+    # THE PRONOUN, on the other operand of the same sentence. `unreadable_count` is a THIRD
+    # independent count — an area can carry one dark test beside two hundred readable ones — so it
+    # needs its own example and its own fixture rather than riding the two above.
+    it "agrees with itself where exactly one test is the one it cannot read" do
+      get repository_path(capped_mixed_run(unreadable: 1, derived: 200), spec_directory: area)
+
+      expect(rows.size).to eq(SpecObservation::UNANNOTATED_EXAMPLES_LIMIT)
+      expect(basis_line).to have_text(
+        "The other 1 it cannot read at all, and that one is listed first", normalize_ws: true
+      )
+      expect(basis_line).to have_no_text("and those are listed first", normalize_ws: true)
+      # The plural operands in the SAME sentence are untouched by the singular ones beside them —
+      # 199 readings are past the cap here, and they still read as plural.
+      expect(basis_line).to have_text("the other 101 are past the cap", normalize_ws: true)
     end
   end
 end
