@@ -41,14 +41,23 @@ class SlowestExamples
   end
 
   # Keywords rather than a positional tuple, and named to match `SpecObservation::COVERAGE_COUNTS`
-  # so `.for` can splat one into the other. Five integers in a row is exactly the signature two of
+  # so `.for` can splat one into the other. Six integers in a row is exactly the signature two of
   # them get silently swapped in.
-  def initialize(rows:, recorded_count:, timed_count:, reported_outcome_count:, failed_count:,
-                 pending_count:)
+  #
+  # EVERY key of that constant is accepted, including ones this panel does not render:
+  # `.for` splats the whole hash, so a counter added there and not accepted here is an
+  # `ArgumentError` on the dashboard and on `api/v1/repositories#latest_run` — the two callers —
+  # rather than a missing figure. `identified_count` is such a key today: it is served on the
+  # ingest `202`, where a producer can still act on it, and this panel has no per-example identity
+  # sentence to say. It is held rather than dropped so the splat keeps working and the figure is in
+  # hand if a surface ever needs it.
+  def initialize(rows:, recorded_count:, timed_count:, reported_outcome_count:, identified_count:,
+                 failed_count:, pending_count:)
     @rows = rows
     @recorded_count = recorded_count
     @timed_count = timed_count
     @reported_outcome_count = reported_outcome_count
+    @identified_count = identified_count
     @failed_count = failed_count
     @pending_count = pending_count
   end
@@ -64,6 +73,14 @@ class SlowestExamples
   # outcomes counted by name. See `SpecObservation::COVERAGE_COUNTS` for why there is no `passed`
   # figure here and why there must not be one.
   attr_reader :reported_outcome_count, :failed_count, :pending_count
+
+  # How many of this run's rows carried an `example_id` — the upsert key, and the axis the ingest
+  # `202` reports as `identified_specs` beside `recorded_specs`. Exposed rather than left as a
+  # write-only ivar: this panel says nothing about per-example identity today, and a figure held
+  # by the constructor with no way to read it is one nothing could ever start saying. Its
+  # shortfall is `recorded_count - identified_count`, never against `TestRun#total_specs_count` —
+  # the two are different grains, per the note at the top of this class.
+  attr_reader :identified_count
 
   # Whether this run recorded per-example rows AT ALL — a different question from whether any of
   # them were timed, and the one that decides whether the surface has anything to say. A run

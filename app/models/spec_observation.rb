@@ -639,10 +639,28 @@ class SpecObservation < ApplicationRecord
   # a second round trip for a figure the scan below already has the rows for. The one-read rule is
   # `SlowestExamples`': a caption fetched separately from the list it describes is a claim with no
   # structural reason to keep agreeing with it. Leave this as a FILTER aggregate.
+  #
+  # `COUNT(example_id)` counts non-nulls on the same terms, and it is the one of these counters
+  # whose column is a KEY rather than a measurement. `example_id` is the conflict target
+  # `Ingest::ObservationRecorder#record` upserts on (`unique_by: %i[test_run_id example_id]`), and
+  # it arrives UNVALIDATED — that class states the exemption as a load-bearing rule, so a payload
+  # carrying no ids at all is accepted and stores a nil in this column on every row. Postgres
+  # treats those nulls as distinct, which is what lets an id-less producer keep one row per example
+  # instead of collapsing to one row per run, and is equally what leaves an id-less REDELIVERY
+  # nothing to conflict with: the rows double. That is a known gap with no platform-side fix — the
+  # only other candidate key is `(file_path, line_number)`, the coordinate a table-driven loop puts
+  # N examples on — so the fix is client-side, and a client can only apply it if something tells it
+  # the ids are missing. This is that something.
+  #
+  # Counted here rather than answered by a second read for the same reason the outcome counters
+  # are: the scan below already has the rows. The three nullable per-example wire columns that
+  # carry a measurement each had an honesty counter and this one — the key — had none, so a
+  # producer sending every id and one sending none were indistinguishable to every reader.
   COVERAGE_COUNTS = {
     recorded_count: "COUNT(*)",
     timed_count: "COUNT(duration_seconds)",
     reported_outcome_count: "COUNT(outcome)",
+    identified_count: "COUNT(example_id)",
     failed_count: "COUNT(*) FILTER (WHERE outcome = 'failed')",
     pending_count: "COUNT(*) FILTER (WHERE outcome = 'pending')"
   }.freeze

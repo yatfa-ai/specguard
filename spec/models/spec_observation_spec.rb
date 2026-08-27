@@ -1669,6 +1669,35 @@ RSpec.describe SpecObservation do
         expect(described_class.coverage_in(run)).to include(recorded_count: 1, timed_count: 1)
       end
 
+      # The counter for the column that is a KEY rather than a measurement. `example_id` is the
+      # conflict target `Ingest::ObservationRecorder` upserts on and it arrives unvalidated, so a
+      # run whose client sends no ids stores a nil on every row — and nothing anywhere counted
+      # them, which made an id-less producer indistinguishable from a fully-identified one.
+      it "counts the rows that carried an example id" do
+        observe(run, duration: 1.0, line_number: 1)
+        observe(run, duration: 1.0, line_number: 2, example_id: nil)
+        observe(run, duration: 1.0, line_number: 3)
+
+        expect(described_class.coverage_in(run)).to include(recorded_count: 3, identified_count: 2)
+      end
+
+      # The two ends of the axis, asserted rather than left to the mixed case above: a run every
+      # row of which carries an id reads EQUAL to its row count, and a run no row of which does
+      # reads zero against a non-zero denominator. Those are the two readings a producer acts on.
+      it "reads the id count equal to the row count when every row carried one" do
+        observe(run, duration: 1.0, line_number: 1)
+        observe(run, duration: 1.0, line_number: 2)
+
+        expect(described_class.coverage_in(run)).to include(recorded_count: 2, identified_count: 2)
+      end
+
+      it "reads a zero id count against the rows a wholly id-less run still wrote" do
+        observe(run, duration: 1.0, line_number: 1, example_id: nil)
+        observe(run, duration: 1.0, line_number: 2, example_id: nil)
+
+        expect(described_class.coverage_in(run)).to include(recorded_count: 2, identified_count: 0)
+      end
+
       it "counts the outcomes it reads by name, off the same rows" do
         observe(run, duration: 1.0, line_number: 1, outcome: "failed")
         observe(run, duration: 1.0, line_number: 2, outcome: "pending")
@@ -1676,7 +1705,7 @@ RSpec.describe SpecObservation do
         observe(run, duration: 1.0, line_number: 4, outcome: "passed")
 
         expect(described_class.coverage_in(run))
-          .to eq(recorded_count: 4, timed_count: 4, reported_outcome_count: 4,
+          .to eq(recorded_count: 4, timed_count: 4, reported_outcome_count: 4, identified_count: 4,
                  failed_count: 1, pending_count: 1)
       end
 
