@@ -260,9 +260,15 @@ Two properties this runbook has that it asked the API to keep, and how they actu
 And one this runbook does *not* have that it asked the API for: **the four distinct refusal
 states** (`:not_installed`, `:not_in_installation`, `:not_administered`, `:not_authorized`)
 reaching the caller as separate answers, since they are the difference between "install the App",
-"ask an admin" and "re-authorise". **The endpoint diverges, deliberately.** All refusals — the
-record's own validation failures and the ownership gate alike — collapse into a single `400`
-response path, on the stated reasoning that a refusal is a refusal and the response should not
-branch on which produced it. The messages still carry the detail; the *status* does not
-distinguish. Recorded here because the difference between those answers is a real difference for
-the caller, whatever the response shape does with it.
+"ask an admin" and "re-authorise". **The endpoint diverges, and the shape of the divergence is not
+a simple collapse.** Two of those four are not reachable on this path at all: `:not_installed` and
+`:not_authorized` are readings taken while asking GitHub live, and this path redeems a recorded
+grant rather than asking. What a grant can answer is three — `:not_granted` (no grant, or one past
+`GithubRegistrationGrant::MAX_AGE`), `:not_administered`, `:not_in_installation` — and those three,
+together with the record's own validation failures, arrive as a single `400` response, on the
+stated reasoning that a refusal is a refusal and the response should not branch on which produced
+it. The *messages* for those three do still differ. `:not_granted` is the one a reader of this
+runbook will meet most, and it is the only refusal whose fix is a browser rather than GitHub —
+which is the same precondition stated above, arriving as an error. Recorded here because the
+difference between those answers is a real difference for the caller, whatever the response shape
+does with it.
