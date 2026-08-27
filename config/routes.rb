@@ -99,6 +99,22 @@ Rails.application.routes.draw do
       # refuse each other's tokens with a 401 (see `Api::BaseController`), so the near-identical
       # paths cannot quietly serve the wrong thing.
       get "repositories", to: "user_repositories#index"
+      # WHAT MAY BE REGISTERED, as opposed to what already IS — the reading `get "repositories"`
+      # above cannot give, because that one serves `Repository.accessible_by` and a repository the
+      # person has not registered yet is by definition not in it.
+      #
+      # A DEDICATED PATH rather than a `?registrable=1` opt-in on the route above, and the choice
+      # was made on evidence rather than taste: `git grep -rn "params\[:" -- app/controllers/api`
+      # returns exactly one line in the whole API tree, so there is no opt-in query-param
+      # convention here to follow — adding one would be INVENTING the first, on the endpoint whose
+      # response shape two shipped clients already read. A literal segment cannot be swallowed as
+      # an id (there is no `:id` member route in this namespace), and it is declared ABOVE `post
+      # "repositories"` only for reading order; the two do not compete for a path.
+      #
+      # Same controller as its two neighbours for the reason stated on the `post`: same credential,
+      # same noun, and a second controller would carry its own `accepts_user_credential`
+      # declaration to forget.
+      get "repositories/registrable", to: "user_repositories#registrable"
       # Registering over the API. Same controller as the `get` above because it is the same
       # credential and the same noun; a separate controller would need its own
       # `accepts_user_credential` declaration and would be one omission away from a 401 nobody can

@@ -77,6 +77,45 @@ class Api::V1::UserRepositoriesController < Api::BaseController
     }
   end
 
+  # WHAT MAY BE REGISTERED — the reading `#index` cannot give, because that one serves
+  # `Repository.accessible_by` and a repository nobody has registered yet is by definition not in
+  # it. Without this an agent holding an `sgu_` key can only guess a name and POST it blind, one at
+  # a time, and learn the answer by being refused.
+  #
+  # ## It reads the snapshot; it does not take one
+  #
+  # ZERO GitHub round trips, and that is a requirement rather than an optimisation. This request
+  # has no user token to ask GitHub with — that absence is the entire reason `GithubRegistrationGrant`
+  # exists — so calling `InstallationRepositories.sources` here would ask with nothing and get
+  # `:not_authorized` back, and calling `GithubRegistrationGrant.capture` would overwrite a good
+  # grant with an empty reading. The only honest thing an API request can serve is what was
+  # recorded, plus how old it is.
+  #
+  # ## It admits nothing
+  #
+  # `RepositoryRegistration` and its verifiers are untouched by this action and remain the only
+  # thing that admits a registration. This is the same set the gate would consult, read out loud
+  # in advance; a name appearing here is not a promise the write will succeed (the repository may
+  # be registered by somebody else between the two calls, and `registered` below says when it
+  # already is).
+  #
+  # ## The refusal is the gate's own sentence
+  #
+  # No grant and a stale grant are the two states `GrantVerifier` answers `:not_granted` for, and
+  # this serves that key's message FROM `InstallationRepositories::MESSAGES` rather than writing a
+  # second sentence beside it. A person who reads this refusal and a person who reads the POST's
+  # are told the same thing and pointed at the same fix.
+  def registrable
+    grant = current_api_user.github_registration_grant
+
+    return render_not_granted(grant) if grant.nil? || grant.stale?
+
+    render json: {
+      grant: grant_state(grant),
+      repositories: registrable_entries(grant)
+    }
+  end
+
   # `current_api_user.repositories.new` rather than `Repository.new(user: …)`: ownership is set from
   # the CREDENTIAL and is not a field of the request, so there is no parameter a caller could send
   # that would register something under somebody else's account.
@@ -129,6 +168,95 @@ class Api::V1::UserRepositoriesController < Api::BaseController
   # what a caller writing curl by hand will send.
   def create_params
     params.permit(:github_full_name)
+  end
+
+  # The two states that redeem nothing, answered with the WRITE GATE'S OWN SENTENCE — read from
+  # `InstallationRepositories::MESSAGES`, never re-typed. `GrantVerifier#verdict_for` refuses on
+  # exactly this condition (`@grant.nil? || @grant.stale?`) and lands on exactly this key, so the
+  # reading and the write cannot tell a caller two different stories about the same account.
+  #
+  # 403 rather than 400: nothing is wrong with the REQUEST — it is well-formed and the credential
+  # is valid — and nothing the caller can put in it would help. What is missing is a grant, and the
+  # fix is somewhere this request cannot reach. `render_bad_request` would say the opposite, and
+  # would send an agent looking for a parameter it got wrong.
+  #
+  # `grant` is passed rather than re-read, and a stale one still reports its `captured_at` and
+  # `expires_at`: "your access lapsed four days ago" is a different fact from "you never had any",
+  # both are actionable, and a bare refusal collapses them. `grant` is `null` for the second.
+  def render_not_granted(grant)
+    render json: {
+      error: "not_granted",
+      # The subject in front of it is this surface's, matching what `GithubRepositoryListing#
+      # github_listing_error_message` does with the same hash: the MESSAGES entries are written as
+      # predicates about a repository ("cannot be registered from an API key — …"), so a reading
+      # about a whole account has to supply a subject. The SENTENCE is still the constant's.
+      message: "Your repositories #{InstallationRepositories::MESSAGES.fetch(:not_granted)}",
+      grant: grant && grant_state(grant)
+    }, status: :forbidden
+  end
+
+  # How old the recording is and when it stops redeeming — the three facts that are currently
+  # knowable nowhere. `expires_at` is DERIVED from the same `MAX_AGE` `stale?` divides on rather
+  # than restated as a literal, so the number cannot drift from the bound it describes.
+  #
+  # `stale` is served even though a stale grant reaches this method only through
+  # `#render_not_granted` (where it is always `true`): it is the field a client branches on, and a
+  # block whose meaning depended on which response carried it would be a worse contract than one
+  # scalar that is simply true or false wherever it appears.
+  #
+  # Both stamps are `&.`-guarded on the same column. `captured_at` is `NOT NULL` and validated, so
+  # a persisted grant always carries one — but `stale?` nevertheless answers a nil one rather than
+  # raising ("I cannot tell how old this is" reads as "too old"), and a serializer that raised on
+  # the state its own `stale` field reports would turn that deliberate answer into a 500.
+  def grant_state(grant)
+    {
+      captured_at: grant.captured_at&.iso8601,
+      expires_at: grant.captured_at&.then { |at| (at + GithubRegistrationGrant::MAX_AGE).iso8601 },
+      stale: grant.stale?
+    }
+  end
+
+  # Every name GitHub said this person ADMINISTERS, each marked with whether SpecGuard already holds
+  # it. `visible_full_names` is deliberately NOT served: it grants nothing, it exists only to decide
+  # which refusal is true (see `GrantVerifier`), and a caller reading a list it cannot register from
+  # would be reading a picker that offers what the write refuses.
+  #
+  # MARKED rather than EXCLUDED. An already-registered name is the answer to "why did my POST say
+  # `has already been taken`", and dropping it from the list would make that state indistinguishable
+  # from having lost admin — two different facts with two different fixes.
+  #
+  # One `IN` over the whole list rather than a lookup per name: the same batched shape
+  # `BulkRegistration` uses, and for the same reason it gives — `LOWER(...)` because the grant
+  # stores names downcased while `repositories.github_full_name` preserves the case it was
+  # registered under, and the uniqueness rule the POST enforces is itself case-insensitive.
+  #
+  # Sorted, matching `#index`'s ordering rule: `github_full_name` is the only column on this list a
+  # client could page or diff against.
+  def registrable_entries(grant)
+    names = grant.registrable_full_names.to_a
+    registered = registered_names_among(names)
+
+    names.sort.map { |name| { full_name: name, registered: registered.include?(name) } }
+  end
+
+  # WHICH of these names SpecGuard already holds, downcased for comparison against the grant's own
+  # downcased set. Asked of `Repository` globally rather than of `accessible_by(current_api_user)`,
+  # and the difference is load-bearing: a repository somebody ELSE registered still refuses this
+  # person's POST with `has already been taken`, so a reading scoped to what they can open would
+  # mark it `registered: false` and send them at a name that cannot be registered by anyone.
+  #
+  # That discloses no repository: every name in this set came from GitHub's answer about THIS
+  # person's own administrative access, so the response says nothing they could not already read on
+  # github.com. Nothing else about such a repository is served — no id, no owner, no `name` — only
+  # the fact that the name is taken.
+  #
+  # A Set rather than an Array so the `include?` in the map above is a hash lookup per entry rather
+  # than a scan of the whole list.
+  def registered_names_among(names)
+    return Set.new if names.empty?
+
+    Repository.where("LOWER(repositories.github_full_name) IN (?)", names.map(&:downcase))
+              .pluck(:github_full_name).map(&:downcase).to_set
   end
 
   # The evidence this request can offer, which is a recording rather than a live answer. `nil` is an

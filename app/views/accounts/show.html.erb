@@ -68,4 +68,73 @@
           ) %>
     <% end %>
   <% end %>
+
+  <%# REGISTRATION ACCESS — the one credential on this page that expires ON ITS OWN.
+
+      The keys above are revoked or they work. A `GithubRegistrationGrant` lapses after
+      `GithubRegistrationGrant::MAX_AGE` with nothing to show for it: `GET /api/v1/repositories`
+      needs no grant and keeps answering, and the key's own "Last used" keeps updating, so a person
+      who mints a key, hands it to an agent and does not open SpecGuard in a browser for a week
+      loses the ability to register and sees no sign of it anywhere. This page is where that had to
+      become visible — beside the credential it is a precondition of, since the two are only ever
+      read together.
+
+      It sits BELOW the key table on purpose: a reader arrives for their keys, and this is a
+      property of the person rather than a second credential to mint. Everything shown is read from
+      the stored grant — rendering this page makes no GitHub call and refreshes nothing (see
+      AccountsController#show). %>
+  <%= render UI::PanelComponent.new(title: "Registration access", id: "registration-access",
+                                    class: "mt-6") do %>
+    <p class="mb-3 text-sm text-app-content-secondary">
+      Registering a repository through an <code class="font-mono text-xs">sgu_</code> key redeems
+      what GitHub last told SpecGuard about your permissions, recorded the last time you listed
+      repositories here in a browser. That record lapses after
+      <%= distance_of_time_in_words(GithubRegistrationGrant::MAX_AGE) %>, and your keys go on
+      working for everything else when it does.
+    </p>
+
+    <% if @registration_grant.nil? %>
+      <%# Never captured — the ordinary state of anyone who has not listed repositories in a browser
+          since this shipped. Deliberately NOT the lapsed sentence below: "yours expired" would be
+          false and would send the reader looking for when it did. %>
+      <p class="text-sm text-app-content-secondary" data-grant-state="absent">
+        <strong>No current record.</strong> SpecGuard has not recorded your GitHub permissions yet,
+        so an API key cannot register repositories for you. Reconnect GitHub to record them.
+      </p>
+    <% else %>
+      <%# Derived from the same MAX_AGE `GithubRegistrationGrant#stale?` divides on, so the date
+          shown here and the bound actually enforced cannot drift apart. %>
+      <% lapses_at = @registration_grant.captured_at + GithubRegistrationGrant::MAX_AGE %>
+      <% lapsed = @registration_grant.stale? %>
+
+      <%= render UI::DefListComponent.new(rows: [
+            ["Last refreshed", "#{time_ago_in_words(@registration_grant.captured_at)} ago"],
+            ["Repositories covered", @registration_grant.registrable_full_names.size],
+            [lapsed ? "Lapsed" : "Lapses",
+             lapsed ? "#{time_ago_in_words(lapses_at)} ago" : "in #{time_ago_in_words(lapses_at)}"]
+          ]) %>
+
+      <% if lapsed %>
+        <p class="mt-3 text-sm text-app-content-secondary" data-grant-state="lapsed">
+          <strong>This record has lapsed.</strong> An API key cannot register repositories until it
+          is refreshed. Reconnect GitHub to refresh it.
+        </p>
+      <% else %>
+        <p class="mt-3 text-sm text-app-content-secondary" data-grant-state="current">
+          Reconnecting refreshes this record and its expiry — you do not have to wait for it to
+          lapse.
+        </p>
+      <% end %>
+    <% end %>
+
+    <%# The EXISTING affordance, not a new one: the same button the repository picker offers, which
+        posts to `github_installation_authorize` and returns here. Nothing on this page can refresh
+        the grant by itself — the capture needs a live GitHub token, and only that round trip brings
+        one back. `github_authorize_button` answers with its own notice when the GitHub App is
+        unconfigured, so this needs no guard of its own. %>
+    <div class="mt-4">
+      <%= github_authorize_button("Reconnect GitHub", return_to: account_path,
+                                  variant: @registration_grant&.stale? == false ? :secondary : :primary) %>
+    </div>
+  <% end %>
 <% end %>
