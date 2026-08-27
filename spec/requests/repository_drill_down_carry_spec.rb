@@ -145,13 +145,21 @@ RSpec.describe "Repository drill-down carry-through", type: :request do
     repository
   end
 
+  # Through the resolver as well as the producer, which is the two halves the ingest endpoint runs
+  # as a `202` and a job behind it. The window ranking is keyed on `spec_identity_id`, so a fixture
+  # that stopped at the producer leaves "Slowest tests across the window" in its `:unresolved` state
+  # — a panel with no rows and therefore no link, which is the one condition under which this
+  # matrix's newest gesture would silently have nothing to assert about. Every other panel here
+  # reads columns the recorder writes directly and is unmoved by this.
   def ingest(repository, specs, commit_sha: run_ask, **attrs)
-    Ingest::RunRecorder.record(
+    run = Ingest::RunRecorder.record(
       repository,
       { commit_sha: commit_sha, branch: "main", total_specs_count: specs.size,
         annotated_specs_count: 0, duration_seconds: 60.0 }.merge(attrs),
       specs: specs.map(&:deep_stringify_keys)
     )
+    Ingest::IdentityResolver.resolve(run)
+    run
   end
 
   def example_spec(file_path:, duration:, line_number:, **attrs)
@@ -221,6 +229,14 @@ RSpec.describe "Repository drill-down carry-through", type: :request do
     { name: "open a file from Slowest tests",
       panel: "#slowest-examples", link: "spec/requests/checkout_spec.rb",
       sets: { spec_file: "spec/requests/checkout_spec.rb" } },
+    # The WINDOW panel's file link, which is a different gesture from the row above it even though
+    # both open a file: that one is one run's ranking and this one is the window's, they are keyed
+    # on different things, and this panel's row can name SEVERAL files. `refund_spec.rb` is the
+    # exact text of exactly one anchor on this panel and is not the open file, so the cell it proves
+    # is a real choice rather than a link that happened to carry an ask it also sets.
+    { name: "open a file from Slowest tests across the window",
+      panel: "#slowest-tests-window", link: "spec/models/refund_spec.rb",
+      sets: { spec_file: "spec/models/refund_spec.rb" } },
     { name: "open a test from Tests whose outcome changed",
       panel: "#unstable-tests", link: "expires the session",
       sets: { unstable_test: "expires the session" } },

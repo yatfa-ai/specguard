@@ -111,11 +111,44 @@
                       The file that RAN the test (`spec_file_path`), which for a shared example
                       group is not the file that defines it. Nullable in the schema, so a test whose
                       every row reported none says so rather than rendering a blank. %>
+                  <%# EVERY file named here is a drill-in, not just the first. The value on screen is
+                      `ARRAY_AGG(DISTINCT spec_file_path)` off the same column
+                      `SpecObservation.in_file` is keyed on, so the string a reader sees IS the key
+                      the destination panel consumes — no projection widening and no lookup.
+
+                      Every entry of a MOVED row is linkable, including a path only the older runs
+                      of the window recorded while the destination is anchored on the newest run.
+                      That is an ordinary answer rather than an error — `SpecFileExamples` states it
+                      in its own class comment and the destination renders its named empty state —
+                      and it is what makes the one disclosure this read exists for navigable on BOTH
+                      of its files rather than on whichever one happened to sort first.
+
+                      Through `drill_down_path`, so opening a file from here does not close a branch,
+                      an area or a description the reader opened separately, nor re-anchor them to
+                      the newest run. %>
                   <span class="block font-mono text-xs text-app-muted">
-                    <% if test.moved? %>
-                      recorded under <%= test.files_seen.to_sentence %>
-                    <% elsif test.files_seen.any? %>
-                      <%= test.files_seen.first %>
+                    <% if test.files_seen.any? %>
+                      <% links = test.files_seen.map do |path|
+                           link_to path,
+                                   drill_down_path(@repository, spec_file: path,
+                                                   anchor: "spec-file-examples"),
+                                   class: "underline underline-offset-2 decoration-app-border-light " \
+                                          "text-app-content hover:decoration-app-content",
+                                   aria: { current: path == @spec_file_request ? "true" : nil }
+                         end %>
+                      <% if test.moved? %>
+                        <%# `Array#to_sentence` returns a plain String and NOT a SafeBuffer, so the
+                            joined markup has to be marked safe or ERB renders visible `&lt;a href=`.
+                            It is safe to do here because every element is `link_to` output, which
+                            escapes both the href and the body, and the only thing `to_sentence`
+                            itself contributes is its own ", " / " and " connectors — no unescaped
+                            value from a run reaches the output. `safe_join`, this codebase's usual
+                            way of joining buffers, is passed over deliberately: it has no "and"
+                            connector, and the sentence reading is the whole point of this line. %>
+                        recorded under <%= links.to_sentence.html_safe %>
+                      <% else %>
+                        <%= links.first %>
+                      <% end %>
                     <% else %>
                       not reported
                     <% end %>

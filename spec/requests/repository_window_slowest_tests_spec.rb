@@ -39,22 +39,32 @@ RSpec.describe "Repository window slowest tests", type: :request do
 
   def section?(id) = panel.has_css?("##{id}")
 
+  # The row's LABEL: the test cell's text with its notes stripped off from the LAST one backwards,
+  # which is the order the partial nests them in — the file line is always the final span of the
+  # cell, and a reword note sits above it only where there was one. Whitespace-collapsed, because a
+  # description and a note assembled across two ERB tags are two readings on the page whatever the
+  # source did with indentation.
+  #
+  # ONE definition, read by both `rows` (which pairs the label with the row's TEXT) and
+  # `row_element` (which pairs it with the row ELEMENT). It is deliberately not inlined at either
+  # site: the reverse-order suffix-stripping is coupled to how the partial nests its spans, so two
+  # copies would be two places that must be edited together the next time that nesting moves.
+  def label_of(test_cell)
+    notes = test_cell.all("span").map { |span| span.text.gsub(/\s+/, " ").strip }
+    notes.reverse.reduce(test_cell.text.gsub(/\s+/, " ").strip) do |label, note|
+      label.delete_suffix(note).strip
+    end
+  end
+
   # One row as a reader meets it: the description, the notes under it (a reword, and the file or
   # files it ran in), its window total, its single worst run, how much of the window it was seen in
   # and how much of its own history was timed.
-  #
-  # The notes are stripped off the label from the LAST one backwards, which is the order they are
-  # nested in: the file line is always the final span of the cell, and a reword note sits above it
-  # only where there was one. Whitespace-collapsed, because a description and a note assembled
-  # across two ERB tags are two readings on the page whatever the source did with indentation.
   def rows
     panel.all("tbody tr").map do |row|
       test_cell, total_cell, slowest_cell, seen_cell, timed_cell = row.all("td")
       notes = test_cell.all("span").map { |span| span.text.gsub(/\s+/, " ").strip }
-      name = test_cell.text.gsub(/\s+/, " ").strip
-      notes.reverse_each { |note| name = name.delete_suffix(note).strip }
 
-      { name: name, notes: notes, total: total_cell.text.strip,
+      { name: label_of(test_cell), notes: notes, total: total_cell.text.strip,
         slowest: slowest_cell.text.strip, seen: seen_cell.text.gsub(/\s+/, " ").strip,
         timed: timed_cell.text.strip }
     end
@@ -63,6 +73,36 @@ RSpec.describe "Repository window slowest tests", type: :request do
   def row_names = rows.map { |row| row[:name] }
 
   def row_named(name) = rows.find { |row| row[:name] == name }
+
+  # The same label `rows` computes, but paired with the ROW ELEMENT rather than with its text. The
+  # file line carries drill-in links now, and an assertion about a link has to reach the anchor
+  # itself — a text-only view of the cell renders `<a href=…>path</a>` and `path` identically, which
+  # is the one distinction the examples below exist to make.
+  def row_element(name)
+    panel.all("tbody tr").find { |row| label_of(row.all("td").first) == name }
+  end
+
+  # The file line of one row, as an element. It is the LAST span of the test cell, which is where
+  # the partial nests it and the same nesting `rows` reads its notes off.
+  def file_line(name) = row_element(name).all("td").first.all("span").last
+
+  def file_links(name) = file_line(name).all("a")
+
+  def file_hrefs(name) = file_links(name).map { |link| link[:href] }
+
+  # The BASE-CASE spelling of the drill-in for `path` — what the link reads as with no other ask
+  # open. The point of the link is the ask it SETS, and `?anchor=` puts the reader on the
+  # destination panel instead of at the top of a page they were already three rungs into.
+  #
+  # Deliberately NOT routed through the view's own `drill_down_path`: that helper reads the open
+  # asks off controller ivars (`@trajectory_branch_request` and its five siblings), which this
+  # spec's binding does not have, so calling it here would build its path from nils and only LOOK
+  # coupled to the view. It agrees with the view because these examples open no other ask —
+  # carry-through, where the two spellings genuinely diverge, is asserted end-to-end against a real
+  # rendered page in spec/requests/repository_drill_down_carry_spec.rb rather than against this.
+  def expected_file_href(repository, path, **asks)
+    repository_path(repository, spec_file: path, anchor: "spec-file-examples", **asks)
+  end
 
   # One ingested run, through the producer and then through the resolver — the two halves the
   # endpoint runs as a `202` and a job behind it. `resolve: false` is the state the endpoint has
@@ -247,6 +287,136 @@ RSpec.describe "Repository window slowest tests", type: :request do
 
       expect(row_named("Ledger rebuild walks every entry")[:notes])
         .to eq(["spec/models/ledger_spec.rb"])
+    end
+  end
+
+  # The file line as a DESTINATION rather than as a label. Every row on this panel is an outlier a
+  # reader wants to act on, and their next question — is this one test slow, or the whole file —
+  # already has a panel on this same page answering it. Until this shipped the row named the file
+  # and stopped there, while the per-run panel two panels up linked the identical value.
+  #
+  # The link is keyed on `spec_file_path`: `SpecObservation.slowest_identity_candidates_in`
+  # aggregates that column into `file_paths` and `SpecObservation.in_file` is keyed on it, so the
+  # string on screen IS the key the destination consumes. These examples assert the ANCHOR and its
+  # href, never the cell's text — the two are indistinguishable in a text-only reading, which is
+  # exactly the state this panel was in before.
+  describe "following a row's file to the examples in it" do
+    it "links the file a test ran in to that file's examples on this page" do
+      repository = window_repository
+
+      get repository_path(repository)
+
+      expect(file_links("Ledger rebuild walks every entry").map(&:text))
+        .to eq(["spec/models/ledger_spec.rb"])
+      expect(file_hrefs("Ledger rebuild walks every entry"))
+        .to eq([expected_file_href(repository, "spec/models/ledger_spec.rb")])
+    end
+
+    # ⭐ EVERY file of a moved row, not the first one sorted. The moved test is the single
+    # disclosure this whole read exists for, and linking only `files_seen.first` would make the
+    # half of its history that lives in the other file the half a reader cannot reach — while the
+    # row goes on naming it, which reads as an offer.
+    it "links every file a moved test was recorded under, not only the first" do
+      repository = window_repository
+
+      get repository_path(repository)
+
+      expect(file_links("Checkout rejects an expired card").map(&:text))
+        .to eq(["spec/billing/checkout_spec.rb", "spec/models/checkout_spec.rb"])
+      expect(file_hrefs("Checkout rejects an expired card"))
+        .to eq([expected_file_href(repository, "spec/billing/checkout_spec.rb"),
+                expected_file_href(repository, "spec/models/checkout_spec.rb")])
+    end
+
+    # ⭐ THE REGRESSION GUARD for the escaping trap this change is built on. `Array#to_sentence`
+    # returns a plain String and NOT a SafeBuffer, so joining `link_to` output through it and
+    # printing the result renders visible `&lt;a href=…&gt;` — markup a reader sees as text and
+    # cannot click. Capybara's `.text` decodes those entities, so a text-only assertion reads the
+    # escaped markup as a perfectly ordinary sentence and passes: this one goes at the RAW BODY,
+    # which is the only place the two spellings differ.
+    it "renders a moved row's links as real anchors rather than as escaped markup" do
+      get repository_path(window_repository)
+
+      expect(response.body).to include("spec/billing/checkout_spec.rb</a>")
+      expect(response.body).not_to include("&lt;a")
+      # And the sentence reading survives the join — the connector is what `to_sentence` was kept
+      # for, and `safe_join` has none.
+      expect(file_line("Checkout rejects an expired card").text.gsub(/\s+/, " ").strip)
+        .to eq("recorded under spec/billing/checkout_spec.rb and spec/models/checkout_spec.rb")
+    end
+
+    # `spec_file_path` is NULLABLE and the aggregate is `ARRAY_AGG(…) FILTER (WHERE … IS NOT NULL)`,
+    # so a test every row of which reported no file comes back with an EMPTY array rather than a
+    # nil. `Ingest::ObservationRecorder` falls back to `file_path`, so neither the producer nor the
+    # fixture can write that nil — which is why the column is set directly here. A defensive branch
+    # nothing exercises is a branch that gets deleted as dead, and the cell it guards would
+    # otherwise offer a link to nowhere.
+    it "says the file was not reported rather than linking nowhere where no row carried one" do
+      repository = window_repository
+      SpecObservation.joins(:test_run)
+                     .where(test_runs: { repository_id: repository.id })
+                     .where(file_path: "spec/models/webhook_spec.rb")
+                     .update_all(spec_file_path: nil)
+
+      get repository_path(repository)
+
+      expect(file_line("Webhook replays a failed delivery").text.strip).to eq("not reported")
+      expect(file_line("Webhook replays a failed delivery")).to have_no_css("a")
+    end
+
+    # The open file marked as open, so a reader who has already drilled in is told which of the
+    # paths in front of them is the one the destination panel below is describing. On a MOVED row
+    # this is the only thing separating the two links.
+    it "marks the path already open as the current one and leaves its sibling unmarked" do
+      repository = window_repository
+
+      get repository_path(repository, spec_file: "spec/models/checkout_spec.rb")
+
+      current = file_links("Checkout rejects an expired card")
+                .select { |link| link[:"aria-current"] == "true" }
+      expect(current.map(&:text)).to eq(["spec/models/checkout_spec.rb"])
+      expect(file_links("Ledger rebuild walks every entry").first[:"aria-current"]).to be_nil
+    end
+
+    # ⭐ A file the ANCHOR run never recorded is an ordinary answer, not an error. `files_seen` is
+    # aggregated across the WINDOW while the destination is anchored on the newest run, so a moved
+    # test's older file is a path the anchor has nothing for by construction — and
+    # `SpecFileExamples` says so in its own class comment. The row links it anyway, because the
+    # alternative is a moved test navigable on one of its two files, and the destination answers
+    # with its named empty state. Not a 500 and not a blank panel.
+    it "lands on the destination's named empty state for a file the anchor run did not record" do
+      repository = window_repository
+
+      get repository_path(repository)
+      older_file = file_hrefs("Checkout rejects an expired card")
+                   .find { |href| href.include?(CGI.escape("spec/models/checkout_spec.rb")) }
+      get older_file
+
+      expect(response).to have_http_status(:ok)
+      destination = Capybara.string(response.body).find("#spec-file-examples")
+      expect(destination).to have_text("No examples for this file", normalize_ws: true)
+      expect(destination).to have_text("This run recorded no examples in " \
+                                       "spec/models/checkout_spec.rb", normalize_ws: true)
+    end
+
+    # No link comes out of a state that has no rows. The three non-`:ranked` states render a
+    # sentence about why there is no ranking, and a drill-in emitted from one of them would be an
+    # offer to open a file the panel has just said it cannot name.
+    it "emits no file link from the state where the anchor's rows are not identified yet" do
+      get repository_path(window_repository(resolve: false))
+
+      expect(panel.has_css?("tbody tr")).to be(false)
+      expect(panel).to have_no_css("a[href*='spec_file=']")
+    end
+
+    it "emits no file link from the state where the newest run recorded no per-example detail" do
+      repository = create_repository(user: @user)
+      ingest(repository, [], commit_sha: "empty000000001", at: 2.days.ago)
+
+      get repository_path(repository)
+
+      expect(section?("slowest-tests-window-unrecorded")).to be(true)
+      expect(panel).to have_no_css("a[href*='spec_file=']")
     end
   end
 
