@@ -1,0 +1,95 @@
+<%# One registered repository's first `sgk_` key, revealed on the batch summary — SPGD-806.
+    Rendered once per registered row that carries a token; see `create.html.erb`.
+
+    ## Why this is its own partial and not `repositories/_revealed_token`
+
+    That partial reads `@revealed_token`, `@revealed_token_name`, `@revealed_token_regenerated` and
+    `@repository` as INSTANCE variables, and is rendered exactly once, from `repositories/show` and
+    against a single-repository controller. It is not parameterised, and contorting it into a
+    collection partial would rewrite the one render that carries the most dangerous value on the
+    site in order to serve a second caller.
+
+    `accounts/_revealed_user_token` already set the precedent for a second reveal surface: its own
+    partial, pointing at `repositories/_revealed_token` for the full rationale rather than sharing
+    code. This is the third, on the same rule. The COMPONENTS and HELPERS are shared —
+    `UI::CopyableCodeComponent`, the `copy-text` Stimulus controller, `integration_guide_agent_prompt`,
+    `integration_guide_endpoint`, `revealed_token_filename` — so the words and the mechanics stay in
+    one place; only the wiring differs, and it has to.
+
+    ## Two things this surface does DIFFERENTLY from the single-repository one, both deliberate
+
+    1. **NO auto-copy.** `repositories/_revealed_token` sets `data-copy-text-auto-copy-value="true"`
+       and is right to: one token, one clipboard, and leaving that page without the value is the
+       expensive outcome. Here there are up to `BulkRegistration::MAX_BATCH` of them, and N blocks
+       racing to write one clipboard on connect would leave the reader holding whichever token won
+       — worse than no auto-copy, because it looks like it worked. Copy and Download stay explicit
+       and per row.
+
+    2. **NO `role="status"` line and no `status` target.** That line exists on the other surface to
+       report whether the AUTOMATIC copy was refused. With no automatic copy there is nothing for it
+       to report, and N live regions announcing themselves on one page is noise a screen reader
+       reader cannot use.
+
+    ## Stimulus scoping is a correctness constraint here, not a style note
+
+    `copy_text_controller.js` reads the SINGULAR `this.sourceTarget`, and Stimulus resolves a target
+    to its nearest same-identifier ancestor. So each repository's block opens its OWN `copy-text`
+    scope, and the two payloads inside it — the bare key and the agent prompt — cannot both sit in
+    that one scope, or Copy and Download would grab whichever came first. The prompt therefore takes
+    a NESTED scope of its own, exactly as `repositories/_revealed_token` does for the same reason.
+
+    The meta that keeps this page out of Turbo's snapshot cache is emitted ONCE for the whole page,
+    by `create.html.erb`, not here — N identical metas would be N copies of a page-level decision.
+
+    @param outcome [BulkRegistration::Outcome] a `:registered` outcome whose `api_key` is present.
+%>
+<% repository = outcome.repository %>
+<% token = outcome.api_key.raw_token %>
+
+<div class="py-4 space-y-3" data-controller="copy-text"
+     data-copy-text-download-filename-value="<%= revealed_token_filename("#{repository.github_full_name} #{outcome.api_key.name}") %>">
+  <div class="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
+    <%= link_to repository.github_full_name, repository_path(repository),
+                class: "text-sm font-semibold text-app-cta hover:underline break-words" %>
+    <p class="text-xs text-app-muted"><%= outcome.api_key.name %></p>
+  </div>
+
+  <%# NO `data-controller="copy-text"` on this one, deliberately: it is THIS row's scope payload,
+      the thing Copy and Download are for. Its own scope would hide it from the row controller and
+      leave `sourceTarget` missing. The prompt below takes the nested scope instead — `sourceTarget`
+      is singular, so a second payload in this scope would be the one that got copied. %>
+  <div class="space-y-1">
+    <p class="section-label text-app-content-secondary">The key</p>
+    <%= render UI::CopyableCodeComponent.new do %><%= token %><% end %>
+  </div>
+
+  <div class="flex flex-wrap items-center gap-x-3 gap-y-1">
+    <%= render UI::ButtonComponent.new(variant: :secondary, size: :sm, type: "button",
+                                       data: { action: "copy-text#download" }) do %>
+      Download as a file
+    <% end %>
+    <p class="text-xs text-app-muted">
+      Written from this page, not fetched from the server — SpecGuard does not hold the token.
+    </p>
+  </div>
+
+  <%# The integration, ready to paste, with this repository's own credential already in it. The
+      same helper the single-repository reveal and the persistent "Wire this repository up" panel
+      use; it already takes `repository:` as an argument, so it works per row unchanged.
+
+      Its own `copy-text` scope, on the rule stated in the header. %>
+  <div class="space-y-1" data-controller="copy-text">
+    <p class="section-label text-app-content-secondary">Wire this repository up</p>
+    <%= render UI::CopyableCodeComponent.new(multiline: true) do %><%= integration_guide_agent_prompt(
+          repository: repository,
+          guide_url: integration_guide_url,
+          endpoint: integration_guide_endpoint,
+          token: token
+        ) %><% end %>
+    <p class="text-xs text-app-muted">
+      Paste it into your coding agent. The key is already in it, so it works as pasted — which is
+      true only while this page is on screen. Reading it yourself instead:
+      <%= link_to "the integration guide", integration_guide_path, class: "underline" %>.
+    </p>
+  </div>
+</div>

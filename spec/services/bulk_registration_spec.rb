@@ -486,6 +486,188 @@ RSpec.describe BulkRegistration do
     end
   end
 
+  # SPGD-806 — the first `sgk_` key, minted in the same pass that registered the repository.
+  #
+  # The criterion is `Api::V1::UserRepositoriesController`'s: a repository with no key is a
+  # repository nothing can deliver to, and minting one is the very next thing every caller would do.
+  # The single-repository web path makes that two gestures "because a person is there to make them",
+  # and the batch is where that premise inverts — at `MAX_BATCH` it is 1 + 2N gestures for a feature
+  # that exists precisely because doing this one repository at a time was the cost.
+  #
+  # What the examples below are actually about is WHICH rows get one. A key is a live credential, so
+  # minting on the wrong row is not an untidiness — it hands somebody a way into a repository they
+  # did not just register.
+  describe "minting each newly registered repository's first key" do
+    it "mints one key per registered repository and carries it on the outcome" do
+      stub_github(repos: [github_repo("acme/api"), github_repo("acme/web"), github_repo("acme/cli")])
+
+      expect { @result = register("acme/api", "acme/web", "acme/cli") }.to change(ApiKey, :count).by(3)
+
+      expect(@result.registered_count).to eq(3)
+      expect(@result.registered.map(&:api_key)).to all(be_a(ApiKey))
+    end
+
+    # The tokens are what the summary exists to show, so "three keys were minted" is not the claim
+    # that matters — three DISTINCT plaintext tokens, readable in this same process, is. `ApiKey`
+    # holds the plaintext in `@raw_token` for exactly the request that minted it, which is why the
+    # batch can render them without a flash at all.
+    it "leaves each key's plaintext token readable, and every one of them distinct" do
+      stub_github(repos: [github_repo("acme/api"), github_repo("acme/web"), github_repo("acme/cli")])
+
+      tokens = register("acme/api", "acme/web", "acme/cli").registered.map { |o| o.api_key.raw_token }
+
+      expect(tokens).to all(start_with(ApiKey::TOKEN_PREFIX))
+      expect(tokens.uniq.length).to eq(3)
+    end
+
+    # Not a third literal. `ApiKeysController` and `Api::V1::UserRepositoriesController` already
+    # agreed on this string deliberately — "so a repository registered by an agent and one
+    # registered in a browser have identically-named keys rather than two conventions a person has
+    # to learn" — and the batch is the third caller of the same convention.
+    it "names the key what every other unnamed first key is named" do
+      stub_github(repos: [github_repo("acme/api")])
+
+      expect(register("acme/api").registered.first.api_key.name).to eq(ApiKey::DEFAULT_NAME)
+    end
+
+    # Attribution has no second chance. `ApiKeysController#destroy` is a hard `destroy!` with no
+    # audit row, so a key minted NULL is NULL forever: it renders "Unknown" in
+    # `repositories/_api_keys` and silently undercounts `MembershipsController#keys_minted_by`, the
+    # query behind the warning shown when somebody's access is revoked. This service holds `user`,
+    # and that is exactly who minted it.
+    it "records the submitting user as the creator of every key it mints" do
+      stub_github(repos: [github_repo("acme/api"), github_repo("acme/web")])
+
+      keys = register("acme/api", "acme/web").registered.map(&:api_key)
+
+      expect(keys.map(&:created_by_user_id)).to all(eq(user.id))
+      expect(keys.map(&:created_by_user_id)).not_to include(nil)
+    end
+
+    # THE ONE THAT IS A SECURITY PROPERTY. An `already_registered` row may be somebody else's
+    # repository — the summary already refuses to link those — and may already hold keys. Minting
+    # there would hand this person a live credential for a repository they did not just register.
+    it "mints nothing for an already-registered repository, including one somebody else owns" do
+      create_repository(user: user, github_full_name: "acme/mine")
+      create_repository(user: create_user(github_uid: "9", github_handle: "someone"),
+                        github_full_name: "acme/theirs")
+      stub_github(repos: [github_repo("acme/mine"), github_repo("acme/theirs"),
+                          github_repo("acme/api")])
+
+      expect { @result = register("acme/mine", "acme/theirs", "acme/api") }
+        .to change(ApiKey, :count).by(1)
+
+      skipped = @result.skipped
+      expect(skipped.map(&:status)).to all(eq(:already_registered))
+      expect(skipped.map(&:api_key)).to all(be_nil)
+      expect(ApiKey.last.repository.github_full_name).to eq("acme/api")
+    end
+
+    # Every other way a name fails to register is the same rule: no row created, so no key.
+    it "mints nothing for a skip of any other kind" do
+      stub_github(repos: [github_repo("acme/api", admin: false)])
+
+      expect { @result = register("acme/api", "ghost/repo", "not-a-slug") }
+        .not_to change(ApiKey, :count)
+
+      expect(@result.registered_count).to eq(0)
+      expect(@result.outcomes.map(&:api_key)).to all(be_nil)
+    end
+
+    # Non-negotiable (c): one INSERT per registered row, inside the loop that was already there.
+    # A 100-row batch must not become 100 extra round trips, and the skip paths must add none —
+    # which is the half a bare "it mints three keys" example cannot see.
+    #
+    # The uniqueness SELECT beside each INSERT is `ApiKey`'s OWN `validates :token_digest,
+    # uniqueness: true`, not a lookup this service performs, so it is asserted as what it is: it
+    # scales with the number of keys MINTED and appears nowhere on a skip path. What this example
+    # exists to catch is the shape that would not scale — a reload of the batch, or a per-candidate
+    # lookup on the rows that registered nothing.
+    it "costs exactly one INSERT per registered row, and nothing on the skip paths" do
+      create_repository(user: create_user(github_uid: "9", github_handle: "someone"),
+                        github_full_name: "acme/theirs")
+      stub_github(repos: [github_repo("acme/api"), github_repo("acme/web"),
+                          github_repo("acme/theirs")])
+
+      statements = queries_against("api_keys") do
+        register("acme/api", "acme/web", "acme/theirs", "ghost/repo")
+      end
+
+      # Two registered rows out of four submitted names.
+      expect(statements.grep(/\AINSERT/).length).to eq(2)
+      # Every remaining statement is the per-key digest uniqueness check, so the table is touched
+      # twice per MINT and not once per submitted name — nothing rides on the two skips.
+      expect(statements.grep(/\ASELECT/).length).to eq(2)
+      expect(statements.grep(/\ASELECT/)).to all(match(/token_digest/))
+      expect(statements.length).to eq(4)
+    end
+
+    # Non-negotiable (d). The API path wraps registration and key in one transaction "because the
+    # response promises both" — one repository, where rolling back is recoverable and
+    # half-registering is not. A batch promises something different, stated in this class's own
+    # header: it "is not a transaction and deliberately not an all-or-nothing", and each repository
+    # is "decided and saved independently". An unrescued `create!` would let ONE key failure destroy
+    # the other registrations, which is the exact failure mode that contract rules out.
+    describe "when a mint fails" do
+      before do
+        stub_github(repos: [github_repo("acme/api"), github_repo("acme/web"), github_repo("acme/cli")])
+        allow(Rails.logger).to receive(:warn)
+      end
+
+      # The failure is aimed at the SECOND repository specifically, so the example can tell "the
+      # batch survived" from "the batch stopped at the failure" — a rescue that aborted the loop
+      # would still leave the first row registered and would pass a weaker assertion.
+      #
+      # Driven by making the key genuinely INVALID rather than by stubbing `save!` to raise. A
+      # `create!` on a record whose `name` is blank raises `ActiveRecord::RecordInvalid` through the
+      # real save path, so what this example exercises is the rescue as it would actually be
+      # reached. Stubbing `save!` on `any_instance` cannot do that here: `and_wrap_original`'s
+      # `original.call` does not persist through an any_instance stub, so the OTHER two keys would
+      # silently fail to be written and the example would pass while measuring nothing.
+      def fail_the_mint_for(full_name)
+        allow(ApiKey).to receive(:new).and_wrap_original do |original, *args, &block|
+          key = original.call(*args, &block)
+          key.name = nil if key.repository&.github_full_name == full_name
+          key
+        end
+      end
+
+      it "leaves the other repositories registered, keyed and reported" do
+        fail_the_mint_for("acme/web")
+
+        result = register("acme/api", "acme/web", "acme/cli")
+
+        expect(result.registered_count).to eq(3)
+        expect(Repository.count).to eq(3)
+        expect(result.registered.map(&:full_name)).to eq(%w[acme/api acme/web acme/cli])
+      end
+
+      # The honest state, and the one the summary renders honestly: the row is registered and links
+      # to a real repository, and it carries no wire-up block because there is no token to show.
+      it "leaves that one repository registered with no key rather than raising" do
+        fail_the_mint_for("acme/web")
+
+        result = register("acme/api", "acme/web", "acme/cli")
+        failed = outcome_for(result, "acme/web")
+
+        expect(failed.status).to eq(:registered)
+        expect(failed.repository).to be_a(Repository)
+        expect(failed.api_key).to be_nil
+        expect(ApiKey.count).to eq(2)
+      end
+
+      # Rescued is not the same as unnoticed. A repository registered without the key it should have
+      # had is something an operator has to be able to find out about.
+      it "reports the failure to the log" do
+        fail_the_mint_for("acme/web")
+
+        register("acme/api", "acme/web", "acme/cli")
+
+        expect(Rails.logger).to have_received(:warn).with(/acme\/web/)
+      end
+    end
+  end
+
   # A second batch running concurrently is the realistic way this happens, and it must read as
   # "already registered" rather than as an exception escaping the action.
   describe "losing a race to another registration" do
