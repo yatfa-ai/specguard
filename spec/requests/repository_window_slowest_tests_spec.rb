@@ -39,22 +39,32 @@ RSpec.describe "Repository window slowest tests", type: :request do
 
   def section?(id) = panel.has_css?("##{id}")
 
+  # The row's LABEL: the test cell's text with its notes stripped off from the LAST one backwards,
+  # which is the order the partial nests them in — the file line is always the final span of the
+  # cell, and a reword note sits above it only where there was one. Whitespace-collapsed, because a
+  # description and a note assembled across two ERB tags are two readings on the page whatever the
+  # source did with indentation.
+  #
+  # ONE definition, read by both `rows` (which pairs the label with the row's TEXT) and
+  # `row_element` (which pairs it with the row ELEMENT). It is deliberately not inlined at either
+  # site: the reverse-order suffix-stripping is coupled to how the partial nests its spans, so two
+  # copies would be two places that must be edited together the next time that nesting moves.
+  def label_of(test_cell)
+    notes = test_cell.all("span").map { |span| span.text.gsub(/\s+/, " ").strip }
+    notes.reverse.reduce(test_cell.text.gsub(/\s+/, " ").strip) do |label, note|
+      label.delete_suffix(note).strip
+    end
+  end
+
   # One row as a reader meets it: the description, the notes under it (a reword, and the file or
   # files it ran in), its window total, its single worst run, how much of the window it was seen in
   # and how much of its own history was timed.
-  #
-  # The notes are stripped off the label from the LAST one backwards, which is the order they are
-  # nested in: the file line is always the final span of the cell, and a reword note sits above it
-  # only where there was one. Whitespace-collapsed, because a description and a note assembled
-  # across two ERB tags are two readings on the page whatever the source did with indentation.
   def rows
     panel.all("tbody tr").map do |row|
       test_cell, total_cell, slowest_cell, seen_cell, timed_cell = row.all("td")
       notes = test_cell.all("span").map { |span| span.text.gsub(/\s+/, " ").strip }
-      name = test_cell.text.gsub(/\s+/, " ").strip
-      notes.reverse_each { |note| name = name.delete_suffix(note).strip }
 
-      { name: name, notes: notes, total: total_cell.text.strip,
+      { name: label_of(test_cell), notes: notes, total: total_cell.text.strip,
         slowest: slowest_cell.text.strip, seen: seen_cell.text.gsub(/\s+/, " ").strip,
         timed: timed_cell.text.strip }
     end
@@ -69,13 +79,7 @@ RSpec.describe "Repository window slowest tests", type: :request do
   # itself — a text-only view of the cell renders `<a href=…>path</a>` and `path` identically, which
   # is the one distinction the examples below exist to make.
   def row_element(name)
-    panel.all("tbody tr").find do |row|
-      test_cell = row.all("td").first
-      notes = test_cell.all("span").map { |span| span.text.gsub(/\s+/, " ").strip }
-      label = test_cell.text.gsub(/\s+/, " ").strip
-      notes.reverse_each { |note| label = label.delete_suffix(note).strip }
-      label == name
-    end
+    panel.all("tbody tr").find { |row| label_of(row.all("td").first) == name }
   end
 
   # The file line of one row, as an element. It is the LAST span of the test cell, which is where
@@ -86,9 +90,16 @@ RSpec.describe "Repository window slowest tests", type: :request do
 
   def file_hrefs(name) = file_links(name).map { |link| link[:href] }
 
-  # What the drill-in for `path` should point at, built the way the view builds it rather than
-  # hand-spelled — the point of the link is the ask it SETS, and `?anchor=` puts the reader on the
+  # The BASE-CASE spelling of the drill-in for `path` — what the link reads as with no other ask
+  # open. The point of the link is the ask it SETS, and `?anchor=` puts the reader on the
   # destination panel instead of at the top of a page they were already three rungs into.
+  #
+  # Deliberately NOT routed through the view's own `drill_down_path`: that helper reads the open
+  # asks off controller ivars (`@trajectory_branch_request` and its five siblings), which this
+  # spec's binding does not have, so calling it here would build its path from nils and only LOOK
+  # coupled to the view. It agrees with the view because these examples open no other ask —
+  # carry-through, where the two spellings genuinely diverge, is asserted end-to-end against a real
+  # rendered page in spec/requests/repository_drill_down_carry_spec.rb rather than against this.
   def expected_file_href(repository, path, **asks)
     repository_path(repository, spec_file: path, anchor: "spec-file-examples", **asks)
   end
