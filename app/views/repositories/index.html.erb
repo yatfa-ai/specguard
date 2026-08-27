@@ -43,7 +43,53 @@
       purpose: the reader most likely to be here is the one being refused by the API, and their
       account may hold no repositories at all. Gating it on the grid would hide it from exactly the
       person the refusal sent. %>
-  <% if @registration_grant_story == :session_expired %>
+  <% if @registration_grant_story == :not_installed %>
+    <%# NOTHING TO TAKE A SNAPSHOT OF — the App is installed on no account this user holds.
+        Ordinary rather than exotic: it is every brand-new signup's first page, and it is also what
+        CANCELLING OUT of GitHub's install picker leaves behind (`GithubInstallationsController#callback`
+        records nothing in that case and says so in its own comment), plus anyone who installed from
+        the App's listing and was bounced through `require_authentication` to sign in first.
+
+        ⚠ THIS BRANCH EXISTS BECAUSE `:never_taken` ENDED IN A FALSE ALL-CLEAR FOR THIS READER, which
+        is worse than the loop the branch below it was added to fix. Its copy promised that opening
+        the picker would take a snapshot and that registering in the browser worked — both false
+        here, since the picker offers this reader no repository at all. Worse, opening it MINTED an
+        empty-but-fresh grant: `sources` answers a user with no installations with `installed: false`
+        and NO error, so `complete?` is true and `capture` writes a row with `registrable: []`. The
+        grant then stopped being stale, this whole panel disappeared, and the API went on refusing
+        them — with `:not_in_installation`, which is not the state any branch here describes. The
+        reader followed the instruction, the warning vanished, and nothing ever told them again.
+
+        The story is read ABOVE the grant for exactly that reason (see `registration_grant_story`),
+        so the empty row can never become a reason for silence.
+
+        The control is `github_install_button` and NOT the reconnect: a credential reads an
+        installation and this reader has none to read. Same existing helper, same existing route —
+        no new route and no new button helper. It handles the unconfigured-App case itself, and the
+        panel is gated on `configured?` besides. %>
+    <%= render UI::AlertComponent.new(
+          tone: :info, title: "Connect the SpecGuard GitHub App to register repositories",
+          class: "space-y-3"
+        ) do %>
+      <p>
+        <%# The same slice of `InstallationRepositories::MESSAGES[:not_granted]` every branch here
+            reads — one vocabulary across the API's refusal and this page. True of this reader in the
+            plainest way: SpecGuard holds no record because there is no installation to read one
+            from. %>
+        <%= github_registration_lapsed_state %>
+        The App is not installed on any of your GitHub accounts yet, so there is nothing for
+        SpecGuard to check yet — connect it below and choose the repositories you want. Until then
+        <%= tag.code("POST /api/v1/repositories") %> will refuse.
+      </p>
+      <div>
+        <%# `return_to:` sends them to the picker rather than back here, on the same reasoning the
+            branches below state: the picker is the sole site a grant is minted, so the journey ends
+            where the state actually resolves. After the install it lists the repositories they just
+            chose, and the grant is taken on that render. %>
+        <%= github_install_button return_to: new_repository_path %>
+      </div>
+    <% end %>
+  <% elsif @registration_grant_story == :session_expired %>
     <%# NO CREDENTIAL TO READ WITH — the App is installed, and this session holds no usable token.
         The most ordinary state there is: a returning reader at the start of a new browser session,
         because a user-to-server token is short-lived and lives only in the session

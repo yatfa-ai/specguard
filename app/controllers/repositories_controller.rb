@@ -1145,6 +1145,30 @@ class RepositoriesController < ApplicationController
   def registration_grant_story
     return nil unless SpecGuard::GithubApp.configured?
 
+    # ⚠ THE INSTALLATION IS ASKED ABOUT FIRST, AND BEFORE THE GRANT IS EVEN READ. This is the
+    # outermost rung of a three-rung ladder — installation, then credential, then snapshot — where
+    # each rung is a precondition for the next: there is no credential worth holding for an App that
+    # is installed nowhere, and no snapshot worth taking of an installation that does not exist.
+    #
+    # It sits ABOVE the redemption check below, not beside the branches under it, and that placement
+    # is the whole fix rather than an ordering preference. A picker render mints a grant from
+    # WHATEVER GitHub answers, and for somebody with no installation GitHub answers *nothing*:
+    # `InstallationRepositories.sources` returns `blank_sources(installed: false)` — no error and not
+    # truncated — so `Sources#complete?` is TRUE and `capture` writes an EMPTY BUT FRESH row. Read
+    # after the grant, this reader would mint that row on their first picker visit, `grant.stale?`
+    # would go false, and the panel would VANISH while `POST /api/v1/repositories` went on refusing
+    # them — with `:not_in_installation`, a different refusal than any branch here describes. That is
+    # a false all-clear rather than a loop: the reader followed the instruction, the warning
+    # disappeared, and nothing on the page would ever tell them again. Asking first means the empty
+    # row can never be reached as a reason for silence.
+    #
+    # Their fix is neither of the two below. A credential reads an installation and there is none to
+    # read; a picker mints a snapshot of an empty set. The missing thing is the App itself, so the
+    # control offered is `github_install_button` — the existing helper for exactly this — and not the
+    # reconnect. `github_installed?` is one `EXISTS` against our own table, the same read the branch
+    # below already makes, and it costs no GitHub round trip.
+    return :not_installed unless current_user.github_installed?
+
     grant = current_user.github_registration_grant
 
     # A grant inside the bound redeems, so there is nothing to say — whatever the session holds.

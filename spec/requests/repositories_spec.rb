@@ -3031,14 +3031,42 @@ RSpec.describe "Repository registration and API keys", type: :request do
       end
     end
 
-    # ⚠ AND THE POPULATION THAT MUST *NOT* BE SWEPT INTO THE BRANCH ABOVE.
+    # ⚠ THE REGRESSION GUARD FOR THE DEFECT THIS ROUND EXISTS TO FIX — THE INSTALLATION AXIS.
     #
-    # Reconnecting is the fix only for somebody who HAS an installation to read. Somebody with none
-    # holds no credential either, so a predicate written on the token ALONE would hand them a
-    # reconnect that resolves nothing they need. `github_installed?` is the second term — the same
-    # pairing `GithubUserSession#github_authorization_needed?` makes, for the same reason — and this
-    # is what pins it: for this reader the picker DOES mint (an empty grant), so the cheaper
-    # `:never_taken` advice is correct and must survive.
+    # Third round, third invisible axis, and the worst of the three outcomes. Round 1's axis was
+    # `lapsed` vs `never_taken`; round 2's was `token` vs `no token`; this one is `installed` vs
+    # `not installed`. Each time the branch made a promise that was true for the population the
+    # examples exercised and false for the one they did not.
+    #
+    # ## What was false, and why it is worse than the previous two
+    #
+    # `:session_expired` correctly requires `github_installed?`, so a reader with NO installation
+    # fell through to `:never_taken` — on BOTH sides of the token axis. That branch told them to open
+    # the picker and promised "registering here in the browser works now". The picker offers this
+    # reader no repository at all; it asks them to connect the App.
+    #
+    # Then the part that weighs heaviest. `InstallationRepositories.sources` answers a user with no
+    # installations with `blank_sources(installed: false)` — NO error and NOT truncated — so
+    # `Sources#complete?` is TRUE and `capture` writes an EMPTY BUT FRESH grant. Opening the picker
+    # therefore made `grant.nil? || grant.stale?` false, the panel DISAPPEARED, and
+    # `POST /api/v1/repositories` went on refusing with `:not_in_installation` — a refusal no branch
+    # here describes. Rounds 1 and 2 produced a LOOP, which is recoverable because the panel stays
+    # and the picker offers its own escape. This produced a FALSE ALL-CLEAR: the reader followed the
+    # instruction, the warning vanished, and nothing on the page would ever tell them again.
+    #
+    # The population is in scope by construction, not an edge imported to make a point. Criterion 1
+    # is "grant is absent or stale" and theirs is absent; `GithubInstallationsController#callback`
+    # records nothing when a user cancels out of GitHub's picker (its own comment names that case),
+    # `require_authentication` lands anyone installing from the App's listing here, and this is every
+    # brand-new signup's first page.
+    #
+    # ## Why the previous round's examples could not see it
+    #
+    # This describe already set the population up correctly. Its two examples asserted that the
+    # reconnect was absent — true, and equally true of the WRONG branch — and that the picker minted
+    # a grant, which PINNED THE EXACT MECHANISM THAT PRODUCES THE FALSE ALL-CLEAR AS THOUGH IT WERE
+    # THE FIX. Neither read the branch's own promise or asked what the API said afterwards. So these
+    # drive to the OUTCOME, and the first one drives the whole journey the old copy prescribed.
     describe "when no installation has been connected at all" do
       # Re-signing in clears the session credential (`SessionsController` resets the session on the
       # way IN, per `GithubUserSession`), but `installation: false` only declines to record a NEW
@@ -3051,17 +3079,69 @@ RSpec.describe "Repository registration and API keys", type: :request do
         expect(@user.reload.github_installed?).to be(false)
       end
 
-      it "is not told to reconnect a credential that would not help" do
+      # ⭐ THE COUNTERFACTUAL, and the example that would have failed last round.
+      #
+      # It follows the OLD branch's instruction exactly — open the picker once — and then asks the
+      # page again. The claim is not about wording: it is that the state remains OBSERVABLE on the
+      # page built to render it, at the precise moment the empty grant exists and would have
+      # silenced it. The mint is asserted as the HAZARD it is rather than as a success.
+      it "keeps saying so after a picker visit mints an empty grant" do
+        stub_github(repos: [github_repo("acme/billing-service")])
+
+        get repositories_path
+        expect(registration_panel).to be_present
+
+        # The hazard, at full strength: the picker writes a grant that is EMPTY but perfectly fresh,
+        # so every "is the grant missing or stale" reading now says no.
+        get new_repository_path
+        grant = GithubRegistrationGrant.find_by(user_id: @user.id)
+        expect(grant.registrable_full_names).to eq([])
+        expect(grant.stale?).to be(false)
+
+        # ...and the page must NOT read that as resolved, because the API has not resolved.
+        get repositories_path
+        expect(registration_panel).to be_present
+        expect(registration_panel).to include("not installed on any of your GitHub accounts")
+
+        # The ground truth the panel is answerable to: still refused, and refused for the reason
+        # this branch names rather than the one the grant branches do.
+        verdict = RepositoryRegistration::GrantVerifier.new(grant: grant)
+                                                       .verdict_for("acme/billing-service")
+        expect(verdict.status).to eq(:not_in_installation)
+      end
+
+      # The two promises the old copy made to this reader, asserted as the falsehoods they were.
+      # `page_text` for the picker claim rather than `registration_panel`, because the sentence must
+      # be absent from the panel AND not reintroduced anywhere else on the page.
+      it "promises neither a snapshot nor a working browser registration" do
         get repositories_path
 
+        expect(registration_panel).not_to include("registering here in the browser works now")
+        expect(registration_panel).not_to include("SpecGuard will take one")
+        expect(registration_panel).not_to include("One more step")
+      end
+
+      # Criterion 2 for this population: the missing thing is the INSTALLATION, so the control is
+      # the install action and not the reconnect — a credential would read an installation that does
+      # not exist. Both asserted against ROUTE HELPERS, so no new route can satisfy this.
+      it "offers the existing install action and not the reconnect" do
+        get repositories_path
+
+        expect(response.body).to include(github_installation_path)
+        expect(registration_panel).to include("Connect repositories on GitHub")
+        expect(response.body).not_to include(github_installation_authorize_path)
         expect(registration_panel).not_to include("Reconnect GitHub to finish")
       end
 
-      it "is pointed at the picker, which does mint a grant for this reader" do
-        stub_github(repos: [github_repo("acme/billing-service")])
+      # Criterion 5 for this population too — the whole story is read from `github_installed?`, one
+      # `EXISTS` against our own table, and no listing helper is reached on this path.
+      it "adds no GitHub round trip" do
+        fake = stub_github(repos: [github_repo("acme/billing-service")])
 
-        expect { get new_repository_path }
-          .to change { GithubRegistrationGrant.find_by(user_id: @user.id) }.from(nil)
+        get repositories_path
+
+        expect(registration_panel).to be_present
+        expect(fake.calls_to(:repositories)).to eq(0)
       end
     end
 
