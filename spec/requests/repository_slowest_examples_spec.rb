@@ -246,10 +246,16 @@ RSpec.describe "Repository slowest tests", type: :request do
 
       expect(rows.first[:ran_in]).to eq("not reported")
       expect(ran_in_cell(panel.first("tbody tr"))).to have_no_css("a")
-      # The definition site is NOT NULL and is what such a row is read by — and the only thing on
-      # the row still worth following.
+      # The definition site is NOT NULL and is what such a row is read by. It is no longer the only
+      # thing on the row worth following — this row is NAMED, and the name carries the per-run
+      # history drill-in — so the cell holds those two and the run-in line carries none. Counted
+      # here rather than left to the assertion above because the count is what says the missing
+      # including file cost this row ONE link and not its whole cell.
       expect(rows.first[:location]).to eq("#{order_spec}:1")
-      expect(panel.first("tbody tr").all("td").first.all("a").size).to eq(1)
+      expect(panel.first("tbody tr").all("td").first.all("a").size).to eq(2)
+      expect(panel.first("tbody tr").all("td").first.all("a").last[:href]).to eq(
+        "https://github.com/acme/billing-service/blob/feedfacecafe0001/#{order_spec}#L1"
+      )
     end
 
     # Opening a file from here is not a request to close a branch, an area or a description the
@@ -311,11 +317,25 @@ RSpec.describe "Repository slowest tests", type: :request do
 
     def invoice_spec = "spec/models/invoice_spec.rb"
 
-    # The definition-site link, told apart from the drill-in beside it by POSITION and never by
-    # text — the rule the whole file reads this cell by. It is the FIRST anchor of the row's first
-    # cell on BOTH label branches (under the name on a named row, AS the name on a nameless one),
-    # because the run-in line is always the LAST span of that cell.
-    def definition_link(row) = row.all("td").first.all("a").first
+    # The definition-site link, told apart from the two drill-ins that share the cell by POSITION
+    # and never by text — the rule the whole file reads this cell by.
+    #
+    # It is the LAST anchor of the cell that is not the run-in link, which is the one rule that
+    # holds on BOTH label branches. It used to be the FIRST anchor, and that stopped being true the
+    # moment the NAME above it became a link on the named branch: the name is now the cell's first
+    # anchor there, while on a nameless row the definition site still IS the label and comes first.
+    # Reading from the other end is what makes the two branches agree again — the definition site is
+    # the last thing in the cell before the run-in line, whether or not a linked name precedes it.
+    #
+    # Excluded by IDENTITY (`Capybara::Node::Element#path`, the node's own XPath) rather than by
+    # counting back a fixed number of anchors: the run-in line carries a link only when the row has
+    # an including file, so a positional offset would read a different anchor on the row that has
+    # none — which is a real branch this file turns on one describe block up.
+    def definition_link(row)
+      ran_in_paths = ran_in_cell(row).all("a").map(&:path)
+
+      row.all("td").first.all("a").reject { |link| ran_in_paths.include?(link.path) }.last
+    end
 
     def definition_hrefs = panel.all("tbody tr").map { |row| definition_link(row)[:href] }
 
@@ -455,6 +475,351 @@ RSpec.describe "Repository slowest tests", type: :request do
       expect(rows.size).to eq(SpecObservation::SLOWEST_LIMIT)
       expect(definition_hrefs.uniq.size).to eq(SpecObservation::SLOWEST_LIMIT)
       expect(ten).to eq(one)
+    end
+  end
+
+  # The row's SUBJECT as a link — the last thing in this cell that went nowhere. The coordinate
+  # under the name and the file beside it were both links while the TEST, which is what the row is
+  # about, was plain text.
+  #
+  # This panel ranks ten wall clocks against ONE run, and the question every one of those rows
+  # raises — is this test always this slow, or was it slow today — is answered by "This test, run
+  # by run" further down the same page, which already carries a Duration column and is already
+  # keyed on the name. So this adds a CALLER and not a read: the destination, `UnstableTestRuns`
+  # and `SpecObservation.outcome_sequence_in` are untouched.
+  #
+  # NOT gated on the flakiness ranking, which is the property that makes the reuse honest rather
+  # than merely convenient: the destination keys on the name and applies no stability filter, so a
+  # perfectly STABLE slow test — the ordinary row on this panel, and one the ranking above would
+  # never list — resolves through it. The example below turns on exactly that row.
+  describe "the test name as a link into its own run-by-run history" do
+    def slow_test = "Ledger rebuild walks every entry"
+
+    def other_test = "Invoice finalize locks the line items"
+
+    # The name link, told apart from the two links BELOW it in the same cell by POSITION and never
+    # by text — the rule this whole file reads this cell by. On a NAMED row it is the cell's first
+    # anchor; this helper is used only on named rows, because on a nameless one the first anchor is
+    # the definition site and there is deliberately no name link to find.
+    def name_link(row) = row.all("td").first.all("a").first
+
+    def name_links = panel.all("tbody tr").map { |row| name_link(row) }
+
+    def history_panel? = Capybara.string(response.body).has_css?("#unstable-test-runs")
+
+    def history_panel = Capybara.string(response.body).find("#unstable-test-runs")
+
+    # The destination's Duration column, which is the whole reason this link points where it does.
+    # Column 4 of `_unstable_test_runs.html.erb`'s header row.
+    def history_durations
+      history_panel.all("tbody tr").map { |row| row.all("td")[4].text.strip }
+    end
+
+    # Two runs so the destination has a SERIES to report rather than a single row, and the same
+    # test timed differently in each — a panel that printed one figure twice would pass an
+    # assertion that only counted rows.
+    def two_run_repository
+      repository = create_repository(user: @user)
+      ingest(repository, [example_spec(name: slow_test, duration: 3.0, line_number: 2),
+                          example_spec(name: other_test, duration: 0.42, line_number: 1)],
+             commit_sha: "aaaa1111bbbb2222")
+      ingest(repository, [example_spec(name: slow_test, duration: 9.5, line_number: 2),
+                          example_spec(name: other_test, duration: 0.42, line_number: 1)],
+             commit_sha: "cccc3333dddd4444")
+      repository
+    end
+
+    # ⭐ CRITERION 1 — one click from the ranking to the series.
+    it "links each named row's test to its own per-run history" do
+      get repository_path(two_run_repository)
+
+      href = name_link(panel.first("tbody tr"))[:href]
+
+      expect(href).to include("unstable_test=#{CGI.escape(slow_test)}")
+      expect(href).to include("#unstable-test-runs")
+    end
+
+    # The link TEXT is what the reader was already looking at, so following it is not a jump to
+    # something they were not offered.
+    it "links the label the panel already printed" do
+      get repository_path(two_run_repository)
+
+      expect(name_links.map(&:text).map(&:strip)).to eq([slow_test, other_test])
+    end
+
+    # ⭐ CRITERION 1, followed rather than asserted at the href: the reader arrives at a panel that
+    # actually reports this test's Duration series, and it is THIS test's — the second test on the
+    # fixture is timed differently, so a link that keyed on the wrong row would print its figures.
+    it "opens a panel reporting that test's duration run by run" do
+      get repository_path(two_run_repository)
+      href = name_link(panel.first("tbody tr"))[:href]
+
+      get href.split("#").first
+
+      expect(history_panel).to have_text(slow_test)
+      expect(history_durations).to eq(["3.00s", "9.50s"])
+    end
+
+    # THE ROW THE REUSE HAS TO SERVE. `?unstable_test=` is named for the panel that first asked it,
+    # and every test on THIS panel is ranked by wall clock with no reference to stability — so the
+    # ordinary case here is a test the "Tests whose outcome changed" ranking does not list at all.
+    # A destination that silently required instability would fail exactly this row and no other.
+    it "opens the history of a test the flakiness ranking never lists" do
+      repository = two_run_repository
+
+      get repository_path(repository)
+
+      # The premise, asserted rather than assumed: this test passed in every run, so the ranking
+      # above does not LIST it. Without this the example below could pass on a flaky test by
+      # accident, which would prove nothing about the stable row this link has to serve.
+      #
+      # Not `have_no_css("#unstable-tests")`: that panel renders here. Its window IS comparable —
+      # two runs that both reported outcomes — so it renders its honest zero rather than absenting
+      # itself, and the fact worth pinning is that the zero is what it prints.
+      ranking = Capybara.string(response.body).find("#unstable-tests")
+      expect(ranking).to have_css("#unstable-tests-none")
+      expect(ranking).to have_no_link(slow_test)
+
+      get repository_path(repository, unstable_test: slow_test)
+
+      expect(response).to have_http_status(:ok)
+      expect(history_panel).to have_text(slow_test)
+      expect(history_durations).to eq(["3.00s", "9.50s"])
+    end
+
+    # ⭐ CRITERION 4 — a list of choices with one of them taken, and the destination is a long way
+    # down the page. Asserted across BOTH rows: "the open test is marked" cannot pass by marking
+    # every row, and `aria-current` is absent rather than "false" on the others.
+    it "marks the row whose test is currently open" do
+      get repository_path(two_run_repository, unstable_test: slow_test)
+
+      expect(name_links.map { |link| [link.text.strip, link["aria-current"]] })
+        .to eq([[slow_test, "true"], [other_test, nil]])
+    end
+
+    # ⭐ CRITERION 2 — the nameless branch is UNCHANGED. Such a row has no name to key the ask on
+    # and its label already IS the coordinate, so it keeps exactly the one link it had: the
+    # definition site, in a new tab. A change that linked `#label` blindly would send this row's
+    # coordinate to a destination that cannot resolve it.
+    it "leaves a nameless row's coordinate linked to its definition site and nothing else" do
+      repository = create_repository(user: @user)
+      ingest(repository, [example_spec(name: nil, duration: 4.0, line_number: 88,
+                                       file_path: "spec/models/ledger_spec.rb")])
+
+      get repository_path(repository)
+
+      row = panel.first("tbody tr")
+      links = row.all("td").first.all("a")
+
+      expect(row_labels).to eq(["spec/models/ledger_spec.rb:88"])
+      # The definition site and the run-in drill-in, and no third link: no history ask was added.
+      expect(links.size).to eq(2)
+      expect(links.first[:href])
+        .to eq("https://github.com/acme/billing-service/blob/feedfacecafe0001/spec/models/ledger_spec.rb#L88")
+      expect(links.first[:target]).to eq("_blank")
+      expect(links.map { |link| link[:href] }).to all(satisfy { |href| !href.include?("unstable_test=") })
+    end
+
+    # ⭐ CRITERION 3 — opening a test from here closes nothing the reader opened separately. The
+    # carry-through rule spec/requests/repository_drill_down_carry_spec.rb owns, asserted at this
+    # link end-to-end: the href carries the other asks AND the page it lands on still has them open.
+    it "carries every other open ask through the link, and through following it" do
+      repository = two_run_repository
+      get repository_path(repository, branch: "main", spec_file: "spec/models/invoice_spec.rb",
+                                      spec_directory: "spec/models")
+
+      href = name_link(panel.first("tbody tr"))[:href]
+
+      expect(href).to include("branch=main")
+      expect(href).to include("spec_file=#{CGI.escape('spec/models/invoice_spec.rb')}")
+      expect(href).to include("spec_directory=#{CGI.escape('spec/models')}")
+
+      get href.split("#").first
+
+      page = Capybara.string(response.body)
+      expect(page).to have_css("#unstable-test-runs")
+      expect(page).to have_css("#spec-file-examples")
+      expect(page).to have_css("#spec-directory-files")
+    end
+
+    # ⭐ CRITERION 5 — the way back out, asserted at the ANCHOR the control lands on and not at the
+    # presence of the panel it should land on.
+    #
+    # THE DISTINCTION IS THE WHOLE EXAMPLE, and the earlier version of it is why: it asserted
+    # `have_css("#slowest-examples")`, which is true of that page whether or not the reader is sent
+    # anywhere near it — the panel renders on every page this fixture builds. So it passed while the
+    # control anchored at `#unstable-tests`, thousands of pixels away, and the criterion it claimed
+    # to pin was not pinned at all. A landing assertion that cannot fail when the reader lands in
+    # the wrong place is not a weaker assertion, it is a different one.
+    #
+    # The fragment is therefore READ rather than discarded, and it is the subject here.
+    it "anchors the reader back at THIS panel when they close the test" do
+      repository = two_run_repository
+      get repository_path(repository, spec_directory: "spec/models")
+
+      open_here = name_link(panel.first("tbody tr"))[:href]
+      get open_here.split("#").first
+
+      close = Capybara.string(response.body).find("#unstable-test-runs")
+                      .find("a", exact_text: "Close test")[:href]
+
+      # The panel the reader opened the test FROM, and specifically not the flakiness ranking this
+      # control anchored at while that panel was the only way in.
+      expect(close.split("#").last).to eq("slowest-examples")
+
+      get close.split("#").first
+
+      page = Capybara.string(response.body)
+      expect(page).to have_no_css("#unstable-test-runs")
+      expect(page).to have_css("#slowest-examples")
+      # The origin is a QUALIFIER of the test, so closing the test takes it with them: leaving it
+      # behind would point this control at a panel with nothing open in it on every later link.
+      expect(close).not_to include("unstable_test_from=")
+      expect(page).to have_css("#spec-directory-files")
+    end
+
+    # THE ROW THE ANCHOR EXISTS FOR, stated as its own example because it is the one the old
+    # hardcoded anchor failed WORST and the one a reader of this panel most often has.
+    #
+    # Every test on this fixture passes in every run, so the flakiness ranking renders its empty
+    # state. A reader who opened such a test and closed it was returned to a panel that, BY
+    # CONSTRUCTION, could not contain the row they came from — it is not that the row was hard to
+    # find, it is that the panel is incapable of listing it. The premise is asserted rather than
+    # assumed, so this cannot pass by accident on a flaky fixture.
+    it "returns a stable slow test's reader to a panel that actually lists it" do
+      repository = two_run_repository
+      get repository_path(repository)
+
+      ranking = Capybara.string(response.body).find("#unstable-tests")
+      expect(ranking).to have_css("#unstable-tests-none")
+      expect(ranking).to have_no_link(slow_test)
+
+      open_here = name_link(panel.first("tbody tr"))[:href]
+      get open_here.split("#").first
+      close = Capybara.string(response.body).find("#unstable-test-runs")
+                      .find("a", exact_text: "Close test")[:href]
+
+      get close.split("#").first
+
+      # The landing panel LISTS the test the reader was reading, which is the property that makes
+      # the return useful rather than merely somewhere to go.
+      expect(close.split("#").last).to eq("slowest-examples")
+      expect(panel).to have_link(slow_test)
+    end
+
+    # THE OTHER ENTRY POINT IS UNMOVED. The flakiness ranking stamps its own origin, so a reader who
+    # opened a test THERE still closes back there — this ticket adds a second origin rather than
+    # moving the one that existed. Asserted from this file because it is this file's change that
+    # could break it.
+    it "leaves a test opened from the flakiness ranking closing back at that ranking" do
+      repository = create_repository(user: @user)
+      flaky = "Session expiry sweeps the cache"
+      ingest(repository, [example_spec(name: flaky, duration: 1.0, line_number: 1, outcome: "failed")],
+             commit_sha: "aaaa1111bbbb2222")
+      ingest(repository, [example_spec(name: flaky, duration: 1.0, line_number: 1, outcome: "passed")],
+             commit_sha: "cccc3333dddd4444")
+
+      get repository_path(repository)
+      open_there = Capybara.string(response.body).find("#unstable-tests")
+                           .find("a", exact_text: flaky)[:href]
+      get open_there.split("#").first
+
+      close = Capybara.string(response.body).find("#unstable-test-runs")
+                      .find("a", exact_text: "Close test")[:href]
+
+      expect(close.split("#").last).to eq("unstable-tests")
+    end
+
+    # A reader who arrived by BOOKMARK or by typing the URL named no origin, and the control falls
+    # back to the anchor it always had rather than to a blank fragment. This is the path every link
+    # written before the qualifier existed still takes, so it is the compatibility pin.
+    it "falls back to the flakiness ranking when no origin was named" do
+      get repository_path(two_run_repository, unstable_test: slow_test)
+
+      close = Capybara.string(response.body).find("#unstable-test-runs")
+                      .find("a", exact_text: "Close test")[:href]
+
+      expect(close.split("#").last).to eq("unstable-tests")
+    end
+
+    # The origin is consumed as a URL FRAGMENT, so a value naming no panel would scroll the reader
+    # nowhere — a silent wrong answer rather than a loud one. Only the ids of the panels that OFFER
+    # the gesture are honoured; anything else is read as "not said" and takes the fallback above.
+    # The three non-String shapes a query string can parse into are pinned the same way, because
+    # `include?` against the allow-list does not answer for an Array or a Parameters the way this
+    # reads it.
+    it "ignores an origin naming no panel, and every shape that is not a description" do
+      repository = two_run_repository
+
+      ["#{'a' * 40}", "javascript:alert(1)", "spec-file-examples"].each do |bogus|
+        get repository_path(repository, unstable_test: slow_test, unstable_test_from: bogus)
+
+        close = Capybara.string(response.body).find("#unstable-test-runs")
+                        .find("a", exact_text: "Close test")[:href]
+
+        expect(response).to have_http_status(:ok)
+        expect(close.split("#").last).to eq("unstable-tests")
+        expect(close).not_to include(CGI.escape(bogus))
+      end
+
+      ["?unstable_test_from[]=slowest-examples", "?unstable_test_from[a]=slowest-examples",
+       "?unstable_test_from[][a]=slowest-examples"].each do |malformed|
+        get "#{repository_path(repository)}?unstable_test=#{CGI.escape(slow_test)}&#{malformed.delete_prefix('?')}"
+
+        close = Capybara.string(response.body).find("#unstable-test-runs")
+                        .find("a", exact_text: "Close test")[:href]
+
+        expect(response).to have_http_status(:ok)
+        expect(close.split("#").last).to eq("unstable-tests")
+      end
+    end
+
+    # ⭐ CRITERION 6 — the ranking is anchored to ONE run and the drill-in reports over the branch
+    # window, so the two can legitimately disagree about whether a test exists. A test ranked here
+    # but absent from that window is an ordinary NAMED empty answer — `UnstableTestRuns`' own class
+    # comment calls it one — and not a 404 or a blank panel.
+    #
+    # The two windows are pulled apart with `?branch=`: the ranking follows the newest run whatever
+    # branch it is on, while the trajectory is the branch the reader asked for.
+    it "renders the named empty state for a test outside the trajectory window" do
+      repository = create_repository(user: @user)
+      ingest(repository, [example_spec(name: other_test, duration: 1.0, line_number: 1)],
+             commit_sha: "aaaa1111bbbb2222", branch: "main")
+      release_only = "Release smoke walks the checkout"
+      ingest(repository, [example_spec(name: release_only, duration: 9.0, line_number: 5)],
+             commit_sha: "cccc3333dddd4444", branch: "release")
+
+      get repository_path(repository, branch: "main", unstable_test: release_only)
+
+      expect(response).to have_http_status(:ok)
+      expect(history_panel?).to be(true)
+      # Named back rather than silently empty: the reader asked for a test and is told about THAT
+      # test, which is what stops the empty panel reading as a broken one.
+      expect(history_panel.find("#unstable-test-runs-none")).to have_text(release_only)
+    end
+
+    # ⭐ CRITERION 7 — this is a CALLER, not a read. The link costs the page nothing when nobody
+    # follows it, and exactly one read of this table when somebody has. Pinned with
+    # `queries_against` the way the budget at the foot of this file is, and as an ABSOLUTE pair
+    # rather than a difference alone: equality against a control would still hold if both pages
+    # regressed together.
+    #
+    # Ten is the page's standing budget with no test asked for — the same figure
+    # "costs the same number of queries at 200 examples as at 3" pins, where every one of the ten
+    # is accounted for. The ELEVENTH is `SpecObservation.outcome_sequence_in`, bounded by one
+    # description's rows over the window rather than by the size of the suite.
+    it "costs nothing when no test is asked for and exactly one read when one is" do
+      repository = two_run_repository
+
+      get repository_path(repository)
+      unasked = queries_against("spec_observations") { get repository_path(repository) }
+      get repository_path(repository, unstable_test: slow_test)
+      asked = queries_against("spec_observations") do
+        get repository_path(repository, unstable_test: slow_test)
+      end
+
+      expect(asked.size).to eq(unasked.size + 1)
+      expect(history_panel).to have_text(slow_test)
     end
   end
 

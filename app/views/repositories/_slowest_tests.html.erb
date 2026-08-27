@@ -87,7 +87,17 @@
                       ZERO NEW QUERIES: `@repository` and `@latest_test_run` are both loaded before
                       this partial renders — `@slowest_examples` is assigned only under
                       `@latest_test_run` — and `#github_blob_url` is string composition. %>
-                  <%= render "repositories/definition_site_link", observation: observation %>
+                  <%# `link_name_from:` is this panel's, and only this panel's. The partial is shared by
+                      three panels and prints the name plainly for the other two; the drill-in below
+                      is a claim about THIS panel's reader, so the caller opts in rather than the
+                      shared cell deciding for everybody. See the partial for what the local turns on.
+
+                      The value is THIS PANEL'S OWN `id` — the same string `UI::PanelComponent` above
+                      renders under — because it is what the destination's "Close test" control
+                      anchors back at. One local rather than a flag plus a companion, so a caller
+                      cannot opt in and then be wrong about where its reader came from. %>
+                  <%= render "repositories/definition_site_link", observation: observation,
+                                                                  link_name_from: "slowest-examples" %>
                   <%# The file that RAN the example, and the link that stops these rows dead-ending.
                       This panel is the page's entry point to per-test data, every row on it is an
                       outlier, and the reader's next question — is this ONE test slow or is the whole

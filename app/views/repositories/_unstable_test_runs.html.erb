@@ -38,15 +38,34 @@
               picked from, so closing a test returns the reader where they opened it rather than at
               the top of a long page.
 
-              Through `drill_down_path`, with `unstable_test: nil` naming the one ask it clears, and
+              WHICH ranking follows the reader rather than being fixed, and that is the whole of
+              `?unstable_test_from=`. This panel has TWO entry points: "Tests whose outcome changed"
+              ranks instability, and "Slowest tests" ranks wall clocks with no reference to it. A
+              hardcoded anchor was correct while the first was the only way in and became false the
+              moment the second existed — and it failed WORST on the row the second panel exists to
+              serve, because a slow test that is perfectly stable is by construction absent from the
+              flakiness ranking. Such a reader was returned to a panel rendering its empty state,
+              thousands of pixels from the panel that actually held their row. The origin is
+              honoured only when the reader arrived carrying one; absent it this is the anchor it
+              always was, so the older entry point, every bookmark and every typed URL are unmoved.
+
+              The SAME invariant "Close file" keeps one ladder over, where the anchor follows
+              whether an area is open: where a gesture lands is a property of the gesture, and a
+              control that assumes one origin is wrong for every other one.
+
+              Through `drill_down_path`, with `unstable_test: nil` naming the ask it clears, and
               explicit for the same reason every clearing gesture on this page is. Carry is the
               default, so an omission here would mean "keep the test open" and this button would
-              navigate to the page it is already on. Every OTHER ask rides through, so closing a
-              test does not close a file, an area or a description the reader opened separately, nor
-              jump the page back to the newest run. %>
+              navigate to the page it is already on. `unstable_test_from: nil` clears in the same
+              breath and is not a second gesture: the origin QUALIFIES the test, so leaving it
+              behind would carry a pointer to a panel nothing is open in through every subsequent
+              link. Every OTHER ask rides through, so closing a test does not close a file, an area
+              or a description the reader opened separately, nor jump the page back to the newest
+              run. %>
           <%= render UI::ButtonComponent.new(
                 variant: :ghost,
-                href: drill_down_path(@repository, unstable_test: nil, anchor: "unstable-tests")
+                href: drill_down_path(@repository, unstable_test: nil, unstable_test_from: nil,
+                                      anchor: @unstable_test_origin_request || "unstable-tests")
               ) { "Close test" } %>
         <% end %>
         <% if @unstable_test_runs.rows.any? %>

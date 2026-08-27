@@ -77,9 +77,16 @@
                         `aria-current` on the open test, because this is a list of choices with one
                         of them taken and the panel below is a long way down the page — a reader
                         arriving back at this table by keyboard needs to be told which row they are
-                        already looking at. %>
+                        already looking at.
+
+                        `unstable_test_from:` STAMPS THE ORIGIN, naming THIS panel's own `id` so the
+                        destination's "Close test" control returns the reader here. It is the value
+                        that control used to hardcode, and passing it explicitly is what lets the
+                        second entry point ("Slowest tests") name itself instead. Set rather than
+                        carried: this link IS the gesture the value describes. %>
                     <%= link_to test.name,
                                 drill_down_path(@repository, unstable_test: test.name,
+                                                unstable_test_from: "unstable-tests",
                                                 anchor: "unstable-test-runs"),
                                 class: "underline underline-offset-2 decoration-app-border-light " \
                                        "text-app-content hover:decoration-app-content",
