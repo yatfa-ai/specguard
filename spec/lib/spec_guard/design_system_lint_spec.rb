@@ -125,6 +125,102 @@ RSpec.describe SpecGuard::DesignSystemLint do
     end
   end
 
+  # Every example in "the rules" writes `app/views/things/show.html.erb` — glob #1 of the four in
+  # SCAN_GLOBS. The other three mutate freely under that suite, and the live-application example
+  # above cannot catch them either: it asserts 0/0/0 on a greenfield app, so "found nothing" and
+  # "did not look" are the same reading. These examples pin the remaining three globs with a
+  # NON-zero assertion, so deleting any of them from SCAN_GLOBS turns this file red.
+  #
+  # This is load-bearing beyond this spec: `spec/components/ui/copyable_code_component_spec.rb`
+  # declines to assert raw-palette colours on the record, because "SCAN_GLOBS already covers
+  # app/components/**/*.rb". That delegation is only sound while glob #3 is pinned here.
+  describe "the scan scope" do
+    # Deliberately NOT `counts_for` — that helper hard-codes glob #1, which is the whole gap.
+    def counts_at(relative_path, source)
+      Dir.mktmpdir do |dir|
+        path = File.join(dir, relative_path)
+        FileUtils.mkdir_p(File.dirname(path))
+        File.write(path, source)
+
+        described_class.new(root: dir).counts
+      end
+    end
+
+    it "scans component templates — app/components/**/*.html.erb" do
+      counts = counts_at("app/components/ui/button_preview.html.erb", %(<button class="btn btn-primary">Save</button>))
+
+      expect(counts["raw_btn"]).to eq(1)
+    end
+
+    it "scans component classes — app/components/**/*.rb" do
+      counts = counts_at("app/components/ui/copyable_code_component.rb", %(def call = tag.a("x", class: "btn")))
+
+      expect(counts["raw_btn"]).to eq(1)
+    end
+
+    it "scans helpers — app/helpers/**/*.rb" do
+      counts = counts_at("app/helpers/things_helper.rb", %(def cta = link_to("x", "/", class: "btn")))
+
+      expect(counts["raw_btn"]).to eq(1)
+    end
+
+    it "scans view templates — app/views/**/*.html.erb" do
+      counts = counts_at("app/views/things/show.html.erb", %(<a class="btn">x</a>))
+
+      expect(counts["raw_btn"]).to eq(1)
+    end
+
+    # Negative control: without this, the three assertions above would also pass under a
+    # SCAN_GLOBS that swept the entire tree, and they would be pinning "scans everything"
+    # rather than "scans these four globs".
+    it "does not scan outside the declared globs" do
+      counts = counts_at("app/models/thing.rb", %(BUTTON = "btn text-3xl bg-white"))
+
+      expect(counts).to eq("heading_sizes" => 0, "raw_palette_colors" => 0, "raw_btn" => 0)
+    end
+  end
+
+  # No example anywhere drove a `.rb` file before the scan-scope block above, so the `.rb` side of
+  # `comment?` was unexercised. The ERB side is covered by "when the comment wraps across lines";
+  # `.rb` needs its own pins because `#` — unlike `<%#` — is line-initial on every comment line,
+  # which is exactly the assumption the implementation states at design_system_lint.rb:170-171.
+  describe "comment handling in .rb files" do
+    def rb_counts(source)
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "app/helpers"))
+        File.write(File.join(dir, "app/helpers/things_helper.rb"), source)
+
+        described_class.new(root: dir).counts
+      end
+    end
+
+    it "does not flag prose in a line-initial comment" do
+      expect(rb_counts("# never use btn or text-3xl or bg-white here\n")).to(
+        eq("heading_sizes" => 0, "raw_palette_colors" => 0, "raw_btn" => 0)
+      )
+    end
+
+    it "does not flag prose in an indented line-initial comment" do
+      expect(rb_counts("module Things\n  # never use btn here\nend\n")["raw_btn"]).to eq(0)
+    end
+
+    it "flags a real offender in a .rb file" do
+      expect(rb_counts(%(def cta = tag.a("x", class: "btn")\n))["raw_btn"]).to eq(1)
+    end
+
+    # PINNED AS IT SHIPS: a trailing `#` comment IS scanned, so prose after code counts as an
+    # offender. `comment?` is anchored (`\A\s*#`), so only a WHOLE-line comment is skipped.
+    #
+    # Mechanically this is the same line-initial-only rule that
+    # `spec/components/caller_class_consumption_spec.rb:165-167` applies to its own sweep, but the
+    # two sweeps want opposite things from it: there, keeping a trailing-comment line is what stops
+    # real code being skipped; here, it is what makes prose count against a shrink-only 0/0/0 gate.
+    # Recorded rather than fixed — changing it is a production decision, not a test one.
+    it "flags a banned token in a trailing comment (false positive, pinned deliberately)" do
+      expect(rb_counts("def x = 1 # never use btn here\n")["raw_btn"]).to eq(1)
+    end
+  end
+
   describe "the baseline" do
     it "is shrink-only by default" do
       Dir.mktmpdir do |dir|
