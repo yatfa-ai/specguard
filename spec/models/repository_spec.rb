@@ -32,6 +32,97 @@ RSpec.describe Repository do
     expect(duplicate).not_to be_valid
   end
 
+  # The uniqueness validation above RACES — its SELECT runs before the INSERT, so a competing
+  # registration that has not committed yet is invisible to it. These four are about what happens
+  # when it loses that race, and none of them can be written as "write the same row twice in
+  # sequence": the validation catches that unaided, so such an example passes with or without any
+  # database-conflict handling.
+  describe "losing the uniqueness race to a concurrent registration" do
+    let(:other_person) { create_user(github_uid: "2002", github_handle: "hubot") }
+
+    # What actually holds the line once the validation has been beaten.
+    #
+    # `name` is passed explicitly because `validate: false` skips the `before_validation
+    # :derive_name` callback that normally fills it, and a NULL there fails on the NOT NULL
+    # constraint FIRST — a green example about the wrong column. Supplying it leaves
+    # `github_full_name` as the only thing left to refuse the row.
+    it "enforces one row per github_full_name in the database" do
+      create_repository(github_full_name: "acme/billing-service")
+
+      expect {
+        other_person.repositories.new(github_full_name: "acme/billing-service", name: "billing-service")
+                    .save!(validate: false)
+      }.to raise_error(ActiveRecord::RecordNotUnique)
+    end
+
+    # ...and this is what turns that into a refusal a form or an API response can render. The race
+    # is simulated by silencing the uniqueness validation, which is exactly what it does on its own
+    # when it cannot see the winning row yet (see spec/support/uniqueness_race.rb).
+    #
+    # Asserted on the KIND as well as the words. `BulkRegistration#taken?` asks
+    # `errors.of_kind?(:github_full_name, :taken)` rather than matching the sentence, so a
+    # translation that added a look-alike string instead of the `:taken` symbol would render
+    # correctly here and still demote a raced row to `:invalid` over there.
+    it "translates the lost race into the same :taken refusal on :github_full_name" do
+      create_repository(github_full_name: "acme/billing-service")
+      duplicate = other_person.repositories.new(github_full_name: "acme/billing-service")
+      allow(uniqueness_validator(described_class)).to receive(:validate_each)
+
+      expect(duplicate.save).to be(false)
+      expect(duplicate.errors.of_kind?(:github_full_name, :taken)).to be(true)
+      expect(duplicate.errors.full_messages).to include("Github full name has already been taken")
+      expect(duplicate).not_to be_persisted
+      expect(described_class.count).to eq(1)
+    end
+
+    # The refusal has to leave the CONNECTION usable, not merely report itself politely.
+    #
+    # Postgres aborts the whole transaction on a constraint violation, so a rescue with no savepoint
+    # returns a clean `false` with a readable sentence on it while every subsequent statement on
+    # that connection dies with `PG::InFailedSqlTransaction` — strictly worse than the 500 this
+    # translation removes, because it reports success at refusing.
+    #
+    # The explicit `transaction` is what makes this load-bearing, and it is NOT redundant with the
+    # suite's transactional fixtures: those open NON-JOINABLE, which forces a savepoint whether the
+    # model asks for one or not, so every other example in this file stays green against a model
+    # that opens none. This one opens a JOINABLE transaction — the kind `Api::V1::UserRepositories
+    # Controller#create` actually writes — which is the only shape that can be poisoned. The query
+    # after the failed save is the assertion: it either answers, or the connection is already dead.
+    it "leaves an enclosing joinable transaction usable after refusing" do
+      create_repository(github_full_name: "acme/billing-service")
+      duplicate = other_person.repositories.new(github_full_name: "acme/billing-service")
+      allow(uniqueness_validator(described_class)).to receive(:validate_each)
+
+      ActiveRecord::Base.transaction do
+        expect(duplicate.save).to be(false)
+        expect(described_class.count).to eq(1)
+      end
+    end
+
+    # A conflict on some OTHER constraint is not this one's to explain away. Swallowing every
+    # `RecordNotUnique` would turn an unrelated violation into "has already been taken" — a wrong
+    # sentence is worse than the raise, because it sends the reader to fix something that is fine
+    # and reports `save` as a clean refusal while the real fault stays hidden. Provoked with a
+    # genuine second violation on this same table: a primary-key collision, on a row whose slug is
+    # NOT a duplicate.
+    it "re-raises a unique violation that is not the duplicate-slug index" do
+      existing = create_repository(github_full_name: "acme/billing-service")
+      clashing = other_person.repositories.new(id: existing.id, github_full_name: "acme/unrelated")
+
+      expect { clashing.save }.to raise_error(ActiveRecord::RecordNotUnique)
+    end
+
+    # The bang is a different contract: a caller who chose it asked for the exception, and nothing
+    # routes it through the translation above.
+    it "still raises from save!" do
+      create_repository(github_full_name: "acme/billing-service")
+      duplicate = other_person.repositories.new(github_full_name: "acme/billing-service")
+      allow(uniqueness_validator(described_class)).to receive(:validate_each)
+
+      expect { duplicate.save! }.to raise_error(ActiveRecord::RecordNotUnique)
+    end
+  end
+
   describe "#github_blob_url" do
     # The one seam every "go and look" link on the dashboard composes through. `#github_url` names
     # the repository; this names a LINE, which is the grain every per-example surface prints and

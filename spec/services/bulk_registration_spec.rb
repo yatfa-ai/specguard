@@ -498,5 +498,34 @@ RSpec.describe BulkRegistration do
       expect(result.skipped.first.status).to eq(:already_registered)
       expect(result.registered_count).to eq(0)
     end
+
+    # SPGD-775 — the same condition, with NOTHING STUBBED ON `save`.
+    #
+    # The example above stubs `save` to raise, which pins the `rescue ActiveRecord::RecordNotUnique`
+    # below it. That rescue is no longer the branch a real raced row takes: `Repository#save` now
+    # contains the violation itself and returns `false`, so this service reaches
+    # `elsif taken?(candidate.record)` instead — and `taken?` asks
+    # `errors.of_kind?(:github_full_name, :taken)`, which is a TYPE test rather than a message test.
+    #
+    # That makes this example the one that can tell the two translations apart. A `Repository`
+    # recording its refusal as the raw STRING "has already been taken" renders an identical sentence
+    # everywhere a human looks, and still fails `of_kind?`, demoting this row from
+    # `:already_registered` to `:invalid`. The stubbed example above cannot see that, because it
+    # never lets the real `save` run — it would stay green through the regression.
+    #
+    # The race itself is simulated the honest way, by silencing the uniqueness validation, which is
+    # exactly what it does on its own when it cannot see the winning row yet.
+    it "reports a REAL raced row as already registered, not as invalid" do
+      create_repository(user: create_user(github_uid: "2002", github_handle: "hubot"),
+                        github_full_name: "acme/api")
+      stub_github(repos: [github_repo("acme/api")])
+      allow(uniqueness_validator(Repository)).to receive(:validate_each)
+
+      result = register("acme/api")
+
+      expect(result.registered_count).to eq(0)
+      expect(result.skipped.first.status).to eq(:already_registered)
+      expect(result.skipped.first.message).to eq(BulkRegistration::ALREADY_REGISTERED_MESSAGE)
+    end
   end
 end

@@ -159,6 +159,65 @@ RSpec.describe "API v1 — POST /api/v1/repositories", type: :request do
 
       expect(response).to have_http_status(:bad_request)
     end
+
+  end
+
+  # SPGD-775 — the RACE the sequential refusal above cannot win.
+  #
+  # The uniqueness validation's SELECT runs before the INSERT, so a row that appears in between is
+  # invisible to it and the unique index is what refuses, as `ActiveRecord::RecordNotUnique`.
+  #
+  # This action is the worst-placed reader of that exception: the save sits inside an explicit
+  # `ActiveRecord::Base.transaction`, which a plain `save` JOINS rather than savepoints, so the
+  # violation aborted the enclosing transaction and propagated out of the action as a BARE 500 with
+  # no JSON body — for the condition the sequential path answers with a 400 and a sentence.
+  # `Repository#save` contains it now, and the containment reaches here with no change to this
+  # controller: `next false` -> `render_bad_request(repository.errors.full_messages)`.
+  #
+  # The race is simulated by silencing the uniqueness validation, which is exactly what it does on
+  # its own when it cannot see the winning row yet (spec/support/uniqueness_race.rb). A spec that
+  # merely registered the same name twice in sequence would prove nothing: the validation catches
+  # that unaided, so it would pass with or without any of this.
+  describe "when it LOSES the uniqueness race" do
+    let(:rival) { create_user(github_uid: "2002", github_handle: "hubot") }
+
+    before { create_registration_grant(user: person, registrable: %w[acme/billing-service acme/ledger]) }
+
+    it "answers 400 with a body rather than a bare 500" do
+      create_repository(user: rival, github_full_name: "acme/billing-service")
+      allow(uniqueness_validator(Repository)).to receive(:validate_each)
+
+      expect { register("acme/billing-service") }.not_to change(Repository, :count)
+
+      expect(response).to have_http_status(:bad_request)
+      expect(response.parsed_body["error"]).to eq("bad_request")
+      expect(response.parsed_body["message"]).to include("has already been taken")
+    end
+
+    # ...and the refusal has to leave the CONNECTION usable, not merely answer politely. Without the
+    # savepoint the rescue would hand back a tidy `false` while Postgres refused every subsequent
+    # statement with `PG::InFailedSqlTransaction` — worse than the 500, because it reports success at
+    # refusing. A SECOND registration on the same connection is the assertion: it either serves, or
+    # the connection is already dead.
+    #
+    # Only the raced name is silenced, so the control that follows is refused by nothing.
+    it "leaves the connection usable for the next registration" do
+      create_repository(user: rival, github_full_name: "acme/billing-service")
+      allow(uniqueness_validator(Repository)).to receive(:validate_each).and_wrap_original do |original, *args|
+        args.first.github_full_name == "acme/billing-service" ? nil : original.call(*args)
+      end
+
+      register("acme/billing-service")
+      expect(response).to have_http_status(:bad_request)
+
+      # Nothing half-registered either: the transaction rolled back as a unit, so the refused row
+      # left no `sgk_` key behind.
+      expect(ApiKey.joins(:repository).where(repositories: { github_full_name: "acme/billing-service" }))
+        .to be_empty
+
+      expect { register("acme/ledger") }.to change(Repository, :count).by(1)
+      expect(response).to have_http_status(:created)
+    end
   end
 
   # SPGD-756 criterion 6 and call #6 — the fail-open decay a snapshot buys, and the two halves that

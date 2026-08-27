@@ -5,6 +5,26 @@
 class Repository < ApplicationRecord
   FULL_NAME_FORMAT = %r{\A[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?/[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?\z}
 
+  # One condition, one error, named once. The read-then-write `uniqueness` validation below and the
+  # database-conflict translation in `#save` are two detections of the SAME fact, and they must be
+  # indistinguishable downstream.
+  #
+  # The SYMBOL, not the sentence it renders. Both carry the same words — `:taken` is Rails' default
+  # and there is no override in `config/locales/en.yml`, so both produce "Github full name has
+  # already been taken", the sentence pinned by
+  # `spec/requests/repository_registration_web_path_spec.rb`. But `errors.add` stores whatever it is
+  # given as the error's TYPE, and a raw string would make the translated error `type ==
+  # "has already been taken"` where the validation's is `:taken`. `BulkRegistration#taken?` asks
+  # `errors.of_kind?(:github_full_name, :taken)` — a type test, not a message test — so a string
+  # here reads as false there and demotes a raced row from `:already_registered` to `:invalid`,
+  # under a sentence that still looks right. Matching the sentence is not enough; the kind has to
+  # match too.
+  DUPLICATE_ERROR = :taken
+
+  # The index that enforces the rule the error above reports, named so `#save` can tell this
+  # conflict apart from any other unique violation the row might hit.
+  DUPLICATE_INDEX = "index_repositories_on_github_full_name"
+
   # The owner: the account that registered this repository, and the only one that holds every
   # permission implicitly (see RepositoryPolicy#owner?). Anything naming the owner reads through
   # here — never off `github_full_name`. The slug's org segment is a *GitHub* org, not a SpecGuard
@@ -74,6 +94,52 @@ class Repository < ApplicationRecord
   scope :accessible_by, ->(user) {
     where(user_id: user.id).or(where(id: user.repository_memberships.select(:repository_id)))
   }
+
+  # The uniqueness validation above is a read-then-write check: its SELECT runs before the INSERT,
+  # so it cannot see a competing registration that has not committed yet. Two concurrent writes for
+  # the same slug — a double-submitted registration form, a re-post on a slow connection, a second
+  # batch running alongside this one — leave the loser to be refused by the unique index instead, as
+  # `ActiveRecord::RecordNotUnique`, several layers below anyone who is listening. There is no
+  # `rescue_from` anywhere in this app, so that reaches the 500 handler: a crash for the exact
+  # condition the sequential path answers with a sentence. `RepositoryMembership` carries this same
+  # translation for its own column, and the reasoning below is that model's, applied here.
+  #
+  # Translated HERE rather than in a controller because `RepositoryRegistration#save` is the one
+  # gate every write of this column passes through, and it calls a plain `save`. Every writer
+  # inherits the fix with no change of its own: the web `#create`/`#update` re-render the form with
+  # the model's reasons, and the API's `#create` takes its `next false` branch and answers
+  # `render_bad_request(repository.errors.full_messages)` — a 400 with a body, which is what that
+  # block's own comment says a refused registration deserves.
+  #
+  # `:github_full_name`, not `:base`, and the `:taken` KIND rather than a look-alike sentence — see
+  # DUPLICATE_ERROR. The two detections have to be indistinguishable downstream, and one reader
+  # (`BulkRegistration#taken?`) tests the kind rather than the words.
+  #
+  # A SAVEPOINT, and here it is load-bearing rather than defensive. Without `requires_new` the
+  # INSERT merely *joins* whatever transaction the caller is already inside, and Postgres aborts
+  # that entire transaction on a constraint violation — so rescuing would hand the caller back a
+  # tidy `false` with a readable sentence on it while leaving the connection refusing every
+  # subsequent statement with `PG::InFailedSqlTransaction`, which is worse than the 500 this exists
+  # to remove because it reports success at refusing. `RepositoryMembership` notes that nothing
+  # wraps a membership save in a transaction today; `Api::V1::UserRepositoriesController#create`
+  # wraps a repository save in one TODAY, so the savepoint is the reason the rescue works at all.
+  # The rescue sits OUTSIDE the block deliberately: the `ROLLBACK TO SAVEPOINT` has to happen
+  # before anything else touches the connection.
+  #
+  # Only THIS conflict is translated; any other unique violation is a different fault and is
+  # re-raised, because answering it with "already been taken" would send the reader to fix
+  # something that is not broken while the real fault stays hidden.
+  #
+  # `save!` is deliberately untouched — it does not route through here, and a caller who chose the
+  # bang asked for the exception.
+  def save(**)
+    self.class.transaction(requires_new: true) { super }
+  rescue ActiveRecord::RecordNotUnique => e
+    raise unless e.message.include?(DUPLICATE_INDEX)
+
+    errors.add(:github_full_name, DUPLICATE_ERROR)
+    false
+  end
 
   def github_url = "https://github.com/#{github_full_name}"
 
