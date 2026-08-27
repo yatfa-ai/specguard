@@ -102,11 +102,12 @@
                       open is one this cell never named. That is also why the two are never printed
                       as one pair.
 
-                      Its OWN `.present?` guard rather than riding the `name` condition above: that
-                      one asks whether the label already IS the location, which is a question about
-                      a different coordinate. For an ordinary example the two lines read similarly,
-                      and that is accepted for the reason the sibling panel accepts it — they are
-                      two facts, and the case where they differ is the case that matters.
+                      Its OWN `.present?` guard rather than riding the `name` condition in
+                      `repositories/_definition_site_link`: that one asks whether the label already
+                      IS the location, which is a question about a different coordinate. For an
+                      ordinary example the two lines read similarly, and that is accepted for the
+                      reason the sibling panel accepts it — they are two facts, and the case where
+                      they differ is the case that matters.
 
                       `spec_file_path` is NULLABLE in the schema — `Ingest::ObservationRecorder`
                       populates it by falling back to `file_path`, but the column does not promise it
