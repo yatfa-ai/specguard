@@ -70,13 +70,25 @@ module RepositoriesHelper
   # panel describes, where the others pick a series or open a panel of the run already chosen — and
   # it is in this hash for exactly the reason they are: a gesture aimed at one ask must not close the
   # others as a side effect. Opening an area is not a request to jump back to the newest run.
+  #
+  # `unstable_test_from` is the one entry here that is NOT an ask. It opens no panel and narrows no
+  # population — it QUALIFIES `unstable_test`, naming which ranking the reader opened it from so the
+  # "Close test" control can return them there. It is in this hash for a reason the six asks make
+  # obvious in the negative: if it did not ride through, opening a file while a test was open would
+  # drop the origin and silently re-point that control at the other panel, which is the same class
+  # of defect carry-by-default exists to kill. A qualifier that does not follow its principal is
+  # worse than none, because it is right until the reader touches anything else.
+  #
+  # It clears the way every ask does — "Close test" passes an explicit `nil` for it alongside the
+  # test itself, because a gesture that removes the subject must not leave its qualifier behind.
   def drill_down_path(repository, anchor:, **overrides)
     asks = { branch: @trajectory_branch_request,
              commit_sha: @run_anchor_request,
              spec_file: @spec_file_request,
              spec_directory: @spec_directory_request,
              repeated_description: @repeated_description_request,
-             unstable_test: @unstable_test_request }
+             unstable_test: @unstable_test_request,
+             unstable_test_from: @unstable_test_origin_request }
 
     repository_path(repository, **asks.merge(overrides), anchor: anchor)
   end

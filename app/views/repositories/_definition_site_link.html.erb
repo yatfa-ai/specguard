@@ -14,7 +14,7 @@
     does not introduce the first one.
 
     `observation` is the only REQUIRED local, and that is load-bearing rather than terse
-    (`link_name:` below is optional and defaults off). `@repository` and `@latest_test_run` are read
+    (`link_name_from:` below is optional and defaults off). `@repository` and `@latest_test_run` are read
     as ivars — they are already in scope at all three call sites, both loaded long before any of
     these partials render. The rule is about not passing a `repository:` local, which would invite a
     caller to re-resolve it per row — exactly what the two `count_queries` budget examples ("costs
@@ -28,8 +28,8 @@
     identity and wears the link alone — rendering the location line underneath as well would make
     it wear the same text twice. A named row shows the name on the first line and the coordinate
     beneath it. THE COORDINATE ALWAYS CARRIES A LINK, on both branches. On a named row the name
-    ALSO carries one when a caller passes `link_name:` — only "Slowest tests" does, and that cell
-    then holds two links to two different places. Absent the flag the named row prints its name
+    ALSO carries one when a caller passes `link_name_from:` — only "Slowest tests" does, and that cell
+    then holds two links to two different places. Absent the local the named row prints its name
     plainly, exactly as it did before the flag existed.
 
     `#location_label` is `file_path` + `line_number` — the DEFINITION site, never `spec_file_path`,
@@ -43,7 +43,7 @@
     NEW TAB: the reader is mid-worklist, and losing a list narrowed by two asks to follow one link
     would make the panel worse to use the more of it you work through. `rel` is written out rather
     than left to the browsers that imply it. %>
-<%# `link_name:` — OFF unless a caller asks for it, hence `local_assigns` rather than a required
+<%# `link_name_from:` — OFF unless a caller asks for it, hence `local_assigns` rather than a required
     local. It turns the named branch's first line into a link into "This test, run by run"
     (`_unstable_test_runs.html.erb`), through `drill_down_path` so opening a test closes no file,
     area, description, branch or run the reader opened separately, with `aria-current` on the row
@@ -53,19 +53,34 @@
     answered there and by nothing on this page. That is a CALLER's claim about its own reader
     rather than a decision this shared cell makes for all three, and the caller states its side.
 
+    ONE LOCAL CARRYING THE CALLER'S OWN PANEL ID, deliberately, rather than a boolean flag beside a
+    companion naming the origin. The value is what the link STAMPS (below) and its presence IS the
+    opt-in, so the two cannot disagree — a `link_name: true` paired with a forgotten origin would be
+    a link that opts in and then lies about where the reader came from, and there would be nothing
+    in either value to catch it. A caller passes the `id` it renders its own panel under; absent,
+    the name prints plainly exactly as it did before the flag existed.
+
     THE LABEL IS LINKED AND THE NAME IS ASKED. `#label` falls back to the definition site for a
     nameless row — a coordinate the destination cannot resolve — so the ask is keyed on `name`.
     Inside this branch `name.present?` is already true and the two read alike; keying on `name` is
     what keeps that true rather than leaving it to hold by coincidence. No new tab and no `rel`,
-    unlike the coordinate below it: the destination is another panel of this same page. %>
-<% link_name = local_assigns.fetch(:link_name, false) %>
+    unlike the coordinate below it: the destination is another panel of this same page.
+
+    `unstable_test_from:` STAMPS THE ORIGIN, and it is what makes the destination's "Close test"
+    control return this reader HERE. That control anchored at the flakiness ranking while that panel
+    was the only way in; this link is the second way in, and its ordinary row is a test that ranking
+    does not list at all — so without the stamp a reader who opened a slow, perfectly stable test
+    was closed back onto a panel that could not contain their row. Set rather than carried, because
+    this link IS the gesture the value describes. %>
+<% link_name_from = local_assigns[:link_name_from] %>
 <% definition_site_url = @repository.github_blob_url(observation.file_path,
                                                      observation.line_number,
                                                      @latest_test_run.commit_sha) %>
 <% if observation.name.present? %>
-  <% if link_name %>
+  <% if link_name_from %>
     <%= link_to observation.label,
                 drill_down_path(@repository, unstable_test: observation.name,
+                                unstable_test_from: link_name_from,
                                 anchor: "unstable-test-runs"),
                 class: "underline underline-offset-2 decoration-app-border-light " \
                        "text-app-content hover:decoration-app-content",

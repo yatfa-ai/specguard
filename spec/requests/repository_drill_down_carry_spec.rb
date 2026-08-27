@@ -77,6 +77,17 @@ RSpec.describe "Repository drill-down carry-through", type: :request do
 
   def other_unstable = "expires the session"
 
+  # The ask above's QUALIFIER, and the only entry in this matrix that is not an ask: it opens no
+  # panel and narrows no population, it names WHICH ranking the reader opened the test from so the
+  # "Close test" control can return them there. It is in the matrix for the reason the six asks are
+  # — a qualifier that stopped following its principal would be silently right until the reader
+  # touched any other link, and then point that control at a panel they never opened.
+  #
+  # Its value here is the OTHER entry point from the one the new gesture below sets, on this file's
+  # standing rule that no link's target may be its own subject: a gesture that SET what was already
+  # open would pass whether it set the value or merely carried it.
+  def unstable_origin_ask = "unstable-tests"
+
   # Shaped so every panel has rows AND so no link's target is its own subject: the file the
   # by-file panel links to is NOT the open file, the area the by-area panels link to is NOT the open
   # area, the description it links to is NOT the open description. A link that carried an ask by
@@ -171,7 +182,7 @@ RSpec.describe "Repository drill-down carry-through", type: :request do
   def open_every_ask
     get repository_path(drill_down_run, branch: branch_ask, commit_sha: run_ask, spec_file: file_ask,
                         spec_directory: area_ask, repeated_description: description_ask,
-                        unstable_test: unstable_ask)
+                        unstable_test: unstable_ask, unstable_test_from: unstable_origin_ask)
   end
 
   # The links, as the page offers them.
@@ -237,12 +248,33 @@ RSpec.describe "Repository drill-down carry-through", type: :request do
     { name: "open a file from Slowest tests across the window",
       panel: "#slowest-tests-window", link: "spec/models/refund_spec.rb",
       sets: { spec_file: "spec/models/refund_spec.rb" } },
+    # Each of the two entry points STAMPS its own panel id as the test's origin, so the "Close test"
+    # control can return the reader to the ranking they actually picked the test from rather than to
+    # a hardcoded one. Only two values are legal, so one of these two rows necessarily sets the value
+    # already open: this one. Its `unstable_test_from` cell therefore cannot tell setting from
+    # carrying — the row BELOW is the discriminating one, and it is the reason the open value is the
+    # other panel.
     { name: "open a test from Tests whose outcome changed",
       panel: "#unstable-tests", link: "expires the session",
-      sets: { unstable_test: "expires the session" } },
+      sets: { unstable_test: "expires the session", unstable_test_from: "unstable-tests" } },
+    # THE SECOND ENTRY POINT, and the gesture this matrix gained with it. It opens a test from the
+    # wall-clock ranking, where the ordinary row is a test the flakiness ranking does not list at
+    # all — so it stamps a DIFFERENT origin, and that difference is what the cell proves.
+    #
+    # Its link is found by the test's exact text on the "Slowest tests" panel. The fixture's
+    # unstable tests are the only rows there carrying a name link, and `reconciles the ledger` is
+    # the OPEN test, so this row deliberately opens the other one: a gesture whose target was its
+    # own subject would pass while setting nothing.
+    { name: "open a test from Slowest tests",
+      panel: "#slowest-examples", link: "expires the session",
+      sets: { unstable_test: "expires the session", unstable_test_from: "slowest-examples" } },
+    # Clears the origin ALONGSIDE the test, which is why `clears` is a list here and a lone symbol
+    # everywhere else. The origin qualifies the test: a close that dropped the subject and kept the
+    # pointer to where it was opened from would carry that pointer through every later link, aimed
+    # at a panel with nothing open in it.
     { name: "Close test",
       panel: "#unstable-test-runs", link: "Close test",
-      clears: :unstable_test },
+      clears: [:unstable_test, :unstable_test_from] },
     # The one gesture here that RE-ANCHORS rather than narrows: it names which run every panel
     # describes, where the others pick a series or open a panel of the run already chosen. It is in
     # this matrix for exactly the reason the others are — jumping to a run is not a request to close
@@ -315,10 +347,14 @@ RSpec.describe "Repository drill-down carry-through", type: :request do
         href = href_for(gesture)
         asks = { branch: branch_ask, commit_sha: run_ask, spec_file: file_ask,
                  spec_directory: area_ask, repeated_description: description_ask,
-                 unstable_test: unstable_ask }
+                 unstable_test: unstable_ask, unstable_test_from: unstable_origin_ask }
+        # `clears` is a symbol at every gesture but one, and a LIST at "Close test": the test's
+        # origin qualifies the test, so that gesture removes two keys in one act. Wrapped rather
+        # than written as a list everywhere, so the fourteen single-key rows stay readable.
+        cleared = Array(gesture[:clears])
 
         asks.each do |key, requested|
-          if gesture[:clears] == key
+          if cleared.include?(key)
             expect(mentions?(href, key)).to be(false),
                                             "expected #{gesture[:name]} to CLEAR #{key}, got #{href}"
           elsif gesture[:sets]&.key?(key)
@@ -356,7 +392,7 @@ RSpec.describe "Repository drill-down carry-through", type: :request do
       "Close file" => [:spec_file, "#spec-file-examples"],
       "Close directory" => [:spec_directory, "#spec-directory-files"],
       "Close description" => [:repeated_description, "#repeated-description-examples"],
-      "Close test" => [:unstable_test, "#unstable-test-runs"],
+      "Close test" => [[:unstable_test, :unstable_test_from], "#unstable-test-runs"],
       "Show the newest run" => [:commit_sha, "#overview"]
     }.each do |label, (ask, panel_id)|
       it "#{label} still drops its own ask" do
@@ -364,7 +400,7 @@ RSpec.describe "Repository drill-down carry-through", type: :request do
 
         href = page.find(panel_id).find("a", text: label, match: :prefer_exact)[:href]
 
-        expect(mentions?(href, ask)).to be(false)
+        Array(ask).each { |key| expect(mentions?(href, key)).to be(false) }
       end
     end
   end

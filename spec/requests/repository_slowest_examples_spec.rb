@@ -642,22 +642,136 @@ RSpec.describe "Repository slowest tests", type: :request do
       expect(page).to have_css("#spec-directory-files")
     end
 
-    # ⭐ CRITERION 5 — the way back out. The destination's existing "Close test" control clears
-    # this ask and only this ask, so a reader who opened a test from here is returned to the page
-    # they left with everything else they had open still open.
-    it "returns the reader to what they had open when they close the test" do
+    # ⭐ CRITERION 5 — the way back out, asserted at the ANCHOR the control lands on and not at the
+    # presence of the panel it should land on.
+    #
+    # THE DISTINCTION IS THE WHOLE EXAMPLE, and the earlier version of it is why: it asserted
+    # `have_css("#slowest-examples")`, which is true of that page whether or not the reader is sent
+    # anywhere near it — the panel renders on every page this fixture builds. So it passed while the
+    # control anchored at `#unstable-tests`, thousands of pixels away, and the criterion it claimed
+    # to pin was not pinned at all. A landing assertion that cannot fail when the reader lands in
+    # the wrong place is not a weaker assertion, it is a different one.
+    #
+    # The fragment is therefore READ rather than discarded, and it is the subject here.
+    it "anchors the reader back at THIS panel when they close the test" do
       repository = two_run_repository
-      get repository_path(repository, spec_directory: "spec/models", unstable_test: slow_test)
+      get repository_path(repository, spec_directory: "spec/models")
+
+      open_here = name_link(panel.first("tbody tr"))[:href]
+      get open_here.split("#").first
 
       close = Capybara.string(response.body).find("#unstable-test-runs")
                       .find("a", exact_text: "Close test")[:href]
+
+      # The panel the reader opened the test FROM, and specifically not the flakiness ranking this
+      # control anchored at while that panel was the only way in.
+      expect(close.split("#").last).to eq("slowest-examples")
 
       get close.split("#").first
 
       page = Capybara.string(response.body)
       expect(page).to have_no_css("#unstable-test-runs")
       expect(page).to have_css("#slowest-examples")
+      # The origin is a QUALIFIER of the test, so closing the test takes it with them: leaving it
+      # behind would point this control at a panel with nothing open in it on every later link.
+      expect(close).not_to include("unstable_test_from=")
       expect(page).to have_css("#spec-directory-files")
+    end
+
+    # THE ROW THE ANCHOR EXISTS FOR, stated as its own example because it is the one the old
+    # hardcoded anchor failed WORST and the one a reader of this panel most often has.
+    #
+    # Every test on this fixture passes in every run, so the flakiness ranking renders its empty
+    # state. A reader who opened such a test and closed it was returned to a panel that, BY
+    # CONSTRUCTION, could not contain the row they came from — it is not that the row was hard to
+    # find, it is that the panel is incapable of listing it. The premise is asserted rather than
+    # assumed, so this cannot pass by accident on a flaky fixture.
+    it "returns a stable slow test's reader to a panel that actually lists it" do
+      repository = two_run_repository
+      get repository_path(repository)
+
+      ranking = Capybara.string(response.body).find("#unstable-tests")
+      expect(ranking).to have_css("#unstable-tests-none")
+      expect(ranking).to have_no_link(slow_test)
+
+      open_here = name_link(panel.first("tbody tr"))[:href]
+      get open_here.split("#").first
+      close = Capybara.string(response.body).find("#unstable-test-runs")
+                      .find("a", exact_text: "Close test")[:href]
+
+      get close.split("#").first
+
+      # The landing panel LISTS the test the reader was reading, which is the property that makes
+      # the return useful rather than merely somewhere to go.
+      expect(close.split("#").last).to eq("slowest-examples")
+      expect(panel).to have_link(slow_test)
+    end
+
+    # THE OTHER ENTRY POINT IS UNMOVED. The flakiness ranking stamps its own origin, so a reader who
+    # opened a test THERE still closes back there — this ticket adds a second origin rather than
+    # moving the one that existed. Asserted from this file because it is this file's change that
+    # could break it.
+    it "leaves a test opened from the flakiness ranking closing back at that ranking" do
+      repository = create_repository(user: @user)
+      flaky = "Session expiry sweeps the cache"
+      ingest(repository, [example_spec(name: flaky, duration: 1.0, line_number: 1, outcome: "failed")],
+             commit_sha: "aaaa1111bbbb2222")
+      ingest(repository, [example_spec(name: flaky, duration: 1.0, line_number: 1, outcome: "passed")],
+             commit_sha: "cccc3333dddd4444")
+
+      get repository_path(repository)
+      open_there = Capybara.string(response.body).find("#unstable-tests")
+                           .find("a", exact_text: flaky)[:href]
+      get open_there.split("#").first
+
+      close = Capybara.string(response.body).find("#unstable-test-runs")
+                      .find("a", exact_text: "Close test")[:href]
+
+      expect(close.split("#").last).to eq("unstable-tests")
+    end
+
+    # A reader who arrived by BOOKMARK or by typing the URL named no origin, and the control falls
+    # back to the anchor it always had rather than to a blank fragment. This is the path every link
+    # written before the qualifier existed still takes, so it is the compatibility pin.
+    it "falls back to the flakiness ranking when no origin was named" do
+      get repository_path(two_run_repository, unstable_test: slow_test)
+
+      close = Capybara.string(response.body).find("#unstable-test-runs")
+                      .find("a", exact_text: "Close test")[:href]
+
+      expect(close.split("#").last).to eq("unstable-tests")
+    end
+
+    # The origin is consumed as a URL FRAGMENT, so a value naming no panel would scroll the reader
+    # nowhere — a silent wrong answer rather than a loud one. Only the ids of the panels that OFFER
+    # the gesture are honoured; anything else is read as "not said" and takes the fallback above.
+    # The three non-String shapes a query string can parse into are pinned the same way, because
+    # `include?` against the allow-list does not answer for an Array or a Parameters the way this
+    # reads it.
+    it "ignores an origin naming no panel, and every shape that is not a description" do
+      repository = two_run_repository
+
+      ["#{'a' * 40}", "javascript:alert(1)", "spec-file-examples"].each do |bogus|
+        get repository_path(repository, unstable_test: slow_test, unstable_test_from: bogus)
+
+        close = Capybara.string(response.body).find("#unstable-test-runs")
+                        .find("a", exact_text: "Close test")[:href]
+
+        expect(response).to have_http_status(:ok)
+        expect(close.split("#").last).to eq("unstable-tests")
+        expect(close).not_to include(CGI.escape(bogus))
+      end
+
+      ["?unstable_test_from[]=slowest-examples", "?unstable_test_from[a]=slowest-examples",
+       "?unstable_test_from[][a]=slowest-examples"].each do |malformed|
+        get "#{repository_path(repository)}?unstable_test=#{CGI.escape(slow_test)}&#{malformed.delete_prefix('?')}"
+
+        close = Capybara.string(response.body).find("#unstable-test-runs")
+                        .find("a", exact_text: "Close test")[:href]
+
+        expect(response).to have_http_status(:ok)
+        expect(close.split("#").last).to eq("unstable-tests")
+      end
     end
 
     # ⭐ CRITERION 6 — the ranking is anchored to ONE run and the drill-in reports over the branch

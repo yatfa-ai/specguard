@@ -71,6 +71,13 @@ class RepositoriesController < ApplicationController
   # a breaking change to the parameter nobody was editing.
   include RequestedUnstableTestParam
 
+  # WHICH PANEL the test above was opened from, read for the "Close test" control and for nothing
+  # else. A QUALIFIER of the ask above rather than an ask of its own: it opens no panel and narrows
+  # no population, so it is deliberately absent from `RepositoriesHelper#drill_down_path`'s carry
+  # set — see the note there. Its own concern for the same reason every sibling has one, and the
+  # allow-list that keeps a URL fragment from naming a panel nobody renders is argued in full there.
+  include RequestedUnstableTestOriginParam
+
   # The repositories this user may pick from, straight off GitHub, and the four different things to
   # say when that list cannot be loaded. Shared with `BulkRegistrationsController`, which renders a
   # picker built from the same listing and has to answer the same questions the same way.
@@ -641,6 +648,10 @@ class RepositoriesController < ApplicationController
     # and a page whose window happens to be empty still has to reproduce the reader's URL rather than
     # silently dropping an ask out of every href on it.
     @unstable_test_request = requested_unstable_test
+    # WHICH PANEL that test was opened from, read outside the guard for the same reason the ask
+    # above is: the "Close test" control has to reproduce the reader's origin whatever the window
+    # turned out to hold. Not in the carry set and not an ask — it qualifies the one above.
+    @unstable_test_origin_request = requested_unstable_test_origin
     if trajectory_runs.any?
       @unstable_tests = UnstableTests.for(@repository, trajectory_runs, branch: @trajectory_run&.branch)
       # ONE ROW of that ranking, opened: not which tests changed their outcome but WHAT THIS ONE
