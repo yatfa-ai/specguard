@@ -78,6 +78,17 @@ RSpec.describe "Repository unstable test runs", type: :request do
     panel.all("tbody tr").map { |row| row.all("td")[1].all("a").map { |link| link[:href] } }.flatten
   end
 
+  # The commit cell's LINKS, read the same way and for the same reason: the visible text is seven
+  # characters whatever ref the href was built from, so the departure this cell makes lives entirely
+  # inside the href. CELL-scoped by position (column 0), because the definition-site cell beside it
+  # is the other place this row's sha appears — a panel-wide `all("a")` would read both and pass off
+  # the neighbour with this cell's link deleted.
+  def commit_hrefs
+    panel.all("tbody tr").map { |row| row.all("td")[0].all("a").map { |link| link[:href] } }.flatten
+  end
+
+  def commit_links = panel.all("tbody tr").filter_map { |row| row.all("td")[0].first("a") }
+
   def duration_sequence = rows.map { |row| row[:duration] }
 
   def definition_site_sequence = rows.map { |row| row[:definition_site] }
@@ -679,6 +690,108 @@ RSpec.describe "Repository unstable test runs", type: :request do
                                       normalize_ws: true)
       expect(basis_line).to have_text("a run whose client reported none says so rather than " \
                                       "reading as a zero", normalize_ws: true)
+    end
+  end
+
+  # THE COMMIT ITSELF, as a link out to GitHub — the join this panel is read for. It has printed a
+  # sha since it shipped and dead-ended there: the reader who has found the first failing row still
+  # had to leave the product, find the repository and paste seven characters into it by hand.
+  describe "opening the commit that ran each row" do
+    # THE assertion that separates per-row pinning from the page-level sha it would be copied from.
+    # The visible column is seven characters whatever ref the href carries, and a single-sha fixture
+    # renders the two byte-identical — so this reads TWO rows at TWO commits and asserts each href
+    # carries its OWN row's sha. Borrowing `@latest_test_run.commit_sha` would send every row to the
+    # newest commit and name the wrong culprit on every row but one.
+    it "links each row to the commit that ran it rather than to the page's newest" do
+      repository = repository_with(%w[passed failed])
+
+      get repository_path(repository, unstable_test: flaky)
+
+      expect(commit_hrefs).to eq(
+        ["https://github.com/acme/checkout/commit/#{sha_for(0)}",
+         "https://github.com/acme/checkout/commit/#{sha_for(1)}"]
+      )
+      expect(commit_hrefs.uniq.size).to eq(2)
+    end
+
+    # The FULL sha goes to GitHub even though seven characters are what the reader sees. The
+    # abbreviation is a label for scanning; a link built from it would be a link built from the
+    # label, which GitHub can often resolve and is not what this row knows.
+    it "links at the full sha while still printing the abbreviation" do
+      repository = repository_with(%w[passed])
+
+      get repository_path(repository, unstable_test: flaky)
+
+      expect(commit_sequence).to eq([sha_for(0).first(7)])
+      expect(commit_hrefs.first).to end_with("/commit/#{sha_for(0)}")
+    end
+
+    # One row must not render two external links two ways: the commit cell and the definition-site
+    # cell beside it both leave the product, so they carry the same classes, target and rel. The
+    # `rel` is not cosmetic — `target="_blank"` without `noopener` hands the opened tab a handle
+    # back to this one.
+    it "carries the same external-link treatment as the definition site beside it" do
+      repository = repository_with(%w[passed])
+
+      get repository_path(repository, unstable_test: flaky)
+
+      commit_link = commit_links.first
+      definition_link = panel.all("tbody tr").first.all("td")[1].first("a")
+
+      expect(commit_link[:target]).to eq("_blank")
+      expect(commit_link[:rel]).to eq("noopener noreferrer")
+      expect(commit_link[:class]).to eq(definition_link[:class])
+    end
+
+    # OUT to GitHub, never IN to the run-anchor drill-in. The Recent runs panel below links its own
+    # sha column to `?commit_sha=` and must keep doing so (SPGD-664); this cell answers the other
+    # question. Asserted as an absence because the failure mode is silent — a `?commit_sha=` href
+    # here renders an identical-looking seven characters.
+    it "leaves the product rather than re-opening the run on this page" do
+      repository = repository_with(%w[passed failed])
+
+      get repository_path(repository, unstable_test: flaky)
+
+      expect(commit_hrefs).to all(start_with("https://github.com/"))
+      expect(commit_hrefs).to all(include("/commit/"))
+      expect(commit_hrefs.join(" ")).not_to include("commit_sha=")
+    end
+
+    # ZERO NEW QUERIES: `row.commit_sha` comes off a run already loaded for the window, `@repository`
+    # is loaded long before the partial renders, and `#github_commit_url` is string composition — so
+    # a table of many linked rows must cost exactly what a table of one row costs.
+    #
+    # ROWS ARE VARIED AT A CONSTANT RUN COUNT, and that is the whole design of this example. Varying
+    # the number of RUNS would measure the wrong thing: the window is per-run, so a longer history
+    # also changes what else the page renders (the cross-run comparison panel, the run-anchor
+    # lookup) and the two pages would differ by far more than the rows under test — a difference
+    # that reads as a per-row leak and is not one. `UnstableTestRuns#rows` is not one-row-per-run:
+    # a description carried by several examples in ONE run contributes one row EACH, which is what
+    # lets this hold the run axis still and move only the row axis.
+    #
+    # `count_queries` rather than a single-table `queries_against`, on the precedent the sibling
+    # panels' guards set: the regression this forecloses is a per-ROW reach for `@repository`, which
+    # would show up against `repositories` and be invisible to a count scoped to one other table.
+    it "adds no query for a table of many linked rows over a table of one" do
+      one_per_run = create_repository(user: @user, github_full_name: "acme/one-per-run")
+      three_per_run = create_repository(user: @user, github_full_name: "acme/three-per-run")
+      3.times do |index|
+        ingest(one_per_run, [example_spec(name: flaky, outcome: "passed", line_number: 1)],
+               commit_sha: sha_for(index), at: (30 - index).days.ago)
+        ingest(three_per_run,
+               (1..3).map { |n| example_spec(name: flaky, outcome: "passed", line_number: n) },
+               commit_sha: sha_for(index), at: (30 - index).days.ago)
+      end
+
+      get repository_path(one_per_run, unstable_test: flaky)
+      expect(commit_hrefs.size).to eq(3)
+      few_rows = count_queries { get repository_path(one_per_run, unstable_test: flaky) }
+
+      get repository_path(three_per_run, unstable_test: flaky)
+      expect(commit_hrefs.size).to eq(9)
+      many_rows = count_queries { get repository_path(three_per_run, unstable_test: flaky) }
+
+      expect(many_rows).to eq(few_rows)
     end
   end
 

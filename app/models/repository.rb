@@ -111,6 +111,31 @@ class Repository < ApplicationRecord
     "#{github_url}/blob/#{escape_path_segments(ref)}/#{escape_path_segments(path)}#L#{line}"
   end
 
+  # ONE COMMIT on GitHub — the third peer of `#github_url` and `#github_blob_url` above, and the
+  # one a surface reaches for when the reader's next question is WHICH CHANGE rather than which
+  # line. A panel that prints a sha has named the thing to look at; this is what lets them look.
+  #
+  # A COMMIT, NEVER A RANGE. `/commit/<ref>` describes exactly the ref it is handed and nothing
+  # about what came before it. A `/compare/<a>...<b>` link would need two refs, and the second one
+  # would have to come from row adjacency on whatever list is rendering — which is not the same as
+  # commit adjacency in the repository (see `UnstableTestRuns`' note on naming a culprit). Naming
+  # the wrong range is worse than naming none, so this method cannot be asked to.
+  #
+  # NO EXISTENCE CLAIM, for the reasons `#github_blob_url` gives in full: this composes a URL and
+  # asks GitHub nothing. An unpushed sha 404s, and that is GitHub telling the truth about a commit
+  # rather than something to probe for once per row.
+  #
+  # Escaped SEGMENT-WISE for the same reason as the ref above: a sha needs no escaping at all, but
+  # a ref is a caller's string and a branch name legitimately carries slashes, so `/` must survive
+  # as structure instead of being flattened into one unresolvable segment by a whole-string
+  # `url_encode`.
+  #
+  # @param ref [String] the commit sha (or ref) to link — a caller with a per-row sha must pass
+  #   THAT row's, not a page-level one, on the same rule the `ref` argument above states.
+  def github_commit_url(ref)
+    "#{github_url}/commit/#{escape_path_segments(ref)}"
+  end
+
   # Ties broken by id so two runs ingested in the same instant still order deterministically.
   def latest_test_run
     test_runs.order(created_at: :desc, id: :desc).first

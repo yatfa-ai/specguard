@@ -123,8 +123,38 @@
                   <%# The join a reader takes this panel for: the commit is what they open next, and
                       on a regression the one to look at is the commit of the first failing row.
                       Seven characters, the same abbreviation the Recent runs panel below uses, so
-                      one page renders one sha one way. %>
-                  <%= row.commit_sha.first(7) %>
+                      one page renders one sha one way — the ABBREVIATION is the label, the FULL
+                      sha is the link, because seven characters are what a reader can scan and
+                      forty are what GitHub should be handed.
+
+                      LINKED AT THIS ROW'S OWN `row.commit_sha`, NEVER the page-level
+                      `@latest_test_run.commit_sha` — the same rule the definition-site cell beside
+                      it states at length. These rows each carry their own run, the window spans
+                      many, and the whole point of the panel is that the culprit is one particular
+                      row's commit: borrowing the page's sha would send every row to the same
+                      newest commit and name the wrong one on every row but one.
+
+                      OUT to GitHub, not IN to the drill-down, and the two panels differing here is
+                      deliberate rather than an inconsistency to tidy up. The Recent runs panel
+                      below links its sha to `?commit_sha=` — the internal run-anchor drill-in —
+                      because there the reader is picking WHICH RUN to read on this page. Here the
+                      run is already the row, so the only question left is what CHANGED, and that
+                      answer is not on this page at all. Same seven characters, two different
+                      questions; re-pointing either at the other's target would delete the one
+                      thing its own panel is for.
+
+                      Same classes, `target` and `rel` as the definition-site cell in this row: one
+                      row must not render two external links two ways.
+
+                      ZERO NEW QUERIES: `row.commit_sha` comes off a run already loaded for the
+                      window, `@repository` is loaded long before this partial renders, and
+                      `#github_commit_url` is string composition — the same argument the blob link
+                      beside it makes. %>
+                  <%= link_to row.commit_sha.first(7),
+                              @repository.github_commit_url(row.commit_sha),
+                              class: "underline underline-offset-2 decoration-app-border-light " \
+                                     "text-app-content hover:decoration-app-content",
+                              target: "_blank", rel: "noopener noreferrer" %>
                 </td>
                 <td class="px-3 py-2 font-mono text-xs text-app-content-secondary">
                   <%# WHERE THE TEST WAS DEFINED IN THIS RUN, PINNED TO THIS ROW'S OWN COMMIT — the
