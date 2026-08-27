@@ -74,42 +74,20 @@
             <% @slowest_examples.rows.each do |observation| %>
               <tr>
                 <td class="px-3 py-2 text-app-content">
-                  <%# `name` is nullable — `Ingest::ObservationRecorder` stores a nil for a producer
-                      that sends none — and a blank cell in a ranked list is a row the reader can
-                      neither identify nor go and find. `SpecObservation#label` falls back to the
-                      definition site for exactly that row.
+                  <%# The definition-site cell, through `repositories/_definition_site_link` — the
+                      same partial "Examples in this spec file" and "Unannotated examples" render.
+                      Which of the two lines carries the link, the ref it is pinned against and the
+                      new-tab convention are that partial's decisions and are documented there.
 
-                      The location line below is therefore rendered only when there IS a name to
-                      locate: the fallback already IS the location, and a row wearing it must not
-                      be made to wear it twice.
-
-                      Whichever of the two carries the coordinate carries the LINK to it, through
-                      `Repository#github_blob_url` and against the sha of the run this page is
-                      anchored to — the same composition and the same new-tab convention the
-                      "Unannotated examples" panel introduced. A nameless row wears the coordinate
-                      as its entire identity, so leaving that branch unlinked would leave exactly
-                      the rows that most need to be findable pointing nowhere.
+                      WHY THIS PANEL CARRIES THE COORDINATE AT ALL: `name` is nullable —
+                      `Ingest::ObservationRecorder` stores a nil for a producer that sends none —
+                      and a blank cell in a RANKED list is a row the reader can neither identify nor
+                      go and find, while being told it is one of their slowest.
 
                       ZERO NEW QUERIES: `@repository` and `@latest_test_run` are both loaded before
                       this partial renders — `@slowest_examples` is assigned only under
                       `@latest_test_run` — and `#github_blob_url` is string composition. %>
-                  <% definition_site_url = @repository.github_blob_url(observation.file_path,
-                                                                       observation.line_number,
-                                                                       @latest_test_run.commit_sha) %>
-                  <% if observation.name.present? %>
-                    <%= observation.label %>
-                    <span class="block font-mono text-xs text-app-muted">
-                      <%= link_to observation.location_label, definition_site_url,
-                                  class: "underline underline-offset-2 decoration-app-border-light " \
-                                         "text-app-content hover:decoration-app-content",
-                                  target: "_blank", rel: "noopener noreferrer" %>
-                    </span>
-                  <% else %>
-                    <%= link_to observation.label, definition_site_url,
-                                class: "underline underline-offset-2 decoration-app-border-light " \
-                                       "text-app-content hover:decoration-app-content",
-                                target: "_blank", rel: "noopener noreferrer" %>
-                  <% end %>
+                  <%= render "repositories/definition_site_link", observation: observation %>
                   <%# The file that RAN the example, and the link that stops these rows dead-ending.
                       This panel is the page's entry point to per-test data, every row on it is an
                       outlier, and the reader's next question — is this ONE test slow or is the whole
@@ -124,11 +102,12 @@
                       open is one this cell never named. That is also why the two are never printed
                       as one pair.
 
-                      Its OWN `.present?` guard rather than riding the `name` condition above: that
-                      one asks whether the label already IS the location, which is a question about
-                      a different coordinate. For an ordinary example the two lines read similarly,
-                      and that is accepted for the reason the sibling panel accepts it — they are
-                      two facts, and the case where they differ is the case that matters.
+                      Its OWN `.present?` guard rather than riding the `name` condition in
+                      `repositories/_definition_site_link`: that one asks whether the label already
+                      IS the location, which is a question about a different coordinate. For an
+                      ordinary example the two lines read similarly, and that is accepted for the
+                      reason the sibling panel accepts it — they are two facts, and the case where
+                      they differ is the case that matters.
 
                       `spec_file_path` is NULLABLE in the schema — `Ingest::ObservationRecorder`
                       populates it by falling back to `file_path`, but the column does not promise it

@@ -324,71 +324,32 @@
             <% @unannotated_examples.rows.each do |observation| %>
               <tr>
                 <td class="px-3 py-2 text-app-content">
-                  <%# Through the same two seams every per-example list on this page renders a row
-                      through, so one example cannot be named one way in a ranking and another way in
-                      the worklist: `#label` falls back to the location for a producer that sent no
-                      name, and the location line below is rendered only when there IS a name, so a
-                      row wearing the fallback does not wear it twice.
+                  <%# The definition-site cell, through `repositories/_definition_site_link` — the
+                      same partial "Slowest tests" and "Examples in this spec file" render, so one
+                      example cannot be named one way in a ranking and another way in the worklist.
+                      Which of the two lines carries the link, the ref it is pinned against and the
+                      new-tab convention are that partial's decisions and are documented there.
 
-                      `#location_label` is `file_path` + `line_number` — the DEFINITION site — and
-                      specifically NOT `spec_file_path` + `line_number`, which for a shared example
-                      group pairs two halves from different files and points at whatever happens to
-                      sit on that line of the including one. On this panel that would send a reader
-                      to annotate a test that is not there.
+                      WHY THIS PANEL CARRIES THE COORDINATE AT ALL, and why it is the panel that
+                      first needed it: the reader's next action here is singular and known — open
+                      that file at that line and write an `@intent` — and this is the one panel on
+                      the page whose whole purpose is to hand them that action. A worklist whose rows
+                      cannot be acted on is a list of complaints.
 
-                      THE COORDINATE IS A LINK, and it is a link on BOTH branches. The reader's next
-                      action here is singular and known — open that file at that line and write an
-                      `@intent` — and this is the one panel on the page whose whole purpose is to
-                      hand them that action. A row from a producer that sent no name WEARS the
-                      coordinate as its label, so linking only the location line below would leave
-                      inert exactly the rows `#label` exists for: the ones a reader "can neither
-                      identify nor go and find".
-
-                      PINNED TO `@latest_test_run.commit_sha` AND NOT TO `main`. That is the run this
-                      panel's rows were read off — the reader's anchor, so a page opened on an older
-                      run via `?commit_sha=` links into THAT run's tree. `file_path`/`line_number`
-                      are a last known path rather than an identity (SPGD-114): a coordinate is
-                      accurate against the tree it was recorded from and no other, and linking at
-                      `main` would send the reader to whatever has since drifted onto line 412.
-                      `commit_sha` is `null: false`, and this partial renders only where
-                      `@latest_test_run` exists, so there is no nil branch and no fallback ref.
-
-                      Built off `file_path` and never `spec_file_path` — the same constraint
-                      `#location_label` is written to above, inherited exactly rather than restated:
-                      the link is that method's two halves, not the row's sort column. The "Spec
-                      file" cell beside this one keeps rendering `spec_file_path` and is not a link.
+                      The "Spec file" cell beside this one keeps rendering `spec_file_path` and is
+                      NOT a link: that is the file that RAN the example and the column this list is
+                      ordered by, which for a shared example group is a different file from the one
+                      the reader must edit.
 
                       A run whose sha was never pushed produces a link GitHub answers 404 to. That is
                       GitHub telling the truth about an unpushed commit, on the same sha this page
                       already prints in "Recent runs" — and this panel PRESENTS and does not judge,
                       so there is no guard, no probe and no conditional rendering.
 
-                      NEW TAB, introduced here deliberately — the app has had no external-link
-                      convention because until now it had no link that leaves it. This one does, and
-                      the reader is mid-worklist: annotating a test and losing a hundred-row list
-                      narrowed by two asks would make the panel worse to use the more of it you work
-                      through. `rel` is written out rather than left to the browsers that imply it.
-
                       ZERO NEW QUERIES: `@repository` and `@latest_test_run` are both already loaded
                       by the time this partial renders, and `#github_blob_url` is string composition
                       that asks GitHub nothing. %>
-                  <% definition_site_url = @repository.github_blob_url(observation.file_path,
-                                                                       observation.line_number,
-                                                                       @latest_test_run.commit_sha) %>
-                  <% if observation.name.present? %>
-                    <%= observation.label %>
-                    <span class="block font-mono text-xs text-app-muted">
-                      <%= link_to observation.location_label, definition_site_url,
-                                  class: "underline underline-offset-2 decoration-app-border-light " \
-                                         "text-app-content hover:decoration-app-content",
-                                  target: "_blank", rel: "noopener noreferrer" %>
-                    </span>
-                  <% else %>
-                    <%= link_to observation.label, definition_site_url,
-                                class: "underline underline-offset-2 decoration-app-border-light " \
-                                       "text-app-content hover:decoration-app-content",
-                                target: "_blank", rel: "noopener noreferrer" %>
-                  <% end %>
+                  <%= render "repositories/definition_site_link", observation: observation %>
                 </td>
                 <td class="px-3 py-2 font-mono text-xs text-app-content-secondary">
                   <%# The file that RAN it, which is the column this list is ordered by — shown
