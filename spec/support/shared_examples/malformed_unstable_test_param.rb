@@ -48,6 +48,7 @@ RSpec.shared_examples "a surface that treats a malformed unstable-test parameter
     ["a nested hash", { unstable_test: { a: "b" } }],
     ["an array of hashes", { unstable_test: [{ a: "b" }] }]
   ].each do |shape, query|
+    # @intent: { entity: "RequestedUnstableTestParam", action: "treat non-string unstable_test as no ask", behavior: "an unstable_test parameter in a non-String shape answers 200 with the unfiltered answer rather than 500, matching an absent parameter", layer: "request" }
     it "answers 200 rather than 500 when unstable_test arrives as #{shape}" do
       expect_unstable_test_param_treated_as_no_ask(query)
     end

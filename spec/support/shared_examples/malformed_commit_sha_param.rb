@@ -52,6 +52,7 @@ RSpec.shared_examples "a surface that treats a malformed commit-sha parameter as
     ["a nested hash", { commit_sha: { a: "b" } }],
     ["an array of hashes", { commit_sha: [{ a: "b" }] }]
   ].each do |shape, query|
+    # @intent: { entity: "RequestedCommitShaParam", action: "treat non-string commit_sha as no ask", behavior: "a commit_sha parameter in a non-String shape answers 200 anchored to the default run rather than 500, matching an absent parameter", layer: "request" }
     it "answers 200 rather than 500 when commit_sha arrives as #{shape}" do
       expect_commit_sha_param_treated_as_no_ask(query)
     end
