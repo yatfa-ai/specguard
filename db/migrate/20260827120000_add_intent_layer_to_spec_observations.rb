@@ -32,7 +32,7 @@
 # names. This column is read by a surface, never by the signal.
 #
 # The second half — *"a column nothing reads is a column that will be read wrongly later"* — is a
-# CONDITION, and it is why a reader ships in the same change: `Api::V1::RepositoriesController#serialized_slowest_examples`
+# CONDITION, and it is why a reader ships in the same change: `RepositoryOverview#serialized_slowest_examples`
 # serves `intent_layer` per example in `latest_run`, so the column has a caller from its first day
 # rather than acquiring one later from someone guessing at its meaning.
 #

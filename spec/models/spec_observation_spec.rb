@@ -3618,7 +3618,7 @@ RSpec.describe SpecObservation do
   # test rather than saying what it is about, so folding "unit" into the text would put one shared
   # token in every unit test in the suite and corrupt the semantic identity of every annotated
   # example already stored. The declared layer is served to clients by
-  # `Api::V1::RepositoriesController#serialized_slowest_examples`; it never reaches the text.
+  # `RepositoryOverview#serialized_slowest_examples`; it never reaches the text.
   #
   # Asserted on the hash `#signal` BUILDS rather than only on the text that comes out, because the
   # text assertion alone is satisfied by `SpecSignal` ignoring an extra key it was handed — which
