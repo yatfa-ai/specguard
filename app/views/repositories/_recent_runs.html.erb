@@ -82,7 +82,8 @@
           Every commit below opens this page on its own run.
           <%= recent_runs_anchor_note(@run_anchor_run, @recent_test_runs) %>
         </p>
-        <%= render UI::TableComponent.new(columns: ["Commit", "Branch", "Tests", "Duration", "Annotated", "Ingested"],
+        <%= render UI::TableComponent.new(columns: (["Commit", "Branch", "Tests", "Duration", "Annotated", "Ingested"] +
+                                                   (repository_policy.can?(:repo_delete) ? [""] : [])),
                                           describedby: "recent-runs-basis") do %>
           <% @recent_test_runs.each do |test_run| %>
             <tr>
@@ -237,6 +238,20 @@
               <td class="px-3 py-2 text-app-content-secondary tabular-nums">
                 <%= time_ago_in_words(test_run.created_at) %> ago
               </td>
+              <%# SPGD-812: removing a run that should never have counted. Rendered ONLY for a
+                  viewer holding :repo_delete — `repository_policy` is the same memoized policy
+                  object the controller authorized with, and rendering a destructive control to a
+                  viewer who cannot fire it is an affordance that can only ever produce a 403
+                  (see ApplicationController#repository_policy). `button_to` + turbo_confirm is the
+                  established convention for destructive rows (`_api_keys.html.erb`), so Rails'
+                  CSRF check applies and the dialog names what goes before it goes. %>
+              <% if repository_policy.can?(:repo_delete) %>
+                <td class="px-3 py-2 text-right">
+                  <%= button_to "Delete", repository_run_path(@repository, test_run), method: :delete,
+                                class: UI::ButtonComponent.classes(variant: :danger, size: :xs),
+                                form: { data: { turbo_confirm: delete_run_confirmation(test_run) } } %>
+                </td>
+              <% end %>
             </tr>
           <% end %>
         <% end %>
