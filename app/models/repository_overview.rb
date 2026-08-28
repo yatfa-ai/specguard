@@ -132,6 +132,14 @@ class RepositoryOverview
   # other.
   include RequestedUnannotatedExamplesParam
 
+  # `?near_duplicates=` read as a request for the repository's near-duplicate clusters — the
+  # second flag-style `Requested*Param` this object reads, and the one whose cost is the whole
+  # reason it exists. `NearDuplicateClusters` is linear but measured at seconds, not
+  # milliseconds — the class comment carries the table — so the ask is what confines the cost to
+  # the client that named it. See `RequestedNearDuplicatesParam`, which holds the reasoning in
+  # full, including why `?near_duplicates=false` is an ask like any other.
+  include RequestedNearDuplicatesParam
+
   # `?commit_sha=` read as a commit sha, to name WHICH RUN this endpoint describes — the only
   # `Requested*Param` here that re-anchors rather than narrows. Every parameter above leaves the
   # anchor alone: `?branch=` narrows a history, the drill-in parameters open one area, one file or
@@ -378,6 +386,13 @@ class RepositoryOverview
       # See `serialized_directory_runtime_file_growth_window`.
       directory_runtime_file_growth_window: serialized_directory_runtime_file_growth_window,
       directory_runtime_file_growth: serialized_directory_runtime_file_growth,
+      # SERVED ON THE ASK AND NEVER WITHOUT IT — `NearDuplicateClusters` is linear but measured in
+      # seconds rather than milliseconds (seven queries at every size; its class comment carries the
+      # table), so this is the one block on this endpoint whose cost had to be opted into rather
+      # than bounded. `?near_duplicates=` is the ask, and a client that does not send it gets the
+      # key present and `null` — the no-ask spelling every gate on this endpoint uses — and pays
+      # not one query for it. See `serialized_near_duplicates`.
+      near_duplicates: serialized_near_duplicates,
       branches_window: serialized_branches_window,
       branches: serialized_branches
     }
@@ -1793,6 +1808,100 @@ class RepositoryOverview
 
     { authored: readings.authored, derived: readings.derived, unreadable: readings.unreadable,
       recorded: readings.recorded }
+  end
+
+  # THE SUITE-WIDE DUPLICATE CENSUS, served to whoever named it — the first block on this endpoint
+  # whose GRAIN is the repository rather than a run or a window of runs, and therefore the first one
+  # that had to be opted into on cost rather than bounded on rows. `NearDuplicateClusters` is linear
+  # but measured in seconds (its class comment carries the table), so `?near_duplicates=` is the ask
+  # and `nil` below is the no-ask answer: the key is present and `null`, and a client that did not
+  # ask pays not one query — pinned by a query-count assertion in this block's request spec, because
+  # the cost is the reason the gate exists.
+  #
+  # == Why the disclosure rides the count and cannot be split from it
+  #
+  # `similarity_basis` and `similarity_floor` are served off the OBJECT'S OWN METHODS rather than
+  # restated here, so this endpoint cannot drift from what `NearDuplicateClusters` says about
+  # itself — and when `SIMILARITY` is re-derived for the shipped provider (open work the constant's
+  # own comment names), the endpoint reports the new figure without being touched. No spec in this
+  # slice may pin either as a literal; the sibling spec `near_duplicate_clusters_spec.rb` already
+  # establishes that discipline for the constants themselves. A cluster count rendered without the
+  # statement of what the similarity means is the *Vacuous Green* failure in a new spelling, which
+  # is why `#similarity_basis` is a method rather than a footnote — and why the two keys sit FIRST
+  # on this block, ahead of every figure they qualify.
+  #
+  # == Raw figures only, never the object's prose
+  #
+  # `duration_label`, `coverage_label` and `identity_coverage_label` exist on the object and on
+  # every `Cluster` and `Member`, and NONE of them is served: they are human sentences built by
+  # `SpecObservation.humanized_duration` / `.coverage_fraction`, and a machine-readable client
+  # cannot act on a sentence without parsing it. The raw `total_seconds` floats and raw counts are
+  # served instead — the operands, never the wording, on this endpoint's standing rule.
+  #
+  # == The membership/weight split, at the two grains the object reads them
+  #
+  # `member_count` is texts in this REPOSITORY across every run; `example_count` is examples in the
+  # run `weighed_run_id` names and only that run. A three-example table-driven loop is ONE member
+  # and THREE examples, and the headline property of the whole object is that those are different
+  # numbers served side by side — a naive serializer that counted identity rows would flatten the
+  # figure the ranking is built on. The request spec pins the three-example case through this
+  # endpoint specifically.
+  #
+  # `NearDuplicateClusters.for(repository)` is called with `run:` defaulted, on the ticket's own
+  # constraint: the object's `validate_run!` RAISES `ArgumentError` on a run from another
+  # repository, deliberately — the caption half is keyed on `test_run_id` with no tenant predicate,
+  # so a foreign run would report another tenant's `recorded_count` beside this tenant's clusters.
+  # That is a caller's bug and is not rescued here. `nil` (never ingested) passes through cleanly
+  # as the `UNRUN` constant, so the block serves rather than raises for a repository with no run.
+  #
+  # No 404 on the empty answer: a repository whose every test reads differently is the SUCCESS
+  # state, and the object's own three-way `recorded?` / `clusterable?` / `any?` split is what keeps
+  # the three silences — nothing ingested, nothing embedded, nothing reads alike — distinguishable
+  # at the wire via `recorded_count`, `identity_count` and the cluster list.
+  def serialized_near_duplicates
+    return nil unless requested_near_duplicates?
+
+    clusters = NearDuplicateClusters.for(repository)
+
+    {
+      similarity_floor: clusters.similarity_floor,
+      similarity_basis: clusters.similarity_basis,
+      weighed_run_id: clusters.weighed_run_id,
+      cluster_count: clusters.cluster_count,
+      truncated: clusters.truncated?,
+      saturated_identity_count: clusters.saturated_identity_count,
+      unresolved_count: clusters.unresolved_count,
+      recorded_count: clusters.recorded_count,
+      identity_count: clusters.identity_count,
+      clustered_identity_count: clusters.clustered_identity_count,
+      clustered_timed_count: clusters.clustered_timed_count,
+      clustered_example_count: clusters.clustered_example_count,
+      clusters: clusters.clusters.map { |cluster| serialized_near_duplicate_cluster(cluster) }
+    }
+  end
+
+  # ONE cluster of tests that read alike, with the figures the ranking is built on — as numbers
+  # rather than as the sentences `NearDuplicateClusters::Cluster#duration_label` would build. Per
+  # the class comment's ⭐ sections, `member_count` and `example_count` are read at two different
+  # grains and served as two different numbers; `unobserved_members` discloses that the member
+  # list holds an identity the weighed run did not observe (deleted, renamed, not selected) rather
+  # than leaving it to be inferred from a small sum; `similarity_range` is the object's
+  # `[strongest, weakest]` pair, both already rounded by the method that owns the rounding, because
+  # membership is transitive while similarity is not and the gap between the two edges is the point.
+  def serialized_near_duplicate_cluster(cluster)
+    {
+      signal_source: cluster.signal_source,
+      member_count: cluster.member_count,
+      example_count: cluster.example_count,
+      total_seconds: cluster.total_seconds,
+      timed_count: cluster.timed_count,
+      similarity_range: cluster.similarity_range,
+      unobserved_members: cluster.unobserved_members?,
+      members: cluster.members.map do |member|
+        { text: member.text, file_path: member.file_path, line_number: member.line_number,
+          example_count: member.example_count, total_seconds: member.total_seconds }
+      end
+    }
   end
 
   def serialized_unannotated_examples(test_run)

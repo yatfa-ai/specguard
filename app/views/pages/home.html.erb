@@ -102,10 +102,11 @@
       <%= render UI::AlertComponent.new(tone: :warning, title: "Not available yet") do %>
         This is the product's direction, not its feature list. Ingestion does now record a row per
         example, and the timing answers built on those rows are in the panel above — as is the layer
-        each annotated test declares, which ingestion now stores and the API now serves. What is
-        left here is blocked on work that has not been done rather than on data alone: clustering
-        across the whole suite, and rolling that per-test layer up into a per-area picture. No panel
-        and no endpoint answers these today.
+        each annotated test declares, which ingestion now stores and the API now serves, and as is
+        the suite-wide clustering, which `GET /api/v1/repository?near_duplicates=` now serves behind
+        an opt-in ask. What is left here is blocked on work that has not been done rather than on
+        data alone: rolling that clustering into a dashboard panel, and rolling that per-test layer
+        up into a per-area picture. No panel answers these today.
       <% end %>
 
       <%# NUMBERED BY WHAT RENDERS, and that is a correction rather than a style choice. This comment
@@ -115,9 +116,16 @@
           the foot of this comment sent that reader to the wrong pair. The departed row is described
           here, but it is no longer COUNTED: the numbers below are the rendered ones.
 
-          Row 1 is untouched and is why this panel still exists: `repeated_descriptions` is one run
-          at description grain and its own panel says it "presents, and does not judge", which is
-          not suite-wide clustering.
+          Row 1's rationale is narrowed to the half that is still genuinely open, the same way
+          Row 2's below is: suite-wide clustering now EXISTS — `GET /api/v1/repository?near_duplicates=`
+          serves it, opt-in, via `NearDuplicateClusters` — so the blocker this row names is no
+          longer the clustering itself but the dashboard PANEL over it. The row stays here, and
+          stays a "Needs ...", because no panel exists and moving it to `#answers-today` would be
+          the same checkable-claim-that-does-not-hold defect this panel was edited to remove: the
+          rule at the top of the first panel is that a row belongs there only if a signed-in user
+          can read the figure off the dashboard or the API today — an agent can, via the endpoint,
+          but a signed-in human browsing the dashboard cannot, and this panel's rows are the
+          questions a person reads off the dashboard.
 
           Row 2's rationale is narrowed AGAIN, to the half that is still genuinely open. It used to
           read "which ingestion does not read", and that went false when `Ingest::ObservationRecorder`
@@ -134,7 +142,7 @@
           `#answers-today`: the row has to stay here, and stay a "Needs ...", for row 3 to keep
           resolving to two. Re-read row 3 against row 2 whenever either is reworded. %>
       <%= render UI::DefListComponent.new(rows: [
-            ["Which groups of tests are potentially redundant?", "Needs suite-wide clustering"],
+            ["Which groups of tests are potentially redundant?", "Needs a dashboard panel over the clustering"],
             ["What already exists for this area, and at which layers?", "Needs the stored per-test layer rolled up per area"],
             ["Which of those duplicates is safe to collapse?", "Needs both of the above"]
           ]) %>
