@@ -66,6 +66,50 @@ class GithubRegistrationGrant < ApplicationRecord
     # An incomplete reading is our ignorance, not GitHub's answer. See the class comment: writing it
     # would convert a truncated page walk into a refusal of repositories this person administers.
     return nil unless sources.complete?
+    # NO INSTALLATION IS NOT AN ANSWER EITHER, and `complete?` cannot see that on its own.
+    #
+    # `InstallationRepositories.sources` returns `blank_sources(installed: false)` when the person
+    # holds no installation, and that is `truncated: false, error: nil` — so it is COMPLETE, and
+    # without this line it is captured as a grant saying GitHub reports them an administrator of
+    # nothing. That is a different sentence from the true one, and the difference is load-bearing:
+    # `GrantVerifier#verdict_for` reads a nil-or-stale grant as `:not_granted` ("SpecGuard has no
+    # current record of your GitHub permissions… reconnect GitHub" — true, and it names the fix),
+    # while a FRESH but empty grant falls past both `registrable?` and `visible?` onto
+    # `:not_in_installation` ("Add it on GitHub, then pick it here") — which sends an agent to add a
+    # repository that is already there, or that they never removed.
+    #
+    # WHAT THIS GUARD REACHES, precisely: the person holds NO installation ROWS. That is the state
+    # `blank_sources(installed: false)` describes, and it arrives two ways — someone who disconnects
+    # their last account on `/account`, and the `dependent: :destroy` cascade when a user row goes.
+    # The guard lives HERE rather than in the controller because the controller cannot hold the
+    # invariant on its own: `capture` is lazy and memoized and fires on the NEXT picker render, long
+    # after any controller has finished, so `GithubInstallationsController#destroy` deleting the
+    # grant at the moment of the act would be undone by the reader's next page view. It deletes it
+    # anyway, at the moment of the act; this is what makes the deletion stick.
+    #
+    # WHAT IT DOES NOT REACH, and this is the gap worth naming rather than glossing: an installation
+    # GitHub has stopped answering for. Someone who uninstalls the App on github.com — which
+    # `GithubHelper`'s own disclosure invites them to do — KEEPS the row, so `installations_for` is
+    # not empty, `sources` never reaches `blank_sources`, and `collect` hardcodes `installed: true`
+    # (`InstallationRepositories:304`). The 404 is absorbed as `:unreadable` with an EMPTY listing
+    # contributing no error, deliberately (see `read`'s comment), so `complete?` is true as well.
+    # Both gates pass, a fresh empty grant is written, and the verdict is the same false
+    # `:not_in_installation` described above. Measured, not reasoned: one row, GitHub answering
+    # NotFound, after a real picker render — `installed? true, complete? true, guard fires false,
+    # grant registrable [], stale? false, verdict :not_in_installation`.
+    #
+    # Closing that direction needs a moment this slice does not have: it is the "later slice" of
+    # installation and uninstall EVENTS that `GithubInstallation:18-25` names, and it is fenced off
+    # as out of scope here. A slice that takes it on wants a predicate distinct from `installed?`,
+    # which reads like "the App is installed on GitHub" but means "this person holds installation
+    # ROWS" — `sources` sets it from whether `installations_for` returned anything, never from what
+    # GitHub answered. `outcomes.any?(&:read?)` is the "and at least one of them answered" reading,
+    # and it is already sitting there.
+    #
+    # Deliberately NOT a deletion of the existing row: the same discipline the incomplete reading
+    # above follows. This says "do not write a statement we cannot make", and whoever holds a grant
+    # keeps it until it lapses on `MAX_AGE` or is dropped by the act that made it false.
+    return nil unless sources.installed?
 
     grant = find_or_initialize_by(user_id: user.id)
     grant.registrable_full_names = downcased(sources.registrable)
