@@ -3079,35 +3079,37 @@ RSpec.describe "Repository registration and API keys", type: :request do
         expect(@user.reload.github_installed?).to be(false)
       end
 
-      # ⭐ THE COUNTERFACTUAL, and the example that would have failed last round.
+      # ⭐ THE COUNTERFACTUAL — drive to the outcome and ask the page again after a picker visit.
       #
-      # It follows the OLD branch's instruction exactly — open the picker once — and then asks the
-      # page again. The claim is not about wording: it is that the state remains OBSERVABLE on the
-      # page built to render it, at the precise moment the empty grant exists and would have
-      # silenced it. The mint is asserted as the HAZARD it is rather than as a success.
-      it "keeps saying so after a picker visit mints an empty grant" do
+      # It opens the picker once — the OLD branch's prescription — and then asks the page again.
+      # The claim is not about wording: it is that the state remains OBSERVABLE on the page built
+      # to render it. Since #808 the picker visit does not even MINT a grant in this state:
+      # `GithubRegistrationGrant.capture` refuses when the person holds no installation rows,
+      # precisely so a fresh-but-empty grant cannot flip the verdict to a false
+      # `:not_in_installation`. So the hazard this example pins is now the ABSENCE of a grant —
+      # asserted as the fact it is, and the panel must still name the true state.
+      it "keeps saying so after a picker visit, which does not mint a grant" do
         stub_github(repos: [github_repo("acme/billing-service")])
 
         get repositories_path
         expect(registration_panel).to be_present
 
-        # The hazard, at full strength: the picker writes a grant that is EMPTY but perfectly fresh,
-        # so every "is the grant missing or stale" reading now says no.
+        # The picker visit: it reads the sources (the lazy capture point) and GitHub answers,
+        # but no grant may be built from "no installation" — absence is not an answer.
         get new_repository_path
-        grant = GithubRegistrationGrant.find_by(user_id: @user.id)
-        expect(grant.registrable_full_names).to eq([])
-        expect(grant.stale?).to be(false)
+        expect(GithubRegistrationGrant.find_by(user_id: @user.id)).to be_nil
 
-        # ...and the page must NOT read that as resolved, because the API has not resolved.
+        # ...and the page must NOT read the state as resolved, because the API has not resolved.
         get repositories_path
         expect(registration_panel).to be_present
         expect(registration_panel).to include("not installed on any of your GitHub accounts")
 
-        # The ground truth the panel is answerable to: still refused, and refused for the reason
-        # this branch names rather than the one the grant branches do.
-        verdict = RepositoryRegistration::GrantVerifier.new(grant: grant)
+        # The ground truth the panel is answerable to: still refused — and refused as
+        # :not_granted ("SpecGuard has no current record…"), the nil-grant reading, rather than
+        # either of the answers a minted grant could have produced.
+        verdict = RepositoryRegistration::GrantVerifier.new(grant: nil)
                                                        .verdict_for("acme/billing-service")
-        expect(verdict.status).to eq(:not_in_installation)
+        expect(verdict.status).to eq(:not_granted)
       end
 
       # The two promises the old copy made to this reader, asserted as the falsehoods they were.
