@@ -102,6 +102,7 @@ class RepositoriesController < ApplicationController
     @repositories = Repository.accessible_by(current_user)
                               .includes(:user)
                               .order(:github_full_name)
+    @registration_grant_story = registration_grant_story
   end
 
   def show
@@ -1059,6 +1060,150 @@ class RepositoriesController < ApplicationController
   # refused because the App is not installed must offer the install button, and the listing alone
   # cannot know that happened.
   def github_verdict = @github_verdict
+
+  # WHICH STORY this person's registration grant tells. FIVE outcomes — the four non-nil ones listed
+  # in the order the ladder below asks them, and they are readings of ONE verdict rather than four
+  # separate bounds. `nil` is last here for readability only: it is not a final rung but the answer
+  # at two earlier ones, an unconfigured App above the ladder and a redeeming grant mid-way down:
+  #
+  #   * `:not_installed` — the App is installed nowhere.
+  #   * `:session_expired` — installed, but this session holds no credential to read it with.
+  #   * `:never_taken` — credential in hand, and no snapshot has EVER been taken.
+  #   * `:lapsed` — a snapshot was taken and has aged past `MAX_AGE`.
+  #   * `nil` — there is nothing to say: the grant redeems, or the App is unconfigured.
+  #
+  # The state `RepositoryRegistration::GrantVerifier` refuses an `sgu_` registration with, asked here
+  # so that the page that refusal sends them to can say so and offer the fix.
+  #
+  # THE SAME EXPRESSION THE GATE USES. `GrantVerifier#verdict_for` opens with `return
+  # verdict(:not_granted, name) if @grant.nil? || @grant.stale?`, and this is that line and not a
+  # second opinion about it: a page drawing a different bound from the gate would tell somebody
+  # their registration access was fine while the API went on refusing them, or the reverse. Absent
+  # and stale are ONE verdict there and are one here for the same reason — neither redeems anything.
+  #
+  # ## One VERDICT, two FACTS — and a landing page owes the reader the FACT
+  #
+  # The merge is right where `GrantVerifier` does it: that method is answering "may this `sgu_`
+  # request register?" at the instant of a refusal, and the answer is no either way. This page is
+  # not a refusal, and to a READER the two halves are different facts with different fixes — so the
+  # verdict is kept whole and its readings are told apart for what is SAID and OFFERED, not
+  # re-bounded. Each of the four names a different missing thing, so each ends in a different fix:
+  #
+  #   * `:not_installed` — the App is installed nowhere, so there is no installation for a
+  #     credential to read and nothing for a picker to take a snapshot OF. Neither fix below
+  #     applies: the missing thing is the App itself, and the control offered is
+  #     `github_install_button`. Asked ABOVE the grant read rather than beside these branches,
+  #     because a picker mints an EMPTY BUT FRESH row for this reader — see the guard's own comment
+  #     for why reading it after the grant produces a false all-clear.
+  #   * `:lapsed` — a snapshot existed and aged past `MAX_AGE`. A week-old grant frequently sits
+  #     beside a week-old session, and nothing on this path has asked (asking is what would cost a
+  #     round trip), so the fix is the reconnect the API's own refusal names.
+  #   * `:never_taken` — no snapshot has EVER been taken. That is the ordinary state of somebody who
+  #     connected the App one redirect ago: `GithubInstallationsController#destination` lands them
+  #     here, and a grant is minted nowhere but a picker render, so their FIRST visit is always this
+  #     one. Nothing lapsed and nothing is missing from their session. Telling them SpecGuard needs
+  #     to check their permissions "again" is false, and sending them to github.com would be a
+  #     WORSE fix than the "Register a repository" button already in this page's header — they hold
+  #     a live token, and the only thing anybody needs to do is open a picker once.
+  #   * `:session_expired` — the App is installed, but this SESSION holds no credential to read it
+  #     with. Split out because both branches above tell this reader something FALSE, for one
+  #     shared reason: each promises the picker will take a snapshot, and for this reader it cannot.
+  #     `InstallationRepositories.sources` answers a blank token with `error: :not_authorized`,
+  #     `Sources#complete?` is therefore false, and the grant's own capture method opens with
+  #     `return nil unless sources.complete?` — so the picker mints NOTHING and the panel redraws
+  #     unchanged, however many times the instruction is followed. It also falsifies the other
+  #     branch's reassurance that registering in the browser is unaffected: the picker offers this
+  #     reader a reconnect rather than a repository. The credential is the missing thing, so the
+  #     reconnect is the whole fix — and after it the picker mints on arrival as it does for anyone.
+  #
+  # ## Nothing to offer means nothing to say
+  #
+  # Both stories end in a control, and with the App unconfigured neither control can work —
+  # `github_authorize_button` renders `github_app_unconfigured_notice` in place of itself, and the
+  # picker cannot reach GitHub either. So the panel is suppressed rather than wrapped around an
+  # operator-facing notice a reader can do nothing with; that notice already meets the operator on
+  # the connect paths, and it is an alert, which inside this page's alert would nest one in another.
+  #
+  # ## Read off the grant, never off the listing — this controller makes that easy to get wrong
+  #
+  # `include GithubRepositoryListing` (above) puts `github_sources`, `github_listing`,
+  # `github_listing_error`, `github_authorization_needed?` and `github_installation_needed?` all in
+  # scope on this action, and every one of them forces `github_sources`. That would do two things,
+  # both unacceptable on this page:
+  #
+  #   * It CALLS GITHUB — a round trip added to the most-visited page in the product, on every
+  #     render, to answer a question one indexed row already answers.
+  #   * `github_sources` is the sole site that CAPTURES a grant (see `GithubRegistrationGrant` and
+  #     the concern's own comment). Asking it would REPAIR the grant as a side effect of asking, so
+  #     the state this page exists to render could never be observed on the page that renders it.
+  #
+  # ## The CREDENTIAL is asked about before the SNAPSHOT, because it decides whether the fix works
+  #
+  # Both stories above end by promising a picker render will take a snapshot, and that promise is
+  # only keepable while the session holds a token to read GitHub with. Without one,
+  # `InstallationRepositories.sources` returns `error: :not_authorized`, `Sources#complete?` is
+  # false, and `capture` opens with `return nil unless sources.complete?` — so the picker mints
+  # NOTHING and this page redraws unchanged however many times its instruction is followed. So the
+  # credential is asked about first: it is the more proximate missing thing, and it is the one whose
+  # absence makes the other two branches' advice untrue.
+  #
+  # ⚠ ASKED AS `github_user_token.nil?` AND DELIBERATELY NOT AS `github_authorization_needed?`. The
+  # two name the same idea, and on this controller the cheap one is not the one that would resolve:
+  # `GithubRepositoryListing` OVERRIDES that predicate, and the override forces `github_sources` —
+  # the round trip and the self-repair this whole method exists to avoid. `github_user_token` is a
+  # signed-session read costing no query and no round trip; `github_installed?` is one `EXISTS`
+  # against our own table.
+  #
+  # ⚠ AND ASKED AS ONE TERM, NOT TWO. `GithubUserSession#github_authorization_needed?` pairs the
+  # token question with `github_installed?`, and this branch deliberately does NOT: the installation
+  # question is settled one rung ABOVE, by the `:not_installed` guard, so by the time this line
+  # evaluates an installation is a PRECONDITION rather than an open question and re-asking could not
+  # change the outcome. That is the point of the ladder — each rung may assume the rungs above it —
+  # and a defensive re-ask would not be belt-and-braces here but a second `EXISTS` on the hot path,
+  # quietly contradicting the claim that this page adds no cost it does not need. An earlier
+  # revision did carry that second term, back when `:not_installed` did not exist and the reader
+  # with no installation fell through to `:never_taken`; the rung above subsumed exactly that
+  # population, and the term went inert with it.
+  #
+  # `has_one :github_registration_grant` is one row on a unique index, and costs one query.
+  def registration_grant_story
+    return nil unless SpecGuard::GithubApp.configured?
+
+    # ⚠ THE INSTALLATION IS ASKED ABOUT FIRST, AND BEFORE THE GRANT IS EVEN READ. This is the
+    # outermost rung of a three-rung ladder — installation, then credential, then snapshot — where
+    # each rung is a precondition for the next: there is no credential worth holding for an App that
+    # is installed nowhere, and no snapshot worth taking of an installation that does not exist.
+    #
+    # It sits ABOVE the redemption check below, not beside the branches under it, and that placement
+    # is the whole fix rather than an ordering preference. A picker render mints a grant from
+    # WHATEVER GitHub answers, and for somebody with no installation GitHub answers *nothing*:
+    # `InstallationRepositories.sources` returns `blank_sources(installed: false)` — no error and not
+    # truncated — so `Sources#complete?` is TRUE and `capture` writes an EMPTY BUT FRESH row. Read
+    # after the grant, this reader would mint that row on their first picker visit, `grant.stale?`
+    # would go false, and the panel would VANISH while `POST /api/v1/repositories` went on refusing
+    # them — with `:not_in_installation`, a different refusal than any branch here describes. That is
+    # a false all-clear rather than a loop: the reader followed the instruction, the warning
+    # disappeared, and nothing on the page would ever tell them again. Asking first means the empty
+    # row can never be reached as a reason for silence.
+    #
+    # Their fix is neither of the two below. A credential reads an installation and there is none to
+    # read; a picker mints a snapshot of an empty set. The missing thing is the App itself, so the
+    # control offered is `github_install_button` — the existing helper for exactly this — and not the
+    # reconnect. `github_installed?` is one `EXISTS` against our own table, the same read the branch
+    # below already makes, and it costs no GitHub round trip.
+    return :not_installed unless current_user.github_installed?
+
+    grant = current_user.github_registration_grant
+
+    # A grant inside the bound redeems, so there is nothing to say — whatever the session holds.
+    # This page is about registration access, and theirs has not lapsed.
+    return nil unless grant.nil? || grant.stale?
+
+    return :session_expired if github_user_token.nil?
+    return :never_taken if grant.nil?
+
+    :lapsed
+  end
 
   # Submitting the form unchanged is a valid save, so don't claim a rename that didn't happen.
   def rename_notice
