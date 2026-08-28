@@ -64,6 +64,8 @@ RSpec.describe "POST /api/v1/ingest", type: :request do
         "total_specs" => 3,
         "annotated_specs" => 2,
         "annotated_ratio" => 0.667,
+        "recorded_specs" => 3,
+        "identified_specs" => 3,
         "embedding_status" => "queued"
       )
     end
@@ -1765,6 +1767,116 @@ RSpec.describe "POST /api/v1/ingest", type: :request do
     end
   end
 
+  # WHAT THE RESPONSE SAYS ABOUT PER-EXAMPLE IDENTITY — the axis two earlier examples pin the
+  # platform-side behaviour of and never ask the client-facing question about.
+  #
+  # Both live in "the per-example rows a run leaves behind": "keeps every example of a payload that
+  # carries no ids at all" and "does double an id-less anonymous slice's rows, having no key with
+  # which not to". They assert that an id-less payload keeps its rows and that an id-less anonymous
+  # slice doubles them on redelivery. Both are statements about what the DATABASE ends up holding,
+  # and both are deliberate: the doubling has no platform-side fix, because the only other
+  # candidate conflict key is `(file_path, line_number)` and that is the coordinate a table-driven
+  # loop puts N examples on. The fix is client-side — send ids — and until now the response gave a
+  # client nothing to act on: a payload omitting every id returned a body byte-identical to one
+  # sending them all. Safety and honesty are different questions; these are the second.
+  describe "the id coverage the response reports" do
+    def coverage_from(specs)
+      ingest(ingest_payload(specs: specs))
+
+      response.parsed_body.slice("total_specs", "recorded_specs", "identified_specs")
+    end
+
+    it "reports an id count equal to the rows when every example carried one" do
+      specs = (1..3).map { |n| unannotated_spec(file_path: "spec/#{n}_spec.rb", line_number: n) }
+
+      expect(coverage_from(specs)).to eq(
+        "total_specs" => 3, "recorded_specs" => 3, "identified_specs" => 3
+      )
+    end
+
+    # ⭐ THE POINT OF THE SLICE. This body and the one above are no longer the same document, which
+    # is the whole difference between a producer that can see it is giving up redelivery safety and
+    # one that cannot. The zero is a MEASURED statement — "no row carried an id" — so it is `0` and
+    # not `null`; only `annotated_ratio` is nullable here, and only because 0/0 is undefined.
+    it "reports a zero id count, against the rows it still wrote, for a payload carrying no ids" do
+      specs = (1..3).map { |n| unannotated_spec(file_path: "spec/#{n}_spec.rb", line_number: n, id: "") }
+
+      expect(coverage_from(specs)).to eq(
+        "total_specs" => 3, "recorded_specs" => 3, "identified_specs" => 0
+      )
+    end
+
+    it "counts exactly the rows carrying an id when a payload mixes the two" do
+      specs = [
+        unannotated_spec(file_path: "spec/a_spec.rb", line_number: 1),
+        unannotated_spec(file_path: "spec/b_spec.rb", line_number: 2, id: ""),
+        unannotated_spec(file_path: "spec/c_spec.rb", line_number: 3),
+        unannotated_spec(file_path: "spec/d_spec.rb", line_number: 4, id: "")
+      ]
+
+      expect(coverage_from(specs)).to eq(
+        "total_specs" => 4, "recorded_specs" => 4, "identified_specs" => 2
+      )
+    end
+
+    # ⭐ THE GRAIN EXAMPLE, and the reason `recorded_specs` is served at all rather than leaving a
+    # client to subtract from `total_specs`.
+    #
+    # This producer sent an id on EVERY example and has no shortfall whatsoever. But it repeated
+    # one, so `Ingest::ObservationRecorder#build_rows` collapsed the repeat to its first occurrence
+    # and wrote two rows for the three specs the run counts. All three numbers are asserted in ONE
+    # example precisely so the disagreement is visible: `identified == recorded`, while
+    # `total_specs` is strictly greater than both.
+    #
+    # A client computing `total_specs - identified_specs` reads a phantom missing id here and goes
+    # hunting a bug that does not exist. `recorded_specs - identified_specs` is the shortfall, and
+    # it is zero, which is the truth. The two figures are the same grain — rows — and `total_specs`
+    # is a different one: the run's suite size, re-derived by SUM over `test_run_shards` from what
+    # the client REPORTED.
+    it "reports no shortfall for a payload that carries every id but repeats one" do
+      specs = [
+        unannotated_spec(file_path: "spec/a_spec.rb", line_number: 1, id: "dup", name: "first"),
+        unannotated_spec(file_path: "spec/b_spec.rb", line_number: 2, id: "dup", name: "second"),
+        unannotated_spec(file_path: "spec/c_spec.rb", line_number: 3, id: "kept")
+      ]
+
+      body = coverage_from(specs)
+
+      expect(body).to eq("total_specs" => 3, "recorded_specs" => 2, "identified_specs" => 2)
+      expect(body["identified_specs"]).to eq(body["recorded_specs"])
+      expect(body["total_specs"]).to be > body["recorded_specs"]
+      # ...and the rows really are what the row-grain pair counted, rather than two numbers that
+      # happen to agree with each other while describing nothing.
+      expect(TestRun.sole.spec_observations.pluck(:example_id)).to match_array(%w[dup kept])
+    end
+
+    # Zeroes rather than nils for a run that recorded nothing, on the house rule pinned at
+    # `spec/models/spec_observation_spec.rb` — "reads zeroes for a run that recorded nothing".
+    # Counts read `0`; only ratios read `null`, and `annotated_ratio` is the one field here that
+    # does, because a run of nothing has no share to report.
+    it "reports zeroes, not nulls, for a run that recorded no rows at all" do
+      ingest(ingest_payload(specs: []))
+
+      expect(response).to have_http_status(:accepted)
+      expect(response.parsed_body).to include(
+        "total_specs" => 0, "recorded_specs" => 0, "identified_specs" => 0, "annotated_ratio" => nil
+      )
+    end
+
+    # ONE round trip for both figures, not two — the cost this slice deliberately adds to the
+    # ingest path, bounded here so it stays one. `coverage_in` selects every counter in
+    # `SpecObservation::COVERAGE_COUNTS` in a single SELECT, so a second statement carrying this
+    # expression would mean someone had fetched the numerator and the denominator separately: two
+    # reads of one run's rows, free to disagree with each other.
+    it "adds exactly one query to the ingest path to answer for both figures" do
+      body = ingest_payload(specs: [unannotated_spec(file_path: "spec/a_spec.rb", line_number: 1)])
+
+      coverage_reads = queries_against(/COUNT\(example_id\)/) { ingest(body) }
+
+      expect(coverage_reads.size).to eq(1)
+    end
+  end
+
   # The other end of the sentence above: rows arrive here one per example per run, and until
   # `Ingest::ObservationPruner` existed nothing ever took one away for age. The rule is
   # `SpecObservation::BRANCH_RETENTION_RUNS` runs OF ONE BRANCH, enforced at the write path
@@ -2008,6 +2120,15 @@ RSpec.describe "POST /api/v1/ingest", type: :request do
     #     window — the boundary lookup, which comes back empty and issues no delete at all;
     #   * and TWO more on a branch at its window — that boundary lookup plus one bounded delete,
     #     which comes back short and stops the loop rather than spending the rest of the ceiling.
+    #   * `SpecObservation.coverage_in` is ONE statement on EVERY ingest, in both figures below —
+    #     the aggregate the `202` reports `recorded_specs` / `identified_specs` from. It is the one
+    #     read on this path that is not about writing the run: everything else in the response
+    #     comes off `test_run.*`, which `Ingest::RunRecorder` returns with the run's derived totals
+    #     already loaded, and per-example identity is not among them because it is a fact about the
+    #     ROWS rather than about what the shards reported. Both figures come out of this single
+    #     SELECT — a second statement here would mean a numerator and a denominator fetched
+    #     separately, free to disagree — and it is bounded by the same
+    #     `/COUNT\(example_id\)/` guard in "the id coverage the response reports".
     #
     # The difference between the two figures is exactly that one delete. Neither figure follows the
     # size of the backlog: the ceilings on the delete statements are
@@ -2021,14 +2142,14 @@ RSpec.describe "POST /api/v1/ingest", type: :request do
       before { api_key }
 
       it "spends a fixed budget, of which the rule is two statements on an unfilled window" do
-        expect(count_queries { ingest(ingest_payload(branch: "main")) }).to eq(8)
+        expect(count_queries { ingest(ingest_payload(branch: "main")) }).to eq(9)
       end
 
       it "spends exactly one more once the window is full and a run falls out of it" do
         ingest(ingest_payload(branch: "main"))
         ingest(ingest_payload(branch: "main"))
 
-        expect(count_queries { ingest(ingest_payload(branch: "main")) }).to eq(9)
+        expect(count_queries { ingest(ingest_payload(branch: "main")) }).to eq(10)
       end
     end
   end

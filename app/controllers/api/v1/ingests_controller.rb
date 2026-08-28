@@ -46,6 +46,14 @@ class Api::V1::IngestsController < Api::BaseController
     # value position where it reads as one more field being looked up.
     embedding_status = enqueue_embeddings(test_run, payload.specs)
 
+    # ONE additional aggregate on the ingest path, and it is a deliberate cost rather than one
+    # discovered in review. Everything above renders off `test_run.*`, which `Ingest::RunRecorder`
+    # returns with the run's derived totals already loaded; per-example identity is not among them,
+    # because it is a fact about the ROWS this run wrote and not about the counts its shards
+    # reported. Both figures below come out of this single call — never two queries for two
+    # numbers that have to agree.
+    coverage = SpecObservation.coverage_in(test_run)
+
     render json: {
       test_run_id: test_run.id,
       # These are the whole CI run's totals, not this shard's own slice — the row *is* the run
@@ -59,6 +67,39 @@ class Api::V1::IngestsController < Api::BaseController
       # percentage via `TestRun#annotated_ratio`; the API and the UI differ in unit on purpose,
       # so neither side has to guess which one it is holding.
       annotated_ratio: test_run.annotated_fraction,
+      # HOW MANY OF THIS RUN'S ROWS CARRY AN `id`, AND THE DENOMINATOR THAT MAKES THAT A FRACTION.
+      #
+      # `example_id` is the upsert key (`Ingest::ObservationRecorder`, `unique_by: %i[test_run_id
+      # example_id]`) and it arrives unvalidated, so a payload omitting every id is accepted and
+      # used to return a body byte-identical to one sending them all. For an ANONYMOUS SLICE
+      # (`ci_run_id` present, `shard_id` nil) an id-less redelivery has nothing to conflict with
+      # and doubles the run's rows — that shape only, per that class's "the three shapes, and the
+      # one that has no answer": a named shard is replaced by the delete on `test_run_shard_id`
+      # regardless of ids, and without a `ci_run_id` every POST is its own run. So a named shard's
+      # replace-on-redelivery comes from that delete, not from the ids. What the ids buy it is
+      # INSURANCE: drop the `shard_id` and its slices become anonymous ones, where the key is the
+      # only thing standing between a redelivery and a doubled run. They are NOT what carries an
+      # example across runs either: `example_id` is run-local by construction (`SpecObservation`,
+      # "The key is run-local, and says so" — positional, unique within a run, and
+      # `unique_by: %i[test_run_id example_id]` is nothing wider). Cross-run identity is
+      # `SpecIdentity`'s, resolved from the row's TEXT via `Ingest::IdentityResolver` — which never
+      # reads `example_id` — so an id-less run still gets it, `Ingest::Payload#validate_name`
+      # requiring a name or an intent on every spec. The fix is client-side, and these two operands
+      # are what let a client see that it needs to apply it.
+      #
+      # THE TWO ARE ONE GRAIN AND THE PAIR IS THE POINT. Both are counted over the rows this run
+      # wrote to `spec_observations`; the shortfall is `recorded_specs - identified_specs` and it
+      # is NEVER `total_specs - identified_specs`. `total_specs` is the whole run's suite size,
+      # re-derived by SUM over `test_run_shards` from what the client REPORTED, while these count
+      # rows — and the two legitimately disagree, because a payload repeating an `id` contributes
+      # one row for it. Subtracting across the two grains invents a shortfall for a producer that
+      # sent every id it has.
+      #
+      # Integers, and `0` rather than `null` on a run that recorded nothing: "no row carried an id"
+      # is a measured statement, unlike `annotated_ratio`, which is null only because 0/0 is
+      # undefined. Operands, not a verdict — the client draws the conclusion.
+      recorded_specs: coverage.fetch(:recorded_count),
+      identified_specs: coverage.fetch(:identified_count),
       embedding_status: embedding_status
     }, status: :accepted
   end

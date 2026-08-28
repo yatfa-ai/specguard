@@ -672,15 +672,28 @@ specguard-lint: checked 3 @intent annotations, 1 malformed</pre>
             the endpoint's own error messages — nothing is ever refused for their absence, so a
             reporter built by probing the API would omit all three and quietly lose per-example
             identity, per-file attribution and outcomes. Naming them as a group is the point; a
-            reader who skims the table still meets them here. %>
-        <%= render UI::AlertComponent.new(tone: :warning, title: "Three fields you are never told you are missing") do %>
+            reader who skims the table still meets them here.
+
+            The TITLE says what is still true of all three — nothing refuses you for omitting them —
+            rather than the older "you are never told you are missing", which this endpoint's
+            `identified_specs` counter made false for `id` and which would otherwise have shipped
+            as a documented lie. Two of the three are still undiscoverable by probing; `id` is not,
+            and the second paragraph draws exactly that line rather than blurring the group. %>
+        <%= render UI::AlertComponent.new(tone: :warning, title: "Three fields nothing will refuse you for omitting") do %>
           <p class="mt-1">
             <code>id</code>, <code>spec_file_path</code> and <code>outcome</code> are not validated.
             A payload omitting all three is accepted with a <code>202</code> and looks completely
             healthy — and quietly gives up per-example identity across re-deliveries, correct
-            per-file time attribution, and pass/fail history. They are the fields you cannot learn
-            about by probing the endpoint, which is why they are called out rather than left in the
-            table. Send all three.
+            per-file time attribution, and pass/fail history. Send all three.
+          </p>
+          <p class="mt-2">
+            <code>spec_file_path</code> and <code>outcome</code> are the two you
+            <strong class="text-app-content">cannot</strong> learn about by probing the endpoint,
+            which is why they are called out here rather than left in the table. <code>id</code> is
+            the exception: the <code>202</code> reports <code>identified_specs</code> beside
+            <code>recorded_specs</code>, so a producer omitting ids can see the shortfall in the
+            response instead of being told nothing. Compare those two — never
+            <code>total_specs</code>, which counts something else (see “What comes back”).
           </p>
         <% end %>
       </div>
@@ -707,17 +720,39 @@ specguard-lint: checked 3 @intent annotations, 1 malformed</pre>
         <%= render UI::TableComponent.new(columns: ["Status", "Body", "Meaning"]) do %>
           <tr>
             <td class="px-3 py-2 font-mono text-xs text-app-content">202</td>
-            <td class="px-3 py-2 font-mono text-xs text-app-content-secondary break-all">{"test_run_id":…,"total_specs":2,"annotated_specs":1,"annotated_ratio":0.5,"embedding_status":"queued"}</td>
+            <td class="px-3 py-2 font-mono text-xs text-app-content-secondary break-all">{"test_run_id":…,"total_specs":2,"annotated_specs":1,"annotated_ratio":0.5,"recorded_specs":2,"identified_specs":2,"embedding_status":"queued"}</td>
             <td class="px-3 py-2 text-app-content-secondary">
-              Stored. The counts are the whole run's — every shard so far, not just this request's
-              slice. <code>annotated_ratio</code> is a 0–1 fraction, or <code>null</code> when the
-              run has no examples at all: a run of nothing has no share to report, and
-              <code>0.0</code> there would be indistinguishable from a measured zero share of a
-              suite that does have tests. The null follows the run's total, not your payload —
-              posting <code>specs: []</code> is accepted, and returns <code>null</code> only when it
-              leaves the run still empty. Send an empty shard to a run whose other shards reported
-              examples and you get their number back. Parse the field as nullable either way.
-              <code>embedding_status</code> is <code>"queued"</code> when identity resolution was
+              Stored. <code>total_specs</code>, <code>annotated_specs</code> and
+              <code>annotated_ratio</code> are the whole run's — every shard so far, not just this
+              request's slice. <code>annotated_ratio</code> is a 0–1 fraction, or
+              <code>null</code> when the run has no examples at all: a run of nothing has no share
+              to report, and <code>0.0</code> there would be indistinguishable from a measured zero
+              share of a suite that does have tests. The null follows the run's total, not your
+              payload — posting <code>specs: []</code> is accepted, and returns <code>null</code>
+              only when it leaves the run still empty. Send an empty shard to a run whose other
+              shards reported examples and you get their number back. Parse the field as nullable
+              either way. <code>recorded_specs</code> and <code>identified_specs</code> are a
+              <strong class="text-app-content">different grain</strong>: they count the per-example
+              <em>rows</em> the run stored, and how many of those carried an <code>id</code>. Both
+              are always integers — <code>0</code>, never <code>null</code>, since “no row carried
+              an id” is something measured rather than undefined. Your id shortfall is
+              <code>recorded_specs − identified_specs</code>; anything above zero means part of the
+              run has no upsert key. What that costs depends on how you deliver: post slices with a
+              <code>ci_run_id</code> but no <code>shard_id</code> and re-delivering one appends
+              duplicate rows instead of replacing them
+              (<a href="#sharding" class="underline">below</a>). Named shards replace themselves
+              either way — the delete does that, not the ids. What the ids buy you there is
+              insurance: drop the <code>shard_id</code> and those slices become the case above,
+              where the ids are the only thing keeping a re-delivery from duplicating rows. They
+              are not what carries a test from one run to the next: <code>id</code> is RSpec's positional
+              <code>Example#id</code>, unique within a run only, and SpecGuard follows a test across
+              runs by its <em>text</em> — its name and intent — not by its id. <strong class="text-app-content">Do not subtract from
+              <code>total_specs</code></strong> — that is the run's reported suite size across all
+              shards, and it counts what you <em>sent</em>, while these count what was
+              <em>stored</em>. The two legitimately differ: repeat an <code>id</code> within one
+              payload and it stores one row, so a producer sending every id it has would compute a
+              shortfall that does not exist. <code>embedding_status</code> is
+              <code>"queued"</code> when identity resolution was
               scheduled and <code>"pending"</code> when there was nothing to schedule.
             </td>
           </tr>
