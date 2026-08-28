@@ -87,10 +87,11 @@ module IntegrationGuideHelper
   # reading the page on. `root_url` supplies that, and the strip matters: the gem joins
   # `/api/v1/ingest` onto whatever it is given, so a trailing slash would produce a double one.
   #
-  # It lives here because three surfaces need the same value — the guide's own env-var table, the
-  # agent prompt on the persistent repository page, and the prompt on the one-shot reveal — and a
-  # regex spelled out three times is three chances to fix two of them. The prompt itself was already
-  # centralised for exactly this reason; the endpoint it embeds deserves the same.
+  # It lives here because four surfaces need the same value — the guide's own env-var table, the
+  # agent prompt on the persistent repository page, the prompt on the one-shot reveal, and the
+  # prompt on each row of the bulk registration summary — and a regex spelled out four times is four
+  # chances to fix three of them. The prompt itself was already centralised for exactly this reason;
+  # the endpoint it embeds deserves the same.
   def integration_guide_endpoint = root_url.sub(%r{/+\z}, "")
 
   def integration_guide_example_payload = JSON.pretty_generate(EXAMPLE_PAYLOAD)
@@ -195,13 +196,14 @@ module IntegrationGuideHelper
 
   # The copy-paste prompt that replaced the "Connect this repository" panel.
   #
-  # == Why this is one method and not two blocks of template text
+  # == Why this is one method and not three blocks of template text
   #
-  # It renders on two surfaces — the one-shot reveal, where the real token is inlined so the prompt
-  # works exactly as pasted, and the persistent repository page, where it cannot be, because only a
-  # digest is stored and a token already shown once is unrecoverable. Those two differ in *one
-  # paragraph*. Written twice they would differ in more than that within a release, and the half a
-  # reader is likelier to meet — the persistent one — is the half nobody re-reads.
+  # It renders on three surfaces, split by whether the real token is on screen: the one-shot reveal
+  # and each row of the bulk registration summary both inline it, so the prompt works exactly as
+  # pasted, while the persistent repository page cannot, because only a digest is stored and a token
+  # already shown once is unrecoverable. All three differ in *one paragraph* (`credential_line`).
+  # Written three times they would differ in more than that within a release, and the one a reader
+  # is likeliest to meet — the persistent one — is the one nobody re-reads.
   #
   # == Why it is short, and deliberately not the documentation
   #
@@ -232,12 +234,15 @@ module IntegrationGuideHelper
 
   private
 
-  # The one paragraph the two surfaces differ in.
+  # The one paragraph those three surfaces differ in — and the split is 2-to-1 rather than even: the
+  # one-shot reveal and each bulk summary row have the token, the persistent repository page does
+  # not.
   #
   # The no-token wording says where the credential *is* rather than what it is, which is the only
   # honest thing the persistent page can say: `ApiKey` keeps a SHA-256 digest, so the server cannot
   # reproduce a token it has already shown. Naming the secret is also the more useful instruction of
-  # the two — the agent's job is to get the value into CI, and on that surface it is already there.
+  # the two — the agent's job is to get the value into CI, and on the token-bearing surfaces it is
+  # already there.
   #
   # Written as heredocs and `chomp`ed rather than as one-line strings with `\n` in them, so the
   # continuation indent that lines the second line up under the first is visible here as the

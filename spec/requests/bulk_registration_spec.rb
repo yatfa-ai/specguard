@@ -1471,6 +1471,208 @@ RSpec.describe "Bulk organization registration", type: :request do
     end
   end
 
+  # SPGD-806 — the tokens on the summary.
+  #
+  # This is the layer the service spec cannot reach: `BulkRegistration` can be asked whether it
+  # minted a key, but whether the PLAINTEXT actually reaches the page — and whether the page is kept
+  # out of Turbo's snapshot cache while it holds N of them — is a question about the render.
+  #
+  # No flash is involved anywhere in here, and that is the design rather than an omission. `#create`
+  # renders its summary instead of redirecting, and `ApiKey` holds the plaintext for exactly the
+  # request that minted it, so the tokens are simply present in the response that created them.
+  describe "the first API key of each newly registered repository" do
+    it "shows one distinct plaintext token per newly registered repository" do
+      stub_github(repos: [github_repo("acme/api"), github_repo("acme/web"), github_repo("acme/cli")])
+
+      submit(%w[acme/api acme/web acme/cli])
+
+      tokens = ApiKey.all.map { |key| key.repository.github_full_name }
+      expect(tokens).to match_array(%w[acme/api acme/web acme/cli])
+
+      shown = response.body.scan(/sgk_[A-Za-z0-9_-]+/).uniq
+      expect(shown.length).to eq(3)
+    end
+
+    # The keys are minted for the person who submitted the batch, and attribution has no second
+    # chance — `ApiKeysController#destroy` is a hard `destroy!` with no audit row, so a key minted
+    # NULL is NULL forever.
+    it "records the submitting user as the creator of every key" do
+      stub_github(repos: [github_repo("acme/api"), github_repo("acme/web")])
+
+      submit(%w[acme/api acme/web])
+
+      expect(ApiKey.pluck(:created_by_user_id)).to all(eq(@user.id))
+    end
+
+    # Criterion 6, first half. Without this meta Turbo snapshots the live DOM — every plaintext
+    # token on it — when the reader navigates away, and repaints it on Back, which would make the
+    # page's "only time these are shown" claim false. It is a PAGE-level decision, so it is emitted
+    # once however many tokens the batch produced.
+    it "emits exactly one no-cache meta when keys were minted" do
+      stub_github(repos: [github_repo("acme/api"), github_repo("acme/web"), github_repo("acme/cli")])
+
+      submit(%w[acme/api acme/web acme/cli])
+
+      expect(response.body.scan('name="turbo-cache-control"').length).to eq(1)
+    end
+
+    # Criterion 6, second half — and the half that says the meta is CONDITIONAL rather than always
+    # on. A summary holding no tokens is an ordinary page, and suppressing the whole app's snapshot
+    # cache for it would be a cost paid for nothing.
+    it "emits no no-cache meta when the batch minted nothing" do
+      create_repository(user: @user, github_full_name: "acme/api")
+      stub_github(repos: [github_repo("acme/api")])
+
+      submit(%w[acme/api])
+
+      expect(ApiKey.count).to eq(0)
+      expect(response.body).not_to include("turbo-cache-control")
+    end
+
+    # Criterion 8. `copy_text_controller.js` reads the SINGULAR `this.sourceTarget`, and Stimulus
+    # resolves a target to its nearest same-identifier ancestor — so N tokens under ONE scope would
+    # mean Copy and Download grabbing whichever came first, on a page whose entire job is getting
+    # these values off it.
+    #
+    # Each row opens its own scope plus a nested one for the agent prompt (a second payload in the
+    # row's scope would be what Copy grabbed), which is the same split `repositories/_revealed_token`
+    # makes for the same reason. Three registered rows is therefore six scopes.
+    it "gives every repository its own copy-text scope" do
+      stub_github(repos: [github_repo("acme/api"), github_repo("acme/web"), github_repo("acme/cli")])
+
+      submit(%w[acme/api acme/web acme/cli])
+
+      expect(response.body.scan('data-controller="copy-text"').length).to eq(6)
+    end
+
+    # Auto-copy is right for the single-repository reveal — one token, one clipboard — and WRONG
+    # here: N blocks racing to write one clipboard on connect leaves the reader holding whichever
+    # token won, which is worse than no auto-copy because it looks like it worked.
+    it "never enables auto-copy on the batch summary" do
+      stub_github(repos: [github_repo("acme/api"), github_repo("acme/web")])
+
+      submit(%w[acme/api acme/web])
+
+      expect(response.body).not_to include("copy-text-auto-copy-value")
+    end
+
+    # THE REFRESH HAZARD, criterion 2 — the highest-risk part of this change and the one that must
+    # not be left implicit. The controller's header notes that a refresh re-submits and that this is
+    # survivable because registration is idempotent. That stays true of the ROWS and is exactly what
+    # is NOT true of the TOKENS: the re-submitted batch mints nothing, so the tokens are gone.
+    #
+    # So the page has to SAY so, and name the recovery — regenerating the key costs a rotation
+    # rather than a re-registration, and a reader who does not know that may go looking for a way to
+    # register the repository a second time.
+    it "states the hazard and names regeneration as the recovery" do
+      stub_github(repos: [github_repo("acme/api")])
+
+      submit(%w[acme/api])
+
+      expect(response.body).to include("Reloading this page will not bring them back")
+      expect(response.body).to include("regenerate")
+    end
+
+    # The same hazard, DRIVEN rather than described: the identical batch submitted a second time.
+    it "mints nothing on a re-submission and shows no token the second time" do
+      stub_github(repos: [github_repo("acme/api"), github_repo("acme/web"), github_repo("acme/cli")])
+
+      submit(%w[acme/api acme/web acme/cli])
+      first_tokens = response.body.scan(/sgk_[A-Za-z0-9_-]+/).uniq
+      expect(first_tokens.length).to eq(3)
+
+      expect { submit(%w[acme/api acme/web acme/cli]) }.not_to change(ApiKey, :count)
+
+      expect(response.body).to include("Already registered (3)")
+      expect(response.body).not_to match(/sgk_[A-Za-z0-9_-]+/)
+      first_tokens.each { |token| expect(response.body).not_to include(token) }
+    end
+
+    # Criterion 3 at the render layer: an already-registered repository somebody ELSE owns must not
+    # be handed a credential. The summary already refuses to link those rows, and this is the same
+    # rule one step further — that repository may already hold keys, and it was not registered by
+    # this batch.
+    it "mints nothing for a repository somebody else already registered" do
+      create_repository(user: create_user(github_uid: "9", github_handle: "someone"),
+                        github_full_name: "acme/theirs")
+      stub_github(repos: [github_repo("acme/theirs"), github_repo("acme/api")])
+
+      expect { submit(%w[acme/theirs acme/api]) }.to change(ApiKey, :count).by(1)
+
+      expect(ApiKey.last.repository.github_full_name).to eq("acme/api")
+      expect(response.body.scan(/sgk_[A-Za-z0-9_-]+/).uniq.length).to eq(1)
+    end
+
+    # THE MINT FAILURE AT THE RENDER LAYER — non-negotiable (d)'s second half, and the example that
+    # makes `Result#any_revealed?` load-bearing rather than merely argued for.
+    #
+    # `mint_first_key` rescues per candidate, so a batch can register rows and produce no tokens at
+    # all. That is the state the summary has to render honestly, and it is a PAGE-level question the
+    # service spec cannot ask: the service spec establishes that the outcome is `:registered` with
+    # `api_key` nil, and this establishes what the page does with it.
+    #
+    # It is the "zero" case criterion 6 was otherwise missing. The example above it drives a batch
+    # that registered NOTHING, which suppresses the apparatus under `any_registered?` too — so it
+    # cannot tell the two questions apart. This one can: a page reasoning from `any_registered?`
+    # emits the cache-suppressing meta, the "copy these before you leave" warning and a panel headed
+    # "0 API keys — this is the only time they are shown" over an empty list. That render is the
+    # failure mode, and this example is what sees it.
+    it "shows no reveal apparatus when every registered row's mint failed" do
+      stub_github(repos: [github_repo("acme/api"), github_repo("acme/web")])
+      fail_the_mint_for("acme/api", "acme/web")
+      allow(Rails.logger).to receive(:warn)
+
+      submit(%w[acme/api acme/web])
+
+      # The registrations themselves survived — that is the contract the rescue exists to keep, and
+      # it is what makes the absence below a decision rather than a failed batch.
+      expect(Repository.count).to eq(2)
+      expect(ApiKey.count).to eq(0)
+      expect(response.body).to include("Registered (2)")
+
+      expect(response.body).not_to include("turbo-cache-control")
+      expect(response.body).not_to include("this is the only time")
+      expect(response.body).not_to include("Copy these before you leave this page")
+      expect(response.body).not_to match(/sgk_[A-Za-z0-9_-]+/)
+    end
+
+    # The MIXED batch, which is the case that separates `any_revealed?` from a plain
+    # `registered.length` anywhere the count is rendered. One row keeps its key and one loses it, so
+    # the panel must be headed for ONE key rather than for the two rows that were registered, and
+    # exactly one wire-up block may appear.
+    #
+    # Both rows still belong under "Registered (2)": the keyless one links to a repository that
+    # really was registered, and it simply carries no wire-up block. A page that dropped it, or that
+    # counted it among the revealed, would be lying in one direction or the other.
+    it "reveals only the rows that kept a key, and still lists the one that did not" do
+      stub_github(repos: [github_repo("acme/api"), github_repo("acme/web")])
+      fail_the_mint_for("acme/web")
+      allow(Rails.logger).to receive(:warn)
+
+      submit(%w[acme/api acme/web])
+
+      expect(ApiKey.count).to eq(1)
+      expect(response.body).to include("Registered (2)")
+      expect(response.body).to include("1 API key — this is the only time it is shown")
+      expect(response.body.scan(/sgk_[A-Za-z0-9_-]+/).uniq.length).to eq(1)
+      expect(response.body.scan("Repository:  acme/api").length).to eq(1)
+      expect(response.body).not_to include("Repository:  acme/web")
+    end
+
+    # The wire-up prompt carries THIS repository's own name and THIS repository's own token, which
+    # is the property that makes it paste-ready. `integration_guide_agent_prompt` already takes
+    # `repository:` as an argument, so it works per row unchanged.
+    it "gives each repository a prompt naming it, with its own token already in it" do
+      stub_github(repos: [github_repo("acme/api"), github_repo("acme/web")])
+
+      submit(%w[acme/api acme/web])
+
+      expect(response.body.scan("Wire this repository up").length).to eq(2)
+      expect(response.body.scan("Repository:  acme/api").length).to eq(1)
+      expect(response.body.scan("Repository:  acme/web").length).to eq(1)
+    end
+  end
+
   describe "authentication" do
     it "does not let a signed-out visitor reach the picker or register anything" do
       delete sign_out_path

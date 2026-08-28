@@ -12,6 +12,21 @@ class ApiKey < ApplicationRecord
   TOKEN_PREFIX = "sgk_"
   TOKEN_BYTES = 24
 
+  # What a key is called when nobody chose a name for it.
+  #
+  # Here rather than at any one of the three call sites, because all three mint a key the person
+  # never named and the string is what makes those keys recognisably the same thing:
+  # `ApiKeysController#api_key_name`'s default (a browser mint with the name field left blank),
+  # `Api::V1::UserRepositoriesController::FIRST_KEY_NAME` (an agent registering over the API), and
+  # `BulkRegistration`'s per-repository first key (a browser registering a whole organization).
+  #
+  # It was two literals agreeing by hand until the third caller arrived, and
+  # `Api::V1::UserRepositoriesController` already states why the agreement is deliberate: "so a
+  # repository registered by an agent and one registered in a browser have identically-named keys
+  # rather than two conventions a person has to learn." Three hand-typed copies is three chances to
+  # change two of them, and nothing in the suite would see the third drift.
+  DEFAULT_NAME = "Default CI Key"
+
   belongs_to :repository
 
   # Who minted the key, recorded at create time — attribution is not recoverable afterwards, since

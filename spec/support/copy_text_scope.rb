@@ -5,8 +5,11 @@
 # `sourceTarget` is SINGULAR and scope-resolved: `Scope#containsElement` is
 # `element.closest(controllerSelector) === this.element`, so a source sitting inside a NESTED
 # `data-controller="copy-text"` belongs to that inner controller and is invisible to the outer one.
-# Both reveal panels rely on this — each nests a second scope around its ready-to-run curl snippet
-# precisely so the token stays the outer scope's only payload.
+# All three reveal panels rely on this — the repository's `sgk_` key, the account's `sgu_` key, and
+# each row of the bulk registration summary — and each nests a second scope precisely so the token
+# stays the outer scope's only payload. What that second scope wraps differs by surface: the two
+# single-token panels nest their ready-to-run curl snippet, and the bulk row nests its wire-up
+# prompt, which has no curl block of its own.
 #
 # Asserting on `panel.css(...)` directly would not hold that down: it counts sources the controller
 # never sees, so collapsing the nested scope — which is what silently hands auto-copy and Download

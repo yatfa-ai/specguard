@@ -66,8 +66,20 @@ class BulkRegistration
   # reader: on `:registered` it is what was just created, and on `:already_registered` it is the
   # existing one — but ONLY when this user may open it. A batch that named a repository somebody else
   # registered says "already registered" and links nowhere, which is all it can honestly say.
-  Outcome = Data.define(:full_name, :status, :message, :repository) do
-    def initialize(message: nil, repository: nil, **) = super
+  # `api_key` is the repository's FIRST key, minted by this batch, and it is present on `:registered`
+  # outcomes and on nothing else. It carries a live `ApiKey` whose `raw_token` is readable — the
+  # plaintext lives in memory for exactly the request that minted it (`ApiKey#assign_token`), and
+  # `BulkRegistrationsController#create` RENDERS its summary rather than redirecting, so the reveal
+  # happens inside that same request. That is why this crosses no flash and no serialization
+  # boundary, unlike the single-repository path, which needs `flash[:revealed_api_key]` precisely
+  # because it redirects.
+  #
+  # It is `nil` on every skip by construction, and nil is also the honest answer for a registered
+  # repository whose mint failed — see `#mint_first_key`, which refuses to let one key failure cost
+  # the other registrations. A reader must therefore ask for the key rather than assume a registered
+  # row has one; the summary renders such a row with its link and no wire-up block.
+  Outcome = Data.define(:full_name, :status, :message, :repository, :api_key) do
+    def initialize(message: nil, repository: nil, api_key: nil, **) = super
 
     def registered? = status == :registered
     def skipped? = !registered?
@@ -138,6 +150,22 @@ class BulkRegistration
     def total_count = outcomes.length
 
     def any_registered? = registered.any?
+
+    # The registered rows that actually carry a token to show, and the question the summary asks
+    # ONCE for the whole page.
+    #
+    # Deliberately NOT the same question as `any_registered?`, and the gap between them is the
+    # honest part: a registration whose key mint failed is registered and has no token (see
+    # `#mint_first_key`), so a page that reasoned from `any_registered?` would emit the reveal
+    # apparatus — the warning, the refresh hazard, the `turbo-cache-control` meta — over nothing.
+    #
+    # Asked here rather than as an `any?` written out in the view so the meta that suppresses
+    # Turbo's snapshot cache and the blocks that put plaintext in the DOM are answers to one
+    # question. Those two must not be able to disagree: a page holding tokens without the meta is
+    # repainted from cache on Back, and that is precisely the leak the meta exists to close.
+    def revealed = registered.select { |outcome| outcome.api_key.present? }
+
+    def any_revealed? = revealed.any?
 
     # Skips grouped by reason, in `SKIP_ORDER`, as `[status, label, outcomes]`. Empty groups are
     # dropped — a heading over nothing is a reason to think something is missing.
@@ -282,7 +310,7 @@ class BulkRegistration
   # One repository in flight. A mutable Struct rather than a `Data` precisely because it IS mutated
   # — three passes decide it, and each has to be able to record its answer without rebuilding the
   # rest. It never leaves this object; `#to_outcome` is the frozen thing callers see.
-  Candidate = Struct.new(:record, :status, :message, :repository, keyword_init: true) do
+  Candidate = Struct.new(:record, :status, :message, :repository, :api_key, keyword_init: true) do
     # Whatever the record's normalisation made of the submitted name, which is the value everything
     # downstream is about: what GitHub is asked, what is saved, and what the summary names.
     def full_name = record.github_full_name.to_s
@@ -297,7 +325,7 @@ class BulkRegistration
 
     def to_outcome
       BulkRegistration::Outcome.new(full_name: full_name, status: status, message: message,
-                                    repository: repository)
+                                    repository: repository, api_key: api_key)
     end
   end
   private_constant :Candidate
@@ -356,6 +384,7 @@ class BulkRegistration
     if candidate.record.save
       candidate.status = :registered
       candidate.repository = candidate.record
+      mint_first_key(candidate)
     elsif taken?(candidate.record)
       candidate.refuse(:already_registered, ALREADY_REGISTERED_MESSAGE)
     else
@@ -364,6 +393,66 @@ class BulkRegistration
     end
   rescue ActiveRecord::RecordNotUnique
     candidate.refuse(:already_registered, ALREADY_REGISTERED_MESSAGE)
+  end
+
+  # The repository's FIRST key, minted in the same pass that registered it — SPGD-806.
+  #
+  # ## Why the batch mints at all
+  #
+  # `Api::V1::UserRepositoriesController` states the criterion: "A repository with no key is a
+  # repository nothing can deliver to, and minting one is the very next thing every caller would do.
+  # The web equivalent is two gestures because a person is there to make them." The batch is the
+  # instance where that premise inverts. `MAX_BATCH` is 100, so "two gestures because a person is
+  # there" becomes 1 + 2N — N repository pages opened and N mint buttons pressed — for a feature
+  # whose entire reason to exist was that doing it one repository at a time was the cost.
+  #
+  # ## Registered rows ONLY, and that is a security property rather than a tidiness one
+  #
+  # It is called from exactly one place: the branch of `#save` that has just created a row. An
+  # `already_registered` outcome mints nothing, and must not — that repository may be somebody
+  # else's (the summary already refuses to link those) and may already hold keys, so minting there
+  # would hand this person a live credential for a repository they did not just register.
+  #
+  # ## `created_by_user` is not optional, and skipping it is not repairable
+  #
+  # `Api::V1::UserRepositoriesController#create` gives the reasoning in full and it applies verbatim
+  # here: `ApiKeysController#destroy` is a hard `destroy!` with no audit row, so attribution cannot
+  # be backfilled — a key minted NULL is NULL forever, renders "Unknown" in `repositories/_api_keys`,
+  # and silently undercounts `MembershipsController#keys_minted_by`, the query behind the warning
+  # shown when someone's access is revoked. This service holds `user` for the whole batch and that
+  # is exactly who minted it.
+  #
+  # ## A failed mint must not cost the other registrations
+  #
+  # This is the one place this class deliberately does NOT follow the API path. That one wraps the
+  # registration and the key in one transaction "because the response promises both" — a single
+  # repository, where rolling back is recoverable and half-registering is not. A batch promises
+  # something different, stated at the top of this file: it "is not a transaction and deliberately
+  # not an all-or-nothing", and each repository is "decided and saved independently". An unrescued
+  # `create!` here would let one key failure raise through the loop and destroy the other 99
+  # registrations — the exact failure mode that contract rules out.
+  #
+  # So a mint failure leaves the candidate `:registered` with no key. That is an honest state and
+  # the page renders it honestly: the row links to a repository that really was registered, and it
+  # carries no wire-up block because there is no token to show. The recovery is the one every
+  # keyless repository already has — mint from the repository page — and it costs nothing that the
+  # rollback alternative would have saved, because the registration is the expensive half.
+  #
+  # `StandardError` rather than a narrower list, and the width is the point: what must not happen is
+  # a batch dying on the mint, and enumerating the ways `create!` can fail is a list that goes stale
+  # the moment `ApiKey` gains a validation. The row is already saved when this runs, so there is
+  # nothing to roll back and nothing to leave half-written. Exceptions that are not this class's
+  # business to swallow — `SignalException`, `NoMemoryError` and friends — are not `StandardError`
+  # and still propagate.
+  def mint_first_key(candidate)
+    candidate.api_key = candidate.record.api_keys.create!(name: ApiKey::DEFAULT_NAME,
+                                                          created_by_user: user)
+  rescue StandardError => e
+    # Reported rather than swallowed silently: the batch survives, and the operator still gets to
+    # see that a repository was registered without the key it should have had.
+    Rails.logger.warn("BulkRegistration: could not mint first API key for " \
+                      "#{candidate.full_name}: #{e.class}: #{e.message}")
+    candidate.api_key = nil
   end
 
   # Attach the existing row to every already-registered skip — but only one this user may open, so

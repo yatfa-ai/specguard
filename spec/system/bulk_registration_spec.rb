@@ -132,4 +132,36 @@ RSpec.describe "Bulk organization registration", type: :system do
       expect(Repository.pluck(:github_full_name)).to match_array(%w[octocat/api octocat/blog])
     end
   end
+
+  # SPGD-806, in the one place it can actually be checked: the tokens reaching a real browser.
+  #
+  # The request spec beside this asserts the plaintext is in `response.body`, which is a claim about
+  # the RENDER. This is the claim about the PAGE — that the summary carrying N live credentials is
+  # what the person who pressed the button ends up looking at. The two are not the same assertion
+  # here, for the reason this whole file exists: `#create` answers with a rendered 200 rather than a
+  # redirect, and the failure mode if the picker ever stops opting out of Turbo is that the
+  # repositories are registered, the request spec still sees the tokens in the body it rendered
+  # itself, and the user watches the picker sit there — with the only copy of two credentials
+  # discarded in a response the browser dropped on the floor.
+  it "shows every newly registered repository's key on the summary, in the browser" do
+    visit bulk_repositories_path(organization: "acme")
+
+    check "acme/api"
+    check "acme/web"
+
+    click_button "Register selected repositories"
+
+    expect(page).to have_content("Registered 2 repositories.")
+    # The panel's own heading, which carries the count and the reveal-once claim in one sentence.
+    expect(page).to have_content("2 API keys — this is the only time they are shown")
+
+    # Both tokens genuinely rendered, read off the PAGE rather than out of the database: only a
+    # SHA-256 digest is stored, so by now the plaintext exists nowhere except on this screen.
+    shown = page.text.scan(/sgk_[A-Za-z0-9_-]+/).uniq
+    expect(shown.length).to eq(2)
+
+    # The refresh hazard is stated where the reader is, rather than left to be discovered by
+    # refreshing and finding the tokens gone.
+    expect(page).to have_content("Reloading this page will not bring them back")
+  end
 end

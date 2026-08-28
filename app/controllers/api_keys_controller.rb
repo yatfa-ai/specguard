@@ -74,7 +74,11 @@ class ApiKeysController < ApplicationController
     flash[:revealed_api_key_name] = api_key.name
   end
 
+  # The name a key gets when the mint form's name field was left blank. Reads `ApiKey::DEFAULT_NAME`
+  # rather than repeating the literal: three paths now mint an unnamed key — this form, an agent
+  # registering over the API, and a browser registering a whole organization — and
+  # `Api::V1::UserRepositoriesController::FIRST_KEY_NAME` states why they must not drift apart.
   def api_key_name
-    params.dig(:api_key, :name).presence || "Default CI Key"
+    params.dig(:api_key, :name).presence || ApiKey::DEFAULT_NAME
   end
 end

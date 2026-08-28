@@ -153,6 +153,94 @@
     <% end %>
   <% end %>
 
+  <%# Each newly registered repository's first `sgk_` key, shown here and nowhere else, ever —
+      SPGD-806.
+
+      ## Why the keys are here at all
+
+      `Api::V1::UserRepositoriesController` states the criterion this serves: a repository with no
+      key is a repository nothing can deliver to, and minting one is the very next thing every
+      caller would do. On the single-repository path that is two gestures "because a person is there
+      to make them". A batch inverts the premise — at `MAX_BATCH` it would be 1 + 2N gestures, N
+      repository pages opened and N mint buttons pressed, for a feature that exists precisely because
+      doing this one repository at a time was the cost.
+
+      ## Why no flash is involved, unlike every other reveal on the site
+
+      `#create` RENDERS this summary rather than redirecting (see the controller's header). `ApiKey`
+      holds the plaintext in memory for exactly the request that minted it, and that request is this
+      one — so the tokens are simply here, with no `flash[:revealed_api_key]`, no redirect and no
+      cross-request carry. `repositories/_revealed_token` needs the flash only because its path
+      redirects.
+
+      ## `any_revealed?`, NOT `any_registered?`
+
+      A registration whose key mint failed is registered and has no token — `BulkRegistration`
+      deliberately does not let one key failure abort the batch. Reasoning from `any_registered?`
+      here would emit this whole apparatus, the warning and the cache-suppressing meta included,
+      over a panel with nothing in it. Those rows still appear in "Registered" below, linked and
+      without a wire-up block, which is the honest render of what happened to them. %>
+  <% if @result.any_revealed? %>
+    <%# ONCE for the page, not once per row: this is a page-level decision and N identical metas
+        would be N copies of it.
+
+        Without it Turbo snapshots the live DOM — every plaintext token on it — when the reader
+        navigates away, and repaints it on Back or on any return here, which would make the "only
+        time these are shown" claim below false. It has to be this meta and not
+        `data-turbo-cache="false"` on the panel: the element-level attribute is NOT implemented in
+        turbo-rails 2.0.23, and the sole cache opt-out Turbo reads is `getSetting("cache-control")`,
+        i.e. this tag. The same mechanism and the same reasoning as `repositories/_revealed_token` —
+        see the full note there.
+
+        Emitted only inside this branch, and an untracked meta is provisional, so Turbo removes it
+        on the way out and the rest of the app keeps its snapshot cache. %>
+    <% content_for :head do %>
+      <meta name="turbo-cache-control" content="no-cache">
+    <% end %>
+
+    <%= render UI::PanelComponent.new(
+          title: "#{pluralize(@result.revealed.length, 'API key')} — this is the only time #{@result.revealed.length == 1 ? 'it is' : 'they are'} shown",
+          id: "revealed-keys",
+          class: "mt-4"
+        ) do %>
+      <%= render UI::AlertComponent.new(tone: :warning, title: "Copy these before you leave this page") do %>
+        <p>
+          Each repository below was registered with its first API key, so it can start reporting test
+          runs without a second trip. Only the SHA-256 digest of each one is stored — reloading this
+          page will not show them again.
+        </p>
+        <%# THE REFRESH HAZARD, stated rather than left for a reader to discover the hard way.
+
+            The controller's header explains that a refresh re-submits, and that this is survivable
+            "precisely because the operation is idempotent by construction: everything registered
+            the first time comes back as `already_registered` the second." That is still true of the
+            ROWS and it is exactly what is NOT true of the TOKENS: the re-submitted batch registers
+            nothing and therefore mints nothing, so a refresh replaces this panel with N "already
+            registered" rows and the tokens are gone.
+
+            The recovery is named because it exists and is cheap relative to the alternative: each
+            key can be regenerated from its repository page (`post :regenerate` in `routes.rb`), so
+            a lost token costs a rotation, not a re-registration — and a reader who does not know
+            that is a reader who may go looking for a way to register the repository again. %>
+        <p class="mt-2">
+          <strong>Reloading this page will not bring them back.</strong> A reload re-submits the
+          batch, and the repositories are already registered by then, so nothing new is minted. If
+          you lose one of these tokens, open the repository and regenerate that key — it costs a
+          rotation rather than a re-registration, and anything already using the old token will need
+          the new one.
+        </p>
+      <% end %>
+
+      <div class="mt-3 divide-y divide-app-border-light">
+        <%# One `copy-text` scope per repository, opened inside the partial. `sourceTarget` is
+            SINGULAR, so a single scope wrapping N payloads would copy whichever came first — see
+            the partial's header. Auto-copy is deliberately NOT enabled anywhere on this page. %>
+        <%= render partial: "bulk_registrations/revealed_batch_token",
+                   collection: @result.revealed, as: :outcome %>
+      </div>
+    <% end %>
+  <% end %>
+
   <% if @result.any_registered? %>
     <%= render UI::PanelComponent.new(title: "Registered (#{@result.registered_count})", class: "mt-4") do %>
       <ul class="divide-y divide-app-border-light">

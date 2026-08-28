@@ -62,7 +62,13 @@ class Api::V1::UserRepositoriesController < Api::BaseController
   #
   # The naming is only half of that parity — see `#create` for the other half, which is the one that
   # cannot be repaired later if it is skipped.
-  FIRST_KEY_NAME = "Default CI Key"
+  #
+  # It reads `ApiKey::DEFAULT_NAME` rather than repeating the literal, because there is now a THIRD
+  # caller minting an unnamed first key — `BulkRegistration`, registering a whole organization from
+  # the browser — and the parity this constant exists to state is only true while all three say the
+  # same thing. Kept as a named constant here rather than inlined at its call site: the sentence
+  # above is about this endpoint's contract, and the alias is where a reader of this file looks.
+  FIRST_KEY_NAME = ApiKey::DEFAULT_NAME
 
   # The delivery verdicts are resolved ONCE for the whole response and threaded into `#serialize`,
   # which takes one repository and has no access to the collection. Resolving them per entry would
