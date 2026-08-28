@@ -78,13 +78,33 @@ class GithubRegistrationGrant < ApplicationRecord
     # `:not_in_installation` ("Add it on GitHub, then pick it here") — which sends an agent to add a
     # repository that is already there, or that they never removed.
     #
-    # Reachable from two directions, which is why the guard lives HERE rather than at either of
-    # them: a person who disconnects their last account on `/account`, and one who uninstalls the
-    # App on github.com and is left with rows nothing syncs. The first deletes its own grant at the
-    # moment of the act (`GithubInstallationsController#destroy`), but that alone cannot hold the
-    # invariant — `capture` is lazy and memoized and fires on the NEXT picker render, long after
-    # any controller has finished, so a delete without this would be undone by the reader's next
-    # page view. The second has no such moment at all.
+    # WHAT THIS GUARD REACHES, precisely: the person holds NO installation ROWS. That is the state
+    # `blank_sources(installed: false)` describes, and it arrives two ways — someone who disconnects
+    # their last account on `/account`, and the `dependent: :destroy` cascade when a user row goes.
+    # The guard lives HERE rather than in the controller because the controller cannot hold the
+    # invariant on its own: `capture` is lazy and memoized and fires on the NEXT picker render, long
+    # after any controller has finished, so `GithubInstallationsController#destroy` deleting the
+    # grant at the moment of the act would be undone by the reader's next page view. It deletes it
+    # anyway, at the moment of the act; this is what makes the deletion stick.
+    #
+    # WHAT IT DOES NOT REACH, and this is the gap worth naming rather than glossing: an installation
+    # GitHub has stopped answering for. Someone who uninstalls the App on github.com — which
+    # `GithubHelper`'s own disclosure invites them to do — KEEPS the row, so `installations_for` is
+    # not empty, `sources` never reaches `blank_sources`, and `collect` hardcodes `installed: true`
+    # (`InstallationRepositories:304`). The 404 is absorbed as `:unreadable` with an EMPTY listing
+    # contributing no error, deliberately (see `read`'s comment), so `complete?` is true as well.
+    # Both gates pass, a fresh empty grant is written, and the verdict is the same false
+    # `:not_in_installation` described above. Measured, not reasoned: one row, GitHub answering
+    # NotFound, after a real picker render — `installed? true, complete? true, guard fires false,
+    # grant registrable [], stale? false, verdict :not_in_installation`.
+    #
+    # Closing that direction needs a moment this slice does not have: it is the "later slice" of
+    # installation and uninstall EVENTS that `GithubInstallation:18-25` names, and it is fenced off
+    # as out of scope here. A slice that takes it on wants a predicate distinct from `installed?`,
+    # which reads like "the App is installed on GitHub" but means "this person holds installation
+    # ROWS" — `sources` sets it from whether `installations_for` returned anything, never from what
+    # GitHub answered. `outcomes.any?(&:read?)` is the "and at least one of them answered" reading,
+    # and it is already sitting there.
     #
     # Deliberately NOT a deletion of the existing row: the same discipline the incomplete reading
     # above follows. This says "do not write a statement we cannot make", and whoever holds a grant
