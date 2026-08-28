@@ -84,9 +84,19 @@ class SpecIdentity < ApplicationRecord
   # disagree most sharply on exactly the row that decides this number: *"the same behaviour
   # reworded"* scores 0.62 under hashing, which is why 0.95 could refuse it as a rename, and a
   # semantic model is built to score that pair HIGH. **This constant is uncalibrated for the current
-  # provider and re-deriving it is open work.** Until it is re-measured, expect renames to be
-  # absorbed into the existing identity rather than starting a new history — the failure mode this
-  # comment's last paragraph calls the permanent, history-corrupting one.
+  # provider.** Until it is re-measured, expect renames to be absorbed into the existing identity
+  # rather than starting a new history — the failure mode this comment's last paragraph calls the
+  # permanent, history-corrupting one.
+  #
+  # The measurement exists and is one command: `bin/rails runner script/ann_recall_audit.rb
+  # calibrate` embeds a fixed set of representative band pairs through the shipped provider (one
+  # batch, ~30 texts) and prints the cosine for each band. It was committed by SPGD-375 and has not
+  # been run to a recorded result: doing so needs `OPENROUTER_API_KEY`, and no environment that
+  # ticket had access to held one — the script refuses to run without a key rather than quietly
+  # measuring a stub. The number this constant should carry is that run's to decide, on a corpus
+  # that spans every band below plus the reworded-behaviour rename a semantic model scores high;
+  # until someone with a key runs it, the warning above stands and the bands below remain the only
+  # calibration on record — from the retired provider.
   #
   # Measured on the RETIRED lexical provider (now `LexicalEmbeddingProvider`, kept in
   # `spec/support/lexical_embeddings.rb` for the resolution specs), over representative pairs:
