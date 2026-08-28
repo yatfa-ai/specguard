@@ -1136,10 +1136,18 @@ class RepositoriesController < ApplicationController
   # `GithubRepositoryListing` OVERRIDES that predicate, and the override forces `github_sources` —
   # the round trip and the self-repair this whole method exists to avoid. `github_user_token` is a
   # signed-session read costing no query and no round trip; `github_installed?` is one `EXISTS`
-  # against our own table. The second term is what `GithubUserSession#github_authorization_needed?`
-  # pairs with the first for, and it matters here: reconnecting is the fix only for somebody who HAS
-  # an installation to read. Somebody with none is not helped by a credential and is left to
-  # `:never_taken`, whose picker does mint for them.
+  # against our own table.
+  #
+  # ⚠ AND ASKED AS ONE TERM, NOT TWO. `GithubUserSession#github_authorization_needed?` pairs the
+  # token question with `github_installed?`, and this branch deliberately does NOT: the installation
+  # question is settled one rung ABOVE, by the `:not_installed` guard, so by the time this line
+  # evaluates an installation is a PRECONDITION rather than an open question and re-asking could not
+  # change the outcome. That is the point of the ladder — each rung may assume the rungs above it —
+  # and a defensive re-ask would not be belt-and-braces here but a second `EXISTS` on the hot path,
+  # quietly contradicting the claim that this page adds no cost it does not need. An earlier
+  # revision did carry that second term, back when `:not_installed` did not exist and the reader
+  # with no installation fell through to `:never_taken`; the rung above subsumed exactly that
+  # population, and the term went inert with it.
   #
   # `has_one :github_registration_grant` is one row on a unique index, and costs one query.
   def registration_grant_story
@@ -1175,7 +1183,7 @@ class RepositoriesController < ApplicationController
     # This page is about registration access, and theirs has not lapsed.
     return nil unless grant.nil? || grant.stale?
 
-    return :session_expired if github_user_token.nil? && current_user.github_installed?
+    return :session_expired if github_user_token.nil?
     return :never_taken if grant.nil?
 
     :lapsed
