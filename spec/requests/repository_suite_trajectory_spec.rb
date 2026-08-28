@@ -984,7 +984,70 @@ RSpec.describe "Repository suite-size trajectory", type: :request do
       expect(trajectory_panel).to have_no_css("#suite-trajectory-branch-fallback")
     end
 
+    it "says nothing about a fallback when the branch asked for is the one it drew" do
+      repository = repository_anchored_on_a_feature_branch
+
+      get repository_path(repository, branch: "main")
+
+      expect(trajectory_panel).to have_no_css("#suite-trajectory-branch-fallback")
+    end
+
+    # The branch controls' own carry rule. `trajectory_branch_item` is the ONE constructor behind
+    # both the chip row and the "All branches" menu, and the row-vs-menu agreement its comment
+    # claims is a property nothing asserted until now. Two things are pinned here on the overflow
+    # fixture, where both controls render the same branches:
+    #
+    #   - row and menu agree: for a branch visible in both, the SAME href — a chip and a menu entry
+    #     naming one branch must be one link offered twice, not two links that can drift.
+    #   - a branch gesture keeps the reader's open drill-downs: the asks ride through the branch
+    #     link (`drill_down_path`'s carry-by-default), and the href lands on the panel that owns
+    #     the gesture (`#suite-trajectory`), because switching series is not a request to close an
+    #     open file, area, description, run anchor or flaky test.
+    #
+    # The ask values need no matching fixture rows: `drill_down_path` reads the RAW request ivars,
+    # so the assertion is about what the link carries, not about what the panels render.
+    it "offers the same branch at the same href from the row and from the menu" do
+      repository = repository_with_eleven_branches
+
+      get repository_path(repository)
+
+      row_href = trajectory_panel.find("#suite-trajectory-branches nav a",
+                                       text: "main (2 runs)", match: :prefer_exact)[:href]
+      menu_href = trajectory_panel.find("#suite-trajectory-branch-menu a",
+                                        text: "main (2 runs)", match: :prefer_exact,
+                                        visible: :all)[:href]
+
+      expect(row_href).to eq(menu_href)
+      expect(row_href).to end_with("#suite-trajectory")
+    end
+
+    it "carries every open drill-down ask through a branch gesture" do
+      repository = repository_with_eleven_branches
+
+      get repository_path(repository, branch: "main", commit_sha: "feedfacecafe0001",
+                          spec_file: "spec/models/order_spec.rb", spec_directory: "spec/models",
+                          repeated_description: "settles the balance",
+                          unstable_test: "reconciles the ledger",
+                          unstable_test_from: "unstable-tests")
+
+      href = trajectory_panel.find("#suite-trajectory-branch-menu a",
+                                   text: "feature/3 (1 run)", match: :prefer_exact,
+                                   visible: :all)[:href]
+      query = href.split("#").first.split("?", 2).last
+      pairs = query.split("&")
+
+      expect(pairs).to include("branch=feature%2F3")
+      expect(pairs).to include("commit_sha=feedfacecafe0001")
+      expect(pairs).to include("spec_file=spec%2Fmodels%2Forder_spec.rb")
+      expect(pairs).to include("spec_directory=spec%2Fmodels")
+      expect(pairs).to include("repeated_description=settles+the+balance")
+      expect(pairs).to include("unstable_test=reconciles+the+ledger")
+      expect(pairs).to include("unstable_test_from=unstable-tests")
+      expect(href).to end_with("#suite-trajectory")
+    end
+
     # `?branch[]=main` and `?branch[x]=1` are a URL anyone can type, and neither is a branch name.
+    #
     # Handed to a `where` they raise — a 500 on the read-only page a reader arrived at by link.
     #
     # The shapes are listed ONCE, in `spec/support/shared_examples/malformed_branch_param.rb`, and
