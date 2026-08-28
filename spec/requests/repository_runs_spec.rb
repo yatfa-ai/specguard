@@ -47,7 +47,10 @@ RSpec.describe "Repository recent runs", type: :request do
     get repository_path(repository)
 
     expect(response).to have_http_status(:ok)
-    expect(run_headers).to eq(["Commit", "Branch", "Tests", "Duration", "Annotated", "Ingested"])
+    # The trailing empty column is the per-row Delete control's (SPGD-812): the owner of this
+    # repository holds `repo.delete`, so the panel renders one extra actions column whose header
+    # is deliberately unnamed — the button in its cells names itself.
+    expect(run_headers).to eq(["Commit", "Branch", "Tests", "Duration", "Annotated", "Ingested", ""])
 
     cells = run_cells("a1b2c3d")
     expect(cells[COMMIT]).to eq("a1b2c3d")

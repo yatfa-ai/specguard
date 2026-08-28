@@ -81,6 +81,17 @@ Rails.application.routes.draw do
     # which fires a consequence dialog about surviving API keys for an operation that is not a
     # removal, and resets the "Since" column so a narrowed colleague reads as a brand-new one.
     resources :members, only: %i[index new create edit update destroy], controller: "memberships"
+
+    # Deleting one run from the "Recent runs" panel (SPGD-812). A member route with only `destroy`,
+    # the same shape `api_keys` above uses: the id is a path segment so Rails' CSRF check applies,
+    # and the action scopes the lookup through the repository, so a run id belonging to another
+    # repository resolves to nobody's row.
+    #
+    # Gated at `:repo_delete` in the action, not at a per-run permission: a run is not a
+    # separately-shareable object, it is repository history, and the price of removing one is
+    # bounded above by the price of removing the repository (RepositoriesController#destroy gates
+    # the same capability for the whole cascade).
+    resources :runs, only: %i[destroy]
   end
 
   # --- Account: what belongs to the person rather than to a repository ------------

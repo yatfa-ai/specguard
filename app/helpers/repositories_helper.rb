@@ -149,6 +149,27 @@ module RepositoriesHelper
       "history and every other member's access went with it."
   end
 
+  # The copy in the per-row Delete confirm dialog on the "Recent runs" panel (SPGD-812). Question
+  # form, matching `remove_confirmation` above; the sentence must name what goes so the dialog is
+  # an informed consent rather than a speed bump — this run, its shards, its per-example
+  # observations, and that it cannot be undone.
+  def delete_run_confirmation(test_run)
+    "Delete run #{test_run.commit_sha.first(7)}? This removes the run, its shards and its " \
+      "per-example observations from #{test_run.repository.github_full_name}, and it cannot be undone."
+  end
+
+  # The counterpart after the click, called from `RunsController#destroy` — the same
+  # confirmation/notice pair `remove_confirmation` / `remove_notice` established.
+  #
+  # Past tense, and it names the run by commit sha and branch so a member who deleted the wrong
+  # row of ten seven-character hashes can tell which one went. `branch` is nullable, so a run
+  # that reported no branch reads "branch not reported" rather than a blank — the same fallback
+  # the Branch column itself renders.
+  def delete_run_notice(test_run)
+    branch = test_run.branch.presence || "branch not reported"
+    "Deleted run #{test_run.commit_sha.first(7)} (#{branch}) and its shards and observations."
+  end
+
   # Why the "Suite growth" panel is not drawing a line, when there are runs on the branch but fewer
   # than two the platform will compare.
   #
