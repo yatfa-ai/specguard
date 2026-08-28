@@ -1441,7 +1441,7 @@ module RepositoriesHelper
   # on both callers already say the intent is.
   def trajectory_branch_item(repository, history, current_branch)
     { label: trajectory_branch_label(history),
-      href: repository_path(repository, branch: history.name),
+      href: drill_down_path(repository, branch: history.name, anchor: "suite-trajectory"),
       current: history.name == current_branch }
   end
 
