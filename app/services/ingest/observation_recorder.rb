@@ -208,19 +208,44 @@ module Ingest
       }
     end
 
-    # The three intent fields, or three nils. Always all three keys, never a subset: `upsert_all`
+    # The four intent fields, or four nils. Always all four keys, never a subset: `upsert_all`
     # builds one statement from the first row's keys, so a row omitting them would take the whole
     # delivery's columns with it and silently drop the intent of every annotated example behind an
     # unannotated first one.
     #
-    # `layer` and `preconditions` are deliberately not read — see the migration.
+    # THAT RULE IS WHY THIS METHOD IS UNCONDITIONAL RATHER THAN MERGING A LAYER IN WHEN ONE IS
+    # PRESENT. The failure it prevents is silent — a payload whose first spec is unannotated would
+    # write the whole delivery without the column, losing every later example's layer with nothing
+    # raised — so it is pinned by a spec ("keeps an annotated example's layer when the first spec of
+    # the delivery is unannotated") rather than left to this comment.
+    #
+    # `layer` IS READ HERE, and it is the one field that was required at the door and then dropped.
+    # `Ingest::Payload#validate_intent` rejects the run with a 400 when the layer is missing or
+    # outside `vendor/schemas/open-test-intent.v1.json`'s four-token enum, so anything reaching this
+    # method has already been checked against that enum — no re-validation belongs here, and none of
+    # the envelope's strictness is relaxed by storing the value.
+    #
+    # THE DECLARED LAYER, NEVER A DERIVED ONE. This records what the annotation said, which is
+    # exactly why it is worth storing: a `layer: "request"` example living under `spec/models/`
+    # stores `"request"`, and a column that mixed a declaration with a directory guess could answer
+    # neither "what did the author claim?" nor "where does this file sit?". Anything inferred needs
+    # its own column under its own name.
+    #
+    # `preconditions` is still deliberately not read, and this is not an oversight left over from
+    # the migration that excluded both. It is free-form prose rather than a bounded enum, no surface
+    # consumes it, and it qualifies a test rather than classifying it — so it fails the "first-class
+    # axis" clause the layer meets. See `db/migrate/20260827120000_add_intent_layer_to_spec_observations.rb`
+    # for why storing the layer does NOT reopen the identity-text question: `Ingest::SpecSignal::INTENT_PARTS`
+    # stays entity/action/behavior, because folding "unit" into the embedded sentence would have
+    # every unit test in the suite share a token.
     def intent_attributes(intent)
       intent = {} unless intent.is_a?(Hash)
 
       {
         intent_entity: presence_of(intent["entity"]),
         intent_action: presence_of(intent["action"]),
-        intent_behavior: presence_of(intent["behavior"])
+        intent_behavior: presence_of(intent["behavior"]),
+        intent_layer: presence_of(intent["layer"])
       }
     end
 

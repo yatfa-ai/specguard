@@ -113,7 +113,7 @@ RSpec.describe "GET /api/v1/repository — latest_run.spec_file_examples", type:
   end
 
   describe "a spec file that was asked for" do
-    # AC1. The block exists, its rows carry the six operands the endpoint's other per-example block
+    # AC1. The block exists, its rows carry the seven operands the endpoint's other per-example block
     # already serves, and the FILE's two population figures sit beside them. The array is asserted
     # as a SEQUENCE — `eq`, not `match_array` — because "slowest first, untimed last" is half of
     # what this key promises, and the untimed row's position is the half a set comparison drops.
@@ -121,19 +121,25 @@ RSpec.describe "GET /api/v1/repository — latest_run.spec_file_examples", type:
       expect(block(query: { spec_file: TARGET_FILE })).to eq(
         "path" => TARGET_FILE,
         "rows" => [
+          # `intent_layer` is null on every row here because this file's fixture is built from
+          # `unannotated_spec` throughout — an unannotated example declares no layer, so a null is
+          # the honest reading rather than a gap. What this block owes the endpoint is the SHAPE:
+          # the key is present on every row. The VALUE axis — a declared token beside an honest
+          # null, interleaved — is pinned where the fixture can carry both, in
+          # `repository_latest_run_spec.rb`, and the write itself in `ingest_spec.rb`.
           { "name" => "Order#total sums the line items", "file_path" => TARGET_FILE,
             "line_number" => 4, "spec_file_path" => TARGET_FILE,
-            "duration_seconds" => 3.0, "outcome" => "passed" },
+            "duration_seconds" => 3.0, "outcome" => "passed", "intent_layer" => nil },
           { "name" => "Order#total ignores voided lines", "file_path" => TARGET_FILE,
             "line_number" => 12, "spec_file_path" => TARGET_FILE,
-            "duration_seconds" => 1.5, "outcome" => "failed" },
+            "duration_seconds" => 1.5, "outcome" => "failed", "intent_layer" => nil },
           { "name" => "behaves like a billable charges once",
             "file_path" => "spec/support/shared_examples/billable.rb",
             "line_number" => 7, "spec_file_path" => TARGET_FILE,
-            "duration_seconds" => 0.5, "outcome" => "passed" },
+            "duration_seconds" => 0.5, "outcome" => "passed", "intent_layer" => nil },
           { "name" => "Order#refund is idempotent", "file_path" => TARGET_FILE,
             "line_number" => 20, "spec_file_path" => TARGET_FILE,
-            "duration_seconds" => nil, "outcome" => "pending" }
+            "duration_seconds" => nil, "outcome" => "pending", "intent_layer" => nil }
         ],
         "recorded_count" => 4,
         "timed_count" => 3,
@@ -152,7 +158,7 @@ RSpec.describe "GET /api/v1/repository — latest_run.spec_file_examples", type:
         .to contain_exactly("path", "rows", "recorded_count", "timed_count", "limit")
       expect(served["rows"].first.keys)
         .to contain_exactly("name", "file_path", "line_number", "spec_file_path",
-                            "duration_seconds", "outcome")
+                            "duration_seconds", "outcome", "intent_layer")
     end
 
     # `SlowestExamples` exposes a `reported_outcome_count` and `SpecFileExamples` does not, which is

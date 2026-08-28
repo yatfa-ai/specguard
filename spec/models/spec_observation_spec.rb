@@ -3633,4 +3633,43 @@ RSpec.describe SpecObservation do
       expect(readings).not_to be_unreadable
     end
   end
+
+  # WHAT `#signal` HANDS THE IDENTITY MACHINERY, pinned against the column that now sits next to the
+  # three fields it reads.
+  #
+  # This guard exists because SPGD-851 changed the temptation, not the code. `#signal` rebuilds the
+  # wire-shaped intent hash from this row's columns, and until that ticket the layer was in no
+  # column at all — so there was nothing here to fold in. Now `intent_layer` is stored on the very
+  # row this method reads, and adding a fourth `"layer" =>` line looks like completing a triple that
+  # was only ever partial for want of data.
+  #
+  # It is not. `Ingest::SpecSignal::INTENT_PARTS` excludes the layer DELIBERATELY: it classifies the
+  # test rather than saying what it is about, so folding "unit" into the text would put one shared
+  # token in every unit test in the suite and corrupt the semantic identity of every annotated
+  # example already stored. The declared layer is served to clients by
+  # `RepositoryOverview#serialized_slowest_examples`; it never reaches the text.
+  #
+  # Asserted on the hash `#signal` BUILDS rather than only on the text that comes out, because the
+  # text assertion alone is satisfied by `SpecSignal` ignoring an extra key it was handed — which
+  # would leave this method quietly passing the layer across a boundary it has no business crossing.
+  it "represents a row by its intent triple and its name, never by the layer stored beside them" do
+    repository = create_repository
+    run = create_test_run(repository: repository)
+    observation = SpecObservation.create!(
+      test_run: run, repository: repository, name: "Invoice finalize locks the line items",
+      example_id: "./spec/models/invoice_spec.rb[1:12]", file_path: "spec/models/invoice_spec.rb",
+      spec_file_path: "spec/models/invoice_spec.rb", line_number: 12, status: "annotated",
+      intent_entity: "Invoice", intent_action: "finalize",
+      intent_behavior: "locks the line items once the invoice is finalized",
+      intent_layer: "request"
+    )
+
+    signal = observation.signal
+
+    expect(signal.text).to eq("Invoice finalize locks the line items once the invoice is finalized")
+    expect(signal.text).not_to include("request")
+    # The layer is stored on the row the signal was built from, so this is a real exclusion rather
+    # than a column that happened to be empty.
+    expect(observation.intent_layer).to eq("request")
+  end
 end

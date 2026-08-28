@@ -151,16 +151,22 @@ RSpec.describe "GET /api/v1/repository — latest_run.unannotated_examples", typ
     # and says out loud what a new key owes this block before it ships.
     #
     # AC7 IS THE SECOND HALF OF THIS EXAMPLE. The three per-example blocks on this endpoint agree on
-    # SIX fields and this one serves FOUR, which is a difference asserted rather than structural —
-    # exactly as their agreement is. Their own `contain_exactly`s go red if one of theirs is dropped
-    # to match this; this one goes red if `duration_seconds` or `outcome` is added here to match them.
-    # Both directions are pinned, in the two places that own them.
+    # SEVEN fields and this one serves SIX, which is a difference asserted rather than structural —
+    # exactly as their agreement is. The two sets are not nested: this block withholds three of
+    # theirs and carries two — `reading` and `derived_intent` (SPGD-711) — that none of them serves.
+    # Their own `contain_exactly`s go red if one of theirs is dropped
+    # to match this; this one goes red if `duration_seconds`, `outcome` or `intent_layer` is added
+    # here to match them. Both directions are pinned, in the two places that own them.
+    #
+    # `intent_layer` is the third withheld field (SPGD-851) and the one whose absence is STRUCTURAL
+    # rather than editorial: this block's population is by definition the rows that declared no
+    # layer, so the key could only ever be null here.
     #
     # `spec_file` and `spec_directory` are in the key set on EVERY call, `null` when they were not
     # sent — the no-ask spelling the whole endpoint uses, and the reason a client can reconcile
     # `recorded_count` against `total_specs - annotated_specs` without knowing what it sent: the two
     # keys say whether the count is the run's.
-    it "serves exactly the unannotated_examples keys this contract pins, and not the six-field shape" do
+    it "serves exactly the unannotated_examples keys this contract pins, and not the per-example shape" do
       served = block(query: ask)
 
       expect(served.keys)
@@ -169,12 +175,13 @@ RSpec.describe "GET /api/v1/repository — latest_run.unannotated_examples", typ
       expect(served["rows"].first.keys)
         .to contain_exactly("name", "file_path", "line_number", "spec_file_path", "reading",
                             "derived_intent")
-      # Not the six-field per-example shape, and specifically not by accident: the endpoint's other
-      # per-example block is on the same response and DOES carry both.
+      # Not the other blocks' seven-field per-example shape, and specifically not by accident: the
+      # endpoint's other per-example block is on the same response and DOES carry all three.
       expect(served["rows"].first).not_to have_key("duration_seconds")
       expect(served["rows"].first).not_to have_key("outcome")
+      expect(served["rows"].first).not_to have_key("intent_layer")
       expect(latest_run(query: ask).dig("slowest_examples", "rows").first)
-        .to include("duration_seconds", "outcome")
+        .to include("duration_seconds", "outcome", "intent_layer")
     end
 
     # ⭐ AC2. THE ASSERTION THIS WHOLE FILE EXISTS FOR. Every figure is taken off the SAME RESPONSE

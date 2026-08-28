@@ -129,6 +129,76 @@ RSpec.describe "POST /api/v1/ingest", type: :request do
       expect(unannotated.intent_behavior).to be_nil
     end
 
+    # THE FIELD THE ENVELOPE REQUIRED AND STORAGE THEN DROPPED. `layer` is in the schema's
+    # `required` list and constrained to a four-token enum, so `Ingest::Payload#validate_intent`
+    # rejected every run that omitted it — and then `intent_attributes` wrote the other three and
+    # discarded this one, which is the inversion `intent_layer` closes.
+    #
+    # Asserted by READING THE ROW BACK, never by expecting the recorder to have been called with
+    # something: a message expectation would pass against a column that was never added and against
+    # an `upsert_all` that silently dropped the key.
+    it "keeps the layer each annotated example declared, at the observation" do
+      ingest(body)
+
+      layers = TestRun.last.spec_observations.where.not(intent_entity: nil)
+                      .order(:line_number).pluck(:intent_layer)
+
+      expect(layers).to eq(%w[unit request])
+    end
+
+    # The other half of the pair above, and the reason the column is nullable. This is partly
+    # STRUCTURAL rather than a choice the recorder makes freely: `validate_intent` requires `intent`
+    # to be ABSENT when `status == "unannotated"`, so what is pinned here is the recorder's handling
+    # of a nil intent — and specifically the `presence_of` path, which is what keeps `""` from
+    # reaching the column. A blank string would make "declared no layer" indistinguishable from a
+    # layer whose name is empty, so `be_nil` is asserted rather than `be_blank`.
+    it "leaves an unannotated example's layer null rather than defaulting or blanking it" do
+      ingest(body)
+
+      unannotated = TestRun.last.spec_observations.find_by(status: "unannotated")
+
+      expect(unannotated.intent_layer).to be_nil
+      expect(unannotated.intent_layer).not_to eq("")
+    end
+
+    # THE `upsert_all` ALL-KEYS-OR-NONE TRAP, which is why `intent_attributes` returns all four keys
+    # unconditionally instead of merging a layer in when one is present.
+    #
+    # `upsert_all` builds ONE statement from the FIRST row's keys, so a recorder that omitted
+    # `intent_layer` for the unannotated spec leading this payload would take the column off the
+    # whole delivery — and the annotated example behind it would store a null layer with nothing
+    # raised and a 202 returned. The failure is completely silent, which is why the ORDER here is
+    # load bearing and stated: unannotated FIRST, annotated SECOND. Reversing the fixture makes this
+    # example pass against the broken recorder.
+    it "keeps an annotated example's layer when the first spec of the delivery is unannotated" do
+      ingest(ingest_payload(specs: [unannotated_spec(file_path: "spec/models/user_spec.rb", line_number: 1),
+                                    annotated_spec(file_path: "spec/requests/checkout_spec.rb",
+                                                   line_number: 2, layer: "request")]))
+
+      expect(response).to have_http_status(:accepted)
+
+      annotated = TestRun.last.spec_observations.find_by(status: "annotated")
+      expect(annotated.intent_layer).to eq("request")
+    end
+
+    # THE ASSERTION THAT SEPARATES A DECLARATION FROM A GUESS, and the point of storing the field at
+    # all. This example DECLARES `layer: "request"` while living under `spec/models/` — a directory
+    # that implies `unit` — so a recorder that inferred the layer from the path, or that let an
+    # inference override the annotation, stores `"unit"` here and is red.
+    #
+    # Nothing derived may ever be written to this column (see the migration): a column mixing an
+    # author's claim with a directory guess could answer neither "what did this test say it was?"
+    # nor "where does this file sit?".
+    it "stores the DECLARED layer even when the file's directory implies a different one" do
+      ingest(ingest_payload(specs: [annotated_spec(file_path: "spec/models/invoice_spec.rb",
+                                                   line_number: 4, layer: "request")]))
+
+      observation = TestRun.last.spec_observations.sole
+
+      expect(observation.file_path).to start_with("spec/models/")
+      expect(observation.intent_layer).to eq("request")
+    end
+
     it "scopes the run to the repository behind the key" do
       other = create_repository(user: create_user(github_uid: "2002", github_handle: "hubot"),
                                 github_full_name: "acme/ledger")

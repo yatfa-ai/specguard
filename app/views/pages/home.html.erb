@@ -54,9 +54,11 @@
         That half has since shipped. `Ingest::ObservationRecorder` writes one `SpecObservation` per
         example, and the answers standing on those rows — slowest tests, heaviest spec files,
         heaviest spec directories — are readable off the dashboard and off `GET /api/v1/repository`,
-        so by the rule below they belong in the first panel and have moved there. Duplicate
-        clusters, and the per-test `layer` the recorder deliberately does not read, still have
-        nothing behind them.
+        so by the rule below they belong in the first panel and have moved there. The per-test
+        `layer` has since joined them: the recorder now stores the layer each annotated example
+        DECLARES, and `latest_run.slowest_examples` serves it per row. What still has nothing behind
+        it is duplicate clusters — and the per-AREA rollup of that layer, which is a different
+        question from knowing one test's, and the one the second panel still names.
 
         So availability is the axis the page is split on, and the split is carried by the panel
         TITLES and by a warning at the top of the second one — never by a footnote or by a change of
@@ -99,27 +101,41 @@
           like the ones above and the whole point is that they are not the same kind of claim. %>
       <%= render UI::AlertComponent.new(tone: :warning, title: "Not available yet") do %>
         This is the product's direction, not its feature list. Ingestion does now record a row per
-        example, and the timing answers built on those rows are in the panel above. What is
+        example, and the timing answers built on those rows are in the panel above — as is the layer
+        each annotated test declares, which ingestion now stores and the API now serves. What is
         left here is blocked on work that has not been done rather than on data alone: clustering
-        across the whole suite, and the layer of each test, which ingestion does not read. No panel
+        across the whole suite, and rolling that per-test layer up into a per-area picture. No panel
         and no endpoint answers these today.
       <% end %>
 
-      <%# Row 1 of this list — "Which tests are slow, and which areas dominate the clock?" — moved to
-          `#answers-today` when the per-test write path shipped. Rows 2 and 4 are untouched and are
-          why this panel still exists: `repeated_descriptions` is one run at description grain and
-          its own panel says it "presents, and does not judge", which is not suite-wide clustering.
-          Row 3's rationale is narrowed to the half that is genuinely open — `Ingest::ObservationRecorder`
-          writes the row per test, but deliberately does not read `layer`.
+      <%# NUMBERED BY WHAT RENDERS, and that is a correction rather than a style choice. This comment
+          used to count a fourth row that had already moved to `#answers-today` — "Which tests are
+          slow, and which areas dominate the clock?", gone when the per-test write path shipped — so
+          its "row 3" and "row 4" named the rows a reader counts as 2 and 3, and the instruction at
+          the foot of this comment sent that reader to the wrong pair. The departed row is described
+          here, but it is no longer COUNTED: the numbers below are the rendered ones.
+
+          Row 1 is untouched and is why this panel still exists: `repeated_descriptions` is one run
+          at description grain and its own panel says it "presents, and does not judge", which is
+          not suite-wide clustering.
+
+          Row 2's rationale is narrowed AGAIN, to the half that is still genuinely open. It used to
+          read "which ingestion does not read", and that went false when `Ingest::ObservationRecorder`
+          began storing `intent_layer` — the layer each annotated example declares is now persisted
+          and served per row by `latest_run.slowest_examples`. What is still missing is the ROLLUP:
+          knowing one test's layer is not knowing which layers already cover an AREA, and no panel
+          and no endpoint groups the stored layers that way. That is the blocker this row now names.
 
           That rationale has to stay phrased as a BLOCKER ("Needs ..."), not as a status report,
           because the last row's "both of the above" resolves to the two needs printed above it. A
-          rationale that opens by naming something which already ships would leave row 4 pointing at
+          rationale that opens by naming something which already ships would leave row 3 pointing at
           a shipped capability — the same checkable-claim-that-does-not-hold defect this panel was
-          edited to remove. Re-read row 4 against row 3 whenever either is reworded. %>
+          edited to remove. That is exactly why storing the layer did NOT promote this row to
+          `#answers-today`: the row has to stay here, and stay a "Needs ...", for row 3 to keep
+          resolving to two. Re-read row 3 against row 2 whenever either is reworded. %>
       <%= render UI::DefListComponent.new(rows: [
             ["Which groups of tests are potentially redundant?", "Needs suite-wide clustering"],
-            ["What already exists for this area, and at which layers?", "Needs the layer of each test, which ingestion does not read"],
+            ["What already exists for this area, and at which layers?", "Needs the stored per-test layer rolled up per area"],
             ["Which of those duplicates is safe to collapse?", "Needs both of the above"]
           ]) %>
     </div>

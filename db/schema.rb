@@ -10,7 +10,7 @@
 #
 # It's strongly recommended that you check this file into your version control system.
 
-ActiveRecord::Schema[8.1].define(version: 2026_08_26_130000) do
+ActiveRecord::Schema[8.1].define(version: 2026_08_27_120000) do
   # These are extensions that must be enabled in order to support this database
   enable_extension "pg_catalog.plpgsql"
   enable_extension "vector"
@@ -273,6 +273,7 @@ ActiveRecord::Schema[8.1].define(version: 2026_08_26_130000) do
     t.string "intent_action"
     t.text "intent_behavior"
     t.string "intent_entity"
+    t.string "intent_layer"
     t.integer "line_number", null: false
     t.text "name"
     t.string "outcome"
