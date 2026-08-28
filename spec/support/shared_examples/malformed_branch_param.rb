@@ -37,6 +37,7 @@ RSpec.shared_examples "a surface that treats a malformed branch parameter as no 
     ["a nested hash", { branch: { a: "b" } }],
     ["an array of hashes", { branch: [{ a: "b" }] }]
   ].each do |shape, query|
+    # @intent: { entity: "RequestedBranchParam", action: "treat non-string branch as no ask", behavior: "a branch parameter in a non-String shape answers 200 with the unfiltered result rather than 500, matching an absent parameter", layer: "request" }
     it "answers 200 rather than 500 when branch arrives as #{shape}" do
       expect_branch_param_treated_as_no_ask(query)
     end

@@ -43,6 +43,7 @@ RSpec.shared_examples "a surface that treats a malformed spec-directory paramete
     ["a nested hash", { spec_directory: { a: "b" } }],
     ["an array of hashes", { spec_directory: [{ a: "b" }] }]
   ].each do |shape, query|
+    # @intent: { entity: "RequestedSpecDirectoryParam", action: "treat non-string spec_directory as no ask", behavior: "a spec_directory parameter in a non-String shape answers 200 with the unscoped answer rather than 500, matching an absent parameter", layer: "request" }
     it "answers 200 rather than 500 when spec_directory arrives as #{shape}" do
       expect_spec_directory_param_treated_as_no_ask(query)
     end

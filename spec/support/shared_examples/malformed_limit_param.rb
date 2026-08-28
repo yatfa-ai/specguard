@@ -59,6 +59,7 @@ RSpec.shared_examples "a surface that treats a non-widening limit parameter as n
     ["zero", { limit: "0" }],
     ["a negative integer", { limit: "-3" }]
   ].each do |shape, query|
+    # @intent: { entity: "RequestedLimitParam", action: "treat non-widening limit as no ask", behavior: "a limit parameter that is not a widening answers 200 with the rollups at their shipped default sizes rather than 500 or a silent wrong size", layer: "request" }
     it "answers 200 with the default rollup size when limit arrives as #{shape}" do
       expect_limit_param_treated_as_no_ask(query)
     end

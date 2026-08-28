@@ -46,6 +46,7 @@ RSpec.shared_examples "a surface that treats a malformed near-duplicates paramet
     ["a nested hash", { near_duplicates: { a: "b" } }],
     ["an array of hashes", { near_duplicates: [{ a: "b" }] }]
   ].each do |shape, query|
+    # @intent: { entity: "RequestedNearDuplicatesParam", action: "treat non-string near_duplicates as no ask", behavior: "a near_duplicates parameter in a non-String shape answers 200 without running the duplication census rather than 500, matching an absent parameter", layer: "request" }
     it "answers 200 rather than running the census when near_duplicates arrives as #{shape}" do
       expect_near_duplicates_param_treated_as_no_ask(query)
     end

@@ -49,6 +49,7 @@ RSpec.shared_examples "a surface that treats a malformed unannotated-examples pa
     ["a nested hash", { unannotated_examples: { a: "b" } }],
     ["an array of hashes", { unannotated_examples: [{ a: "b" }] }]
   ].each do |shape, query|
+    # @intent: { entity: "RequestedUnannotatedExamplesParam", action: "treat non-string unannotated_examples as no ask", behavior: "an unannotated_examples parameter in a non-String shape answers 200 without opening the unannotated block rather than 500, matching an absent parameter", layer: "request" }
     it "answers 200 rather than opening the block when unannotated_examples arrives as #{shape}" do
       expect_unannotated_examples_param_treated_as_no_ask(query)
     end

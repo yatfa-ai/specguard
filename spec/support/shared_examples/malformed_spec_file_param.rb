@@ -43,6 +43,7 @@ RSpec.shared_examples "a surface that treats a malformed spec-file parameter as 
     ["a nested hash", { spec_file: { a: "b" } }],
     ["an array of hashes", { spec_file: [{ a: "b" }] }]
   ].each do |shape, query|
+    # @intent: { entity: "RequestedSpecFileParam", action: "treat non-string spec_file as no ask", behavior: "a spec_file parameter in a non-String shape answers 200 with the unscoped answer rather than 500, matching an absent parameter", layer: "request" }
     it "answers 200 rather than 500 when spec_file arrives as #{shape}" do
       expect_spec_file_param_treated_as_no_ask(query)
     end

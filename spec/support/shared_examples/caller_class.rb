@@ -42,6 +42,7 @@ RSpec.shared_examples "a component that appends the caller's class" do |options|
     # method returns "<base> <probe>" and then "<base>" — the caller's class vanishes on the second
     # call, with nothing raised and nothing logged. Asserting only that the FIRST call contains the
     # probe would pass against the mutating form; comparing the second to the first is the point.
+    # @intent: { entity: "ApplicationComponent", action: "read caller class twice", behavior: "the caller's class survives a second call to the class-computing method unchanged instead of vanishing after the mutating options delete", layer: "unit" }
     it "survives a second call to ##{method}" do
       component = instance_exec({ key => probe }, &build)
 
@@ -69,6 +70,7 @@ RSpec.shared_examples "a component that appends the caller's class" do |options|
     # assertion; there is no duplicate attribute and no displaced class to observe. What this
     # example still pins at all 19 is that the caller's class lands on the root element, once,
     # without displacing `base`. See `ApplicationComponent#merge_classes` for the split.
+    # @intent: { entity: "ApplicationComponent", action: "render with caller class", behavior: "the caller's class lands on the root element exactly once, as a single class attribute, without displacing the component's own base classes", layer: "integration" }
     it "lands on the root element exactly once, without displacing the component's own classes" do
       render_inline(instance_exec({ key => probe }, &build)) { body }
 
@@ -76,6 +78,7 @@ RSpec.shared_examples "a component that appends the caller's class" do |options|
       expect(rendered_content.scan(probe).size).to eq(1)
     end
 
+    # @intent: { entity: "ApplicationComponent", action: "render without caller class", behavior: "rendering with an empty caller's-class slot leaves the component's own classes on the root element and emits no caller-class remnant anywhere", layer: "integration" }
     it "leaves the component's own classes intact when the caller passes none" do
       render_inline(instance_exec({}, &build)) { body }
 

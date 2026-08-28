@@ -45,6 +45,7 @@ RSpec.shared_examples "a surface that treats a malformed repeated-description pa
     ["a nested hash", { repeated_description: { a: "b" } }],
     ["an array of hashes", { repeated_description: [{ a: "b" }] }]
   ].each do |shape, query|
+    # @intent: { entity: "RequestedRepeatedDescriptionParam", action: "treat non-string repeated_description as no ask", behavior: "a repeated_description parameter in a non-String shape answers 200 with the unfiltered answer rather than 500, matching an absent parameter", layer: "request" }
     it "answers 200 rather than 500 when repeated_description arrives as #{shape}" do
       expect_repeated_description_param_treated_as_no_ask(query)
     end
