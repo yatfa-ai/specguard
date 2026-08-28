@@ -46,9 +46,16 @@
 # present in the URL.
 #
 # Then ONE parse with no rescue ladder: `Integer(ask, exception: false)` is the only line that
-# decides what a numeric string is, and it answers `nil` for every non-integer spelling at once —
-# `"abc"`, `"1.5"`, `"0x10"` — rather than a regex that matches today's shapes and misses
-# tomorrow's. ZERO and NEGATIVE answers fall to `nil` too: a limit of zero is not a wider list
+# decides what a numeric string is, and it answers `nil` for every spelling that names no integer
+# at once — `"abc"`, `"1.5"` — rather than a regex that matches today's shapes and misses
+# tomorrow's. WHAT `Kernel#Integer` ACCEPTS IS BROADER THAN DECIMAL DIGITS, and that is accepted
+# deliberately rather than papered over: a base-prefixed spelling parses (`"0x10"` answers 16,
+# `"0xc"` answers 12), and surrounding whitespace is ignored (`" 5 "` answers 5). Both honour the
+# ask — they name a positive integer, the guard's positive/clamp rules already bound them to
+# `MAX_LIMIT`, and rejecting spellings `Kernel#Integer` accepts would mean a second, divergent
+# definition of "numeric" beside the parse. Both shapes are pinned positive-path in
+# `spec/requests/repository_limit_param_spec.rb` so this passage cannot drift again.
+# ZERO and NEGATIVE answers fall to `nil` too: a limit of zero is not a wider list
 # and not a narrower one the models have a meaning for, and `ActiveRecord`'s `.limit(nil)` is NO
 # limit at all, which is the opposite of what a zero-ask would be read as. A magnitude below one
 # is the same no-ask an unparsable one is, on the siblings' rule that there is nothing here for a

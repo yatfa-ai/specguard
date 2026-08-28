@@ -17,6 +17,11 @@
 #   number rather than a no-ask: `ActiveRecord`'s `.limit(nil)` is NO limit, the opposite of what
 #   a zero would be read as, and a negative one is a 500 no surface owes a client for a typo.
 #
+#   NOTE the boundary of this list: it is the spellings `Kernel#Integer` answers `nil` for. What
+#   `Integer` DOES accept but a reader might assume falls here — a base prefix (`?limit=0xc` → 12)
+#   and surrounding whitespace (`?limit= 12 ` → 12) — is a widening, not a no-ask, and is pinned
+#   as a positive path beside the host group, not folded into it.
+#
 # Its own file rather than a widening of any sibling `malformed_*_param.rb`, and one file per
 # parameter is the point of the split — each doc comment governs ONE parameter, and folding a
 # second into a sibling's would make one list stand for two questions that are free to be answered

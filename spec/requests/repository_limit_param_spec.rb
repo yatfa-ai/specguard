@@ -135,6 +135,28 @@ RSpec.describe "Repository heaviest rollup limit parameter", type: :request do
       expect(widen_link[:href]).to include("spec_file=spec%2Fd01%2Fa01_spec.rb")
     end
 
+    # A spelling `Kernel#Integer` accepts that reads as "obviously invalid": a BASE PREFIX. This
+    # example exists to keep the guard's rationale comment honest — the comment once claimed
+    # `"0x10"` answers nil when it parses to 16, and only an example asserting the real behaviour
+    # (a base prefix widens to the value it parses to) keeps a future maintainer from
+    # re-believing the false half.
+    it "honours a base-prefixed spelling as the magnitude it parses to" do
+      get repository_path(fifteen_file_run, limit: "0xc")
+
+      expect(file_row_paths.size).to eq(12)
+      expect(files_panel.find("#spec-file-durations-basis"))
+        .to have_text("The 12 heaviest of the 15 files", normalize_ws: true)
+    end
+
+    # The same for whitespace-padded strings: `Integer(" 12 ")` answers 12, so the ask widens —
+    # pinned so the guard's "what Kernel#Integer accepts, we honour" rule has both spellings
+    # standing behind it.
+    it "honours a whitespace-padded spelling as the magnitude it parses to" do
+      get repository_path(fifteen_file_run, limit: " 12 ")
+
+      expect(file_row_paths.size).to eq(12)
+    end
+
     it "offers the way back to the shipped default once widened" do
       get repository_path(fifteen_file_run, limit: 12)
 

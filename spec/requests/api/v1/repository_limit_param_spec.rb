@@ -90,6 +90,26 @@ RSpec.describe "GET /api/v1/repository — limit parameter", type: :request do
     expect(files["file_count"]).to eq(15)
   end
 
+  # Spellings `Kernel#Integer` accepts that a reader might assume land in the malformed set: a
+  # BASE PREFIX (`"0xc"` parses to 12) and SURROUNDING WHITESPACE (`" 12 "` parses to 12). Both
+  # honour the ask and the published `limit` reports the parsed magnitude — pinned here because
+  # the guard's rationale comment once claimed `"0x10"` answers nil when it parses to 16, and
+  # only examples asserting the real behaviour keep that claim from being re-believed.
+  it "honours a base-prefixed spelling as the magnitude it parses to" do
+    body = get_repository(query: { limit: "0xc" })
+
+    expect(body.dig("latest_run", "spec_files", "rows").size).to eq(12)
+    expect(body.dig("latest_run", "spec_files", "limit")).to eq(12)
+    expect(body.dig("latest_run", "spec_directories", "limit")).to eq(12)
+  end
+
+  it "honours a whitespace-padded spelling as the magnitude it parses to" do
+    body = get_repository(query: { limit: " 12 " })
+
+    expect(body.dig("latest_run", "spec_files", "limit")).to eq(12)
+    expect(body.dig("latest_run", "spec_directories", "limit")).to eq(12)
+  end
+
   describe "a limit parameter that is not a widening" do
     # The no-ask answer is the DEFAULT body: both blocks at their shipped constants, the very
     # figures the first example above pins — which is why this asserts against the constants
