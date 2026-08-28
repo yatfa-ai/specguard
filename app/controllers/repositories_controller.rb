@@ -1061,10 +1061,19 @@ class RepositoriesController < ApplicationController
   # cannot know that happened.
   def github_verdict = @github_verdict
 
-  # WHICH STORY this person's registration grant tells: `:lapsed` when a snapshot was taken and has
-  # aged out, `:never_taken` when none has ever been taken, `nil` when there is nothing to say. The
-  # state `RepositoryRegistration::GrantVerifier` refuses an `sgu_` registration with, asked here so
-  # that the page that refusal sends them to can say so and offer the fix.
+  # WHICH STORY this person's registration grant tells. FIVE outcomes — the four non-nil ones listed
+  # in the order the ladder below asks them, and they are readings of ONE verdict rather than four
+  # separate bounds. `nil` is last here for readability only: it is not a final rung but the answer
+  # at two earlier ones, an unconfigured App above the ladder and a redeeming grant mid-way down:
+  #
+  #   * `:not_installed` — the App is installed nowhere.
+  #   * `:session_expired` — installed, but this session holds no credential to read it with.
+  #   * `:never_taken` — credential in hand, and no snapshot has EVER been taken.
+  #   * `:lapsed` — a snapshot was taken and has aged past `MAX_AGE`.
+  #   * `nil` — there is nothing to say: the grant redeems, or the App is unconfigured.
+  #
+  # The state `RepositoryRegistration::GrantVerifier` refuses an `sgu_` registration with, asked here
+  # so that the page that refusal sends them to can say so and offer the fix.
   #
   # THE SAME EXPRESSION THE GATE USES. `GrantVerifier#verdict_for` opens with `return
   # verdict(:not_granted, name) if @grant.nil? || @grant.stale?`, and this is that line and not a
@@ -1077,8 +1086,15 @@ class RepositoriesController < ApplicationController
   # The merge is right where `GrantVerifier` does it: that method is answering "may this `sgu_`
   # request register?" at the instant of a refusal, and the answer is no either way. This page is
   # not a refusal, and to a READER the two halves are different facts with different fixes — so the
-  # verdict is kept whole and the two are told apart for what is SAID and OFFERED, not re-bounded:
+  # verdict is kept whole and its readings are told apart for what is SAID and OFFERED, not
+  # re-bounded. Each of the four names a different missing thing, so each ends in a different fix:
   #
+  #   * `:not_installed` — the App is installed nowhere, so there is no installation for a
+  #     credential to read and nothing for a picker to take a snapshot OF. Neither fix below
+  #     applies: the missing thing is the App itself, and the control offered is
+  #     `github_install_button`. Asked ABOVE the grant read rather than beside these branches,
+  #     because a picker mints an EMPTY BUT FRESH row for this reader — see the guard's own comment
+  #     for why reading it after the grant produces a false all-clear.
   #   * `:lapsed` — a snapshot existed and aged past `MAX_AGE`. A week-old grant frequently sits
   #     beside a week-old session, and nothing on this path has asked (asking is what would cost a
   #     round trip), so the fix is the reconnect the API's own refusal names.
