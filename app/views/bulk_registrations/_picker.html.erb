@@ -25,6 +25,56 @@
         <% end %>
         <%= withheld_repositories_sentence(organization.withheld_count) %>
       </p>
+      <%# The carried batch came back SHORT — said here, beside the other "your list is short, here
+          is why" sentence, because it is the same kind of fact and a reader scanning for one should
+          find the other. A separate paragraph rather than another clause in the one above: that one
+          describes the LISTING ("12 repositories you administer"), while this describes what
+          happened to the READER'S SELECTION on a trip they just took, and it carries an action.
+
+          Every argument here is evidence the helper needs to say only what is TRUE of each name,
+          and none of them is optional — the helper's comment sets out the four states and why
+          merging any two of them makes the page state a falsehood. In short:
+
+            @full_names   what was carried. Read directly rather than passed in, because the
+                          `github_full_names[]` checkbox below reads exactly that and the two must
+                          be asking about one list. Same for the comparison — see the helper, which
+                          mirrors `Array#include?` case-sensitively on purpose.
+            administered  which carried names have NO ROW. Not `registerable`: an already-registered
+                          name HAS a row (rendered below, disabled, with a badge saying so), which
+                          is the page accounting for it.
+            visible       what is CONNECTED, administered or not — the same set `withheld_count` is
+                          derived from, four lines up. It separates "no row because it is not in
+                          the installation" from "no row because you do not administer it", which
+                          are different facts with different fixes, and which this paragraph would
+                          otherwise report as one. Without it the page can say a repository is not
+                          connected directly beneath a sentence saying one connected repository is
+                          not listed — about the same repository.
+            account       whose picker this is, so a carried name from another account is not
+                          bucketed against a list that was never about it.
+            registered    what is already IN SpecGuard, so it is not reported as a shortfall at
+                          all — it is connected, and the reader's goal for it is already met.
+                          Derived from `organization.repos` and not from `administered`, because
+                          the exclusion has to cover the withheld bucket too: a repository
+                          somebody else registered can be visible-but-not-administered here, and
+                          telling this reader to "ask an administrator to register it" would be
+                          asking for a thing already done. Same set `already_registered?` is
+                          computed from four lines up, so it costs no read of its own.
+            complete      whether ABSENCE is GitHub's answer or merely ours. The page-side reading
+                          of the rule `name_verdict` enforces on the server; with the listing short,
+                          the "not connected — add it on GitHub" claim is withheld rather than
+                          guessed. Nothing else on this branch of `new.html.erb` says the listing is
+                          incomplete, so this is the only thing standing between a truncated read
+                          and a confident false sentence. %>
+      <% shortfall = unmatched_carried_repositories_sentence(
+           @full_names, administered.map(&:full_name),
+           visible: organization.repos.map(&:full_name),
+           account: organization.login,
+           complete: github_listing_complete?,
+           registered: organization.repos.map(&:full_name).select { |name| already_registered?(name) }
+         ) %>
+      <% if shortfall %>
+        <p class="mt-1 text-sm text-app-content-secondary"><%= shortfall %></p>
+      <% end %>
     </div>
     <%= render UI::ButtonComponent.new(variant: :ghost, size: :sm, href: bulk_repositories_path) do %>
       Change account
