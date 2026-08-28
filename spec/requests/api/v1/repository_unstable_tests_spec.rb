@@ -55,6 +55,10 @@ RSpec.describe "GET /api/v1/repository — unstable_tests", type: :request do
       specs: specs.map(&:deep_stringify_keys)
     )
     TestRun.where(id: run.id).update_all(created_at: at) if at
+    # Resolved inline, because the block now GROUPS on the durable identity (SPGD-758): an
+    # unresolved row is excluded from the matching rather than keyed by its description. Resolving
+    # here is the shape the endpoint's own pipeline produces one job later.
+    Ingest::IdentityResolver.resolve(run)
     run
   end
 
@@ -110,7 +114,13 @@ RSpec.describe "GET /api/v1/repository — unstable_tests", type: :request do
         "outcome_words" => %w[failed passed],
         "files_seen" => ["spec/models/invoice_spec.rb"],
         "multi_file" => false,
-        "shared_description" => false
+        "shared_description" => false,
+        # The identity the grouping keys on — served so a client can tell two same-named tests
+        # apart and see the rename disclosure's anchor. Read off the row's own observation rather
+        # than assumed from the fixture's insert order.
+        "spec_identity_id" => SpecObservation.where(name: FLIPPING_TEST).pick(:spec_identity_id),
+        "renamed" => false,
+        "descriptions" => [FLIPPING_TEST]
       )
     end
 
@@ -134,7 +144,7 @@ RSpec.describe "GET /api/v1/repository — unstable_tests", type: :request do
       expect(block.keys).to contain_exactly(
         "rows", "shared_description_rows", "run_count", "runs_with_rows",
         "runs_reporting_outcomes", "recorded", "comparable", "candidate_count", "examined_count",
-        "truncated", "unexamined_count", "unnamed_count", "limit",
+        "truncated", "unexamined_count", "unnamed_count", "unresolved_count", "limit",
         # The drill-in below this block, nested inside it exactly as the three sibling drill-ins are
         # nested inside the rankings they open. Present on EVERY request and `null` unless
         # `?unstable_test=` named a test — the key-always-present rule this endpoint states in full
@@ -163,10 +173,10 @@ RSpec.describe "GET /api/v1/repository — unstable_tests", type: :request do
       window, block = blocks(query: { branch: "main" })
 
       expect(window).to eq(
-        "order" => "failed_run_count_desc,run_count_desc,name_asc",
+        "order" => "failed_run_count_desc,run_count_desc,spec_identity_id_asc",
         # TRUE here, and it is the only `true` on this endpoint. The three sort keys are
-        # `failed_run_count`, `run_count` and `name`, and every one of them is served on the row —
-        # unlike `history`, whose tie-break is an ingest sequence no row carries.
+        # `failed_run_count`, `run_count` and `spec_identity_id`, and every one of them is served
+        # on the row — unlike `history`, whose tie-break is an ingest sequence no row carries.
         "tie_break_served" => true,
         "branch_scope" => "single_branch",
         "branch" => "main",
@@ -176,7 +186,7 @@ RSpec.describe "GET /api/v1/repository — unstable_tests", type: :request do
         "run_count" => 5, "runs_with_rows" => 5, "runs_reporting_outcomes" => 5,
         "recorded" => true, "comparable" => true,
         "candidate_count" => 1, "examined_count" => 1, "truncated" => false,
-        "unexamined_count" => 0, "unnamed_count" => 0,
+        "unexamined_count" => 0, "unnamed_count" => 0, "unresolved_count" => 0,
         "limit" => SpecObservation::UNSTABLE_CANDIDATE_LIMIT
       )
       # No value anywhere in either block is a sentence. The twelve `unstable_tests_*` helpers that
@@ -291,7 +301,7 @@ RSpec.describe "GET /api/v1/repository — unstable_tests", type: :request do
 
       expect(block).to be_nil
       expect(window).to eq(
-        "order" => "failed_run_count_desc,run_count_desc,name_asc",
+        "order" => "failed_run_count_desc,run_count_desc,spec_identity_id_asc",
         "tie_break_served" => true,
         "branch_scope" => "all_branches",
         "branch" => nil,
@@ -696,22 +706,23 @@ RSpec.describe "GET /api/v1/repository — unstable_tests", type: :request do
       expect(get_repository(key: api_key)["unstable_tests"]).to be_nil
     end
 
-    # ONE, and specifically the FIRST of the four. `UnstableTests.for` asks the gating question on
-    # its own and returns before the other three, so an incomparable window costs one probe — which
+    # ONE, and specifically the FIRST of the five. `UnstableTests.for` asks the gating question on
+    # its own and returns before the other four, so an incomparable window costs one probe — which
     # a bare count of one cannot distinguish from any other single read.
     it "reads it exactly once, and only the gating probe, on an incomparable window" do
       repository_with([nil, nil, nil])
       get_repository(key: api_key)
 
       expect(flakiness_reads_matched { get_repository(key: api_key, query: { branch: "main" }) })
-        .to eq([1, 0, 0, 0])
+        .to eq([1, 0, 0, 0, 0])
       expect(get_repository(key: api_key, query: { branch: "main" })
                .dig("unstable_tests", "comparable")).to be(false)
     end
 
-    # FOUR AT MOST, and here exactly four — one per read, each fired once. Pinned as four
+    # FIVE AT MOST, and here exactly five — one per read, each fired once. Pinned as five
     # positively-matched statements rather than as a total, so a read that stopped being issued and
-    # a different one that started cannot cancel out into a passing number.
+    # a different one that started cannot cancel out into a passing number. (SPGD-758 added the
+    # fifth: the window's unresolved-row exclusion count, beside the unnamed count.)
     #
     # THIS IS ALSO THE MEMOIZATION GUARD, and it is the only form of one this endpoint can have.
     # `show` reads the presenter twice — once for the window block's `grouped`, once for the rows —
@@ -719,14 +730,14 @@ RSpec.describe "GET /api/v1/repository — unstable_tests", type: :request do
     # separate example for that: a per-read count of one IS the statement that it was built once,
     # and an example that only re-asserted it over the incomparable window would be pinning the
     # gating probe a second time rather than the memo.
-    it "reads it exactly four times on a branch-scoped comparable window, one per read" do
+    it "reads it exactly five times on a branch-scoped comparable window, one per read" do
       repository_with(%w[passed failed passed])
       get_repository(key: api_key)
 
       expect(flakiness_reads_matched { get_repository(key: api_key, query: { branch: "main" }) })
-        .to eq([1, 1, 1, 1])
+        .to eq([1, 1, 1, 1, 1])
       expect(flakiness_grain_reads { get_repository(key: api_key, query: { branch: "main" }) }.length)
-        .to eq(4)
+        .to eq(5)
     end
 
     # And the four are ALL of the reads this window adds — the assertion the per-grain count cannot
@@ -746,10 +757,9 @@ RSpec.describe "GET /api/v1/repository — unstable_tests", type: :request do
     # candidate and composition reads unless the anchor holds a RESOLVED row; these runs are ingested
     # through `Ingest::RunRecorder` without `Ingest::IdentityResolver`, so every row's
     # `spec_identity_id` is NULL, the object stops in `:unresolved`, and one read is its whole cost.
-    # A window whose identities resolved costs three — which is why this is stated as a fact about
-    # the fixture and asserted as its own term below rather than folded into a total that would go
-    # quietly wrong the day this fixture started resolving.
-    it "adds exactly those four to the table's total, and no fifth" do
+    # A window whose identities resolved costs three — which is what these fixtures now do, since
+    # SPGD-758's identity-grained grouping requires them to resolve inline.
+    it "adds exactly those five to the table's total, and no sixth" do
       repository_with(%w[passed failed passed])
       get_repository(key: api_key)
 
@@ -759,20 +769,21 @@ RSpec.describe "GET /api/v1/repository — unstable_tests", type: :request do
         runtime_growth_grain_reads { get_repository(key: api_key, query: { branch: "main" }) }
       identity =
         identity_grain_reads { get_repository(key: api_key, query: { branch: "main" }) }
-
       expect([area.length, file.length, example.length, description.length, flakiness.length])
-        .to eq([1, 1, 2, 2, 4])
+        .to eq([1, 1, 2, 2, 5])
       expect(growth.length).to eq(2)
       expect(runtime_growth.length).to eq(1)
-      # ONE, not three — the gating probe alone, on the unresolved fixture reasoned about above.
-      # Stated as its own term so the day this fixture starts resolving identities, THIS line fails
-      # and names the reason rather than the total drifting by two under a comment that still reads
-      # as if it were right.
-      expect(identity.length).to eq(1)
+      # THREE, not one — SPGD-758's fixtures resolve inline (an unresolved row is an exclusion
+      # from the flakiness matching rather than a key), so the slowest-tests panel over the same
+      # window passes its resolver gate and pays its candidate and composition reads where these
+      # fixtures used to stop it at the gate.
+      expect(identity.length).to eq(3)
       expect(observation_reads { get_repository(key: api_key, query: { branch: "main" }) }.length)
         .to eq(classified_observation_reads { get_repository(key: api_key, query: { branch: "main" }) })
+      # FIFTEEN at the last recount, plus the flakiness grain's fifth read and the two identity
+      # reads the resolving fixtures now pay: eighteen.
       expect(observation_reads { get_repository(key: api_key, query: { branch: "main" }) }.length)
-        .to eq(15)
+        .to eq(18)
     end
 
     # NO RUN-WINDOW QUERY. The block is drawn on `history_runs`, which is materialized once and
@@ -824,7 +835,7 @@ RSpec.describe "GET /api/v1/repository — unstable_tests", type: :request do
 
       expect(repository.test_runs.where(branch: "main").count).to eq(30)
       expect(flakiness_grain_reads { get_repository(key: api_key, query: { branch: "main" }) }.length)
-        .to eq(4)
+        .to eq(5)
       expect(count_queries { get_repository(key: api_key, query: { branch: "main" }) }).to eq(baseline)
       # The window really did grow to the bound, so the invariance above is over an axis that
       # moved rather than one that never left three.
@@ -833,8 +844,8 @@ RSpec.describe "GET /api/v1/repository — unstable_tests", type: :request do
     end
 
     # CONSTANT IN THE SIZE OF THE SUITE. Two orders of magnitude of examples per run cost the same
-    # four reads — the property that makes the block affordable at the roadmap's design point.
-    it "costs the same four reads as the suite grows" do
+    # five reads — the property that makes the block affordable at the roadmap's design point.
+    it "costs the same five reads as the suite grows" do
       repository_with(%w[passed failed passed])
       get_repository(key: api_key)
       baseline = count_queries { get_repository(key: api_key, query: { branch: "main" }) }
@@ -851,7 +862,7 @@ RSpec.describe "GET /api/v1/repository — unstable_tests", type: :request do
 
       expect(repository.spec_observations.count).to be > 600
       expect(flakiness_grain_reads { get_repository(key: api_key, query: { branch: "main" }) }.length)
-        .to eq(4)
+        .to eq(5)
       expect(count_queries { get_repository(key: api_key, query: { branch: "main" }) }).to eq(baseline)
     end
 

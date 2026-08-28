@@ -692,7 +692,13 @@ RSpec.describe "Repository window slowest tests", type: :request do
       # panels would be equal and worthless.
       expect(rows.size).to eq(SpecObservation::SLOWEST_LIMIT)
       expect(large_queries.size).to eq(small_queries.size)
-      expect(large_queries.size).to eq(3)
+      # FIVE since SPGD-758, and three of them are this panel's own — the gate, the capped
+      # candidate step and the composition. The other two are the flakiness panel over the same
+      # page, whose grouping moved onto this same column: its candidate probe (empty on this
+      # fixture's green window, but issued) and its unresolved-row exclusion count. Counted here
+      # because they carry `spec_identity_id` and a pattern that ignored them would be re-defining
+      # the column's cost rather than measuring it.
+      expect(large_queries.size).to eq(5)
     end
 
     # A window whose newest run has nothing to rank asks ONE question and stops — the gate, and

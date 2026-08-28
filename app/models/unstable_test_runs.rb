@@ -59,10 +59,10 @@
 #
 # `?unstable_test=` is a URL a reader types, edits and bookmarks, and a window that recorded nothing
 # under the description they ask for is an ordinary answer rather than a malformed request: a test
-# renamed since — which per the project's semantic-identity rule STARTS A NEW HISTORY and so is
-# exactly how a bookmark goes stale — a description edited, a typo. `.for` returns an object with no
-# rows and the surface says so, which is the same shape `RepeatedDescriptionExamples` answers with
-# one ladder over.
+# renamed since — which per the project's semantic-identity rule starts a new history for an
+# UNANNOTATED test (the owner-settled case) while an annotated one keeps it under the ranking's
+# identity — a description edited, a typo. `.for` returns an object with no rows and the surface
+# says so, which is the same shape `RepeatedDescriptionExamples` answers with one ladder over.
 class UnstableTestRuns
   def self.for(repository, runs, name, limit: SpecObservation::UNSTABLE_TEST_RUNS_LIMIT)
     new(name: name, runs: runs,

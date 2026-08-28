@@ -102,6 +102,17 @@
                         recorded under <%= test.files_seen.to_sentence %>
                       </span>
                     <% end %>
+                    <%# The same disclosure on the DESCRIPTION axis, possible since the grouping
+                        moved to the durable identity (SPGD-758): an annotated test whose wording
+                        changed mid-window keeps ONE history here, and the reader is told it spans
+                        two descriptions rather than left to wonder why the drill-in's bookmark
+                        went stale. Both wordings are named, because a rename the panel cannot
+                        show is a rename the reader attributes to a bug. %>
+                    <% if test.renamed? %>
+                      <span class="block font-mono text-xs text-app-muted">
+                        recorded as <%= test.descriptions.to_sentence %>
+                      </span>
+                    <% end %>
                   </td>
                   <%# Always the fraction. "12" alone reads as twelve of something unstated, and on
                       this panel the denominator IS the claim: a test seen in 12 of 30 runs is a

@@ -108,6 +108,10 @@ RSpec.describe "Repository unstable test runs", type: :request do
       specs: specs.map(&:deep_stringify_keys)
     )
     TestRun.where(id: run.id).update_all(created_at: at) if at
+    # Resolved inline: the ranking this drill-in sits under groups on the durable identity
+    # (SPGD-758), so an unresolved row never reaches it and the fixtures would show an empty
+    # ranking rather than a flaky one.
+    Ingest::IdentityResolver.resolve(run)
     run
   end
 

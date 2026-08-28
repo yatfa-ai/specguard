@@ -72,6 +72,11 @@ RSpec.describe "Repository unstable tests", type: :request do
       specs: specs.map(&:deep_stringify_keys)
     )
     TestRun.where(id: run.id).update_all(created_at: at) if at
+    # Resolved inline, because this panel now GROUPS on the durable identity (SPGD-758): an
+    # unresolved row is excluded from the matching rather than keyed by its description. Resolving
+    # here is the shape the endpoint's own pipeline produces one job later, and without it every
+    # row this file seeds would be an exclusion rather than a test.
+    Ingest::IdentityResolver.resolve(run)
     run
   end
 
@@ -199,9 +204,11 @@ RSpec.describe "Repository unstable tests", type: :request do
 
       get repository_path(repository)
 
-      expect(basis_line).to have_text("matched across those runs by their description alone",
+      expect(basis_line).to have_text("matched across those runs by their durable identity",
                                       normalize_ws: true)
-      expect(basis_line).to have_text("a renamed test starts a new one", normalize_ws: true)
+      expect(basis_line).to have_text("an unannotated test is identified by its description, so " \
+                                      "a reworded unannotated test starts a new one",
+                                      normalize_ws: true)
     end
 
     # Where the panel stops looking, said rather than left to be discovered. The search begins at
@@ -822,7 +829,15 @@ RSpec.describe "Repository unstable tests", type: :request do
       # sentence rather than a panel's list. Ungated unlike every drill-in on this page, because a
       # correction a client has to opt into leaves the Overview printing the subtraction it replaced.
       # Its own budget is asserted in spec/requests/api/v1/repository_intent_readings_spec.rb.
-      expect(large_queries.size).to eq(16)
+      #
+      # RECOUNTED AT 19 by SPGD-758, for three reads at once: THIS panel's grouping moved to the
+      # durable identity, so its fixtures now resolve inline (an unresolved row is an exclusion
+      # rather than a key) and it pays a FIFTH read — the window's unresolved-row exclusion count,
+      # `SpecObservation.unresolved_row_count_in` — beside the unnamed count it already paid; and
+      # the slowest-tests panel over the same window, whose fixtures were already resolved by that
+      # change, now passes its own gate and pays its candidate and composition reads instead of
+      # stopping at it. Five for this panel, four for that one, none growing with window or suite.
+      expect(large_queries.size).to eq(19)
     end
 
     # The candidate narrowing is what makes the composition affordable, and its `IN` list is capped
@@ -837,7 +852,7 @@ RSpec.describe "Repository unstable tests", type: :request do
         ingest(repository, specs, commit_sha: "red#{format("%011d", index)}", at: (30 - index).days.ago)
       end
 
-      expect(queries_against("spec_observations") { get repository_path(repository) }.size).to eq(16)
+      expect(queries_against("spec_observations") { get repository_path(repository) }.size).to eq(19)
     end
 
     # The gate is what it says it is: a window that cannot be compared asks nothing past the probe
@@ -867,16 +882,25 @@ RSpec.describe "Repository unstable tests", type: :request do
       # client has to opt into leaves the Overview printing the subtraction it replaced. It belongs
       # with the eleven above rather than with the two gates: it reads the latest run whatever the
       # window says, and it withholds nothing because there is nothing behind it to withhold.
-      expect(queries.size).to eq(13)
-      # What the gate withholds is a grouping by description over the WINDOW — the candidate
-      # narrowing and the composition that follows it, both of which narrow `test_run_id` to a LIST
-      # of runs. The single-run `GROUP BY name` among the ten belongs to the "Descriptions this run
-      # recorded more than once" panel and is not this one's: it asks about one run's rows, needs no
-      # outcome to have been reported, and is therefore not something an incomparable window has any
-      # reason to withhold. Discriminated on the window narrow rather than on the grouping alone,
-      # because the grouping alone stopped telling the two apart the moment a second panel used it.
+      #
+      # THE FOURTEENTH AND FIFTEENTH are SPGD-758's fixtures resolving inline, which the identity
+      # grouping requires: the slowest-tests panel over the same window now passes its own resolver
+      # gate and pays its candidate and composition reads where these fixtures used to stop it at
+      # the gate. They are that panel's reads on this page and not this one's — this panel still
+      # asks nothing past its own probe on an incomparable window.
+      expect(queries.size).to eq(15)
+      # What the gate withholds is THIS panel's outcome-narrowed grouping over the WINDOW — the
+      # candidate narrowing (`test_run_id IN` + `outcome = 'failed'`, grouped on the identity) and
+      # the composition that follows it. The window-narrowed identity groupings that ARE on the
+      # page belong to the slowest-tests panel, whose own gate these fixtures now pass (SPGD-758's
+      # fixtures resolve inline), and the single-run `GROUP BY name` belongs to the "Descriptions
+      # this run recorded more than once" panel — neither is something an incomparable window has
+      # any reason to withhold. Discriminated on the outcome narrow rather than on the grouping
+      # alone, because the grouping alone is shared by three panels on this page.
       expect(
-        queries.none? { |sql| sql.include?("GROUP BY") && sql.include?("name") && sql.include?(%(test_run_id" IN)) }
+        queries.none? do |sql|
+          sql.include?("GROUP BY") && sql.include?(%(test_run_id" IN)) && sql.include?("outcome")
+        end
       ).to be(true)
     end
   end

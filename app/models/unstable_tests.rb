@@ -15,23 +15,32 @@
 # rule for deciding that two rows in two runs are the same test. This is that question, and the
 # rule it needs is the next section.
 #
-# == The rule is the description, and the panel says so
+# == The rule is the durable identity, and the panel says so
 #
-# Tests are matched across runs by `name` ALONE — the example's full description — and by nothing
-# else. Not by file, not by the `file_path:line_number` coordinate, which `SpecObservation`'s class
-# comment records as positional and explicitly unstable across refactors. The project's identity
-# rule is semantic: a test that moves within a file or to another file is the same test and its
-# history follows it, and flakiness is exactly the question that cannot be asked without that —
-# "the same description fails every third run" has to be answerable without knowing what line it
-# sat on in any of them. A renamed test starts a new history, and that is intended rather than a
-# limitation to apologise for.
+# Tests are matched across runs by their `spec_identity_id` — the durable semantic identity
+# `Ingest::IdentityResolver` derives from the `@intent` triple when entity/action/behavior are all
+# present, and from the description when they are not — and by nothing positional. Not by file, not
+# by the `file_path:line_number` coordinate, which `SpecObservation`'s class comment records as
+# positional and explicitly unstable across refactors, and — since SPGD-758 — not by `name` either.
+# The project's identity rule is semantic: a test that moves within a file or to another file is the
+# same test and its history follows it, and flakiness is exactly the question that cannot be asked
+# without that. This is the same grain `SlowestTests` ranks the duration axis at, and for the same
+# reason: grouped on `name`, an annotated test reworded mid-window was two half-histories, and a
+# test that failed under the old description and passed under the new satisfied `Row#changed?` in
+# NEITHER half — the flakiest possible signal, invisible precisely because it was renamed.
 #
-# Nothing about that rule is written to the database. There is no fingerprint column, no unique key
-# and no identity claim in the schema: this is a read-time `GROUP BY` whose rule the panel states
-# in its own caption, which is what keeps it revisable. Exact string equality is the degenerate
-# case of the soft match the goals describe — an unchanged description produces a byte-identical
-# vector, so a cosine-1.0 match returns these same groups — and when a similarity provider lands,
-# this read is where the threshold widens. Nothing here is undone by it.
+# The UNANNOTATED case is owner-settled and unchanged (Project Goals, SPGD-1): an unannotated
+# test's identity is derived from its description, so a reword still starts a new history, and that
+# is intended rather than a limitation to apologise for. An annotated test survives a reword — the
+# `@intent` carries identity ahead of the description — and both its duration history and its
+# OUTCOME history follow it. `Row#renamed?` discloses that a row's history spans two descriptions.
+#
+# Nothing about that rule is written to the database beyond the resolver's own writes: this is a
+# read-time `GROUP BY` whose rule the panel states in its own caption, which is what keeps it
+# revisable. Exact string equality is the degenerate case of the soft match the goals describe —
+# an unchanged description produces a byte-identical vector, so a cosine-1.0 match returns these
+# same groups — and when a similarity provider lands, this read is where the threshold widens.
+# Nothing here is undone by it.
 #
 # == Why the list and its captions are one object
 #
@@ -41,16 +50,18 @@
 # ivars they are two things that agree today with no structural reason to keep agreeing. It derives
 # no figure of its own — every number comes back from the reads in `SpecObservation`.
 #
-# == Four bounded reads, none of them growing with the suite
+# == Five bounded reads, none of them growing with the suite
 #
 # 1. `.window_outcome_reporting` — how many of the window's runs reported anything at all, and how
 #    many of them said how any example ended. Asked FIRST and on its own, because fewer than two
 #    such runs means the comparison cannot be made and everything below it would be a figure about
 #    silence. At most two index probes per run.
-# 2. `.unstable_candidates_in` — the descriptions that failed anywhere in the window, capped.
-# 3. `.outcome_composition_in` — those descriptions only, across the whole window.
-# 4. `.unnamed_row_count_in` — the rows that carried no description and were therefore excluded
-#    from the matching.
+# 2. `.unstable_identity_candidates_in` — the durable tests that failed anywhere in the window,
+#    capped.
+# 3. `.unstable_outcome_composition_in` — those identities only, across the whole window.
+# 4. `.unnamed_row_count_in` — the rows that carried no description, and
+# 5. `.unresolved_row_count_in` — the rows that reached no identity. Two exclusion counts of the
+#    same window grain, one per column the matching can be denied by.
 #
 # The count is constant in the length of the window and in the size of the suite. It is not
 # constant in STATE — an incomparable window costs one read and stops, and a window with no
@@ -69,37 +80,41 @@ class UnstableTests
     # Nothing below this line may be read as a fact about outcomes on a window that reported fewer
     # than two of them, so nothing below this line is asked. See `#comparable?`.
     #
-    # THREE ZEROS AND A NIL, and the split is the point. `candidate_count` and `examined_count` are
-    # OUTCOME-derived — the candidate step reads `outcome`, and in a window nothing was examined in
-    # they are the true counts of an examination that correctly did not happen. `unnamed_count` is
-    # not: `.unnamed_row_count_in` carries no outcome predicate at all, so the number of unnamed
-    # rows is a real and answerable fact here that this branch simply never asks. Serving `0` for it
-    # would be a fabricated exclusion count — indistinguishable, on the wire, from a window measured
-    # to have excluded nothing — and this key exists precisely so a client can tell how much of the
+    # THREE ZEROS AND TWO NILS, and the split is the point. `candidate_count` and `examined_count`
+    # are OUTCOME-derived — the candidate step reads `outcome`, and in a window nothing was
+    # examined in they are the true counts of an examination that correctly did not happen.
+    # Neither `unnamed_count` nor `unresolved_count` is: neither `.unnamed_row_count_in` nor
+    # `.unresolved_row_count_in` carries an outcome predicate at all, so both are real and
+    # answerable facts here that this branch simply never asks. Serving `0` for either would be a
+    # fabricated exclusion count — indistinguishable, on the wire, from a window measured to have
+    # excluded nothing — and these keys exist precisely so a client can tell how much of the
     # window the matching had to drop.
     #
-    # `nil` rather than the count, because asking would cost a second read and the API doc states as
+    # `nil` rather than the count, because asking would cost second reads and the API doc states as
     # a deliberate property that an incomparable window costs ONE read and stops. Absence at zero
     # cost, on the precedent SPGD-474 set for the same fabrication.
     unless reporting[:runs_reporting_outcomes] >= 2
-      return new(**window, groups: [], candidate_count: 0, examined_count: 0, unnamed_count: nil)
+      return new(**window, groups: [], candidate_count: 0, examined_count: 0,
+                 unnamed_count: nil, unresolved_count: nil)
     end
 
-    candidates = SpecObservation.unstable_candidates_in(run_ids)
-    names = candidates.map(&:first)
+    candidates = SpecObservation.unstable_identity_candidates_in(run_ids)
+    identity_ids = candidates.map(&:first)
 
     new(**window,
-        groups: SpecObservation.outcome_composition_in(repository_id: repository.id, run_ids: run_ids,
-                                                       names: names),
+        groups: SpecObservation.unstable_outcome_composition_in(run_ids: run_ids,
+                                                                spec_identity_ids: identity_ids),
         # Off any row, because the count rides back on all of them; `to_i` on the nil of a window
         # in which nothing failed, where "no candidates" is the honest count.
         candidate_count: candidates.first&.last.to_i,
-        examined_count: names.size,
-        unnamed_count: SpecObservation.unnamed_row_count_in(repository_id: repository.id, run_ids: run_ids))
+        examined_count: identity_ids.size,
+        unnamed_count: SpecObservation.unnamed_row_count_in(repository_id: repository.id, run_ids: run_ids),
+        unresolved_count: SpecObservation.unresolved_row_count_in(repository_id: repository.id,
+                                                                  run_ids: run_ids))
   end
 
   def initialize(branch:, run_count:, runs_with_rows:, runs_reporting_outcomes:, groups:,
-                 candidate_count:, examined_count:, unnamed_count:)
+                 candidate_count:, examined_count:, unnamed_count:, unresolved_count:)
     @branch = branch
     @run_count = run_count
     @runs_with_rows = runs_with_rows
@@ -107,16 +122,17 @@ class UnstableTests
     @candidate_count = candidate_count
     @examined_count = examined_count
     @unnamed_count = unnamed_count
+    @unresolved_count = unresolved_count
     @changed = groups.map { |tuple| Row.new(**ROW_ATTRIBUTES.zip(tuple).to_h) }.select(&:changed?)
-                     .sort_by { |row| [-row.failed_run_count, -row.run_count, row.name] }
+                     .sort_by { |row| [-row.failed_run_count, -row.run_count, row.spec_identity_id] }
   end
 
   # How a composition tuple is read into a `Row`. Built by NAME off
   # `SpecObservation::UNSTABLE_COMPOSITION` rather than by position, so a counter added to that
-  # constant cannot silently land in the wrong attribute here. Eight values in a row is exactly the
+  # constant cannot silently land in the wrong attribute here. Ten values in a row is exactly the
   # signature two of them get quietly swapped in — the objection `SlowestExamples#initialize`
   # answers with keywords, made structural.
-  ROW_ATTRIBUTES = [:name, *SpecObservation::UNSTABLE_COMPOSITION.keys].freeze
+  ROW_ATTRIBUTES = [:spec_identity_id, *SpecObservation::UNSTABLE_COMPOSITION.keys].freeze
 
   private_constant :ROW_ATTRIBUTES
 
@@ -153,6 +169,16 @@ class UnstableTests
   # key) is the latter — it serves the nil through as `null`.
   attr_reader :unnamed_count
 
+  # How many rows of the window reached no durable identity and were therefore excluded from the
+  # matching — the sibling exclusion of the one above, at the same window grain, for the column
+  # the identity-grained matching (since SPGD-758) is denied by instead. Rows, not tests: an
+  # unresolved row is precisely a row this panel cannot say WHICH test is.
+  #
+  # `nil` — never `0` — on the same branch and for the same reason as `unnamed_count` above: a
+  # zero there would be a fabricated exclusion count, and this key is served through the same
+  # serializer beside that one.
+  attr_reader :unresolved_count
+
   # Whether this window has any per-example grain AT ALL — the question that decides whether the
   # panel is rendered rather than what it says. A repository whose CI has never sent per-example
   # detail has no cross-run test history to discuss, and a panel explaining that at length would be
@@ -171,53 +197,71 @@ class UnstableTests
   # `SlowestExamples#outcomes_reported?` draws the same line for a single run.
   def comparable? = runs_reporting_outcomes >= 2
 
-  # The tests whose outcome changed across the window, most-failing first — each one a description
-  # that failed in some of the runs it appeared in and reported some other outcome in others.
+  # The tests whose outcome changed across the window, most-failing first — each one a durable
+  # test that failed in some of the runs it appeared in and reported some other outcome in others.
   #
-  # Only groups whose description belonged to at most one example per run. A description carried by
+  # Only groups whose identity belonged to at most one example per run. An identity carried by
   # two examples in a single run is not a key for that run, so its `failed` and its `passed` are
   # two tests rather than one test that flipped, and calling it flaky would be a false positive
   # manufactured by the matching rule. Those groups are reported — separately, as what they are —
   # by `#shared_description_rows`.
   def rows = @changed.reject(&:shared_description?)
 
-  # The groups the rule could not rule on: descriptions that varied in outcome across the window
-  # AND were carried by more than one example in at least one run of it. Listed rather than
-  # dropped, because a dropped group is a silence the reader has no way to notice, and named as
-  # what they are rather than as flakiness, because nothing here establishes which of it.
+  # The groups the rule could not rule on: tests that varied in outcome across the window AND were
+  # carried by more than one example in at least one run of it. Listed rather than dropped,
+  # because a dropped group is a silence the reader has no way to notice, and named as what they
+  # are rather than as flakiness, because nothing here establishes which of it.
   def shared_description_rows = @changed.select(&:shared_description?)
 
   def any? = rows.any?
 
-  # Descriptions that failed in the window and were never examined, because the candidate cap bit.
+  # Durable tests that failed in the window and were never examined, because the candidate cap bit.
   # A capped list that does not disclose its cap is read as the whole story — the same lie by
   # omission `SpecFileDurations#truncated?` refuses one panel over.
   def truncated? = candidate_count > examined_count
 
   def unexamined_count = candidate_count - examined_count
 
-  # One description, across the whole window — how often it was seen, how often it failed, and
+  # One durable test, across the whole window — how often it was seen, how often it failed, and
   # which words the runs used for what happened to it.
-  Row = Struct.new(:name, :recorded_count, :run_count, :reported_outcome_count, :failed_count,
-                   :failed_run_count, :outcomes, :file_paths, keyword_init: true) do
+  Row = Struct.new(:spec_identity_id, :recorded_count, :run_count, :reported_outcome_count,
+                   :failed_count, :failed_run_count, :outcomes, :file_paths, :names, :latest_name,
+                   keyword_init: true) do
+    # The description a reader recognises — the identity's MOST RECENT one, which is the label the
+    # drill-in (`UnstableTestRuns`, keyed positionally on `name`) resolves the row to its runs
+    # under. Load-bearing for that reason: the row must keep a usable `name` even though the
+    # grouping key moved off it.
+    def name = latest_name
+
     # Its outcome CHANGED: it failed somewhere in the window and reported some other outcome
     # somewhere else in it.
     #
-    # Both halves are needed and neither is redundant. The failure is what put the description in
-    # front of this object at all (see `SpecObservation.unstable_candidates_in`) and is asserted
-    # again here rather than assumed, because this predicate is what the surface's whole claim
-    # rests on. The other half is a comparison against `reported_outcome_count` and NOT against
+    # Both halves are needed and neither is redundant. The failure is what put the identity in
+    # front of this object at all (see `SpecObservation.unstable_identity_candidates_in`) and is
+    # asserted again here rather than assumed, because this predicate is what the surface's whole
+    # claim rests on. The other half is a comparison against `reported_outcome_count` and NOT against
     # `recorded_count`: a run that recorded the test and said nothing about how it ended is not
     # evidence that it passed, and counting that silence as a second outcome would manufacture a
     # flip out of a client that stopped sending outcomes.
     def changed? = failed_count.positive? && reported_outcome_count > failed_count
 
-    # This description was carried by more than one example in at least one run of the window, so
-    # it is not a key for that run and its differing outcomes are not known to be one test's.
-    # `COUNT(*)` against `COUNT(DISTINCT test_run_id)`, taken in the same pass as everything else.
+    # This identity was carried by more than one example in at least one run of the window, so it
+    # is not a key for that run and its differing outcomes are not known to be one test's. At the
+    # identity grain this means several examples RESOLVED TO ONE IDENTITY within a single run — a
+    # table-driven loop, a shared example group, or two verbatim-identical tests, which the
+    # resolver's cosine-1.0 match agrees are one — rather than the several-same-description reading
+    # the name-grained rule had. `COUNT(*)` against `COUNT(DISTINCT test_run_id)`, taken in the
+    # same pass as everything else.
     def shared_description? = recorded_count > run_count
 
-    # The same description was recorded under more than one spec file across the window. Per the
+    # This test's DESCRIPTION changed across the window while its identity did not — the disclosure
+    # `SlowestTests::Row#renamed?` makes for the duration axis, and which grouping on `name`
+    # structurally could not make until SPGD-758 moved this read to the identity. An annotated
+    # test reworded mid-window is ONE row here wearing both descriptions; the failed-then-passed
+    # rename that used to vanish into two half-histories appears, and says what it is.
+    def renamed? = descriptions.size > 1
+
+    # The same test was recorded under more than one spec file across the window. Per the
     # project's semantic-identity rule a test that MOVED is the same test and keeps its history, so
     # this is a disclosure rather than a defect — but a reader looking for a flaky test in one file
     # needs to know the history spans two.
@@ -242,7 +286,13 @@ class UnstableTests
     # quoting what arrived is the only reading that cannot be wrong.
     def outcome_words = Array(outcomes).sort
 
-    # The spec files this description was recorded under. `Array()` because both aggregates are
+    # The descriptions this test was seen wearing, sorted so two rows carrying the same set read
+    # the same way. `Array()` because the aggregate is `ARRAY_AGG(…) FILTER (…)`, which is SQL
+    # NULL rather than an empty array for a group with nothing to collect — a nil the caller would
+    # otherwise have to know about at every call site. Two of them is `#renamed?`.
+    def descriptions = Array(names).sort
+
+    # The spec files this test was recorded under. `Array()` because both aggregates are
     # `ARRAY_AGG(…) FILTER (…)`, which is SQL NULL rather than an empty array for a group with
     # nothing to collect — a nil the caller would otherwise have to know about at every call site.
     def files_seen = Array(file_paths).sort

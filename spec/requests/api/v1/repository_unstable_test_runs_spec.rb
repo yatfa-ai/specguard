@@ -62,6 +62,9 @@ RSpec.describe "GET /api/v1/repository — unstable_tests.unstable_test_runs", t
       specs: specs.map(&:deep_stringify_keys)
     )
     TestRun.where(id: run.id).update_all(created_at: at) if at
+    # Resolved inline: the ranking this drill-in sits under groups on the durable identity
+    # (SPGD-758), so an unresolved row never reaches it.
+    Ingest::IdentityResolver.resolve(run)
     run
   end
 
@@ -187,8 +190,12 @@ RSpec.describe "GET /api/v1/repository — unstable_tests.unstable_test_runs", t
       flaky_block = parent(repo: flaky, query: query)
 
       # The ranking is blind to the difference, and that is not a defect in it: a `COUNT` of failures
-      # over a window is the same integer whichever runs they landed in.
-      expect(regressed_block["rows"]).to eq(flaky_block["rows"])
+      # over a window is the same integer whichever runs they landed in. `spec_identity_id` is
+      # excluded because it names the ROW's own identity — two repositories resolve their
+      # descriptions to two different identity rows, and the sameness being asserted here is in
+      # every figure ABOUT the window, not in which database row holds the test.
+      expect(regressed_block["rows"].map { |row| row.except("spec_identity_id") })
+        .to eq(flaky_block["rows"].map { |row| row.except("spec_identity_id") })
       expect(regressed_block.dig("rows", 0)).to include(
         "run_count" => 10, "failed_run_count" => 4, "outcome_words" => %w[failed passed]
       )

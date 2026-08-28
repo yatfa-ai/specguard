@@ -38,8 +38,9 @@
 # The per-area series that WOULD answer it — `GROUP BY directory, test_run_id` over all thirty run
 # ids — is deliberately not this slice. It would be the first read in this application to scan a
 # whole window unnarrowed (thirty runs × a twenty-thousand-example suite is ~600k rows per page
-# load), where every shipped window read narrows first: `.unstable_candidates_in` to `outcome:
-# "failed"`, `.outcome_composition_in` to at most `UNSTABLE_CANDIDATE_LIMIT` names. Two run ids is
+# load), where every shipped window read narrows first: `.unstable_identity_candidates_in` to
+# `outcome: "failed"`, `.unstable_outcome_composition_in` to at most `UNSTABLE_CANDIDATE_LIMIT`
+# identities. Two run ids is
 # the certified shape, and that is what this reads.
 #
 # == It compares populations; it matches no tests

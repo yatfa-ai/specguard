@@ -2207,14 +2207,14 @@ class RepositoryOverview
   # `order` NAMES ALL THREE KEYS, and `tie_break_served` is `true` here — one of the blocks on
   # this endpoint where it is, as is `serialized_directory_growth_window`.
   # `UnstableTests#initialize` sorts by `(-failed_run_count, -run_count,
-  # name)` and every one of those three is served on the row below, so unlike `history` and
+  # spec_identity_id)` and every one of those three is served on the row below, so unlike `history` and
   # `branches` — whose tie-breaks are an ingest sequence and a last-run timestamp that no row
   # carries — a client CAN reproduce this order from what it holds. Stated rather than assumed,
   # because the honest answer differs per block and a client that had to guess would re-sort one of
   # the two lists that must not be re-sorted.
   def serialized_unstable_tests_window
     {
-      order: "failed_run_count_desc,run_count_desc,name_asc",
+      order: "failed_run_count_desc,run_count_desc,spec_identity_id_asc",
       tie_break_served: true,
       branch_scope: requested_branch ? "single_branch" : "all_branches",
       branch: requested_branch,
@@ -2281,15 +2281,18 @@ class RepositoryOverview
   # `unnamed_count` IS AN EXCLUSION, not a population. A null `name` cannot be matched to itself
   # across runs — two nulls are not known to be one test — so those rows are dropped from the
   # matching before anything is grouped. Counted in ROWS and never in tests, because an unnamed row
-  # is precisely a row this block cannot say is a test.
+  # is precisely a row this block cannot say is a test. `unresolved_count` is its sibling exclusion,
+  # for the rows that reached no durable identity — the column the identity-grained matching
+  # (SPGD-758) is denied by instead, served here beside the first with the same grain and the same
+  # semantics.
   #
-  # It is `null` wherever the outcome gate below short-circuited — the ONE key on that line that
-  # goes null while `candidate_count`, `examined_count`, `truncated` and `unexamined_count` stay at
-  # their zeros. The split is not a stylistic one. Those four are OUTCOME facts, and in a window
+  # BOTH are `null` wherever the outcome gate below short-circuited — the two keys on that line
+  # that go null while `candidate_count`, `examined_count`, `truncated` and `unexamined_count` stay
+  # at their zeros. The split is not a stylistic one. Those four are OUTCOME facts, and in a window
   # nothing was examined in their zeros are true: no candidate was found because none was sought.
-  # This one is a ROW fact — its query carries no outcome predicate — so the number of unnamed rows
-  # is fully determined in that window and merely never asked. A `0` would be a fabricated
-  # exclusion, wire-identical to a window measured to hold none, and a client reading this key to
+  # These two are ROW facts — their queries carry no outcome predicate — so the number of excluded
+  # rows is fully determined in that window and merely never asked. A `0` would be a fabricated
+  # exclusion, wire-identical to a window measured to hold none, and a client reading these keys to
   # learn how much of the window the matching dropped could not tell "not counted" from "counted
   # zero". Null rather than the true count because asking costs the second read the ONE-read
   # property below rules out; the HTML panel refuses to print any count over this same state.
@@ -2339,6 +2342,7 @@ class RepositoryOverview
       truncated: unstable.truncated?,
       unexamined_count: unstable.unexamined_count,
       unnamed_count: unstable.unnamed_count,
+      unresolved_count: unstable.unresolved_count,
       limit: SpecObservation::UNSTABLE_CANDIDATE_LIMIT,
       unstable_test_runs: serialized_unstable_test_runs
     }
@@ -2482,7 +2486,10 @@ class RepositoryOverview
       outcome_words: row.outcome_words,
       files_seen: row.files_seen,
       multi_file: row.multi_file?,
-      shared_description: row.shared_description?
+      shared_description: row.shared_description?,
+      spec_identity_id: row.spec_identity_id,
+      renamed: row.renamed?,
+      descriptions: row.descriptions
     }
   end
 

@@ -749,12 +749,12 @@ RSpec.describe "GET /api/v1/repository — directory_growth", type: :request do
       # `directory_runtime_growth` was added: that block ranks by a SUM of durations rather than a
       # COUNT, so it is matched by its own pattern and adopted into no grain here.
       expect([area.length, file.length, example.length, description.length, flakiness.length,
-              growth.length]).to eq([1, 1, 2, 2, 3, 2])
+              growth.length]).to eq([1, 1, 2, 2, 4, 2])
       expect(identity.length).to eq(1)
       expect(observation_reads { get_repository(key: api_key, query: { branch: "main" }) }.length)
         .to eq(classified_observation_reads { get_repository(key: api_key, query: { branch: "main" }) })
       expect(observation_reads { get_repository(key: api_key, query: { branch: "main" }) }.length)
-        .to eq(14)
+        .to eq(15)
     end
 
     # NO RUN-WINDOW QUERY. The block is drawn on `history_runs`, which is materialized once and
