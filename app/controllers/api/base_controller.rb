@@ -65,6 +65,24 @@ class Api::BaseController < ActionController::API
 
   before_action :authenticate_api_key!
 
+  # The resolve-and-authorize seam for a repository named in the URL — the SAME implementation the
+  # browser tree authorizes with (`ApplicationController` includes the same module), so a change to
+  # who may do what cannot land on one surface and miss the other. See the module's header for the
+  # `authorizing_user` seam this class answers below, and for why the 404-vs-403 fork it carries is
+  # rendered here as JSON rather than left to Rails' default public-exception page (the two
+  # `rescue_from` registrations immediately below).
+  include RepositoryAuthorization
+
+  # The web tree answers the middleware mapping in `config/application.rb` for these exceptions;
+  # an `ActionController::API` has no equivalent wiring, and an escaped raise would render Rails'
+  # default public-exception body instead of this controller's own `{error:, message:}` shape. So
+  # the fork's two halves are each caught HERE, at the base every machine endpoint inherits from,
+  # and rendered with the renderers below — preserving the property the concern exists to carry:
+  # a non-member learns nothing of the repository's existence (404), a member missing the
+  # capability is told the truth (403), and both bodies are the API's own rather than HTML.
+  rescue_from ActiveRecord::RecordNotFound, with: :render_not_found
+  rescue_from SpecGuard::NotAuthorized, with: :render_forbidden
+
   # This endpoint needs `current_repository`. A `sgu_` user key gets 401 here.
   def self.accepts_repository_credential
     self.accepted_credential = ApiKey
@@ -79,15 +97,28 @@ class Api::BaseController < ActionController::API
 
   # Private on purpose: a public method on a controller is a routable action.
   #
-  # `current_repository` is populated only under `accepts_repository_credential`, and
-  # `current_api_user` only under `accepts_user_credential` — the other is `nil`, always, and no
-  # endpoint should be reading the one it did not declare for.
+  # `current_repository` is NOT in this list any more: it is supplied by `RepositoryAuthorization`
+  # (included above), which resolves the repository named in the URL and authorizes a capability
+  # against it. For a repository-credential endpoint the attribute reader's old behaviour is
+  # preserved exactly: `bind_principal` sets `@current_repository` during authentication, and the
+  # concern's `current_repository` called with no capability returns that memoized value without
+  # consulting `params` at all — the ingest contract, where the credential IS the authorization.
+  # For a user-credential endpoint it resolves `params[:repository_id]`/`params[:id]` and
+  # authorizes, which is the mutating half this slice ships.
   #
   # `current_api_user` rather than `current_user`: the name `current_user` means "the person holding
   # this browser session" everywhere else in this application
   # (`ApplicationController#current_user`), and this is a different thing arrived at a different way
   # — a person named by a token, with no session anywhere near it.
-  attr_reader :current_api_key, :current_repository, :current_api_user
+  attr_reader :current_api_key, :current_api_user
+
+  # How `RepositoryAuthorization` names THIS tree's principal. The API's principal is the person a
+  # `sgu_` key speaks for — `current_api_user` — which is a different thing, arrived at a different
+  # way, from the web tree's `current_user`, and the two names stay separate on purpose. See the
+  # module's header; the web tree answers the same seam with `current_user`.
+  def authorizing_user
+    current_api_user
+  end
 
   def authenticate_api_key!
     credential = self.class.accepted_credential
@@ -143,6 +174,19 @@ class Api::BaseController < ActionController::API
   # No `details`: a 404 has nothing per-field to say, and the id is already in the caller's URL.
   def render_not_found(message = "The requested resource could not be found.")
     render json: { error: "not_found", message: message }, status: :not_found
+  end
+
+  # The OTHER half of the fork `RepositoryAuthorization` carries, rendered for a member of the
+  # repository who lacks the capability the action asked for. Unlike the 404 above there is a real
+  # row and a real permission in hand, so the caller is owed the truth rather than silence — 404
+  # here would be a lie to someone who can already see the repository.
+  #
+  # `message` is the renderer's own sentence rather than the exception's: `SpecGuard::NotAuthorized`
+  # carries no text, and the capability that was refused is the controller's knowledge, not the
+  # policy's — a caller who held `view` and asked for `keys.manage` is told what they may do about
+  # it (ask the owner) rather than which internal symbol was missing.
+  def render_forbidden(message = "You do not have permission to do that on this repository.")
+    render json: { error: "forbidden", message: message }, status: :forbidden
   end
 
   # `details` carries every validation failure; `message` repeats the first so a client that reads

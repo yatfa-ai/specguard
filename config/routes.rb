@@ -131,6 +131,21 @@ Rails.application.routes.draw do
       # `accepts_user_credential` declaration and would be one omission away from a 401 nobody can
       # explain. The GitHub ownership check is NOT skipped here — see the controller.
       post "repositories", to: "user_repositories#create"
+      # DELETING ONE OF THEM — the mutating half of the `sgu_` surface (SPGD-754), on the same
+      # controller as its siblings for the same reason they share one: same credential, same noun,
+      # and a second controller would carry its own `accepts_user_credential` declaration to forget.
+      #
+      # The authorization is `RepositoryAuthorization`'s fork at `:repo_delete` — NOT `:owner`,
+      # matching the web `RepositoriesController#destroy` exactly, because the two are the same
+      # code now and a member granted `repo.delete` may remove a repository in either surface.
+      delete "repositories/:id", to: "user_repositories#destroy"
+      # MINTING AND REVOKING A REPOSITORY'S OWN `sgk_` KEYS — mirroring the web nesting
+      # (`resources :api_keys, only: %i[create destroy]` under `resources :repositories`), WITHOUT
+      # the member `regenerate`: in-place rotation is ruled out of the API surface, and its
+      # no-grace-window stop is the model's own documented behaviour rather than something to port.
+      # The `:repository_id` segment is what `RepositoryAuthorization#current_repository` reads.
+      post "repositories/:repository_id/api_keys", to: "user_repository_api_keys#create"
+      delete "repositories/:repository_id/api_keys/:id", to: "user_repository_api_keys#destroy"
       # ONE REPOSITORY, BY NAME, FOR THE PERSON HOLDING THE KEY — the reading `get "repositories"`
       # above stops one grain short of. That one lists what a person may open and serves six identity
       # fields per row; this opens one and serves the whole overview.

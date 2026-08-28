@@ -216,6 +216,29 @@ class Api::V1::UserRepositoriesController < Api::BaseController
     render json: registered_body(repository, api_key), status: :created
   end
 
+  # REMOVING ONE OF THEM — the mutating counterpart of `#show`, on the same credential. The
+  # authorization is `RepositoryAuthorization`'s fork at `:repo_delete` — deliberately NOT
+  # `:owner`, exactly as the web `RepositoriesController#destroy` resolves, because the two are
+  # one implementation now and a member granted `repo.delete` may remove a repository from either
+  # surface.
+  #
+  # No GitHub round trip and no notice to compose: the web action builds its flash sentence BEFORE
+  # the row goes away only because a destroyed record cannot be asked for its associations, and a
+  # JSON body has no such dependency — there is nothing to say about a repository except that it
+  # is gone, and the caller named it.
+  #
+  # `204` rather than a body: the resource the URL named no longer exists, so there is nothing to
+  # describe and no `message` a client could act on. This is the one response in the `sgu_`
+  # surface that is deliberately NOT a JSON body, and it matches what DELETE means everywhere else
+  # in this API's vocabulary (`UserRepositoryApiKeysController#destroy` follows it).
+  def destroy
+    repository = current_repository(:repo_delete)
+
+    repository.destroy!
+
+    head :no_content
+  end
+
   private
 
   # Top-level rather than nested under a `repository` key. This is a JSON API being driven by an
