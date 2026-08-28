@@ -1603,6 +1603,62 @@ RSpec.describe "Bulk organization registration", type: :request do
       expect(response.body.scan(/sgk_[A-Za-z0-9_-]+/).uniq.length).to eq(1)
     end
 
+    # THE MINT FAILURE AT THE RENDER LAYER — non-negotiable (d)'s second half, and the example that
+    # makes `Result#any_revealed?` load-bearing rather than merely argued for.
+    #
+    # `mint_first_key` rescues per candidate, so a batch can register rows and produce no tokens at
+    # all. That is the state the summary has to render honestly, and it is a PAGE-level question the
+    # service spec cannot ask: the service spec establishes that the outcome is `:registered` with
+    # `api_key` nil, and this establishes what the page does with it.
+    #
+    # It is the "zero" case criterion 6 was otherwise missing. The example above it drives a batch
+    # that registered NOTHING, which suppresses the apparatus under `any_registered?` too — so it
+    # cannot tell the two questions apart. This one can: a page reasoning from `any_registered?`
+    # emits the cache-suppressing meta, the "copy these before you leave" warning and a panel headed
+    # "0 API keys — this is the only time they are shown" over an empty list. That render is the
+    # failure mode, and this example is what sees it.
+    it "shows no reveal apparatus when every registered row's mint failed" do
+      stub_github(repos: [github_repo("acme/api"), github_repo("acme/web")])
+      fail_the_mint_for("acme/api", "acme/web")
+      allow(Rails.logger).to receive(:warn)
+
+      submit(%w[acme/api acme/web])
+
+      # The registrations themselves survived — that is the contract the rescue exists to keep, and
+      # it is what makes the absence below a decision rather than a failed batch.
+      expect(Repository.count).to eq(2)
+      expect(ApiKey.count).to eq(0)
+      expect(response.body).to include("Registered (2)")
+
+      expect(response.body).not_to include("turbo-cache-control")
+      expect(response.body).not_to include("this is the only time")
+      expect(response.body).not_to include("Copy these before you leave this page")
+      expect(response.body).not_to match(/sgk_[A-Za-z0-9_-]+/)
+    end
+
+    # The MIXED batch, which is the case that separates `any_revealed?` from a plain
+    # `registered.length` anywhere the count is rendered. One row keeps its key and one loses it, so
+    # the panel must be headed for ONE key rather than for the two rows that were registered, and
+    # exactly one wire-up block may appear.
+    #
+    # Both rows still belong under "Registered (2)": the keyless one links to a repository that
+    # really was registered, and it simply carries no wire-up block. A page that dropped it, or that
+    # counted it among the revealed, would be lying in one direction or the other.
+    it "reveals only the rows that kept a key, and still lists the one that did not" do
+      stub_github(repos: [github_repo("acme/api"), github_repo("acme/web")])
+      fail_the_mint_for("acme/web")
+      allow(Rails.logger).to receive(:warn)
+
+      submit(%w[acme/api acme/web])
+
+      expect(ApiKey.count).to eq(1)
+      expect(response.body).to include("Registered (2)")
+      expect(response.body).to include("1 API key — this is the only time it is shown")
+      expect(response.body.scan(/sgk_[A-Za-z0-9_-]+/).uniq.length).to eq(1)
+      expect(response.body.scan("Repository:  acme/api").length).to eq(1)
+      expect(response.body).not_to include("Repository:  acme/web")
+    end
+
     # The wire-up prompt carries THIS repository's own name and THIS repository's own token, which
     # is the property that makes it paste-ready. `integration_guide_agent_prompt` already takes
     # `repository:` as an argument, so it works per row unchanged.

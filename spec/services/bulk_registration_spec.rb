@@ -614,24 +614,16 @@ RSpec.describe BulkRegistration do
         allow(Rails.logger).to receive(:warn)
       end
 
-      # The failure is aimed at the SECOND repository specifically, so the example can tell "the
+      # `fail_the_mint_for` is `spec/support/api_key_mint_failure.rb`, which carries the full note on
+      # why the failure is made REAL rather than stubbed onto `save!` and why the stub lands on the
+      # class. It lives there rather than here because BOTH layers have to answer for the state it
+      # produces — this group asks what the outcome carries, and the request spec asks what the page
+      # renders for a registered row with no token, which is the question `Result#any_revealed?`
+      # exists to answer.
+      #
+      # The failure is aimed at the SECOND repository specifically, so the examples can tell "the
       # batch survived" from "the batch stopped at the failure" — a rescue that aborted the loop
       # would still leave the first row registered and would pass a weaker assertion.
-      #
-      # Driven by making the key genuinely INVALID rather than by stubbing `save!` to raise. A
-      # `create!` on a record whose `name` is blank raises `ActiveRecord::RecordInvalid` through the
-      # real save path, so what this example exercises is the rescue as it would actually be
-      # reached. Stubbing `save!` on `any_instance` cannot do that here: `and_wrap_original`'s
-      # `original.call` does not persist through an any_instance stub, so the OTHER two keys would
-      # silently fail to be written and the example would pass while measuring nothing.
-      def fail_the_mint_for(full_name)
-        allow(ApiKey).to receive(:new).and_wrap_original do |original, *args, &block|
-          key = original.call(*args, &block)
-          key.name = nil if key.repository&.github_full_name == full_name
-          key
-        end
-      end
-
       it "leaves the other repositories registered, keyed and reported" do
         fail_the_mint_for("acme/web")
 

@@ -3,10 +3,15 @@ module ApplicationHelper
   # them in a sitting can tell the files apart; `parameterize` is also what stops a user-controlled
   # key name from reaching the browser's `download` attribute as a path.
   #
-  # Here rather than in `RepositoriesHelper`, where it started, because there are now TWO reveal
-  # panels rendering it — a repository's `sgk_` key on repositories#show, and a person's `sgu_` key
-  # on accounts#show — and neither surface owns the rule. Nothing about it was ever repository-
-  # shaped.
+  # Here rather than in `RepositoriesHelper`, where it started, because there are now THREE reveal
+  # panels rendering it — a repository's `sgk_` key on repositories#show, a person's `sgu_` key on
+  # accounts#show, and each newly registered repository's first key on the bulk registration summary
+  # — and no one surface owns the rule. Nothing about it was ever repository-shaped.
+  #
+  # The batch summary is also the one caller that does not hand this a bare key name: it renders N
+  # panels in one response, where every key carries the same `ApiKey::DEFAULT_NAME`, so it composes
+  # the repository's full name in as well and gets a distinct filename per row. That is a caller's
+  # decision rather than this method's — what is owned here is the shape and the `parameterize`.
   def revealed_token_filename(name)
     ["specguard", name.to_s.parameterize.presence, "api-key"].compact.join("-") + ".txt"
   end
