@@ -127,6 +127,7 @@ RSpec.describe "caller-supplied component classes" do
   # Called in the HOSTILE order on purpose. Through the template this passes either way, which is
   # precisely what makes the order-bet invisible and worth pinning here instead.
   describe "Forms::FieldComponent#input", type: :component do
+    # @intent: { entity: "Forms::FieldComponent", action: "consume wrapper class", behavior: "input splat emits an input with no wrapper_class attribute or probe class when called before #wrapper_class", layer: "integration" }
     it "consumes :wrapper_class even when called before #wrapper_class" do
       component = Forms::FieldComponent.new(
         form: ActionView::Helpers::FormBuilder.new(
@@ -159,6 +160,7 @@ RSpec.describe "caller-supplied component classes" do
   #
   #   bundle exec rspec spec/components --tag ~construct_grep
   #
+  # @intent: { entity: "caller-class registry", action: "enumerate consuming components", behavior: "the greppable construct list and the registry match exactly in both directions, failing on new or stale sites", layer: "unit" }
   it "names every component that consumes a caller-supplied class", :construct_grep do
     consuming = Rails.root.glob("app/components/**/*.rb").filter_map { |path|
       # Whole-line comments dropped first: `ApplicationComponent` documents this very construct in

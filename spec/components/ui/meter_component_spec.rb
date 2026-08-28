@@ -34,6 +34,7 @@ RSpec.describe UI::MeterComponent, type: :component do
       [2, 7] => 28.6,
       [1, 3] => 33.3
     }.each do |(annotated, total), expected|
+      # @intent: { entity: "UI::MeterComponent#percent", action: "compute share", behavior: "the recomputed share equals TestRun#annotated_ratio for each ratio, rounding to one decimal", layer: "unit" }
       it "computes #{annotated}/#{total} as #{expected}, the same share TestRun#annotated_ratio reports" do
         from_the_model = TestRun.new(total_specs_count: total, annotated_specs_count: annotated).annotated_ratio
 
@@ -49,6 +50,7 @@ RSpec.describe UI::MeterComponent, type: :component do
     # compared values would report a confusing failure instead of the real one. This mirrors how
     # `test_run_spec.rb:27-28` pins the twin guard on the model side.
     [[0, 0], [5, 0], [5, -4]].each do |(value, max)|
+      # @intent: { entity: "UI::MeterComponent#percent", action: "guard zero and negative max", behavior: "a non-positive max yields a finite Float 0.0 rather than NaN or Infinity", layer: "unit" }
       it "returns a finite 0.0 rather than NaN/Infinity when max is #{max} (value #{value})" do
         percent = described_class.new(value: value, max: max).percent
 
@@ -73,6 +75,7 @@ RSpec.describe UI::MeterComponent, type: :component do
     # the ceiling, the one below covers the floor. Mutation-confirmed against the full suite, each
     # bound independently — `clamp(0.0, 100)` fails this example and only this one; `clamp(0,
     # 100.0)` fails the floor example and only that one. Neither half can be reverted silently.
+    # @intent: { entity: "UI::MeterComponent#percent", action: "clamp ceiling", behavior: "a value above max returns exactly Float 100 so the bar cannot overflow", layer: "unit" }
     it "holds the 100 ceiling when value exceeds max instead of overflowing the bar" do
       percent = described_class.new(value: 5, max: 3).percent
 
@@ -93,6 +96,7 @@ RSpec.describe UI::MeterComponent, type: :component do
     # left the whole suite green while the floor branch returned Integer `0` and rendered "0%"
     # immediately beside the `max <= 0` guard's "0.0%": SPGD-214's own one-fact-two-spellings
     # defect, lower bound instead of upper.
+    # @intent: { entity: "UI::MeterComponent#percent", action: "clamp floor", behavior: "a negative value returns exactly Float 0 rather than Integer 0, matching the guard branch spelling", layer: "unit" }
     it "holds the 0 floor as a Float when value is negative" do
       percent = described_class.new(value: -2, max: 3).percent
 
@@ -106,6 +110,7 @@ RSpec.describe UI::MeterComponent, type: :component do
     # the printed text — and they are gated differently: the width always renders, the text only
     # when `label:` is present. Asserting one would leave the other free to drift, which is the
     # same two-spellings-of-one-fact hazard this whole file exists for, one layer down.
+    # @intent: { entity: "UI::MeterComponent", action: "render percent", behavior: "the bar width style and the printed label text carry the same computed percentage", layer: "integration" }
     it "carries the same percent into both the bar width and the printed text" do
       render_inline(described_class.new(value: 2, max: 3, label: "Annotated"))
 
@@ -116,6 +121,7 @@ RSpec.describe UI::MeterComponent, type: :component do
     # The bar is the component's whole reason to exist, so the no-label case must still render it
     # at the right width. Without that first assertion the "no percentage text" claim would pass
     # just as well on a component that rendered nothing at all.
+    # @intent: { entity: "UI::MeterComponent", action: "render without label", behavior: "omitting label still renders the bar at the right width while no percentage text or numeral span appears", layer: "integration" }
     it "renders the bar but no percentage text when no label is passed" do
       render_inline(described_class.new(value: 2, max: 3))
 
@@ -153,11 +159,13 @@ RSpec.describe UI::MeterComponent, type: :component do
 
     # The literals above are only a contract while they cover the whole enum. Without this, a
     # sixth tone added to TONES renders untested and the loop below silently keeps passing.
+    # @intent: { entity: "UI::MeterComponent::TONES", action: "enumerate tones", behavior: "the expected literal class map covers every tone key the component defines", layer: "unit" }
     it "states an expected class for every tone the component defines" do
       expect(expected_tone_classes.keys).to match_array(UI::MeterComponent::TONES.keys)
     end
 
     expected_tone_classes.each do |tone, expected_class|
+      # @intent: { entity: "UI::MeterComponent", action: "paint tone", behavior: "the bar element class is exactly the layout classes plus that tone literal class", layer: "integration" }
       it "paints the bar element with #{expected_class} for the #{tone} tone" do
         render_inline(described_class.new(value: 1, max: 2, tone: tone))
 
@@ -170,6 +178,7 @@ RSpec.describe UI::MeterComponent, type: :component do
     # rendering in the wrong colour and the repository dashboard 500ing. Taken through the render
     # too: the fallback's job is to put a real colour on the element, not merely to return a
     # string, and `render_inline` raising is itself the KeyError half of the claim.
+    # @intent: { entity: "UI::MeterComponent", action: "fall back on unknown tone", behavior: "an unknown tone renders the cta bar colour instead of raising KeyError", layer: "integration" }
     it "falls back to the cta tone on the element rather than raising when the tone is unknown" do
       render_inline(described_class.new(value: 1, max: 2, tone: :chartreuse))
 
@@ -188,12 +197,14 @@ RSpec.describe UI::MeterComponent, type: :component do
     # the caller's class is PRESENT on the root element, while these pin the exact composed string
     # — the component's own class first, the caller's appended, and the base alone when the caller
     # passes nothing.
+    # @intent: { entity: "UI::MeterComponent#bar_class", action: "append caller class", behavior: "wrapper_class returns the component base class then the caller class, appended not replaced", layer: "unit" }
     it "appends the caller's class to its own rather than replacing it" do
       component = described_class.new(value: 1, max: 2, class: "lg:col-span-3")
 
       expect(component.wrapper_class).to eq("space-y-1 lg:col-span-3")
     end
 
+    # @intent: { entity: "UI::MeterComponent#bar_class", action: "default wrapper class", behavior: "with no caller class wrapper_class returns only the component own base class", layer: "unit" }
     it "returns its own base class when the caller passes none" do
       expect(described_class.new(value: 1, max: 2).wrapper_class).to eq("space-y-1")
     end

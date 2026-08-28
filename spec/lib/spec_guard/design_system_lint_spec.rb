@@ -8,10 +8,12 @@ RSpec.describe SpecGuard::DesignSystemLint do
   describe "the live application" do
     subject(:lint) { described_class.new(root: Rails.root) }
 
+    # @intent: { entity: "SpecGuard::DesignSystemLint", action: "read baseline", behavior: "the live application baseline hash is zero on all three rules", layer: "unit" }
     it "sits at the frozen 0/0/0 baseline" do
       expect(lint.baseline).to eq("heading_sizes" => 0, "raw_palette_colors" => 0, "raw_btn" => 0)
     end
 
+    # @intent: { entity: "SpecGuard::DesignSystemLint", action: "check drift", behavior: "the live application counts stay at the frozen 0/0/0 baseline so any offender reads as a regression", layer: "unit" }
     it "has no drift — SpecGuard is greenfield, so any offender is a regression" do
       expect(lint.counts).to eq("heading_sizes" => 0, "raw_palette_colors" => 0, "raw_btn" => 0),
                              -> { lint.report }
@@ -30,30 +32,37 @@ RSpec.describe SpecGuard::DesignSystemLint do
       end
     end
 
+    # @intent: { entity: "DesignSystemLint heading rule", action: "flag ad-hoc size", behavior: "a text-3xl heading increments the heading_sizes count", layer: "unit" }
     it "flags an ad-hoc heading size" do
       expect(counts_for(%(<h1 class="text-3xl font-bold">Hi</h1>))["heading_sizes"]).to eq(1)
     end
 
+    # @intent: { entity: "DesignSystemLint heading rule", action: "accept ramp", behavior: "a text-app-h1 heading leaves the heading_sizes count at zero", layer: "unit" }
     it "accepts the sanctioned type ramp" do
       expect(counts_for(%(<h1 class="text-app-h1">Hi</h1>))["heading_sizes"]).to eq(0)
     end
 
+    # @intent: { entity: "DesignSystemLint palette rule", action: "flag raw colour", behavior: "raw Tailwind palette classes increment the raw_palette_colors count", layer: "unit" }
     it "flags a raw Tailwind palette colour" do
       expect(counts_for(%(<p class="text-gray-900 bg-red-500">Hi</p>))["raw_palette_colors"]).to eq(1)
     end
 
+    # @intent: { entity: "DesignSystemLint palette rule", action: "flag bare white", behavior: "a bare bg-white class increments the raw_palette_colors count", layer: "unit" }
     it "flags bare white/black" do
       expect(counts_for(%(<p class="bg-white">Hi</p>))["raw_palette_colors"]).to eq(1)
     end
 
+    # @intent: { entity: "DesignSystemLint palette rule", action: "accept tokens", behavior: "app-* token classes leave the raw_palette_colors count at zero", layer: "unit" }
     it "accepts app-* tokens" do
       expect(counts_for(%(<p class="text-app-content bg-app-surface">Hi</p>))["raw_palette_colors"]).to eq(0)
     end
 
+    # @intent: { entity: "DesignSystemLint button rule", action: "flag raw btn", behavior: "a raw DaisyUI btn class increments the raw_btn count", layer: "unit" }
     it "flags a raw DaisyUI button" do
       expect(counts_for(%(<button class="btn btn-primary">Save</button>))["raw_btn"]).to eq(1)
     end
 
+    # @intent: { entity: "DesignSystemLint comment handling", action: "skip single-line comment", behavior: "banned tokens inside a single-line ERB comment are not counted", layer: "unit" }
     it "does not flag prose in a single-line comment" do
       expect(counts_for(%(<%# never use btn or text-3xl here %>))["raw_btn"]).to eq(0)
     end
@@ -62,6 +71,7 @@ RSpec.describe SpecGuard::DesignSystemLint do
     # ordinary markup, so the sole difference between green and red was where the sentence wrapped.
     # All three rules fire independently depending on which token lands on a continuation line.
     context "when the comment wraps across lines" do
+      # @intent: { entity: "DesignSystemLint comment handling", action: "skip wrapped comment heading", behavior: "an ad-hoc heading size on a comment continuation line is not counted", layer: "unit" }
       it "does not flag an ad-hoc heading size on a continuation line" do
         markup = <<~ERB
           <%# never use btn or
@@ -71,6 +81,7 @@ RSpec.describe SpecGuard::DesignSystemLint do
         expect(counts_for(markup)["heading_sizes"]).to eq(0)
       end
 
+      # @intent: { entity: "DesignSystemLint comment handling", action: "skip wrapped comment colour", behavior: "a raw palette colour on a comment continuation line is not counted", layer: "unit" }
       it "does not flag a raw palette colour on a continuation line" do
         markup = <<~ERB
           <%# never use raw colours like
@@ -80,6 +91,7 @@ RSpec.describe SpecGuard::DesignSystemLint do
         expect(counts_for(markup)["raw_palette_colors"]).to eq(0)
       end
 
+      # @intent: { entity: "DesignSystemLint comment handling", action: "skip wrapped comment button", behavior: "a raw btn token on a comment continuation line is not counted", layer: "unit" }
       it "does not flag a raw DaisyUI button on a continuation line" do
         markup = <<~ERB
           <%# Raw DaisyUI
@@ -89,6 +101,7 @@ RSpec.describe SpecGuard::DesignSystemLint do
         expect(counts_for(markup)["raw_btn"]).to eq(0)
       end
 
+      # @intent: { entity: "DesignSystemLint comment handling", action: "count after comment", behavior: "a real offender on the line after a comment close still increments the count", layer: "unit" }
       it "still counts a real offender on the line after the closing %>" do
         markup = <<~ERB
           <%# note
@@ -99,6 +112,7 @@ RSpec.describe SpecGuard::DesignSystemLint do
         expect(counts_for(markup)["raw_btn"]).to eq(1)
       end
 
+      # @intent: { entity: "DesignSystemLint comment handling", action: "count later in file", behavior: "a real offender further down the same file past a comment still increments the count", layer: "unit" }
       it "still counts a real offender inside the same file, further down" do
         markup = <<~ERB
           <%# never use
@@ -112,6 +126,7 @@ RSpec.describe SpecGuard::DesignSystemLint do
 
       # The comment in a.html.erb is deliberately clean, so the only way this count can move is
       # the open-comment state surviving into b.html.erb and swallowing a real offender.
+      # @intent: { entity: "DesignSystemLint comment handling", action: "isolate comment state per file", behavior: "an unterminated comment in one file does not swallow an offender in the next scanned file", layer: "unit" }
       it "does not let an unterminated comment leak into the next file" do
         Dir.mktmpdir do |dir|
           views = File.join(dir, "app/views/things")
@@ -146,24 +161,28 @@ RSpec.describe SpecGuard::DesignSystemLint do
       end
     end
 
+    # @intent: { entity: "DesignSystemLint scan scope", action: "scan component templates", behavior: "an offender inside app/components html.erb templates is counted", layer: "unit" }
     it "scans component templates — app/components/**/*.html.erb" do
       counts = counts_at("app/components/ui/button_preview.html.erb", %(<button class="btn btn-primary">Save</button>))
 
       expect(counts["raw_btn"]).to eq(1)
     end
 
+    # @intent: { entity: "DesignSystemLint scan scope", action: "scan component classes", behavior: "an offender inside app/components ruby files is counted", layer: "unit" }
     it "scans component classes — app/components/**/*.rb" do
       counts = counts_at("app/components/ui/copyable_code_component.rb", %(def call = tag.a("x", class: "btn")))
 
       expect(counts["raw_btn"]).to eq(1)
     end
 
+    # @intent: { entity: "DesignSystemLint scan scope", action: "scan helpers", behavior: "an offender inside app/helpers ruby files is counted", layer: "unit" }
     it "scans helpers — app/helpers/**/*.rb" do
       counts = counts_at("app/helpers/things_helper.rb", %(def cta = link_to("x", "/", class: "btn")))
 
       expect(counts["raw_btn"]).to eq(1)
     end
 
+    # @intent: { entity: "DesignSystemLint scan scope", action: "scan views", behavior: "an offender inside app/views html.erb templates is counted", layer: "unit" }
     it "scans view templates — app/views/**/*.html.erb" do
       counts = counts_at("app/views/things/show.html.erb", %(<a class="btn">x</a>))
 
@@ -173,6 +192,7 @@ RSpec.describe SpecGuard::DesignSystemLint do
     # Negative control: without this, the three assertions above would also pass under a
     # SCAN_GLOBS that swept the entire tree, and they would be pinning "scans everything"
     # rather than "scans these four globs".
+    # @intent: { entity: "DesignSystemLint scan scope", action: "exclude undeclared paths", behavior: "a banned token in app/models is not counted anywhere", layer: "unit" }
     it "does not scan outside the declared globs" do
       counts = counts_at("app/models/thing.rb", %(BUTTON = "btn text-3xl bg-white"))
 
@@ -194,16 +214,19 @@ RSpec.describe SpecGuard::DesignSystemLint do
       end
     end
 
+    # @intent: { entity: "DesignSystemLint rb comments", action: "skip line-initial comment", behavior: "prose in a line-initial ruby comment is not counted on any rule", layer: "unit" }
     it "does not flag prose in a line-initial comment" do
       expect(rb_counts("# never use btn or text-3xl or bg-white here\n")).to(
         eq("heading_sizes" => 0, "raw_palette_colors" => 0, "raw_btn" => 0)
       )
     end
 
+    # @intent: { entity: "DesignSystemLint rb comments", action: "skip indented comment", behavior: "prose in an indented line-initial ruby comment is not counted", layer: "unit" }
     it "does not flag prose in an indented line-initial comment" do
       expect(rb_counts("module Things\n  # never use btn here\nend\n")["raw_btn"]).to eq(0)
     end
 
+    # @intent: { entity: "DesignSystemLint rb comments", action: "flag ruby offender", behavior: "a banned token in ruby code increments the raw_btn count", layer: "unit" }
     it "flags a real offender in a .rb file" do
       expect(rb_counts(%(def cta = tag.a("x", class: "btn")\n))["raw_btn"]).to eq(1)
     end
@@ -216,12 +239,14 @@ RSpec.describe SpecGuard::DesignSystemLint do
     # two sweeps want opposite things from it: there, keeping a trailing-comment line is what stops
     # real code being skipped; here, it is what makes prose count against a shrink-only 0/0/0 gate.
     # Recorded rather than fixed — changing it is a production decision, not a test one.
+    # @intent: { entity: "DesignSystemLint rb comments", action: "count trailing comment", behavior: "a banned token after code on the same line counts as an offender, false positive pinned as shipped", layer: "unit" }
     it "flags a banned token in a trailing comment (false positive, pinned deliberately)" do
       expect(rb_counts("def x = 1 # never use btn here\n")["raw_btn"]).to eq(1)
     end
   end
 
   describe "the baseline" do
+    # @intent: { entity: "DesignSystemLint baseline", action: "rewrite baseline", behavior: "update_baseline writes the current smaller count rather than preserving the stored larger one", layer: "unit" }
     it "is shrink-only by default" do
       Dir.mktmpdir do |dir|
         FileUtils.mkdir_p(File.join(dir, "config/lint"))
@@ -235,6 +260,7 @@ RSpec.describe SpecGuard::DesignSystemLint do
       end
     end
 
+    # @intent: { entity: "DesignSystemLint baseline", action: "report regression", behavior: "a count above the stored baseline marks the lint dirty and names the rule, count and baseline", layer: "unit" }
     it "reports growth past the baseline as a regression" do
       Dir.mktmpdir do |dir|
         FileUtils.mkdir_p(File.join(dir, "app/views/things"))

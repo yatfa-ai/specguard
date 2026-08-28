@@ -3,6 +3,7 @@
 require "rails_helper"
 
 RSpec.describe UI::TableComponent, type: :component do
+  # @intent: { entity: "UI::TableComponent", action: "point at caption", behavior: "a named describedby renders aria-describedby on the table element", layer: "integration" }
   it "points the table at a caption when one is named" do
     render_inline(described_class.new(columns: ["Commit"], describedby: "recent-runs-basis")) { "" }
 
@@ -15,6 +16,7 @@ RSpec.describe UI::TableComponent, type: :component do
   # markup rather than through a CSS selector, because `[aria-describedby]` and
   # `[aria-describedby='']` are different selectors and a matcher for the first would pass on an
   # empty value — the exact confusion this pins against.
+  # @intent: { entity: "UI::TableComponent", action: "omit caption attribute", behavior: "with no describedby the table markup carries no aria-describedby attribute at all, not an empty one", layer: "integration" }
   it "emits no aria-describedby at all when none is named" do
     render_inline(described_class.new(columns: ["Commit"])) { "" }
 
@@ -34,6 +36,7 @@ RSpec.describe UI::TableComponent, type: :component do
   # on evaluation order alone. Re-verified by mutation after the memoisation landed: merging
   # `@options[:class]` into the table's classes leaves every render-level example green — the whole
   # "a component that appends the caller's class" group included — and turns only this one red.
+  # @intent: { entity: "UI::TableComponent#table_attributes", action: "isolate class slot", behavior: "table_attributes never reads the caller :class whatever order accessors are called in", layer: "unit" }
   it "never reads the caller's :class, independent of which accessor the template calls first" do
     component = described_class.new(columns: ["Commit"], class: "lg:col-span-3")
 
@@ -41,6 +44,7 @@ RSpec.describe UI::TableComponent, type: :component do
     expect(component.wrapper_class).to include("lg:col-span-3")
   end
 
+  # @intent: { entity: "UI::TableComponent", action: "place caller class", behavior: "caller classes land on the wrapper div and never on the table itself", layer: "integration" }
   it "keeps caller classes on the wrapper, not on the table" do
     render_inline(described_class.new(columns: ["Commit"], class: "lg:col-span-3")) { "" }
 
