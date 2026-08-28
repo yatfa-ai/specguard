@@ -194,6 +194,35 @@
               </tr>
             <% end %>
           <% end %>
+          <%# THE WIDENING ASK — the directories panel's own copy of the control the by-file panel
+              above renders, to the SAME shared ceiling and through the SAME `drill_down_path`
+              carry. The `?limit=` ask names a magnitude, not a panel, so both rollups widen on
+              one URL and each panel offers its own way to see it: a reader widening from here
+              gets the same widened by-file list above, and the captions on both panels restate
+              their own population at the new size off the same `COUNT(*) OVER ()` figure.
+
+              Same rules as the sibling's copy, and for the same reasons stated there: rendered
+              only when `truncated?` leaves headroom below the ceiling; and beside it the way
+              back, an explicit `limit: nil` override, because a widening in the URL rides every
+              link on the page and a bare link would keep it. %>
+          <% if @spec_directory_durations.truncated? &&
+                @spec_directory_durations.rows.size < RequestedLimitParam::MAX_LIMIT %>
+            <p class="text-xs mt-2">
+              <%= link_to "Show up to #{number_with_delimiter(RequestedLimitParam::MAX_LIMIT)} heaviest areas",
+                          drill_down_path(@repository, limit: RequestedLimitParam::MAX_LIMIT,
+                                          anchor: "spec-directory-durations"),
+                          class: "underline underline-offset-2 decoration-app-border-light " \
+                                 "text-app-content hover:decoration-app-content" %>
+            </p>
+          <% end %>
+          <% if @limit_request %>
+            <p class="text-xs mt-2">
+              <%= link_to "Back to the #{SpecObservation::HEAVIEST_DIRECTORIES_LIMIT} heaviest",
+                          drill_down_path(@repository, limit: nil, anchor: "spec-directory-durations"),
+                          class: "underline underline-offset-2 decoration-app-border-light " \
+                                 "text-app-content hover:decoration-app-content" %>
+            </p>
+          <% end %>
         <% else %>
           <%# Directories exist and not one of their examples was timed. Every group's SUM is NULL,
               so there is a list of areas and no ranking — and a column of "not reported" under a
