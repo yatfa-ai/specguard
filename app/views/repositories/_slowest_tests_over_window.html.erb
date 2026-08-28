@@ -92,9 +92,8 @@
                     <span class="text-app-muted">no description reported</span>
                   <% end %>
                   <%# ⭐ THE REWORDED TEST, VISIBLE. Its description changed while its identity did
-                      not, so its history did not restart — and this is the disclosure the outcome
-                      panel above structurally cannot make, since grouped on `name` a reword is two
-                      tests there. %>
+                      not, so its history did not restart — a disclosure the outcome panel above
+                      makes too, since SPGD-758 moved that read to the identity grain. %>
                   <% if test.renamed? %>
                     <span class="block text-xs text-app-muted">
                       also recorded as <%= test.descriptions.drop(1).to_sentence %>

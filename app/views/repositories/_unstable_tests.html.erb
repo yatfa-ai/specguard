@@ -55,7 +55,7 @@
                         30 runs and shows the words those runs used; WHICH 4 decides whether the
                         reader hunts a commit or quarantines a test, and nothing anywhere said. The
                         aggregate above cannot say — it is `COUNT`s and `ARRAY_AGG(DISTINCT …)` under
-                        `GROUP BY name`, which is what keeps it constant in the size of the suite —
+                        `GROUP BY spec_identity_id`, which is what keeps it constant in the size of the suite —
                         so the axis comes back from a rung below rather than from changing it.
 
                         `?unstable_test=`, following the `?spec_file=` / `?spec_directory=` /
@@ -100,6 +100,17 @@
                     <% if test.multi_file? %>
                       <span class="block font-mono text-xs text-app-muted">
                         recorded under <%= test.files_seen.to_sentence %>
+                      </span>
+                    <% end %>
+                    <%# The same disclosure on the DESCRIPTION axis, possible since the grouping
+                        moved to the durable identity (SPGD-758): an annotated test whose wording
+                        changed mid-window keeps ONE history here, and the reader is told it spans
+                        two descriptions rather than left to wonder why the drill-in's bookmark
+                        went stale. Both wordings are named, because a rename the panel cannot
+                        show is a rename the reader attributes to a bug. %>
+                    <% if test.renamed? %>
+                      <span class="block font-mono text-xs text-app-muted">
+                        recorded as <%= test.descriptions.to_sentence %>
                       </span>
                     <% end %>
                   </td>

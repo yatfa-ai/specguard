@@ -71,10 +71,12 @@
 # SQL only its own read produces.
 #
 # The by-description patterns were chosen under that lesson rather than after it. `GROUP BY
-# "spec_observations"."name"` is the obvious match and is the WRONG one: three reads on this table
-# group on `name` — `.unstable_candidates_in`, `.outcome_composition_in` and
-# `.repeated_descriptions_in` — so it would adopt two of the flakiness grain's four the moment a
-# branch-scoped window was exercised. `HAVING (COUNT(*) > 1)` is issued by the third alone. Its
+# "spec_observations"."name"` is the obvious match and is the WRONG one: it would adopt
+# `.repeated_descriptions_in` into the flakiness grain — the two flakiness reads,
+# `.unstable_identity_candidates_in` and `.unstable_outcome_composition_in`, moved to
+# `GROUP BY spec_identity_id` and no longer produce it, but the description read still does, so
+# matching on the grouping alone would adopt it the moment a branch-scoped window was exercised.
+# `HAVING (COUNT(*) > 1)` is issued by that read alone. Its
 # partner is matched on `COUNT(*) FILTER (WHERE name IS NULL)`, which only `.description_presence_in`
 # selects: the flakiness grain's own unnamed-row read is a `.count` over `where(name: nil)` and
 # spells that condition as the QUOTED-COLUMN form the fourth pattern below matches, so the two
@@ -398,6 +400,19 @@ module ObservationGrainReads
   # filter with no grouping at all.
   IDENTITY_GROUPING = /GROUP BY "spec_observations"\."spec_identity_id"/
 
+  # The slowest-tests candidate list — identified by its exact select list (`spec_identity_id`
+  # riding back with the two window-over-aggregate totals), NOT by those totals alone:
+  # `SUM(COUNT(duration_seconds)) OVER ()` is also `repeated_descriptions_in`'s coverage ride-along
+  # (measured while reclassifying for SPGD-758), and an ORDER BY pattern matched the by-file rollup
+  # before that.
+  IDENTITY_CANDIDATES =
+    /SELECT "spec_observations"\.spec_identity_id, COUNT\(\*\) OVER \(\), SUM\(COUNT\(duration_seconds\)\) OVER \(\)/
+
+  # The slowest-tests composition — the one identity-grained read selecting `MAX(duration_seconds)`.
+  # `MAX` is what keeps it from matching the flakiness composition SPGD-758 moved onto the same
+  # GROUP BY column, which aggregates outcomes and never a duration.
+  IDENTITY_COMPOSITION = /MAX\(duration_seconds\)/
+
   # The gating PRESENCE probe — `.identity_presence_in`, matched on the FILTER aggregate it alone
   # selects. The unquoted `spec_identity_id` here is not incidental: it is an `Arel.sql` literal,
   # where `SpecObservation.unresolved` spells the same condition through the query builder and so
@@ -405,6 +420,15 @@ module ObservationGrainReads
   # therefore cannot collide with this even on the `IS NULL` the two share — verified by generating
   # both statements rather than by reading them.
   IDENTITY_PRESENCE = /COUNT\(\*\) FILTER \(WHERE spec_identity_id IS NULL\)/
+
+  # The flakiness grain's reads, named because SPGD-758 moved them onto the same GROUP BY column
+  # the identity grain uses: the flakiness candidates and composition BOTH group on
+  # `spec_identity_id` now, so the identity grain's composition pattern has to exclude them
+  # structurally rather than by column name alone. `FLAKINESS_COMPOSITION` — the `ARRAY_AGG(DISTINCT
+  # outcome)` no duration read selects — is that exclusion, and `FLAKINESS_CANDIDATES`' `ORDER BY
+  # COUNT(*)` does the same for the capped candidate list.
+  FLAKINESS_CANDIDATES = /ORDER BY COUNT\(\*\) ASC, spec_identity_id ASC/
+  FLAKINESS_COMPOSITION = /ARRAY_AGG\(DISTINCT outcome\)/
 
   # `[area, file, example, description, flakiness, growth, directory_files, file_examples,
   # repeated_description_examples, directory_file_growth, runtime_growth,
@@ -462,21 +486,26 @@ module ObservationGrainReads
      reads.grep(/AS unannotated_recorded_count/),
      reads.grep(UNANNOTATED_DEBT_ORDER),
      reads.grep(RUN_READINGS_PROJECTION),
-     reads.grep(IDENTITY_PRESENCE) + reads.grep(IDENTITY_GROUPING)]
+     reads.grep(IDENTITY_PRESENCE) + reads.grep(IDENTITY_CANDIDATES) +
+       reads.grep(IDENTITY_GROUPING).grep(IDENTITY_COMPOSITION)]
   end
 
-  # `UnstableTests.for`'s four reads, in the order it issues them: the gating outcome-reporting
-  # probe, the capped candidate list, the composition over those candidates, and the unnamed-row
-  # exclusion count. Exposed so a block can assert WHICH of the four fired — an incomparable window
-  # is "the first one and no other", which a bare count of one cannot say.
+  # `UnstableTests.for`'s five reads, in the order it issues them: the gating outcome-reporting
+  # probe, the capped candidate list, the composition over those candidates, the unnamed-row
+  # exclusion count, and — since SPGD-758 grouped the matching on the durable identity — the
+  # unresolved-row exclusion count beside it. Exposed so a block can assert WHICH fired — an
+  # incomparable window is "the first one and no other", which a bare count of one cannot say.
   #
-  # `"name" IS NULL` does not match the candidate read's `"name" IS NOT NULL`, and
-  # `ARRAY_AGG(DISTINCT outcome)` is selected by no other read this endpoint issues.
+  # `"name" IS NULL` does not match the candidate read's `"name" IS NOT NULL`;
+  # `ARRAY_AGG(DISTINCT outcome)` is selected by no other read this endpoint issues; and the
+  # unresolved count's QUOTED `"spec_observations"."spec_identity_id" IS NULL` cannot collide with
+  # `IDENTITY_PRESENCE`'s unquoted FILTER aggregate, for the reason that constant states.
   def flakiness_grain_patterns
     [/FILTER \(WHERE probe\.has_rows\)/,
-     /ORDER BY COUNT\(\*\) ASC, name ASC/,
-     /ARRAY_AGG\(DISTINCT outcome\)/,
-     /"spec_observations"\."name" IS NULL/]
+     FLAKINESS_CANDIDATES,
+     FLAKINESS_COMPOSITION,
+     /"spec_observations"\."name" IS NULL/,
+     /"spec_observations"\."spec_identity_id" IS NULL/]
   end
 
   def area_grain_reads(&) = observation_reads_by_grain(&)[0]

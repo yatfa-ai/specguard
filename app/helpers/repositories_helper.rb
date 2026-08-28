@@ -611,15 +611,17 @@ module RepositoriesHelper
   # new history and its old one stops at the rename. Both are consequences a reader can only check
   # against their own repository if they are told the rule.
   def unstable_tests_matching_sentence
-    "Tests are matched across those runs by their description alone — not by file and not by line, " \
+    "Tests are matched across those runs by their durable identity, not by file and not by line, " \
       "since both move under a test that did not change. So a test that moved keeps its history " \
-      "here, and a renamed test starts a new one."
+      "here, and a test whose wording changed while its annotation held keeps its history too — " \
+      "an unannotated test is identified by its description, so a reworded unannotated test " \
+      "starts a new one."
   end
 
   # Where the panel stops looking, stated as a boundary rather than implied by an absence.
   #
   # The search begins at the runs' failures, which is what makes it affordable at the design point
-  # (see `SpecObservation.unstable_candidates_in`). The cost of that narrowing is real and specific:
+  # (see `SpecObservation.unstable_identity_candidates_in`). The cost of that narrowing is real and specific:
   # a test that alternated `pending` and `passed` and never failed varied its outcome and is not
   # reported. A reader who is not told that reads this list as "every test whose outcome varied".
   def unstable_tests_boundary_sentence
@@ -629,11 +631,11 @@ module RepositoriesHelper
   end
 
   # What the window held that the matching could not use, and what the narrowing did not reach.
-  # Both are silences, and a silence a reader cannot see is the one thing a panel counted off a
+  # All are silences, and a silence a reader cannot see is the one thing a panel counted off a
   # partial population must not leave them to discover.
   def unstable_tests_exclusion_sentence(unstable)
-    [unstable_tests_unnamed_clause(unstable), unstable_tests_truncation_clause(unstable)]
-      .compact.join(" ").presence
+    [unstable_tests_unnamed_clause(unstable), unstable_tests_unresolved_clause(unstable),
+     unstable_tests_truncation_clause(unstable)].compact.join(" ").presence
   end
 
   # Why there is no list and no zero: fewer than two runs of the window reported an outcome, so
@@ -1343,6 +1345,26 @@ module RepositoriesHelper
     "#{number_with_delimiter(unstable.unnamed_count)} " \
       "#{"row".pluralize(unstable.unnamed_count)} in this window carried no description; " \
       "#{reason} excluded from the matching rather than pooled into #{one ? "a test" : "one"}."
+  end
+
+  # The sibling exclusion, for the rows that carried a description but reached no durable identity
+  # — the column the identity-grained matching (SPGD-758) is denied by instead. Same grain as the
+  # clause above, same refusal: a row the resolver never matched to a test cannot be followed
+  # across runs, and dropping it silently would be a claim about a population the panel did not
+  # read. Counted in ROWS for the same reason the unnamed count is.
+  #
+  # Rendered under the same conditions and behind the same `comparable?` guard as the clause above:
+  # the count is `nil`, never `0`, on an incomparable window, and this clause is reached only
+  # through `#unstable_tests_exclusion_sentence` inside the panel's compared branch.
+  def unstable_tests_unresolved_clause(unstable)
+    return nil unless unstable.unresolved_count.positive?
+
+    one = unstable.unresolved_count == 1
+
+    "#{number_with_delimiter(unstable.unresolved_count)} " \
+      "#{"row".pluralize(unstable.unresolved_count)} in this window reached no durable identity " \
+      "(it was never matched to a test), and #{one ? "was" : "were"} excluded from the matching " \
+      "rather than pooled."
   end
 
   # The cap, disclosed only when it bit — and stated as what was KEPT rather than as a bare number

@@ -14,10 +14,10 @@
 # That work landed — `spec_identity_id` is written on every row by {Ingest::ObservationRecorder} and
 # resolved by {Ingest::IdentityResolver} — and until this object nothing aggregated it. Every read on
 # this table either bounds itself to one run ({SlowestExamples}, {SpecFileDurations},
-# {SpecDirectoryDurations}) or spans runs while grouping on something else: {UnstableTests} groups on
-# `name`, deliberately and for a question about outcomes, and {NearDuplicateClusters} reaches
-# `spec_identities` but weighs every cluster inside a SINGLE run. This is the first `GROUP BY
-# spec_identity_id` in the application, and the difference it makes is one sentence long: **a test
+# {SpecDirectoryDurations}) or spans runs while grouping on something else — {NearDuplicateClusters}
+# reaches `spec_identities` but weighs every cluster inside a SINGLE run. This was the first
+# `GROUP BY spec_identity_id` in the application — {UnstableTests} now groups its outcome axis the
+# same way, on SPGD-758 — and the difference it makes is one sentence long: **a test
 # that moved keeps its runtime history.**
 #
 # == ⭐ Which is the whole point, so it is worth saying what "moved" costs the alternatives
@@ -25,16 +25,17 @@
 # Group on `(file_path, line_number)` and a test that slid four lines down in a refactor is two rows
 # splitting one history, each reporting half the wall clock — `SpecObservation`'s class comment
 # records that coordinate as positional and explicitly unstable. Group on `example_id` and the same
-# happens on any reorder, `scoped_id` being positional too. Group on `name` — which {UnstableTests}
-# does, on purpose, and which nothing here relitigates — and a test survives a move but not a
-# rename, and an edited description starts a fresh history halfway through the window. The identity
-# is semantic and outlives all three edits, and this ranking is where that finally buys something.
+# happens on any reorder, `scoped_id` being positional too. Group on `name` and a test survives a
+# move but not a rename: for an UNANNOTATED test — whose identity is derived from its description —
+# an edited description still starts a fresh history halfway through the window, which
+# {UnstableTests} now only does for that unannotated case, owner-settled; the identity is semantic
+# and outlives all three edits, and this ranking is where that finally buys something.
 #
 # == Two steps, because the honest spelling of this question is unaffordable
 #
 # "Group the window by identity and order by the sum" reads every row of every run: 600,000 of them
 # at thirty runs of the roadmap's 20,000-example design point, per render. `SpecObservation`'s
-# `.unstable_candidates_in` states the same arithmetic for its own grain and refuses it the same
+# `.unstable_identity_candidates_in` states the same arithmetic for its own grain and refuses it the same
 # way, and this mirrors that two-step exactly:
 #
 # 1. **Candidates** — `.slowest_identity_candidates_in`, the NEWEST run's slowest identities, capped.
@@ -328,7 +329,8 @@ class SlowestTests
     # Its DESCRIPTION changed across the window while its identity did not — a reword close enough
     # in meaning that {Ingest::IdentityResolver} matched it to the same test above
     # `SpecIdentity::MATCH_SIMILARITY`. The same disclosure as `#moved?` on the other axis, and the
-    # one {UnstableTests} structurally cannot make: grouped on `name`, a rename is two tests there.
+    # one {UnstableTests::Row#renamed?} makes too, since SPGD-758 moved that read to the identity
+    # grain — a rename is one test there as well, not two.
     def renamed? = descriptions.size > 1
 
     # Whether anything timed this test at all. A row that reaches the list untimed is ordinary — see

@@ -1429,78 +1429,90 @@ class SpecObservation < ApplicationRecord
     { runs_with_rows: row["runs_with_rows"].to_i, runs_reporting_outcomes: row["runs_reporting_outcomes"].to_i }
   end
 
-  # Step one of two: the descriptions that recorded a FAILURE somewhere in the window — the only
-  # descriptions whose outcome can have changed within it, since a test that never failed here has
+  # Step one of two: the durable tests that recorded a FAILURE somewhere in the window — the only
+  # identities whose outcome can have changed within it, since a test that never failed here has
   # nothing to have changed from.
   #
   # This is the read `index_spec_observations_on_test_run_id_and_outcome` was built for and which
   # `COVERAGE_COUNTS` above declines to use, in as many words: *"that index is built for NARROWING
   # to the failures — the 'which tests failed' list a later slice will want"*. This is that later
   # slice, and the narrowing is what makes the whole panel affordable. Grouping the window's rows
-  # by `name` directly is 600,000 rows aggregated per page load at the design point; grouping only
-  # the failures is a scan of the failures.
+  # by identity directly is 600,000 rows aggregated per page load at the design point; grouping
+  # only the failures is a scan of the failures.
   #
   # Nothing correct is lost. A test that reported only non-failing outcomes across the window may
   # well have varied — `pending` one run and `passed` the next — and that variance is deliberately
   # out of this panel's scope, which the panel states rather than leaves to be discovered.
   #
-  # A null `name` is excluded HERE rather than after the fact, because a null cannot be matched to
-  # itself across runs: two nulls are not known to be one test, and `GROUP BY name` would pool
-  # every unnamed example of every run of the window into one fictional test with a fictional
-  # history. How many rows that excludes is a separate question, asked by `.unnamed_row_count_in`
-  # and stated on the panel — silently dropping them is the reading this must not produce.
+  # GROUPED ON `spec_identity_id`, on the precedent `.slowest_identity_candidates_in` set for the
+  # duration axis and for the same reason SPGD-700 moved that read: an annotated test whose
+  # description was reworded mid-window is ONE test here — the identity `Ingest::IdentityResolver`
+  # kept across the reword — rather than two half-histories. A row with no identity is excluded
+  # HERE because a null cannot be matched to itself across runs, and how many rows that excludes
+  # is a separate question, asked by `.unresolved_row_count_in` and stated on the panel — silently
+  # dropping them is the reading this must not produce. An UNANNOTATED test is keyed by its
+  # description's identity (`signal_source: "name"`), so a reword still starts a new history there
+  # — owner-settled, and unchanged by this read.
   #
   # == The ordering, and what the cap therefore keeps
   #
   # Fewest failures first. The cap is only ever reached by a window in which more than
-  # `UNSTABLE_CANDIDATE_LIMIT` distinct descriptions failed — a suite that has gone broadly red —
-  # and in that window the descriptions that failed in EVERY run are precisely the ones whose
+  # `UNSTABLE_CANDIDATE_LIMIT` distinct identities failed — a suite that has gone broadly red —
+  # and in that window the identities that failed in EVERY run are precisely the ones whose
   # outcome did not change. Keeping the least-failing end of the list therefore keeps the end this
-  # panel can still say something true about, and `name` breaks ties so the kept set is stable
-  # between two requests rather than whatever the planner returned first.
+  # panel can still say something true about, and `spec_identity_id` breaks ties so the kept set
+  # is stable between two requests rather than whatever the planner returned first.
   #
   # `COUNT(*) OVER ()` is evaluated AFTER `GROUP BY` and BEFORE `LIMIT`, so it counts candidate
-  # DESCRIPTIONS and counts all of them however few are returned — the truncation-disclosure shape
+  # IDENTITIES and counts all of them however few are returned — the truncation-disclosure shape
   # `#file_durations_in` documents at length, riding back on every row for no second round trip.
   #
-  # @return [Array<Array>] `[name, candidate_count]` per kept description, where `candidate_count`
-  #   is the same figure on every row: how many descriptions failed in the window in all.
-  def self.unstable_candidates_in(run_ids, limit: UNSTABLE_CANDIDATE_LIMIT)
+  # @return [Array<Array>] `[spec_identity_id, candidate_count]` per kept identity, where
+  #   `candidate_count` is the same figure on every row: how many identities failed in the window
+  #   in all.
+  def self.unstable_identity_candidates_in(run_ids, limit: UNSTABLE_CANDIDATE_LIMIT)
     return [] if run_ids.empty?
 
     where(test_run_id: run_ids, outcome: "failed")
-      .where.not(name: nil)
-      .group(:name)
-      .order(Arel.sql("COUNT(*) ASC"), Arel.sql("name ASC"))
+      .where.not(spec_identity_id: nil)
+      .group(:spec_identity_id)
+      .order(Arel.sql("COUNT(*) ASC"), Arel.sql("spec_identity_id ASC"))
       .limit(limit)
-      .pluck(Arel.sql("name"), Arel.sql("COUNT(*) OVER ()"))
+      .pluck(Arel.sql("spec_identity_id"), Arel.sql("COUNT(*) OVER ()"))
   end
 
-  # Everything the panel has to say about ONE description across the window, as one grouped
+  # Everything the panel has to say about ONE durable test across the window, as one grouped
   # aggregate over the candidates only — ordered, named, and kept in one constant for the reason
   # `COVERAGE_COUNTS` is: the names are what the caller destructures and the expressions are what a
   # plan assertion EXPLAINs, and two lists that drifted apart would be a row counting a column
   # nobody selected.
   #
-  # `run_count` beside `recorded_count` is the load-bearing pair. The grouping key is the
-  # description ALONE (see `.unstable_candidates_in`), and a description is not a key within a
-  # single run: a table-driven loop, a shared example group or two genuinely identical `it` strings
-  # put several examples under one description in the same run. Such a group holds a `failed` and a
+  # `run_count` beside `recorded_count` is the load-bearing pair. The grouping key is the durable
+  # identity (see `.unstable_identity_candidates_in`), and an identity is not a key within a single
+  # run: a table-driven loop, a shared example group or two verbatim-identical tests resolve to ONE
+  # identity and put several examples under it in the same run. Such a group holds a `failed` and a
   # `passed` in one run and would read, through any figure that did not distinguish them, as a test
   # that flipped between runs. `COUNT(*) > COUNT(DISTINCT test_run_id)` is that distinction, taken
   # in the same pass — see `UnstableTests::Row#shared_description?`, which is what the surface says
   # it with.
   #
   # `failed_run_count` beside `failed_count` for the same reason: "failed in 3 of the 12 runs it
-  # appeared in" is a sentence about runs, and counting rows would tell a reader that a description
+  # appeared in" is a sentence about runs, and counting rows would tell a reader that an identity
   # carried by four examples failed four times in one run.
   #
-  # `ARRAY_AGG(DISTINCT …) FILTER (WHERE … IS NOT NULL)` for both lists, so a null never arrives as
-  # a nil element inside an array the surface iterates. The outcome words are echoed verbatim and
-  # never folded into a verdict, for the reason `#outcome_label` gives: nothing platform-side
-  # validates that string. The file paths are what makes a MOVED test visible — per the project's
-  # semantic-identity rule a test that moved is the same test and keeps its history, so a group
-  # spanning two files is a disclosure and not an error, but the reader is told.
+  # `names` and `latest_name` are what make the RENAME legible — the disclosure
+  # `SlowestTests::Row#renamed?` makes for the duration axis, now available here in one pass: an
+  # annotated test reworded mid-window is ONE group wearing two descriptions, and the latest of
+  # them is the label a reader recognises. `latest_name` orders by `id DESC`, ingest order, which
+  # is the newest description the window recorded. `ARRAY_AGG(DISTINCT …) FILTER (WHERE … IS NOT
+  # NULL)` for both lists, so a null never arrives as a nil element inside an array the surface
+  # iterates.
+  #
+  # The outcome words are echoed verbatim and never folded into a verdict, for the reason
+  # `#outcome_label` gives: nothing platform-side validates that string. The file paths are what
+  # makes a MOVED test visible — per the project's semantic-identity rule a test that moved is the
+  # same test and keeps its history, so a group spanning two files is a disclosure and not an
+  # error, but the reader is told.
   UNSTABLE_COMPOSITION = {
     recorded_count: "COUNT(*)",
     run_count: "COUNT(DISTINCT test_run_id)",
@@ -1508,24 +1520,42 @@ class SpecObservation < ApplicationRecord
     failed_count: "COUNT(*) FILTER (WHERE outcome = 'failed')",
     failed_run_count: "COUNT(DISTINCT test_run_id) FILTER (WHERE outcome = 'failed')",
     outcomes: "ARRAY_AGG(DISTINCT outcome) FILTER (WHERE outcome IS NOT NULL)",
-    file_paths: "ARRAY_AGG(DISTINCT spec_file_path) FILTER (WHERE spec_file_path IS NOT NULL)"
+    file_paths: "ARRAY_AGG(DISTINCT spec_file_path) FILTER (WHERE spec_file_path IS NOT NULL)",
+    names: "ARRAY_AGG(DISTINCT name) FILTER (WHERE name IS NOT NULL)",
+    latest_name: "(ARRAY_AGG(name ORDER BY id DESC) FILTER (WHERE name IS NOT NULL))[1]"
   }.freeze
 
-  # Step two of two: how each candidate description behaved across the whole window — over the
+  # Step two of two: how each candidate identity behaved across the whole window — over the
   # candidates only, which is what keeps this off the whole window's rows.
   #
-  # Scoped by `repository_id` as well as by the window's runs, and that is not belt-and-braces: it
-  # is the leading column of `index_spec_observations_on_repository_id_and_name`, the index this
-  # read rides and the one `SpecObservation`'s own comments have been reserving. Without it there
-  # is no index on `name` to walk and the grouping falls back to reading the runs whole.
+  # GROUPED ON `spec_identity_id` and, like `.identity_duration_composition_in`, it carries NO
+  # `repository_id` predicate — and the omission is deliberate for that read's own stated reason:
+  # the index here is on `spec_identity_id` alone, so a repository predicate buys this read no
+  # index and risks costing it the one it needs — the planner would be offered
+  # `index_spec_observations_on_repository_id` as an alternative to the identity index this bound
+  # depends on. Tenancy is carried by the arguments instead, and structurally: the identity ids
+  # come from `.unstable_identity_candidates_in` over runs already scoped to this repository, and a
+  # `spec_identity` is `repository_id`-scoped, so the ids handed in are this repository's own.
   #
-  # @return [Array<Array>] `[name, *UNSTABLE_COMPOSITION.values]` per description, in that order.
-  def self.outcome_composition_in(repository_id:, run_ids:, names:)
-    return [] if names.empty? || run_ids.empty?
+  # == What it costs, MEASURED rather than assumed
+  #
+  # The same bitmap shape the sibling identity read measured and accepted: the index is on
+  # `spec_identity_id` ALONE, so the window predicate arrives as a FILTER after the fetch rather
+  # than as an index condition that narrows it. The bound is **candidates × the runs those
+  # identities appear in at all**, NOT `limit × window` — pinned in the certification the same way
+  # the sibling pins it, by SHRINKING THE CANDIDATE LIST and measuring again rather than by
+  # asserting one ceiling. That leaves it bounded by RETENTION: `BRANCH_RETENTION_RUNS` caps a
+  # branch's history at 60 runs, so a candidate's rows are capped whatever window is asked for.
+  #
+  # @return [Array<Array>] `[spec_identity_id, *UNSTABLE_COMPOSITION.values]` per identity, in that
+  #   order.
+  def self.unstable_outcome_composition_in(run_ids:, spec_identity_ids:)
+    return [] if spec_identity_ids.empty? || run_ids.empty?
 
-    where(repository_id: repository_id, test_run_id: run_ids, name: names)
-      .group(:name)
-      .pluck(Arel.sql("name"), *UNSTABLE_COMPOSITION.values.map { |sql| Arel.sql(sql) })
+    where(test_run_id: run_ids, spec_identity_id: spec_identity_ids)
+      .group(:spec_identity_id)
+      .pluck(Arel.sql("spec_identity_id"),
+             *UNSTABLE_COMPOSITION.values.map { |sql| Arel.sql(sql) })
   end
 
   # How many rows of the window carried no description at all — the figure the panel states when it
@@ -1546,6 +1576,38 @@ class SpecObservation < ApplicationRecord
     return 0 if run_ids.empty?
 
     where(repository_id: repository_id, test_run_id: run_ids, name: nil).count
+  end
+
+  # How many rows of the window reached no durable identity — the sibling exclusion of the count
+  # above, for the identity-grained matching `UnstableTests` now does. Same signature, same window
+  # scoping, stated beside the window read it captions: two counts of the same grain, one per
+  # column the matching can be denied by.
+  #
+  # A null `spec_identity_id` is not a test this read can follow across runs: an unresolved row in
+  # one run and an unresolved row in another are not known to be one example, so they are dropped
+  # from the matching rather than pooled. Dropping them silently is the failure mode the count
+  # above refuses for its own nulls, and the same refusal is made here.
+  #
+  # ⚠️ Deliberately WINDOW-scoped and never repository-wide, on the objection
+  # `.identity_presence_in` records and this read does NOT cross: SPGD-367 leaves a failed embed's
+  # `spec_identity_id` NULL forever, so a repository-wide count is monotonic in a way an exclusion
+  # must not be. This window is `Repository#suite_size_trajectory` — the last
+  # `TRAJECTORY_LIMIT` runs of one branch, sliding — so an old NULL row LEAVES the window as newer
+  # runs arrive and the count cannot grow without bound. It counts what this window's matching
+  # actually had to drop, which is the honest figure and the property the count above already has
+  # for its own nulls. That is also why this is a sibling of `.unnamed_row_count_in` rather than a
+  # widening of `identity_presence_in`: that method is single-run for single-run consumers, and it
+  # stays that way.
+  #
+  # Both partial indexes carrying `spec_identity_id IS NULL` lead on `repository_id`, so the null
+  # range is reached through them — but ⚠️ neither carries `test_run_id`, so the window predicate is
+  # a FILTER, not an index condition. That is the same measured-and-accepted shape
+  # `.identity_duration_composition_in` documents for its own window predicate; certified the same
+  # way in the plan specs rather than assumed.
+  def self.unresolved_row_count_in(repository_id:, run_ids:)
+    return 0 if run_ids.empty?
+
+    where(repository_id: repository_id, test_run_id: run_ids, spec_identity_id: nil).count
   end
 
   # How many ROWS one description's run sequence returns — the drill-in below the composition above.
@@ -1591,10 +1653,10 @@ class SpecObservation < ApplicationRecord
     "COUNT(outcome) OVER () AS unstable_test_reported_outcome_count"
 
   # ONE description's rows across a window of runs, IN WINDOW ORDER — the rung below
-  # `.outcome_composition_in`, and the axis that read has to destroy to do its own job.
+  # `.unstable_outcome_composition_in`, and the axis that read has to destroy to do its own job.
   #
-  # The composition is `COUNT`s and `ARRAY_AGG(DISTINCT …)` under `GROUP BY name`: one row per
-  # description for the whole window, which is exactly right for a RANKING and is why nothing here
+  # The composition is `COUNT`s and `ARRAY_AGG(…)` under `GROUP BY spec_identity_id`: one row per
+  # durable test for the whole window, which is exactly right for a RANKING and is why nothing here
   # changes it. What it cannot say is WHEN. "Failed in 4 of 30 runs" is the same pair of integers
   # whether those four were the last four — a regression, whose fix is to find the commit — or runs
   # 3, 11, 19 and 26 — flakiness, whose fix is somewhere else entirely. This read is the same rows
@@ -1623,9 +1685,9 @@ class SpecObservation < ApplicationRecord
   # of a month ago. `id ASC` breaks ties WITHIN a run, so a description carried by several examples
   # in one run has one stable order rather than one the planner picks afresh per request.
   #
-  # Scoped by `repository_id` as well as by the window's runs, for the reason `.outcome_composition_in`
-  # gives verbatim: it is the leading column of `index_spec_observations_on_repository_id_and_name`,
-  # and without it there is no index on `name` to walk.
+  # Scoped by `repository_id` as well as by the window's runs, because it narrows on `name` — and
+  # `repository_id` is the leading column of `index_spec_observations_on_repository_id_and_name`,
+  # the only index on `name`, so without it there is no index to walk.
   #
   # == Query cost
   #
@@ -1709,7 +1771,7 @@ class SpecObservation < ApplicationRecord
   #
   # The naive spelling of "the slowest tests in this repository" groups the whole window by identity,
   # which is 600,000 rows aggregated per page load at the 20,000-example design point — the arithmetic
-  # `.unstable_candidates_in` states for its own grain and refuses. So the narrowing happens first and
+  # `.unstable_identity_candidates_in` states for its own grain and refuses. So the narrowing happens first and
   # it happens here: ONE RUN's rows, reached through an index that leads with `test_run_id`, grouped
   # and capped. The window is only ever aggregated over the identities this step hands back.
   #
@@ -1745,7 +1807,7 @@ class SpecObservation < ApplicationRecord
   #
   # `COUNT(*) OVER ()` counts candidate IDENTITIES — evaluated after `GROUP BY` and before `LIMIT`,
   # so it counts all of them however few are returned. That is the truncation disclosure
-  # `.unstable_candidates_in` documents and `SlowestTests#truncated?` reports.
+  # `.unstable_identity_candidates_in` documents and `SlowestTests#truncated?` reports.
   #
   # `SUM(COUNT(duration_seconds)) OVER ()` is a window over an aggregate, which reads oddly and is
   # the point: it re-totals the per-identity timed counts back up to the RUN, so the numerator of the
@@ -1787,8 +1849,8 @@ class SpecObservation < ApplicationRecord
   # so a test that changed `file_path`/`line_number` between two runs of the window is one group and
   # both runs' durations land in one sum — which is the whole of what slice 1 settled cross-run
   # identity FOR. Grouped on the coordinate it would be two rows halving one test's history, and
-  # grouped on `name` a rename would do the same; `UnstableTests` groups on `name` deliberately and
-  # for a different question, and that choice is not disturbed here.
+  # grouped on `name` a rename would do the same — which is why `UnstableTests` groups on the
+  # identity too, since SPGD-758, so both axes survive the rename for an annotated test.
   #
   # `recorded_count` beside `timed_count` for `.file_durations_in`'s reason, restated one grain over:
   # `SUM` skips NULLs silently, so a group summing four of its nine rows must say so or the total is
@@ -1853,10 +1915,9 @@ class SpecObservation < ApplicationRecord
   # already three orders of magnitude off the shape it replaces at the design point, and an index
   # added on an argument rather than on a profile is the kind this table already carries two of.
   #
-  # NO `repository_id` PREDICATE, and the omission is deliberate rather than an oversight of its
-  # sibling's care. `.outcome_composition_in` scopes by repository because `repository_id` is the
-  # LEADING COLUMN of the index it rides and there is no index on `name` without it. The index here
-  # is on `spec_identity_id` alone, so a repository predicate buys this read no index and risks
+  # NO `repository_id` PREDICATE, and the omission is deliberate rather than an oversight. Both
+  # identity-grained composition reads decline the predicate for the same reason: the index here is
+  # on `spec_identity_id` alone, so a repository predicate buys this read no index and risks
   # costing it the one it needs — the planner would be offered
   # `index_spec_observations_on_repository_id` as an alternative to the identity index this bound
   # depends on. Tenancy is carried by the arguments instead, and structurally: a `spec_identity` is
@@ -2083,14 +2144,16 @@ class SpecObservation < ApplicationRecord
   #
   # == Why this did not already exist
   #
-  # `GROUP BY name` appears exactly twice above, and both are narrowed to failures:
-  # `.unstable_candidates_in` selects `outcome: "failed"` before it groups, and
-  # `.outcome_composition_in` is scoped to the names that read returned. On a GREEN suite — the
-  # normal case — nothing here groups examples by description at all. So the fact that several
-  # examples of one run share a description has only ever been reachable as a by-product of the
-  # flakiness path, where `UnstableTests::Row#shared_description?` computes it in order to THROW
-  # THOSE GROUPS AWAY: there, a description carried by two examples in one run is a matching-rule
-  # false positive to be rejected. Here it is the finding.
+  # `GROUP BY name` in this file's cross-run reads is gone — the flakiness panel now groups on
+  # `spec_identity_id` (`.unstable_identity_candidates_in` and
+  # `.unstable_outcome_composition_in`), which never pools several examples of one run under one
+  # key unless they resolved to ONE identity. So this read is the ONLY grouping by description
+  # left, and on a GREEN suite — the normal case — nothing else groups examples by description at
+  # all. The fact that several examples of one run share a description has otherwise only ever
+  # been reachable as a by-product of the flakiness path, where
+  # `UnstableTests::Row#shared_description?` computes it in order to THROW THOSE GROUPS AWAY:
+  # there, an identity carried by two examples in one run is a matching-rule false positive to be
+  # rejected. Here it is the finding.
   #
   # The population is documented on `UNSTABLE_COMPOSITION` above and is not hypothetical: *"a
   # table-driven loop, a shared example group or two genuinely identical `it` strings put several
@@ -2125,9 +2188,8 @@ class SpecObservation < ApplicationRecord
   # served by `index_spec_observations_on_test_run_id` — and GROUPS on a column no index leads on
   # for this predicate, which decides nothing about the access path.
   # `index_spec_observations_on_repository_id_and_name` exists and is NOT the path here: it leads on
-  # `repository_id`, which is what `.outcome_composition_in` rides for a WINDOW of runs, and a
-  # single-run narrow does not begin with it. EXPLAIN-certified at the 20-run seed in
-  # spec/models/spec_observation_spec.rb rather than argued for here.
+  # `repository_id`, and a single-run narrow does not begin with it. EXPLAIN-certified at the 20-run
+  # seed in spec/models/spec_observation_spec.rb rather than argued for here.
   #
   # Not "and the grouping hash-aggregates on top", which this comment used to say and which is
   # measurably false: the `ARRAY_AGG(DISTINCT spec_file_path)` in the `pluck` below disqualifies

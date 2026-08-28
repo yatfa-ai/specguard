@@ -20,7 +20,7 @@
 #     quarantine, retry, or hunting the shared state, and there is no culprit commit to find.
 #
 # `UnstableTests` cannot tell them apart and is right not to try: `SpecObservation::UNSTABLE_COMPOSITION`
-# is every column a `COUNT` or an `ARRAY_AGG(DISTINCT …)` under `GROUP BY name`, which is the correct
+# is every column a `COUNT` or an `ARRAY_AGG(DISTINCT …)` under `GROUP BY spec_identity_id`, which is the correct
 # shape for a RANKING and is what keeps it constant in the size of the suite.
 # `UnstableTests::Row#outcome_words` then sorts the distinct set, discarding even arrival order — on
 # purpose, so two rows carrying the same set read the same way. The run axis is gone before the row
@@ -59,10 +59,10 @@
 #
 # `?unstable_test=` is a URL a reader types, edits and bookmarks, and a window that recorded nothing
 # under the description they ask for is an ordinary answer rather than a malformed request: a test
-# renamed since — which per the project's semantic-identity rule STARTS A NEW HISTORY and so is
-# exactly how a bookmark goes stale — a description edited, a typo. `.for` returns an object with no
-# rows and the surface says so, which is the same shape `RepeatedDescriptionExamples` answers with
-# one ladder over.
+# renamed since — which per the project's semantic-identity rule starts a new history for an
+# UNANNOTATED test (the owner-settled case) while an annotated one keeps it under the ranking's
+# identity — a description edited, a typo. `.for` returns an object with no rows and the surface
+# says so, which is the same shape `RepeatedDescriptionExamples` answers with one ladder over.
 class UnstableTestRuns
   def self.for(repository, runs, name, limit: SpecObservation::UNSTABLE_TEST_RUNS_LIMIT)
     new(name: name, runs: runs,

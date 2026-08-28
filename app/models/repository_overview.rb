@@ -256,9 +256,10 @@ class RepositoryOverview
       # ACROSS SEVERAL RUNS. `latest_run.slowest_examples` is the same question at single-run grain
       # and stays exactly where it is — this is its complement, not its replacement.
       #
-      # It is the DURATION axis of what `unstable_tests` does for the OUTCOME axis, one grain finer:
-      # that block groups on `name`, so a renamed test is two tests there, and this one groups on
-      # `spec_identity_id`, so a test that MOVED or was REWORDED keeps its runtime history. See
+      # It is the DURATION axis of what `unstable_tests` does for the OUTCOME axis — both are
+      # matched to a DURABLE TEST. That block groups on `spec_identity_id`, so an annotated test
+      # that was REWORDED keeps its outcome history there, and this one groups on
+      # `spec_identity_id` too, so a test that MOVED or was REWORDED keeps its runtime history. See
       # `serialized_slowest_tests_window`.
       slowest_tests_window: serialized_slowest_tests_window,
       slowest_tests: serialized_slowest_tests,
@@ -1280,9 +1281,10 @@ class RepositoryOverview
   # THE GRAIN IS THE DESCRIPTION, which is a grain none of the four blocks above can reach. They
   # roll a run's rows up by where the code LIVES — the example, its file, its area — and no
   # rollup of "where" can see that two of those rows claim to test the same thing. The measurement
-  # existed nowhere before that panel: `GROUP BY name` appears twice in this application and both
-  # are narrowed to failures, so on a green suite — the normal case — nothing grouped examples by
-  # description at all.
+  # existed nowhere before that panel: no read in this application groups examples by description
+  # outside failures — the flakiness panel groups on `spec_identity_id`, and identity is not a
+  # description — so on a green suite, the normal case, nothing grouped examples by description at
+  # all.
   #
   # THE SAME OBJECT THE PANEL READS, never a hand-written query — this file's governing rule,
   # stated in full on `serialized_spec_files` above. `RepeatedDescriptions` is view-free, so the
@@ -2316,14 +2318,14 @@ class RepositoryOverview
   # `order` NAMES ALL THREE KEYS, and `tie_break_served` is `true` here — one of the blocks on
   # this endpoint where it is, as is `serialized_directory_growth_window`.
   # `UnstableTests#initialize` sorts by `(-failed_run_count, -run_count,
-  # name)` and every one of those three is served on the row below, so unlike `history` and
+  # spec_identity_id)` and every one of those three is served on the row below, so unlike `history` and
   # `branches` — whose tie-breaks are an ingest sequence and a last-run timestamp that no row
   # carries — a client CAN reproduce this order from what it holds. Stated rather than assumed,
   # because the honest answer differs per block and a client that had to guess would re-sort one of
   # the two lists that must not be re-sorted.
   def serialized_unstable_tests_window
     {
-      order: "failed_run_count_desc,run_count_desc,name_asc",
+      order: "failed_run_count_desc,run_count_desc,spec_identity_id_asc",
       tie_break_served: true,
       branch_scope: requested_branch ? "single_branch" : "all_branches",
       branch: requested_branch,
@@ -2390,15 +2392,18 @@ class RepositoryOverview
   # `unnamed_count` IS AN EXCLUSION, not a population. A null `name` cannot be matched to itself
   # across runs — two nulls are not known to be one test — so those rows are dropped from the
   # matching before anything is grouped. Counted in ROWS and never in tests, because an unnamed row
-  # is precisely a row this block cannot say is a test.
+  # is precisely a row this block cannot say is a test. `unresolved_count` is its sibling exclusion,
+  # for the rows that reached no durable identity — the column the identity-grained matching
+  # (SPGD-758) is denied by instead, served here beside the first with the same grain and the same
+  # semantics.
   #
-  # It is `null` wherever the outcome gate below short-circuited — the ONE key on that line that
-  # goes null while `candidate_count`, `examined_count`, `truncated` and `unexamined_count` stay at
-  # their zeros. The split is not a stylistic one. Those four are OUTCOME facts, and in a window
+  # BOTH are `null` wherever the outcome gate below short-circuited — the two keys on that line
+  # that go null while `candidate_count`, `examined_count`, `truncated` and `unexamined_count` stay
+  # at their zeros. The split is not a stylistic one. Those four are OUTCOME facts, and in a window
   # nothing was examined in their zeros are true: no candidate was found because none was sought.
-  # This one is a ROW fact — its query carries no outcome predicate — so the number of unnamed rows
-  # is fully determined in that window and merely never asked. A `0` would be a fabricated
-  # exclusion, wire-identical to a window measured to hold none, and a client reading this key to
+  # These two are ROW facts — their queries carry no outcome predicate — so the number of excluded
+  # rows is fully determined in that window and merely never asked. A `0` would be a fabricated
+  # exclusion, wire-identical to a window measured to hold none, and a client reading these keys to
   # learn how much of the window the matching dropped could not tell "not counted" from "counted
   # zero". Null rather than the true count because asking costs the second read the ONE-read
   # property below rules out; the HTML panel refuses to print any count over this same state.
@@ -2448,6 +2453,7 @@ class RepositoryOverview
       truncated: unstable.truncated?,
       unexamined_count: unstable.unexamined_count,
       unnamed_count: unstable.unnamed_count,
+      unresolved_count: unstable.unresolved_count,
       limit: SpecObservation::UNSTABLE_CANDIDATE_LIMIT,
       unstable_test_runs: serialized_unstable_test_runs
     }
@@ -2465,7 +2471,7 @@ class RepositoryOverview
   # and 26 is FLAKINESS, where there is no culprit commit to find and the work is quarantine or
   # shared state. An agent told to "fix the flaky tests" treats every row as the second, and on the
   # first it hunts nondeterminism in a test that fails deterministically. `UNSTABLE_COMPOSITION` is
-  # `COUNT`s and `ARRAY_AGG(DISTINCT …)` under `GROUP BY name` and is RIGHT to be — that is what
+  # `COUNT`s and `ARRAY_AGG(DISTINCT …)` under `GROUP BY spec_identity_id` and is RIGHT to be — that is what
   # keeps the ranking constant in the size of the suite — so the axis is not recovered by changing
   # it. It is recovered by a rung below it.
   #
@@ -2591,7 +2597,10 @@ class RepositoryOverview
       outcome_words: row.outcome_words,
       files_seen: row.files_seen,
       multi_file: row.multi_file?,
-      shared_description: row.shared_description?
+      shared_description: row.shared_description?,
+      spec_identity_id: row.spec_identity_id,
+      renamed: row.renamed?,
+      descriptions: row.descriptions
     }
   end
 
@@ -2658,9 +2667,10 @@ class RepositoryOverview
   # keeps its runtime history."*
   #
   # AND A DIFFERENT GRAIN FROM `unstable_tests`, which is the neighbour it most resembles. That
-  # block groups on `name` — deliberately, for a question about outcomes — so a REWORDED test is two
-  # tests there and its history restarts midway through the window. `renamed` on the row below is
-  # the disclosure that block structurally cannot make.
+  # block groups on `spec_identity_id` too — the question is about outcomes on a DURABLE TEST — so
+  # an annotated test that was REWORDED keeps one outcome history there, disclosed by the `renamed`
+  # key on its own row. An unannotated renamed test is still two tests there, on the owner-settled
+  # rule that an unannotated rename loses its history.
   #
   # THE SAME OBJECT THE PANEL READS, never a hand-written query — this file's governing rule, stated
   # in full on `serialized_spec_files`. `SlowestTests` is view-free, so the API and the panel name
@@ -2785,8 +2795,8 @@ class RepositoryOverview
   # ⭐ `moved` AND `renamed` ARE THE POINT OF THE IDENTITY GRAIN and no other key on this endpoint
   # can express either. `moved` is this test recorded under more than one spec file across the
   # window — the guarantee being KEPT rather than an anomaly, and a fact about where to go looking.
-  # `renamed` is its description changing while its identity did not, which `unstable_tests` is
-  # structurally incapable of reporting: grouped on `name`, a rename is two tests there.
+  # `renamed` is its description changing while its identity did not — the same disclosure
+  # `unstable_tests` makes on its own rows, since both reads group on `spec_identity_id`.
   #
   # `descriptions` and `files_seen` are the OPERANDS behind those two booleans, so a client can see
   # what the flag is claiming rather than take it. Both are read through the Struct's own readers

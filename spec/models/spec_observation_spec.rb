@@ -917,10 +917,11 @@ RSpec.describe SpecObservation do
       # by-directory rollup's `COUNT(DISTINCT name)` does. What makes the access path worth
       # measuring rather than assuming is that unlike
       # `DIRECTORY_EXPRESSION` there IS an index over `name` on this table —
-      # `index_spec_observations_on_repository_id_and_name` — and it is NOT the path here, because
-      # it leads on `repository_id`. That index is what `.outcome_composition_in` rides for a
-      # WINDOW of runs; a single-run narrow does not begin with its leading column, and reaching
-      # for it would mean walking a whole repository's rows to answer a question about one run.
+      # `index_spec_observations_on_repository_id_and_name` — but it is not this read's path and it
+      # is no longer any flakiness read's path either: `unstable_outcome_composition_in` groups on
+      # `spec_identity_id` and takes no `repository_id` predicate, so it rides the identity index
+      # instead, and this single-run narrow would not begin with this index's leading column
+      # regardless.
       #
       # `SUM(duration_seconds)` projects a column outside every index leading with `test_run_id`,
       # so the aggregate has to touch the heap and an `Index Only Scan` is not available to this
@@ -963,12 +964,64 @@ RSpec.describe SpecObservation do
 
     # `example 7` is the unstable one: it fails in every other run of the window and passes in the
     # rest. `example 13` fails in all of them — a broken test, not an unstable one, and the row
-    # that keeps the candidate ordering honest. Every hundredth row carries no name at all.
+    # that keeps the candidate ordering honest. `example 21` is the annotated RENAME: it fails
+    # under its old wording for the first three runs, is reworded mid-window, and passes under the
+    # new wording for the last three — one identity throughout, and exactly the failed-then-passed
+    # shape that vanished from the panel when this read grouped on `name`. `example 31` is the
+    # UNANNOTATED rename: the same edit, but the reword resolves to a NEW identity, so it is two
+    # tests and stays two (owner-settled) — its failing half is a fourth candidate that failed in
+    # every one of its three runs. Every hundredth row carries no name at all and reaches no
+    # identity — the two exclusions the panel has to state.
+    RENAMED_EXAMPLE = 21
+    UNANNOTATED_RENAMED_EXAMPLE = 31
+
+    def identity_ids
+      now = Time.current
+      vector = EmbeddingGenerator.call("one vector, reused")
+      SpecIdentity.insert_all(
+        (1..rows_per_run + 1).map do |index|
+          text = "identity #{index}"
+          { repository_id: repository.id, text: text, text_digest: SpecIdentity.digest_for(text),
+            signal_source: "name", embedding: vector,
+            file_path: "spec/f#{index % 15}_spec.rb", line_number: index,
+            created_at: now, updated_at: now }
+        end
+      )
+
+      SpecIdentity.where(repository: repository).order(:id).pluck(:id)
+    end
+
+    # The unannotated rename resolves to a NEW identity from run 3 on — the extra identity seeded
+    # above — while every other named row keeps one identity throughout.
+    def identity_for(index, run_index)
+      return nil if (index % 100).zero?
+
+      if run_index >= 3 && index == UNANNOTATED_RENAMED_EXAMPLE
+        @identity_ids[rows_per_run]
+      else
+        @identity_ids[index - 1]
+      end
+    end
+
     def outcome_for(index, run_index)
       return run_index.even? ? "failed" : "passed" if index == 7
       return "failed" if index == 13
+      return run_index < 3 ? "failed" : "passed" if index == RENAMED_EXAMPLE
+      return run_index < 3 ? "failed" : "passed" if index == UNANNOTATED_RENAMED_EXAMPLE
 
       "passed"
+    end
+
+    # The reworded wording of examples 21 and 31 from run 3 on — the same identity for 21, a NEW
+    # identity for 31 (the extra identity seeded above).
+    def name_for(index, run_index)
+      return nil if (index % 100).zero?
+
+      if run_index >= 3 && [RENAMED_EXAMPLE, UNANNOTATED_RENAMED_EXAMPLE].include?(index)
+        "example #{index}, reworded"
+      else
+        "example #{index}"
+      end
     end
 
     def seed(test_run, run_index)
@@ -978,16 +1031,20 @@ RSpec.describe SpecObservation do
           test_run_id: test_run.id, repository_id: repository.id,
           example_id: "./spec/f#{index % 15}_spec.rb[1:#{index}]",
           spec_file_path: "spec/f#{index % 15}_spec.rb", file_path: "spec/f#{index % 15}_spec.rb",
-          line_number: index, name: (index % 100).zero? ? nil : "example #{index}",
+          line_number: index, name: name_for(index, run_index),
           duration_seconds: 0.1, outcome: outcome_for(index, run_index),
-          status: "unannotated", created_at: now, updated_at: now
+          status: "unannotated", spec_identity_id: identity_for(index, run_index),
+          created_at: now, updated_at: now
         }
       end
 
       SpecObservation.insert_all(rows)
     end
 
-    before { runs.each_with_index { |test_run, index| seed(test_run, index) } }
+    before do
+      @identity_ids = identity_ids
+      runs.each_with_index { |test_run, index| seed(test_run, index) }
+    end
 
     describe "what they return" do
       it "counts the window's runs that recorded rows and those that reported an outcome" do
@@ -1011,40 +1068,92 @@ RSpec.describe SpecObservation do
       end
 
       # Only what failed, fewest failures first — and the total riding back on every row, counted
-      # after the grouping and before the limit.
-      it "names the descriptions that failed in the window, least-failing first" do
-        expect(described_class.unstable_candidates_in(window_ids))
-          .to eq([["example 7", 2], ["example 13", 2]])
+      # after the grouping and before the limit. Four candidates: example 7 (3 failures), the two
+      # reworded examples' failing halves (3 each), and the broken example 13 (6) — ordered by
+      # failure count with the identity breaking ties.
+      it "names the identities that failed in the window, least-failing first" do
+        candidates = described_class.unstable_identity_candidates_in(window_ids)
+
+        expect(candidates.map(&:first)).to eq(
+          [@identity_ids[6], @identity_ids[RENAMED_EXAMPLE - 1],
+           @identity_ids[UNANNOTATED_RENAMED_EXAMPLE - 1], @identity_ids[12]]
+        )
+        expect(candidates.map(&:last)).to all(eq(4))
       end
 
       it "keeps the least-failing end of the list when the cap bites" do
-        expect(described_class.unstable_candidates_in(window_ids, limit: 1))
-          .to eq([["example 7", 2]])
+        expect(described_class.unstable_identity_candidates_in(window_ids, limit: 1).map(&:first))
+          .to eq([@identity_ids[6]])
       end
 
-      # A null name is not a test this read can follow across runs, so it never becomes a group.
-      it "never groups the unnamed rows into a description of their own" do
-        expect(described_class.unstable_candidates_in(window_ids).map(&:first)).to all(be_present)
+      # A row with no durable identity is not a test this read can follow across runs, so it never
+      # becomes a group — and neither does the UNANNOTATED rename's passing half, which resolved to
+      # a new identity and never failed under it.
+      it "never groups the unresolved rows into an identity of their own" do
+        expect(described_class.unstable_identity_candidates_in(window_ids).map(&:first))
+          .to all(be_present)
       end
 
       it "composes each candidate over the whole window" do
-        composed = described_class.outcome_composition_in(
-          repository_id: repository.id, run_ids: window_ids, names: ["example 7"]
+        composed = described_class.unstable_outcome_composition_in(
+          run_ids: window_ids, spec_identity_ids: [@identity_ids[6]]
         )
 
-        # name, recorded, runs, reported, failed, failed runs, outcomes, files —
-        # `SpecObservation::UNSTABLE_COMPOSITION`'s order, which is what the caller destructures by.
-        expect(composed).to eq([["example 7", 6, 6, 6, 3, 3, %w[failed passed], ["spec/f7_spec.rb"]]])
+        # identity, recorded, runs, reported, failed, failed runs, outcomes, files, names,
+        # latest_name — `SpecObservation::UNSTABLE_COMPOSITION`'s order, kept positional here to
+        # pin the tuple's shape; the renamed example below destructures it by meaning.
+        expect(composed).to eq(
+          [[@identity_ids[6], 6, 6, 6, 3, 3, %w[failed passed], ["spec/f7_spec.rb"],
+            ["example 7"], "example 7"]]
+        )
+      end
+
+      # ⭐ THE RENAME, at the grain that makes it. Example 21 failed under its old wording for the
+      # first three runs of the window and passed under the reworded one for the last three — one
+      # identity, two descriptions, one history. Under the name-grained rule this test existed as
+      # TWO half-histories, each failing `#changed?` in one half, and vanished from the panel
+      # entirely: the flakiest possible signal, invisible precisely because it was renamed.
+      it "keeps a reworded annotated test's ONE history and discloses the rename" do
+        composed = described_class.unstable_outcome_composition_in(
+          run_ids: window_ids, spec_identity_ids: [@identity_ids[RENAMED_EXAMPLE - 1]]
+        )
+
+        expect(composed.length).to eq(1)
+        _id, recorded, run_count, reported, failed, failed_runs, outcomes, _files, names, latest =
+          composed.first
+        expect([recorded, run_count, reported, failed, failed_runs]).to eq([6, 6, 6, 3, 3])
+        expect(outcomes.sort).to eq(%w[failed passed])
+        expect(names.sort).to eq(["example 21", "example 21, reworded"])
+        # The most recent description the window recorded — the label a reader recognises.
+        expect(latest).to eq("example 21, reworded")
+      end
+
+      # The UNANNOTATED rename is owner-settled and unchanged: the reword resolved to a NEW
+      # identity, so the failing half is a test that failed in every one of its three runs and the
+      # passing half never failed at all — two tests, neither unstable.
+      it "still reports an unannotated reword as the two tests it resolved to" do
+        composed = described_class.unstable_outcome_composition_in(
+          run_ids: window_ids, spec_identity_ids: [@identity_ids[UNANNOTATED_RENAMED_EXAMPLE - 1],
+                                                   @identity_ids[rows_per_run]]
+        )
+
+        first, second = composed
+        expect([first[1], first[2], first[4]]).to eq([3, 3, 3]) # recorded, runs, failed — all failed
+        expect(first[9]).to eq("example 31") # latest_name: its own half only
+        expect(second[4]).to eq(0) # the passing half never failed
       end
 
       # The composition is bounded to the window, not to the repository's whole history — the seven
-      # runs outside it hold the same descriptions and must not be counted into these figures.
+      # runs outside it hold the same identities and must not be counted into these figures.
       it "counts only the runs of the window it was given" do
-        composed = described_class.outcome_composition_in(
-          repository_id: repository.id, run_ids: window_ids.first(2), names: ["example 13"]
+        composed = described_class.unstable_outcome_composition_in(
+          run_ids: window_ids.first(2), spec_identity_ids: [@identity_ids[12]]
         )
 
-        expect(composed).to eq([["example 13", 2, 2, 2, 2, 2, ["failed"], ["spec/f13_spec.rb"]]])
+        expect(composed).to eq(
+          [[@identity_ids[12], 2, 2, 2, 2, 2, ["failed"], ["spec/f13_spec.rb"], ["example 13"],
+            "example 13"]]
+        )
       end
 
       it "counts the rows of the window that carried no description" do
@@ -1052,11 +1161,32 @@ RSpec.describe SpecObservation do
           .to eq(18)
       end
 
+      # The sibling exclusion: the same rows carry no name AND no identity in this seed, so both
+      # counts read the same window the same way — two figures of one grain, one per column the
+      # matching can be denied by.
+      it "counts the rows of the window that reached no durable identity" do
+        expect(described_class.unresolved_row_count_in(repository_id: repository.id, run_ids: window_ids))
+          .to eq(18)
+      end
+
+      it "answers for a window of no runs without asking the database anything" do
+        expect(count_queries do
+          expect(described_class.unstable_outcome_composition_in(
+            run_ids: [], spec_identity_ids: [@identity_ids[6]]
+          )).to be_empty
+          expect(described_class.unstable_outcome_composition_in(
+            run_ids: window_ids, spec_identity_ids: []
+          )).to be_empty
+          expect(described_class.unresolved_row_count_in(repository_id: repository.id, run_ids: []))
+            .to eq(0)
+        end).to eq(0)
+      end
+
       # The fifth read, and the one the four above cannot stand in for: they are the composition's
       # steps, and every one of them destroys the run axis on purpose. This is the same rows
       # UNGROUPED, so the sequence the aggregate summed over is legible again — a window whose
       # failures are the last four runs and one whose failures are scattered produce the same
-      # `outcome_composition_in` tuple and different sequences here.
+      # `unstable_outcome_composition_in` tuple and different sequences here.
       it "returns one description's rows across the window, in the order the window was given" do
         sequence = described_class.outcome_sequence_in(
           repository_id: repository.id, run_ids: window_ids, name: "example 7"
@@ -1164,26 +1294,51 @@ RSpec.describe SpecObservation do
       # failed' list a later slice will want". This is that read, and the narrowing it makes
       # possible is what keeps the composition below off the whole window.
       it "narrows to the window's failures off the by-outcome index" do
-        plan = plan_for_actual_sql("spec_observations") { described_class.unstable_candidates_in(window_ids) }
+        plan = plan_for_actual_sql("spec_observations") do
+          described_class.unstable_identity_candidates_in(window_ids)
+        end
 
         expect(plan).to include("index_spec_observations_on_test_run_id_and_outcome")
         expect(plan).to match(SCAN)
         expect(plan).not_to match(/Seq Scan on spec_observations/)
       end
 
-      # Observed: `index_spec_observations_on_repository_id_and_name`, the second index this table
-      # has carried unread. `repository_id` leads it, which is why the composition is scoped by
-      # repository as well as by window — without that column there is no index on `name` to walk
-      # and the grouping falls back to reading the runs whole.
-      it "composes the candidates off the by-name index rather than scanning the table" do
+      # Observed: `index_spec_observations_on_spec_identity_id` — the same index the sibling
+      # duration composition rides, for the same reason: the grouping key moved to the identity, so
+      # the identity index is the path and the repository predicate is dropped rather than risking
+      # the planner a `repository_id`-leading alternative to it.
+      it "composes the candidates off the by-identity index rather than scanning the table" do
         plan = plan_for_actual_sql("spec_observations") do
-          described_class.outcome_composition_in(repository_id: repository.id, run_ids: window_ids,
-                                                 names: ["example 7", "example 13"])
+          described_class.unstable_outcome_composition_in(
+            run_ids: window_ids,
+            spec_identity_ids: [@identity_ids[6], @identity_ids[12], @identity_ids[20]]
+          )
         end
 
-        expect(plan).to include("index_spec_observations_on_repository_id_and_name")
+        expect(plan).to include("index_spec_observations_on_spec_identity_id")
         expect(plan).to match(SCAN)
         expect(plan).not_to match(/Seq Scan on spec_observations/)
+      end
+
+      # ⭐ THE BOUND, MEASURED — the same certification shape the sibling identity read used, on the
+      # same window bound: pinned by SHRINKING THE CANDIDATE LIST, because what has to stay true is
+      # that the work follows the CANDIDATES and a single ceiling passes just as happily on a read
+      # that has stopped being narrowed at all.
+      it "reads on the order of the candidate count, not of the window" do
+        composed = lambda do |count|
+          rows_touched("spec_observations") do
+            described_class.unstable_outcome_composition_in(
+              run_ids: window_ids, spec_identity_ids: @identity_ids.first(count)
+            )
+          end
+        end
+
+        ten = composed.call(10)
+        three = composed.call(3)
+
+        expect(ten).to be <= 10 * runs.size * 2
+        expect(three).to be <= 3 * runs.size * 2
+        expect(ten).to be < SpecObservation.where(test_run_id: window_ids).count / 5
       end
 
       # A btree indexes its nulls, so `name IS NULL` is a range of that same index and the count
@@ -1194,6 +1349,21 @@ RSpec.describe SpecObservation do
         end
 
         expect(plan).to include("index_spec_observations_on_repository_id_and_name")
+        expect(plan).to match(SCAN)
+        expect(plan).not_to match(/Seq Scan on spec_observations/)
+      end
+
+      # The sibling exclusion. Two partial indexes carry `spec_identity_id IS NULL` and lead on
+      # `repository_id`, but neither carries `test_run_id`, so the window predicate is a FILTER
+      # rather than an index condition — and on this seed the planner prices the plain identity
+      # index's own null range below both partials. WHICH index it picks is a cost tiebreak; what
+      # this certifies is the `Seq Scan` refusal: the count reads through AN index and never walks
+      # the window.
+      it "counts the unresolved rows through an index rather than scanning" do
+        plan = plan_for_actual_sql("spec_observations") do
+          described_class.unresolved_row_count_in(repository_id: repository.id, run_ids: window_ids)
+        end
+
         expect(plan).to match(SCAN)
         expect(plan).not_to match(/Seq Scan on spec_observations/)
       end
@@ -1359,8 +1529,8 @@ RSpec.describe SpecObservation do
       end
 
       # A row with no durable identity cannot be matched to itself across runs, so it never becomes
-      # a group — the same refusal `.unstable_candidates_in` makes for a null `name`, at the key
-      # this read groups on.
+      # a group — the same refusal `.unstable_identity_candidates_in` makes for a null
+      # `spec_identity_id`, at the key this read groups on.
       it "never groups the unresolved rows into an identity of their own" do
         expect(described_class.slowest_identity_candidates_in(anchor, limit: 300).map(&:first))
           .to all(be_present)

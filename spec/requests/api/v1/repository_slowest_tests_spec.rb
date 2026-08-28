@@ -660,7 +660,12 @@ RSpec.describe "GET /api/v1/repository — slowest_tests", type: :request do
       # THE SPLIT, not merely the total: asserted per pattern so a read migrating from one statement
       # family to the other cannot hide inside a still-correct `3`.
       expect(reads.grep(ObservationGrainReads::IDENTITY_PRESENCE).length).to eq(1)
-      expect(reads.grep(ObservationGrainReads::IDENTITY_GROUPING).length).to eq(2)
+      # TWO grouped reads by the REFINED patterns — SPGD-758 moved the flakiness candidates onto
+      # the same GROUP BY column, so `IDENTITY_GROUPING` alone now matches that read too and the
+      # split is made on the select-list patterns that keep the two grains apart.
+      expect(reads.grep(ObservationGrainReads::IDENTITY_CANDIDATES).length).to eq(1)
+      expect(reads.grep(ObservationGrainReads::IDENTITY_GROUPING)
+                  .grep(ObservationGrainReads::IDENTITY_COMPOSITION).length).to eq(1)
       expect(identity_grain_reads { get_repository(query: { branch: "main" }) }.length).to eq(3)
       # And the two patterns are DISJOINT over these statements — the property that lets one grain
       # carry two patterns without double-counting, which `classified_observation_reads` would

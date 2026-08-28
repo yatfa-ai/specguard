@@ -436,8 +436,9 @@ class RepositoriesController < ApplicationController
     @unannotated_directories = UnannotatedDirectories.for(@latest_test_run) if @latest_test_run
     # The same run's rows at a grain none of the panels above reach: not which FILES or AREAS the
     # wall clock went into, but which DESCRIPTIONS more than one example of the run recorded, and
-    # what those examples cost between them. Reachable from nowhere until now — `GROUP BY name`
-    # exists twice in this application and both are narrowed to failures, so on a green suite
+    # what those examples cost between them. Reachable from nowhere until now — no read in this
+    # application groups examples by description outside failures — the flakiness panel groups on
+    # `spec_identity_id`, and identity is not a description — so on a green suite
     # nothing grouped examples by description at all (see `SpecObservation.repeated_descriptions_in`).
     #
     # Presented for review and never as a verdict: a shared description is equally a table-driven
@@ -658,7 +659,7 @@ class RepositoriesController < ApplicationController
       # ONE ROW of that ranking, opened: not which tests changed their outcome but WHAT THIS ONE
       # ACTUALLY DID, run by run and in the window's own order. The rung the flakiness ladder never
       # had, and the end of it — `UnstableTests` is `COUNT`s and `ARRAY_AGG(DISTINCT …)`
-      # under `GROUP BY name`, which is what keeps it constant in the size of the suite and is
+      # under `GROUP BY spec_identity_id`, which is what keeps it constant in the size of the suite and is
       # exactly what discards the run axis. A row saying `30 runs, 4 failed, [failed, passed]`
       # describes two windows calling for opposite work: four failures at runs 27–30 is a
       # REGRESSION with a culprit commit to find, and four failures at runs 3, 11, 19 and 26 is

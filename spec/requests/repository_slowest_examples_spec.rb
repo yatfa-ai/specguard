@@ -65,12 +65,17 @@ RSpec.describe "Repository slowest tests", type: :request do
   # One ingested run, through the producer. `specs` are the wire hashes a client POSTs; the
   # recorder reads them by string key, which is what `Ingest::Payload` hands it after JSON parsing.
   def ingest(repository, specs, commit_sha: "feedfacecafe0001", **attrs)
-    Ingest::RunRecorder.record(
+    run = Ingest::RunRecorder.record(
       repository,
       { commit_sha: commit_sha, branch: "main", total_specs_count: specs.size,
         annotated_specs_count: 0, duration_seconds: 60.0 }.merge(attrs),
       specs: specs.map(&:deep_stringify_keys)
     )
+    # Resolved inline: the flakiness panel on the same page groups on the durable identity
+    # (SPGD-758), so an unresolved row is an exclusion there rather than a key and the fixtures
+    # would render that panel empty.
+    Ingest::IdentityResolver.resolve(run)
+    run
   end
 
   # One example on the wire. `duration:` and `name:` are passed at every call site, nils included —
@@ -1119,9 +1124,15 @@ RSpec.describe "Repository slowest tests", type: :request do
       # sentence rather than a panel's list. Ungated unlike every drill-in on this page, because a
       # correction a client has to opt into leaves the Overview printing the subtraction it replaced.
       # Its own budget is asserted in spec/requests/api/v1/repository_intent_readings_spec.rb.
+      # RECOUNTED AT 12 by SPGD-758: this file's fixtures now resolve identities inline (the
+      # flakiness panel on this page groups on the durable identity, so an unresolved row is an
+      # exclusion there rather than a key), which passes the window slowest-tests panel's resolver
+      # gate and pays its candidate and composition reads where these fixtures used to stop it at
+      # the gate. The flakiness panel itself still costs its one gating probe here — this file's
+      # examples report no outcomes, so its window is incomparable and it stops there.
       # Page-wide rather than panel-scoped on purpose: what must not grow is the number of times
       # ONE page walks this table, and only a count taken across the whole request can say that.
-      expect(large_queries.size).to eq(10)
+      expect(large_queries.size).to eq(12)
     end
   end
 
