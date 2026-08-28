@@ -18,6 +18,7 @@ RSpec.describe JsonParseErrorResponder do
     ->(_env) { raise error.new("Error occurred while parsing request parameters") }
   end
 
+  # @intent: { entity: "JsonParseErrorResponder", action: "answer parse error", behavior: "a parse error on an API path answers 400 with the JSON bad_request envelope and charset", layer: "integration" }
   it "answers an unparseable API body with the API's own error shape" do
     status, headers, body = call("/api/v1/ingest", &raising_app)
 
@@ -26,6 +27,7 @@ RSpec.describe JsonParseErrorResponder do
     expect(JSON.parse(body.first)).to include("error" => "bad_request")
   end
 
+  # @intent: { entity: "JsonParseErrorResponder", action: "size error response", behavior: "the error response content-length equals the returned body byte size", layer: "integration" }
   it "sets a content-length matching the body it returns" do
     _, headers, body = call("/api/v1/ingest", &raising_app)
 
@@ -34,16 +36,19 @@ RSpec.describe JsonParseErrorResponder do
 
   # Outside /api an HTML client has no use for a JSON error body, so Rails' own exception handling
   # stays in charge. This is the half that is easy to get wrong by widening the rescue.
+  # @intent: { entity: "JsonParseErrorResponder", action: "re-raise off api", behavior: "a parse error on a non-API path propagates to Rails exception handling", layer: "integration" }
   it "re-raises for a non-API path" do
     expect { call("/repositories", &raising_app) }.to raise_error(parse_error)
   end
 
+  # @intent: { entity: "JsonParseErrorResponder", action: "pass healthy response", behavior: "a response without a parse error passes through the middleware unmodified", layer: "integration" }
   it "leaves a healthy response completely alone" do
     downstream = [200, { "content-type" => "text/plain" }, ["ok"]]
 
     expect(call("/api/v1/ingest") { |_env| downstream }).to eq(downstream)
   end
 
+  # @intent: { entity: "JsonParseErrorResponder", action: "ignore other errors", behavior: "an unrelated exception on an API path propagates rather than being answered as 400", layer: "integration" }
   it "does not swallow errors it was not written for" do
     expect { call("/api/v1/ingest") { |_env| raise ArgumentError, "unrelated" } }
       .to raise_error(ArgumentError)

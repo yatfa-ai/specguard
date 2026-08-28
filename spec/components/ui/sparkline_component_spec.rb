@@ -34,6 +34,7 @@ RSpec.describe UI::SparklineComponent, type: :component do
     }.merge(overrides)))
   end
 
+  # @intent: { entity: "UI::SparklineComponent", action: "draw path", behavior: "the svg holds one path of a move plus one line command per plotted point", layer: "integration" }
   it "draws one path through every point" do
     render_series
 
@@ -43,6 +44,7 @@ RSpec.describe UI::SparklineComponent, type: :component do
     expect(d).to start_with("M")
   end
 
+  # @intent: { entity: "UI::SparklineComponent", action: "mark points", behavior: "one circle per point, each titled with its own label, formatted figure and detail", layer: "integration" }
   it "puts a marker on every point, each naming its own figure" do
     render_series
 
@@ -55,6 +57,7 @@ RSpec.describe UI::SparklineComponent, type: :component do
 
   # The lowest value sits at the floor of the plot and the highest at its ceiling — which is the
   # whole point of not starting at zero, and the reason the bounds have to be printed.
+  # @intent: { entity: "UI::SparklineComponent", action: "scale to range", behavior: "the lowest value sits at the plot floor and the highest at the ceiling with strictly ordered ys between", layer: "integration" }
   it "scales the plot to the series' own range" do
     render_series
 
@@ -65,6 +68,7 @@ RSpec.describe UI::SparklineComponent, type: :component do
     expect(ys[1]).to be > ys.last
   end
 
+  # @intent: { entity: "UI::SparklineComponent", action: "print axis bounds", behavior: "both the minimum and maximum figures appear as text beside the plot", layer: "integration" }
   it "prints both axis bounds beside the plot, so a slope can be read" do
     render_series
 
@@ -76,6 +80,7 @@ RSpec.describe UI::SparklineComponent, type: :component do
 
   # A suite that was measured repeatedly and did not move IS a flat line. Dividing by its
   # zero-width range is the bug; drawing the flat line is the correct answer.
+  # @intent: { entity: "UI::SparklineComponent", action: "draw flat series", behavior: "an unchanged two-point series draws both markers at the vertical midpoint without dividing by zero", layer: "integration" }
   it "draws a series that never moved down the middle rather than dividing by zero" do
     render_series(points: [build_point("steady1", 1_000), build_point("steady2", 1_000)])
 
@@ -86,6 +91,7 @@ RSpec.describe UI::SparklineComponent, type: :component do
   # A backstop, not the message. One point drawn as a line is a flat one, which says the suite is
   # stable — a claim one measurement cannot support. The caller still owes its reader an explicit
   # empty state; this only guarantees the component will not invent the claim on its own.
+  # @intent: { entity: "UI::SparklineComponent", action: "reject single point", behavior: "a one-point series renders no svg or container at all rather than an unsupported flat-line claim", layer: "integration" }
   it "renders nothing at all rather than a flat line through one point" do
     render_series(points: [build_point("onlyone", 1_000)])
 
@@ -93,6 +99,7 @@ RSpec.describe UI::SparklineComponent, type: :component do
     expect(page).to have_no_css("#trajectory", visible: :all)
   end
 
+  # @intent: { entity: "UI::SparklineComponent", action: "reject empty series", behavior: "an empty series renders no svg or container at all", layer: "integration" }
   it "renders nothing on an empty series" do
     render_series(points: [])
 
@@ -103,6 +110,7 @@ RSpec.describe UI::SparklineComponent, type: :component do
   describe "the text alternative" do
     # The series is data, not decoration: a line is a picture of numbers and cannot be read by
     # anything that does not see.
+    # @intent: { entity: "UI::SparklineComponent", action: "render text alternative", behavior: "the details table lists every plotted figure as one row per point with its three cells", layer: "integration" }
     it "states every plotted figure as a table row" do
       render_series
 
@@ -113,6 +121,7 @@ RSpec.describe UI::SparklineComponent, type: :component do
                           ["ccccccc", "1,047", "1 day ago"]])
     end
 
+    # @intent: { entity: "UI::SparklineComponent", action: "word columns", behavior: "the table headers are exactly the caller-supplied column vocabulary in order", layer: "integration" }
     it "uses the caller's vocabulary for the columns" do
       render_series
 
@@ -125,6 +134,7 @@ RSpec.describe UI::SparklineComponent, type: :component do
     # chart itself is drawn under. What it must never be is content withheld from sight while
     # exposed to assistive technology, which would put the honest version of this panel behind a
     # screen reader.
+    # @intent: { entity: "UI::SparklineComponent", action: "disclose figures", behavior: "the alternative is a native details disclosure visible to everyone, never sr-only or hidden markup", layer: "integration" }
     it "is a native disclosure open to everyone, not markup hidden from sight" do
       render_series
 
@@ -134,6 +144,7 @@ RSpec.describe UI::SparklineComponent, type: :component do
       expect(page.native.to_html).not_to include("display: none")
     end
 
+    # @intent: { entity: "UI::SparklineComponent", action: "inflect disclosure", behavior: "the summary count pluralises correctly at two plotted figures", layer: "integration" }
     it "inflects the disclosure at two figures" do
       render_series(points: three_points.first(2))
 
@@ -150,6 +161,7 @@ RSpec.describe UI::SparklineComponent, type: :component do
     # accessible name is announced in full and uninterrupted, so a ~60-word summary used as the name
     # sits unskippably between the reader and the table of figures below; as a description it is the
     # same sentence, reachable and passable.
+    # @intent: { entity: "UI::SparklineComponent", action: "announce name and description", behavior: "the svg is role img named by the visible label element and described by the visible summary element", layer: "integration" }
     it "names itself from the visible label and describes itself from the visible summary" do
       render_series
 
@@ -164,6 +176,7 @@ RSpec.describe UI::SparklineComponent, type: :component do
 
     # The id is a caller's argument rather than a generated one: non-deterministic markup is
     # markup no request spec can name.
+    # @intent: { entity: "UI::SparklineComponent", action: "scope element ids", behavior: "label and summary ids derive from the caller-supplied id so markup is deterministic", layer: "integration" }
     it "scopes its element ids to the id it was given" do
       render_series(id: "other-chart")
 
@@ -171,6 +184,7 @@ RSpec.describe UI::SparklineComponent, type: :component do
       expect(page).to have_css("#other-chart-summary")
     end
 
+    # @intent: { entity: "UI::SparklineComponent", action: "announce coverage", behavior: "the coverage wording renders beside the label, not only inside the disclosure", layer: "integration" }
     it "carries the coverage beside the label, not only in the caption" do
       render_series
 
@@ -178,6 +192,7 @@ RSpec.describe UI::SparklineComponent, type: :component do
     end
   end
 
+  # @intent: { entity: "UI::SparklineComponent", action: "merge caller class", behavior: "a caller :class is appended to the wrapper layout classes rather than replacing them", layer: "integration" }
   it "appends caller classes to the wrapper instead of replacing them" do
     render_series(class: "mt-4")
 
@@ -207,6 +222,7 @@ RSpec.describe UI::SparklineComponent, type: :component do
                     **overrides)
     end
 
+    # @intent: { entity: "UI::SparklineComponent", action: "plot sub-integer range", behavior: "a 0.55s spread across three floats renders as three distinct strictly ordered marker positions", layer: "integration" }
     it "draws a sub-integer range as a slope rather than flattening it to a line" do
       render_durations
 
@@ -219,6 +235,7 @@ RSpec.describe UI::SparklineComponent, type: :component do
     # The same series through the OLD `to_i` coercion is 74, 74, 74 — a zero-width range, drawn
     # down the middle of the plot. Naming that value here is what makes the guard above fail if the
     # coercion ever comes back, rather than merely testing that three floats differ.
+    # @intent: { entity: "UI::SparklineComponent", action: "avoid integer coercion", behavior: "a moving float series never parks its markers on the flat-line midpoint value", layer: "integration" }
     it "does not park a moving series on the flat-line midpoint" do
       render_durations
 
@@ -226,6 +243,7 @@ RSpec.describe UI::SparklineComponent, type: :component do
       expect(page.all("svg circle").map { |circle| circle[:cy].to_f }).not_to include(midpoint)
     end
 
+    # @intent: { entity: "UI::SparklineComponent", action: "announce marker units", behavior: "marker titles use the caller formatter wording and never the hard-coded test-count vocabulary", layer: "integration" }
     it "announces markers in the caller's unit and never as a count of tests" do
       render_durations
 
@@ -236,6 +254,7 @@ RSpec.describe UI::SparklineComponent, type: :component do
       expect(titles.join).not_to include("test")
     end
 
+    # @intent: { entity: "UI::SparklineComponent", action: "print caller units", behavior: "axis bound text and table cells both carry the caller formatter unit spelling", layer: "integration" }
     it "prints the axis bounds and the table cells in the caller's unit" do
       render_durations
 
@@ -250,6 +269,7 @@ RSpec.describe UI::SparklineComponent, type: :component do
     # only `formatter` — which is what the wall-clock series does — gets the same wording in the
     # marker as in the table. A caller whose figure does not carry its unit (`20,013`) passes both,
     # which is the suite-size shape every assertion above this block exercises.
+    # @intent: { entity: "UI::SparklineComponent", action: "default marker wording", behavior: "with no point_formatter the marker title words the figure exactly as the table cell does", layer: "integration" }
     it "words a marker exactly as the table when the caller supplies no marker wording" do
       render_durations
 
@@ -288,6 +308,7 @@ RSpec.describe UI::SparklineComponent, type: :component do
     # the axis bounds.
     def predicted(values) = (2 * values.size) + values.uniq.size + 2
 
+    # @intent: { entity: "UI::SparklineComponent", action: "budget formatter calls", behavior: "a render calls the caller formatter two per point plus one per distinct value plus two for bounds", layer: "integration" }
     it "costs two per point, one per distinct value, and two for the axis bounds" do
       moving = (0...30).map { |index| 74.0 + (index * 0.9) }
       flat = Array.new(30, 74.25)
@@ -301,6 +322,7 @@ RSpec.describe UI::SparklineComponent, type: :component do
     # print it — which is invisible in the rendered output and only shows up as a count. Measured as
     # the MARGINAL cost of one more distinct point, so it holds at any series length: two per point
     # plus the one distinct value it adds. A point that cost four would be the double-format back.
+    # @intent: { entity: "UI::SparklineComponent", action: "format each row once", behavior: "adding one distinct point costs exactly three formatter calls, catching a double-format regression", layer: "integration" }
     it "words a row once rather than formatting it to test it and again to print it" do
       marginal = formatter_calls_for([74.25, 74.30, 74.90]) - formatter_calls_for([74.25, 74.30])
 

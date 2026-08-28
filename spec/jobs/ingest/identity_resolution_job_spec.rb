@@ -12,6 +12,7 @@ RSpec.describe Ingest::IdentityResolutionJob do
     Ingest::RunRecorder.record(repository, payload.test_run_attributes, specs: payload.specs)
   end
 
+  # @intent: { entity: "Ingest::IdentityResolutionJob", action: "resolve run", behavior: "performing the job links the run sole observation to the repository sole spec identity", layer: "unit" }
   it "resolves the run it was given" do
     run = record([unannotated_spec(name: "Cart adds an item to the cart")])
 
@@ -23,6 +24,7 @@ RSpec.describe Ingest::IdentityResolutionJob do
   # Between the enqueue and the dequeue the repository may have been deleted, which takes its runs
   # with it. There is nothing to resolve and nothing to report, so this is not an error — and it is
   # asserted rather than left to a `retry_on` policy this slice deliberately does not set.
+  # @intent: { entity: "Ingest::IdentityResolutionJob", action: "handle vanished run", behavior: "performing for a deleted run id completes without raising", layer: "unit" }
   it "is a no-op for a run that no longer exists" do
     run = record([unannotated_spec])
     id = run.id
@@ -31,6 +33,7 @@ RSpec.describe Ingest::IdentityResolutionJob do
     expect { described_class.perform_now(id) }.not_to raise_error
   end
 
+  # @intent: { entity: "Ingest::IdentityResolutionJob", action: "delegate resolution", behavior: "performing hands the run record to Ingest::IdentityResolver.resolve unchanged", layer: "unit" }
   it "hands the work to the resolver rather than reimplementing any of it" do
     run = record([unannotated_spec])
     allow(Ingest::IdentityResolver).to receive(:resolve)
@@ -52,6 +55,7 @@ RSpec.describe Ingest::IdentityResolutionJob do
       lines.grep(/\[IdentityResolver\]/)
     end
 
+    # @intent: { entity: "Ingest::IdentityResolutionJob", action: "report completion", behavior: "one job emits exactly one IdentityResolver summary line covering all resolved rows", layer: "unit" }
     it "emits exactly one summary for the job, not one per row" do
       run = record([unannotated_spec(file_path: "spec/a_spec.rb", line_number: 1,
                                      name: "Cart adds an item to the cart"),
@@ -68,6 +72,7 @@ RSpec.describe Ingest::IdentityResolutionJob do
     # The job's own rule, kept: between the enqueue and the dequeue the repository may have been
     # deleted, and a run that no longer exists is *"nothing to resolve and nothing to report"*. The
     # second half of that sentence had no mechanism to be true or false of until now.
+    # @intent: { entity: "Ingest::IdentityResolutionJob", action: "report vanished run", behavior: "performing for a deleted run id logs no IdentityResolver summary at all", layer: "unit" }
     it "reports nothing for a run that no longer exists" do
       run = record([unannotated_spec])
       id = run.id
@@ -88,10 +93,12 @@ RSpec.describe Ingest::IdentityResolutionJob do
   describe "serializing one run's jobs" do
     let(:run) { record([unannotated_spec]) }
 
+    # @intent: { entity: "Ingest::IdentityResolutionJob", action: "limit concurrency", behavior: "the concurrency limit is one job at a time", layer: "unit" }
     it "admits one job at a time" do
       expect(described_class.concurrency_limit).to eq(1)
     end
 
+    # @intent: { entity: "Ingest::IdentityResolutionJob", action: "key concurrency", behavior: "two jobs for the same run id derive an identical concurrency key", layer: "unit" }
     it "keys the limit on the run, so two jobs for the same run share a key" do
       expect(described_class.new(run.id).concurrency_key).to eq(described_class.new(run.id).concurrency_key)
     end
@@ -99,6 +106,7 @@ RSpec.describe Ingest::IdentityResolutionJob do
     # The other direction, and the one that matters: a constant key would satisfy the assertion above
     # while serializing identity resolution across every run in the deployment — every repository's
     # ingest queued behind every other's, a multi-tenant stall dressed as an optimisation.
+    # @intent: { entity: "Ingest::IdentityResolutionJob", action: "key concurrency per run", behavior: "jobs for different runs derive different concurrency keys so runs do not serialise together", layer: "unit" }
     it "keys the limit on the run, so jobs for different runs do not share a key" do
       other = record([unannotated_spec(file_path: "spec/other_spec.rb", line_number: 9)])
 
@@ -109,6 +117,7 @@ RSpec.describe Ingest::IdentityResolutionJob do
     # releasing a blocked job anyway. SolidQueue's 3-minute default is shorter than a design-point
     # resolve, so leaving it there would expire the semaphore mid-run and silently restore the
     # overlap — this slice voided with nothing turning red.
+    # @intent: { entity: "Ingest::IdentityResolutionJob", action: "hold semaphore", behavior: "the semaphore duration exceeds SolidQueue default period and is at least one hour", layer: "unit" }
     it "holds the semaphore for longer than a resolve can take, not SolidQueue's 3-minute default" do
       expect(described_class.concurrency_duration).to be > SolidQueue.default_concurrency_control_period
       expect(described_class.concurrency_duration).to be >= 1.hour
@@ -118,6 +127,7 @@ RSpec.describe Ingest::IdentityResolutionJob do
     # every row that shard delivered until some later ingest's cross-run sweep found them. The gem
     # sanitises this attribute (an unrecognised value silently becomes `:block`), so a genuine
     # `:discard` edit is caught by nothing else in the suite.
+    # @intent: { entity: "Ingest::IdentityResolutionJob", action: "conflict policy", behavior: "held-back jobs block rather than discard so no shard work is lost", layer: "unit" }
     it "blocks the jobs it holds back rather than discarding them" do
       expect(described_class.concurrency_on_conflict).to eq(:block)
     end
