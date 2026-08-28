@@ -917,10 +917,11 @@ RSpec.describe SpecObservation do
       # by-directory rollup's `COUNT(DISTINCT name)` does. What makes the access path worth
       # measuring rather than assuming is that unlike
       # `DIRECTORY_EXPRESSION` there IS an index over `name` on this table —
-      # `index_spec_observations_on_repository_id_and_name` — and it is NOT the path here, because
-      # it leads on `repository_id`. That index is what `.outcome_composition_in` rides for a
-      # WINDOW of runs; a single-run narrow does not begin with its leading column, and reaching
-      # for it would mean walking a whole repository's rows to answer a question about one run.
+      # `index_spec_observations_on_repository_id_and_name` — but it is not this read's path and it
+      # is no longer any flakiness read's path either: `unstable_outcome_composition_in` groups on
+      # `spec_identity_id` and takes no `repository_id` predicate, so it rides the identity index
+      # instead, and this single-run narrow would not begin with this index's leading column
+      # regardless.
       #
       # `SUM(duration_seconds)` projects a column outside every index leading with `test_run_id`,
       # so the aggregate has to touch the heap and an `Index Only Scan` is not available to this
@@ -1185,7 +1186,7 @@ RSpec.describe SpecObservation do
       # steps, and every one of them destroys the run axis on purpose. This is the same rows
       # UNGROUPED, so the sequence the aggregate summed over is legible again — a window whose
       # failures are the last four runs and one whose failures are scattered produce the same
-      # `outcome_composition_in` tuple and different sequences here.
+      # `unstable_outcome_composition_in` tuple and different sequences here.
       it "returns one description's rows across the window, in the order the window was given" do
         sequence = described_class.outcome_sequence_in(
           repository_id: repository.id, run_ids: window_ids, name: "example 7"
@@ -1528,8 +1529,8 @@ RSpec.describe SpecObservation do
       end
 
       # A row with no durable identity cannot be matched to itself across runs, so it never becomes
-      # a group — the same refusal `.unstable_candidates_in` makes for a null `name`, at the key
-      # this read groups on.
+      # a group — the same refusal `.unstable_identity_candidates_in` makes for a null
+      # `spec_identity_id`, at the key this read groups on.
       it "never groups the unresolved rows into an identity of their own" do
         expect(described_class.slowest_identity_candidates_in(anchor, limit: 300).map(&:first))
           .to all(be_present)

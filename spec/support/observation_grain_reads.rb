@@ -71,10 +71,12 @@
 # SQL only its own read produces.
 #
 # The by-description patterns were chosen under that lesson rather than after it. `GROUP BY
-# "spec_observations"."name"` is the obvious match and is the WRONG one: three reads on this table
-# group on `name` — `.unstable_candidates_in`, `.outcome_composition_in` and
-# `.repeated_descriptions_in` — so it would adopt two of the flakiness grain's four the moment a
-# branch-scoped window was exercised. `HAVING (COUNT(*) > 1)` is issued by the third alone. Its
+# "spec_observations"."name"` is the obvious match and is the WRONG one: it would adopt
+# `.repeated_descriptions_in` into the flakiness grain — the two flakiness reads,
+# `.unstable_identity_candidates_in` and `.unstable_outcome_composition_in`, moved to
+# `GROUP BY spec_identity_id` and no longer produce it, but the description read still does, so
+# matching on the grouping alone would adopt it the moment a branch-scoped window was exercised.
+# `HAVING (COUNT(*) > 1)` is issued by that read alone. Its
 # partner is matched on `COUNT(*) FILTER (WHERE name IS NULL)`, which only `.description_presence_in`
 # selects: the flakiness grain's own unnamed-row read is a `.count` over `where(name: nil)` and
 # spells that condition as the QUOTED-COLUMN form the fourth pattern below matches, so the two

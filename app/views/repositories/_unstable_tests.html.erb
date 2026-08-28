@@ -55,7 +55,7 @@
                         30 runs and shows the words those runs used; WHICH 4 decides whether the
                         reader hunts a commit or quarantines a test, and nothing anywhere said. The
                         aggregate above cannot say — it is `COUNT`s and `ARRAY_AGG(DISTINCT …)` under
-                        `GROUP BY name`, which is what keeps it constant in the size of the suite —
+                        `GROUP BY spec_identity_id`, which is what keeps it constant in the size of the suite —
                         so the axis comes back from a rung below rather than from changing it.
 
                         `?unstable_test=`, following the `?spec_file=` / `?spec_directory=` /

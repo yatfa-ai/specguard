@@ -20,7 +20,7 @@
 #     quarantine, retry, or hunting the shared state, and there is no culprit commit to find.
 #
 # `UnstableTests` cannot tell them apart and is right not to try: `SpecObservation::UNSTABLE_COMPOSITION`
-# is every column a `COUNT` or an `ARRAY_AGG(DISTINCT …)` under `GROUP BY name`, which is the correct
+# is every column a `COUNT` or an `ARRAY_AGG(DISTINCT …)` under `GROUP BY spec_identity_id`, which is the correct
 # shape for a RANKING and is what keeps it constant in the size of the suite.
 # `UnstableTests::Row#outcome_words` then sorts the distinct set, discarding even arrival order — on
 # purpose, so two rows carrying the same set read the same way. The run axis is gone before the row

@@ -621,7 +621,7 @@ module RepositoriesHelper
   # Where the panel stops looking, stated as a boundary rather than implied by an absence.
   #
   # The search begins at the runs' failures, which is what makes it affordable at the design point
-  # (see `SpecObservation.unstable_candidates_in`). The cost of that narrowing is real and specific:
+  # (see `SpecObservation.unstable_identity_candidates_in`). The cost of that narrowing is real and specific:
   # a test that alternated `pending` and `passed` and never failed varied its outcome and is not
   # reported. A reader who is not told that reads this list as "every test whose outcome varied".
   def unstable_tests_boundary_sentence
