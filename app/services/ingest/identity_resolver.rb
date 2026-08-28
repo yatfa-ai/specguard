@@ -1938,13 +1938,36 @@ module Ingest
     # == The scope filter is applied AFTER the index scan, and under-recall here costs an identity
     #
     # An HNSW scan produces `hnsw.ef_search` candidates (default 40) from the whole table and only
-    # then applies `repository_id`. Today `spec_identities` is small enough that the planner scans
-    # it outright and the question does not arise. Once it is large enough across all tenants that
-    # the index wins — the 20,000-per-repository design point multiplied by every repository — a
-    # small tenant's true nearest neighbour can fall outside those 40 global candidates, and this
-    # method returns nothing. A miss here is not a worse ranking, it is a second identity for a test
-    # that already had one, and a history split in two. That is what makes it worth stating:
-    # `spec_intents` carries the same shape and is only ever ranking.
+    # then applies `repository_id` — for the shapes where the planner chooses that scan. Measured
+    # (SPGD-375, `script/ann_recall_audit.rb`, PostgreSQL 17.9 / pgvector 0.8.6, an 80,100-row
+    # table of four 20,000-row tenants and one 100-row one, near-band probes at cosine 0.96–0.995
+    # of a tenant's own row): the planner does NOT hand every shape to HNSW. For a SMALL tenant it
+    # bitmap-scans `index_spec_identities_on_repository_id` and computes distances as a filter —
+    # exact, recall 1.000 at every `ef_search`. For a tenant whose own 20,000 rows make the
+    # repository filter unselective, it chooses the HNSW index with `repository_id` applied after
+    # the scan — the exposure shape — and at stock `ef_search` 40 that query returns the exact
+    # truth's row for only **0.91** of near-band probes: one observation in eleven that is inside
+    # the match band comes back with nothing, and a test that already had an identity gets a second
+    # one. A miss here is not a worse ranking, it is a history split in two.
+    #
+    # **Mitigated, with the number that chose it.** The query below runs inside its own
+    # transaction and issues `SET LOCAL hnsw.iterative_scan = 'relaxed_order'` before it, scoped
+    # to this statement and undone at commit — a global `hnsw.*` change would tax every other
+    # vector consumer for a fix only this query needs. On the same grid: `iterative_scan =
+    # relaxed_order` at stock `ef_search` returns recall **1.000**. Raising `ef_search` to 200
+    # also reaches 1.000, and is not preferred because it buys the same recall for the same
+    # latency (~148 ms/query against ~7.9 unmitigated) while making EVERY query dearer at the
+    # index level; iterative scan pays only when the filtered candidate list is short, which is
+    # exactly the under-recall case. What the fix costs on a miss — the axis it was left off for
+    # in the first place — is bounded and symmetric on this corpus (~140 ms miss vs ~138 ms hit
+    # for a large tenant), and it cannot tax the first-ingest run that made the old paragraph
+    # hesitate: a repository's first run inserts into a table its tenant does not yet dominate,
+    # the planner answers small-tenant shapes from the `repository_id` index, and the GUC is inert
+    # on a non-HNSW plan. Unchanged re-ingests never reach this method at all ({#identical_text}
+    # and the digest shortcut return first), so the ~18x per-query cost lands only on the changed
+    # and new tests of an already-large repository. Rerun the grid against a bigger corpus — or
+    # against real Voyage geometry rather than the synthetic cluster corpus the script documents —
+    # before trusting these numbers past 10^5 rows.
     #
     # What it cannot cost is the identical-text case — a moved test, or the same test ingested by
     # two shards. {#identical_text} answers that one before this method is called at all, and
@@ -1952,16 +1975,6 @@ module Ingest
     # The exposure is exactly the near-identical band, the case the spec's "differs only in
     # punctuation and whitespace" example isolates: the bytes differ, so neither equality can see
     # it and only similarity can find the row.
-    #
-    # **Deliberately not mitigated here.** pgvector 0.8.0 is installed and `hnsw.iterative_scan`
-    # addresses this directly, so the remedy is a one-line `SET` rather than an upgrade. It is left
-    # off because of what it costs on the axis this slice is explicitly not allowed to touch:
-    # iterative scan keeps descending until enough rows pass the filter or it hits
-    # `hnsw.max_scan_tuples`, which makes every *miss* dramatically more expensive — and a
-    # repository's first run is 20,000 consecutive misses. Choosing between that, a partitioned or
-    # per-tenant index, and a raised `ef_search` is a measurement against the 20k design point, and
-    # that is **SPGD-72's**, alongside the batching, caching and re-embed skipping it already owns.
-    # Handed to it by name rather than guessed at here.
     #
     # == The projection is narrowed, and it is the four columns the callers actually read
     #
@@ -2020,35 +2033,42 @@ module Ingest
     # drains the candidate list on every hit. SPGD-72 is measuring this plan, not the one that was
     # here before.
     #
-    # **But that plan is not currently the one this query gets, and that is the bigger finding.**
-    # On PG 17.10 / pgvector 0.8.0 at stock `random_page_cost` 4, the planner did not choose
-    # `index_spec_identities_on_embedding` for ANY shape of this query — not with both filters, not
-    # with one, not for a bare `ORDER BY embedding <=> $1 LIMIT 1`; `pg_stat_user_indexes.idx_scan`
-    # for that 156 MB index stayed at **0**. The reason is TOAST: a 1536-float `vector` lives out of
-    # line, so the heap for 20,000 rows is ~5 MB against ~160 MB of TOAST, and a Seq Scan costs out
-    # at ~900 while the HNSW scan starts at ~2341. The planner takes the "cheap" seq scan and then
-    # pays a detoast per row — 145 ms/query actual, against 0.6-1.1 ms for the forced ANN plan.
-    #
-    # ⚠️ **That measurement is on the column this table no longer has.** The 2026-08-17 migration
-    # moved `embedding` to `halfvec(1024)`, which is 2,052 bytes per datum against 6,148 — still
-    # over `TOAST_TUPLE_THRESHOLD` and so still out of line, but only just, and the TOAST that
-    # drives the finding above shrinks by about two thirds. Both sides of the comparison move: the
-    # seq scan's detoast gets cheaper, and so does every HNSW hop. **Which plan the planner picks
-    # after the migration has NOT been re-measured** — it is the same question SPGD-72 already owns,
-    # asked of a column three times smaller.
-    # So on this configuration the tiebreak is free (146.95 vs 146.60 ms/query, inside noise)
-    # because the ANN plan it burdens never runs. Do not read that as permission to relax the key:
-    # planner settings, PG version and data shape all move this, the cost above lands the moment the
-    # ANN plan IS chosen, and correctness does not depend on which plan wins. The index going unused
-    # is **squarely SPGD-72's**, and a larger prize than anything this ticket touches; it is recorded
-    # here and handed over rather than acted on, because ANN-index tuning is out of scope above.
+    # **But that plan was not the one this query got under the old column, and SPGD-375's run
+    # closed the question.** On PG 17.10 / pgvector 0.8.0 over the retired 1536-float `vector`,
+    # the planner chose `index_spec_identities_on_embedding` for NO shape of this query — TOAST
+    # made the "cheap" seq scan win and the index sat at zero scans. On `halfvec(1024)`
+    # (PostgreSQL 17.9 / pgvector 0.8.6, `script/ann_recall_audit.rb`'s 80,100-row corpus, stock
+    # costs, after ANALYZE) that has changed: for the shape where the repository filter is
+    # unselective — a tenant's own 20,000 rows — the planner now CHOOSES `Limit -> Incremental
+    # Sort (Presorted Key: distance) -> Index Scan using index_spec_identities_on_embedding`,
+    # with `repository_id` and the threshold as filters applied after the scan. The tiebreak's
+    # incremental sort is therefore no longer hypothetical: it is on the plan this query actually
+    # gets for large tenants, and the under-recall paragraph above was measured on that same
+    # plan. For a small tenant the planner bitmap-scans `repository_id` and the HNSW index never
+    # runs — the tiebreak is free there and the exposure is absent there, and those are the same
+    # statement. Which plan wins remains planner-version- and data-shape-dependent; correctness
+    # (the tiebreak, the projection) holds under either, and the recall mitigation below is
+    # inert on a non-HNSW plan.
     def nearest(embedding)
-      @repository.spec_identities
-                 .select(:id, :text, :text_digest, :signal_source)
-                 .nearest_neighbors(:embedding, embedding, distance: "cosine",
-                                    threshold: SpecIdentity::MATCH_DISTANCE)
-                 .order(:id)
-                 .first
+      SpecIdentity.transaction do
+        # Scoped to THIS query via SET LOCAL inside the surrounding transaction — never a global
+        # `hnsw.*` change, which would tax every other vector consumer for a fix only this query
+        # needs. Two notes for whoever touches this: (1) SET LOCAL persists until COMMIT, so if a
+        # caller already holds a transaction this savepoint joins, the GUC rides to that outer
+        # transaction's end — harmless here because `iterative_scan` only alters how an HNSW scan
+        # gathers candidates and the resolver's other statements are not vector scans, but it is
+        # why this is a transaction of its own whenever nothing outer holds one; (2)
+        # `relaxed_order` and not `strict_order`: the `.order(:id)` tiebreak below already forces
+        # an Incremental Sort over whatever the scan emits, so paying for strict ordering inside
+        # the scan as well buys nothing.
+        SpecIdentity.connection.execute("SET LOCAL hnsw.iterative_scan = 'relaxed_order'")
+        @repository.spec_identities
+                   .select(:id, :text, :text_digest, :signal_source)
+                   .nearest_neighbors(:embedding, embedding, distance: "cosine",
+                                      threshold: SpecIdentity::MATCH_DISTANCE)
+                   .order(:id)
+                   .first
+      end
     end
 
     # **The one match that can never learn from itself, marked so it stops recurring.** A test whose

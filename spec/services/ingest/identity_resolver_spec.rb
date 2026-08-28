@@ -996,6 +996,34 @@ RSpec.describe Ingest::IdentityResolver do
 
       expect(lookups.sole).to match(/ORDER BY.*<=>.*,\s*"spec_identities"\."id" ASC\s*LIMIT/m)
     end
+
+    it "issues the ANN under-recall mitigation as SET LOCAL on the statement's own transaction" do
+      # SPGD-375: `#nearest` under-recalls on the HNSW plan — measured 0.91 recall@1 at the
+      # 20,000-per-tenant design point on PG 17.9 / pgvector 0.8.6, `script/ann_recall_audit.rb`
+      # — and the fix chosen from that grid is `SET LOCAL hnsw.iterative_scan = 'relaxed_order'`
+      # (recall 1.000; see that script and the ticket for the grid, including what the fix costs
+      # on a miss).
+      #
+      # This asserts the MECHANISM and deliberately not the outcome. A recall assertion here
+      # would be vacuous: at test-suite table sizes the planner does not choose the HNSW index
+      # at all (it answers from the `repository_id` index, or scans outright), a non-ANN plan is
+      # exact, and "the right row came back" passes identically with the mitigation present,
+      # absent, or with the index dropped. What CANNOT be accidentally right is whether the
+      # GUC was issued on the connection for this query — the same shape of backstop as the
+      # ordering example above it. The SET is asserted verbatim including the `LOCAL` scoping:
+      # a plain `SET` would leak the GUC to the rest of the connection's life and fail here.
+      ingest([one(original)], ci_run_id: "run-1")
+      second = record([one("Order#checkout rejects an expired cards", line: 2)], ci_run_id: "run-2")
+
+      statements = executed_sql { described_class.resolve(second) }
+
+      set = statements.grep(/\ASET LOCAL hnsw\.iterative_scan/i).sole
+      expect(set).to match(/relaxed_order/i)
+      # And the ANN statement it scopes is in the SAME captured block, after the SET —
+      # a GUC issued on some other connection or some other query would pass the line above
+      # and mean nothing.
+      expect(statements.index { |s| s =~ /<=>/ }).to be > statements.index(set)
+    end
   end
 
   describe "re-ingesting text that has not changed" do
