@@ -78,6 +78,14 @@ class RepositoriesController < ApplicationController
   # allow-list that keeps a URL fragment from naming a panel nobody renders is argued in full there.
   include RequestedUnstableTestOriginParam
 
+  # `?limit=` read as an Integer ask for how many rows the two run-grain duration rollups below
+  # should list — the first MAGNITUDE ask this page reads, and the only one whose value is bounded
+  # by nothing in the data, which is why its guard carries a ceiling no sibling needs. Shared with
+  # `RepositoryOverview`, which reads the same parameter under the same guard to widen the same
+  # two rollups' blocks on `GET /api/v1/repository`. See `RequestedLimitParam` for the guard's
+  # reasoning in full.
+  include RequestedLimitParam
+
   # The repositories this user may pick from, straight off GitHub, and the four different things to
   # say when that list cannot be loaded. Shared with `BulkRegistrationsController`, which renders a
   # picker built from the same listing and has to answer the same questions the same way.
@@ -201,6 +209,12 @@ class RepositoriesController < ApplicationController
     @run_anchor_request = requested_commit_sha
     @run_anchor_run = @run_anchor_request && @repository.latest_test_run_for_commit(@run_anchor_request)
     @latest_test_run = @run_anchor_run || newest_test_run
+    # The `?limit=` ask in its raw form, read once for both duration rollups below and carried by
+    # every `drill_down_path` link on the page — the same rule `@trajectory_branch_request` and
+    # friends follow: a link reproduces what the reader asked for, so widening one panel closes no
+    # open drill-in and drops no widening already in the URL. `nil` — no ask — is the common
+    # answer, and `rollup_limit` is what turns it into each panel's default constant.
+    @limit_request = requested_limit
     # The refused half of the same delivery stream the run above is the accepted half of, and the
     # verdict the page header's connection indicator needs in order to stop being wrong.
     #
@@ -368,7 +382,7 @@ class RepositoriesController < ApplicationController
     # answers so the panel branches on one read rather than the controller taking a second.
     #
     # ONE query, not growing with the size of the suite: see `SpecFileDurations`.
-    @spec_file_durations = SpecFileDurations.for(@latest_test_run) if @latest_test_run
+    @spec_file_durations = SpecFileDurations.for(@latest_test_run, limit: rollup_limit(SpecObservation::HEAVIEST_FILES_LIMIT)) if @latest_test_run
     # One file out of that rollup, opened: not which files the wall clock went into but WHICH
     # EXAMPLES are in the one the reader picked. The rollup is a capped ten and every panel on this
     # page is, so a reader who has found the heavy file has so far found the end of the road — this
@@ -404,7 +418,7 @@ class RepositoriesController < ApplicationController
     #
     # Guarded identically, and on nothing else. ONE query, not growing with the size of the suite:
     # see `SpecDirectoryDurations`.
-    @spec_directory_durations = SpecDirectoryDurations.for(@latest_test_run) if @latest_test_run
+    @spec_directory_durations = SpecDirectoryDurations.for(@latest_test_run, limit: rollup_limit(SpecObservation::HEAVIEST_DIRECTORIES_LIMIT)) if @latest_test_run
     # The SAME grain as the line above and a different AXIS, which is why it is a second read rather
     # than a column on that one. That rollup ranks areas by WALL CLOCK and its coverage figure is
     # TIMING coverage; this one ranks them by how many of their examples carry no `@intent`. An
@@ -808,6 +822,14 @@ class RepositoriesController < ApplicationController
   end
 
   private
+
+  # The limit the two run-grain duration rollups were asked for, resolved against each panel's own
+  # default. The `?limit=` ask names a magnitude and no panel, so the DEFAULT is per-call-site —
+  # the shipped constants stay the defaults and are not re-tuned, and a nil ask (the common one)
+  # must not become `limit: nil`, which ActiveRecord reads as NO limit at all: the opposite of the
+  # widening the reader declined. Read through `RequestedLimitParam` like both surfaces of the API,
+  # never re-derived here.
+  def rollup_limit(default) = @limit_request || default
 
   # `user_id` is already loaded on the record, so this asks nothing of the database.
   def owns_repository?(repository)

@@ -127,6 +127,47 @@
               </tr>
             <% end %>
           <% end %>
+          <%# THE WIDENING ASK, rendered only when there is something to widen to. The panel's own
+              cap was the whole defect this control closes: the caption above says "the 10 heaviest
+              of the 300" and offered no way to see more, on a page whose every other figure is a
+              link somewhere. One control, to the shared ceiling rather than a stepper — an
+              intermediate page size is a pagination contract this endpoint has no cursor for, and
+              an ask past the ceiling is an unbounded scan on a 20,000-example suite, which is
+              what `RequestedLimitParam::MAX_LIMIT` exists to refuse by clamping.
+
+              Through `drill_down_path`, so the widening carries every open drill-in and every
+              other ask — the reciprocity rule the row links above state. Widening the list is not
+              a request to close the file panel opened from it.
+
+              Rendered when `truncated?` AND there is headroom left, so a list already at the
+              ceiling does not offer a widening that cannot widen. `truncated?` stays honest at
+              the widened size on its own: the population figure rides back on the same aggregate
+              (`COUNT(*) OVER ()`, counted before the LIMIT), so there is no limit-plus-one probe
+              to widen and none is needed.
+
+              Below it, the way back: once a widening is in the URL it rides every link on the
+              page, so the only honest way back to the shipped default is an explicit `limit: nil`
+              override — a bare link to the page would keep the widening. It names the default
+              this panel ships with rather than a number read off the rows, which are the widened
+              rows, not the default ones. %>
+          <% if @spec_file_durations.truncated? &&
+                @spec_file_durations.rows.size < RequestedLimitParam::MAX_LIMIT %>
+            <p class="text-xs mt-2">
+              <%= link_to "Show up to #{number_with_delimiter(RequestedLimitParam::MAX_LIMIT)} heaviest files",
+                          drill_down_path(@repository, limit: RequestedLimitParam::MAX_LIMIT,
+                                          anchor: "spec-file-durations"),
+                          class: "underline underline-offset-2 decoration-app-border-light " \
+                                 "text-app-content hover:decoration-app-content" %>
+            </p>
+          <% end %>
+          <% if @limit_request %>
+            <p class="text-xs mt-2">
+              <%= link_to "Back to the #{SpecObservation::HEAVIEST_FILES_LIMIT} heaviest",
+                          drill_down_path(@repository, limit: nil, anchor: "spec-file-durations"),
+                          class: "underline underline-offset-2 decoration-app-border-light " \
+                                 "text-app-content hover:decoration-app-content" %>
+            </p>
+          <% end %>
         <% else %>
           <%# Files exist and not one of their examples was timed. Every group's SUM is NULL, so
               there is a list of files and no ranking — and a column of "not reported" under a

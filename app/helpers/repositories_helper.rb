@@ -89,6 +89,12 @@ module RepositoriesHelper
              repeated_description: @repeated_description_request,
              unstable_test: @unstable_test_request,
              unstable_test_from: @unstable_test_origin_request }
+    # The magnitude ask rides the same carry, but ONLY when there is one: `nil` in the hash above
+    # would put `?limit=` on every link of a default page — bytes that say an ask was made when
+    # none was — and this page's no-ask render is pinned byte-for-byte. Added conditionally after
+    # the hash rather than inside it, so an explicit `limit: nil` override ("Back to the 10
+    # heaviest") still beats a carried widening through the ordinary `merge` below.
+    asks[:limit] = @limit_request if @limit_request
 
     repository_path(repository, **asks.merge(overrides), anchor: anchor)
   end

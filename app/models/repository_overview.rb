@@ -162,6 +162,15 @@ class RepositoryOverview
   # windows would then describe that run under a `run_anchor` naming the sha the client asked for.
   # See `RequestedCommitShaParam`, which holds that reasoning in full.
   include RequestedCommitShaParam
+
+  # `?limit=` read as an Integer ask for how many rows the two run-grain duration rollups should
+  # list — the first MAGNITUDE `Requested*Param` this object reads, shared with
+  # `RepositoriesController` on the same reasoning every shared include above gives: the guard is
+  # the parameter's, not the surface's, and a second copy of it would be a second answer to "which
+  # shapes does `?limit=` tolerate". It names no run, no area and no key — it asks the ranking
+  # itself to grow — which is also why it alone carries a ceiling: see `RequestedLimitParam`,
+  # which holds that reasoning in full.
+  include RequestedLimitParam
   # The bound on `history` below. Ten rows is ten rows whether the suite holds three tests or
   # twenty thousand — `Repository#recent_test_runs` argues that in its own comment — so this is a
   # bound and not the first page of a pagination contract there is no cursor to continue.
@@ -1061,7 +1070,8 @@ class RepositoryOverview
   # `spec/models/spec_observation_spec.rb`, so a 20,000-example suite costs exactly what a
   # 40-example one does. It sits inside the budget `serialized_shards` states above.
   def serialized_spec_files(test_run)
-    durations = SpecFileDurations.for(test_run)
+    limit = requested_limit || SpecObservation::HEAVIEST_FILES_LIMIT
+    durations = SpecFileDurations.for(test_run, limit: limit)
 
     return nil unless durations.recorded?
 
@@ -1075,7 +1085,12 @@ class RepositoryOverview
         }
       end,
       file_count: durations.file_count,
-      limit: SpecObservation::HEAVIEST_FILES_LIMIT
+      # The APPLIED limit, never the ask verbatim: an over-large ask is clamped by the guard, and
+      # `file_count > limit` is how a client detects truncation — a `limit` the response did not
+      # honour would make that comparison lie in exactly the direction the field exists to prevent.
+      # Beside `file_count`, counted before the LIMIT and exact, the two operands of the disclosure
+      # travel together.
+      limit: limit
     }
   end
 
@@ -1116,7 +1131,8 @@ class RepositoryOverview
   # `index_spec_observations_on_test_run_id` serves it — EXPLAIN-certified at the 20-run seed in
   # `spec/models/spec_observation_spec.rb` rather than asserted here.
   def serialized_spec_directories(test_run)
-    durations = SpecDirectoryDurations.for(test_run)
+    limit = requested_limit || SpecObservation::HEAVIEST_DIRECTORIES_LIMIT
+    durations = SpecDirectoryDurations.for(test_run, limit: limit)
 
     return nil unless durations.recorded?
 
@@ -1140,7 +1156,10 @@ class RepositoryOverview
         }
       end,
       directory_count: durations.directory_count,
-      limit: SpecObservation::HEAVIEST_DIRECTORIES_LIMIT
+      # The APPLIED limit, never the ask verbatim — the same rule `serialized_spec_files` states
+      # for its own `limit`, not restated here beyond noting the two must agree in kind: both are
+      # clamped by the same guard, and both sit beside a count taken before the LIMIT.
+      limit: limit
     }
   end
 
