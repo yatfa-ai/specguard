@@ -1767,10 +1767,12 @@ RSpec.describe "POST /api/v1/ingest", type: :request do
     end
   end
 
-  # WHAT THE RESPONSE SAYS ABOUT PER-EXAMPLE IDENTITY — the axis the two examples above pin the
+  # WHAT THE RESPONSE SAYS ABOUT PER-EXAMPLE IDENTITY — the axis two earlier examples pin the
   # platform-side behaviour of and never ask the client-facing question about.
   #
-  # `:1534` and `:1577` assert that an id-less payload keeps its rows and that an id-less anonymous
+  # Both live in "the per-example rows a run leaves behind": "keeps every example of a payload that
+  # carries no ids at all" and "does double an id-less anonymous slice's rows, having no key with
+  # which not to". They assert that an id-less payload keeps its rows and that an id-less anonymous
   # slice doubles them on redelivery. Both are statements about what the DATABASE ends up holding,
   # and both are deliberate: the doubling has no platform-side fix, because the only other
   # candidate conflict key is `(file_path, line_number)` and that is the coordinate a table-driven
