@@ -505,6 +505,19 @@ class SpecIdentity < ApplicationRecord
 
     transaction do
       set_operator_cost(VECTOR_OPERATOR_COST)
+      # The recall mitigation {Ingest::IdentityResolver#nearest} established (SPGD-375), for the
+      # same exposure on this read: the HNSW descent applies `repository_id` AFTER the scan, so
+      # whenever the planner hands the LATERAL the index (a plan choice that moves with catalog
+      # statistics — the poisoning `spec/support/relation_statistics.rb` documents at length —
+      # and with pgvector version), a small tenant's qualifying neighbours can fall outside the
+      # `hnsw.ef_search` candidates and the cluster under-reports. `relaxed_order` iterates past
+      # the first candidate page until the filters are satisfied — measured at recall 1.000 on
+      # the resolver's own grid — and it is inert whenever the planner declines the index, which
+      # is the plan a small tenant honestly stat'ed gets. Observed failing in CI exactly this
+      # way on main at c192b15 (run 33222056930): `repository_near_duplicates_spec.rb` saw
+      # cluster_count 0 and 7 of 10 pairs, a comment-only commit, unreproducible locally across
+      # three full-suite seeds — the intermittent shape stats poisoning produces.
+      connection.execute("SET LOCAL hnsw.iterative_scan = 'relaxed_order'")
       rows = connection.select_all(sql).cast_values
       set_operator_cost(previous_cost)
       rows
