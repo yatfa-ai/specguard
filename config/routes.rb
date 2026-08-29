@@ -175,6 +175,20 @@ Rails.application.routes.draw do
       # surface answering to both is not expressible and deliberately so. The BODY is shared anyway,
       # by `RepositoryOverview` rather than by a shared credential; see that class.
       get "repositories/:id", to: "user_repositories#show"
+      # MANAGING A REPOSITORY'S MEMBERS over the `sgu_` surface (SPGD-875) — list, add by handle,
+      # edit permissions, revoke — mirroring the web nesting (`resources :memberships` under
+      # `resources :repositories`) in the named-per-route shape `user_repository_api_keys` uses
+      # directly above, for the reason the `post "repositories"` note states: a second
+      # `accepts_user_credential` declaration to forget on a controller nobody routed is one
+      # omission away from a 401 nobody can explain, so same noun, same controller.
+      #
+      # The `:repository_id` segment is what `RepositoryAuthorization#current_repository` reads;
+      # the `:id` on the member routes is a MEMBERSHIP id, scoped to the repository by the
+      # controller's `find_membership!` — a foreign repository's membership id answers 404 there.
+      get "repositories/:repository_id/members", to: "user_repository_members#index"
+      post "repositories/:repository_id/members", to: "user_repository_members#create"
+      patch "repositories/:repository_id/members/:id", to: "user_repository_members#update"
+      delete "repositories/:repository_id/members/:id", to: "user_repository_members#destroy"
     end
   end
 
