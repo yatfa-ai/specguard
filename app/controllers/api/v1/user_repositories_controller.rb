@@ -276,11 +276,11 @@ class Api::V1::UserRepositoriesController < Api::BaseController
     # to read this — including `delivery_health`, which is not null here for the reason `#index`
     # gives: `refusing: false` is a positive finding and an absent key would read as "SpecGuard
     # does not track that".
-    verdict = RejectedIngests.verdict(
-      last_rejection_at: last_rejection_times_for([repository.id])[repository.id],
-      last_accepted_run_at: latest_test_runs_for([repository.id])[repository.id]&.created_at
-    )
-    delivery_health = { refusing: verdict.refusing?, last_rejection_at: verdict.last_rejection_at&.iso8601 }
+    # `delivery_verdicts` is the one spelling of this expression the file owns — its own comment
+    # says the verdict is never re-spelled and that key names are borrowed from
+    # `serialized_delivery_health` precisely so surfaces do not name the same facts differently.
+    # A single-element input costs nothing extra (the batched helpers already take an array).
+    delivery_health = delivery_verdicts([repository])[repository.id]
 
     render json: { repository: serialize(repository, delivery_health) }, status: :ok
   end
