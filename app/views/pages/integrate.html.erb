@@ -100,10 +100,11 @@
     </div>
   <% end %>
 
-  <%= render UI::PanelComponent.new(title: "Ruby and RSpec", id: "ruby") do %>
+  <%= render UI::PanelComponent.new(title: "Ruby — RSpec and Minitest", id: "ruby") do %>
     <div class="space-y-5">
       <p class="text-sm text-app-content-secondary">
-        The shortest path: a shipped client gem adds an RSpec formatter that collects every example
+        The shortest path: a shipped client gem carries a reporter for each of the two Ruby
+        frameworks — an RSpec formatter and a Minitest plugin — that collects every example
         and posts the run. It never fails your build — a delivery that is refused, times out or
         cannot connect writes one line to stderr and lets the suite's own exit code stand.
       </p>
@@ -138,19 +139,34 @@
 
       <%# The credential is the switch, and that is worth stating rather than leaving to be
           discovered: a reader who runs the suite on their laptop and sees no run in SpecGuard is
-          otherwise looking at a silent success. %>
+          otherwise looking at a silent success. Two files, because they mean different things:
+          without a key the run is a local development record; a key that could not deliver is a
+          queued run waiting for replay. %>
       <%= render UI::AlertComponent.new(tone: :neutral, title: "With no API key set, the run is written to a file") do %>
         <p class="mt-1">
           <code>SPECGUARD_API_KEY</code> is the switch. Unset, the formatter appends the run to
-          <code>log/test_results.jsonl</code> — one whole run per line, the same JSON it
-          would have posted — and posts nothing. That is also the fallback when a delivery fails, so
-          a run survives a network blip. <code>bundle exec specguard-ingest
-          log/test_results.jsonl</code> replays those lines to the endpoint afterwards. (On the wire
+          <code>log/test_results.local.jsonl</code> — one whole run per line, the same JSON it
+          would have posted — and posts nothing. That file is a development record, not a queue.
+          A run that <em>had</em> a key but could not deliver — refused, timed out, network down —
+          lands in a different file, the replay queue <code>log/test_results.jsonl</code>, and
+          <code>bundle exec specguard-ingest log/test_results.jsonl</code> re-delivers it to the
+          endpoint afterwards, so a run survives a network blip. (On the wire
           a body of 256 KiB or more is gzipped, so a large run's request is compressed even though
           the file's line is not. <code>rspec --dry-run</code> writes nothing at all — there is no
           run to record.)
         </p>
       <% end %>
+
+      <div class="space-y-2" data-controller="copy-text">
+        <p class="section-label text-app-content-secondary">Minitest instead of RSpec</p>
+        <%= render UI::CopyableCodeComponent.new(multiline: true) do %><%= integration_guide_minitest_snippet %><% end %>
+        <p class="text-xs text-app-muted">
+          Same gem, same variables, same never-fail contract. Minitest discovers the reporter as a
+          plugin from the load path, so under <code>bundle exec</code> there is nothing to register
+          and no spec file to change — the suite's own output is untouched, and one envelope is
+          posted per process.
+        </p>
+      </div>
 
       <div class="space-y-2">
         <p class="section-label text-app-content-secondary">Every variable the gem reads</p>
@@ -219,22 +235,41 @@
           <tr>
             <td class="px-3 py-2 font-mono text-xs text-app-content">SPECGUARD_OUTPUT_PATH</td>
             <td class="px-3 py-2 text-xs text-app-muted">log/test_results.jsonl</td>
-            <td class="px-3 py-2 text-app-content-secondary">Where a run goes when it is not delivered.</td>
+            <td class="px-3 py-2 text-app-content-secondary">
+              The replay queue: where a run that <em>had</em> a key but could not deliver lands,
+              one run per line, for <code>specguard-ingest</code> to re-deliver later.
+            </td>
+          </tr>
+          <tr>
+            <td class="px-3 py-2 font-mono text-xs text-app-content">SPECGUARD_LOCAL_OUTPUT_PATH</td>
+            <td class="px-3 py-2 text-xs text-app-muted">log/test_results.local.jsonl</td>
+            <td class="px-3 py-2 text-app-content-secondary">
+              The development record: where a run goes when no API key is set at all. Same JSON,
+              different meaning — a note that a run happened, not a queue waiting to be replayed.
+            </td>
           </tr>
           <tr>
             <td class="px-3 py-2 font-mono text-xs text-app-content">SPECGUARD_VALIDATE_INTENT</td>
-            <td class="px-3 py-2 text-xs text-app-muted">unset</td>
+            <td class="px-3 py-2 text-xs text-app-muted">unset — downloaded</td>
             <td class="px-3 py-2 text-app-content-secondary">
-              Read by <code>specguard-lint</code> rather than by the formatter. Point it at a
-              <code>validate-intent</code> binary to check annotations with the canonical Go
-              validator instead of the gem's vendored Ruby copy; unset (or blank, which means
-              deliberately off) keeps the Ruby path. A binary that is named but missing, not a file
-              or not executable is already a hard exit 2 on its own. What
-              <code>--require-validator</code> adds is the case that was silent — the Ruby path
-              taken because no binary was ever asked for, which otherwise passes and leaves only a
-              stderr line to say so. Give the flag in CI and that becomes an exit 2, whether the
-              variable never arrived (a mistyped name, a step that did not run) or arrived blank;
-              asking for the binary and switching it off in the same breath is refused too.
+              Annotations are validated by the protocol's own Go binary, <code>validate-intent</code>
+              — it is the only validator, there is no Ruby arm. Unset, the gem downloads the pinned
+              release itself on first use (sha256-verified against the release manifest, installed
+              atomically into a cache directory) and keeps it across runs. Set it to a path when you
+              cannot or will not download at run time — an air-gapped CI, a mirror, a build you
+              pinned yourself: a binary that is missing, not a file or not executable is a hard
+              exit 2 from <code>specguard-lint</code>, and the formatter reports annotations it
+              cannot verify as unannotated rather than guessing.
+            </td>
+          </tr>
+          <tr>
+            <td class="px-3 py-2 font-mono text-xs text-app-content">SPECGUARD_CACHE_DIR</td>
+            <td class="px-3 py-2 text-xs text-app-muted">XDG cache + gem name</td>
+            <td class="px-3 py-2 text-app-content-secondary">
+              Where the downloaded <code>validate-intent</code> binary lives.
+              <code>~/.cache/&lt;gem&gt;/validate-intent/&lt;tag&gt;</code> by default (or
+              <code>$XDG_CACHE_HOME</code>). Override it to keep the binary on a CI cache you
+              already mount — same binary, same tag, no re-download.
             </td>
           </tr>
         <% end %>
@@ -423,15 +458,16 @@ bundle exec specguard-lint spec/models/order_spec.rb<% end %>
 
       <div class="space-y-2">
         <p class="section-label text-app-content-secondary">What it prints, and what it exits</p>
-        <pre class="overflow-x-auto rounded-md border border-app-border-light bg-app-surface-raised px-3 py-2 font-mono text-xs text-app-content">specguard-lint: validated in Ruby (SPECGUARD_VALIDATE_INTENT is unset)
+        <pre class="overflow-x-auto rounded-md border border-app-border-light bg-app-surface-raised px-3 py-2 font-mono text-xs text-app-content">specguard-lint: validated by validate-intent 0.1.4 (go1.22.12 x86_64-linux) schema sha256:9c2f…
 specguard-lint: checked 12 spec files
 FAIL  spec/models/order_spec.rb:9
         -&gt; &lt;root&gt;: missing required property 'entity'
 specguard-lint: checked 3 @intent annotations, 1 malformed</pre>
         <p class="text-xs text-app-muted">
           The count of files comes before the findings, and the count of annotations after them. The
-          first line names which validator did the work and is written to <strong
-          class="text-app-content">stderr</strong>, not stdout — so redirect stderr if you are
+          first line names which validator did the work — the binary, its version, and the digest
+          of the schema it enforces — and is written to <strong
+          class="text-app-content">stderr</strong>, not stdout, so redirect stderr if you are
           capturing output for a report. It is printed once the validator has been resolved, which
           means a run that dies before that point does not emit it: <code>--version</code> and
           <code>--help</code>, an unrecognised flag, and a <code>SPECGUARD_VALIDATE_INTENT</code>
@@ -446,8 +482,9 @@ specguard-lint: checked 3 @intent annotations, 1 malformed</pre>
         <p class="text-xs text-app-muted">
           Exit 2 is the broad one, and it is a category rather than a list: bad flags, an unloadable
           schema, <code>--changed</code> outside a git repository or combined with explicit files or
-          unable to resolve its diff base, a validator binary that is missing, unusable or disagrees
-          with the gem about the schema, an unmet <code>--require-validator</code>, and any
+          unable to resolve its diff base, a validator binary that is missing, unusable, could not
+          be downloaded, or disagrees
+          with the gem about the schema, and any
           unexpected internal error — the linter maps its own bugs here too, so that exit 1 keeps
           meaning one thing. The rule to wire CI against is the distinction, not the enumeration:
           <strong class="text-app-content">1 is a verdict about your annotations, 2 is the tool

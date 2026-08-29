@@ -97,12 +97,12 @@ module IntegrationGuideHelper
   def integration_guide_example_payload = JSON.pretty_generate(EXAMPLE_PAYLOAD)
 
   # The Gemfile entry, verbatim from the client gem's own README so the two cannot disagree.
-  # `require: false` because the formatter is loaded by RSpec, not by Bundler.
+  # `require: false` because the reporters are loaded by the test frameworks, not by Bundler.
   def integration_guide_gemfile_snippet
     <<~RUBY.strip
       # Gemfile
       group :test do
-        gem "specguard-rspec", require: false
+        gem "specguard-ruby", require: false
       end
     RUBY
   end
@@ -115,6 +115,22 @@ module IntegrationGuideHelper
       RSpec.configure do |config|
         config.add_formatter(SpecGuard::RSpecFormatter)
       end
+    RUBY
+  end
+
+  # The Minitest half of the same gem: no registration step at all — Minitest discovers
+  # the reporter as a plugin from the load path, so `bundle exec` running the suite is the
+  # whole integration. The explicit form is for runners where plugin discovery must not be
+  # assumed (or plain ruby without Bundler): attach the plugin after minitest itself, or the
+  # require opens a bare `module Minitest` with nothing in it.
+  def integration_guide_minitest_snippet
+    <<~RUBY.strip
+      # The suite runner you already have — the gem's plugin attaches itself:
+      bundle exec ruby test/all.rb
+
+      # Or explicitly, where discovery must not be assumed:
+      bundle exec ruby -rminitest -rminitest/specguard_plugin \
+        -e 'Minitest.extensions << "specguard"; load ARGV[0]' test/all.rb
     RUBY
   end
 

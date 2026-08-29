@@ -154,8 +154,9 @@ RSpec.describe "The public integration guide", type: :request do
     it "covers the Ruby client, the linter, the annotation protocol and the MCP bridge" do
       text = Capybara.string(response.body).text.gsub(/\s+/, " ")
 
-      expect(text).to include("specguard-rspec")
+      expect(text).to include("specguard-ruby")
       expect(text).to include("SpecGuard::RSpecFormatter")
+      expect(text).to include("Minitest")
       expect(text).to include("specguard-lint")
       expect(text).to include("specguard-mcp")
       expect(text).to include("SPECGUARD_ENDPOINT")
