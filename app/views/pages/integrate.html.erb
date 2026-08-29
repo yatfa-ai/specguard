@@ -250,7 +250,7 @@
           </tr>
           <tr>
             <td class="px-3 py-2 font-mono text-xs text-app-content">SPECGUARD_VALIDATE_INTENT</td>
-            <td class="px-3 py-2 text-xs text-app-muted">unset — downloaded</td>
+            <td class="px-3 py-2 text-xs text-app-muted">downloaded automatically</td>
             <td class="px-3 py-2 text-app-content-secondary">
               Annotations are validated by the protocol's own Go binary, <code>validate-intent</code>
               — it is the only validator, there is no Ruby arm. Unset, the gem downloads the pinned
@@ -264,7 +264,7 @@
           </tr>
           <tr>
             <td class="px-3 py-2 font-mono text-xs text-app-content">SPECGUARD_CACHE_DIR</td>
-            <td class="px-3 py-2 text-xs text-app-muted">XDG cache + gem name</td>
+            <td class="px-3 py-2 text-xs text-app-muted">~/.cache/specguard-ruby/validate-intent/&lt;tag&gt;</td>
             <td class="px-3 py-2 text-app-content-secondary">
               Where the downloaded <code>validate-intent</code> binary lives.
               <code>~/.cache/&lt;gem&gt;/validate-intent/&lt;tag&gt;</code> by default (or
