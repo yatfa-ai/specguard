@@ -25,12 +25,14 @@ RSpec.describe "POST /api/v1/ingest — the record a refused delivery leaves", t
   def refused_body = { specs: [] }
 
   describe "an authenticated request whose payload is refused" do
+    # @intent: { entity: "IngestRejection", action: "write one row per refused delivery", behavior: "an authenticated but refused POST creates exactly one row attributed to the repository whose key authenticated the request", layer: "request" }
     it "writes exactly one row, attributed to the repository that authenticated" do
       expect { ingest(refused_body) }.to change(IngestRejection, :count).by(1)
 
       expect(IngestRejection.last.repository).to eq(repository)
     end
 
+    # @intent: { entity: "IngestRejection", action: "stamp the refusal time", behavior: "occurred_at on the row lands within seconds of the refused request so the panel reads a real time", layer: "request" }
     it "stamps when the refusal happened" do
       ingest(refused_body)
 
@@ -41,6 +43,7 @@ RSpec.describe "POST /api/v1/ingest — the record a refused delivery leaves", t
     # response's `details` rather than against a literal, which is the whole claim: the owner reads
     # exactly what the client was told, so the two cannot drift apart into a platform-side
     # paraphrase.
+    # @intent: { entity: "IngestRejection", action: "store the errors verbatim", behavior: "the row details equal the response details string for string, so the owner reads exactly what the client was told with no paraphrase", layer: "request" }
     it "stores the payload's errors verbatim, identical to what the client was handed" do
       ingest(refused_body)
 
@@ -50,12 +53,14 @@ RSpec.describe "POST /api/v1/ingest — the record a refused delivery leaves", t
 
     # The concrete reason the header is on the row: a version floor is diagnosable only if the row
     # says which version reported.
+    # @intent: { entity: "IngestRejection", action: "record the client User-Agent", behavior: "a versioned client header survives onto the row, which is what makes a version floor diagnosable later", layer: "request" }
     it "records the client's User-Agent" do
       ingest(refused_body, headers: { "User-Agent" => "specguard-rspec/0.3.1" })
 
       expect(IngestRejection.last.user_agent).to eq("specguard-rspec/0.3.1")
     end
 
+    # @intent: { entity: "IngestRejection", action: "store nil for an absent User-Agent", behavior: "an empty header column becomes nil on the row rather than a placeholder or blank string", layer: "request" }
     it "records a nil User-Agent rather than a placeholder when the client sent none" do
       ingest(refused_body, headers: { "User-Agent" => "" })
 
@@ -64,6 +69,7 @@ RSpec.describe "POST /api/v1/ingest — the record a refused delivery leaves", t
 
     # Success criterion 2. The row is bookkeeping the client never asked for and must be invisible
     # in the answer it gets — status and every key of the body, not just the status.
+    # @intent: { entity: "ingest response", action: "keep the 400 contract unchanged", behavior: "status and every body key stay exactly as before the rejection table existed, so the bookkeeping is invisible to the client", layer: "request" }
     it "leaves the 400 response contract completely unchanged" do
       ingest(refused_body)
 
@@ -73,6 +79,7 @@ RSpec.describe "POST /api/v1/ingest — the record a refused delivery leaves", t
       expect(response.parsed_body["message"]).to eq(response.parsed_body["details"].first)
     end
 
+    # @intent: { entity: "IngestRejection", action: "store nothing of the run", behavior: "a refused delivery writes no TestRun and no SpecObservation, keeping the table a refusal record rather than a retry queue", layer: "request" }
     it "still stores nothing of the run itself — this is a record of the refusal, not a retry queue" do
       expect { ingest(refused_body) }.not_to change(TestRun, :count)
 
@@ -84,12 +91,14 @@ RSpec.describe "POST /api/v1/ingest — the record a refused delivery leaves", t
   # nil, `render_unauthorized` returns BEFORE the stamp, and no repository is ever resolved — so
   # there is nothing to attribute a row to and none is invented.
   describe "a request that never authenticates" do
+    # @intent: { entity: "IngestRejection", action: "skip rows for missing credentials", behavior: "a request with no Authorization header answers 401 and writes no rejection row because no repository was resolved", layer: "request" }
     it "writes no row for a missing Authorization header" do
       expect { ingest(refused_body, key: nil) }.not_to change(IngestRejection, :count)
 
       expect(response).to have_http_status(:unauthorized)
     end
 
+    # @intent: { entity: "IngestRejection", action: "skip rows for a bad key", behavior: "an invalid token answers 401 without writing a row even though the payload itself would also have been refused", layer: "request" }
     it "writes no row for a bad key, even though the payload would also have been refused" do
       expect do
         ingest(refused_body, key: nil, headers: { "Authorization" => "Bearer sgk_not-a-key" })
@@ -102,6 +111,7 @@ RSpec.describe "POST /api/v1/ingest — the record a refused delivery leaves", t
   # Success criterion 9. The accepted path must be untouched — a rejection table that started
   # writing rows for successful runs would make the panel's central claim false.
   describe "a delivery that is accepted" do
+    # @intent: { entity: "IngestRejection", action: "stay silent for accepted deliveries", behavior: "a valid payload answers 202 and records the run without ever touching the rejection table", layer: "request" }
     it "writes no rejection row and still answers 202" do
       expect { ingest(ingest_payload) }.not_to change(IngestRejection, :count)
 
@@ -114,12 +124,14 @@ RSpec.describe "POST /api/v1/ingest — the record a refused delivery leaves", t
   describe "the retention rule" do
     before { stub_const("IngestRejection::REPOSITORY_RETENTION_ROWS", 2) }
 
+    # @intent: { entity: "IngestRejection", action: "bound a repository recent refusals", behavior: "beyond the retention bound a repository keeps only its most recent refusal rows", layer: "request" }
     it "keeps only the most recent N refusals of a repository" do
       3.times { ingest(refused_body) }
 
       expect(repository.ingest_rejections.count).to eq(2)
     end
 
+    # @intent: { entity: "IngestRejection", action: "evict the oldest rows", behavior: "the prune removes the oldest refusal first so the surviving rows are the recent window the panel claims to show", layer: "request" }
     it "evicts the OLDEST, so what survives is the recent window the panel claims to show" do
       ingest({ specs: [], marker: "first" })
       oldest = IngestRejection.last
@@ -132,6 +144,7 @@ RSpec.describe "POST /api/v1/ingest — the record a refused delivery leaves", t
     # The window is per REPOSITORY — see `IngestRejection::REPOSITORY_RETENTION_ROWS` for why it
     # cannot be per branch the way `Ingest::ObservationPruner`'s is. This is what "per repository"
     # has to mean: one repository's refusals never evict another's.
+    # @intent: { entity: "IngestRejection", action: "bound each repository separately", behavior: "one repository refusals never evict another repository rows because the retention window is per repository", layer: "request" }
     it "bounds each repository on its own" do
       other = create_repository(user: create_user(github_uid: "2002", github_handle: "hubot"),
                                 github_full_name: "acme/other-service")
@@ -160,6 +173,7 @@ RSpec.describe "POST /api/v1/ingest — the record a refused delivery leaves", t
     # its envelope — one reason per example — at a size an example can run.
     def many_reasons_body = { commit_sha: "a" * 40, specs: Array.new(30) { {} } }
 
+    # @intent: { entity: "IngestRejection", action: "produce an oversized refusal fixture", behavior: "the malformed suite of thirty blank specs yields one hundred twenty reasons, far past the per-row bound the following examples rely on", layer: "request" }
     it "produces the shape these examples rest on — many more reasons than the bound" do
       ingest(many_reasons_body)
 
@@ -167,6 +181,7 @@ RSpec.describe "POST /api/v1/ingest — the record a refused delivery leaves", t
       expect(120).to be > IngestRejection::RETAINED_REASONS_PER_ROW
     end
 
+    # @intent: { entity: "IngestRejection", action: "cap the stored reasons", behavior: "the row keeps at most the per-row bound of reasons however many the endpoint actually reported", layer: "request" }
     it "stores at most RETAINED_REASONS_PER_ROW of them" do
       ingest(many_reasons_body)
 
@@ -175,6 +190,7 @@ RSpec.describe "POST /api/v1/ingest — the record a refused delivery leaves", t
 
     # What was dropped is COUNTED, not discarded silently — this is what lets the panel say "and
     # 100 more", which is itself the diagnosis: every spec was refused, not one.
+    # @intent: { entity: "IngestRejection", action: "count omitted reasons", behavior: "total and omitted reason counts plus a truncated flag let the panel say how much was dropped instead of hiding it", layer: "request" }
     it "records how many reasons the endpoint actually gave" do
       ingest(many_reasons_body)
 
@@ -188,6 +204,7 @@ RSpec.describe "POST /api/v1/ingest — the record a refused delivery leaves", t
     # own `file_path`, and a client free to send a malformed path is free to send a huge one. Twenty
     # unbounded strings is still a multi-megabyte row, so both halves are needed for the ceiling to
     # be arithmetic rather than a hope about well-behaved clients.
+    # @intent: { entity: "IngestRejection", action: "shorten a pathological reason", behavior: "a single reason built from a huge client file_path is truncated on the row while the response keeps it whole", layer: "request" }
     it "shortens a single pathological reason rather than storing it whole" do
       long_path = "x" * 5_000
       ingest({ commit_sha: "a" * 40,
@@ -203,6 +220,7 @@ RSpec.describe "POST /api/v1/ingest — the record a refused delivery leaves", t
     # measured over the WHOLE ROW rather than over `details` alone, because `user_agent` sits on the
     # same row and is equally the client's to choose. Measuring one column would let a ~100 KB
     # header pass a fence whose name is a claim about the row.
+    # @intent: { entity: "IngestRejection", action: "bound the whole row size", behavior: "many long reasons plus a huge header still serialize to a row under a stated byte ceiling because every client-controlled column is bounded", layer: "request" }
     it "keeps the row under a stated size ceiling however large the payload or the client's header" do
       ingest({ commit_sha: "a" * 40,
                specs: Array.new(200) { { file_path: "x" * 5_000, line_number: 0 } } },
@@ -213,6 +231,7 @@ RSpec.describe "POST /api/v1/ingest — the record a refused delivery leaves", t
 
     # The other client-controlled column on the row, on its own, so a regression in the header half
     # names itself instead of surfacing as a byte count drifting up.
+    # @intent: { entity: "IngestRejection", action: "shorten a pathological User-Agent", behavior: "a megabyte header is truncated on the row to its bound and ends with an ellipsis marker", layer: "request" }
     it "shortens a pathological User-Agent rather than storing it whole" do
       ingest(refused_body, headers: { "User-Agent" => "u" * 100_000 })
 
@@ -225,6 +244,7 @@ RSpec.describe "POST /api/v1/ingest — the record a refused delivery leaves", t
     # STORAGE rule and must not reach the client: the response still carries every reason, in full,
     # exactly as `origin/main` sent it. `truncate` returning a new String is what guarantees it —
     # these are the same String objects `render_bad_request` is about to serialise.
+    # @intent: { entity: "ingest response", action: "keep every reason full length", behavior: "the storage bound never reaches the client, whose 400 still carries every reason untruncated", layer: "request" }
     it "leaves the client's 400 carrying every reason at full length" do
       long_path = "y" * 4_000
       ingest({ commit_sha: "a" * 40,
@@ -244,6 +264,7 @@ RSpec.describe "POST /api/v1/ingest — the record a refused delivery leaves", t
       allow(IngestRejection).to receive(:create!).and_raise(ActiveRecord::StatementInvalid, "boom")
     end
 
+    # @intent: { entity: "IngestRejection", action: "answer 400 when the write fails", behavior: "a raising create does not turn a determined refusal into a 500; the client still gets the bad_request body", layer: "request" }
     it "still answers the client the 400 it had already determined" do
       ingest(refused_body)
 
@@ -253,6 +274,7 @@ RSpec.describe "POST /api/v1/ingest — the record a refused delivery leaves", t
 
     # The loss is invisible on the dashboard by construction — the panel simply shows fewer rows —
     # so it has to be loud somewhere. This pins that it is, and that it is not a bare rescue.
+    # @intent: { entity: "IngestRejection", action: "report a failed write", behavior: "the swallowed failure is reported to Rails.error as handled rather than rescued silently", layer: "request" }
     it "reports the failure rather than swallowing it" do
       expect(Rails.error).to receive(:report)
         .with(instance_of(ActiveRecord::StatementInvalid), hash_including(handled: true))
@@ -267,12 +289,14 @@ RSpec.describe "POST /api/v1/ingest — the record a refused delivery leaves", t
   describe "when the retention prune fails after the row is written" do
     before { allow(IngestRejection).to receive(:where).and_raise(ActiveRecord::StatementInvalid, "boom") }
 
+    # @intent: { entity: "IngestRejection", action: "keep the row when the prune fails", behavior: "a retention prune that raises after the commit leaves the written row in place and still answers the 400", layer: "request" }
     it "keeps the committed row and still answers the 400" do
       expect { ingest(refused_body) }.to change(IngestRejection, :count).by(1)
 
       expect(response).to have_http_status(:bad_request)
     end
 
+    # @intent: { entity: "IngestRejection", action: "report the prune under its own stage", behavior: "the prune failure reports with a stage context naming prune so it is distinguishable from a failed write", layer: "request" }
     it "reports the prune failure under its own stage" do
       expect(Rails.error).to receive(:report)
         .with(instance_of(ActiveRecord::StatementInvalid), hash_including(context: hash_including(stage: "prune")))
@@ -282,6 +306,7 @@ RSpec.describe "POST /api/v1/ingest — the record a refused delivery leaves", t
 
     # The row is committed, so returning nil — "the write failed" — would be a lie about the one
     # thing the caller could observe.
+    # @intent: { entity: "IngestRejection", action: "return the written row", behavior: "even when the prune fails the recorder returns the persisted row rather than nil, telling the truth about the observable write", layer: "request" }
     it "returns the row that was written" do
       repository_record = repository
       result = Ingest::RejectionRecorder.record(repository_record, ["boom"], user_agent: nil)

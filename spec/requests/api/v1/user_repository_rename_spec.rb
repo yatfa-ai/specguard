@@ -32,6 +32,7 @@ RSpec.describe "API v1 — PATCH /api/v1/repositories/:id", type: :request do
       create_test_run(repository: repository)
     end
 
+    # @intent: { entity: "repository", action: "rename in place", behavior: "a successful PATCH is pure metadata - the repository count is unchanged and every api key and test run survives the new full name", layer: "request" }
     it "changes the name and preserves every key and every run" do
       expect { rename("acme/ledger") }.not_to change(Repository, :count)
 
@@ -47,6 +48,7 @@ RSpec.describe "API v1 — PATCH /api/v1/repositories/:id", type: :request do
     end
 
     # GitHub logins and repository names are case-insensitive; the grant is keyed to match.
+    # @intent: { entity: "registration grant", action: "match case-insensitively", behavior: "the grant match and the stored name are case-insensitive, so ACME/LEDGER renames onto a lowercase grant", layer: "request" }
     it "matches the grant case-insensitively" do
       rename("ACME/LEDGER")
 
@@ -61,6 +63,7 @@ RSpec.describe "API v1 — PATCH /api/v1/repositories/:id", type: :request do
   describe "who may rename" do
     before { create_registration_grant(user: person, registrable: ["acme/ledger"]) }
 
+    # @intent: { entity: "repository", action: "hide the unopenable", behavior: "a repository the caller cannot even open answers 404 so its existence stays hidden and nothing is written", layer: "request" }
     it "answers 404 for a repository the key's person cannot even open" do
       stranger_repository = create_repository(user: create_user(github_uid: "2002", github_handle: "hubot"))
 
@@ -70,6 +73,7 @@ RSpec.describe "API v1 — PATCH /api/v1/repositories/:id", type: :request do
       expect(stranger_repository.reload.github_full_name).to eq("acme/billing-service")
     end
 
+    # @intent: { entity: "repository", action: "refuse a non-owner", behavior: "a non-owner member is refused with 403 even when granted repo.delete, and the name is left alone", layer: "request" }
     it "answers 403 for a non-owner member, even one who could delete it" do
       member = create_user(github_uid: "3003", github_handle: "tri-person")
       create_membership(repository: repository, user: member, permissions: [RepositoryMembership::REPO_DELETE])
@@ -90,6 +94,7 @@ RSpec.describe "API v1 — PATCH /api/v1/repositories/:id", type: :request do
                                 visible: ["acme/billing-service", "acme/ledger"])
     end
 
+    # @intent: { entity: "registration grant", action: "refuse an unknown name", behavior: "a name outside the installation grant answers 400 with the gate own message and no write happens", layer: "request" }
     it "refuses a name GitHub never told this person about, and writes nothing" do
       expect { rename("someone-else/private-thing") }
         .not_to(change { repository.reload.github_full_name })
@@ -99,6 +104,7 @@ RSpec.describe "API v1 — PATCH /api/v1/repositories/:id", type: :request do
         .to include(InstallationRepositories::MESSAGES.fetch(:not_in_installation))
     end
 
+    # @intent: { entity: "registration grant", action: "refuse the unadministered", behavior: "a name the person can see but not administer is refused 400 naming exactly that distinction", layer: "request" }
     it "refuses a repository they can see but do not administer, and says which it is" do
       expect { rename("acme/ledger") }.not_to(change { repository.reload.github_full_name })
 
@@ -107,6 +113,7 @@ RSpec.describe "API v1 — PATCH /api/v1/repositories/:id", type: :request do
         .to include(InstallationRepositories::MESSAGES.fetch(:not_administered))
     end
 
+    # @intent: { entity: "repository", action: "refuse a taken name", behavior: "a full name another account already registered answers 400 with an already-taken message and no write", layer: "request" }
     it "refuses a name another account already registered" do
       create_repository(user: create_user(github_uid: "2002", github_handle: "hubot"),
                         github_full_name: "acme/ledger")
@@ -120,6 +127,7 @@ RSpec.describe "API v1 — PATCH /api/v1/repositories/:id", type: :request do
 
   # The 403 `#registrable` owns, with the sentence naming the fix neither other refusal does.
   describe "when there is no current grant to redeem" do
+    # @intent: { entity: "registration grant", action: "refuse the ungranted", behavior: "a person with no registration grant at all answers 403 not_granted with the fix-naming message and nothing is written", layer: "request" }
     it "refuses a person who has never had one" do
       rename("acme/ledger")
 
@@ -130,6 +138,7 @@ RSpec.describe "API v1 — PATCH /api/v1/repositories/:id", type: :request do
       expect(repository.reload.github_full_name).to eq("acme/billing-service")
     end
 
+    # @intent: { entity: "registration grant", action: "refuse a stale grant", behavior: "a grant past its age bound is treated as absent even though it names the new repository, answering 403 not_granted", layer: "request" }
     it "refuses a grant past its bound, even though it names the new repository" do
       create_registration_grant(user: person, registrable: ["acme/ledger"],
                                 captured_at: GithubRegistrationGrant::MAX_AGE.ago - 1.hour)
@@ -145,6 +154,7 @@ RSpec.describe "API v1 — PATCH /api/v1/repositories/:id", type: :request do
 
   # The credential seam, in the direction this verb opens: a `sgk_` repository key is a valid
   # credential that resolves no person, so it must be refused before anything is written.
+  # @intent: { entity: "credential seam", action: "refuse a repository key", behavior: "an sgk_ repository key resolves no person and is refused 401 before anything is written", layer: "request" }
   it "refuses a repository key, and writes nothing" do
     create_registration_grant(user: person, registrable: ["acme/ledger"])
     repository_key = repository.api_keys.create!
@@ -155,6 +165,7 @@ RSpec.describe "API v1 — PATCH /api/v1/repositories/:id", type: :request do
     expect(response).to have_http_status(:unauthorized)
   end
 
+  # @intent: { entity: "credential seam", action: "refuse a bare request", behavior: "a request carrying no credential at all answers 401 and nothing is written", layer: "request" }
   it "refuses a request carrying no credential at all" do
     rename("acme/ledger", token: nil)
 

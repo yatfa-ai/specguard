@@ -72,12 +72,14 @@ RSpec.describe "API v1 — GET /api/v1/repositories/:id", type: :request do
 
   # SUCCESS CRITERION 1 — an owned repository answers with the overview.
   describe "a repository the person owns" do
+    # @intent: { entity: "UserRepositoryOverview", action: "answer the route", behavior: "an owned repository responds 200 on the user-keyed singular overview route", layer: "request" }
     it "answers 200" do
       get_repository
 
       expect(response).to have_http_status(:ok)
     end
 
+    # @intent: { entity: "UserRepositoryOverview", action: "identify the repository", behavior: "the repository block echoes the id, full name and name of the repository the path named", layer: "request" }
     it "identifies the repository that was asked for" do
       expect(get_repository["repository"])
         .to include("id" => owned.id, "full_name" => "acme/billing-service", "name" => "billing-service")
@@ -90,6 +92,7 @@ RSpec.describe "API v1 — GET /api/v1/repositories/:id", type: :request do
     #
     # Asserted against the SINGULAR route's own live response, so the claim is "these two routes
     # serve the same blocks" rather than "this route serves the fourteen blocks I typed in 2026".
+    # @intent: { entity: "UserRepositoryOverview", action: "match the sgk_ route blocks", behavior: "the user-keyed body carries every top-level block the repository-keyed route serves except api_key", layer: "request" }
     it "serves exactly the blocks the sgk_ route serves, minus api_key" do
       ingest(owned, [example_row(file_path: "spec/models/user_spec.rb")])
 
@@ -108,6 +111,7 @@ RSpec.describe "API v1 — GET /api/v1/repositories/:id", type: :request do
     # repository's own `sgk_` keys are not the caller's to describe. A block of nulls would be a
     # sentence about a credential that does not exist, and a client reading `null` cannot tell "this
     # request had no repository key" from "the key has no name" — only one of which is true.
+    # @intent: { entity: "UserRepositoryOverview", action: "omit the api_key block", behavior: "a request made with a user key serves no api_key key at all rather than a block of nulls", layer: "request" }
     it "omits the api_key block entirely rather than serving it full of nulls" do
       body = get_repository
 
@@ -118,6 +122,7 @@ RSpec.describe "API v1 — GET /api/v1/repositories/:id", type: :request do
     # reports on the repository's keys as a SET, which is repository-scoped like everything else
     # here. It is arguably worth MORE under a user key, where the caller holds none of them and an
     # `sgk_` key is reveal-once and therefore unaskable any other way.
+    # @intent: { entity: "UserRepositoryOverview", action: "serve credential_health", behavior: "the overview still reports the repository's key rotation set even when the caller holds a repository key of their own", layer: "request" }
     it "still answers credential_health, which is about the repository's keys and not the caller's" do
       stranded = owned.api_keys.create!(name: "Stale CI Key")
       stranded.regenerate!
@@ -127,12 +132,14 @@ RSpec.describe "API v1 — GET /api/v1/repositories/:id", type: :request do
                     "keys" => [a_hash_including("name" => "Stale CI Key")])
     end
 
+    # @intent: { entity: "UserRepositoryOverview", action: "serve delivery_health", behavior: "the overview keeps the repository-scoped delivery health block with its refusing flag", layer: "request" }
     it "still answers delivery_health, which is repository-scoped" do
       expect(get_repository["delivery_health"]).to include("refusing" => false)
     end
 
     # The run-grain half is not merely PRESENT but correct — a body assembled from the wrong
     # repository, or from a repository with its runs dropped, would still carry every key.
+    # @intent: { entity: "UserRepositoryOverview", action: "read the latest run", behavior: "the latest_run block reports the commit sha of the run the repository itself recorded, not another repository's", layer: "request" }
     it "reads the repository's own latest run" do
       ingest(owned, [example_row(file_path: "spec/models/user_spec.rb")],
              commit_sha: "abc123abc123abc1")
@@ -146,6 +153,7 @@ RSpec.describe "API v1 — GET /api/v1/repositories/:id", type: :request do
   # member may hold no `sgk_` key for the repository and, lacking `keys.manage`, may have no way to
   # mint one.
   describe "a repository shared with the person through a membership" do
+    # @intent: { entity: "UserRepositoryOverview", action: "answer for a membership", behavior: "a repository shared through a membership responds 200 and names that repository in the body", layer: "request" }
     it "answers 200 with the overview" do
       body = get_repository(id: shared.id)
 
@@ -153,6 +161,7 @@ RSpec.describe "API v1 — GET /api/v1/repositories/:id", type: :request do
       expect(body["repository"]).to include("id" => shared.id, "full_name" => "acme/ledger")
     end
 
+    # @intent: { entity: "UserRepositoryOverview", action: "match owned blocks", behavior: "a membership-opened overview serves the identical set of top-level blocks an owned one does", layer: "request" }
     it "serves the same blocks it serves for an owned repository" do
       expect(get_repository(id: shared.id).keys).to eq(get_repository(id: owned.id).keys)
     end
@@ -160,6 +169,7 @@ RSpec.describe "API v1 — GET /api/v1/repositories/:id", type: :request do
     # The rule rather than the output, on the precedent `user_repositories_spec.rb` sets for the
     # same distinction: a second hand-written copy of the access rule would pass the example above
     # and fail this one the day a third access path is added to `accessible_by`.
+    # @intent: { entity: "UserRepositoryOverview", action: "open accessible repositories", behavior: "every id Repository.accessible_by admits for the person answers 200 on this route", layer: "request" }
     it "opens exactly what `Repository.accessible_by` admits" do
       Repository.accessible_by(person).pluck(:id).each do |id|
         get_repository(id: id)
@@ -175,6 +185,7 @@ RSpec.describe "API v1 — GET /api/v1/repositories/:id", type: :request do
     # a SECOND, unscoped question purely to tell a caller that something they may not open is
     # nevertheless there — which turns id enumeration into a census of the platform. The scoped
     # relation never has the row in hand to refuse.
+    # @intent: { entity: "UserRepositoryOverview", action: "refuse invisibly", behavior: "a repository outside the person's access answers 404 so unscoped existence is never confirmed", layer: "request" }
     it "answers 404 rather than 403" do
       get_repository(id: invisible.id)
 
@@ -184,6 +195,7 @@ RSpec.describe "API v1 — GET /api/v1/repositories/:id", type: :request do
     # The 404 above is only worth anything if it is the SAME 404 a non-existent id gets. Asserted as
     # an equivalence rather than as two separate status checks: a body that differed between the two
     # would disclose existence just as loudly as a 403 does, one response at a time.
+    # @intent: { entity: "UserRepositoryOverview", action: "mirror the absent-id answer", behavior: "the forbidden response has the same status and body as the one for an unregistered id", layer: "request" }
     it "is indistinguishable from the answer for an id that was never registered" do
       forbidden = get_repository(id: invisible.id)
       forbidden_status = response.status
@@ -194,6 +206,7 @@ RSpec.describe "API v1 — GET /api/v1/repositories/:id", type: :request do
       expect(absent).to eq(forbidden)
     end
 
+    # @intent: { entity: "UserRepositoryOverview", action: "disclose nothing", behavior: "the refusal body never leaks the hidden repository's full name even though the row exists", layer: "request" }
     it "discloses nothing about the repository it refused" do
       get_repository(id: invisible.id)
 
@@ -212,6 +225,7 @@ RSpec.describe "API v1 — GET /api/v1/repositories/:id", type: :request do
       ["a negative id", "-1"],
       ["a huge id", "99999999999999999999"]
     ].each do |shape, id|
+      # @intent: { entity: "UserRepositoryOverview", action: "sink malformed ids", behavior: "a non-numeric, prefixed, injected, negative or oversized id lands on the same 404 without raising", layer: "request" }
       it "answers 404 rather than raising for #{shape}" do
         get_repository(id: CGI.escape(id.to_s))
 
@@ -230,6 +244,7 @@ RSpec.describe "API v1 — GET /api/v1/repositories/:id", type: :request do
   describe "an sgk_ repository key presented to this route" do
     let(:repository_key) { owned.api_keys.create! }
 
+    # @intent: { entity: "UserRepositoryOverview", action: "refuse repository keys", behavior: "an sgk_ credential presented to this route is rejected with 401 before any repository is read", layer: "request" }
     it "is refused with 401" do
       get_repository(token: repository_key.raw_token)
 
@@ -240,6 +255,7 @@ RSpec.describe "API v1 — GET /api/v1/repositories/:id", type: :request do
     # rather than a lookup that happens to fail. A implementation that probed `api_keys`, missed,
     # then probed `user_api_keys` would produce this identical 401 while doubling the cost of every
     # request, and would pass the example above.
+    # @intent: { entity: "UserRepositoryOverview", action: "decide by prefix", behavior: "the sgk_ refusal happens without a single statement against the api_keys table", layer: "request" }
     it "reads no credential table at all, because the prefix decides first" do
       token = repository_key.raw_token
 
@@ -249,6 +265,7 @@ RSpec.describe "API v1 — GET /api/v1/repositories/:id", type: :request do
       expect(statements).to be_empty
     end
 
+    # @intent: { entity: "UserRepositoryOverview", action: "leave the key unstamped", behavior: "a refused repository key gets no last_used_at, so failed probes do not refresh apparent activity", layer: "request" }
     it "does not stamp the refused key as used" do
       key = repository_key
 
@@ -260,6 +277,7 @@ RSpec.describe "API v1 — GET /api/v1/repositories/:id", type: :request do
     # The direction that would be the real harm: a repository key naming a repository this person
     # cannot open must not become a way to read it. It is refused for being the wrong KIND of
     # credential, before the question of which repository it names arises at all.
+    # @intent: { entity: "UserRepositoryOverview", action: "refuse cross-use", behavior: "a repository key naming a repository the person cannot open is still refused as a wrong-kind credential", layer: "request" }
     it "cannot be used to open a repository through the plural route" do
       get_repository(id: invisible.id, token: invisible.api_keys.create!.raw_token)
 
@@ -268,12 +286,14 @@ RSpec.describe "API v1 — GET /api/v1/repositories/:id", type: :request do
   end
 
   describe "a credential that is not valid at all" do
+    # @intent: { entity: "UserRepositoryOverview", action: "require a credential", behavior: "a request with no Authorization header is refused 401", layer: "request" }
     it "refuses a missing Authorization header" do
       get "/api/v1/repositories/#{owned.id}"
 
       expect(response).to have_http_status(:unauthorized)
     end
 
+    # @intent: { entity: "UserRepositoryOverview", action: "refuse unknown tokens", behavior: "a well-formed sgu_ token that matches no stored digest is refused 401", layer: "request" }
     it "refuses a well-formed but unknown sgu_ token" do
       get_repository(token: "sgu_#{SecureRandom.hex(24)}")
 
@@ -282,6 +302,7 @@ RSpec.describe "API v1 — GET /api/v1/repositories/:id", type: :request do
 
     # A key belonging to somebody who can open nothing is a VALID credential — so this is a 404,
     # not a 401, and the distinction is the seam working correctly rather than an inconsistency.
+    # @intent: { entity: "UserRepositoryOverview", action: "distinguish authz from authn", behavior: "a valid key whose person can open nothing gets 404, because the credential itself resolved fine", layer: "request" }
     it "answers 404 — not 401 — for a valid key whose person may open nothing" do
       loner = create_user(github_uid: "3003", github_handle: "nobody")
 
@@ -324,6 +345,7 @@ RSpec.describe "API v1 — GET /api/v1/repositories/:id", type: :request do
       "commit_sha" => { commit_sha: "abc123abc123abc1" },
       "unannotated_examples" => { unannotated_examples: "1" }
     }.each do |name, query|
+      # @intent: { entity: "UserRepositoryOverview", action: "honour drill-in parameters", behavior: "each of the seven narrowing query parameters yields the same filtered body the sgk_ route gives, minus api_key", layer: "request" }
       it "answers ?#{name}= with the same body the sgk_ route answers, minus api_key" do
         user_keyed = get_repository(query: query)
 
@@ -415,6 +437,7 @@ RSpec.describe "API v1 — GET /api/v1/repositories/:id", type: :request do
     # REGRESSION ONE: an implementation that probes `api_keys`, misses, then probes `user_api_keys`.
     # It produces an identical response and doubles the cost of every request. `token_digest` is the
     # column every credential lookup keys on, in BOTH tables, so this population spans the seam.
+    # @intent: { entity: "Authentication", action: "read one credential table", behavior: "resolving the caller issues exactly one SELECT keyed on token_digest across either credential table", layer: "request" }
     it "reads a credential table exactly once, whichever table it is" do
       statements = selects(/token_digest/) { get "/api/v1/repositories/#{id}", headers: bearer(token) }
 
@@ -427,6 +450,7 @@ RSpec.describe "API v1 — GET /api/v1/repositories/:id", type: :request do
     # `eager_load(:user)` filters through the `users` row without populating the association, and
     # `bind_principal`'s `.user` then re-reads it by primary key on every authenticated request —
     # a second statement that carries no `token_digest` and would pass the example above.
+    # @intent: { entity: "Authentication", action: "join the person", behavior: "the single credential statement also carries the users join so the principal is never re-read by id", layer: "request" }
     it "brings the person back in that same statement rather than re-reading them" do
       statements = selects(/"users"/) { get "/api/v1/repositories/#{id}", headers: bearer(token) }
 
@@ -445,11 +469,13 @@ RSpec.describe "API v1 — GET /api/v1/repositories/:id", type: :request do
   # this route shipped, so what protects it now is declaration order — which is invisible, and is
   # exactly the kind of thing a later tidy-up sorts alphabetically. This example is the guard.
   describe "the sibling route the member route must not swallow" do
+    # @intent: { entity: "Routing", action: "keep the sibling route", behavior: "/api/v1/repositories/registrable still recognises to the registrable action rather than being eaten as an :id", layer: "request" }
     it "still resolves /repositories/registrable to #registrable" do
       expect(Rails.application.routes.recognize_path("/api/v1/repositories/registrable", method: :get))
         .to include(controller: "api/v1/user_repositories", action: "registrable")
     end
 
+    # @intent: { entity: "Routing", action: "answer the sibling route", behavior: "the registrable endpoint responds 200 with a repositories payload rather than falling into #show", layer: "request" }
     it "still answers the registrable endpoint rather than a 404 from #show" do
       create_registration_grant(user: person)
 
@@ -465,6 +491,7 @@ RSpec.describe "API v1 — GET /api/v1/repositories/:id", type: :request do
   # own, because each of them only ever looks at one route: the two routes must not merely both
   # work, they must agree.
   describe "the extraction, which must have changed nothing" do
+    # @intent: { entity: "UserRepositoryOverview", action: "stay byte-identical", behavior: "both routes serve exactly equal blocks for the same repository once api_key is subtracted", layer: "request" }
     it "serves byte-identical blocks on both routes for the same repository" do
       ingest(owned,
              [example_row(file_path: "spec/models/user_spec.rb", line_number: 1, duration: 3.0),
@@ -480,6 +507,7 @@ RSpec.describe "API v1 — GET /api/v1/repositories/:id", type: :request do
     # The `api_key` block is the one thing that does not travel, so the singular route must still
     # serve it in FULL — an extraction that dropped it would pass every equivalence above, since
     # they all subtract it before comparing.
+    # @intent: { entity: "RepositoryOverview", action: "keep the api_key block", behavior: "the sgk_ route still serves the full api_key block with its name and reporting pointers after the extraction", layer: "request" }
     it "still serves the whole api_key block on the sgk_ route" do
       key = owned.api_keys.create!(name: "CI Key")
 
@@ -491,6 +519,7 @@ RSpec.describe "API v1 — GET /api/v1/repositories/:id", type: :request do
     end
   end
 
+  # @intent: { entity: "UserApiKey", action: "stamp usage", behavior: "a successful user-keyed overview request writes last_used_at on the credential that made it", layer: "request" }
   it "stamps the user key as used" do
     expect(user_api_key.last_used_at).to be_nil
 

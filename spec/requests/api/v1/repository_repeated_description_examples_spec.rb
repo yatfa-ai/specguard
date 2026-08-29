@@ -148,6 +148,7 @@ RSpec.describe "GET /api/v1/repository — latest_run.repeated_description_examp
     # asserted as a SEQUENCE — `eq`, not `match_array` — because "slowest first, untimed last" is
     # half of what this key promises, and the untimed row's position is the half a set comparison
     # drops.
+    # @intent: { entity: "RepeatedDescriptionExamples", action: "rank the description's examples", behavior: "rows for the asked-for description are ordered slowest first with untimed examples at the end", layer: "request" }
     it "lists that description's examples slowest-first, untimed last, with what each row is" do
       expect(block(query: { repeated_description: looped })).to eq(
         "name" => looped,
@@ -179,6 +180,7 @@ RSpec.describe "GET /api/v1/repository — latest_run.repeated_description_examp
     # the `eq` above — the pattern both sibling drill-in contracts set, and for the same reason: a
     # guard whose stated subject IS the key set survives a fixture whose numbers change, and says out
     # loud what a new key owes this block before it ships.
+    # @intent: { entity: "RepeatedDescriptionExamples", action: "pin the keys", behavior: "the block serves exactly the key set this contract enumerates and nothing beyond it", layer: "request" }
     it "serves exactly the repeated_description_examples keys this contract pins" do
       served = block(query: { repeated_description: looped })
 
@@ -194,6 +196,7 @@ RSpec.describe "GET /api/v1/repository — latest_run.repeated_description_examp
     # to read one must not have to learn a second shape to read the others. Read off the RESPONSE, so
     # it is the endpoint's own blocks agreeing rather than three hand-written lists agreeing with
     # each other.
+    # @intent: { entity: "RepeatedDescriptionExamples", action: "match the row shape", behavior: "each row uses the same shape the endpoint's other example-grain blocks serve", layer: "request" }
     it "serves the same per-example row shape as both of the endpoint's other example blocks" do
       body = get_repository(query: { repeated_description: looped,
                                      spec_file: order_spec })["latest_run"]
@@ -208,6 +211,7 @@ RSpec.describe "GET /api/v1/repository — latest_run.repeated_description_examp
     # Every figure is taken off the RESPONSE: the run-wide slowest ten hold no member of the group,
     # the by-file drill-in over the group's own file ranks a different description above its rows,
     # and the ranking this drills out of names the files without listing anything in them.
+    # @intent: { entity: "RepeatedDescriptionExamples", action: "list uniquely filtered examples", behavior: "the block surfaces examples no other example block on this endpoint can narrow to", layer: "request" }
     it "lists examples no other block on this endpoint can be filtered down to" do
       body = get_repository(query: { repeated_description: looped,
                                      spec_file: order_spec })["latest_run"]
@@ -229,6 +233,7 @@ RSpec.describe "GET /api/v1/repository — latest_run.repeated_description_examp
     # The grain no rung of area → file → example can hold. This group is not inside any one file, so
     # there is no `?spec_file=` ask that returns it and no `?spec_directory=` ask either — the two
     # files sit in different areas.
+    # @intent: { entity: "RepeatedDescriptionExamples", action: "span files and areas", behavior: "a description whose members live in two files under two areas is still one ranked group", layer: "request" }
     it "lists a group whose members span two files and two areas" do
       served = block(query: { repeated_description: looped })
 
@@ -239,6 +244,7 @@ RSpec.describe "GET /api/v1/repository — latest_run.repeated_description_examp
 
     # The row that separates "the file an example is IN" from "the file that RAN it". A serializer
     # serving one path under both names satisfies every other example in this file and fails here.
+    # @intent: { entity: "RepeatedDescriptionExamples", action: "separate definition from inclusion", behavior: "a shared-example row names both the defining file and the including file distinctly", layer: "request" }
     it "names the definition site and the including file apart, for a shared example group" do
       shared = block(query: { repeated_description: looped })["rows"].find { it["line_number"] == 7 }
 
@@ -251,6 +257,7 @@ RSpec.describe "GET /api/v1/repository — latest_run.repeated_description_examp
     # would assert an example that cost nothing, which is a measurement nobody took — and at this
     # grain that row is often exactly the row a reader came for, because a test that never ran is one
     # way three examples come to say the same thing.
+    # @intent: { entity: "RepeatedDescriptionExamples", action: "null untimed durations", behavior: "an example that reported no duration gets null rather than a coerced zero", layer: "request" }
     it "serves a null duration for an example that reported none, never a zero" do
       rows = block(query: { repeated_description: looped })["rows"]
 
@@ -264,6 +271,7 @@ RSpec.describe "GET /api/v1/repository — latest_run.repeated_description_examp
     # `RepeatedDescriptionExamples#coverage_label` are each one call away in the object this reads
     # from, and any of them would still satisfy the assertions above if the fixture's values happened
     # to render similarly.
+    # @intent: { entity: "RepeatedDescriptionExamples", action: "serve raw values", behavior: "counts and totals arrive as numbers with machine-readable words, never display labels", layer: "request" }
     it "serves numbers and words, never the panel's labels" do
       served = block(query: { repeated_description: looped })
 
@@ -277,6 +285,7 @@ RSpec.describe "GET /api/v1/repository — latest_run.repeated_description_examp
     # OPERANDS, NOT PREDICATES. The object answers `#truncated?`, `#complete?`, `#any_timed?` and
     # `#lists_untimed?`, and each is a COMPARISON between two figures this block already serves. A
     # client words them; the endpoint does not ship the comparison instead of the numbers.
+    # @intent: { entity: "RepeatedDescriptionExamples", action: "omit derivable predicates", behavior: "the block ships no boolean caption a client can compute from the operands it already has", layer: "request" }
     it "ships no caption predicate a client can compute from the operands" do
       served = block(query: { repeated_description: looped })
 
@@ -291,6 +300,7 @@ RSpec.describe "GET /api/v1/repository — latest_run.repeated_description_examp
     # A description carried by exactly ONE example is excluded from the ranking above by
     # `HAVING COUNT(*) > 1` and is still an ordinary ask here: the parameter is a description, not a
     # row of that ranking, and a reader who types one gets the answer rather than an empty block.
+    # @intent: { entity: "RepeatedDescriptionExamples", action: "open excluded descriptions", behavior: "a description the slowest ranking leaves out still drills in here", layer: "request" }
     it "opens a description the ranking above excludes" do
       served = block(query: { repeated_description: "is valid with a customer" })
 
@@ -308,6 +318,7 @@ RSpec.describe "GET /api/v1/repository — latest_run.repeated_description_examp
   # `serialized_history` already refuses for an unknown `?branch=`, where the ask is RESTATED beside
   # a zero rather than answered with somebody else's rows.
   describe "the two ways this key can be empty" do
+    # @intent: { entity: "RepeatedDescriptionExamples", action: "null the block when unasked", behavior: "with no repeated_description parameter the key stays present holding null", layer: "request" }
     it "is null — with the key present — when no description was asked for" do
       body = get_repository
 
@@ -323,6 +334,7 @@ RSpec.describe "GET /api/v1/repository — latest_run.repeated_description_examp
 
     # AC3. A description the run recorded nothing under is an ordinary answer and never an error: the
     # ask is restated, the list is empty, both counts are an honest zero, and the status is 200.
+    # @intent: { entity: "RepeatedDescriptionExamples", action: "empty block for silent runs", behavior: "a description asked for that the recorded run never hit answers a present block with zero rows naming the description", layer: "request" }
     it "is a present block with no rows, naming the description, when the run recorded none" do
       served = block(query: { repeated_description: "reconciles the ledger" })
 
@@ -335,6 +347,7 @@ RSpec.describe "GET /api/v1/repository — latest_run.repeated_description_examp
     # The pair, side by side, which is the assertion neither example above can make on its own: a
     # client can tell the two apart WITHOUT knowing what it sent, because the second never wears the
     # first's spelling.
+    # @intent: { entity: "RepeatedDescriptionExamples", action: "distinguish the two empties", behavior: "the no-ask null and the asked-but-empty block are spelled differently so clients can tell them apart", layer: "request" }
     it "spells the two differently, so a client can tell which one it got" do
       expect(block).to be_nil
       expect(block(query: { repeated_description: "reconciles the ledger" })).not_to be_nil
@@ -345,6 +358,7 @@ RSpec.describe "GET /api/v1/repository — latest_run.repeated_description_examp
     # A near miss is one of the ordinary ways to arrive at the empty answer — a test renamed since, a
     # description reworded, a stale bookmark — and none of them is an error or a prefix match onto
     # the description it nearly is.
+    # @intent: { entity: "RepeatedDescriptionExamples", action: "refuse prefix matching", behavior: "a reworded description yields the empty block rather than an error or a fuzzy match", layer: "request" }
     it "answers a reworded description with the empty block rather than an error or a prefix match" do
       served = block(query: { repeated_description: "settles the balances" })
 
@@ -356,6 +370,7 @@ RSpec.describe "GET /api/v1/repository — latest_run.repeated_description_examp
     # There is no `latest_run` at all for a repository whose CI has never reported, so the ask cannot
     # conjure one — the rule the whole block follows, restated here because this is one of the three
     # keys on it a client can ask for by name.
+    # @intent: { entity: "RepeatedDescriptionExamples", action: "omit before first run", behavior: "a repository with no recorded runs serves no repeated_description_examples block at all", layer: "request" }
     it "serves no block at all when CI has never reported" do
       silent = create_repository(user: @user, github_full_name: "acme/never-ran")
 
@@ -385,6 +400,7 @@ RSpec.describe "GET /api/v1/repository — latest_run.repeated_description_examp
 
     # THE positive path, beside the group, which is what separates "the guard read the parameter"
     # from "the endpoint ignores this parameter entirely".
+    # @intent: { entity: "RepeatedDescriptionExamples", action: "honour the parameter", behavior: "a repeated_description matching a real description narrows the block to that group", layer: "request" }
     it "honours a repeated_description that IS a description" do
       expect(block(query: { repeated_description: looped })["rows"].length).to eq(4)
     end
@@ -393,6 +409,7 @@ RSpec.describe "GET /api/v1/repository — latest_run.repeated_description_examp
     # NULLABLE — which is why the ranking above excludes unnamed rows in SQL — so without `.presence`
     # an empty ask would become `WHERE name = ''`, a query for a description no row can carry and
     # therefore a block guaranteed to be empty. That is a worse answer than not opening one.
+    # @intent: { entity: "RepeatedDescriptionExamples", action: "ignore the empty ask", behavior: "an empty repeated_description behaves exactly like the parameter being absent", layer: "request" }
     it "treats an empty repeated_description as no ask" do
       expect(block(query: { repeated_description: "" })).to be_nil
     end
@@ -403,6 +420,7 @@ RSpec.describe "GET /api/v1/repository — latest_run.repeated_description_examp
   # anyway. Here the gate is the ASK and it is decided before any query is issued, so a client that
   # never sends the parameter pays nothing at all for the key's existence.
   describe "what the drill-in costs the endpoint" do
+    # @intent: { entity: "RepeatedDescriptionExamples", action: "cost one query", behavior: "asking for the block adds exactly one query to the response and none when unasked", layer: "request" }
     it "adds exactly one query when asked, and none when not" do
       # Warmed first, on the precedent the sibling cost blocks set: the very first request of an
       # example pays for state a second one does not — an API key's first use is recorded — and a
@@ -428,6 +446,7 @@ RSpec.describe "GET /api/v1/repository — latest_run.repeated_description_examp
     # spec/support/observation_grain_reads.rb, which is also where the argument for matching every
     # grain POSITIVELY is made — and where this grain's pattern is separated from the per-example
     # ranking's and the file drill-in's, both of which also rank this table by duration.
+    # @intent: { entity: "RepeatedDescriptionExamples", action: "read only its grain", behavior: "spec_observations is read once for this grain while sibling grains' read counts stay unchanged", layer: "request" }
     it "reads spec_observations once for its own grain, and leaves every other grain alone" do
       area, file, example, description, flakiness, growth, directory_files, file_examples,
         repeated_description_examples =
@@ -459,6 +478,7 @@ RSpec.describe "GET /api/v1/repository — latest_run.repeated_description_examp
     # The three drill-ins compose without any of them being classified as another — the pairing that
     # the partition's own separation of these patterns exists to make assertable, and the shape no
     # single-ask block above can speak for. Nine reads: the six, plus one per ask.
+    # @intent: { entity: "RepeatedDescriptionExamples", action: "keep drill-ins separate", behavior: "asking for all three drill-ins at once narrows each to its own grain with no cross-narrowing", layer: "request" }
     it "keeps the three drill-ins in their own grains when all are asked for at once" do
       query = { repeated_description: looped, spec_file: order_spec, spec_directory: "spec/models" }
 
@@ -489,6 +509,7 @@ RSpec.describe "GET /api/v1/repository — latest_run.repeated_description_examp
     # capped, so a group of 4 and one of 300 cost the same single query. A serializer that fetched
     # the run's rows and filtered them in Ruby reads as more here and as more again as the suite
     # grows.
+    # @intent: { entity: "RepeatedDescriptionExamples", action: "scale reads flat", behavior: "one spec_observations read serves a description however many examples it carries", layer: "request" }
     it "reads it once however many examples the description carries" do
       big = create_repository(user: @user, github_full_name: "acme/wide-group")
       ingest(big, Array.new(300) do |index|
@@ -525,6 +546,7 @@ RSpec.describe "GET /api/v1/repository — latest_run.repeated_description_examp
       repo
     end
 
+    # @intent: { entity: "RepeatedDescriptionExamples", action: "cap rows and report totals", behavior: "the block serves at most the limit's worth of rows while still stating the group's full example count", layer: "request" }
     it "serves the limit's worth of rows, and says how many examples the description carries" do
       served = block(key: capped.api_keys.create!, query: { repeated_description: looped })
 
@@ -546,6 +568,7 @@ RSpec.describe "GET /api/v1/repository — latest_run.repeated_description_examp
     # different numbers, so a serializer that reached for either would still serve a
     # plausible-looking page. Asserted as an inequality between the constants rather than against the
     # literal 25, which is the form that stays true if the cap is ever retuned.
+    # @intent: { entity: "RepeatedDescriptionExamples", action: "use its own cap", behavior: "the row cap comes from this grain's constant and not from a neighbouring grain's limit", layer: "request" }
     it "is capped by this grain's own constant, not by a neighbouring one" do
       expect(SpecObservation::REPEATED_DESCRIPTION_EXAMPLES_LIMIT)
         .not_to eq(SpecObservation::FILE_EXAMPLES_LIMIT)
@@ -570,6 +593,7 @@ RSpec.describe "GET /api/v1/repository — latest_run.repeated_description_examp
       repo
     end
 
+    # @intent: { entity: "RepeatedDescriptionExamples", action: "null silent durations", behavior: "a group where nothing was timed serves null durations plus a flag rather than zeros", layer: "request" }
     it "serves null durations rather than zeros, and says the group timed nothing" do
       served = block(key: untimed.api_keys.create!, query: { repeated_description: looped })
 
@@ -600,6 +624,7 @@ RSpec.describe "GET /api/v1/repository — latest_run.repeated_description_examp
              commit_sha: "feedfacecafe0002", branch: "feature/x")
     end
 
+    # @intent: { entity: "RepeatedDescriptionExamples", action: "honour the branch ask", behavior: "the block describes the latest run on the named branch and narrows history independently of it", layer: "request" }
     it "describes the latest run under a branch ask, and narrows history independently" do
       body = get_repository(query: { repeated_description: looped, branch: "main" })
 
@@ -613,6 +638,7 @@ RSpec.describe "GET /api/v1/repository — latest_run.repeated_description_examp
       expect(body["history"].map { it["commit_sha"] }).to eq(["feedfacecafe0001"])
     end
 
+    # @intent: { entity: "RepeatedDescriptionExamples", action: "be branch-invariant", behavior: "the served drill-in body is the same whether or not a branch was named", layer: "request" }
     it "serves the same drill-in with and without the branch ask" do
       with_branch = block(query: { repeated_description: looped, branch: "main" })
 
@@ -624,6 +650,7 @@ RSpec.describe "GET /api/v1/repository — latest_run.repeated_description_examp
     # another: the area key still lists the area's FILES, the file key the file's EXAMPLES, and this
     # one the description's — across both files, which is the answer neither of the other two can
     # give.
+    # @intent: { entity: "RepeatedDescriptionExamples", action: "compose drill-ins", behavior: "all three drill-ins answer together without one narrowing another's result", layer: "request" }
     it "answers all three drill-ins at once without any narrowing another" do
       body = get_repository(query: { repeated_description: looped, spec_file: order_spec,
                                      spec_directory: "spec/models" })
@@ -661,6 +688,7 @@ RSpec.describe "GET /api/v1/repository — latest_run.repeated_description_examp
     # the half the `NULLS LAST` in the read exists to get right. Every figure comes off the object
     # rather than off the fixture's numbers: two independent hand-written expectations would both
     # still pass if the endpoint started reading a different run or a different description.
+    # @intent: { entity: "RepeatedDescriptionExamples", action: "agree with the panel", behavior: "the API rows and their order are the same ones the rendered panel draws from", layer: "request" }
     it "serves the same rows, in the same order, that the panel renders from" do
       served = block(query: { repeated_description: looped })
       shown = RepeatedDescriptionExamples.for(repository.latest_test_run, looped)
@@ -681,6 +709,7 @@ RSpec.describe "GET /api/v1/repository — latest_run.repeated_description_examp
     # — the duration through `SpecObservation.humanized_duration`, the seam every grain on that page
     # renders through, rather than through a hand-rolled `"%.2fs"` that would be a second definition
     # of the spelling.
+    # @intent: { entity: "RepeatedDescriptionExamples", action: "match printed operands", behavior: "the block names the same examples with the same operands the panel prints for them", layer: "request" }
     it "names the same examples, with the same operands, as the panel prints" do
       served = block(query: { repeated_description: looped })
       get repository_path(repository, repeated_description: looped)

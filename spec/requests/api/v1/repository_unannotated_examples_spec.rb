@@ -122,6 +122,7 @@ RSpec.describe "GET /api/v1/repository — latest_run.unannotated_examples", typ
     # (`eq`, not `match_array`) because a stable, file-navigable order is half of what this key
     # promises: the cap fires as the normal case on this population, so a reader annotating the first
     # hundred and asking again must not be handed a re-shuffled hundred.
+    # @intent: { entity: "repository unannotated_examples endpoint", action: "list unannotated examples", behavior: "the worklist comes back in definition file order and every row carries enough locating detail to open the source", layer: "request" }
     it "lists the run's unannotated examples in file order, with enough to open each one" do
       expect(block(query: ask)).to eq(
         "spec_file" => nil,
@@ -166,6 +167,7 @@ RSpec.describe "GET /api/v1/repository — latest_run.unannotated_examples", typ
     # sent — the no-ask spelling the whole endpoint uses, and the reason a client can reconcile
     # `recorded_count` against `total_specs - annotated_specs` without knowing what it sent: the two
     # keys say whether the count is the run's.
+    # @intent: { entity: "repository unannotated_examples endpoint", action: "pin the response shape", behavior: "the block exposes only the contracted unannotated_examples keys and never leaks the richer per-example structure behind it", layer: "request" }
     it "serves exactly the unannotated_examples keys this contract pins, and not the per-example shape" do
       served = block(query: ask)
 
@@ -193,6 +195,7 @@ RSpec.describe "GET /api/v1/repository — latest_run.unannotated_examples", typ
     #
     # A serializer that counted the PAGE instead of the population would still pass here (3 rows, 3
     # counted); the truncation example below is what separates those two, and it is why both exist.
+    # @intent: { entity: "repository unannotated_examples endpoint", action: "reconcile counters", behavior: "the row count off a single response equals the run annotation counters, proving the page and the counters describe the same population", layer: "request" }
     it "reconciles its count with the run's own annotation counters, off one response" do
       run = latest_run(query: ask)
 
@@ -210,6 +213,7 @@ RSpec.describe "GET /api/v1/repository — latest_run.unannotated_examples", typ
     # population however few rows come back. This population is routinely the whole run — a repository
     # that has just installed the gem has `recorded_count == total_specs` on day one — so truncation
     # is the normal case here rather than the exotic one.
+    # @intent: { entity: "repository unannotated_examples endpoint", action: "count beyond the cap", behavior: "the disclosed population total covers the whole run even when pagination truncated the rows actually served", layer: "request" }
     it "counts the run's whole unannotated population, not the page the cap left" do
       big = separate_repository("acme/just-installed")
       over = SpecObservation::UNANNOTATED_EXAMPLES_LIMIT + 25
@@ -233,6 +237,7 @@ RSpec.describe "GET /api/v1/repository — latest_run.unannotated_examples", typ
     # The annotated rows are not in the list, asserted against the response's own names rather than
     # against a count — a block that returned every row of the run would satisfy `recorded_count` if
     # the count were folded from the rows, and would fail here.
+    # @intent: { entity: "repository unannotated_examples endpoint", action: "exclude annotated rows", behavior: "no example carrying an annotation appears anywhere in the served worklist", layer: "request" }
     it "lists no example that carries an annotation" do
       names = block(query: ask)["rows"].map { it["name"] }
 
@@ -248,6 +253,7 @@ RSpec.describe "GET /api/v1/repository — latest_run.unannotated_examples", typ
     # serving one path under both names satisfies every count in this file and fails here — and on
     # THIS block the consequence is concrete: a reader sent to `spec/support/shared_examples/billable.rb`
     # to annotate a test would find the group, not the example that ran it.
+    # @intent: { entity: "repository unannotated_examples endpoint", action: "report shared example sites", behavior: "a row generated from a shared example group reports the defining file separately from the file that included it", layer: "request" }
     it "names the definition site and the including file apart, for a shared example group" do
       shared = block(query: ask)["rows"].find { it["line_number"] == 7 }
 
@@ -260,6 +266,7 @@ RSpec.describe "GET /api/v1/repository — latest_run.unannotated_examples", typ
     # `SpecObservation#duration_label` and `#outcome_label` are each one call away in the rows this
     # reads, and `recorded_count > rows.length` is one comparison away in the object it reads from.
     # This endpoint ships the operands and lets a client word it.
+    # @intent: { entity: "repository unannotated_examples endpoint", action: "serve raw figures", behavior: "counts and status words are returned directly, with no panel labels or comparison verdicts mixed into the payload", layer: "request" }
     it "serves numbers and words, never the panel's labels or its comparisons" do
       served = block(query: ask)
 
@@ -273,6 +280,7 @@ RSpec.describe "GET /api/v1/repository — latest_run.unannotated_examples", typ
     # ordered by its PATH like every other row rather than shuffled to the end. That is the axis
     # decision `SpecObservation.unannotated_in` argues: the sibling drill-ins rank by duration because
     # a reader came to measure, and nobody arrives here for that.
+    # @intent: { entity: "repository unannotated_examples endpoint", action: "order untimed rows", behavior: "an example with no duration sorts by its location fields rather than by a missing cost", layer: "request" }
     it "orders an untimed example by where it lives rather than by what it cost" do
       rows = block(query: ask)["rows"]
 
@@ -285,6 +293,7 @@ RSpec.describe "GET /api/v1/repository — latest_run.unannotated_examples", typ
     # tidy: a reader who annotates the first hundred and asks again must be walking a list, not
     # re-rolling one. `spec_file_path`, `line_number` and `id` are each total where the pair before it
     # ties, so no tie is left for the planner to break afresh per request.
+    # @intent: { entity: "repository unannotated_examples endpoint", action: "keep pages stable", behavior: "asking again for the same run yields an identical page, so the listing is deterministic across calls", layer: "request" }
     it "returns the same page twice for the same run" do
       expect(block(query: ask)).to eq(block(query: ask))
     end
@@ -308,6 +317,7 @@ RSpec.describe "GET /api/v1/repository — latest_run.unannotated_examples", typ
     # AC2. The file rung. `other_file` holds TWO of the run's three unannotated examples, so a block
     # that had ignored the narrowing returns a superset that still looks like a list of unannotated
     # examples — and the count is what separates the two beyond doubt.
+    # @intent: { entity: "repository unannotated_examples endpoint", action: "narrow by file", behavior: "sending the file filter shrinks both rows and total to that one file, and the filter value is echoed back to the client", layer: "request" }
     it "narrows the rows AND the count to one file, and echoes the file it narrowed by" do
       served = block(query: ask.merge(spec_file: other_file))
 
@@ -325,6 +335,7 @@ RSpec.describe "GET /api/v1/repository — latest_run.unannotated_examples", typ
     # `spec_file_path` the rows are ordered by and that `?spec_file=` means everywhere else here. The
     # shared example group is the row that can tell those apart: asking for `order_spec.rb` finds it,
     # and asking for the `spec/support/` helper it is written in does not.
+    # @intent: { entity: "repository unannotated_examples endpoint", action: "narrow on run location", behavior: "the file filter matches where the example executed, not the shared file where it was defined", layer: "request" }
     it "narrows by the file that RAN the example, not the file it is defined in" do
       by_running_file = block(query: ask.merge(spec_file: target_file))
 
@@ -340,6 +351,7 @@ RSpec.describe "GET /api/v1/repository — latest_run.unannotated_examples", typ
 
     # AC3. The area rung, by `DIRECTORY_EXPRESSION` equality. `spec/models` and `spec/services` each
     # hold part of this run's unannotated population, so each ask excludes the other's rows.
+    # @intent: { entity: "repository unannotated_examples endpoint", action: "narrow by area", behavior: "the area filter restricts rows and total to one directory and restates the chosen area in the response", layer: "request" }
     it "narrows the rows AND the count to one area, and echoes the area it narrowed by" do
       models = block(query: ask.merge(spec_directory: models_area))
       services = block(query: ask.merge(spec_directory: services_area))
@@ -361,6 +373,7 @@ RSpec.describe "GET /api/v1/repository — latest_run.unannotated_examples", typ
     # PARENT of the including file compared for EQUALITY: `spec/models/orders` is its own area, not
     # part of `spec/models`. A `LIKE 'spec/models%'` written to make "the whole subtree" work returns
     # both rows here and would be a fifth directory semantics on this table.
+    # @intent: { entity: "repository unannotated_examples endpoint", action: "treat areas as exact", behavior: "a subdirectory is excluded by its parent filter because an area is the immediate parent directory, never a path prefix", layer: "request" }
     it "excludes a SUBDIRECTORY's rows, because an area is the immediate parent and not a prefix" do
       nested = separate_repository("acme/nested-areas")
       ingest(nested,
@@ -383,6 +396,7 @@ RSpec.describe "GET /api/v1/repository — latest_run.unannotated_examples", typ
     end
 
     # AC4. Both together AND, with no precedence rule: a coherent pair is the intersection.
+    # @intent: { entity: "repository unannotated_examples endpoint", action: "intersect filters", behavior: "file and area sent together intersect their row sets and totals, and both filter values are echoed", layer: "request" }
     it "intersects the two when both are sent, and echoes both" do
       served = block(query: ask.merge(spec_file: other_file, spec_directory: services_area))
 
@@ -396,6 +410,7 @@ RSpec.describe "GET /api/v1/repository — latest_run.unannotated_examples", typ
     # AC4, the half a precedence rule would have broken. A file outside the area named is an empty
     # INTERSECTION — 200, both narrowings echoed — rather than one parameter silently winning and the
     # other being dropped, which is the failure a client could not see from the body.
+    # @intent: { entity: "repository unannotated_examples endpoint", action: "answer empty intersection", behavior: "contradictory filter values still return 200 with zero rows while restating both narrowings", layer: "request" }
     it "answers a contradictory pair with no rows, both narrowings restated, and a 200" do
       served = block(query: ask.merge(spec_file: other_file, spec_directory: models_area))
 
@@ -414,6 +429,7 @@ RSpec.describe "GET /api/v1/repository — latest_run.unannotated_examples", typ
     # answer `repository_spec_file_examples_spec.rb` fixed for the rung below and this inherits
     # verbatim: 200, the ask restated, `rows: []`, honest zeroes. Never a 404, and specifically never
     # a prefix match onto the neighbour the typo was nearly spelled as.
+    # @intent: { entity: "repository unannotated_examples endpoint", action: "reject unknown paths", behavior: "a mistyped path yields the plain empty block instead of an error or an unintended prefix match", layer: "request" }
     it "answers a typo with the empty block rather than an error or a prefix match" do
       typo_file = block(query: ask.merge(spec_file: "spec/services/pricing_spec.rbx"))
       typo_area = block(query: ask.merge(spec_directory: "spec/serv"))
@@ -433,6 +449,7 @@ RSpec.describe "GET /api/v1/repository — latest_run.unannotated_examples", typ
     # ANNOTATED file here — it has rows, and none of them unannotated — so a client reads "the file
     # exists and there is nothing left to do" off two counts it already has. The typo reads zero on
     # both, which is the other sentence.
+    # @intent: { entity: "repository unannotated_examples endpoint", action: "signal empty versus unknown", behavior: "a distinguishable absent value lets clients tell an unknown file from a fully annotated one without a new field", layer: "request" }
     it "lets a client separate an unknown path from a fully-annotated one, with no new field" do
       done = latest_run(query: ask.merge(spec_file: annotated_file))
       missing = latest_run(query: ask.merge(spec_file: "spec/models/nope_spec.rb"))
@@ -447,6 +464,7 @@ RSpec.describe "GET /api/v1/repository — latest_run.unannotated_examples", typ
     # AC6. The narrowing parameters are the flag's modifiers, never its trigger. Sent WITHOUT it the
     # block stays `null` — and they still open their own blocks, which is the half that proves the
     # parameters were read at all rather than the request having been ignored.
+    # @intent: { entity: "repository unannotated_examples endpoint", action: "gate the block on flag", behavior: "the block stays null when a narrowing is sent without the flag that asks for it", layer: "request" }
     it "leaves the block null when a narrowing arrives without the flag" do
       run = latest_run(query: { spec_file: other_file, spec_directory: services_area })
 
@@ -461,6 +479,7 @@ RSpec.describe "GET /api/v1/repository — latest_run.unannotated_examples", typ
     # blank before any of them reaches SQL. So a malformed narrowing is not a narrowing: the block is
     # the WHOLE RUN with both keys `null`, never the raw parameter echoed back and never an `IN` list
     # under a key naming one file.
+    # @intent: { entity: "repository unannotated_examples endpoint", action: "sanitize bad filters", behavior: "malformed or blank narrowing values are treated as absent and echoed back as null, never reflected raw", layer: "request" }
     it "treats a malformed or blank narrowing as no narrowing, and echoes null rather than the raw parameter" do
       [{ spec_file: [other_file] }, { spec_file: { path: other_file } }, { spec_file: "" },
        { spec_directory: [services_area] }, { spec_directory: "" }].each do |malformed|
@@ -476,6 +495,7 @@ RSpec.describe "GET /api/v1/repository — latest_run.unannotated_examples", typ
     # AC8. The cap fires WITHIN the narrowed population, and `recorded_count` is that population's —
     # the same window/limit separation the whole-run block pins, asserted again one narrowing down,
     # because a serializer could have narrowed the rows and counted the page.
+    # @intent: { entity: "repository unannotated_examples endpoint", action: "cap narrowed results", behavior: "the narrowing respects the page cap while the total keeps counting the full narrowed population behind it", layer: "request" }
     it "caps the narrowed page and still counts the narrowed population behind it" do
       big = separate_repository("acme/one-heavy-area")
       over = SpecObservation::UNANNOTATED_EXAMPLES_LIMIT + 25
@@ -503,6 +523,7 @@ RSpec.describe "GET /api/v1/repository — latest_run.unannotated_examples", typ
     # this parameter — which is what this example pins by taking the SAME `+2` the un-narrowed cost
     # block takes: a map that had grown a second read under a narrowing, or that had been skipped when
     # one arrived, is a different number here.
+    # @intent: { entity: "repository unannotated_examples endpoint", action: "bound queries under narrowing", behavior: "narrowed requests add exactly two queries, one per block, each charged to its own grain", layer: "request" }
     it "adds exactly two queries when narrowed — one per block — each in its own grain" do
       query = ask.merge(spec_file: other_file, spec_directory: services_area)
 
@@ -519,6 +540,7 @@ RSpec.describe "GET /api/v1/repository — latest_run.unannotated_examples", typ
     # And the narrowing composes with the parameter that re-anchors the run, which is the ordinary
     # use rather than the exotic one: "what is still unannotated in the module I am touching, as of
     # the commit I pushed".
+    # @intent: { entity: "repository unannotated_examples endpoint", action: "compose with commit_sha", behavior: "the narrowing composes with the run selector so both name the same run being narrowed within", layer: "request" }
     it "composes with ?commit_sha=, which names the run it narrowed within" do
       ingest(repository,
              [unannotated_spec(file_path: other_file, line_number: 9,
@@ -552,6 +574,7 @@ RSpec.describe "GET /api/v1/repository — latest_run.unannotated_examples", typ
     # `unreadable_count DESC` in front of that, and in this fixture the two agree — `spec/services`
     # leads on unreadable (2 to 1) as well as on debt (2 to 1), so the row order below is green under
     # either term. The example after this one is the one that pulls them apart, in both directions.
+    # @intent: { entity: "repository unannotated_directories ranking", action: "rank areas", behavior: "the ranking ships the two operands per area rather than a precomputed fraction, so a client can redo the arithmetic", layer: "request" }
     it "ranks the areas, and ships the operands rather than a fraction" do
       expect(debt_map(query: ask)).to eq(
         "rows" => [
@@ -573,6 +596,7 @@ RSpec.describe "GET /api/v1/repository — latest_run.unannotated_examples", typ
     #
     # Both halves put the expected head row LAST alphabetically, so `path ASC` cannot produce either
     # answer and the count terms are what is under test.
+    # @intent: { entity: "repository unannotated_directories ranking", action: "lead on unreadable areas", behavior: "areas that cannot be read sort first and debt is used as the tie-breaking signal when nothing is unreadable", layer: "request" }
     it "leads on the areas it cannot read, and falls back to debt where none is dark" do
       dark = separate_repository("acme/one-dark-area")
       ingest(dark,
@@ -618,6 +642,7 @@ RSpec.describe "GET /api/v1/repository — latest_run.unannotated_examples", typ
     # again under a second name — a read that had narrowed on `status` instead of FILTERing inside the
     # aggregate returns `2, 2` and `1, 1` here, a fraction that is 100% on every row and no operand
     # at all. That is the discriminating half of this example.
+    # @intent: { entity: "repository unannotated_directories ranking", action: "pin the block shape", behavior: "the ranking block serves exactly the contracted unannotated_directories keys and nothing more", layer: "request" }
     it "serves exactly the unannotated_directories keys this contract pins" do
       served = debt_map(query: ask)
 
@@ -650,6 +675,7 @@ RSpec.describe "GET /api/v1/repository — latest_run.unannotated_examples", typ
     # one unannotated row each, every one of them unreadable — so neither count term orders it and
     # `path ASC` is what is under test. Two count terms are still not a total order and Postgres is
     # under no obligation to be stable.
+    # @intent: { entity: "repository unannotated_directories ranking", action: "tie-break deterministically", behavior: "equal ranking values break on path ascending so identical requests return the same ordering", layer: "request" }
     it "breaks a tie on path ASC, so two identical asks return the same order" do
       tied = separate_repository("acme/tied-areas")
       ingest(tied,
@@ -672,6 +698,7 @@ RSpec.describe "GET /api/v1/repository — latest_run.unannotated_examples", typ
     # Its own constant, asserted as such: a serializer reusing `HEAVIEST_DIRECTORIES_LIMIT` would pass
     # a bare `10` here and go red on the day either constant moved, which is the coupling the model's
     # constants block exists to refuse.
+    # @intent: { entity: "repository unannotated_directories ranking", action: "disclose the cap", behavior: "the ranking honours its own limit and reports how many areas the run touched overall", layer: "request" }
     it "caps the ranking at its own limit and discloses how many areas the run touched" do
       wide = separate_repository("acme/many-areas")
       areas = SpecObservation::UNANNOTATED_DIRECTORIES_LIMIT + 3
@@ -711,6 +738,7 @@ RSpec.describe "GET /api/v1/repository — latest_run.unannotated_examples", typ
     # assertion about the worklist alone; a serializer that stopped narrowing the WORKLIST — undoing
     # SPGD-608 — passes an assertion about the map alone. Only the two together pin the disagreement,
     # which is the thing `serialized_unannotated_directories` carries a comment about.
+    # @intent: { entity: "repository unannotated_directories ranking", action: "keep map totals whole-run", behavior: "the map block stays whole-run under a narrowing while the worklist count narrows with the filter", layer: "request" }
     it "stays whole-run under a narrowing, while the worklist's own count narrows" do
       narrowed = ask.merge(spec_directory: "spec/services")
       run = latest_run(query: narrowed)
@@ -736,6 +764,7 @@ RSpec.describe "GET /api/v1/repository — latest_run.unannotated_examples", typ
     # rather than left to a comment because it is the reading a client is most likely to get backwards
     # — and because a future edit that "fixed" the disagreement would break this example rather than
     # silently making one of the two figures mean something else.
+    # @intent: { entity: "repository unannotated_directories ranking", action: "skip narrowed reconciliation", behavior: "the narrowed worklist count is deliberately not reconciled against the whole-run map", layer: "request" }
     it "does not reconcile the narrowed worklist count against the whole-run map, and should not" do
       run = latest_run(query: ask.merge(spec_directory: "spec/services"))
       map_total = run.dig("unannotated_directories", "rows").sum { it["unannotated_count"] }
@@ -750,6 +779,7 @@ RSpec.describe "GET /api/v1/repository — latest_run.unannotated_examples", typ
     # `DIRECTORY_EXPRESSION` COALESCEs a top-level file's directory to `.` — what `Pathname#dirname`
     # calls it and what a reader recognises. Without the COALESCE the GROUP BY key is SQL NULL, which
     # reaches the client as an unnamed area it cannot pass back to `?spec_directory=`.
+    # @intent: { entity: "repository unannotated_directories ranking", action: "name root areas", behavior: "a spec at repository root reports area dot rather than a null key", layer: "request" }
     it "names a root-level spec's area `.` rather than serving a null key" do
       rooted = separate_repository("acme/root-level-specs")
       ingest(rooted,
@@ -774,6 +804,8 @@ RSpec.describe "GET /api/v1/repository — latest_run.unannotated_examples", typ
     # rows are not rolled up into its parent's counts. Nothing in this read compares paths, so nobody
     # could break this with a bad `LIKE` — they would break it by "fixing" the map into a subtree
     # rollup, which reads as a tidier answer and is a fifth directory semantics on this table.
+    # @intent: { entity: "repository unannotated_directories ranking", action: "row each subdirectory", behavior: "a nested directory gets its own ranking row instead of being folded into its parent area", layer: "request" }
+    # @intent: { entity: "repository unannotated_directories ranking", action: "include clean areas", behavior: "a fully annotated area still appears with a zero so the listing covers every area the run touched", layer: "request" }
     it "gives a subdirectory its own row rather than rolling it into its parent" do
       nested = separate_repository("acme/nested-debt")
       ingest(nested,
@@ -805,6 +837,7 @@ RSpec.describe "GET /api/v1/repository — latest_run.unannotated_examples", typ
     # last by construction, so on any run with more areas than the cap it is cut and never seen; on a
     # small run it is listed, and listed is correct. `directory_count` counts it either way, which is
     # what keeps this key's disclosure describing the same population `spec_directories` does.
+    # @intent: { entity: "repository unannotated_directories ranking", action: "include clean areas", behavior: "a fully annotated area still appears with a zero so the listing covers every area the run touched", layer: "request" }
     it "lists a fully-annotated area with a zero rather than dropping it from the run's areas" do
       mixed = separate_repository("acme/one-area-done")
       ingest(mixed,
@@ -826,6 +859,7 @@ RSpec.describe "GET /api/v1/repository — latest_run.unannotated_examples", typ
     # `?unannotated_examples=` rather than a parameter of its own, so a client that never asks gets
     # the key present and `null` — never an empty block, and never a row it did not pay for. The
     # cost block above asserts the other half, that the absent key is also an absent query.
+    # @intent: { entity: "repository unannotated_examples map block", action: "omit the map by default", behavior: "the map key is present but null when the requesting flag was not sent", layer: "request" }
     it "is null — with the key present — when the flag was not sent" do
       body = get_repository
 
@@ -849,6 +883,8 @@ RSpec.describe "GET /api/v1/repository — latest_run.unannotated_examples", typ
     # this `null` is what discriminates it — so the second half below reaches the SAME zero from a run
     # that did record rows and gets the map PRESENT. That is the discrimination the null buys, and it
     # is why a serializer "fixing" this disagreement into `rows: []` would be taking something away.
+    # @intent: { entity: "repository unannotated_examples map block", action: "separate map from worklist", behavior: "a run with no per-example rows leaves the map null while the worklist still answers with its own block", layer: "request" }
+    # @intent: { entity: "repository unannotated_directories worklist", action: "omit the block unasked", behavior: "the worklist block is null with its key present whenever the client did not ask for it", layer: "request" }
     it "is null for a run with no per-example rows, while the worklist answers with a block" do
       bare = separate_repository("acme/no-observations")
       create_test_run(repository: bare, commit_sha: "norows000623", duration_seconds: 42.5)
@@ -883,6 +919,8 @@ RSpec.describe "GET /api/v1/repository — latest_run.unannotated_examples", typ
   # because the empty answer here is not a stale bookmark or a deleted file but the STATE THE METRIC
   # EXISTS TO REACH.
   describe "the two ways this key can be empty" do
+    # @intent: { entity: "repository unannotated_directories worklist", action: "omit the block unasked", behavior: "the worklist block is null with its key present whenever the client did not ask for it", layer: "request" }
+    # @intent: { entity: "repository unannotated_examples drill-ins", action: "distinguish block spellings", behavior: "the two drill-in flags are spelled differently in the response so a client can tell which block it received", layer: "request" }
     it "is null — with the key present — when the block was not asked for" do
       body = get_repository
 
@@ -900,6 +938,7 @@ RSpec.describe "GET /api/v1/repository — latest_run.unannotated_examples", typ
     # would answer the best possible outcome with the one word reserved for "you did not ask", and a
     # client walking a repository to completion would watch the block vanish at the moment it
     # succeeded and be unable to tell that from its own parameter having been dropped.
+    # @intent: { entity: "repository unannotated_directories worklist", action: "serve empty when clean", behavior: "a fully annotated run yields a present block with zero rows rather than a null block", layer: "request" }
     it "is a present block with no rows when the run is fully annotated" do
       done = separate_repository("acme/fully-annotated")
       ingest(done, [annotated_spec(file_path: annotated_file, line_number: 4),
@@ -918,6 +957,8 @@ RSpec.describe "GET /api/v1/repository — latest_run.unannotated_examples", typ
 
     # The pair, side by side, which is the assertion neither example above can make on its own: a
     # client can tell the two apart WITHOUT knowing what it sent.
+    # @intent: { entity: "repository unannotated_examples drill-ins", action: "distinguish block spellings", behavior: "the two drill-in flags are spelled differently in the response so a client can tell which block it received", layer: "request" }
+    # @intent: { entity: "GET /api/v1/repository", action: "default to newest run", behavior: "a call with no run selector describes the repository newest run", layer: "request" }
     it "spells the two differently, so a client can tell which one it got" do
       done = separate_repository("acme/nothing-left")
       ingest(done, [annotated_spec(file_path: annotated_file, line_number: 4)])
@@ -931,6 +972,7 @@ RSpec.describe "GET /api/v1/repository — latest_run.unannotated_examples", typ
     # There is no `latest_run` at all for a repository whose CI has never reported, so the ask cannot
     # conjure one — the rule the whole block follows, restated here because this is one of the keys on
     # it a client can ask for by name.
+    # @intent: { entity: "repository unannotated_examples drill-ins", action: "omit block without CI", behavior: "when CI has never reported, the block is served not at all rather than as an empty shell", layer: "request" }
     it "serves no block at all when CI has never reported" do
       silent = separate_repository("acme/never-ran")
 
@@ -955,6 +997,7 @@ RSpec.describe "GET /api/v1/repository — latest_run.unannotated_examples", typ
              commit_sha: "feedfacecafe0002")
     end
 
+    # @intent: { entity: "GET /api/v1/repository", action: "default to newest run", behavior: "a call with no run selector describes the repository newest run", layer: "request" }
     it "describes the repository's newest run on a default call" do
       served = block(query: ask)
 
@@ -963,6 +1006,7 @@ RSpec.describe "GET /api/v1/repository — latest_run.unannotated_examples", typ
       expect(get_repository(query: ask).dig("run_anchor", "commit_sha")).to eq("feedfacecafe0002")
     end
 
+    # @intent: { entity: "GET /api/v1/repository", action: "select run by commit", behavior: "the commit_sha parameter moves the drill-ins to the named run like the other run-grain selectors", layer: "request" }
     it "moves to the run named by ?commit_sha= with the other run-grain drill-ins" do
       query = ask.merge(commit_sha: "feedfacecafe0001")
       served = block(query: query)
@@ -997,6 +1041,7 @@ RSpec.describe "GET /api/v1/repository — latest_run.unannotated_examples", typ
 
     # THE positive path, beside the group, which is what separates "the guard read the parameter" from
     # "the endpoint ignores this parameter entirely".
+    # @intent: { entity: "repository unannotated_examples flag", action: "accept string values", behavior: "an unannotated_examples parameter supplied as a string is honoured rather than rejected", layer: "request" }
     it "honours an unannotated_examples that IS a string" do
       expect(block(query: ask)["rows"].length).to eq(3)
     end
@@ -1004,6 +1049,7 @@ RSpec.describe "GET /api/v1/repository — latest_run.unannotated_examples", typ
     # An empty ask is no ask: `?unannotated_examples=` is what a browser sends for an unfilled form
     # field and what a client building a query string off a nil variable sends, and an ask has to be
     # affirmative rather than merely present in the URL.
+    # @intent: { entity: "repository unannotated_examples flag", action: "ignore empty values", behavior: "an empty unannotated_examples parameter is treated as no ask and no block is opened", layer: "request" }
     it "treats an empty unannotated_examples as no ask" do
       expect(block(query: { unannotated_examples: "" })).to be_nil
     end
@@ -1013,6 +1059,7 @@ RSpec.describe "GET /api/v1/repository — latest_run.unannotated_examples", typ
     # has and would spell "a word you do not recognise" and "a shape that is not a String" the same
     # way. A client that does not want the block omits the parameter, which is how it declines the
     # other six. Pinned so a later reader does not "fix" this into a boolean cast.
+    # @intent: { entity: "repository unannotated_examples flag", action: "open on any non-blank", behavior: "any non-blank string opens the block, including the literal word false", layer: "request" }
     it "opens the block for any non-blank string, the word false included" do
       expect(block(query: { unannotated_examples: "false" })).not_to be_nil
       expect(block(query: { unannotated_examples: "1" })["recorded_count"]).to eq(3)
@@ -1025,6 +1072,7 @@ RSpec.describe "GET /api/v1/repository — latest_run.unannotated_examples", typ
   # the gate is the ask and it is decided before any query is issued, so a client that never sends the
   # parameter pays nothing at all for the key's existence.
   describe "what the drill-in costs the endpoint" do
+    # @intent: { entity: "repository unannotated_examples endpoint", action: "charge queries only when asked", behavior: "exactly two queries are added when the blocks are requested and none when they are not", layer: "request" }
     it "adds exactly two queries when asked — the worklist and the map — and none when not" do
       # Warmed first, on the precedent every sibling cost block sets: the very first request of an
       # example pays for state a second one does not — an API key's first use is recorded — and a
@@ -1049,6 +1097,7 @@ RSpec.describe "GET /api/v1/repository — latest_run.unannotated_examples", typ
     # spec/support/observation_grain_reads.rb, which is also where the argument for matching every
     # grain POSITIVELY is made — and where the debt ranking's separation from the two OTHER reads
     # that group by the same directory expression is argued.
+    # @intent: { entity: "repository unannotated_examples endpoint", action: "read once per block", behavior: "spec_observations is read once per served block and no other query grain is disturbed", layer: "request" }
     it "reads spec_observations once per block it serves, and leaves every other grain alone" do
       area, file, example, description, flakiness, growth, directory_files, file_examples,
         description_examples, _dfg, _rtg, _dfrtg, unstable_test_runs, unannotated, debt, readings =
@@ -1087,6 +1136,7 @@ RSpec.describe "GET /api/v1/repository — latest_run.unannotated_examples", typ
     # The drill-ins compose without either being classified as the other — this one against the
     # bottom rung of the area → file → example ladder, which is the sibling whose read also lists this
     # table's rows with a window count riding on them.
+    # @intent: { entity: "repository unannotated_examples endpoint", action: "keep drill-in grains apart", behavior: "asking for both drill-ins at once still reads each block in its own separate grain", layer: "request" }
     it "keeps the two drill-ins in their own grains when both are asked for at once" do
       query = ask.merge(spec_file: other_file)
 
@@ -1106,6 +1156,7 @@ RSpec.describe "GET /api/v1/repository — latest_run.unannotated_examples", typ
     # took a second pass for either population, reads as more here and as more again as the suite
     # grows. The map is the one to watch: it is a GROUPED AGGREGATE over the whole run rather than a
     # capped scan, and its cap cuts the GROUPS rather than the rows it aggregates.
+    # @intent: { entity: "repository unannotated_examples endpoint", action: "stay flat in block cost", behavior: "each block is read exactly once regardless of how many unannotated examples the run holds", layer: "request" }
     it "reads each block once however many unannotated examples the run holds" do
       big = separate_repository("acme/wide-run")
       ingest(big, Array.new(400) do |index|

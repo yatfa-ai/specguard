@@ -86,6 +86,7 @@ RSpec.describe "GET /api/v1/repository — near_duplicates", type: :request do
   end
 
   describe "a repository whose near duplicates were asked about" do
+    # @intent: { entity: "near_duplicates", action: "serve a cluster", behavior: "the one cluster serves two members but four examples through the table-driven loop shared identity, with summed wall clock and per-member example counts intact at the wire", layer: "request" }
     it "serves the cluster with its member count, example count and summed wall clock" do
       served = block(query: ask)
 
@@ -105,6 +106,7 @@ RSpec.describe "GET /api/v1/repository — near_duplicates", type: :request do
       expect(cluster["similarity_range"]).to eq([0.89, 0.89])
     end
 
+    # @intent: { entity: "near_duplicates", action: "pin the key set", behavior: "the block serves only machine fields at every level - floor, basis, run id, counts and rows - and no prose label such as a duration or coverage sentence appears anywhere in the JSON", layer: "request" }
     it "serves exactly the keys this contract pins, and never the object's prose" do
       served = block(query: ask)
 
@@ -129,6 +131,7 @@ RSpec.describe "GET /api/v1/repository — near_duplicates", type: :request do
     # against the CONSTANTS, never literals, on the discipline SPGD-717 established next door: a
     # literal here is a stale claim waiting to happen, and when the threshold is re-derived for the
     # shipped provider the endpoint must report the new figure without being touched.
+    # @intent: { entity: "near_duplicates", action: "disclose the similarity floor", behavior: "similarity_floor and similarity_basis ride the payload sourced from the object own constants, so a re-derived threshold is reported without the endpoint being touched", layer: "request" }
     it "cannot serve a cluster count without the statement of what the similarity means" do
       served = block(query: ask)
 
@@ -136,6 +139,7 @@ RSpec.describe "GET /api/v1/repository — near_duplicates", type: :request do
       expect(served["similarity_basis"]).to eq(NearDuplicateClusters::SIMILARITY_BASIS)
     end
 
+    # @intent: { entity: "near_duplicates", action: "report populations", behavior: "recorded, identity, clustered and timed counts plus truncated false let an empty ranking be read as a finding about a known population rather than a silence", layer: "request" }
     it "reports the population figures that make an empty ranking a finding rather than a silence" do
       served = block(query: ask)
 
@@ -149,6 +153,7 @@ RSpec.describe "GET /api/v1/repository — near_duplicates", type: :request do
       expect(served["saturated_identity_count"]).to eq(0)
     end
 
+    # @intent: { entity: "near_duplicates", action: "disclose truncation", behavior: "one more cluster than the ranking limit is served as a capped list with the true cluster_count and truncated true, so the page cannot pass itself off as the census", layer: "request" }
     it "discloses a truncated ranking rather than passing the page off as the census" do
       many = separate_repository("acme/many-pairs")
       # Two more near-duplicate pairs than the ranking's limit, so the cluster list is capped while
@@ -182,6 +187,7 @@ RSpec.describe "GET /api/v1/repository — near_duplicates", type: :request do
     # to weigh against, which is a fact about the repository's history — `weighed_run_id` is null
     # and the population figures are zero, and the block serves rather than raises because `nil`
     # is the object's own documented `UNRUN` path.
+    # @intent: { entity: "near_duplicates", action: "distinguish two silences", behavior: "a never-ingested repository serves null weighed_run_id with zero populations while an all-unique suite reaches the same empty list with a live population behind it", layer: "request" }
     it "serves the block for a repository that never ingested, distinguishably from an all-unique suite" do
       bare = separate_repository("acme/never-ingested")
       served = block(key: bare.api_keys.create!, query: ask)
@@ -205,6 +211,7 @@ RSpec.describe "GET /api/v1/repository — near_duplicates", type: :request do
   # THE COST CLAIM, as a query-count criterion rather than a nicety: the census is the one read on
   # this endpoint measured in seconds, and the opt-in ask is the entire design that confines it.
   describe "a client that does not ask" do
+    # @intent: { entity: "near_duplicates", action: "charge only the ask", behavior: "without the parameter the key is present but null and not one query touches spec_identities, while the same capture with the ask is non-empty", layer: "request" }
     it "pays nothing — not one query — while the key stays present and null" do
       # Warm every cache the no-ask request shares with the asking one, so the comparison below
       # measures the census and not a first-touch column load.
@@ -239,10 +246,12 @@ RSpec.describe "GET /api/v1/repository — near_duplicates", type: :request do
     # THE positive path, beside the group: this parameter's "malformed" answer and its "absent"
     # answer are the same `null`, so nothing inside the shared group can tell a working guard from
     # an endpoint that ignores the parameter entirely.
+    # @intent: { entity: "near_duplicates", action: "honour a string parameter", behavior: "a string-valued parameter runs the census and returns cluster_count one, the positive control beside the shared malformed-parameter group", layer: "request" }
     it "honours a near_duplicates that IS a string" do
       expect(block(query: ask)["cluster_count"]).to eq(1)
     end
 
+    # @intent: { entity: "near_duplicates", action: "treat empty as no ask", behavior: "an empty near_duplicates value is treated as no ask and the block stays null with a 200 response", layer: "request" }
     it "treats an empty near_duplicates as no ask" do
       expect(block(query: { near_duplicates: "" })).to be_nil
     end

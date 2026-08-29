@@ -28,6 +28,7 @@ RSpec.describe "API v1 — POST /api/v1/repositories", type: :request do
   describe "when the grant names the repository" do
     before { create_registration_grant(user: person, registrable: ["acme/billing-service"]) }
 
+    # @intent: { entity: "Repository registration", action: "register under a grant", behavior: "a POST with a person key and a grant naming the name creates the repository owned by that person and answers 201 with its id", layer: "request" }
     it "registers it to the person the key speaks for" do
       expect { register("acme/billing-service") }.to change(Repository, :count).by(1)
 
@@ -43,6 +44,7 @@ RSpec.describe "API v1 — POST /api/v1/repositories", type: :request do
     # Asserted by USING the token rather than by matching its shape: `GET /api/v1/repository`
     # authenticating on it is the only evidence that what came back is the real credential and not
     # a plausible-looking string.
+    # @intent: { entity: "registration api key", action: "mint a working key in the exchange", behavior: "the response token authenticates a follow-up read on the new repository, proving it is the real credential not a plausible string", layer: "request" }
     it "hands back a working first key for it" do
       register("acme/billing-service")
 
@@ -58,6 +60,7 @@ RSpec.describe "API v1 — POST /api/v1/repositories", type: :request do
     # Reveal-once, asserted on the STORED ROW rather than on the model's documentation of itself.
     # Every attribute is checked, not just `token_digest`, so a column added later that happened to
     # carry the plaintext would fail here.
+    # @intent: { entity: "registration api key", action: "store no plaintext", behavior: "the stored row matches the digest and no attribute anywhere on it contains the revealed token", layer: "request" }
     it "stores no column carrying the plaintext it just revealed" do
       register("acme/billing-service")
       token = response.parsed_body.dig("api_key", "token")
@@ -78,6 +81,7 @@ RSpec.describe "API v1 — POST /api/v1/repositories", type: :request do
     # nil-check. `repositories/_api_keys` renders this column, and "Unknown" is a sentence about a
     # key minted before attribution existed or whose creator was deleted — neither is true of one
     # minted a second ago by a person who is still here.
+    # @intent: { entity: "registration api key", action: "record the creator", behavior: "the minted key names the person whose grant was redeemed as created_by, an attribution that cannot be repaired after the fact", layer: "request" }
     it "records the person who minted it as its creator" do
       register("acme/billing-service")
 
@@ -90,6 +94,7 @@ RSpec.describe "API v1 — POST /api/v1/repositories", type: :request do
     # key over the API is a slice that has not shipped.
     #
     # The stub is the shape of the only failure that is real: `token_digest` carries a unique index.
+    # @intent: { entity: "Repository registration", action: "roll back on a failed mint", behavior: "when the promised key cannot be saved the whole registration unwinds and no repository row is left behind", layer: "request" }
     it "registers nothing when the key it promised cannot be minted" do
       allow_any_instance_of(ApiKey).to receive(:save!).and_raise(ActiveRecord::RecordNotUnique)
 
@@ -103,6 +108,7 @@ RSpec.describe "API v1 — POST /api/v1/repositories", type: :request do
     # `Repository#normalize_full_name` runs before the grant is consulted (the gate's `valid?` step),
     # and the grant is keyed case-insensitively for the reason `InstallationRepositories
     # .verify_batch` gives: GitHub logins and repository names are.
+    # @intent: { entity: "Repository registration", action: "match the grant case-insensitively", behavior: "a differently-cased org/repo spelling still redeems the grant because normalization and matching fold case", layer: "request" }
     it "matches the grant case-insensitively" do
       expect { register("ACME/Billing-Service") }.to change(Repository, :count).by(1)
 
@@ -120,6 +126,7 @@ RSpec.describe "API v1 — POST /api/v1/repositories", type: :request do
                                 visible: ["acme/billing-service", "acme/ledger"])
     end
 
+    # @intent: { entity: "Repository registration", action: "refuse an unknown name", behavior: "a name outside both grant sets answers 400 with the not-in-installation sentence and writes nothing", layer: "request" }
     it "refuses a name GitHub never told this person about, and writes nothing" do
       expect { register("someone-else/private-thing") }.not_to change(Repository, :count)
 
@@ -132,6 +139,7 @@ RSpec.describe "API v1 — POST /api/v1/repositories", type: :request do
     # The ordinary position of an organization's non-admin members, and a DIFFERENT sentence with a
     # different fix. Telling them apart is the entire reason the grant records a visible set beside
     # the set it grants from.
+    # @intent: { entity: "Repository registration", action: "refuse a visible non-admin repo", behavior: "a repository the person can see but does not administer gets its own refusal sentence distinct from the unknown-name one", layer: "request" }
     it "refuses a repository they can see but do not administer, and says which it is" do
       expect { register("acme/ledger") }.not_to change(Repository, :count)
 
@@ -144,6 +152,7 @@ RSpec.describe "API v1 — POST /api/v1/repositories", type: :request do
 
     # The record's own rules still run, and they run FIRST — see `RepositoryRegistration`. A slug
     # that is not `org/repo` is refused without the grant being consulted at all.
+    # @intent: { entity: "Repository registration", action: "refuse a malformed name first", behavior: "a name that is not org/repo is refused by the record own rules before the grant is ever consulted", layer: "request" }
     it "still refuses a name that is not org/repo" do
       expect { register("nonsense") }.not_to change(Repository, :count)
 
@@ -151,6 +160,7 @@ RSpec.describe "API v1 — POST /api/v1/repositories", type: :request do
       expect(response.parsed_body["message"]).to include("must look like org/repo")
     end
 
+    # @intent: { entity: "Repository registration", action: "refuse a taken name", behavior: "a name another account already registered is refused 400 even though the grant names it", layer: "request" }
     it "refuses a name another account already registered" do
       create_repository(user: create_user(github_uid: "2002", github_handle: "hubot"),
                         github_full_name: "acme/billing-service")
@@ -183,6 +193,7 @@ RSpec.describe "API v1 — POST /api/v1/repositories", type: :request do
 
     before { create_registration_grant(user: person, registrable: %w[acme/billing-service acme/ledger]) }
 
+    # @intent: { entity: "Repository registration", action: "lose the race politely", behavior: "when the unique index refuses what the validation missed the answer is a 400 with a JSON body, not a bare 500", layer: "request" }
     it "answers 400 with a body rather than a bare 500" do
       create_repository(user: rival, github_full_name: "acme/billing-service")
       allow(uniqueness_validator(Repository)).to receive(:validate_each)
@@ -201,6 +212,7 @@ RSpec.describe "API v1 — POST /api/v1/repositories", type: :request do
     # the connection is already dead.
     #
     # Only the raced name is silenced, so the control that follows is refused by nothing.
+    # @intent: { entity: "Repository registration", action: "leave the connection usable", behavior: "after the raced refusal the connection still serves a second registration and the refused attempt left no key behind", layer: "request" }
     it "leaves the connection usable for the next registration" do
       create_repository(user: rival, github_full_name: "acme/billing-service")
       allow(uniqueness_validator(Repository)).to receive(:validate_each).and_wrap_original do |original, *args|
@@ -223,6 +235,7 @@ RSpec.describe "API v1 — POST /api/v1/repositories", type: :request do
   # SPGD-756 criterion 6 and call #6 — the fail-open decay a snapshot buys, and the two halves that
   # bound it. Both land on `:not_granted`, whose sentence names a fix neither other refusal does.
   describe "when there is no current grant to redeem" do
+    # @intent: { entity: "GithubRegistrationGrant", action: "refuse a person with no grant", behavior: "a person who never had a grant gets the not-granted sentence naming the SpecGuard-side fix", layer: "request" }
     it "refuses a person who has never had one" do
       expect { register("acme/billing-service") }.not_to change(Repository, :count)
 
@@ -231,6 +244,7 @@ RSpec.describe "API v1 — POST /api/v1/repositories", type: :request do
         .to include(InstallationRepositories::MESSAGES.fetch(:not_granted))
     end
 
+    # @intent: { entity: "GithubRegistrationGrant", action: "refuse a stale grant", behavior: "a grant past its age bound is refused with the same not-granted sentence even when it names the repository", layer: "request" }
     it "refuses a grant past its bound, even though it names the repository" do
       create_registration_grant(user: person, registrable: ["acme/billing-service"],
                                 captured_at: GithubRegistrationGrant::MAX_AGE.ago - 1.hour)
@@ -243,6 +257,7 @@ RSpec.describe "API v1 — POST /api/v1/repositories", type: :request do
     end
 
     # The control the example above needs: without it, a bound of zero would pass it.
+    # @intent: { entity: "GithubRegistrationGrant", action: "redeem an old but current grant", behavior: "a grant just inside the bound still registers, the control that pins the bound actually divides", layer: "request" }
     it "still redeems a grant that is old but inside the bound" do
       create_registration_grant(user: person, registrable: ["acme/billing-service"],
                                 captured_at: GithubRegistrationGrant::MAX_AGE.ago + 1.hour)
@@ -253,6 +268,7 @@ RSpec.describe "API v1 — POST /api/v1/repositories", type: :request do
     # The distinguishability half of criterion 6, asserted as a property of the strings rather than
     # by re-reading either of them: a refusal a client cannot tell apart from "you are not an
     # administrator" sends a person to GitHub when the fix is in SpecGuard.
+    # @intent: { entity: "GithubRegistrationGrant", action: "keep refusals distinguishable", behavior: "the not-granted message differs from every other refusal sentence so a client is not sent to GitHub for a SpecGuard fix", layer: "request" }
     it "says something no other refusal says" do
       expect(InstallationRepositories::MESSAGES.fetch(:not_granted))
         .not_to eq(InstallationRepositories::MESSAGES.fetch(:not_administered))
@@ -270,6 +286,7 @@ RSpec.describe "API v1 — POST /api/v1/repositories", type: :request do
   describe "the grant belongs to the person, not to the key" do
     before { create_registration_grant(user: person, registrable: %w[acme/billing-service acme/checkout]) }
 
+    # @intent: { entity: "GithubRegistrationGrant", action: "redeem across keys", behavior: "a second key of the same person redeems the same grant, because the grant belongs to the person not the key", layer: "request" }
     it "redeems the same grant from a second key the same person holds" do
       laptop = create_user_api_key(user: person, name: "Laptop")
       agent = create_user_api_key(user: person, name: "Agent")
@@ -281,6 +298,7 @@ RSpec.describe "API v1 — POST /api/v1/repositories", type: :request do
       expect(response).to have_http_status(:created)
     end
 
+    # @intent: { entity: "GithubRegistrationGrant", action: "survive a key revocation", behavior: "destroying one key does not change what a surviving key of the same person can register", layer: "request" }
     it "leaves the surviving key registering exactly as before when another is revoked" do
       lost = create_user_api_key(user: person, name: "Lost laptop")
       kept = create_user_api_key(user: person, name: "Agent")
@@ -292,6 +310,7 @@ RSpec.describe "API v1 — POST /api/v1/repositories", type: :request do
     end
 
     # Somebody else's grant is not evidence about this person, and neither is somebody else's key.
+    # @intent: { entity: "GithubRegistrationGrant", action: "refuse another person grant", behavior: "somebody else grant is not evidence about this person, so the POST is refused 400 with nothing written", layer: "request" }
     it "does not let one person redeem another person's grant" do
       stranger = create_user(github_uid: "2002", github_handle: "hubot")
       create_registration_grant(user: stranger, registrable: ["acme/payments"])
@@ -303,6 +322,7 @@ RSpec.describe "API v1 — POST /api/v1/repositories", type: :request do
   end
 
   # SPGD-756 criterion 9 — inherited from `UserApiKey.authenticate`, asserted rather than assumed.
+  # @intent: { entity: "Repository registration", action: "refuse an archived owner", behavior: "archiving the person makes their key unauthenticated, so nothing registers however good the grant", layer: "request" }
   it "registers nothing for an archived owner, however good their grant is" do
     create_registration_grant(user: person, registrable: ["acme/billing-service"])
     token = user_api_key.raw_token
@@ -316,6 +336,7 @@ RSpec.describe "API v1 — POST /api/v1/repositories", type: :request do
   # The credential seam, in the direction this new verb opens. A `sgk_` repository key is a
   # perfectly valid credential and resolves no person, so it must be refused here — and refused
   # BEFORE anything is written.
+  # @intent: { entity: "Repository registration", action: "refuse a repository key", behavior: "an sgk repository credential resolves no person and is refused 401 before anything is written", layer: "request" }
   it "refuses a repository key, and writes nothing" do
     create_registration_grant(user: person, registrable: ["acme/checkout"])
     repository_key = create_repository(user: person).api_keys.create!
@@ -326,6 +347,7 @@ RSpec.describe "API v1 — POST /api/v1/repositories", type: :request do
     expect(response).to have_http_status(:unauthorized)
   end
 
+  # @intent: { entity: "Repository registration", action: "refuse a credential-less POST", behavior: "a request with no Authorization header at all writes nothing and answers 401", layer: "request" }
   it "refuses a request carrying no credential at all" do
     expect { post "/api/v1/repositories", params: { github_full_name: "acme/billing-service" }, as: :json }
       .not_to change(Repository, :count)
@@ -339,6 +361,7 @@ RSpec.describe "API v1 — POST /api/v1/repositories", type: :request do
   #
   # This is the one example here that signs in, and it does so BEFORE the key is used rather than
   # around it — the browser's part is over by the time the API request is made.
+  # @intent: { entity: "Repository registration", action: "redeem a browser-minted grant", behavior: "a person picker visit in the browser leaves a grant an agent key redeems minutes later with no session and no GitHub call", layer: "request" }
   it "lets a browser's look at the picker become an agent's registration" do
     stub_github(repos: [github_repo("acme/billing-service"), github_repo("acme/ledger", admin: false)])
     user = sign_in_via_github

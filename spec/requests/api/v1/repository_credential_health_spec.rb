@@ -39,12 +39,14 @@ RSpec.describe "GET /api/v1/repository — credential_health", type: :request do
   # "No key is stranded" is an ANSWER, and one an agent cannot otherwise tell apart from "SpecGuard
   # does not track that". The block is unconditional and its empty state is a real state.
   describe "a repository with no rotated key" do
+    # @intent: { entity: "credential_health", action: "serve the empty state", behavior: "a repository with no rotated key gets the full block with rotated_and_unused false and an empty key list rather than an omitted block", layer: "request" }
     it "serves the block with a negative verdict rather than omitting it" do
       health = credential_health
 
       expect(health).to eq("rotated_and_unused" => false, "keys" => [])
     end
 
+    # @intent: { entity: "credential_health", action: "clear on first use", behavior: "one use of the replacement after a rotation clears the stranded verdict, with no window to expire and no threshold to cross", layer: "request" }
     it "keeps saying so after a rotation whose replacement has been used" do
       stale = repository.api_keys.create!(name: "CI")
       stale.regenerate!
@@ -70,6 +72,7 @@ RSpec.describe "GET /api/v1/repository — credential_health", type: :request do
       end
     end
 
+    # @intent: { entity: "credential_health", action: "name the stranded key", behavior: "the verdict comes with the stranded key name, so the remedy can name which secret store to update", layer: "request" }
     it "reports the state and names which key, so the remedy is actionable" do
       health = credential_health
 
@@ -79,6 +82,7 @@ RSpec.describe "GET /api/v1/repository — credential_health", type: :request do
       expect(health["keys"].map { |key| key["name"] }).to eq(["CI — main"])
     end
 
+    # @intent: { entity: "credential_health", action: "date the rotation", behavior: "the row serves the rotation date and the stranding last_used_at, the use preserved and ordered before the rotation", layer: "request" }
     it "dates the rotation and serves the stamp it stranded, rather than hiding it" do
       row = credential_health["keys"].first
 
@@ -89,6 +93,7 @@ RSpec.describe "GET /api/v1/repository — credential_health", type: :request do
       expect(row["last_used_at"]).to be < row["rotated_at"]
     end
 
+    # @intent: { entity: "credential_health", action: "null a never-used key", behavior: "a key rotated before it ever authenticated serves a null last_used_at beside its rotation date", layer: "request" }
     it "serves null for a key rotated before it ever authenticated" do
       stranded.destroy!
       never_used = repository.api_keys.create!(name: "Fresh")
@@ -101,6 +106,7 @@ RSpec.describe "GET /api/v1/repository — credential_health", type: :request do
       expect(row["rotated_at"]).to be_present
     end
 
+    # @intent: { entity: "credential_health", action: "withhold token material", behavior: "the named row carries only name, rotated_at and last_used_at, and no digest or hint appears anywhere in the response body", layer: "request" }
     it "discloses no token material for the key it names" do
       row = credential_health["keys"].first
 
@@ -114,6 +120,7 @@ RSpec.describe "GET /api/v1/repository — credential_health", type: :request do
 
   # ── The requesting key ──────────────────────────────────────────────────────────────────────
   describe "the api_key block" do
+    # @intent: { entity: "api_key", action: "serve the rotation date", behavior: "the api_key block serves the requesting key own rotated_at, real after a regenerate and null before one", layer: "request" }
     it "serves the requesting key's own rotation date" do
       api_key.regenerate!
 
@@ -121,10 +128,12 @@ RSpec.describe "GET /api/v1/repository — credential_health", type: :request do
       expect(get_repository.dig("api_key", "rotated_at")).to eq(api_key.reload.rotated_at.iso8601)
     end
 
+    # @intent: { entity: "api_key", action: "null an unrotated key", behavior: "an unrotated requesting key serves a null rotated_at rather than any default date", layer: "request" }
     it "serves null for a key that has never been rotated" do
       expect(get_repository.dig("api_key", "rotated_at")).to be_nil
     end
 
+    # @intent: { entity: "api_key", action: "point at the verdict block", behavior: "the api_key block names credential_health via rotation_reported_by as the holder of the repository-grain verdict", layer: "request" }
     it "points at the block that answers what it structurally cannot" do
       body = get_repository
 
@@ -135,6 +144,7 @@ RSpec.describe "GET /api/v1/repository — credential_health", type: :request do
       expect(body).to have_key("credential_health")
     end
 
+    # @intent: { entity: "api_key", action: "omit the impossible verdict", behavior: "the requester can never be rotated-and-unused because authenticating stamps it, so no such field is served on the api_key block", layer: "request" }
     it "serves no per-key rotated-and-unused verdict, which could only ever be false here" do
       api_key.regenerate!
 
@@ -150,6 +160,7 @@ RSpec.describe "GET /api/v1/repository — credential_health", type: :request do
     end
   end
 
+  # @intent: { entity: "credential_health", action: "scope to the caller", behavior: "another tenant stranded key neither flips the verdict nor leaks its name into this repository response", layer: "request" }
   it "scopes the verdict to the caller's own repository" do
     other = create_repository(user: create_user(github_uid: "3003", github_handle: "hubot"),
                               github_full_name: "acme/ledger")

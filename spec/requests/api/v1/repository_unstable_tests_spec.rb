@@ -99,6 +99,7 @@ RSpec.describe "GET /api/v1/repository — unstable_tests", type: :request do
     # Criterion 1, at the row grain. Every counter the panel words as a sentence, served as the
     # integers those sentences are built from — and the outcome words echoed rather than folded
     # into a verdict.
+    # @intent: { entity: "repository unstable_tests block", action: "serve test figures", behavior: "each test is named with every figure the panel words, expressed as counts", layer: "request" }
     it "names the test and serves every figure the panel words, as counts" do
       _window, block = blocks(query: { branch: "main" })
 
@@ -126,6 +127,7 @@ RSpec.describe "GET /api/v1/repository — unstable_tests", type: :request do
 
     # The test that never varied is not on the list — the block names what CHANGED, and a stable
     # test served beside a flaky one is the signal buried in the population it was drawn from.
+    # @intent: { entity: "repository unstable_tests block", action: "require variance", behavior: "a test reporting the same outcome in every run is left out of the listing", layer: "request" }
     it "leaves out the test that reported the same outcome in every run" do
       _window, block = blocks(query: { branch: "main" })
 
@@ -136,6 +138,7 @@ RSpec.describe "GET /api/v1/repository — unstable_tests", type: :request do
     # off — so both blocks are pinned EXACTLY rather than key by key, on the rule the sibling
     # file's top-level contract states: a key added without a line in this list fails here, and a
     # listed key quietly dropped fails here too.
+    # @intent: { entity: "repository unstable_tests block", action: "pin the response shape", behavior: "exactly the contracted keys appear, on both the window and the rows block", layer: "request" }
     it "serves exactly the keys this contract pins, on the window and on the rows block" do
       window, block = blocks(query: { branch: "main" })
 
@@ -160,6 +163,7 @@ RSpec.describe "GET /api/v1/repository — unstable_tests", type: :request do
     # above are the SAME VALUES whether or not the drill-in was asked for. A drill-in that reached
     # back into the block it sits in — re-querying the window, re-sorting the rows, spending the
     # candidate cap — would go red here rather than in a client.
+    # @intent: { entity: "repository unstable_tests block", action: "keep keys unconditional", behavior: "the key set is identical whether or not the drill-in was requested", layer: "request" }
     it "serves those keys identically whether or not the drill-in was asked for" do
       _window, asked = blocks(query: { branch: "main", unstable_test: FLIPPING_TEST })
       _window, unasked = blocks(query: { branch: "main" })
@@ -169,6 +173,7 @@ RSpec.describe "GET /api/v1/repository — unstable_tests", type: :request do
       expect(asked["unstable_test_runs"]).not_to be_nil
     end
 
+    # @intent: { entity: "repository unstable_tests block", action: "state the window", behavior: "the window is described with counts and booleans only, with no prose sentence", layer: "request" }
     it "states the window it was drawn over, as counts and booleans and no prose" do
       window, block = blocks(query: { branch: "main" })
 
@@ -202,6 +207,7 @@ RSpec.describe "GET /api/v1/repository — unstable_tests", type: :request do
     # The order is the presenter's own and is NOT re-sorted here. Asserted on a fixture where the
     # ranking and the alphabet disagree, because any single-row fixture — and any fixture whose
     # rows happen to be alphabetical — passes under a serializer that sorts by name.
+    # @intent: { entity: "repository unstable_tests block", action: "preserve presenter order", behavior: "rows arrive in the presenter own most-failing-first order without being re-sorted", layer: "request" }
     it "serves the presenter's order, most-failing first, without re-sorting it" do
       3.times do |index|
         ingest(repository,
@@ -241,6 +247,7 @@ RSpec.describe "GET /api/v1/repository — unstable_tests", type: :request do
       end
     end
 
+    # @intent: { entity: "repository unstable_tests block", action: "match the panel", behavior: "the same tests are named with the same fractions and the same words the panel shows", layer: "request" }
     it "names the same tests, with the same fractions and the same words" do
       repository_with(%w[passed failed passed passed failed])
       # A second flaky description, so the comparison below is over a LIST rather than over a
@@ -294,6 +301,7 @@ RSpec.describe "GET /api/v1/repository — unstable_tests", type: :request do
       repository
     end
 
+    # @intent: { entity: "repository unstable_tests block", action: "explain empty windows", behavior: "an incomparable window yields null rows and a window that says why, rather than an empty list", layer: "request" }
     it "serves null rows and a window that says why, rather than an empty list" do
       interleaved_repository
 
@@ -315,6 +323,7 @@ RSpec.describe "GET /api/v1/repository — unstable_tests", type: :request do
     # The refusal, made non-vacuous. The same window under `?branch=` DOES reach the comparison and
     # DOES report the branch honestly, so the null above is a decision about scope rather than a
     # fixture with nothing in it.
+    # @intent: { entity: "repository unstable_tests block", action: "group per branch", behavior: "naming a branch compares the same window once, finding no flip across branches", layer: "request" }
     it "compares the same window once a branch is named, and finds no flip on either branch" do
       interleaved_repository
 
@@ -336,6 +345,7 @@ RSpec.describe "GET /api/v1/repository — unstable_tests", type: :request do
 
     # And the row the cross-branch grouping WOULD have manufactured is nameable, so the two
     # examples above are not both passing for want of any flip anywhere in the data.
+    # @intent: { entity: "repository unstable_tests block", action: "prove grouping matters", behavior: "an interleaved window would have shown a flip had it not been grouped by branch", layer: "request" }
     it "would have produced a flip had the interleaved window been grouped" do
       interleaved_repository
       runs = repository.recent_test_runs(limit: 30).to_a
@@ -350,6 +360,7 @@ RSpec.describe "GET /api/v1/repository — unstable_tests", type: :request do
   # Criterion 4 — the Vacuous Green gate. `outcome` is nullable and nothing validates it, so a
   # window whose client sends none produces exactly the empty list a perfectly stable window does.
   describe "a branch-scoped window that cannot be compared" do
+    # @intent: { entity: "repository unstable_tests block", action: "flag over a silent window", behavior: "the flag is served beside an empty list when the window reported nothing at all", layer: "request" }
     it "serves the flag beside the empty list, over a window that reported nothing at all" do
       repository_with([nil, nil, nil])
 
@@ -379,6 +390,7 @@ RSpec.describe "GET /api/v1/repository — unstable_tests", type: :request do
     # THE example for `unnamed_count`, and the only one in this file that can fail if the gate
     # fabricates the zero: the window holds unnamed rows and reported no outcome over any of them,
     # so `0` and `null` are two different claims about it rather than the same number twice.
+    # @intent: { entity: "repository unstable_tests block", action: "not count unnamed exclusions", behavior: "the exclusion counter refuses to count rows it never counted over a window holding unnamed rows", layer: "request" }
     it "declines to count the exclusion it never counted, over a window that holds unnamed rows" do
       3.times do |index|
         ingest(repository,
@@ -408,6 +420,8 @@ RSpec.describe "GET /api/v1/repository — unstable_tests", type: :request do
     # The gate is false in two states, not one, and the second is not silence: the window reported,
     # and holds exactly one run to have reported it. One run's outcome cannot have changed from
     # anything, which is arithmetic rather than a nullability detail.
+    # @intent: { entity: "repository unstable_tests block", action: "serve again on one run", behavior: "the flag is still served where exactly one run reported", layer: "request" }
+    # @intent: { entity: "repository unstable_tests block", action: "flip on two runs", behavior: "the flag turns true with the same empty list once two runs have reported", layer: "request" }
     it "serves it again where exactly one run reported" do
       repository_with([nil, "failed", nil])
 
@@ -421,6 +435,7 @@ RSpec.describe "GET /api/v1/repository — unstable_tests", type: :request do
     # The falsifier for both examples above: a window that reported and holds two such runs serves
     # `comparable: true` with the same empty list. If the flag did not move, the two examples above
     # would be asserting a constant.
+    # @intent: { entity: "repository unstable_tests block", action: "flip on two runs", behavior: "the flag turns true with the same empty list once two runs have reported", layer: "request" }
     it "flips the flag to true, with the same empty list, once two runs report" do
       repository_with(%w[passed passed])
 
@@ -433,6 +448,7 @@ RSpec.describe "GET /api/v1/repository — unstable_tests", type: :request do
     # A window with no per-example rows at all is a third state again — a repository whose CI has
     # never sent per-example detail has no cross-run test history to discuss, and `recorded` is
     # what says so rather than a `comparable` that would read as "nobody told us".
+    # @intent: { entity: "repository unstable_tests block", action: "record false on empties", behavior: "a window that recorded no examples serves a recorded false for the flag", layer: "request" }
     it "serves recorded false for a window that recorded no examples" do
       2.times do |index|
         create_test_run(repository: repository, commit_sha: "bare#{format("%08d", index)}",
@@ -458,6 +474,7 @@ RSpec.describe "GET /api/v1/repository — unstable_tests", type: :request do
     # branch you named, which has no runs" — and `serialized_history` makes exactly this argument
     # for `history: []` two blocks up: a client that asked for `main` and could not tell those apart
     # would have nothing in the body to detect the difference with.
+    # @intent: { entity: "repository unstable_tests block", action: "group over an empty window", behavior: "a branch with no runs groups over an empty window and issues no read doing it", layer: "request" }
     it "groups over an empty window for a branch with no runs, and reads nothing to do it" do
       repository_with(%w[passed failed passed])
       get_repository(key: api_key)
@@ -494,6 +511,8 @@ RSpec.describe "GET /api/v1/repository — unstable_tests", type: :request do
       end
     end
 
+    # @intent: { entity: "repository unstable_tests block", action: "separate quarantined tests", behavior: "a quarantined test appears as its own list and never among the flaky rows", layer: "request" }
+    # @intent: { entity: "repository unstable_tests block", action: "carry the flag on both lists", behavior: "the flag rides on rows of both lists when the window holds each kind", layer: "request" }
     it "serves it as its own list and never among the flaky rows" do
       _window, block = blocks(query: { branch: "main" })
 
@@ -511,6 +530,7 @@ RSpec.describe "GET /api/v1/repository — unstable_tests", type: :request do
     # `branch` follows. Asserted with a window that populates BOTH lists, which is the only shape
     # where a serializer hard-coding the flag per list would be indistinguishable from one reading
     # the row.
+    # @intent: { entity: "repository unstable_tests block", action: "carry the flag on both lists", behavior: "the flag rides on rows of both lists when the window holds each kind", layer: "request" }
     it "carries the flag on rows of both lists, on a window that holds each" do
       repository_with(%w[passed failed passed])
 
@@ -542,6 +562,8 @@ RSpec.describe "GET /api/v1/repository — unstable_tests", type: :request do
       repository
     end
 
+    # @intent: { entity: "repository unstable_tests block", action: "disclose the cap", behavior: "the response states the cap, both operands of it, and the bound that produced the cap", layer: "request" }
+    # @intent: { entity: "repository unstable_tests block", action: "serve the cap untripped", behavior: "where the window stayed under the limit the cap is served as not tripped", layer: "request" }
     it "discloses the cap, both operands of it, and the bound that produced it" do
       stub_const("SpecObservation::UNSTABLE_CANDIDATE_LIMIT", 5)
       truncated_window(5)
@@ -561,6 +583,7 @@ RSpec.describe "GET /api/v1/repository — unstable_tests", type: :request do
 
     # The falsifier: the same window under a cap it does not reach serves `truncated: false` and a
     # zero remainder. Without it the example above pins a pair of constants.
+    # @intent: { entity: "repository unstable_tests block", action: "serve the cap untripped", behavior: "where the window stayed under the limit the cap is served as not tripped", layer: "request" }
     it "serves the cap as untripped where the window stayed under it" do
       truncated_window(5)
 
@@ -577,6 +600,8 @@ RSpec.describe "GET /api/v1/repository — unstable_tests", type: :request do
   # example — so those rows are dropped from the matching before anything is grouped, and the
   # exclusion is counted. Dropping them silently is the reading this must not produce.
   describe "rows that carried no description" do
+    # @intent: { entity: "repository unstable_tests block", action: "count excluded rows", behavior: "excluded rows are counted and never pooled into a synthetic test of their own", layer: "request" }
+    # @intent: { entity: "repository unstable_tests block", action: "serve real zeros", behavior: "where every row carried a description the unnamed counter is a real zero", layer: "request" }
     it "counts the excluded rows and never pools them into a test of their own" do
       3.times do |index|
         ingest(repository,
@@ -598,6 +623,7 @@ RSpec.describe "GET /api/v1/repository — unstable_tests", type: :request do
       expect(block["candidate_count"]).to eq(1)
     end
 
+    # @intent: { entity: "repository unstable_tests block", action: "serve real zeros", behavior: "where every row carried a description the unnamed counter is a real zero", layer: "request" }
     it "serves a real zero where every row carried a description" do
       repository_with(%w[passed failed])
 
@@ -611,6 +637,7 @@ RSpec.describe "GET /api/v1/repository — unstable_tests", type: :request do
   # history, so a group spanning two files is a DISCLOSURE rather than an error — and a reader
   # looking for a flaky test in one file needs to know the history spans two.
   describe "a test recorded under more than one spec file" do
+    # @intent: { entity: "repository unstable_tests block", action: "list the spanned files", behavior: "every file the history spans is served, sorted, beside the flag", layer: "request" }
     it "serves every file the history spans, sorted, beside the flag" do
       [["spec/models/invoice_spec.rb", "passed"],
        ["spec/models/invoice_spec.rb", "failed"],
@@ -645,6 +672,7 @@ RSpec.describe "GET /api/v1/repository — unstable_tests", type: :request do
     # run that recorded the description while saying nothing about how it ended counted as silence
     # rather than as a pass. `#changed?` compares against `reported_outcome_count` and never against
     # `recorded_count` for exactly that reason.
+    # @intent: { entity: "repository unstable_tests block", action: "count silence as silence", behavior: "sorted lists are served and empty spans are reported as such, not as absent", layer: "request" }
     it "serves sorted lists, and counts the silence as silence" do
       repository_with(["failed", "passed", nil, nil])
 
@@ -661,6 +689,7 @@ RSpec.describe "GET /api/v1/repository — unstable_tests", type: :request do
 
     # The words are echoed, never reworded and never folded into a verdict — nothing platform-side
     # validates that string, so quoting what arrived is the only reading that cannot be wrong.
+    # @intent: { entity: "repository unstable_tests block", action: "echo unknown outcomes", behavior: "an outcome word the reader does not recognise is echoed rather than silently read as a pass", layer: "request" }
     it "echoes an outcome word it does not recognise rather than reading it as a pass" do
       repository_with(%w[failed flaked])
 
@@ -684,6 +713,7 @@ RSpec.describe "GET /api/v1/repository — unstable_tests", type: :request do
     # ZERO, and it is the whole branch-scope decision expressed as a cost: unfiltered, the object
     # is not constructed, so there is nothing to read. A gate placed AFTER the reads would serve
     # the same `null` and cost four.
+    # @intent: { entity: "repository unstable_tests block", action: "skip reads unfiltered", behavior: "spec_observations is not read at all on an unfiltered window", layer: "request" }
     it "reads spec_observations not at all on an unfiltered window" do
       repository_with(%w[passed failed passed])
       get_repository(key: api_key)
@@ -709,6 +739,7 @@ RSpec.describe "GET /api/v1/repository — unstable_tests", type: :request do
     # ONE, and specifically the FIRST of the five. `UnstableTests.for` asks the gating question on
     # its own and returns before the other four, so an incomparable window costs one probe — which
     # a bare count of one cannot distinguish from any other single read.
+    # @intent: { entity: "repository unstable_tests block", action: "probe once when incomparable", behavior: "exactly one read, only the gating probe, happens on an incomparable window", layer: "request" }
     it "reads it exactly once, and only the gating probe, on an incomparable window" do
       repository_with([nil, nil, nil])
       get_repository(key: api_key)
@@ -730,6 +761,7 @@ RSpec.describe "GET /api/v1/repository — unstable_tests", type: :request do
     # separate example for that: a per-read count of one IS the statement that it was built once,
     # and an example that only re-asserted it over the incomparable window would be pinning the
     # gating probe a second time rather than the memo.
+    # @intent: { entity: "repository unstable_tests block", action: "read once per consumer", behavior: "exactly five reads happen on a branch-scoped comparable window, one per consumer", layer: "request" }
     it "reads it exactly five times on a branch-scoped comparable window, one per read" do
       repository_with(%w[passed failed passed])
       get_repository(key: api_key)
@@ -759,6 +791,7 @@ RSpec.describe "GET /api/v1/repository — unstable_tests", type: :request do
     # `spec_identity_id` is NULL, the object stops in `:unresolved`, and one read is its whole cost.
     # A window whose identities resolved costs three — which is what these fixtures now do, since
     # SPGD-758's identity-grained grouping requires them to resolve inline.
+    # @intent: { entity: "repository unstable_tests block", action: "charge exactly five", behavior: "exactly those five queries land in the table total and no sixth appears", layer: "request" }
     it "adds exactly those five to the table's total, and no sixth" do
       repository_with(%w[passed failed passed])
       get_repository(key: api_key)
@@ -794,6 +827,7 @@ RSpec.describe "GET /api/v1/repository — unstable_tests", type: :request do
     # on the ROW-VALUE predicate `Repository#previous_test_run_on_branch` emits and
     # `recent_test_runs` does not — so this still pins the window at one statement rather than
     # absorbing a regression into a widened total.
+    # @intent: { entity: "repository unstable_tests block", action: "avoid test_runs queries", behavior: "no query against test_runs is issued whatever the window holds", layer: "request" }
     it "adds no query against test_runs, whatever the window holds" do
       repository_with(Array.new(12) { |index| index == 3 ? "failed" : "passed" })
       get_repository(key: api_key)
@@ -822,6 +856,7 @@ RSpec.describe "GET /api/v1/repository — unstable_tests", type: :request do
     # CONSTANT IN THE LENGTH OF THE WINDOW. The gating probe is one lateral over the run ids and
     # the composition is one grouped aggregate over the window — never one read per run, which is
     # the N+1 a three-run fixture cannot distinguish from none.
+    # @intent: { entity: "repository unstable_tests block", action: "stay flat to the bound", behavior: "the read cost is the same at 3 runs and at the full 30-run bound", layer: "request" }
     it "costs the same at 3 runs and at the full 30-run bound" do
       repository_with(%w[passed failed passed])
       get_repository(key: api_key)
@@ -845,6 +880,7 @@ RSpec.describe "GET /api/v1/repository — unstable_tests", type: :request do
 
     # CONSTANT IN THE SIZE OF THE SUITE. Two orders of magnitude of examples per run cost the same
     # five reads — the property that makes the block affordable at the roadmap's design point.
+    # @intent: { entity: "repository unstable_tests block", action: "stay flat as suite grows", behavior: "the same five reads are charged however much the suite grows", layer: "request" }
     it "costs the same five reads as the suite grows" do
       repository_with(%w[passed failed passed])
       get_repository(key: api_key)

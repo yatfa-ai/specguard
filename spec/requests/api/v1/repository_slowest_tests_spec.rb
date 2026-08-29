@@ -130,6 +130,7 @@ RSpec.describe "GET /api/v1/repository — slowest_tests", type: :request do
   # carry different shas, different timestamps and — through the partition below — different
   # membership.
   describe "⭐ which run the ranking was anchored on" do
+    # @intent: { entity: "SlowestTests", action: "anchor on the newest run", behavior: "the window names its newest run as the anchor and never the oldest", layer: "request" }
     it "names the NEWEST run of the window, never the oldest" do
       window_repository
       newest = repository.test_runs.order(created_at: :desc, id: :desc).first
@@ -153,6 +154,7 @@ RSpec.describe "GET /api/v1/repository — slowest_tests", type: :request do
     # WHICH TESTS ARE SERVED. A test present in the window's oldest runs and gone by the newest is
     # not on this list; anchored on the oldest it would be, and the test that only exists in the
     # newest runs would not.
+    # @intent: { entity: "SlowestTests", action: "rank current tests only", behavior: "tests held only by the oldest run are excluded while the newest run's tests rank", layer: "request" }
     it "ranks the tests the newest run holds, and not the ones only the oldest run held" do
       # Two runs of a suite whose slow test was DELETED, then two more of the suite that replaced
       # it — so the two candidate sets are disjoint and the anchor's choice is visible in the rows.
@@ -185,6 +187,7 @@ RSpec.describe "GET /api/v1/repository — slowest_tests", type: :request do
   describe "a branch-scoped window whose runs reported per-example timings" do
     before { window_repository }
 
+    # @intent: { entity: "SlowestTests", action: "pin the keys", behavior: "the window and rows blocks serve exactly the key sets this contract enumerates", layer: "request" }
     it "serves exactly the keys this contract pins, on the window and on the rows block" do
       window, block = blocks(query: { branch: "main" })
 
@@ -203,6 +206,7 @@ RSpec.describe "GET /api/v1/repository — slowest_tests", type: :request do
       )
     end
 
+    # @intent: { entity: "SlowestTests", action: "state the window", behavior: "the response states the window it drew over and promises a reproducible row order", layer: "request" }
     it "states the window it was drawn over, and claims a reproducible order" do
       window, _block = blocks(query: { branch: "main" })
 
@@ -221,6 +225,7 @@ RSpec.describe "GET /api/v1/repository — slowest_tests", type: :request do
     # The order is the presenter's own and is NOT re-sorted here — and the claim `tie_break_served`
     # makes is checked rather than taken: the order a client computes from the fields it holds is
     # the order it received.
+    # @intent: { entity: "SlowestTests", action: "serve presenter order", behavior: "rows arrive slowest first with the untimed row last, matching the presenter's order", layer: "request" }
     it "serves the presenter's order, slowest first, with the untimed row last" do
       _window, block = blocks(query: { branch: "main" })
 
@@ -235,6 +240,7 @@ RSpec.describe "GET /api/v1/repository — slowest_tests", type: :request do
     # ⭐ The window TOTAL beside the single worst run, and the pair is the point: 12 seconds is one
     # twelve-second test or four runs of a three-second one, and a ranking ordered on the sum alone
     # cannot tell a client which it is looking at.
+    # @intent: { entity: "SlowestTests", action: "total beside longest", behavior: "each test carries its window total next to its single longest run, as raw numbers", layer: "request" }
     it "serves each test's window total beside its single longest run, as numbers and not sentences" do
       _window, block = blocks(query: { branch: "main" })
 
@@ -256,6 +262,7 @@ RSpec.describe "GET /api/v1/repository — slowest_tests", type: :request do
     # A group nothing timed serves `null` and never `0.0` — a zero there is a measurement invented
     # out of silence, and it would name the unmeasured test the cheapest in the suite rather than
     # the unknown one.
+    # @intent: { entity: "SlowestTests", action: "null untimed durations", behavior: "a test nothing timed gets a null duration rather than a coerced zero", layer: "request" }
     it "serves a null duration for a test nothing timed, never a zero" do
       _window, block = blocks(query: { branch: "main" })
 
@@ -267,6 +274,7 @@ RSpec.describe "GET /api/v1/repository — slowest_tests", type: :request do
       expect(block["rows"].last).to eq(untimed)
     end
 
+    # @intent: { entity: "SlowestTests", action: "serve coverage figures", behavior: "the coverage numbers the panel words arrive as counts and booleans instead of sentences", layer: "request" }
     it "serves the coverage figures the panel words, as counts and booleans" do
       _window, block = blocks(query: { branch: "main" })
 
@@ -298,6 +306,7 @@ RSpec.describe "GET /api/v1/repository — slowest_tests", type: :request do
 
     # `limit` is read off `SpecObservation`'s own constant rather than restated in the controller,
     # so the response cannot claim a bound the query did not apply.
+    # @intent: { entity: "SlowestTests", action: "report the applied bound", behavior: "the response discloses the limit the query actually enforced", layer: "request" }
     it "reports the bound the query actually applied" do
       _window, block = blocks(query: { branch: "main" })
 
@@ -312,6 +321,7 @@ RSpec.describe "GET /api/v1/repository — slowest_tests", type: :request do
 
     # Under any positional key this is TWO rows of 2 seconds each, neither at its right place in the
     # list. It is ONE row of 4, and it names both files the history it summed came from.
+    # @intent: { entity: "SlowestTests", action: "fold moved tests", behavior: "a test that changed file stays one flagged row naming both files it was recorded under", layer: "request" }
     it "keeps a moved test in one row, flags it, and names both files it was recorded under" do
       _window, block = blocks(query: { branch: "main" })
 
@@ -328,6 +338,7 @@ RSpec.describe "GET /api/v1/repository — slowest_tests", type: :request do
     # incapable of making, since grouped on `name` a reword is two tests there. The descriptions come
     # back as a SET, so neither is "the current one" and the row serves both rather than promoting
     # one and discarding the rest.
+    # @intent: { entity: "SlowestTests", action: "fold reworded tests", behavior: "a test that changed description stays one flagged row naming both descriptions it wore", layer: "request" }
     it "keeps a reworded test in one row, flags it, and names both descriptions it wore" do
       _window, block = blocks(query: { branch: "main" })
 
@@ -343,6 +354,7 @@ RSpec.describe "GET /api/v1/repository — slowest_tests", type: :request do
 
     # `unstable_tests` groups on `name` over the SAME window in the SAME response, so the row above
     # is nameable proof of what this block adds: two descriptions there, one test here.
+    # @intent: { entity: "SlowestTests", action: "express file-spanning identity", behavior: "the block serves a row identity the name-grained sibling block cannot state", layer: "request" }
     it "serves an identity the name-grained sibling block cannot express" do
       body = get_repository(query: { branch: "main" })
 
@@ -355,6 +367,7 @@ RSpec.describe "GET /api/v1/repository — slowest_tests", type: :request do
     # A test that ran more than once inside a single run — a table-driven loop, or a shared example
     # group — is one identity and several rows, and that is what separates "slow in four runs" from
     # "run twice in each of two".
+    # @intent: { entity: "SlowestTests", action: "flag reruns inside a run", behavior: "a test that ran more than once in a run is flagged with its operands beside the boolean", layer: "request" }
     it "flags a test that ran more than once inside a run, with both operands beside the boolean" do
       repo = create_repository(user: @user, github_full_name: "acme/loop-service")
       2.times do |index|
@@ -395,6 +408,7 @@ RSpec.describe "GET /api/v1/repository — slowest_tests", type: :request do
       repository
     end
 
+    # @intent: { entity: "SlowestTests", action: "null rows when unresolved", behavior: "a window that cannot be ranked serves null rows with a reason rather than an empty list", layer: "request" }
     it "serves null rows and a window that says why, rather than an empty list" do
       interleaved_repository
 
@@ -416,6 +430,7 @@ RSpec.describe "GET /api/v1/repository — slowest_tests", type: :request do
     # The refusal, made non-vacuous. The same window under `?branch=` DOES reach the ranking and DOES
     # report the branch honestly, so the null above is a decision about SCOPE rather than a fixture
     # with nothing in it.
+    # @intent: { entity: "SlowestTests", action: "rank per branch", behavior: "naming a branch ranks that branch's own window and never across branches", layer: "request" }
     it "ranks the same window once a branch is named, per branch and not across them" do
       interleaved_repository
 
@@ -443,6 +458,7 @@ RSpec.describe "GET /api/v1/repository — slowest_tests", type: :request do
     # `Ingest::IdentityResolutionJob` is asynchronous, so this is what EVERY run looks like for the
     # seconds after it lands. Served as an empty list it is "nobody has told us which tests these
     # are" wearing the spelling of "everything is fast".
+    # @intent: { entity: "SlowestTests", action: "distinguish empty from unresolved", behavior: "a ranked window with nothing slow is spelled differently from an unresolved one", layer: "request" }
     it "distinguishes an unresolved window from a ranked one with nothing slow in it" do
       window_repository(resolve: false)
 
@@ -465,6 +481,7 @@ RSpec.describe "GET /api/v1/repository — slowest_tests", type: :request do
     # `candidate_count` and `timed_count` are figures nothing measured: a `0` there is
     # wire-indistinguishable from a window MEASURED to have found none, which is exactly the
     # distinction these keys exist to let a client draw.
+    # @intent: { entity: "SlowestTests", action: "null unreachable figures", behavior: "figures whose producing read never ran are null, never zero", layer: "request" }
     it "serves null — never zero — for the figures the read that would have produced them never reached" do
       window_repository(resolve: false)
 
@@ -480,6 +497,7 @@ RSpec.describe "GET /api/v1/repository — slowest_tests", type: :request do
 
     # A different absence, and one nothing is going to clear on its own: the newest run reported no
     # per-example detail at all, so there is no per-test grain to rank at any identity.
+    # @intent: { entity: "SlowestTests", action: "spell the unrecorded state", behavior: "an anchor that wrote no rows serves the unrecorded state distinguishably", layer: "request" }
     it "serves the unrecorded state, distinguishably, when the anchor wrote no rows" do
       ingest(repository, [], commit_sha: "empty0sha000001", at: 2.days.ago)
 
@@ -496,6 +514,7 @@ RSpec.describe "GET /api/v1/repository — slowest_tests", type: :request do
 
     # The fourth state: a named branch with no runs at all. `SlowestTests` returns `:no_runs` before
     # touching the database, so every figure is `nil` and there is no run to name.
+    # @intent: { entity: "SlowestTests", action: "spell the no-runs state", behavior: "a branch that never ran serves no_runs with a null anchor", layer: "request" }
     it "serves the no-runs state with a null anchor, over a branch that never ran" do
       window_repository
 
@@ -532,6 +551,7 @@ RSpec.describe "GET /api/v1/repository — slowest_tests", type: :request do
     # state a duration ranking can be in, because slowness here is an ORDER and not a threshold. So
     # the honest pin is the one below — that the ranked state is distinguishable from the three
     # empty ones — and NOT an assertion about an empty list that no input can produce.
+    # @intent: { entity: "SlowestTests", action: "rank with rows", behavior: "the ranked state always carries rows and is never the empty list the gating states serve", layer: "request" }
     it "serves the ranked state with rows, never as the empty list the three gating states serve" do
       # A test the anchor did not run — present in the window and excluded by the ⭐ partition, so
       # the ranking is drawn from a genuinely narrowed population rather than from everything.
@@ -557,6 +577,7 @@ RSpec.describe "GET /api/v1/repository — slowest_tests", type: :request do
     # no input produces `:ranked` with an empty list. Written as a property over the states this
     # file already builds, so a future change to `rank` that made the pair reachable fails HERE —
     # beside the comment explaining why the ticket asked for it — rather than in a client.
+    # @intent: { entity: "SlowestTests", action: "never empty when ranked", behavior: "no window this file can build yields a ranked state holding an empty list", layer: "request" }
     it "never serves a ranked state with an empty list, on any window this file can build" do
       unrecorded = create_repository(user: @user, github_full_name: "acme/empty-anchor")
       ingest(unrecorded, [], commit_sha: "blank1sha000001", at: 2.days.ago)
@@ -577,6 +598,7 @@ RSpec.describe "GET /api/v1/repository — slowest_tests", type: :request do
     # The states are FOUR, and the pin is that no two of them serialize alike. Read together rather
     # than one at a time, because the failure this guards is a serializer that collapses two of them
     # into the same body.
+    # @intent: { entity: "SlowestTests", action: "keep states tellable apart", behavior: "the four states are distinguishable in the payload by a client", layer: "request" }
     it "serves four states that a client can tell apart" do
       no_runs = create_repository(user: @user, github_full_name: "acme/no-runs")
       unrecorded = create_repository(user: @user, github_full_name: "acme/unrecorded")
@@ -597,6 +619,7 @@ RSpec.describe "GET /api/v1/repository — slowest_tests", type: :request do
   # ⭐ CRITERION 7 — the cap, disclosed with both operands beside the boolean. A capped list that
   # does not say it stopped is read as the whole story.
   describe "a window whose anchor holds more tests than the ranking examines" do
+    # @intent: { entity: "SlowestTests", action: "disclose the cap", behavior: "the cap is reported with the operand counts a client checks it against", layer: "request" }
     it "discloses the cap, with the operands a client checks it against" do
       2.times do |index|
         specs = (1..14).map do |i|
@@ -626,6 +649,7 @@ RSpec.describe "GET /api/v1/repository — slowest_tests", type: :request do
 
     # And the uncapped window says so — a `truncated: false` that is a measurement rather than a
     # constant.
+    # @intent: { entity: "SlowestTests", action: "report no false truncation", behavior: "a window the cap did not bite reports no truncation", layer: "request" }
     it "reports no truncation on a window the cap did not bite" do
       window_repository
 
@@ -652,6 +676,7 @@ RSpec.describe "GET /api/v1/repository — slowest_tests", type: :request do
   # for a grain that fired rather than a red example. This example is the guard for the half of the
   # partition the unresolved fixtures structurally cannot exercise.
   describe "what the block costs the endpoint on a window it can rank" do
+    # @intent: { entity: "SlowestTests", action: "issue three identity reads", behavior: "a branch ask costs the presence probe then the two grouped reads and no more", layer: "request" }
     it "issues three identity reads — the presence probe, then the two grouped reads" do
       window_repository
 
@@ -676,6 +701,7 @@ RSpec.describe "GET /api/v1/repository — slowest_tests", type: :request do
 
     # The gated half of the same contract, stated here beside the ranked one rather than inferred:
     # unfiltered, `SlowestTests` is never constructed and the grain is EMPTY.
+    # @intent: { entity: "SlowestTests", action: "cost nothing unasked", behavior: "with no branch named the identity reads issue no queries at all", layer: "request" }
     it "issues none at all when no branch was asked for" do
       window_repository
 
@@ -688,6 +714,7 @@ RSpec.describe "GET /api/v1/repository — slowest_tests", type: :request do
   # one test across several runs. Pinned, because a later hand moving it would break every client's
   # path without breaking a single assertion above.
   describe "where the block sits in the body" do
+    # @intent: { entity: "SlowestTests", action: "sit beside unstable_tests", behavior: "the block is served beside unstable_tests at the top level and never nested inside latest_run", layer: "request" }
     it "is served beside unstable_tests and never inside latest_run" do
       window_repository
 

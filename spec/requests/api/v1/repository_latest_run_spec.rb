@@ -110,6 +110,7 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
                       duration_seconds: 42.5)
     end
 
+    # @intent: { entity: "Repository latest-run endpoint", action: "report suite facts", behavior: "the response describes the newest run's suite totals exactly as ingest stored them, with no derived or invented figures", layer: "request" }
     it "reports the latest run's suite facts" do
       body = get_repository
 
@@ -203,6 +204,7 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
     # AC2. Read off the same accessor `repositories#show` assigns to `@latest_test_run` rather than
     # re-stating the fixture's numbers: two independent hand-written expectations would still both
     # pass if the endpoint started reading a *different* row.
+    # @intent: { entity: "Repository latest-run endpoint", action: "mirror the show serializer", behavior: "the latest_run block is byte-identical in rows and figures to what repositories#show already renders, so the two surfaces cannot drift", layer: "request" }
     it "reports the same row, and the same figures, that repositories#show renders" do
       shown = repository.latest_test_run
       block = get_repository["latest_run"]
@@ -223,6 +225,7 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
       expect(block["ingested_at"]).to eq(shown.created_at.iso8601)
     end
 
+    # @intent: { entity: "Repository latest-run endpoint", action: "preserve sibling blocks", behavior: "adding latest_run to the payload leaves the existing repository and api_key blocks untouched in shape and content", layer: "request" }
     it "leaves the existing repository and api_key blocks in place" do
       body = get_repository
 
@@ -235,6 +238,7 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
     # responses. So the top level is pinned EXACTLY rather than key by key: a key added without a
     # line in that list fails here, and a listed key quietly dropped fails here too.
     # `contain_exactly` is what makes it bidirectional; `have_key` per block would catch neither.
+    # @intent: { entity: "Repository latest-run endpoint", action: "pin top-level keys", behavior: "the endpoint serves exactly the pinned set of top-level keys, so any new key is a deliberate contract change rather than drift", layer: "request" }
     it "serves exactly the top-level keys this contract pins" do
       expect(get_repository.keys)
         .to contain_exactly("repository", "api_key", "delivery_health", "credential_health",
@@ -251,6 +255,7 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
                             "near_duplicates")
     end
 
+    # @intent: { entity: "Repository latest-run endpoint", action: "scope to the key's repository", behavior: "an api_key only ever sees the latest run of its own repository, never a run from another repository the key has no claim on", layer: "request" }
     it "scopes latest_run to the key's own repository" do
       other = create_repository(user: create_user(github_uid: "2002", github_handle: "hubot"),
                                 github_full_name: "acme/ledger")
@@ -276,6 +281,7 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
       [older, newer]
     end
 
+    # @intent: { entity: "Repository latest-run endpoint", action: "break created_at ties", behavior: "when two runs share a timestamp the endpoint picks the same winner as Repository#latest_test_run, so the surfaces agree", layer: "request" }
     it "breaks the created_at tie the same way Repository#latest_test_run does" do
       _older, newer = two_runs_stamped_together
 
@@ -288,6 +294,7 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
     # stamped fixture and disagrees only here. Asserted on the RESPONSE's own two blocks — not each
     # against the model — because a re-sort in the serializer would move both of the model's
     # answers not at all and both of the response's independently.
+    # @intent: { entity: "Repository latest-run endpoint", action: "agree with history", behavior: "the run named in latest_run is the same run that history[0] names, so a client reading either slot sees one truth", layer: "request" }
     it "names the same run in history[0] as in latest_run" do
       older, newer = two_runs_stamped_together
 
@@ -301,6 +308,7 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
   # AC3. `null`, not a zeroed block: a repository whose CI has never reported must not be
   # indistinguishable from one that reported an empty suite.
   describe "a repository whose CI has never reported" do
+    # @intent: { entity: "Repository latest-run endpoint", action: "report absence as null", behavior: "a repository with no runs gets latest_run null rather than a block of zeros that a client might mistake for an empty suite", layer: "request" }
     it "reports latest_run as null rather than a block of zeros" do
       body = get_repository
 
@@ -317,10 +325,12 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
                       annotated_specs_count: 1, branch: nil, duration_seconds: nil)
     end
 
+    # @intent: { entity: "Repository latest-run endpoint", action: "keep branch null", behavior: "a run that reported no branch serializes branch as null instead of the serializer inventing a default branch name", layer: "request" }
     it "keeps branch null instead of substituting a name" do
       expect(get_repository["latest_run"]).to include("branch" => nil)
     end
 
+    # @intent: { entity: "Repository latest-run endpoint", action: "keep duration null", behavior: "a run with no duration serializes duration_seconds as null rather than zero, which would assert the suite took no time", layer: "request" }
     it "keeps duration_seconds null instead of asserting the run took no time" do
       expect(get_repository["latest_run"]).to include("duration_seconds" => nil)
     end
@@ -332,10 +342,12 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
   describe "a run that reported zero tests" do
     before { create_test_run(repository: repository, commit_sha: "emptysuite", total_specs_count: 0) }
 
+    # @intent: { entity: "Repository latest-run endpoint", action: "keep ratio null", behavior: "when the denominator is missing the annotated ratio stays null instead of a confident 0.0 a dashboard would render", layer: "request" }
     it "reports no ratio rather than a confident 0.0" do
       expect(get_repository["latest_run"]).to include("annotated_ratio" => nil)
     end
 
+    # @intent: { entity: "Repository latest-run endpoint", action: "report empty-suite counts", behavior: "a run that recorded no examples still serves its count fields, so a client can tell an empty suite from a missing block", layer: "request" }
     it "still reports the counts, so a client can see the suite was empty" do
       expect(get_repository["latest_run"]).to include("total_specs" => 0, "annotated_specs" => 0)
     end
@@ -345,6 +357,7 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
     # suite". `false` — not a missing key, not `null` — is what says so, on the same rule
     # `timed_shard_count` follows on a history row: a guard a client must first test for the
     # presence of is not a guard.
+    # @intent: { entity: "Repository latest-run endpoint", action: "flag unmeasured runs", behavior: "a run reporting zero tests is marked as not a measurement of the suite rather than as a healthy green result", layer: "request" }
     it "flags a run that reported no tests as not a measurement of the suite" do
       expect(get_repository["latest_run"]).to include("suite_size_measured" => false)
     end
@@ -360,6 +373,7 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
     # `latest_run` is caught by the example above, and one that stops reading the same row is caught
     # only here. `commit_sha` is asserted equal first so the comparison cannot pass by comparing two
     # blocks that describe DIFFERENT rows which happen to agree.
+    # @intent: { entity: "Repository latest-run endpoint", action: "agree on the shared row", behavior: "the row serialized inside latest_run matches the same run's history entry, so double serialization cannot diverge", layer: "request" }
     it "agrees with history[0] about the same row it serializes twice" do
       body = get_repository
 
@@ -377,6 +391,7 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
   # this file already carries `true`, but it carries it among eight other keys and fails under any
   # of them; this is the one example whose name says which value drifted.
   describe "a run that measured a suite" do
+    # @intent: { entity: "Repository latest-run endpoint", action: "state measurement", behavior: "suite_size_measured is true exactly when the run provides a usable suite size, letting clients trust the figure", layer: "request" }
     it "reports latest_run.suite_size_measured as true" do
       create_test_run(repository: repository, commit_sha: "measured0000", total_specs_count: 40,
                       annotated_specs_count: 10)
@@ -394,6 +409,7 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
   # mid-run the ingest response and a later GET legitimately describe different totals — asserting
   # they match across a sharded fixture would encode an invariant that does not hold.
   describe "agreement with the /ingest response for the same run" do
+    # @intent: { entity: "Repository latest-run endpoint", action: "echo the ingest ratio", behavior: "the annotated ratio matches what /ingest answered for the same run, in the same 0-1 unit, not a rescaled copy", layer: "request" }
     it "answers the same annotated_ratio /ingest did, in the same 0–1 unit" do
       post "/api/v1/ingest",
            params: ingest_payload(
@@ -420,6 +436,7 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
 
     # Guards the direction the agreement above cannot catch on its own: both sides could drift to
     # the percentage together and still agree with each other.
+    # @intent: { entity: "Repository latest-run endpoint", action: "serve a fraction", behavior: "the ratio is serialized as a fraction between 0 and 1, not as the percentage the dashboard renders", layer: "request" }
     it "is the fraction, not the percentage the dashboard renders" do
       create_test_run(repository: repository, commit_sha: "quarter", total_specs_count: 40,
                       annotated_specs_count: 10)
@@ -511,6 +528,7 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
          wall_clock_excess_seconds last_shard_arrived_at settling_period_seconds per_shard]
     end
 
+    # @intent: { entity: "Repository latest-run endpoint", action: "pin sharded keys", behavior: "a sharded run serves exactly the pinned latest_run key set, so decomposition adds keys only by contract", layer: "request" }
     it "serves exactly the latest_run keys this contract pins, on a sharded run" do
       sharded_run([61.0, 58.5, 74.25, 60.0], commit_sha: "feedfacecafe0198", settled: true)
       # The composition neither existing `latest_run` pin sees — both are written against the
@@ -530,6 +548,7 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
                             "ingested_at")
     end
 
+    # @intent: { entity: "Repository latest-run endpoint", action: "pin shard keys", behavior: "once shards have arrived the shards block serves exactly the pinned key set and nothing improvised", layer: "request" }
     it "serves exactly the shards keys this contract pins once the decomposition is open" do
       sharded_run([61.0, 58.5, 74.25, 60.0], commit_sha: "feedfacecafe0199", settled: true)
       # `shards` is `null` on an unsharded run, so a key-set assertion that never checked the
@@ -542,6 +561,7 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
         .to contain_exactly(*contract_shard_keys)
     end
 
+    # @intent: { entity: "Repository latest-run endpoint", action: "serve withheld shards", behavior: "while the decomposition is withheld the shards keys are still served, holding the shape clients were promised", layer: "request" }
     it "serves those same keys while the decomposition is withheld" do
       sharded_run([61.0, 58.5, 74.25, 60.0], commit_sha: "feedfacecafe0200")
       shown = repository.latest_test_run
@@ -562,6 +582,7 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
 
     # The defect, stated as an expectation. 74.25s of waiting against 253.75s of machine time is a
     # 3.4× gap on this fixture, and until now the endpoint served only the smaller number.
+    # @intent: { entity: "Repository latest-run endpoint", action: "serve machine time", behavior: "machine time appears beside wall-clock duration and each figure states the shard set it was computed over", layer: "request" }
     it "serves the machine time beside the wall clock, and states what each was computed over" do
       run = sharded_run([61.0, 58.5, 74.25, 60.0], commit_sha: "feedfacecafe0179")
 
@@ -624,6 +645,7 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
     # Asserted as a DIVISION a client would actually perform, not as the shape of the block: the
     # point is that the two columns beside each other are sufficient, and a `total_specs` served
     # under a shard whose `duration_seconds` belongs to a different row would satisfy the shape.
+    # @intent: { entity: "Repository latest-run endpoint", action: "carry shard operands", behavior: "each shard row carries its own duration beside the test count that duration was measured over", layer: "request" }
     it "carries each shard's duration beside the test count it was measured over" do
       sharded_run([61.0, 58.5, 74.25, 60.0], commit_sha: "feedfacecafe0231")
 
@@ -641,6 +663,7 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
     # word it differently, or not at all. A `seconds_per_spec` key would also have to invent an
     # answer for a shard whose `total_specs` is `0`, which is a real row: the column is
     # `null: false, default: 0`.
+    # @intent: { entity: "Repository latest-run endpoint", action: "serve operands not quotient", behavior: "the two operands of any derived rate are served and the division is left to the client, never precomputed", layer: "request" }
     it "serves the two operands and never the quotient, so the client owns the division" do
       sharded_run([61.0, 58.5, 74.25, 60.0], commit_sha: "feedfacecafe0232")
 
@@ -657,6 +680,7 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
     # endpoint serves the zero rather than omitting the shard or substituting a count from
     # somewhere else, and the client is the one that decides not to divide by it. The panel makes
     # the same call in words (`TestRun#shard_size_label`).
+    # @intent: { entity: "Repository latest-run endpoint", action: "serve zero-count shards", behavior: "a shard reporting zero tests still appears with a zero count instead of being silently dropped from the list", layer: "request" }
     it "serves a zero test count as a zero rather than omitting the shard" do
       run = repository.test_runs.create!(commit_sha: "feedfacecafe0233", ci_run_id: "gha-empty",
                                         total_specs_count: 10_000, duration_seconds: 61.0)
@@ -674,6 +698,7 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
     # recognises. `null` says the client did not name the slice — a positional index would hand
     # back a name nothing in CI answers to, which is the mistake the panel's `shard_label` refuses
     # in the same words.
+    # @intent: { entity: "Repository latest-run endpoint", action: "null unnamed shard ids", behavior: "a shard without a name serializes id as null rather than smuggling in its list position as an identifier", layer: "request" }
     it "serves an unnamed shard's id as null rather than as a position" do
       run = repository.test_runs.create!(commit_sha: "feedfacecafe0234", ci_run_id: "gha-unnamed",
                                         total_specs_count: 10_000, duration_seconds: 61.0)
@@ -690,6 +715,7 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
     # actually a second figure to compare. Read off the accessors the panel renders from rather
     # than the fixture's arithmetic: restating `253.75` here would still pass if the endpoint
     # summed a different set of rows than the panel does.
+    # @intent: { entity: "Repository latest-run endpoint", action: "mirror cost figures", behavior: "the cost figures in latest_run match those repositories#show renders for the very same run", layer: "request" }
     it "reports the same cost figures repositories#show renders for the same run" do
       sharded_run([61.0, 58.5, 74.25, 60.0], commit_sha: "feedfacecafe0180")
 
@@ -708,6 +734,7 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
     # and the SILENT ONE IS THE SLOWEST here on purpose, because a cancelled or timed-out job
     # usually is. Both figures are then computed over three rows: the SUM is a floor, and the MAX
     # is a maximum over a subset that excluded the very shard that would have set it.
+    # @intent: { entity: "Repository latest-run endpoint", action: "state timing coverage", behavior: "when a shard reported no timing the response says which figures cover which shard set instead of guessing", layer: "request" }
     it "reports both figures' coverage when a shard reported no timing" do
       run = sharded_run([61.0, 58.5, nil, 60.0], commit_sha: "feedfacecafe0181")
 
@@ -752,6 +779,7 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
     # COUNTS, not as the prose `TestRun#machine_seconds_coverage` / `#wall_clock_coverage` write
     # for the panel. A client that has to regex "slowest of the 3 that reported" out of a string
     # has not been told anything it can compute with.
+    # @intent: { entity: "Repository latest-run endpoint", action: "serve coverage as counts", behavior: "timing coverage is expressed as counts a client can divide, not as the human sentences the panel shows", layer: "request" }
     it "carries the coverage as counts a client can divide, not as the panel's sentences" do
       run = sharded_run([61.0, 58.5, nil, 60.0], commit_sha: "feedfacecafe0182")
 
@@ -768,6 +796,7 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
     # AC3. `null` is not `0.0`, and this is the composition where the difference bites hardest: a
     # four-shard run where nothing reported still ran, and serializing its cost as a measured zero
     # would be the endpoint asserting the suite was free.
+    # @intent: { entity: "Repository latest-run endpoint", action: "keep machine time null", behavior: "with no shard timing at all machine_seconds stays null rather than degrading to zero", layer: "request" }
     it "keeps machine_seconds null, not zero, when no shard reported a timing" do
       run = sharded_run([nil, nil, nil, nil], commit_sha: "feedfacecafe0183")
 
@@ -824,6 +853,7 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
       # below would pass just as well against a serializer that hard-coded three nulls — the shards
       # are created inline, so the default fixture is un-settled and the honest answer to all three
       # keys really is `null`. This is the example that says the fixture got past the gate.
+      # @intent: { entity: "Shards delivery gate", action: "gate on shard arrival", behavior: "the shards block is served only once all declared shards have stopped arriving at ingest", layer: "request" }
       it "reaches the gate only once its shards have stopped arriving" do
         sharded_run([61.0, 58.5, 74.25, 60.0], commit_sha: "feedfacecafe0190")
         expect(repository.latest_test_run).not_to be_wall_clock_decomposable
@@ -838,6 +868,7 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
       # `longest_shard_label` rather than against `"3"`, because a hard-coded name would still pass
       # if the API sorted its own way and happened to agree on this fixture — the property is that
       # the two orderings are the SAME ordering, not that they coincide once.
+      # @intent: { entity: "Shards delivery gate", action: "name the waited-on shard", behavior: "while waiting the response names which shard the run is held on, ordered slowest first as the panel orders them", layer: "request" }
       it "names which shard the run waited on, slowest first, in the panel's own order" do
         run = sharded_run([61.0, 58.5, 74.25, 60.0], commit_sha: "feedfacecafe0192", settled: true)
         shown = repository.latest_test_run
@@ -857,6 +888,7 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
       # the precedent the "reports the same cost figures repositories#show renders" example above
       # sets, and for the same reason: `63.4375` written out here would still pass if the endpoint
       # divided a different SUM by a different count.
+      # @intent: { entity: "Shards delivery gate", action: "report floor and excess", behavior: "the gate reports the same waiting floor and excess figures repositories#show renders for the run", layer: "request" }
       it "reports the floor and the excess repositories#show renders for the same run" do
         sharded_run([61.0, 58.5, 74.25, 60.0], commit_sha: "feedfacecafe0193", settled: true)
 
@@ -875,6 +907,7 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
       # already follow here, extended to the keys that are likeliest to break it, since the model
       # side of this decomposition exposes `shard_distribution_labels` and `balanced_wall_clock_label`
       # that a serializer could reach for by name.
+      # @intent: { entity: "Shards delivery gate", action: "serve numeric decomposition", behavior: "the wait decomposition is served as plain numbers, never as the panel's human-readable labels", layer: "request" }
       it "serves the decomposition as numbers, not as the panel's labels" do
         run = sharded_run([61.0, 58.5, 74.25, 60.0], commit_sha: "feedfacecafe0194", settled: true)
 
@@ -906,6 +939,7 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
       # `rows` is actively misleading rather than merely early: `duration_seconds: :desc` is NULLS
       # FIRST in Postgres, so the shard that reported NOTHING would head a list whose contract is
       # "slowest first".
+      # @intent: { entity: "Shards delivery gate", action: "withhold on missing timing", behavior: "all three timing keys stay withheld when any shard never reported timing, even after delivery settles", layer: "request" }
       it "withholds all three keys when a shard reported no timing, even once delivery settled" do
         sharded_run([61.0, 58.5, nil, 60.0], commit_sha: "feedfacecafe0195", settled: true)
         shown = repository.latest_test_run
@@ -927,6 +961,7 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
       # would wave this run straight through with a partial SUM over a partial count. That is the
       # state `Repository#latest_test_run` puts every sharded run in for the first minutes of its
       # own delivery, which makes it the common case rather than the edge one.
+      # @intent: { entity: "Shards delivery gate", action: "withhold while arriving", behavior: "the withheld decomposition keys are absent for as long as shards are still arriving", layer: "request" }
       it "withholds all three keys while the shards are still arriving" do
         sharded_run([61.0, 58.5, 74.25, 60.0], commit_sha: "feedfacecafe0196")
         shown = repository.latest_test_run
@@ -952,6 +987,7 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
       # and `timed_count == count` are both in this same body, so a client reading `rows: null`
       # beside them already concludes by elimination that delivery is settling. Only the WHEN was
       # unreachable.
+      # @intent: { entity: "Shards delivery gate", action: "preserve computation inputs", behavior: "while withheld, the response still carries enough operands for a client to compute the values once they return", layer: "request" }
       it "carries enough to compute when the withheld decomposition returns, while it is withheld" do
         run = sharded_run([61.0, 58.5, 74.25, 60.0], commit_sha: "feedfacecafe0233")
         expect(repository.latest_test_run).to be_wall_clock_decomposition_pending
@@ -987,6 +1023,7 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
       # exactly as long as nobody changes the constant, which is the drift this criterion is about.
       # Under a stubbed period the literal implementation goes red and the constant-reading one
       # tracks it.
+      # @intent: { entity: "Shards delivery gate", action: "serve the settling constant", behavior: "the settling period is read from the configured constant, so changing the constant changes the served body", layer: "request" }
       it "serves the settling period from the constant, so a changed constant changes the body" do
         sharded_run([61.0, 58.5, 74.25, 60.0], commit_sha: "feedfacecafe0234")
 
@@ -1002,6 +1039,7 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
       # present-but-null-once-settled key would satisfy every key-set assertion in this file while
       # answering nothing. A settled run saying WHEN it settled is a fact a reader wants after the
       # decomposition opens and not only before.
+      # @intent: { entity: "Shards delivery gate", action: "keep the arrival moment", behavior: "the arrival moment stays served after the decomposition opens, so history of the wait is not lost", layer: "request" }
       it "keeps serving the arrival moment once the decomposition has opened" do
         run = sharded_run([61.0, 58.5, 74.25, 60.0], commit_sha: "feedfacecafe0235", settled: true)
         expect(repository.latest_test_run).to be_wall_clock_decomposable
@@ -1020,6 +1058,7 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
       # its slices apart. Serving `null` rather than a position number is the whole point: "shard 2"
       # is unactionable advice when nothing in CI is called shard 2, and it would name a different
       # slice on the next run.
+      # @intent: { entity: "Shards delivery gate", action: "null unnamed ids", behavior: "an unnamed shard serializes id as null, never as its position in the shard list", layer: "request" }
       it "serves an unnamed shard's id as null, never as its position in the list" do
         sharded_run([61.0, 58.5, 74.25, 60.0], commit_sha: "feedfacecafe0197", settled: true,
                                                shard_ids: ["1", nil, "3", "4"])
@@ -1039,6 +1078,7 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
   # figure to print — the run is served exactly as it always was, with the key present and null.
   # `multi_shard?` and not `shard_count.positive?` is the gate for precisely this row.
   describe "a run assembled from a single shard" do
+    # @intent: { entity: "Repository latest-run endpoint", action: "omit the shard block", behavior: "a run whose wall clock and machine time are one number serves no shard block at all rather than a redundant one", layer: "request" }
     it "reports no shard block, because its wall clock and its machine time are one number" do
       run = repository.test_runs.create!(commit_sha: "oneshard0000", ci_run_id: "gha-oneshard",
                                          total_specs_count: 5000, duration_seconds: 61.0)
@@ -1079,6 +1119,7 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
     # AC1. The block exists, and its rows carry all four columns rather than a path and a number.
     # The array is asserted as a SEQUENCE — `eq`, not `match_array` — because the ranking is half
     # of what this key promises, and the fixture above is built so the two orders differ.
+    # @intent: { entity: "Spec files rollup", action: "rank heaviest files first", behavior: "each file's total duration is served beside the figure set it was summed over, ranked heaviest first", layer: "request" }
     it "serves each file's total beside what that total was summed over, heaviest first" do
       expect(spec_files["rows"]).to eq(
         [
@@ -1096,6 +1137,7 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
     # side effect of the `eq` above — the pattern `contract_shard_keys` sets one block up, and for
     # the same reason. A guard whose stated subject IS the key set survives a fixture whose numbers
     # change, and says out loud what a new key owes this block before it ships.
+    # @intent: { entity: "Spec files rollup", action: "pin key set", behavior: "the spec_files block serves exactly the pinned key set and nothing beyond it", layer: "request" }
     it "serves exactly the spec_files keys this contract pins" do
       expect(spec_files.keys).to contain_exactly("rows", "file_count", "limit")
       expect(spec_files["rows"].first.keys)
@@ -1107,6 +1149,7 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
     # endpoint started reading a different run, a different limit, or re-sorted the list. The
     # ORDER is asserted as a sequence, because that is the half a `match_array` would drop and the
     # half the `NULLS LAST` in the aggregate exists to get right.
+    # @intent: { entity: "Spec files rollup", action: "mirror the show rows", behavior: "spec_files rows match repositories#show row for row and in the same order", layer: "request" }
     it "serves the same rows, in the same order, that repositories#show renders" do
       shown = SpecFileDurations.for(repository.latest_test_run)
 
@@ -1121,6 +1164,7 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
     # `Row#duration_label` and `#coverage_label` are one call away in the presenter this reads
     # from, and a serializer that reached for either would still satisfy every assertion above if
     # the fixture's numbers happened to render similarly.
+    # @intent: { entity: "Spec files rollup", action: "serve numbers", behavior: "every spec_files figure is a number or null, never a preformatted panel label", layer: "request" }
     it "serves numbers, never the panel's labels" do
       expect(spec_files.to_json).not_to match(/of \d|\d+\.\d+s|not reported/)
       expect(spec_files["rows"].map { it["total_seconds"] }).to all(be_a(Float).or(be_nil))
@@ -1132,6 +1176,7 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
     # assert the file cost the run nothing, which is a measurement nobody took. Both halves are
     # asserted because they fail differently: a serializer coalescing to zero passes "the file
     # appears" and fails "the total is null".
+    # @intent: { entity: "Spec files rollup", action: "null untimed files", behavior: "a file whose examples all went untimed serves null duration instead of a lying 0.0", layer: "request" }
     it "serves null, not 0.0, for a file whose examples all went untimed" do
       observe(test_run, path: "spec/models/silent_spec.rb", duration: nil, line_number: 1)
       observe(test_run, path: "spec/models/silent_spec.rb", duration: nil, line_number: 2)
@@ -1152,6 +1197,7 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
     # bearing rather than decorative. The total covers half the file, and the row is what says so;
     # a client reading `total_seconds` beside a suite-level coverage figure would take this file's
     # 3.0s as its cost.
+    # @intent: { entity: "Spec files rollup", action: "state per-row coverage", behavior: "a partly timed file states how many of its examples carry timing so the total is interpretable", layer: "request" }
     it "states per-row coverage on a partly timed file" do
       observe(test_run, path: "spec/models/partial_spec.rb", duration: 3.0, line_number: 1)
       observe(test_run, path: "spec/models/partial_spec.rb", duration: nil, line_number: 2)
@@ -1166,6 +1212,7 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
     # AC4. The figure `rows.size` cannot supply. The list stops at the limit, so its own length
     # reads the same on "the 10 heaviest of 300" and "all 10 this run touched" — and a client with
     # only the array would report the second while looking at the first.
+    # @intent: { entity: "Spec files rollup", action: "report the total file count", behavior: "the response says how many files the run touched in all, beyond the limit that cut the visible list", layer: "request" }
     it "reports how many files the run touched in all, past the limit that cut the list" do
       limit = SpecObservation::HEAVIEST_FILES_LIMIT
       (limit + 5).times do |index|
@@ -1226,6 +1273,7 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
     # AC1. The block exists, and its rows carry all four columns rather than a path and a number.
     # The array is asserted as a SEQUENCE — `eq`, not `match_array` — because the ranking is half
     # of what this key promises, and the fixture above is built so the two orders differ.
+    # @intent: { entity: "Spec directories rollup", action: "rank heaviest areas first", behavior: "each area's total duration is served with the figure set it was summed over, heaviest first", layer: "request" }
     it "serves each area's total beside what that total was summed over, heaviest first" do
       expect(spec_directories["rows"]).to eq(
         [
@@ -1246,6 +1294,7 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
     # the heaviest area is not the area of the heaviest file, and its total is larger than any file
     # total in the body. A client that "derived" areas by grouping `spec_files` — the substitute
     # this key exists to refuse — reads the ranking backwards on exactly this run.
+    # @intent: { entity: "Spec directories rollup", action: "rank by area cost", behavior: "areas are ordered by what the whole area cost, not by what its single heaviest file cost", layer: "request" }
     it "ranks areas by what the AREA cost, not by what its heaviest file cost" do
       body = get_repository["latest_run"]
 
@@ -1267,6 +1316,7 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
     # side effect of the `eq` above — the pattern `contract_shard_keys` and the by-file block set,
     # and for the same reason. A guard whose stated subject IS the key set survives a fixture whose
     # numbers change, and says out loud what a new key owes this block before it ships.
+    # @intent: { entity: "Spec directories rollup", action: "pin key set", behavior: "the spec_directories block serves exactly the pinned key set", layer: "request" }
     it "serves exactly the spec_directories keys this contract pins" do
       expect(spec_directories.keys).to contain_exactly("rows", "directory_count", "limit")
       expect(spec_directories["rows"].first.keys)
@@ -1279,6 +1329,7 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
     # endpoint started reading a different run, a different limit, or re-sorted the list. The
     # ORDER is asserted as a sequence, because that is the half a `match_array` would drop and the
     # half the `NULLS LAST` in the aggregate exists to get right.
+    # @intent: { entity: "Spec directories rollup", action: "mirror the show rows", behavior: "spec_directories rows match repositories#show row for row in content and order", layer: "request" }
     it "serves the same rows, in the same order, that repositories#show renders" do
       shown = SpecDirectoryDurations.for(repository.latest_test_run)
 
@@ -1296,6 +1347,7 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
     # `Row#duration_label` and `#coverage_label` are one call away in the presenter this reads
     # from, and a serializer that reached for either would still satisfy every assertion above if
     # the fixture's numbers happened to render similarly.
+    # @intent: { entity: "Spec directories rollup", action: "serve numbers", behavior: "spec_directories figures are numbers or null, never the panel's formatted labels", layer: "request" }
     it "serves numbers, never the panel's labels" do
       expect(spec_directories.to_json).not_to match(/of \d|\d+\.\d+s|not reported/)
       expect(spec_directories["rows"].map { it["total_seconds"] }).to all(be_a(Float).or(be_nil))
@@ -1313,6 +1365,7 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
     # reads the most redundant area in the suite out of a silence nobody measured. `named_count: 0`
     # is what makes the zero readable as "nothing to count", and it is the ONLY field that can: the
     # payload carries no other figure a client could subtract to reach it.
+    # @intent: { entity: "Spec directories rollup", action: "serve zero named counts", behavior: "an area with no named descriptions serves a zero named count beside its zero distinct count", layer: "request" }
     it "serves a zero named count beside the zero distinct count for an area carrying no descriptions" do
       observe(test_run, path: "spec/silent/one_spec.rb", duration: 1.0, line_number: 1, name: nil)
       observe(test_run, path: "spec/silent/two_spec.rb", duration: 1.0, line_number: 2, name: nil)
@@ -1327,6 +1380,7 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
     # The partial area, where the two figures stop being interchangeable: the distinct count was
     # taken over the NAMED rows, so `named_count` and not `recorded_count` is the denominator a
     # client divides by, and the difference between them is what the count could not see.
+    # @intent: { entity: "Spec directories rollup", action: "state the distinct population", behavior: "the distinct-description count states the row population it was taken over, not the area's whole row count", layer: "request" }
     it "serves the population the distinct count was taken over, not the area's whole row count" do
       observe(test_run, path: "spec/partial/a_spec.rb", duration: 1.0, line_number: 1, name: "shared")
       observe(test_run, path: "spec/partial/b_spec.rb", duration: 1.0, line_number: 2, name: "shared")
@@ -1344,6 +1398,7 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
     # measurement, and `SUM(...) DESC`'s NULLS FIRST would name it the heaviest AREA in the suite.
     # Both halves are asserted because they fail differently: a serializer coalescing to zero
     # passes "the area appears" and fails "the total is null".
+    # @intent: { entity: "Spec directories rollup", action: "null untimed areas", behavior: "an area whose examples all went untimed serves null duration rather than zero", layer: "request" }
     it "serves null, not 0.0, for an area whose examples all went untimed" do
       observe(test_run, path: "spec/silent/one_spec.rb", duration: nil, line_number: 1)
       observe(test_run, path: "spec/silent/two_spec.rb", duration: nil, line_number: 2)
@@ -1361,6 +1416,7 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
     # An area whose examples were HALF timed — the state that makes a per-row denominator load
     # bearing rather than decorative, and load bearing over a wider population than a file's. The
     # total covers half the area, and the row is what says so.
+    # @intent: { entity: "Spec directories rollup", action: "state per-row coverage", behavior: "a partly timed area states how many of its examples carry timing", layer: "request" }
     it "states per-row coverage on a partly timed area" do
       observe(test_run, path: "spec/partial/seen_spec.rb", duration: 3.0, line_number: 1)
       observe(test_run, path: "spec/partial/unseen_spec.rb", duration: nil, line_number: 1)
@@ -1376,6 +1432,7 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
     # coalesces it to `"."` rather than dropping the row. Asserted here because it is the one input
     # at this grain that has no counterpart one rung down, and a serializer or an expression change
     # that let it fall out would silently stop the areas summing to the run.
+    # @intent: { entity: "Spec directories rollup", action: "coalesce root-level files", behavior: "a spec file at the repository root is grouped under its coalesced area instead of being dropped", layer: "request" }
     it "serves a root-level spec file under its coalesced area rather than dropping it" do
       observe(test_run, path: "smoke_spec.rb", duration: 2.5, line_number: 1)
 
@@ -1389,6 +1446,7 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
     # AC4. The figure `rows.size` cannot supply. The list stops at the limit, so its own length
     # reads the same on "the 10 heaviest of 300" and "all 10 this run touched" — and a client with
     # only the array would report the second while looking at the first.
+    # @intent: { entity: "Spec directories rollup", action: "report total area count", behavior: "the response says how many areas the run touched in all, past the limit that cut the list", layer: "request" }
     it "reports how many areas the run touched in all, past the limit that cut the list" do
       limit = SpecObservation::HEAVIEST_DIRECTORIES_LIMIT
       (limit + 5).times do |index|
@@ -1441,6 +1499,7 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
     # the column, guessed a layer from the file's directory, or dropped the key on the rows that
     # have none is red on this one assertion — and the interleaving is what makes it so, since a
     # ranking whose values happened to sit in a block could be satisfied by a zip that slipped.
+    # @intent: { entity: "Slowest examples ranking", action: "rank slowest first", behavior: "each slow example is served as raw operands on duration, ordered slowest first", layer: "request" }
     it "serves each slow example's raw operands, slowest first" do
       expect(slowest_examples["rows"]).to eq(
         [
@@ -1467,6 +1526,7 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
     # AC3. The coverage the ranking was taken over, and the bound that cut it. `limit` is read off
     # the constant rather than written as `10`, so a change to `SLOWEST_LIMIT` cannot leave the
     # endpoint disclosing a bound it no longer applies.
+    # @intent: { entity: "Slowest examples ranking", action: "state ranking basis", behavior: "the ranking states the population it was taken over and the bound that produced the cut", layer: "request" }
     it "states what the ranking was taken over, and the bound that produced it" do
       expect(slowest_examples["recorded_count"]).to eq(4)
       expect(slowest_examples["timed_count"]).to eq(4)
@@ -1490,6 +1550,7 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
     # assertion cannot state: `.first` is a row that HAS a layer, so a serializer that omitted the
     # key on the rows without one would still satisfy this guard — the `eq` above is what closes
     # that, and the two are deliberately read together.
+    # @intent: { entity: "Slowest examples ranking", action: "pin key set", behavior: "the slowest_examples block serves exactly the pinned key set", layer: "request" }
     it "serves exactly the slowest_examples keys this contract pins" do
       expect(slowest_examples.keys)
         .to contain_exactly("rows", "recorded_count", "timed_count", "reported_outcome_count",
@@ -1504,6 +1565,7 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
     # still pass if the endpoint started reading a different run, a different limit, or re-sorted
     # the list. Every served axis is compared element-wise, because a serializer that zipped two
     # columns out of step would satisfy any one of them alone.
+    # @intent: { entity: "Slowest examples ranking", action: "mirror the show rows", behavior: "slowest_examples rows match repositories#show row for row and order", layer: "request" }
     it "serves the same rows, in the same order, that repositories#show renders" do
       shown = SlowestExamples.for(repository.latest_test_run)
 
@@ -1524,6 +1586,7 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
     # this block maps (`SpecObservation#label`, `#location_label`, `#duration_label`,
     # `#outcome_label`), and each folds a fallback string into the value a client would have to
     # parse back out.
+    # @intent: { entity: "Slowest examples ranking", action: "serve raw values", behavior: "rows carry numbers and raw strings only, never the panel's prettified labels", layer: "request" }
     it "serves numbers and raw strings, never the panel's labels" do
       expect(slowest_examples.to_json).not_to match(/of \d|\d+\.\d+s|not reported/)
       expect(slowest_examples["rows"].map { it["duration_seconds"] }).to all(be_a(Float))
@@ -1541,6 +1604,7 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
     # coverage figure cannot tell that run from one where these ten happened to be the quiet ones,
     # which is exactly why `reported_outcome_count` is served beside the rows rather than left to
     # be inferred from them.
+    # @intent: { entity: "Slowest examples ranking", action: "distinguish empty outcomes", behavior: "a run with no recorded outcomes serves an empty ranking rather than one padded with quiet rows", layer: "request" }
     it "distinguishes a run that reported no outcomes from one whose slowest ten were quiet" do
       silent = create_test_run(repository: repository, commit_sha: "noOutcome001", duration_seconds: 12.0)
       observe(silent, path: "spec/models/a_spec.rb", duration: 3.0, line_number: 1, name: "a", outcome: nil)
@@ -1557,6 +1621,7 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
     # An outcome string SpecGuard does not read, echoed verbatim. Nothing platform-side validates
     # this column — `Ingest::Payload` does not — so a serializer that mapped unknown strings onto a
     # known vocabulary would be inventing a verdict the producer never sent.
+    # @intent: { entity: "Slowest examples ranking", action: "echo unknown outcomes", behavior: "an outcome the endpoint does not recognise is echoed verbatim rather than folded into a known one", layer: "request" }
     it "echoes an outcome it does not recognise rather than folding it into a known one" do
       exotic = create_test_run(repository: repository, commit_sha: "exotic000001", duration_seconds: 5.0)
       observe(exotic, path: "spec/models/a_spec.rb", duration: 3.0, line_number: 1,
@@ -1571,6 +1636,7 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
     # still LOCATABLE — which is the whole reason the location is served as operands rather than
     # substituted through `#label`, whose fallback would put `"spec/models/a_spec.rb:1"` in the
     # `name` field and make a nameless test indistinguishable from one named after its own file.
+    # @intent: { entity: "Slowest examples ranking", action: "serve nameless rows", behavior: "a row with no example name serves null for it and can still be located by its other operands", layer: "request" }
     it "serves a nameless row as null and still locates it" do
       nameless = create_test_run(repository: repository, commit_sha: "nameless0001", duration_seconds: 5.0)
       observe(nameless, path: "spec/models/a_spec.rb", duration: 3.0, line_number: 42, name: nil)
@@ -1588,6 +1654,7 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
     # `spec_file_path` genuinely differ — and `line_number` belongs to the first of them, never to
     # the second. Serving `spec_file_path` is also what makes this block JOINABLE: it is the column
     # the two rollups aggregate on, so a client can carry a ranked test back to its rollup row.
+    # @intent: { entity: "Slowest examples ranking", action: "separate definition site", behavior: "the definition site and the including file are served as separate operands rather than merged", layer: "request" }
     it "keeps the definition site and the including file as separate operands" do
       shared = create_test_run(repository: repository, commit_sha: "sharedex0001", duration_seconds: 5.0)
       observe(shared, path: "spec/models/user_spec.rb", defined_in: "spec/support/shared_examples.rb",
@@ -1608,6 +1675,7 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
     # `.timed` scope and `coverage_in`'s two different COUNTs exist to make. A client dividing
     # `timed_count` by `recorded_count` learns the ranking covered four of six examples; one
     # holding only the rows would report six.
+    # @intent: { entity: "Slowest examples ranking", action: "rank only timed rows", behavior: "untimed rows are counted but never enter the duration ranking", layer: "request" }
     it "ranks only the timed rows while counting all of them" do
       observe(test_run, path: "spec/models/silent_spec.rb", duration: nil, line_number: 1, name: "silent one")
       observe(test_run, path: "spec/models/silent_spec.rb", duration: nil, line_number: 2, name: "silent two")
@@ -1621,6 +1689,7 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
     # AC3's figure that `rows.size` cannot supply. The list stops at the limit, so its own length
     # reads the same on "the 10 slowest of 300" and "all 10 this run timed" — and a client with only
     # the array would report the second while looking at the first.
+    # @intent: { entity: "Slowest examples ranking", action: "report total example count", behavior: "the response says how many examples the run recorded in all, past the ranking's cut", layer: "request" }
     it "reports how many examples the run recorded in all, past the limit that cut the list" do
       limit = SpecObservation::SLOWEST_LIMIT
       (limit + 5).times do |index|
@@ -1643,6 +1712,7 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
     # each other: the heaviest AREA holds none of the two slowest TESTS, and no rollup row names a
     # test. A client that "derived" slow tests from the rollups — the substitute this key exists to
     # refuse — has no row to name and no name to report.
+    # @intent: { entity: "Slowest examples ranking", action: "name a test", behavior: "the ranking names a concrete test, which neither rollup beside it can do", layer: "request" }
     it "names a test, which neither rollup beside it can" do
       # Two hundred cheap examples in one file: heaviest area AND heaviest file by SUM, with not
       # one of its rows anywhere near the head of the ranking. Concentration and outliers are
@@ -1739,6 +1809,7 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
     #
     # `files_seen` is SORTED rather than in insertion order, and the multi-file group is inserted
     # later-file-first so that is a real assertion.
+    # @intent: { entity: "Repeated descriptions ranking", action: "rank costliest first", behavior: "each repeated description is served as raw operands on cost, costliest first", layer: "request" }
     it "serves each repeated description's raw operands, costliest first" do
       expect(repeated_descriptions["rows"]).to eq(
         [
@@ -1760,6 +1831,7 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
     # add a row, it would put that row at the head of the ranking. Its own example rather than an
     # inference from the `eq` above, because the sequence assertion would report the failure as a
     # length mismatch and name nothing.
+    # @intent: { entity: "Repeated descriptions ranking", action: "drop single-carrier rows", behavior: "a description only one example carried stays out of the repeated ranking entirely", layer: "request" }
     it "leaves a description only one example carried out of the ranking" do
       expect(repeated_descriptions["rows"].map { it["name"] }).not_to include("User validates its email")
       expect(test_run.spec_observations.where(name: "User validates its email").count).to eq(1)
@@ -1776,6 +1848,7 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
     # `limit` is read off the constant rather than written as `10`, so a change to
     # `REPEATED_DESCRIPTIONS_LIMIT` cannot leave the endpoint disclosing a bound it no longer
     # applies.
+    # @intent: { entity: "Repeated descriptions ranking", action: "state grouping basis", behavior: "the response states the grouped population, the rows that could not be grouped, and the bound that cut the list", layer: "request" }
     it "states the population it grouped, the rows it could not, and the bound that cut the list" do
       expect(repeated_descriptions["group_count"]).to eq(3)
       expect(repeated_descriptions["recorded_count"]).to eq(12)
@@ -1791,6 +1864,7 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
     # holding `recorded_count` and `unnamed_row_count` holds `named_row_count`'s two operands and
     # can tell "ten of these twelve rows were described" from "none of them were" — the distinction
     # `#named?` draws, WITHOUT this endpoint shipping the predicate or the subtraction.
+    # @intent: { entity: "Repeated descriptions ranking", action: "serve both operands", behavior: "named_row_count is handed to the client as both its operands rather than as the subtraction", layer: "request" }
     it "hands the client both operands of named_row_count rather than the subtraction" do
       shown = RepeatedDescriptions.for(repository.latest_test_run)
 
@@ -1802,6 +1876,7 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
     # AC5's first half, and the shape a truncated list would otherwise wear. `rows.size` alone reads
     # identically on "the 10 costliest of 80" and "all 3", so `group_count` is the figure that tells
     # them apart — the `COUNT(*) OVER ()` counted after the `HAVING` and before the `LIMIT`.
+    # @intent: { entity: "Repeated descriptions ranking", action: "report total repetition count", behavior: "the response says how many descriptions repeated in all, past the limit that cut the list", layer: "request" }
     it "reports how many descriptions were repeated in all, past the limit that cut the list" do
       limit = SpecObservation::REPEATED_DESCRIPTIONS_LIMIT
       (limit + 5).times do |index|
@@ -1829,6 +1904,7 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
     #
     # A `null` here would be a third meaning for the key — "we do not know where these ran" spelled
     # the same way an absent value is — that no client could tell from the absence of a group.
+    # @intent: { entity: "Repeated descriptions ranking", action: "serve empty arrays", behavior: "a group whose rows named no including file serves an empty array, not null", layer: "request" }
     it "serves an empty array, not null, for a group whose rows named no including file" do
       unlocated = create_test_run(repository: repository, commit_sha: "unlocated001", duration_seconds: 9.0)
       2.times do |index|
@@ -1851,6 +1927,7 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
     # both still pass if the endpoint started reading a different run, a different limit, or
     # re-sorted the list. Every served axis is compared element-wise, because a serializer that
     # zipped two columns out of step would satisfy any one of them alone.
+    # @intent: { entity: "Repeated descriptions ranking", action: "mirror the show rows", behavior: "repeated_descriptions rows match repositories#show row for row and order", layer: "request" }
     it "serves the same rows, in the same order, that repositories#show renders" do
       shown = RepeatedDescriptions.for(repository.latest_test_run)
 
@@ -1870,6 +1947,7 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
     # methods sit one call away on the very rows this block maps: `Row#duration_label` renders
     # `"1.23s"` or `"not reported"`, and `Row#coverage_label` renders `"6 of 8"`. Both are sentences
     # a client would have to parse back into the numbers they were built from.
+    # @intent: { entity: "Repeated descriptions ranking", action: "serve numbers", behavior: "figures are numbers or null, never the panel's formatted labels", layer: "request" }
     it "serves numbers, never the panel's labels" do
       expect(repeated_descriptions.to_json).not_to match(/\d+ of \d+|\d+\.\d+s|not reported/)
       expect(repeated_descriptions["rows"].map { it["recorded_count"] }).to all(be_a(Integer))
@@ -1884,6 +1962,7 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
     # several examples is evidence of repetition AND the ordinary shape of a table-driven loop or a
     # shared example group, and nothing here decides which — so the response carries no verdict key
     # either. Nor does it ship the comparisons the client can make itself.
+    # @intent: { entity: "Repeated descriptions ranking", action: "ship operands only", behavior: "the ranking is presented without judgement, shipping operands instead of pre-evaluated predicates", layer: "request" }
     it "presents the ranking without judging it, and ships operands rather than predicates" do
       expect(repeated_descriptions.keys)
         .not_to include("redundant", "truncated", "complete", "any_timed", "recorded")
@@ -1898,6 +1977,7 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
     # The row keys are pinned too, and that half is load bearing here: `Row` is a `Struct`, so
     # `#to_h` would serialize `file_paths` — the raw, unsorted, possibly-`nil` `ARRAY_AGG` — beside
     # or instead of `files_seen`, and this is the guard that keeps it out.
+    # @intent: { entity: "Repeated descriptions ranking", action: "pin key set", behavior: "the repeated_descriptions block serves exactly the pinned key set", layer: "request" }
     it "serves exactly the repeated_descriptions keys this contract pins" do
       expect(repeated_descriptions.keys)
         .to contain_exactly("rows", "group_count", "recorded_count", "unnamed_row_count",
@@ -1910,6 +1990,7 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
     # is read off the endpoint's own response, so it is the blocks disagreeing with each other: the
     # heaviest file and the slowest test are both the single-example row this ranking excludes, and
     # no row of any block beside this one can say that three examples claim to test the same thing.
+    # @intent: { entity: "Repeated descriptions ranking", action: "name a repetition", behavior: "the block names a concrete repetition, which no other block beside it can do", layer: "request" }
     it "names a repetition, which no block beside it can" do
       body = get_repository["latest_run"]
 
@@ -1935,6 +2016,7 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
     # zeroed block, because a `recorded_count: 0` beside an empty array would assert a run that ran
     # no examples. Its own example lives in the block below, beside its three siblings' nulls; this
     # one is here so the three empty states can be compared side by side.
+    # @intent: { entity: "Repeated descriptions ranking", action: "distinguish nothing from null", behavior: "a run that recorded nothing serves null while a run that recorded but repeated nothing serves an empty block", layer: "request" }
     it "serves null for a run that recorded nothing, and a block for one that recorded and repeated nothing" do
       silent = create_test_run(repository: repository, commit_sha: "empty0000001", duration_seconds: 42.5)
       expect(silent.spec_observations).to be_empty
@@ -1969,6 +2051,7 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
     # empty list a suite of entirely unique descriptions returns. "Nobody told us what these tests
     # are called" is not "every test here is unique", and `unnamed_row_count` against
     # `recorded_count` is what tells a client which one it is holding.
+    # @intent: { entity: "Repeated descriptions ranking", action: "distinguish undescribed runs", behavior: "a run nobody described is told apart from one whose every description is unique", layer: "request" }
     it "distinguishes a run nobody described from one whose every description is unique" do
       nameless = create_test_run(repository: repository, commit_sha: "empty0000003", duration_seconds: 42.5)
       5.times { |index| observe(nameless, path: "spec/a_spec.rb", duration: 1.0, line_number: index, name: nil) }
@@ -1991,6 +2074,7 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
     # ranking with no order to it — every `total_seconds` null — and the block is served with the
     # rows in it, because "we found repetition and nobody measured it" is a finding and blanking it
     # would be the same silence one rung down.
+    # @intent: { entity: "Repeated descriptions ranking", action: "rank untimed repetitions", behavior: "a repetition found with nothing timed under it is still served with its counts", layer: "request" }
     it "serves the repetition it found even when nothing under it was timed" do
       untimed = create_test_run(repository: repository, commit_sha: "empty0000004", duration_seconds: 42.5)
       2.times { |index| observe(untimed, path: "spec/a_spec.rb", duration: nil, line_number: index, name: "twice") }
@@ -2009,6 +2093,7 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
 
   # AC2. The whole pre-SPGD-255 corpus, plus every client that sends no per-example detail.
   describe "a run that recorded no per-example rows" do
+    # @intent: { entity: "Repository latest-run endpoint", action: "null the files block", behavior: "spec_files serves null with the key still present when the run has nothing to serve", layer: "request" }
     it "serves spec_files as null, with the key still present" do
       create_test_run(repository: repository, commit_sha: "norows000001", duration_seconds: 42.5)
 
@@ -2025,6 +2110,7 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
     # AC2 at the grain above, and its own example rather than a third `expect` in the one above:
     # the two keys are gated by two different presenters' `#recorded?`, so a change that unblanked
     # one leaves the other's guard green and must be named by a red example of its own.
+    # @intent: { entity: "Repository latest-run endpoint", action: "null the directories block", behavior: "spec_directories serves null with the key still present when the run has nothing to serve", layer: "request" }
     it "serves spec_directories as null, with the key still present" do
       create_test_run(repository: repository, commit_sha: "norows000002", duration_seconds: 42.5)
 
@@ -2044,6 +2130,7 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
     # EMPTY ranking over a real per-example grain, and `#recorded?` serves the block for it while
     # `rows.any?` would blank it — asserting the run whose observations are genuinely absent is
     # what keeps this example about the gate rather than about the emptiness of the array.
+    # @intent: { entity: "Repository latest-run endpoint", action: "null the examples block", behavior: "slowest_examples serves null with the key still present when the run has nothing to serve", layer: "request" }
     it "serves slowest_examples as null, with the key still present" do
       create_test_run(repository: repository, commit_sha: "norows000003", duration_seconds: 42.5)
 
@@ -2058,6 +2145,7 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
     # timed none of them, so there is a per-example grain to disclose and an empty ranking over it
     # — the state a `rows.any?` gate would serve as `null`, telling a client the run reported no
     # per-example detail when it reported fifty examples' worth.
+    # @intent: { entity: "Repository latest-run endpoint", action: "serve an empty ranking", behavior: "a run that recorded rows but timed none serves the block with an empty ranking rather than null", layer: "request" }
     it "serves the block, with an empty ranking, for a run that recorded rows and timed none" do
       untimed = create_test_run(repository: repository, commit_sha: "untimed00001", duration_seconds: 42.5)
       3.times { |index| observe(untimed, path: "spec/a_spec.rb", duration: nil, line_number: index, name: "a#{index}") }
@@ -2082,6 +2170,7 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
     # ranking is empty for three different reasons" above; asserting the run whose observations are
     # genuinely ABSENT is what keeps this example about the gate rather than about the emptiness of
     # the array.
+    # @intent: { entity: "Repository latest-run endpoint", action: "null the repetitions block", behavior: "repeated_descriptions serves null with the key still present when the run has nothing to serve", layer: "request" }
     it "serves repeated_descriptions as null, with the key still present" do
       create_test_run(repository: repository, commit_sha: "norows000004", duration_seconds: 42.5)
 
@@ -2133,6 +2222,7 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
       run
     end
 
+    # @intent: { entity: "Repository history window", action: "order rows newest first", behavior: "history rows arrive newest first carrying the figures a client needs to difference consecutive runs", layer: "request" }
     it "serves every row newest first, with the figures a client needs to difference them" do
       _first, _second, third = three_runs
 
@@ -2184,6 +2274,7 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
     # unnoticed, which is the exact failure this example was written against. Every other key's
     # value is unchanged, which is the compatibility claim — `branch_scope` is still
     # `"all_branches"` and `limit` is still `10` for a request that named no branch.
+    # @intent: { entity: "Repository history window", action: "carry per-row branches", behavior: "each history row carries its own branch and the window states that rows interleave branches", layer: "request" }
     it "carries each row's own branch, and says on the window that it interleaves them" do
       three_runs
 
@@ -2207,6 +2298,7 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
     # from what the client holds and the array's own order is the answer. If a later slice serves an
     # id or an ingest sequence on a row, this fails and the token has to be re-decided rather than
     # silently becoming a lie.
+    # @intent: { entity: "Repository history window", action: "keep array order authoritative", behavior: "no second ordering key is served on a row, so the array position stays the only order", layer: "request" }
     it "serves no second ordering key on a row, which is what makes the array order authoritative" do
       first, _second, _third = three_runs
 
@@ -2230,6 +2322,7 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
 
     # AC. Every figure re-derived straight from the table, in the ordering the model documents —
     # so the assertion cannot pass by reading the same Ruby the serializer read.
+    # @intent: { entity: "Repository history window", action: "match direct SQL", behavior: "the served window equals what a direct SQL query over the same rows returns", layer: "request" }
     it "matches direct SQL over the same rows" do
       three_runs
 
@@ -2253,6 +2346,7 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
     # A run that reported zero tests has a count but not a measurement, so a difference taken
     # against it describes the report and not the suite. The boolean is what lets a client refuse
     # that subtraction without re-deriving the rule.
+    # @intent: { entity: "Repository history window", action: "flag unmeasured rows", behavior: "a history row whose run reported no tests is flagged as not a measurement of the suite", layer: "request" }
     it "flags a run that reported no tests as not a measurement of the suite" do
       create_test_run(repository: repository, commit_sha: "emptyrun0000", branch: "main",
                       total_specs_count: 0, annotated_specs_count: 0)
@@ -2269,6 +2363,7 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
     # The other composition fact. `TestRun#assembled_like?` decides whether two runs may be
     # differenced on shard-count equality alone, so serving the count is serving exactly what that
     # rule reads — a client can apply it without the endpoint applying it for them.
+    # @intent: { entity: "Repository history window", action: "report shard assembly counts", behavior: "each history row states how many shards it was assembled from", layer: "request" }
     it "reports how many shards each row was assembled from" do
       one_piece = create_test_run(repository: repository, commit_sha: "onepiece0000", total_specs_count: 20)
       sharded = repository.test_runs.create!(commit_sha: "sharded00000", ci_run_id: "gha-sharded",
@@ -2293,6 +2388,7 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
     # cancelled or timed-out job usually is. Differencing them on `duration_seconds` alone reports a
     # 70% speedup that is entirely telemetry loss. `timed_shard_count` is the only field on either
     # row that can tell them apart.
+    # @intent: { entity: "Repository history window", action: "distinguish half-silent rows", behavior: "a fully timed row is told apart from an otherwise identical one whose shards half stayed silent", layer: "request" }
     it "distinguishes a fully-timed row from a half-silent one that is otherwise identical" do
       timed = sharded_history_run("alltimed0000", [150.0, 300.0, 450.0, 600.0])
       silent = sharded_history_run("halfsilent00", [150.0, 180.0, nil, nil])
@@ -2323,6 +2419,7 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
     # exactly the row a client most needs to refuse to difference, and each of the three wrong
     # answers hides that in a different way — absent and null read as "the endpoint does not say",
     # `3` reads as full coverage.
+    # @intent: { entity: "Repository history window", action: "zero for uncounted shards", behavior: "a run that recorded shards and timed none serves zero timed shards, not a nil placeholder", layer: "request" }
     it "reports zero timed shards for a run that recorded shards and timed none of them" do
       run = sharded_history_run("nonetimed000", [nil, nil, nil], duration_seconds: 74.25)
 
@@ -2340,6 +2437,7 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
     # value is the one place a nil placeholder could reach the body. It serves the same really-
     # counted `0` its `shard_count` does: there were no parts, so there were none to time. This is
     # the whole unsharded corpus — every laptop `bundle exec rspec` — and its meaning is unchanged.
+    # @intent: { entity: "Repository history window", action: "count zero for shardless runs", behavior: "a shardless run serves a really-counted zero shard figure rather than nil", layer: "request" }
     it "serves a really-counted zero for a shardless run rather than a nil placeholder" do
       run = create_test_run(repository: repository, commit_sha: "onepiece0000",
                             total_specs_count: 20, duration_seconds: 42.5)
@@ -2355,6 +2453,7 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
     # primed a number counted over a different set of rows than `TestRun#timed_shard_count` reads.
     # This is what pins the PRIMED value to the queried one — the preload's whole risk is that it
     # answers fast and wrong.
+    # @intent: { entity: "Repository history window", action: "prime timed counts", behavior: "each row's timed shard count matches what the model itself counts", layer: "request" }
     it "primes each row's timed count to what the model itself counts" do
       run = sharded_history_run("agreement000", [61.0, 58.5, nil, 60.0])
 
@@ -2368,6 +2467,7 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
     # Ten rows is ten rows whether the suite holds three tests or twenty thousand. The window
     # states the bound so a client reading a full array does not conclude the suite has run exactly
     # ten times — `returned == limit` is how it learns there is more behind it.
+    # @intent: { entity: "Repository history window", action: "disclose the bound", behavior: "the window stops at ten rows and says so, so a client cannot infer the history is complete", layer: "request" }
     it "stops at ten rows and says so rather than letting a client infer the history is complete" do
       12.times { |index| create_test_run(repository: repository, commit_sha: "bounded%06d" % index) }
 
@@ -2382,6 +2482,7 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
     # `[]` and not `null` — the one place this slice departs from the `latest_run`/`shards`
     # null-means-absent rule. An empty *list* is not the lie a zeroed *block* would be: "no runs"
     # is exactly what zero rows means, and a client can iterate it without branching first.
+    # @intent: { entity: "Repository history window", action: "serve empty arrays on silence", behavior: "a repository CI has never reported to serves an empty array while latest_run stays null", layer: "request" }
     it "serves an empty array for a repository whose CI has never reported, while latest_run stays null" do
       body = get_repository
 
@@ -2393,6 +2494,7 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
 
     # `history` is added BESIDE the existing blocks, on the rule the shards slice followed — a
     # client reading this endpoint today reads the same keys, types and values tomorrow.
+    # @intent: { entity: "Repository history window", action: "preserve sibling blocks", behavior: "adding the history window leaves latest_run, shards and api_key exactly where they were", layer: "request" }
     it "leaves latest_run, shards and api_key exactly where they were" do
       _first, _second, third = three_runs
 
@@ -2504,6 +2606,7 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
       body.merge("api_key" => body.fetch("api_key").except("last_used_at"))
     end
 
+    # @intent: { entity: "Repository branches catalogue", action: "expose the trunk defect", behavior: "when the unfiltered window holds no main rows at all, filtering it answers an empty list and the defect is visible", layer: "request" }
     it "sees the defect: the unfiltered window holds no main rows at all, so filtering it answers []" do
       branch_starved_repository
 
@@ -2517,6 +2620,7 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
     # The same starvation one bound further out, pinned directly on the table rather than through
     # the endpoint — because no response exposes the thirty newest interleaved rows, and this is the
     # property that makes "bound first, filter the Array" indistinguishable from a broken filter.
+    # @intent: { entity: "Repository branches catalogue", action: "expose the deeper bound defect", behavior: "the 30 newest runs repository-wide can also all be feature branches, starving the deeper bound too", layer: "request" }
     it "starves the deeper bound too: the 30 newest runs repository-wide are also all feature branches" do
       branch_starved_repository
 
@@ -2529,6 +2633,7 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
     # AC1. The same repository, the same instant, one query parameter — twenty-five `main` rows
     # where filtering either bounded window could only ever produce zero. Twenty-five is neither
     # limit, so the count cannot have come from truncating anything.
+    # @intent: { entity: "Repository branches catalogue", action: "narrow to the branch", behavior: "a branch filter returns only that branch's rows, and more of them than the unfiltered bound could hold", layer: "request" }
     it "returns only that branch's rows, and more of them than the unfiltered bound could hold" do
       main_runs, _feature_runs = branch_starved_repository
 
@@ -2548,6 +2653,7 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
     # `start_with?("branch:")` their way back to the two facts.
     #
     # Whole-hash, for the same reason the unfiltered assertion is: this block is the contract.
+    # @intent: { entity: "Repository branches catalogue", action: "state the narrowed scope", behavior: "the narrowed scope is stated as comparable tokens with the branch name in its own key", layer: "request" }
     it "states the narrowed scope as comparable tokens, with the branch name in its own key" do
       branch_starved_repository
 
@@ -2565,6 +2671,7 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
       )
     end
 
+    # @intent: { entity: "Repository branches catalogue", action: "report the branch bound", behavior: "the window reports the branch bound rather than the unfiltered one, and stops there", layer: "request" }
     it "reports the branch bound rather than the unfiltered one, and stops there" do
       Array.new(35) do |index|
         create_test_run(repository: repository, commit_sha: "deep%08d" % index, branch: "main")
@@ -2584,6 +2691,7 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
     # its current anchor for a branch it does not recognise and renders a visible notice saying so;
     # a JSON client has no notice, so a substituted branch's rows would be a growth series computed
     # for the wrong branch with nothing in the body to detect it.
+    # @intent: { entity: "Repository branches catalogue", action: "answer unknown branches", behavior: "an unknown branch answers an empty list, never another branch's rows", layer: "request" }
     it "answers an unknown branch with [], never another branch's rows" do
       branch_starved_repository
 
@@ -2607,6 +2715,7 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
     # `WHERE branch = ''` (which matches nothing, and would make an empty param indistinguishable
     # from an unknown branch) and it must not become "give me the unfiltered window under a
     # narrowed scope token" either. It is byte-identical to sending no param at all.
+    # @intent: { entity: "Repository branches catalogue", action: "treat blank as no filter", behavior: "a blank branch parameter is read as no filter rather than as a hunt for an empty branch name", layer: "request" }
     it "treats a blank branch as no filter, not as an empty branch name" do
       branch_starved_repository
 
@@ -2628,6 +2737,7 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
     # Asserted from BOTH sides, because either alone is passable by a broken guard: a blank param
     # must return the anonymous rows as part of the unfiltered history (not a NULL-scoped subset),
     # and no branch name may select them.
+    # @intent: { entity: "Repository branches catalogue", action: "exclude branchless runs", behavior: "runs that reported no branch are unselectable and are never pooled into a branch series", layer: "request" }
     it "leaves runs that reported no branch unselectable, and never pools them into a series" do
       anonymous = Array.new(3) do |index|
         create_test_run(repository: repository, commit_sha: "anon%08d" % index, branch: nil)
@@ -2672,6 +2782,7 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
     # `latest_run` is deliberately the `feature/*` run here while `history[0]` is a `main` row —
     # they differ, and that is the contract rather than a bug. Pinned explicitly below so a later
     # slice that "fixes" the mismatch by re-anchoring `latest_run` has to argue with this example.
+    # @intent: { entity: "Repository branches catalogue", action: "preserve sibling blocks", behavior: "the branch filter leaves latest_run, shards, api_key and repository exactly where they were", layer: "request" }
     it "leaves latest_run, shards, api_key and repository exactly where they were" do
       _main_runs, feature_runs = branch_starved_repository
 
@@ -2688,6 +2799,7 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
       expect(filtered.dig("latest_run", "branch")).not_to eq("main")
     end
 
+    # @intent: { entity: "Repository branches catalogue", action: "pin narrowed key sets", behavior: "under a branch param the same top-level keys and row keys are served as without one", layer: "request" }
     it "serves the same top-level keys, and the same row keys, under a branch param" do
       branch_starved_repository
 
@@ -2716,6 +2828,7 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
     # predicate rides along with it rather than being applied to a re-sorted result. Same-instant
     # rows are the only fixture that can tell the two apart: any distinctly-stamped fixture agrees
     # under both.
+    # @intent: { entity: "Repository branches catalogue", action: "keep the tie-break narrowed", behavior: "the created_at and id tie-break still applies inside the narrowed window", layer: "request" }
     it "keeps the created_at/id tie-break inside the narrowed window" do
       stamp = 2.hours.ago
       older = create_test_run(repository: repository, commit_sha: "tieold000000", branch: "main")
@@ -2731,6 +2844,7 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
         .to eq([newer.commit_sha, older.commit_sha])
     end
 
+    # @intent: { entity: "Repository branches catalogue", action: "scope to the key's repository", behavior: "the narrowed history only ever contains rows from the api_key's own repository", layer: "request" }
     it "scopes the narrowed history to the key's own repository" do
       create_test_run(repository: repository, commit_sha: "ourmain00000", branch: "main")
       other = create_repository(user: create_user(github_uid: "2002", github_handle: "hubot"),
@@ -2743,6 +2857,7 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
 
     # The rows a narrowed window serves are the same rows, assembled the same way — the composition
     # facts a client needs before differencing two of them are not a casualty of the filter.
+    # @intent: { entity: "Repository branches catalogue", action: "prime narrowed shard counts", behavior: "each narrowed row still carries its primed shard count", layer: "request" }
     it "still primes each narrowed row's shard count" do
       create_test_run(repository: repository, commit_sha: "onepiece0000", branch: "main",
                       total_specs_count: 20)
@@ -2758,6 +2873,7 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
 
     # AC. Re-derived straight from the table, in the ordering and with the predicate the model
     # documents — so the assertion cannot pass by reading the same Ruby the serializer read.
+    # @intent: { entity: "Repository branches catalogue", action: "match direct SQL", behavior: "the narrowed window equals what direct SQL over the same branch's rows returns", layer: "request" }
     it "matches direct SQL over the same branch's rows" do
       branch_starved_repository
 
@@ -2813,6 +2929,7 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
     # blocks that hang off it. Asserted as a WHOLE-BLOCK comparison against the default call's, so
     # this cannot pass by the sha moving while the figures beside it stayed on the newest run — the
     # exact half-re-anchored shape the single-memo design exists to prevent.
+    # @intent: { entity: "Run anchor", action: "anchor on the named run", behavior: "a named commit sha anchors latest_run on that run rather than on the newest", layer: "request" }
     it "anchors latest_run on the named run rather than on the newest" do
       first, _second, third = three_run_history
 
@@ -2836,6 +2953,7 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
     # assertion discriminating: the named run's file, area, slowest example and repeated description
     # are all absent from the newest run, so a block that failed to re-anchor serves the newest run's
     # rows and is red on its own name rather than merely on a count.
+    # @intent: { entity: "Run anchor", action: "re-anchor rollups", behavior: "naming a run re-anchors all five rollups and all three drill-ins onto the named run", layer: "request" }
     it "re-anchors all five rollups and all three drill-ins onto the named run" do
       named_run = create_test_run(repository: repository, commit_sha: "old000000001", branch: "main",
                                   total_specs_count: 2, duration_seconds: 9.0)
@@ -2898,6 +3016,7 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
       run
     end
 
+    # @intent: { entity: "Run anchor", action: "re-anchor shards", behavior: "the shards block follows the named run rather than the newest one", layer: "request" }
     it "re-anchors shards onto the named run" do
       sharded = two_shard_run(commit_sha: "shard0000001")
       create_test_run(repository: repository, commit_sha: "plain0000002")
@@ -2908,6 +3027,7 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
     end
 
     # AC1's disclosure half: the block that says which run was described and why.
+    # @intent: { entity: "Run anchor", action: "disclose the resolved ask", behavior: "a resolved run_anchor discloses the run the response was anchored on", layer: "request" }
     it "discloses a resolved ask on run_anchor" do
       first, = three_run_history
 
@@ -2930,6 +3050,7 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
     # inventing an ask. `resolved` is TRUE here and that is the deliberate reading: it is false in
     # exactly one case, a client that named a sha and is not being served it, so an
     # `unless resolved` warning does not fire on every unparameterised GET.
+    # @intent: { entity: "Run anchor", action: "disclose the default anchor", behavior: "when no run was named run_anchor discloses the default that was chosen", layer: "request" }
     it "discloses the default anchor when no run was named" do
       _first, _second, third = three_run_history
 
@@ -2952,6 +3073,7 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
     # THE RAW ASK IS ASSERTED PRESENT, and it is the load-bearing key here: it is the only place in
     # the body that still holds what the client typed, so without it a fallback is indistinguishable
     # from the client's own bug.
+    # @intent: { entity: "Run anchor", action: "fall back and say so", behavior: "a named sha with no run falls back to the newest run and discloses that it did", layer: "request" }
     it "falls back to the newest run and says so when the named sha has no run" do
       _first, _second, third = three_run_history
 
@@ -2978,6 +3100,7 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
     # null for "CI has never reported". The two facts are separable and the block must not conflate
     # them — `resolved: false` here is about the ask, and `commit_sha: null` about there being
     # nothing to fall back to.
+    # @intent: { entity: "Run anchor", action: "keep anchor on silence", behavior: "run_anchor stays present even on a repository CI has never reported to", layer: "request" }
     it "keeps run_anchor present on a repository CI has never reported to" do
       body = get_repository(query: { commit_sha: "deadbeefdead" })
 
@@ -3007,6 +3130,7 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
     # the tie-break — the id, which is the ingest sequence — is the only thing that can. A finder
     # ordering on `created_at` alone would pass or fail here at the database's discretion, which is
     # the shape this example exists to forbid.
+    # @intent: { entity: "Run anchor", action: "resolve same-sha runs", behavior: "two runs on one sha resolve to the newer one, broken by ingest sequence", layer: "request" }
     it "resolves two runs on one sha to the newer, broken by ingest sequence" do
       instant = 1.hour.ago
       older = create_test_run(repository: repository, commit_sha: "twice0000001", branch: "main",
@@ -3032,6 +3156,7 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
     # run strictly older than THIS one, on THIS one's branch". The baseline is asserted to be the
     # named run's PREDECESSOR and not the newest run's, which is the half that would silently stay
     # put if the growth blocks read `Repository#latest_test_run` directly.
+    # @intent: { entity: "Run anchor", action: "agree across blocks", behavior: "under an explicit ask every anchored block names the same single run", layer: "request" }
     it "keeps every anchored block naming the same run under an explicit ask" do
       first, second, _third = three_run_history
 
@@ -3055,6 +3180,7 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
     # of the fixture, so a later slice that "fixes" the mismatch by narrowing `history` to the named
     # run has to argue with this example — and so a client reading `run_anchor` learns why the two
     # disagree rather than filing it as a bug.
+    # @intent: { entity: "Run anchor", action: "leave history unanchored", behavior: "history stays where it was, so latest_run may legitimately differ from history[0]", layer: "request" }
     it "leaves history where it was, and lets latest_run differ from history[0]" do
       first, _second, third = three_run_history
 
@@ -3070,6 +3196,7 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
     # AC5, first half. `?commit_sha=` is "no ask", not `WHERE commit_sha = ''` — the column is NOT
     # NULL and `TestRun` validates its presence, so a blank matches nothing and an implementation
     # that queried on it would fall back while `run_anchor` claimed a request had been made.
+    # @intent: { entity: "Run anchor", action: "read blank shas as no ask", behavior: "a blank commit_sha is read as no ask rather than as an empty query", layer: "request" }
     it "reads a blank commit_sha as no ask rather than as an empty query" do
       _first, _second, third = three_run_history
 
@@ -3113,6 +3240,7 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
       # The positive-path example the shared examples' own doc comment requires to sit beside them: a
       # guard that swallowed EVERY value would answer 200 on all three malformed shapes too, and
       # nothing above separates "the guard rejects non-Strings" from "the parameter does nothing".
+      # @intent: { entity: "Run anchor", action: "accept string shas", behavior: "a commit_sha that is a string is honoured as an anchor ask", layer: "request" }
       it "honours a commit_sha that IS a string" do
         first, = three_run_history
 
@@ -3126,6 +3254,7 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
     # branch. Worth pinning because the two parameters are the only ones here that select ROWS rather
     # than open panels, and an implementation that let the branch predicate reach the anchor finder
     # would silently fail to resolve a sha whose run is on another branch.
+    # @intent: { entity: "Run anchor", action: "compose with branch", behavior: "a commit_sha ask and a branch ask compose without either overriding the other", layer: "request" }
     it "composes with ?branch= without either ask overriding the other" do
       feature = create_test_run(repository: repository, commit_sha: "feat00000001",
                                 branch: "feature/x", total_specs_count: 5)
@@ -3147,6 +3276,7 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
     # the whole response, and a lookup on a DEFAULT call is one every unparameterised GET pays for
     # nothing. `requested_test_run` and `latest_test_run` both memoize across the nil; this is what
     # says so from the outside.
+    # @intent: { entity: "Run anchor", action: "read the run once", behavior: "the named run is read exactly once, and nothing extra is read when no sha was named", layer: "request" }
     it "reads the named run once, and reads nothing extra when no sha was named" do
       first, = three_run_history
 
@@ -3187,6 +3317,7 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
       [main_runs, feature_runs]
     end
 
+    # @intent: { entity: "Repository branches catalogue", action: "expose the catalogue defect", behavior: "when the only window a client has holds no main row, no response names main and the defect is visible", layer: "request" }
     it "sees the defect: the only window a client has holds no main row, so no response names it" do
       trunk_hidden_repository
 
@@ -3200,6 +3331,7 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
     # AC1. The same repository, the same instant, NO query parameter — and the name that appears
     # nowhere in `history` appears in `branches`, with the count that says why a client should care.
     # Removing the catalogue turns this red; nothing else in the body can answer it.
+    # @intent: { entity: "Repository branches catalogue", action: "name main with its count", behavior: "a repository whose whole history window hides main still serves main with its run count", layer: "request" }
     it "names main, with its run count, on a repository whose whole history window hides it" do
       trunk_hidden_repository
 
@@ -3213,6 +3345,7 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
     # AC1's second half, and it is the sibling panel's stated rule rather than a convenience: the
     # client that needs the catalogue most has not selected anything yet, so it cannot be a block
     # that appears only once you already selected something.
+    # @intent: { entity: "Repository branches catalogue", action: "ignore branch for the catalogue", behavior: "the same branch catalogue is served whether or not a branch was asked for", layer: "request" }
     it "serves the same catalogue whether or not a branch was asked for" do
       trunk_hidden_repository
 
@@ -3229,6 +3362,7 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
     # comparing two branches' history must not have to strip a `+` before it can subtract, and a
     # count that stopped is a different fact from a count that finished — so both are served and
     # neither is spelled into the other.
+    # @intent: { entity: "Repository branches catalogue", action: "serve stopped counts", behavior: "a stopped walk count is served as a number and a flag, not as the panel's 30-plus string", layer: "request" }
     it "serves a stopped count as a number and a flag, not as the panel's 30+ string" do
       Array.new(35) do |index|
         create_test_run(repository: repository, commit_sha: "deep%08d" % index, branch: "main")
@@ -3252,6 +3386,7 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
     # AC3. The walk's bound, as tokens. Whole-hash, because this block IS the contract — a key
     # added without a line in the hash below fails here, and a pinned key dropped fails
     # here too.
+    # @intent: { entity: "Repository branches catalogue", action: "serve bound and order tokens", behavior: "the walk's bound and ordering are stated as tokens, not as the helper's prose", layer: "request" }
     it "states the walk's bound and its own ordering as tokens, not as the helper's prose" do
       trunk_hidden_repository
 
@@ -3281,6 +3416,7 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
     # ordering exists to prevent.
     #
     # `insert_all!` so the fixture costs one statement rather than three thousand.
+    # @intent: { entity: "Repository branches catalogue", action: "say why the walk stopped", behavior: "the walk is reported as cut on the repository where the trunk is missing because it genuinely is", layer: "request" }
     it "says the walk stopped, on the repository where the trunk is missing because it did" do
       now = Time.current
       TestRun.insert_all!(Array.new(3000) do |index|
@@ -3305,6 +3441,7 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
     # (`feature/000`…`feature/499`), and `?branch=feature/500` pins the one it did not reach.
     # `returned` is then 501 and a `==` derivation would report a cut walk as complete — which is
     # `RepositoriesHelper#trajectory_walk_cut?`'s stated reason for `>=`.
+    # @intent: { entity: "Repository branches catalogue", action: "report a pinned-branch cut", behavior: "a pinned branch pushing the row count past the bound still yields a reported cut walk", layer: "request" }
     it "still reports a cut walk when a pinned branch pushed the row count past the bound" do
       now = Time.current
       TestRun.insert_all!(Array.new(501) do |index|
@@ -3326,6 +3463,7 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
 
     # AC8's other half: pinning cannot invent a branch. A pinned name with no runs behind it drops
     # out with every other empty one, which is the same answer `history` gives it.
+    # @intent: { entity: "Repository branches catalogue", action: "invent no branches", behavior: "a branch parameter with no runs does not make the endpoint invent a branch entry", layer: "request" }
     it "does not invent a branch for a ?branch= that has no runs" do
       trunk_hidden_repository
 
@@ -3338,6 +3476,7 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
     # AC4. `RepositoriesHelper::TRAJECTORY_BRANCH_CHOICES` is about what a row of links can carry
     # before it stops being a way to find a branch. A JSON array has no such limit, and a display
     # bound leaking into a machine response would drop branches for a reason that does not apply.
+    # @intent: { entity: "Repository branches catalogue", action: "serve every walked branch", behavior: "the catalogue serves every branch the walk reached, not only the eight a row of links can hold", layer: "request" }
     it "serves every branch the walk reached, not the eight a row of links can hold" do
       trunk_hidden_repository
 
@@ -3351,6 +3490,7 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
     # AC5. `branch` is nullable and ingest accepts a body without it, so `null` means "the client
     # did not say" — a different fact from any branch name. The anonymous runs of every machine are
     # not one branch, and offering them a name here would offer a name `?branch=` refuses to match.
+    # @intent: { entity: "Repository branches catalogue", action: "exclude branchless runs", behavior: "runs that reported no branch are left out of the catalogue entirely", layer: "request" }
     it "leaves runs that reported no branch out of the catalogue entirely" do
       Array.new(5) { |index| create_test_run(repository: repository, commit_sha: "anon%08d" % index) }
       create_test_run(repository: repository, commit_sha: "named0000000", branch: "main")
@@ -3363,6 +3503,7 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
       expect(body["branches_window"]).to include("returned" => 1)
     end
 
+    # @intent: { entity: "Repository branches catalogue", action: "serve empty catalogues", behavior: "a repository CI has never reported to serves an empty catalogue, never null", layer: "request" }
     it "serves an empty catalogue, never null, for a repository whose CI has never reported" do
       body = get_repository
 
@@ -3374,6 +3515,7 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
     # AC. Re-derived straight from the table rather than from the same Ruby the serializer read, in
     # the ordering the model documents — most history first, ties to the branch pushed to most
     # recently, then to the name.
+    # @intent: { entity: "Repository branches catalogue", action: "match direct SQL", behavior: "the served catalogue equals direct SQL over the same repository's branches", layer: "request" }
     it "matches direct SQL over the same repository's branches" do
       trunk_hidden_repository
 
@@ -3394,6 +3536,7 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
     # `history_window` is asserted whole-hash, so a `branches` key folded in there would change a
     # block clients already read. Pinned here with a populated catalogue, which is the only state
     # where the mistake is possible.
+    # @intent: { entity: "Repository branches catalogue", action: "preserve the history window", behavior: "the catalogue leaves history_window exactly as it was rather than growing a branches key", layer: "request" }
     it "leaves history_window exactly as it was, rather than growing a branches key" do
       trunk_hidden_repository
 
@@ -3431,6 +3574,7 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
     # The invariance, from a ONE-BRANCH baseline out to forty. One query per branch — the shape the
     # `SELECT DISTINCT` this walk replaced would have invited — reads as thirty-nine extra
     # statements at the top of this example and none at the bottom.
+    # @intent: { entity: "Repository branches catalogue", action: "hold cost across sizes", behavior: "the catalogue costs the same to serve at 1 branch, at 10 and at 40", layer: "request" }
     it "costs the same at 1 branch, at 10 and at 40" do
       create_branches(1, prefix: "one")
       get_repository
@@ -3450,6 +3594,7 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
 
     # The budget stated as ONE absolute query rather than only as "the same as before", because
     # invariance alone would also hold for a catalogue that cost forty-one queries at every size.
+    # @intent: { entity: "Repository branches catalogue", action: "pay one query", behavior: "the whole catalogue is paid for with exactly one query at any branch count", layer: "request" }
     it "pays exactly one query for the whole catalogue, at any branch count" do
       create_branches(40, prefix: "budget")
       # Warm the API-key lookup path so the auth queries do not vary between runs.
@@ -3477,6 +3622,7 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
     # EXPLAINED ON THE STATEMENT THE REQUEST ACTUALLY RAN, captured off the notification rather than
     # rebuilt here — `BRANCH_HISTORY_SQL` is `private_constant`, and a hand-copied query would be a
     # plan for a string this endpoint never executes.
+    # @intent: { entity: "Repository branches catalogue", action: "use the covering index", behavior: "the catalogue query is served by the (repository_id, branch, created_at, id) index with no sequential scan", layer: "request" }
     it "is served by the (repository_id, branch, created_at, id) index, with no sequential scan" do
       now = Time.current
       TestRun.insert_all!(Array.new(3000) do |index|
@@ -3542,6 +3688,7 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
     #
     # Three rows is still TWENTY-SEVEN short of the bound: a per-row `pick` for `shard_count` reads
     # as twenty-seven extra statements here, which is the leak this bounds.
+    # @intent: { entity: "Repository branches catalogue", action: "hold narrowed-window cost", behavior: "the narrowed window costs the same at 3 branch rows, at 30 and at 40", layer: "request" }
     it "costs the same at 3 branch rows, at 30 and at 40" do
       create_main_runs(3, prefix: "cost")
       get_repository(query: { branch: "main" })
@@ -3566,6 +3713,7 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
     # `latest_run` pays its own separate un-grouped aggregate for `shard_totals` on ONE row. That
     # query is not part of this window and is not what this example bounds; counting it here would
     # make the budget read as three and hide which of the two axes moved if one ever did.
+    # @intent: { entity: "Repository branches catalogue", action: "pay two queries", behavior: "a 30-row narrowed window costs exactly two queries: the history read and one grouped count", layer: "request" }
     it "pays exactly two queries for a 30-row narrowed window: the history and one grouped count" do
       create_main_runs(30, prefix: "budget")
       # Warm the API-key lookup path so the auth queries do not vary between runs.
@@ -3619,6 +3767,7 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
     # before it is filtered is what returns zero `main` rows today. Asserted on the SQL rather than
     # on the rows, because a two-query implementation that filtered in Ruby can return exactly the
     # same rows and would pass every example above.
+    # @intent: { entity: "Repository branches catalogue", action: "inline the branch predicate", behavior: "the branch predicate lives in the same SQL statement as the window bound instead of in a second query", layer: "request" }
     it "puts the branch predicate in the same statement as the bound" do
       create_main_runs(30, prefix: "onequery")
       get_repository(query: { branch: "main" })
@@ -3658,6 +3807,7 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
     # the planner sorting every run on the branch first. That is the difference between O(limit) and
     # O(history) as the branch grows, and it is the same distinction
     # `Repository#suite_size_trajectory` measured on a 40,000-run branch and documented.
+    # @intent: { entity: "Repository branches catalogue", action: "walk the index backwards", behavior: "the narrowed window is served by walking the covering index backwards with no sort step", layer: "request" }
     it "is served by the (repository_id, branch, created_at, id) index, walked backwards, with no sort" do
       now = Time.current
       TestRun.insert_all!(Array.new(3000) do |index|
@@ -3721,6 +3871,7 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
     # Verified by mutation: making `serialized_shards` read `test_run.test_run_shards.map` instead
     # of the single `#shard_reports` pluck turns the 4-vs-40 assertions red (44 ≠ 8) and leaves the
     # `+ 1` at one — which is exactly the failure this example exists to catch, still caught.
+    # @intent: { entity: "Repository latest-run endpoint", action: "hold shard-cost flat", behavior: "serving the run costs the same on a 4-shard run and a 40-shard run, one read more than a shardless one", layer: "request" }
     it "costs the same on a 4-shard run and a 40-shard run, one read more than a shardless one" do
       create_test_run(repository: repository, commit_sha: "noshards0000", duration_seconds: 42.5)
       get_repository
@@ -3759,6 +3910,7 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
     # failure rather than as a quietly smaller baseline. What must not move is the number of reads
     # as the matrix grows — a per-shard `pick` reads as 40 statements here and as one everywhere
     # else, so this is the only place it is visible.
+    # @intent: { entity: "Repository latest-run endpoint", action: "hold decomposition cost flat", behavior: "a decomposable run costs two extra queries, and the same two whether it has 4 shards or 40", layer: "request" }
     it "costs two extra queries on a decomposable run, and the same two whether it has 4 shards or 40" do
       create_test_run(repository: repository, commit_sha: "gated0000000", duration_seconds: 42.5)
       get_repository
@@ -3785,6 +3937,7 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
     # Baseline at ONE run on purpose. The bound is ten, so a baseline taken at three rows would sit
     # inside the window a leak scales with and understate it, and 25 exceeds the bound so the count
     # must stop moving there too — a serializer that ignored `limit` shows up as 25 ≠ 10.
+    # @intent: { entity: "Repository latest-run endpoint", action: "hold cost across run counts", behavior: "serving the endpoint costs the same on 1 run, on 10 runs and on 25 runs", layer: "request" }
     it "costs the same on 1 run, on 10 runs and on 25 runs" do
       create_test_run(repository: repository, commit_sha: "runcount0000", duration_seconds: 42.5)
       get_repository
@@ -3827,6 +3980,7 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
     # 20,000-example design point. A serializer that fetched rows and rolled them up in Ruby — or
     # one that took a second pass for `file_count` — reads as two here and as more as the suite
     # grows.
+    # @intent: { entity: "Repository latest-run endpoint", action: "read observations once", behavior: "spec_observations is read exactly once, on a run with rows and on a run without", layer: "request" }
     it "reads spec_observations exactly once, on a run with rows and on a run without" do
       bare = create_test_run(repository: repository, commit_sha: "cost00000001", duration_seconds: 42.5)
       get_repository
@@ -3859,6 +4013,7 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
     # The history axis, restated for this key alone. `spec_files` is served on `latest_run` and on
     # nothing else, so a window of ten runs must not read the table ten times — the N+1 that would
     # be invisible in the example above, where every fixture has exactly one run to serve.
+    # @intent: { entity: "Repository latest-run endpoint", action: "hold reads against history", behavior: "the observation read count does not grow with the number of runs the history holds", layer: "request" }
     it "reads it once whatever the history holds" do
       run = create_test_run(repository: repository, commit_sha: "costwindow01", duration_seconds: 42.5)
       observe(run, path: "spec/a_spec.rb", duration: 0.5, line_number: 1)
@@ -3886,6 +4041,7 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
     # 20,000-example design point: 20 examples over 2 areas and 2000 over 200 cost the same single
     # read. A serializer that fetched rows and grouped them in Ruby — or that took a second pass
     # for `directory_count` — reads as two here and as more as the suite grows.
+    # @intent: { entity: "Repository latest-run endpoint", action: "read once per area grain", behavior: "the area grain reads spec_observations exactly once, with rows and without", layer: "request" }
     it "reads spec_observations exactly once for the area grain, on a run with rows and without" do
       bare = create_test_run(repository: repository, commit_sha: "acost0000001", duration_seconds: 42.5)
       get_repository
@@ -3932,6 +4088,7 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
     # The history axis, restated for this key alone. `spec_directories` is served on `latest_run`
     # and on nothing else, so a window of sixteen runs must not read the table sixteen times — the
     # N+1 that is invisible in the example above, where every fixture has one run to serve.
+    # @intent: { entity: "Repository latest-run endpoint", action: "hold area-grain reads", behavior: "the area-grain observation read count stays fixed whatever the history holds", layer: "request" }
     it "reads it once whatever the history holds" do
       run = create_test_run(repository: repository, commit_sha: "acostwindow1", duration_seconds: 42.5)
       observe(run, path: "spec/models/a_spec.rb", duration: 0.5, line_number: 1)
@@ -3974,6 +4131,7 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
     # The by-description patterns were chosen against that same trap: two of the flakiness grain's
     # four also `GROUP BY name`, so this fixture's empty flakiness list is what would catch a
     # description pattern loose enough to adopt them.
+    # @intent: { entity: "Repository latest-run endpoint", action: "bound total observation reads", behavior: "spec_observations is read exactly seven times in total: one per rollup grain, two per ranking, no others", layer: "request" }
     it "reads spec_observations exactly seven times in total — one per rollup grain, two per ranking, and no other" do
       run = create_test_run(repository: repository, commit_sha: "acosttotal01", duration_seconds: 42.5)
       observe(run, path: "spec/models/a_spec.rb", duration: 0.5, line_number: 1)
@@ -4018,6 +4176,7 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
     # 20,000-example design point. A serializer that fetched rows and sorted them in Ruby — or that
     # took a third pass for the coverage figures — reads as three here and as more as the suite
     # grows.
+    # @intent: { entity: "Repository latest-run endpoint", action: "read twice for the grain", behavior: "this grain reads spec_observations exactly twice, on a run with rows and without", layer: "request" }
     it "reads spec_observations exactly twice for this grain, on a run with rows and without" do
       bare = create_test_run(repository: repository, commit_sha: "ecost0000001", duration_seconds: 42.5)
       get_repository
@@ -4052,6 +4211,7 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
     # `queries_against`'s per-table narrowing cannot see. Stated as UNCHANGED across two orders of
     # magnitude of suite size rather than as a number, because the number belongs to the endpoint's
     # other blocks and would rebaseline every time one of them changed.
+    # @intent: { entity: "Repository latest-run endpoint", action: "hold total cost as the suite grows", behavior: "the endpoint's total query count is stated as unchanged across two orders of magnitude of suite size", layer: "request" }
     it "leaves the endpoint's total query count unmoved as the suite grows" do
       run = create_test_run(repository: repository, commit_sha: "ecosttotal01", duration_seconds: 42.5)
       10.times { |line| observe(run, path: "spec/a_spec.rb", duration: 0.5, line_number: line) }
@@ -4071,6 +4231,7 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
     # The history axis, restated for this key alone. `slowest_examples` is served on `latest_run`
     # and on nothing else, so a window of sixteen runs must not read the table thirty-two times —
     # the N+1 that is invisible in the examples above, where every fixture has one run to serve.
+    # @intent: { entity: "Repository latest-run endpoint", action: "hold history reads flat", behavior: "the description-grain read count stays the same whatever the run history holds", layer: "request" }
     it "reads it twice whatever the history holds" do
       run = create_test_run(repository: repository, commit_sha: "ecostwindow1", duration_seconds: 42.5)
       observe(run, path: "spec/models/a_spec.rb", duration: 0.5, line_number: 1)
@@ -4101,6 +4262,7 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
     # roadmap's 20,000-example design point. A serializer that fetched rows and grouped them in Ruby
     # — or that took a third pass for the presence counts — reads as three here and as more as the
     # suite grows.
+    # @intent: { entity: "Repository latest-run endpoint", action: "read twice for the grain", behavior: "this grain reads spec_observations exactly twice, on a run with rows and without", layer: "request" }
     it "reads spec_observations exactly twice for this grain, on a run with rows and without" do
       bare = create_test_run(repository: repository, commit_sha: "dcost0000001", duration_seconds: 42.5)
       get_repository
@@ -4141,6 +4303,7 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
     # `queries_against`'s per-table narrowing cannot see. Stated as UNCHANGED across two orders of
     # magnitude of suite size rather than as a number, because the number belongs to the endpoint's
     # other blocks and would rebaseline every time one of them changed.
+    # @intent: { entity: "Repository latest-run endpoint", action: "hold the endpoint total", behavior: "the whole endpoint's query count is unmoved as the suite grows, since the figure belongs to its other blocks", layer: "request" }
     it "leaves the endpoint's total query count unmoved as the suite grows" do
       run = create_test_run(repository: repository, commit_sha: "dcosttotal01", duration_seconds: 42.5)
       10.times { |line| observe(run, path: "spec/a_spec.rb", duration: 0.5, line_number: line, name: "a") }
@@ -4164,6 +4327,7 @@ RSpec.describe "GET /api/v1/repository — latest_run and history", type: :reque
     # `latest_run` and on nothing else, so a window of sixteen runs must not read the table
     # thirty-two times — the N+1 that is invisible in the examples above, where every fixture has
     # one run to serve.
+    # @intent: { entity: "Repository latest-run endpoint", action: "hold reads against sixteen runs", behavior: "a sixteen-run window still reads the observation and description grains a fixed number of times, killing the N+1", layer: "request" }
     it "reads it twice whatever the history holds" do
       run = create_test_run(repository: repository, commit_sha: "dcostwindow1", duration_seconds: 42.5)
       2.times { |line| observe(run, path: "spec/models/a_spec.rb", duration: 0.5, line_number: line, name: "a") }

@@ -106,6 +106,7 @@ RSpec.describe "GET /api/v1/repository — directory_run_growth", type: :request
 
     # No `?branch=`, no `?spec_directory=`, nothing. The dashboard answers this question with no
     # parameter and this endpoint served `directory_growth: null` for exactly the same request.
+    # @intent: { entity: "directory_run_growth", action: "serve growth without a branch ask", behavior: "a plain unparameterised request carries a comparable window block and the run-over-run rows, the question the window pair needs a branch to answer", layer: "request" }
     it "carries growth on a request that names no branch at all" do
       window, block = blocks
 
@@ -117,6 +118,7 @@ RSpec.describe "GET /api/v1/repository — directory_run_growth", type: :request
     # The operands the panel's labels are built from, and nothing that has been worded. Read through
     # `serialized_directory_growth_row`, which is SHARED VERBATIM with the window pair — so this is
     # also the assertion that the shared row serializer reaches this block unchanged.
+    # @intent: { entity: "directory_run_growth", action: "serve each area operands and states", behavior: "every row carries baseline_count, anchor_count, change, moved, new_area and removed_area so a client builds its own labels from numbers", layer: "request" }
     it "serves each area's two operands, their difference and the three states of it" do
       _window, block = blocks
 
@@ -138,6 +140,7 @@ RSpec.describe "GET /api/v1/repository — directory_run_growth", type: :request
     # `change` above is signed in. Both halves flip together if the two runs are handed to
     # `SpecDirectoryGrowth.for` in the wrong order, so both are stated: swapping the arguments turns
     # `spec/models` from `+3` into `-3` AND swaps these two shas.
+    # @intent: { entity: "directory_run_growth", action: "anchor on the latest run", behavior: "anchor is the newest run and baseline its predecessor on the same branch, so every change sign survives an argument swap in the growth object", layer: "request" }
     it "anchors on the latest run and baselines on the previous one, so every change carries its true sign" do
       window, block = blocks
 
@@ -153,6 +156,7 @@ RSpec.describe "GET /api/v1/repository — directory_run_growth", type: :request
     # The area grain is NOT DERIVABLE from what the endpoint already served, stated as an assertion
     # rather than as a claim in a comment: the two runs report the SAME `total_specs`, and three
     # areas moved between them.
+    # @intent: { entity: "directory_run_growth", action: "reach underivable figures", behavior: "two runs reporting identical total_specs still show three areas moving, proving the area grain cannot be computed from the served run totals", layer: "request" }
     it "reaches figures no arrangement of the run totals it already serves can produce" do
       body = get_repository
       totals = body["history"].map { |row| row["total_specs"] }
@@ -165,6 +169,7 @@ RSpec.describe "GET /api/v1/repository — directory_run_growth", type: :request
     # `change_reading`, `previous_count_label` and `latest_count_label` — typographic and
     # screen-reader spellings of these same numbers. A client served those would be splitting
     # strings and stripping glyphs to compare two rows.
+    # @intent: { entity: "directory_run_growth", action: "serve operands never panel spellings", behavior: "no serialized string is a label the dashboard typeset, so a client compares rows arithmetically instead of splitting glyphs", layer: "request" }
     it "serves no value the panel has worded, and no glyph it has typeset" do
       window, block = blocks
 
@@ -180,6 +185,7 @@ RSpec.describe "GET /api/v1/repository — directory_run_growth", type: :request
     # The cap's operands, so "am I seeing all of them" is answerable. `directory_count` is counted
     # BEFORE the `LIMIT` applies (a window function runs first), and `limit` is read off the
     # constant rather than restated.
+    # @intent: { entity: "directory_run_growth", action: "disclose coverage and cap operands", behavior: "directory_count, truncated, limit and both recorded counts are served, letting a client tell a full list from a cut one", layer: "request" }
     it "discloses the areas it covered, whether the list was cut, and the bound that cut it" do
       _window, block = blocks
 
@@ -192,6 +198,7 @@ RSpec.describe "GET /api/v1/repository — directory_run_growth", type: :request
   end
 
   describe "a comparison covering more areas than the block lists" do
+    # @intent: { entity: "directory_run_growth", action: "disclose a truncation honestly", behavior: "when areas exceed the limit the block serves only the limit rows but reports the true directory_count, the bound and truncated true", layer: "request" }
     it "discloses the cap, the total it was applied to, and the bound that produced it" do
       areas = Array.new(SpecObservation::MOVED_DIRECTORIES_LIMIT + 2) { |index| "spec/area#{index}" }
       ingest_areas(areas.index_with { 1 }, commit_sha: "previous0001", at: 20.days.ago)
@@ -222,6 +229,7 @@ RSpec.describe "GET /api/v1/repository — directory_run_growth", type: :request
                    at: 10.days.ago)
     end
 
+    # @intent: { entity: "directory_run_growth", action: "compare within the latest run branch", behavior: "the baseline is the previous run on the anchor run own branch, not the interleaved all-branch neighbour row that a different branch wrote", layer: "request" }
     it "compares the two newest runs on the latest run's own branch, not the interleaved row" do
       window, block = blocks
 
@@ -240,6 +248,7 @@ RSpec.describe "GET /api/v1/repository — directory_run_growth", type: :request
     # NOT RE-ANCHORED BY `?branch=`, exactly like `latest_run` and unlike `history`. A client
     # narrowing the history has asked a question about a series, not for a different comparison —
     # and `branch` says which branch this one was actually taken on, so the two cannot be confused.
+    # @intent: { entity: "directory_run_growth", action: "ignore a branch parameter for anchoring", behavior: "a branch ask narrows history but never re-anchors the comparison, which keeps naming the latest run own branch and shas", layer: "request" }
     it "keeps naming the latest run's branch under a ?branch= that names another" do
       window, block = blocks(query: { branch: "main" })
 
@@ -267,6 +276,7 @@ RSpec.describe "GET /api/v1/repository — directory_run_growth", type: :request
 
     def fresh_repository = create_repository(user: @user, github_full_name: "acme/r#{SecureRandom.hex(4)}")
 
+    # @intent: { entity: "directory_run_growth", action: "name the applicable failure state", behavior: "the nine shapes from missing runs to unrecorded rows each get a distinct state token with comparable false and a null rows block, comparable alone serving rows", layer: "request" }
     it "names which of the nine applies, and serves no rows in any but the last" do
       # SERIALIZER-LEVEL, and NOT model states: `SpecDirectoryGrowth.for` dereferences its second
       # argument on its second line and has no nil state of its own.
@@ -353,6 +363,7 @@ RSpec.describe "GET /api/v1/repository — directory_run_growth", type: :request
     # contract block goes to the SAME KEY SET in an absence state as in a comparison, rather than
     # going absent or going short. A block that explains a `null` is worthless if it is itself
     # absent whenever the `null` happens.
+    # @intent: { entity: "directory_run_growth_window", action: "keep the contract key set constant", behavior: "the contract block serves the same keys with no comparison as with one, so the explanation of a null never goes absent when the null happens", layer: "request" }
     it "serves the same contract keys with no comparison as with one" do
       absent = fresh_repository
       compared = fresh_repository.tap { |repo| adjacent_runs(repo: repo) }
@@ -378,6 +389,7 @@ RSpec.describe "GET /api/v1/repository — directory_run_growth", type: :request
     # WITHOUT the counts it just read, so every aggregate falls back to its `0` default: serving
     # them raw would print `anchor_recorded_count: 0` for a latest run that recorded four hundred
     # rows. The state token is the actionable half, and it is served one key up.
+    # @intent: { entity: "directory_run_growth", action: "withhold denominators rather than zero them", behavior: "in a row-decided state the block is null instead of printing zero counts that the dropped aggregates would have fabricated", layer: "request" }
     it "withholds the denominators in a state whose object dropped them, rather than serving zeroes" do
       ingest(repository, [], commit_sha: "totalsonly01", at: 20.days.ago, total: 400)
       ingest_areas({ "spec/models" => 400 }, commit_sha: "recorded0001", at: 10.days.ago)
@@ -401,6 +413,7 @@ RSpec.describe "GET /api/v1/repository — directory_run_growth", type: :request
     # that is most visible: unfiltered, the window pair declines (its gate is `?branch=`) and the new
     # pair compares. Every `directory_growth*` value is stated in full rather than by `include`, so a
     # change to either key is a red example here.
+    # @intent: { entity: "directory_growth pair", action: "leave the window pair untouched", behavior: "an unfiltered request still declines the branch-gated window pair and gets the run-over-run rows, with every directory_growth value byte-identical to before", layer: "request" }
     it "leaves directory_growth and directory_growth_window exactly as they were" do
       body = get_repository
 
@@ -416,6 +429,7 @@ RSpec.describe "GET /api/v1/repository — directory_run_growth", type: :request
 
     # Named, the window pair still answers exactly as it did — over its own window, with its own
     # basis token and its own state vocabulary, none of which the new pair touched.
+    # @intent: { entity: "directory_growth pair", action: "serve both pairs distinctly under a branch", behavior: "with a branch ask the window pair answers over its own basis tokens and at two runs the two pairs agree on rows while their basis tokens still differ", layer: "request" }
     it "leaves the window pair's own answer alone under ?branch=" do
       body = get_repository(query: { branch: "main" })
 
@@ -438,6 +452,7 @@ RSpec.describe "GET /api/v1/repository — directory_run_growth", type: :request
     # THE TWO PAIRS SEPARATE THE MOMENT A THIRD RUN EXISTS — the assertion that the example above is
     # an agreement at two runs and not a duplicated key. `spec/models` moved 1 → 9 → 4: the window
     # spans the ends (+3) and this pair spans the newest two (−5).
+    # @intent: { entity: "directory_run_growth", action: "diverge from the window pair", behavior: "once a run sits between the window ends the two pairs report different operands for the same area, proving they are separate measurements", layer: "request" }
     it "answers differently from the window pair once there is a run between the ends" do
       ingest_areas({ "spec/models" => 9, "spec/services" => 2, "spec/jobs" => 2 },
                    commit_sha: "middle000001", at: 15.days.ago)
@@ -463,6 +478,7 @@ RSpec.describe "GET /api/v1/repository — directory_run_growth", type: :request
       end
     end
 
+    # @intent: { entity: "directory_run_growth", action: "match the dashboard panel figures", behavior: "the API rows and the rendered repositories#show panel name the same areas, operands and movements for the same repository and run", layer: "request" }
     it "names the same areas, with the same operands and the same movements" do
       adjacent_runs
 
@@ -493,6 +509,7 @@ RSpec.describe "GET /api/v1/repository — directory_run_growth", type: :request
 
     # The panel prints the previous run's sha in its caption; the block serves it as a key. Same
     # run, so an agent reading the API and a human reading the page are looking at one comparison.
+    # @intent: { entity: "directory_run_growth", action: "match the panel caption run", behavior: "the baseline_commit_sha the block serves is the run the panel caption prints, so both surfaces describe one comparison", layer: "request" }
     it "names the same previous run the panel's caption does" do
       adjacent_runs
 
@@ -511,6 +528,7 @@ RSpec.describe "GET /api/v1/repository — directory_run_growth", type: :request
   # `JSON.stringify(overview, null, 2)` and returns the object verbatim as `structured`, so a key
   # reaches `get_repository_overview` if and only if it is a TOP-LEVEL key of this body.
   describe "what a passthrough client sees" do
+    # @intent: { entity: "directory_run_growth", action: "land at the top level only", behavior: "both keys are added beside history and never nested inside latest_run, which keeps single-run facts single-run", layer: "request" }
     it "adds the pair at the top level, and nowhere else" do
       adjacent_runs
 
@@ -533,6 +551,7 @@ RSpec.describe "GET /api/v1/repository — directory_run_growth", type: :request
     # growth blocks issue `SpecObservation.directory_growth_between`, so both land in the SAME grain
     # — `growth_grain_reads` cannot tell them apart by pattern. Unfiltered, the window pair is not
     # constructed at all, so the one read here is unambiguously this block's.
+    # @intent: { entity: "directory_run_growth", action: "read the growth grain once", behavior: "an unparameterised request issues exactly one growth-grain spec_observations read, which also guards the presenter memoization", layer: "request" }
     it "reads spec_observations exactly once on an unparameterised request" do
       adjacent_runs
       get_repository(key: api_key)
@@ -544,6 +563,7 @@ RSpec.describe "GET /api/v1/repository — directory_run_growth", type: :request
     # matching no grain's pattern is invisible to every one of them. The total is also asserted as
     # the SUM OF THE PARTS, so a read that stopped being issued and a different one that started
     # cannot cancel out into a passing number.
+    # @intent: { entity: "directory_run_growth", action: "add exactly one classified read", behavior: "the per-grain partition accounts for every observation read on the request, and the total equals the sum of the classified parts", layer: "request" }
     it "adds exactly that one to the table's total, and no second" do
       adjacent_runs
       get_repository(key: api_key)
@@ -561,6 +581,7 @@ RSpec.describe "GET /api/v1/repository — directory_run_growth", type: :request
     # NOTHING. The gate short-circuits before any read in five of the nine states — the two
     # serializer states never construct the object, and three of the model's own are decided from
     # the two runs alone.
+    # @intent: { entity: "directory_run_growth", action: "skip reads with nothing to compare", behavior: "a repository whose state is decided from the runs alone issues no growth-grain read while the single-run grains keep reading", layer: "request" }
     it "reads spec_observations for this grain not at all where there is nothing to compare" do
       solo = create_repository(user: @user, github_full_name: "acme/solo")
       solo_key = solo.api_keys.create!
@@ -577,6 +598,7 @@ RSpec.describe "GET /api/v1/repository — directory_run_growth", type: :request
     # A repository CI has never reported on does not raise, and asks NOTHING — neither
     # `spec_observations` nor the previous-run lookup, which `Repository#previous_test_run_on_branch`
     # declines before any read when the run is nil.
+    # @intent: { entity: "directory_run_growth", action: "ask nothing of a runless repository", behavior: "a repository CI never reported on answers 200 with no growth read and no previous-run lookup at all", layer: "request" }
     it "asks nothing at all of a repository with no runs" do
       empty = create_repository(user: @user, github_full_name: "acme/empty")
       empty_key = empty.api_keys.create!
@@ -596,6 +618,7 @@ RSpec.describe "GET /api/v1/repository — directory_run_growth", type: :request
     # the ROW-VALUE PREDICATE rather than on `"branch" = `, which `recent_test_runs` also emits
     # under `?branch=`: `(test_runs.created_at, test_runs.id) < (...)` is issued by
     # `Repository#previous_test_run_on_branch` and by nothing else this endpoint calls.
+    # @intent: { entity: "directory_run_growth", action: "look up the previous run once", behavior: "the row-value-predicate previous-run lookup fires exactly once per request however many blocks read the baseline", layer: "request" }
     it "looks the previous run up exactly once" do
       adjacent_runs
       get_repository(key: api_key)
@@ -617,6 +640,7 @@ RSpec.describe "GET /api/v1/repository — directory_run_growth", type: :request
     # `repository_id`, told apart only by a bind value the log does not carry. So the falsifiable
     # statement is the count: three reads of `test_runs` on this request — the anchor, the window,
     # and the previous-run lookup — and an unmemoized anchor makes it five.
+    # @intent: { entity: "directory_run_growth", action: "select the latest run once", behavior: "test_runs is read three times total on the request and the anchor lookup is memoized at the controller however many blocks want it", layer: "request" }
     it "selects the latest run once, however many blocks read it" do
       adjacent_runs
       get_repository(key: api_key)
@@ -640,6 +664,7 @@ RSpec.describe "GET /api/v1/repository — directory_run_growth", type: :request
     # The cost does not follow the size of the suite: the aggregate is `GROUP BY` area over two run
     # ids in an `IN` list, and the row cap bounds what comes back. A relative pin rather than a
     # number that would need rebaselining.
+    # @intent: { entity: "directory_run_growth", action: "stay flat as the suite grows", behavior: "ingesting a much larger run leaves the query count and the single growth read unchanged because the aggregate groups two run ids under a row cap", layer: "request" }
     it "costs the same one read as the suite grows" do
       adjacent_runs
       get_repository(key: api_key)
@@ -657,6 +682,7 @@ RSpec.describe "GET /api/v1/repository — directory_run_growth", type: :request
 
     # Nor does it follow the length of the history — this pair reads the two newest rows and never
     # walks, so thirty runs cost what two do.
+    # @intent: { entity: "directory_run_growth", action: "stay flat as history grows", behavior: "thirty runs cost the same single growth read as two since the pair reads only the two newest rows and never walks the history", layer: "request" }
     it "costs the same at 2 runs and at 30" do
       adjacent_runs
       get_repository(key: api_key)
