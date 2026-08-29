@@ -30,6 +30,7 @@ RSpec.describe "System spec driver error tolerance" do
   # Chromium process is started and these examples cost milliseconds.
   subject(:driver) { Capybara.drivers[:headless_chromium].call(nil) }
 
+  # @intent: { entity: "System driver error tolerance", action: "register headless chromium driver", behavior: "the driver the suite actually uses treats chromedriver UnknownError as an invalid-element error so Capybara waits through it", layer: "system" }
   it "retries the detached-node error chromedriver reports as UnknownError" do
     expect(driver.invalid_element_errors).to include(Selenium::WebDriver::Error::UnknownError)
   end
@@ -37,6 +38,7 @@ RSpec.describe "System spec driver error tolerance" do
   # The widening must ADD to Capybara's list rather than replace it. A subclass that returned only
   # the new class would pass the example above while silently dropping the stale-element handling
   # every other example in the suite depends on.
+  # @intent: { entity: "System driver error tolerance", action: "widen invalid_element_errors", behavior: "the added UnknownError class extends rather than replaces Capybara stock stale and interactability errors", layer: "system" }
   it "keeps the errors Capybara already tolerated" do
     expect(driver.invalid_element_errors).to include(
       Selenium::WebDriver::Error::StaleElementReferenceError,
@@ -53,6 +55,7 @@ RSpec.describe "System spec driver error tolerance" do
   # element, so the mechanism is exercised without needing to lose a real race. The block raises
   # once and then succeeds — exactly the shape of a transient swap — and the assertion is that the
   # caller sees the SUCCESS.
+  # @intent: { entity: "System driver error tolerance", action: "synchronize a node interaction", behavior: "a block raising the detached-node error once is re-run and its second-attempt success is returned to the caller", layer: "system" }
   it "recovers when a detached-node error is raised once and the retry succeeds" do
     session = Capybara::Session.new(:headless_chromium, nil)
     node = Capybara::Node::Base.new(session, driver)

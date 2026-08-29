@@ -24,6 +24,7 @@ RSpec.describe "Bulk organization registration", type: :system do
     @user = sign_in_via_github_in_browser
   end
 
+  # @intent: { entity: "BulkOrganizationRegistration", action: "submit the repository picker form", behavior: "the rendered non-redirect summary reaches the browser and the picker form is gone, with both repositories registered", layer: "system" }
   it "shows the summary after registering, rather than leaving the picker untouched" do
     visit bulk_repositories_path(organization: "acme")
 
@@ -52,6 +53,7 @@ RSpec.describe "Bulk organization registration", type: :system do
   # arrive the way it does in life — the page was rendered when both were free, and one of them was
   # registered before the button was pressed. That is also the case where a dishonest summary would
   # hurt most, since the user has every reason to believe both were registered.
+  # @intent: { entity: "BulkOrganizationRegistration", action: "register a stale mixed batch", behavior: "the summary shown to the user distinguishes the skipped already-registered row with its reason from the one registered", layer: "system" }
   it "reports skips alongside registrations in the browser" do
     visit bulk_repositories_path(organization: "acme")
 
@@ -73,6 +75,7 @@ RSpec.describe "Bulk organization registration", type: :system do
   # "Select all shown" must reach exactly the rows the search box is currently showing — a control
   # that quietly reached past the narrowing would register repositories the user had filtered out
   # of view.
+  # @intent: { entity: "BulkOrganizationRegistration", action: "use select-all-shown with an active search filter", behavior: "only the filtered-in repository is checked and registered while the hidden one is left alone", layer: "system" }
   it "selects only the rows the search box is currently showing" do
     visit bulk_repositories_path(organization: "acme")
 
@@ -99,6 +102,7 @@ RSpec.describe "Bulk organization registration", type: :system do
                           github_repo("octocat/blog", owner_type: "User")])
     end
 
+    # @intent: { entity: "BulkOrganizationRegistration", action: "start from the chooser with only user-owned repositories", behavior: "the personal-namespace card is offered and a two-repository batch registers through it", layer: "system" }
     it "offers the personal namespace and registers a batch from it" do
       visit bulk_repositories_path
 
@@ -143,6 +147,7 @@ RSpec.describe "Bulk organization registration", type: :system do
   # repositories are registered, the request spec still sees the tokens in the body it rendered
   # itself, and the user watches the picker sit there — with the only copy of two credentials
   # discarded in a response the browser dropped on the floor.
+  # @intent: { entity: "BulkOrganizationRegistration", action: "register a two-repository batch", behavior: "both one-time plaintext tokens render on the delivered page with the reveal-once warning visible to the user", layer: "system" }
   it "shows every newly registered repository's key on the summary, in the browser" do
     visit bulk_repositories_path(organization: "acme")
 

@@ -61,6 +61,7 @@ RSpec.describe GithubApi do
   describe "reading a repository" do
     # `admin` is the field the whole slice turns on: it is the user's OWN permission, and it is what
     # separates "somebody gave SpecGuard this repository" from "you may register it".
+    # @intent: { entity: "GithubApi", action: "read installation repositories", behavior: "the listing carries the payload's privacy, owner type and this user's own admin bit as distinct readable predicates", layer: "unit" }
     it "reports what GitHub says about the repository AND about this user's access to it" do
       with_responses(http_response(Net::HTTPOK, body: repositories_payload(
         [repo_payload("acme/billing", private: true, admin: true)]
@@ -78,6 +79,7 @@ RSpec.describe GithubApi do
     # `archived?` are false — both are claims the payload has to make — `organization?` is false,
     # which withholds rather than guessing a namespace's kind, and `admin?` is false, which FAILS
     # CLOSED: a payload with no permissions hash must not read as an administrator.
+    # @intent: { entity: "GithubApi", action: "read installation repositories", behavior: "a bare payload reads false for private, archived, organization and admin — failing closed on the permission", layer: "unit" }
     it "reads absent fields as withheld rather than inventing them" do
       with_responses(http_response(Net::HTTPOK,
                                    body: repositories_payload([{ "full_name" => "acme/billing" }])))
@@ -90,6 +92,7 @@ RSpec.describe GithubApi do
       expect(repo).not_to be_admin
     end
 
+    # @intent: { entity: "GithubApi", action: "read installation repositories", behavior: "each request sends the user token as a bearer with the pinned GitHub API version and vendor Accept header", layer: "unit" }
     it "authenticates as the user and pins the API version" do
       fake = with_responses(http_response(Net::HTTPOK, body: repositories_payload([])))
 
@@ -109,6 +112,7 @@ RSpec.describe GithubApi do
       Net::HTTPNotFound => GithubApi::NotFound,
       Net::HTTPInternalServerError => GithubApi::Unavailable
     }.each do |http_class, error_class|
+      # @intent: { entity: "GithubApi", action: "map HTTP errors", behavior: "each intercepted Net::HTTP error class is raised as its named GithubApi error type", layer: "unit" }
       it "turns #{http_class.name.demodulize} into #{error_class.name}" do
         with_responses(http_response(http_class, code: "500"))
 
@@ -119,6 +123,7 @@ RSpec.describe GithubApi do
     # A rate limit clears by waiting and a refusal does not, so the reason has to survive as
     # something a caller can branch on. A message match would pass just as well against a client
     # that told every 403 the same story, which is the bug these pin.
+    # @intent: { entity: "GithubApi", action: "map HTTP errors", behavior: "a 403 with zero rate limit remaining carries reason :rate_limited in the raised Forbidden", layer: "unit" }
     it "names the rate limit when GitHub's 403 is one" do
       with_responses(http_response(Net::HTTPForbidden, code: "403",
                                    headers: { "x-ratelimit-remaining" => "0" }))
@@ -131,6 +136,7 @@ RSpec.describe GithubApi do
     # as one: a user-to-server token reaches an organization through that organization's own
     # installation rather than through a SAML authorization of its own. A 403 carrying the header is
     # an ordinary refusal here, not a "get your org to approve SpecGuard" nobody can act on.
+    # @intent: { entity: "GithubApi", action: "map HTTP errors", behavior: "a 403 carrying only an SSO header reads as a plain :refused with no SSO reason invented", layer: "unit" }
     it "reports a 403 that names no cause as a plain refusal" do
       with_responses(http_response(Net::HTTPForbidden, code: "403",
                                    headers: { "x-github-sso" => "required; organizations=abc" }))
@@ -141,6 +147,7 @@ RSpec.describe GithubApi do
 
     # A rate-limited response can carry other headers too. Exhaustion is the narrower and more
     # certain signal, and it is the only one that clears by waiting, so it wins.
+    # @intent: { entity: "GithubApi", action: "map HTTP errors", behavior: "exhaustion outranks the SSO header when a 403 carries both", layer: "unit" }
     it "prefers the rate limit when a 403 carries both signals" do
       with_responses(http_response(Net::HTTPForbidden, code: "403",
                                    headers: { "x-ratelimit-remaining" => "0",
@@ -152,6 +159,7 @@ RSpec.describe GithubApi do
 
     # Every transport failure is the same fact to a caller — GitHub could not be reached — and none
     # of them should escape as a Net::HTTP or OpenSSL exception a rescue clause has to enumerate.
+    # @intent: { entity: "GithubApi", action: "read installation repositories", behavior: "ECONNREFUSED surfaces as Unavailable rather than a raw Errno escaping to callers", layer: "unit" }
     it "wraps a transport failure rather than letting it escape" do
       allow(Net::HTTP).to receive(:start).and_raise(Errno::ECONNREFUSED)
 
@@ -159,6 +167,7 @@ RSpec.describe GithubApi do
         .to raise_error(GithubApi::Unavailable, /GitHub request failed/)
     end
 
+    # @intent: { entity: "GithubApi", action: "read installation repositories", behavior: "an HTML body raises Unavailable naming the not-JSON cause instead of a parse error", layer: "unit" }
     it "wraps a body that is not the JSON GitHub promised" do
       with_responses(http_response(Net::HTTPOK, body: "<html>maintenance</html>"))
 
@@ -173,6 +182,7 @@ RSpec.describe GithubApi do
     # which answers for the App and so answers identically for every member of an organization. This
     # one is scoped to the installation AND to the caller, which is what makes both conditions
     # checkable from one response.
+    # @intent: { entity: "GithubApi", action: "read installation repositories", behavior: "the request targets /user/installations/:id/repositories with per_page paging, not /user/repos or the App-wide endpoint", layer: "unit" }
     it "reads the installation's repositories AS THIS USER" do
       fake = with_responses(http_response(Net::HTTPOK, body: repositories_payload([repo_payload("acme/billing")])))
 
@@ -189,6 +199,7 @@ RSpec.describe GithubApi do
     # GitHub offers no `sort` on this endpoint, so the order is applied here — and it has to be,
     # because the picker is rendered from it and a list that reshuffles between renders is one
     # people stop trusting.
+    # @intent: { entity: "GithubApi", action: "read installation repositories", behavior: "the listing comes back sorted case-insensitively by full name from a single request", layer: "unit" }
     it "sorts the listing by name rather than leaving GitHub's order" do
       fake = with_responses(http_response(Net::HTTPOK, body: repositories_payload(
         [repo_payload("acme/zebra"), repo_payload("acme/Apple"), repo_payload("acme/mango")]
@@ -200,6 +211,7 @@ RSpec.describe GithubApi do
 
     # A body of an unexpected shape ends the walk rather than raising a NoMethodError several frames
     # up in a controller.
+    # @intent: { entity: "GithubApi", action: "read installation repositories", behavior: "a body missing the repositories key yields an empty page rather than raising", layer: "unit" }
     it "treats a body that is not the promised object as an empty page" do
       with_responses(http_response(Net::HTTPOK, body: { "total_count" => 0 }.to_json))
 
@@ -208,6 +220,7 @@ RSpec.describe GithubApi do
 
     # A short page is GitHub saying "that was the last one", so a second request would be a wasted
     # round trip on every render of the registration form.
+    # @intent: { entity: "GithubApi", action: "page the listing", behavior: "a partial page ends the walk after one request without marking the listing truncated", layer: "unit" }
     it "stops at the first short page" do
       fake = with_responses(http_response(Net::HTTPOK, body: repositories_payload([repo_payload("acme/billing")])))
 
@@ -218,6 +231,7 @@ RSpec.describe GithubApi do
       expect(fake.requests.length).to eq(1)
     end
 
+    # @intent: { entity: "GithubApi", action: "page the listing", behavior: "a full first page triggers a second request at page=2 and every repository is collected", layer: "unit" }
     it "follows pages while each one comes back full" do
       full_page = Array.new(GithubApi::PER_PAGE) { |i| repo_payload("acme/repo-#{i}") }
       fake = with_responses(
@@ -235,6 +249,7 @@ RSpec.describe GithubApi do
     # The cap is a bound on one page render, not a claim about anyone's installation — so it is
     # reported rather than applied silently. The picker says so, and `InstallationRepositories`
     # refuses an absent name rather than reading our own page walk as GitHub's verdict.
+    # @intent: { entity: "GithubApi", action: "page the listing", behavior: "hitting the page cap stops fetching and flags the listing truncated rather than silently cutting it", layer: "unit" }
     it "reports truncation when the page cap is reached" do
       full_page = Array.new(GithubApi::PER_PAGE) { |i| repo_payload("acme/repo-#{i}") }
       responses = Array.new(GithubApi::MAX_PAGES) { http_response(Net::HTTPOK, body: repositories_payload(full_page)) }
@@ -248,6 +263,7 @@ RSpec.describe GithubApi do
   end
 
   describe ".for_user" do
+    # @intent: { entity: "GithubApi", action: "build a client for a user", behavior: "the factory receives the user token and the installation id whether passed a record or a bare id", layer: "unit" }
     it "binds a client to the user's credential and one installation, taking a record or a bare id" do
       described_class.factory = ->(token, installation_id) { [token, installation_id] }
       installation = create_user.github_installations.first
@@ -258,6 +274,7 @@ RSpec.describe GithubApi do
 
     # Both are ordinary states of the world on a page that offers to fix them — no installation yet,
     # or a session with no credential — rather than exceptions.
+    # @intent: { entity: "GithubApi", action: "build a client for a user", behavior: "a missing installation or blank credential yields nil instead of raising", layer: "unit" }
     it "returns nil rather than raising when there is nothing to read with" do
       expect(described_class.for_user("ghu_t", nil)).to be_nil
       expect(described_class.for_user("ghu_t", 0)).to be_nil
@@ -267,6 +284,7 @@ RSpec.describe GithubApi do
 
     # Building a client costs nothing and reaches nobody: a controller builds one on paths that may
     # never call GitHub, and it must not have paid for a round trip to find that out.
+    # @intent: { entity: "GithubApi", action: "build a client for a user", behavior: "constructing a client opens no connection; only using it reaches GitHub", layer: "unit" }
     it "does not call GitHub until the client is actually used" do
       described_class.factory = nil
       allow(Net::HTTP).to receive(:start)

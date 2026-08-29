@@ -22,6 +22,7 @@ RSpec.describe DerivedIntent do
   # the sigil and one space after the method name.
   describe ".from — the descriptions that yield a reading" do
     DerivedIntentCorpus::DERIVABLE.each do |name, expected|
+      # @intent: { entity: "DerivedIntent", action: "parse a full_description", behavior: "every corpus entry the class claims readable yields exactly the expected entity, action and behavior triple", layer: "unit" }
       it "reads #{name.inspect}" do
         derived = described_class.from(name, spec_file_path: "spec/models/thing_spec.rb")
 
@@ -36,6 +37,7 @@ RSpec.describe DerivedIntent do
     # built to guarantee this — the entity and action minimums and the behavior's 15 characters are
     # encoded in the regex — and the guarantee is worth exactly as much as the last edit to those
     # constants, so it is asserted rather than argued.
+    # @intent: { entity: "DerivedIntent", action: "validate derived readings", behavior: "every reading the corpus yields passes OpenTestIntent validation with zero errors, so a derived reading is never schema-invalid", layer: "unit" }
     it "returns nothing that the OpenTestIntent schema would reject" do
       readings = DerivedIntentCorpus::DERIVABLE.keys.filter_map do |name|
         described_class.from(name, spec_file_path: "spec/models/thing_spec.rb")
@@ -48,6 +50,7 @@ RSpec.describe DerivedIntent do
     # The sigil is CONSUMED, not carried into the action, and the two spellings collapse onto one
     # value. An author writing this annotation by hand writes `action: call`, and a derived action of
     # `#call` would be incomparable with it on the one field the two most obviously line up on.
+    # @intent: { entity: "DerivedIntent", action: "parse method sigils", behavior: "the hash and dot spellings collapse to the same bare action name with the sigil consumed", layer: "unit" }
     it "spells an instance method's action the way an author would, and identically to a class one" do
       instance = described_class.from("Invoice#finalize locks the line items")
       singleton = described_class.from("Invoice.finalize locks the line items")
@@ -59,6 +62,7 @@ RSpec.describe DerivedIntent do
 
   describe ".from — the descriptions that yield nothing" do
     DerivedIntentCorpus::UNREADABLE.each do |name, why|
+      # @intent: { entity: "DerivedIntent", action: "parse a full_description", behavior: "each unreadable corpus string yields nil rather than a partial or guessed reading", layer: "unit" }
       it "reads nothing from #{name.inspect} — #{why}" do
         expect(described_class.from(name, spec_file_path: "spec/models/thing_spec.rb")).to be_nil
       end
@@ -67,6 +71,7 @@ RSpec.describe DerivedIntent do
     # A nil `name` is an ordinary row rather than an error: the column is nullable, because
     # `Ingest::ObservationRecorder#attributes` writes it through `presence_of` and a producer that
     # sent nothing stores a NULL.
+    # @intent: { entity: "DerivedIntent", action: "parse absent descriptions", behavior: "nil, empty and whitespace-only descriptions all return nil, treating a nullable column as ordinary", layer: "unit" }
     it "reads nothing from a row that carries no description at all" do
       expect(described_class.from(nil)).to be_nil
       expect(described_class.from("")).to be_nil
@@ -78,6 +83,7 @@ RSpec.describe DerivedIntent do
     # the tempting repair — take the behavior's first word — reads `when` as an action on the very
     # common `Checkout when the card is expired returns 402`. A wrong action is worse than no
     # reading: it is a claim, made by the platform, in a field an author is supposed to own.
+    # @intent: { entity: "DerivedIntent", action: "parse entity-and-behavior text", behavior: "a description with no action between entity and behavior is refused outright rather than guessed at", layer: "unit" }
     it "refuses an entity-and-behavior description rather than inventing an action for it" do
       expect(described_class.from("Checkout rejects an expired card")).to be_nil
       expect(described_class.from("Checkout when the card is expired returns 402 payment required"))
@@ -96,6 +102,7 @@ RSpec.describe DerivedIntent do
     # written twice in two languages, and the two spellings that were there — `String#strip` and
     # `btrim(COALESCE(name, ''))` — do not agree about a tab or a newline. So: the padding is in the
     # pattern, and nothing here or in `SpecObservation::READING_EXPRESSION` may trim.
+    # @intent: { entity: "DerivedIntent", action: "absorb surrounding padding", behavior: "the pattern itself swallows its own whitespace so tabs and newlines at either end never reach the fields", layer: "unit" }
     it "absorbs its own padding rather than leaving a trim for each engine to spell" do
       expect(described_class::PATTERN).to start_with("#{described_class::SPACE}*")
       expect(described_class::PATTERN).to end_with("#{described_class::SPACE}*")
@@ -116,6 +123,7 @@ RSpec.describe DerivedIntent do
     # `[[:space:]]` is not one rule: Ruby's is Unicode-aware on a UTF-8 string and Postgres's is not,
     # so U+00A0 is whitespace to one engine and an ordinary character to the other. One pattern
     # string containing it is still two rules, which is the failure this class was corrected for.
+    # @intent: { entity: "DerivedIntent", action: "define whitespace", behavior: "the rule spells its character class explicitly, leaving U+00A0 an ordinary character in both positions tested", layer: "unit" }
     it "spells its whitespace rather than borrowing a POSIX class whose meaning differs" do
       expect(described_class::PATTERN).not_to include("[:space:]")
       expect(described_class::WHITESPACE).to eq("\\t\\n\\v\\f\\r ")
@@ -145,6 +153,7 @@ RSpec.describe DerivedIntent do
       # No path at all — the row's `spec_file_path` is nullable by schema. The default, not a nil.
       nil => "unit"
     }.each do |path, layer|
+      # @intent: { entity: "DerivedIntent", action: "guess the layer", behavior: "the layer comes from the spec directory: requests, integration, system (and legacy features) map to their schema values and a missing path defaults to unit", layer: "unit" }
       it "reads #{layer.inspect} from #{path.inspect}" do
         expect(described_class.from("Invoice#finalize locks the line items", spec_file_path: path).layer)
           .to eq(layer)
@@ -153,6 +162,7 @@ RSpec.describe DerivedIntent do
 
     # The FIRST recognised segment wins, scanned from the root, because the outer directory is the
     # one a suite organises by.
+    # @intent: { entity: "DerivedIntent", action: "guess the layer", behavior: "when a path carries two recognised segments the outermost directory wins", layer: "unit" }
     it "takes the outermost recognised segment when a path carries two" do
       derived = described_class.from("Invoice#finalize locks the line items",
                                      spec_file_path: "spec/system/admin/requests/billing_spec.rb")
@@ -164,6 +174,7 @@ RSpec.describe DerivedIntent do
   describe "#to_intent" do
     # No `preconditions` key. A derived reading has none, and an empty array would claim the test
     # declares no preconditions — a different statement from "nobody said".
+    # @intent: { entity: "DerivedIntent", action: "serialize to intent", behavior: "the hash carries exactly entity, action, behavior and layer and never a preconditions key at all", layer: "unit" }
     it "is the four fields an author would have written, and never an empty preconditions array" do
       derived = described_class.from("Invoice#finalize locks the line items",
                                      spec_file_path: "spec/models/invoice_spec.rb")
