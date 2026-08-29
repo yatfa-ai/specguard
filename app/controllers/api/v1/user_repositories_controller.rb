@@ -239,12 +239,65 @@ class Api::V1::UserRepositoriesController < Api::BaseController
     head :no_content
   end
 
+  # RENAMING ONE — the owner-only verb the `sgu_` surface was missing, through the SAME
+  # grant-backed gate `#create` redeems. `RepositoryRegistration` with the recorded
+  # `GithubRegistrationGrant` makes rename exactly as session-free as registration: the grant is
+  # what GitHub said about this person while a browser still held a token, and a new name is a
+  # registration question in every respect but the row's age.
+  #
+  # Owner-only through `RepositoryAuthorization`, the same asymmetry as the web `#update`: a member
+  # granted `repo.delete` may DESTROY from this surface but only the OWNER renames —
+  # `github_full_name` is both the repository's identity and the globally unique key, so no
+  # membership permission grants it. Non-member → 404 (nil is 404, never 403 — see `#show`),
+  # non-owner member → 403.
+  #
+  # Renaming is pure metadata: api_keys, test_runs and spec_intents are keyed by repository_id, so
+  # none are touched. That is the whole point — the alternative (remove + re-register) destroys
+  # every key and all telemetry.
+  #
+  # Refusals funnel through `render_bad_request(repository.errors.full_messages)` exactly as
+  # `#create` does, so the gate's own sentences are served: name absent from the grant →
+  # `:not_in_installation`; visible-but-not-administered → `:not_administered`; taken → "has
+  # already been taken". A nil or stale grant is the 403 `#registrable` owns, with the
+  # `:not_granted` sentence naming the browser-and-seven-days fix — 403 rather than 400 because
+  # nothing in the REQUEST can help (see `render_not_granted`).
+  def update
+    repository = current_repository(:owner)
+
+    grant = current_api_user.github_registration_grant
+    return render_not_granted(grant) if grant.nil? || grant.stale?
+
+    repository.assign_attributes(update_params)
+    registration = RepositoryRegistration.new(repository: repository, verifier: grant_verifier)
+
+    return render_bad_request(repository.errors.full_messages) unless registration.save
+
+    # The same five identity fields `#index` serves, so a client that has read the list knows how
+    # to read this — including `delivery_health`, which is not null here for the reason `#index`
+    # gives: `refusing: false` is a positive finding and an absent key would read as "SpecGuard
+    # does not track that".
+    # `delivery_verdicts` is the one spelling of this expression the file owns — its own comment
+    # says the verdict is never re-spelled and that key names are borrowed from
+    # `serialized_delivery_health` precisely so surfaces do not name the same facts differently.
+    # A single-element input costs nothing extra (the batched helpers already take an array).
+    delivery_health = delivery_verdicts([repository])[repository.id]
+
+    render json: { repository: serialize(repository, delivery_health) }, status: :ok
+  end
+
   private
 
   # Top-level rather than nested under a `repository` key. This is a JSON API being driven by an
   # agent, not a Rails form being submitted by a browser, and `{"github_full_name": "org/repo"}` is
   # what a caller writing curl by hand will send.
   def create_params
+    params.permit(:github_full_name)
+  end
+
+  # Same shape and same reason as `create_params`: a top-level `{"github_full_name": "org/repo"}`,
+  # which is what an agent writing curl by hand sends. The web nests under `repository:` because a
+  # form does; this API does not.
+  def update_params
     params.permit(:github_full_name)
   end
 

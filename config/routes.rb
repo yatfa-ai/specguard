@@ -175,6 +175,15 @@ Rails.application.routes.draw do
       # surface answering to both is not expressible and deliberately so. The BODY is shared anyway,
       # by `RepositoryOverview` rather than by a shared credential; see that class.
       get "repositories/:id", to: "user_repositories#show"
+      # RENAMING ONE — the mutating counterpart of `#show` above, over the same `sgu_` credential
+      # and through the same grant-backed `RepositoryRegistration` `#create` redeems. Declared in
+      # THIS block for the reason the note directly above states: `:id` is greedy and must stay
+      # behind the literal `registrable` route. Do not reorder.
+      #
+      # Renaming is pure metadata — api_keys, test_runs and spec_intents are keyed by
+      # repository_id, so none are touched. That is the whole point: the alternative
+      # (remove + re-register) destroys every key and all telemetry.
+      patch "repositories/:id", to: "user_repositories#update"
       # MANAGING A REPOSITORY'S MEMBERS over the `sgu_` surface (SPGD-875) — list, add by handle,
       # edit permissions, revoke — mirroring the web nesting (`resources :memberships` under
       # `resources :repositories`) in the named-per-route shape `user_repository_api_keys` uses
