@@ -18,7 +18,7 @@ require "rails_helper"
 #   - `permissions` array params persist intact (not silently dropped by a scalar permit);
 #   - a `sgk_` repository key is refused 401 on all four routes;
 #   - GET rows carry handle/permissions/granted_by/created_at ordered by handle, and no
-#     `keys_minted`.
+#     `keys_minted`; GET and POST bodies carry the membership `id` PATCH/DELETE name rows by.
 RSpec.describe "API v1 — repository members over a user key", type: :request do
   let(:owner) { create_user(github_uid: "1001", github_handle: "octocat") }
   let(:repository) { create_repository(user: owner, github_full_name: "acme/billing-service") }
@@ -74,6 +74,13 @@ RSpec.describe "API v1 — repository members over a user key", type: :request d
       expect(rows.second["granted_by"]).to eq("grantor")
     end
 
+    it "serves the membership id per row, so a caller can later edit or revoke what it lists" do
+      get members_path, headers: bearer(owner_key.raw_token)
+
+      rows = response.parsed_body.fetch("members")
+      expect(rows.map { |row| row["id"] }).to eq([second.id, first.id])
+    end
+
     it "does not disclose keys_minted" do
       get members_path, headers: bearer(owner_key.raw_token)
 
@@ -112,6 +119,14 @@ RSpec.describe "API v1 — repository members over a user key", type: :request d
         "permissions" => %w[view keys.manage],
         "granted_by" => "octocat"
       )
+    end
+
+    it "serves the created membership's id, matching the persisted row" do
+      post_member(handle: "hubot", permissions: %w[view])
+
+      expect(response).to have_http_status(:created)
+      row = repository.repository_memberships.find_by!(user: member)
+      expect(response.parsed_body.fetch("member")).to include("id" => row.id)
     end
 
     it "stamps the grantor from the credential of a members.manage member, not just the owner" do
@@ -298,6 +313,25 @@ RSpec.describe "API v1 — repository members over a user key", type: :request d
               params: { permissions: %w[view members.manage] },
               headers: bearer(owner_key.raw_token)
       }.not_to change(RepositoryMembership, :count)
+
+      expect(response).to have_http_status(:not_found)
+      expect(other_row.reload.permissions).to eq(%w[view])
+    end
+
+    it "answers 404 for an id lifted from a DIFFERENT repository's own list, leaving it untouched" do
+      other = create_repository(user: owner, github_full_name: "acme/other-service")
+      other_row = create_membership(repository: other, user: stranger, permissions: %w[view])
+
+      # The id is genuinely served to an authorized caller on the other repository — the exact
+      # scenario the old comment feared — and naming it here must still 404, because
+      # `find_membership!` scopes it away, not because the body withheld it.
+      get members_path(other), headers: bearer(owner_key.raw_token)
+      foreign_id = response.parsed_body.fetch("members").first.fetch("id")
+      expect(foreign_id).to eq(other_row.id)
+
+      patch member_path(foreign_id),
+            params: { permissions: %w[view members.manage] },
+            headers: bearer(owner_key.raw_token)
 
       expect(response).to have_http_status(:not_found)
       expect(other_row.reload.permissions).to eq(%w[view])

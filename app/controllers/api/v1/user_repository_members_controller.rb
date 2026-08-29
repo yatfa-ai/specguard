@@ -181,13 +181,16 @@ class Api::V1::UserRepositoryMembersController < Api::BaseController
     end
   end
 
-  # Deliberately the same four fields the web page renders per row, and no fifth: `keys_minted`
-  # is a `keys.manage` disclosure this `members.manage` read does not carry (see the class
-  # header), and there is no membership id in the body because the caller already holds the one
-  # they used — PATCH and DELETE name rows by it, and serving an id invites treating it as
-  # portable between repositories, which `find_membership!` exists to refuse.
+  # `keys_minted` is a `keys.manage` disclosure this `members.manage` read does not carry (see
+  # the class header). The membership `id` IS served: the API caller has no other way to learn
+  # it — no response in this API returns the id PATCH and DELETE name rows by, so withholding it
+  # would leave a caller who just added a member unable to edit or revoke what they created.
+  # Portability between repositories is refused by `find_membership!`, not by omission here: a
+  # foreign repository's id is scoped out before any body could matter, so serving the id inside
+  # an already-authorized response discards no guarantee that scoped lookup does not enforce.
   def serialize(membership)
     {
+      id: membership.id,
       handle: membership.user.github_handle,
       permissions: membership.permissions,
       granted_by: membership.granted_by_user&.github_handle,
