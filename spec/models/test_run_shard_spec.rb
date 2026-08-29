@@ -20,6 +20,7 @@ RSpec.describe TestRunShard do
   # race an exception to rescue rather than a second row splitting one slice's counts in two, and
   # the run's totals are a SUM over these rows, so a duplicate is not a cosmetic problem.
   describe "the shard identity" do
+    # @intent: { entity: "TestRunShard", action: "enforce unique shard identity per run", behavior: "creating the same shard_id twice inside one run raises RecordNotUnique instead of inserting a duplicate row that would double-count the slice", layer: "unit" }
     it "refuses a second row for a shard this run has already recorded" do
       run.test_run_shards.create!(slice(shard_id: "1"))
 
@@ -31,6 +32,7 @@ RSpec.describe TestRunShard do
     # the run is the reason `spec/requests/api/v1/ingest_spec.rb`'s "does not let one run's shard
     # overwrite another run's shard of the same name" is allowed to expect two rows rather than a
     # collision; without the scope, the second build's shard 1 could not be recorded at all.
+    # @intent: { entity: "TestRunShard", action: "scope uniqueness to the run", behavior: "two different runs may each store a shard named 1, so the uniqueness key carries the run id and the second run's shard inserts cleanly", layer: "unit" }
     it "lets two runs each hold a shard of the same name" do
       other = repository.test_runs.create!(commit_sha: "deadbee", ci_run_id: "gha-43")
       run.test_run_shards.create!(slice(shard_id: "1"))
@@ -48,6 +50,7 @@ RSpec.describe TestRunShard do
     # `WHERE shard_id IS NOT NULL` clause is not what admits these rows — a plain unique index on
     # `(test_run_id, shard_id)` admits them too (measured). What this example refuses is a future
     # `NULLS NOT DISTINCT`, which is the only mutation that reds it.
+    # @intent: { entity: "TestRunShard", action: "admit unnamed slices", behavior: "a client that shards without a recognized index gets one row per POST, so three anonymous slices persist as three rows rather than collapsing the suite to a quarter", layer: "unit" }
     it "lets a run hold any number of slices the client did not name" do
       expect do
         3.times { run.test_run_shards.create!(slice(shard_id: nil)) }

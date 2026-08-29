@@ -47,6 +47,7 @@ RSpec.describe UnannotatedDirectories do
     # The state the caption exists for: a list that is the head of a longer population. Asserted
     # against the two operands as well as the predicate, so an example that passed because the cap
     # stopped working would fail here rather than read as a truncated run.
+    # @intent: { entity: "UnannotatedDirectories", action: "flag a truncated ranking", behavior: "a run touching 25 areas returns exactly the limit of rows, a directory_count of 25, and a truthy truncated? predicate", layer: "unit" }
     it "reports the list as cut" do
       directories = described_class.for(run_touching(25))
 
@@ -59,6 +60,7 @@ RSpec.describe UnannotatedDirectories do
   describe "a run whose areas all fit" do
     # The OTHER answer, and the one a predicate hard-wired to `true` fails: a complete list captioned
     # as a sample tells a reader there are areas it is not showing them when there are none.
+    # @intent: { entity: "UnannotatedDirectories", action: "report a complete list", behavior: "when every touched area fits within the cap, rows and directory_count agree and truncated? is false so the caption claims no hidden rows", layer: "unit" }
     it "reports the list as complete" do
       directories = described_class.for(run_touching(3))
 
@@ -71,6 +73,7 @@ RSpec.describe UnannotatedDirectories do
     # many areas as the cap lists comes back with `directory_count == rows.size` and is COMPLETE —
     # every area it touched is on the page. `>=` passes every other example in this file and turns
     # this one run into a list that claims it is hiding rows it is not.
+    # @intent: { entity: "UnannotatedDirectories", action: "pin the boundary at the limit", behavior: "a run touching exactly as many areas as the cap lists is not truncated, distinguishing strict comparison from a >= that would falsely caption a full list as cut", layer: "unit" }
     it "reports a run touching exactly the limit as complete" do
       directories = described_class.for(run_touching(SpecObservation::UNANNOTATED_DIRECTORIES_LIMIT))
 
@@ -87,6 +90,7 @@ RSpec.describe UnannotatedDirectories do
   # truncation out of two zeroes. `#recorded?` is what a surface branches on here — this pins that the
   # predicate stays quiet in the state where there is nothing to be the head of.
   describe "a run with no per-example rows" do
+    # @intent: { entity: "UnannotatedDirectories", action: "stay quiet without detail rows", behavior: "a totals-only run with no per-example observations is unrecorded, reports zero directories, and never manufactures a truncation from two zeroes", layer: "unit" }
     it "claims no truncation" do
       directories = described_class.for(create_test_run(repository: repository, total_specs_count: 900))
 
@@ -102,6 +106,7 @@ RSpec.describe UnannotatedDirectories do
   # calls this sits beside a "no unannotated tests in this run" state, and a predicate that quietly
   # tracked DEBT rather than LENGTH would make the two disagree on precisely that run.
   describe "a fully annotated run with more areas than the ranking lists" do
+    # @intent: { entity: "UnannotatedDirectories", action: "truncate on length not debt", behavior: "a fully annotated run spread over more areas than the cap is still truncated, because the predicate measures list length rather than unannotated volume", layer: "unit" }
     it "reports the list as cut, on length rather than on debt" do
       directories = described_class.for(ingest((1..25).map do |i|
         annotated_spec(file_path: "spec/d#{format('%02d', i)}/a_spec.rb", line_number: i)

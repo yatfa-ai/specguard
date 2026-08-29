@@ -66,6 +66,7 @@ RSpec.describe NearDuplicateClusters do
     # hold is the ORDERING. Matching strictly above clustering is what lets a pair that merely reads
     # alike resolve to two identities AND be reported here; fold the two together and the finding
     # and both histories go at once.
+    # @intent: { entity: "NearDuplicateClusters", action: "set the threshold", behavior: "the clustering floor sits strictly below the identity-matching threshold so the two judgements stay separate", layer: "unit" }
     it "sits strictly below the identity-matching threshold" do
       expect(described_class::SIMILARITY).to be < SpecIdentity::MATCH_SIMILARITY
     end
@@ -80,22 +81,26 @@ RSpec.describe NearDuplicateClusters do
     # it was actually chosen in, which is a fact about how the constant was derived. They do not
     # claim that window is the right one for the provider running today, and they must not be
     # widened to accommodate one — re-deriving the band needs a measurement this repo does not have.
+    # @intent: { entity: "NearDuplicateClusters", action: "set the threshold", behavior: "the similarity constant lies inside the band the retired provider's calibration left open", layer: "unit" }
     it "sits inside the band the provider's own calibration leaves open" do
       expect(described_class::SIMILARITY).to be > 0.80
       expect(described_class::SIMILARITY).to be <= 0.89
     end
 
+    # @intent: { entity: "NearDuplicateClusters", action: "set the threshold", behavior: "the constants are independent of SpecIdentity's rather than aliases of them", layer: "unit" }
     it "is not a second name for either of SpecIdentity's constants" do
       expect(described_class::SIMILARITY).not_to eq(SpecIdentity::MATCH_SIMILARITY)
       expect(described_class::DISTANCE).not_to eq(SpecIdentity::MATCH_DISTANCE)
     end
 
+    # @intent: { entity: "NearDuplicateClusters", action: "set the threshold", behavior: "the distance bound is derived from the similarity constant in the form pgvector's operator expects", layer: "unit" }
     it "expresses the distance the pgvector operator wants, derived rather than restated" do
       expect(described_class::DISTANCE).to eq(1 - described_class::SIMILARITY)
     end
 
     # The constant this slice is forbidden to move. Pinned HERE as well as in spec_identity_spec.rb
     # because this is the file whose author is holding both numbers at once.
+    # @intent: { entity: "NearDuplicateClusters", action: "set the threshold", behavior: "the identity-matching threshold stays at 0.95, pinned so this slice cannot move it", layer: "unit" }
     it "leaves the matching threshold where it was" do
       expect(SpecIdentity::MATCH_SIMILARITY).to eq(0.95)
     end
@@ -103,6 +108,7 @@ RSpec.describe NearDuplicateClusters do
 
   describe "a near-duplicate pair" do
     # SPGD-369 criterion 1.
+    # @intent: { entity: "NearDuplicateClusters", action: "cluster near duplicates", behavior: "a pair scoring inside the band resolves to a single cluster of two members", layer: "unit" }
     it "comes back as one cluster of two members" do
       identity(EXPIRED, line: 3)
       identity(OUTRIGHT, line: 9)
@@ -116,6 +122,7 @@ RSpec.describe NearDuplicateClusters do
 
     # The grain of the MEMBERSHIP is the repository. `SpecObservation.repeated_descriptions_in` is
     # scoped to one run and could never see this: the two tests never ran together.
+    # @intent: { entity: "NearDuplicateClusters", action: "cluster near duplicates", behavior: "membership spans runs: identities observed in different runs still cluster, weighted in the newest run only", layer: "unit" }
     it "clusters across runs, because identity outlives the run that observed it" do
       first = create_test_run(repository: repository, commit_sha: "aaaa1111")
       second = create_test_run(repository: repository, commit_sha: "bbbb2222")
@@ -139,6 +146,7 @@ RSpec.describe NearDuplicateClusters do
 
     # The lower edge of the band. 0.80 is where "a different test" starts, per the provider's own
     # calibration, and the threshold clears it by more than the hashing error the audit measured.
+    # @intent: { entity: "NearDuplicateClusters", action: "cluster near duplicates", behavior: "a pair merely lexically similar below the floor is left as two distinct tests", layer: "unit" }
     it "leaves a merely lexically-similar pair alone" do
       identity(EXPIRED, line: 3)
       identity(RESTATED, line: 9)
@@ -157,11 +165,13 @@ RSpec.describe NearDuplicateClusters do
       observe(identity(OUTRIGHT, line: 9), duration: 5.0)
     end
 
+    # @intent: { entity: "NearDuplicateClusters", action: "weigh a loop", behavior: "the verbatim loop collapses to one identity row, which is the premise the object is shaped around", layer: "unit" }
     it "is one identity row, which is the premise this whole object is shaped around" do
       expect(repository.spec_identities.count).to eq(2)
       expect(repository.spec_observations.count).to eq(4)
     end
 
+    # @intent: { entity: "NearDuplicateClusters", action: "weigh a loop", behavior: "a table-driven loop counts as three examples on the cluster, not one", layer: "unit" }
     it "weighs the loop at three examples, not at one" do
       cluster = described_class.for(repository).clusters.first
       loop_member = cluster.members.find { |member| member.text == EXPIRED }
@@ -169,6 +179,7 @@ RSpec.describe NearDuplicateClusters do
       expect(loop_member.example_count).to eq(3)
     end
 
+    # @intent: { entity: "NearDuplicateClusters", action: "weigh a loop", behavior: "the cluster reports its size in texts and its weight in examples as two distinct numbers", layer: "unit" }
     it "reports the cluster's weight in examples and its size in texts, as two numbers" do
       cluster = described_class.for(repository).clusters.first
 
@@ -176,6 +187,7 @@ RSpec.describe NearDuplicateClusters do
       expect(cluster.example_count).to eq(4)
     end
 
+    # @intent: { entity: "NearDuplicateClusters", action: "weigh a loop", behavior: "total_seconds sums wall clock over the four examples rather than the two identities", layer: "unit" }
     it "sums the wall clock over the examples rather than over the identities" do
       cluster = described_class.for(repository).clusters.first
 
@@ -205,6 +217,7 @@ RSpec.describe NearDuplicateClusters do
       end
     end
 
+    # @intent: { entity: "NearDuplicateClusters", action: "weigh repeated ingests", behavior: "weights count the four tests the suite holds, not the forty observation rows the ingests wrote", layer: "unit" }
     it "weighs the four tests the suite holds, not the forty rows the ingests wrote" do
       expect(repository.spec_observations.count).to eq(40)
 
@@ -219,6 +232,7 @@ RSpec.describe NearDuplicateClusters do
     # Every figure on the object counted over the run the weights were summed in — the property the
     # class comment claims for itself, and the one that fails if the caption is read repository-wide
     # while the list is read per-run.
+    # @intent: { entity: "NearDuplicateClusters", action: "weigh repeated ingests", behavior: "captions like recorded and coverage counts are taken over the same run the weights were summed in", layer: "unit" }
     it "counts its captions over the same run it weighed" do
       result = described_class.for(repository)
 
@@ -231,6 +245,7 @@ RSpec.describe NearDuplicateClusters do
 
     # The run is a parameter rather than a fact about the newest ingest, so a surface can weigh the
     # same clusters against the run its reader is looking at.
+    # @intent: { entity: "NearDuplicateClusters", action: "weigh repeated ingests", behavior: "the weighing run is a parameter, so the same clusters can be weighed against any chosen run", layer: "unit" }
     it "weighs the same clusters against whatever run it is handed" do
       first = repository.test_runs.order(:id).first
 
@@ -251,6 +266,7 @@ RSpec.describe NearDuplicateClusters do
       observe(identity(CREDIT, line: 15), duration: 1.0)
     end
 
+    # @intent: { entity: "NearDuplicateClusters", action: "merge mixed duplicates", behavior: "verbatim and near-identical duplicates coexist in one cluster with the two counts kept apart", layer: "unit" }
     it "represents both, and keeps the two counts apart" do
       result = described_class.for(repository)
       cluster = result.clusters.first
@@ -260,6 +276,7 @@ RSpec.describe NearDuplicateClusters do
       expect(cluster.example_count).to eq(4)
     end
 
+    # @intent: { entity: "NearDuplicateClusters", action: "merge mixed duplicates", behavior: "the whole clustered population reports the same identity and example totals", layer: "unit" }
     it "says the same two numbers over the whole clustered population" do
       result = described_class.for(repository)
 
@@ -271,6 +288,7 @@ RSpec.describe NearDuplicateClusters do
   # SPGD-369 criterion 4. There is no `@intent` anywhere in this fixture — every identity is
   # name-derived, which is what a suite with zero annotation produces on the ingest path.
   describe "a repository with no annotation at all" do
+    # @intent: { entity: "NearDuplicateClusters", action: "cluster unannotated suites", behavior: "a suite with zero annotation still clusters, because a test name is a signal in itself", layer: "unit" }
     it "clusters anyway, because a name is a signal" do
       identity(EXPIRED, line: 3)
       identity(OUTRIGHT, line: 9)
@@ -287,6 +305,7 @@ RSpec.describe NearDuplicateClusters do
   # SPGD-369 criterion 5. An intent-derived text is a joined triple and a name-derived one is human
   # prose; `Ingest::SpecSignal` is explicit that they are not the same evidence.
   describe "the signal_source partition" do
+    # @intent: { entity: "NearDuplicateClusters", action: "partition by signal source", behavior: "an intent-derived and a name-derived test never merge however close their vectors score", layer: "unit" }
     it "refuses to merge an intent-derived and a name-derived test, however close they score" do
       identity(EXPIRED, source: "name", line: 3)
       identity(OUTRIGHT, source: "intent", line: 9)
@@ -294,6 +313,7 @@ RSpec.describe NearDuplicateClusters do
       expect(described_class.for(repository).clusters).to be_empty
     end
 
+    # @intent: { entity: "NearDuplicateClusters", action: "partition by signal source", behavior: "the identical pair clusters once both share a source, proving the partition is what separated them", layer: "unit" }
     it "clusters the identical pair once they share a source — so it is the partition doing it" do
       identity(EXPIRED, source: "name", line: 3)
       identity(OUTRIGHT, source: "name", line: 9)
@@ -301,6 +321,7 @@ RSpec.describe NearDuplicateClusters do
       expect(described_class.for(repository).clusters.size).to eq(1)
     end
 
+    # @intent: { entity: "NearDuplicateClusters", action: "partition by signal source", behavior: "each cluster states which signal source it was found in", layer: "unit" }
     it "states which source each cluster was found in" do
       identity(EXPIRED, source: "intent", line: 3)
       identity(OUTRIGHT, source: "intent", line: 9)
@@ -316,6 +337,7 @@ RSpec.describe NearDuplicateClusters do
   # SPGD-369 criterion 6. The engine reads vocabulary, not meaning, and the object says so rather
   # than letting a confident cluster count stand for the whole of a suite's duplication.
   describe "two tests that duplicate each other in different words" do
+    # @intent: { entity: "NearDuplicateClusters", action: "admit the lexical limit", behavior: "a reworded duplicate scoring 0.31 is not clustered by the lexical provider", layer: "unit" }
     it "does not cluster them, at 0.31" do
       identity(EXPIRED, line: 3)
       identity(REWORDED, line: 9)
@@ -323,10 +345,12 @@ RSpec.describe NearDuplicateClusters do
       expect(described_class.for(repository).clusters).to be_empty
     end
 
+    # @intent: { entity: "NearDuplicateClusters", action: "admit the lexical limit", behavior: "the limitation is carried on the object's similarity_basis attribute rather than only in a comment", layer: "unit" }
     it "carries the limitation on the object rather than in a comment" do
       expect(described_class.for(repository).similarity_basis).to eq("semantic similarity, not exact wording")
     end
 
+    # @intent: { entity: "NearDuplicateClusters", action: "admit the lexical limit", behavior: "the floor actually searched at is disclosed on the result so no reader has to assume one", layer: "unit" }
     it "states the floor it searched at, so a reader is not left to assume one" do
       expect(described_class.for(repository).similarity_floor).to eq(described_class::SIMILARITY)
     end
@@ -334,6 +358,7 @@ RSpec.describe NearDuplicateClusters do
 
   # SPGD-369 criterion 7.
   describe "the ranking" do
+    # @intent: { entity: "NearDuplicateClusters", action: "rank clusters", behavior: "clusters order by summed wall clock even when the cheaper cluster has more members", layer: "unit" }
     it "is by summed wall clock, never by member count" do
       cheap = identity(EXPIRED, line: 3)
       cheap_partner = identity(OUTRIGHT, line: 9)
@@ -354,6 +379,7 @@ RSpec.describe NearDuplicateClusters do
       expect(clusters.last.total_seconds).to be_within(0.001).of(0.3)
     end
 
+    # @intent: { entity: "NearDuplicateClusters", action: "rank clusters", behavior: "a cluster nobody timed sorts last and is labelled not reported rather than free", layer: "unit" }
     it "puts a cluster nobody timed last, never first" do
       untimed = identity(EXPIRED, line: 3)
       untimed_partner = identity(OUTRIGHT, line: 9)
@@ -371,6 +397,7 @@ RSpec.describe NearDuplicateClusters do
       expect(clusters.last.duration_label).to eq("not reported")
     end
 
+    # @intent: { entity: "NearDuplicateClusters", action: "rank clusters", behavior: "members inside a cluster sort by the same summed-duration rule", layer: "unit" }
     it "orders members inside a cluster by the same rule" do
       observe(identity(EXPIRED, line: 3), duration: 0.5)
       observe(identity(OUTRIGHT, line: 9), duration: 9.0)
@@ -384,6 +411,7 @@ RSpec.describe NearDuplicateClusters do
   describe "what it says about itself when the list is empty" do
     # The Vacuous Green split: three different facts, three different answers, and only the first
     # two are silence.
+    # @intent: { entity: "NearDuplicateClusters", action: "report emptiness", behavior: "a repository that ingested nothing is distinguished from one whose tests are merely all distinct", layer: "unit" }
     it "distinguishes a repository that ingested nothing from one whose tests are all distinct" do
       empty = described_class.for(repository)
 
@@ -403,6 +431,7 @@ RSpec.describe NearDuplicateClusters do
     # A repository whose ingests wrote identities but whose runs are all gone — or which has not
     # been ingested at all — has nothing to weigh clusters in. It says so, rather than presenting a
     # cluster at zero examples as a cluster that costs nothing.
+    # @intent: { entity: "NearDuplicateClusters", action: "report emptiness", behavior: "with no run to weigh against the result says so instead of presenting a weightless cluster as cheap", layer: "unit" }
     it "says there was no run to weigh against, rather than reporting a weightless finding" do
       identity(EXPIRED, line: 3)
       identity(OUTRIGHT, line: 9)
@@ -419,6 +448,7 @@ RSpec.describe NearDuplicateClusters do
 
     # An observation that reached no identity is excluded structurally — there is nothing to cluster
     # it by — so no window over the pair read could ever have counted it.
+    # @intent: { entity: "NearDuplicateClusters", action: "report emptiness", behavior: "observations that reached no identity are counted in a separate unresolved figure", layer: "unit" }
     it "answers separately for the examples that reached no identity" do
       observe(identity(EXPIRED, line: 3))
       SpecObservation.create!(
@@ -434,6 +464,7 @@ RSpec.describe NearDuplicateClusters do
       expect(result).to be_excluded_unresolved_rows
     end
 
+    # @intent: { entity: "NearDuplicateClusters", action: "report emptiness", behavior: "an ordinary repository gets no mention of unresolved-row exclusion", layer: "unit" }
     it "does not mention the exclusion on an ordinary repository" do
       observe(identity(EXPIRED, line: 3))
 
@@ -444,6 +475,7 @@ RSpec.describe NearDuplicateClusters do
     # `spec_identity_id` NULL forever, so a suite whose every current test resolves cleanly would go
     # on reporting exclusions from runs long past. Counted in the weighed run, it says what THIS run
     # could not read — which is the only population the weights beside it were summed over.
+    # @intent: { entity: "NearDuplicateClusters", action: "report emptiness", behavior: "a past run's unresolved rows do not leak into the current weighed run's caption", layer: "unit" }
     it "does not carry a past run's unresolved rows into this run's caption" do
       old = create_test_run(repository: repository, commit_sha: "0dd0dd00")
       SpecObservation.create!(
@@ -469,6 +501,7 @@ RSpec.describe NearDuplicateClusters do
       identity(UNRELATED, line: 20, path: "spec/models/shipping_spec.rb")
     end
 
+    # @intent: { entity: "NearDuplicateClusters", action: "report coverage", behavior: "the coverage label states how much of the embedded population clustered at all", layer: "unit" }
     it "states how much of the embedded population clustered at all" do
       result = described_class.for(repository)
 
@@ -477,6 +510,7 @@ RSpec.describe NearDuplicateClusters do
       expect(result.identity_coverage_label).to eq("2 of 3")
     end
 
+    # @intent: { entity: "NearDuplicateClusters", action: "report coverage", behavior: "the timing coverage label counts how many clustered examples reported a duration", layer: "unit" }
     it "states how many of the clustered examples were timed" do
       result = described_class.for(repository)
 
@@ -485,6 +519,7 @@ RSpec.describe NearDuplicateClusters do
       expect(result).not_to be_complete
     end
 
+    # @intent: { entity: "NearDuplicateClusters", action: "report coverage", behavior: "completeness requires every clustered example to have carried a timing", layer: "unit" }
     it "is complete only when every clustered example reported a timing" do
       SpecObservation.where(duration_seconds: nil).update_all(duration_seconds: 2.0)
 
@@ -500,6 +535,7 @@ RSpec.describe NearDuplicateClusters do
     # fails against any arithmetic answer and passes only against a per-member one. An EVEN fixture
     # is the one that flatters the wrong implementation, and this object's flagship scenario, a
     # table-driven loop, is uneven by construction.
+    # @intent: { entity: "NearDuplicateClusters", action: "report coverage", behavior: "an identity nothing resolved to stays visible in the member list at zero examples", layer: "unit" }
     it "keeps an identity nothing resolved to visible, at zero examples" do
       expect(described_class.for(repository).clusters.first).not_to be_unobserved_members
 
@@ -534,6 +570,7 @@ RSpec.describe NearDuplicateClusters do
               test_run: newest, duration: 3.0)
     end
 
+    # @intent: { entity: "NearDuplicateClusters", action: "weigh an unobserved cluster", behavior: "a cluster found from older runs survives into a weighed run that never observed it", layer: "unit" }
     it "still holds the cluster, because membership spans runs" do
       result = described_class.for(repository, run: newest)
 
@@ -542,6 +579,7 @@ RSpec.describe NearDuplicateClusters do
       expect(result).to be_any
     end
 
+    # @intent: { entity: "NearDuplicateClusters", action: "weigh an unobserved cluster", behavior: "the unobserved cluster weighs nothing and discloses its members as unobserved", layer: "unit" }
     it "weighs it at nothing and says its members went unobserved" do
       cluster = described_class.for(repository, run: newest).clusters.first
 
@@ -555,6 +593,7 @@ RSpec.describe NearDuplicateClusters do
     # holds and the OLD guard — `any?`, true because the cluster is right there — let it through:
     # a panel told "not reported", "0 of 0" and "complete" in one breath. Revert the guard to `any?`
     # and this example goes red, which is the only thing that makes it load-bearing.
+    # @intent: { entity: "NearDuplicateClusters", action: "weigh an unobserved cluster", behavior: "coverage is not called complete over a population the weighed run never read, avoiding a 0-of-0 claim", layer: "unit" }
     it "does not call the coverage complete over a population it never read" do
       result = described_class.for(repository, run: newest)
 
@@ -566,6 +605,7 @@ RSpec.describe NearDuplicateClusters do
 
     # The same object weighed against the run that DID observe the members: the clusters are the
     # same clusters, and only now is completeness a claim about something.
+    # @intent: { entity: "NearDuplicateClusters", action: "weigh an unobserved cluster", behavior: "weighed against the run that did observe them the same clusters report full coverage", layer: "unit" }
     it "is complete again when weighed against the run that observed them" do
       result = described_class.for(repository, run: run)
 
@@ -585,6 +625,7 @@ RSpec.describe NearDuplicateClusters do
                         github_full_name: "acme/elsewhere")
     end
 
+    # @intent: { entity: "NearDuplicateClusters", action: "guard the tenant boundary", behavior: "a weighed run belonging to another repository is refused with an ArgumentError", layer: "unit" }
     it "is refused rather than captioned with the other tenant's rows" do
       observe(identity(EXPIRED, line: 3))
       foreign = create_test_run(repository: other, commit_sha: "f0re1980")
@@ -594,6 +635,7 @@ RSpec.describe NearDuplicateClusters do
     end
 
     # `nil` is the documented "this repository has never ingested" case and is NOT the error case.
+    # @intent: { entity: "NearDuplicateClusters", action: "guard the tenant boundary", behavior: "a nil run, the never-ingested case, still answers with an unweighed result instead of erroring", layer: "unit" }
     it "still answers for a repository with no run at all" do
       identity(EXPIRED, line: 3)
 
@@ -606,6 +648,7 @@ RSpec.describe NearDuplicateClusters do
   end
 
   describe "truncation, which the caption has to say rather than imply" do
+    # @intent: { entity: "NearDuplicateClusters", action: "disclose truncation", behavior: "the total cluster count is reported even when the returned list was cut by the limit", layer: "unit" }
     it "counts every cluster it found, not the ones that fit" do
       # Three pairs drawn from three disjoint vocabularies. Measured: 0.91–0.99 within a pair,
       # 0.04–0.07 across any two of them — so this is three clusters and not one, which is what a
@@ -626,6 +669,7 @@ RSpec.describe NearDuplicateClusters do
       expect(result).to be_truncated
     end
 
+    # @intent: { entity: "NearDuplicateClusters", action: "disclose truncation", behavior: "a finding that fits entirely under the limit is not marked truncated", layer: "unit" }
     it "is not truncated when the whole finding fits" do
       identity(EXPIRED, line: 3)
       identity(OUTRIGHT, line: 9)
@@ -638,6 +682,7 @@ RSpec.describe NearDuplicateClusters do
     # Six mutually near-identical texts with `neighbours: 2` — every member's list is full, so
     # edges were certainly cut. Single linkage still recovers the group; the disclosure is what
     # says the group might have been larger still.
+    # @intent: { entity: "NearDuplicateClusters", action: "disclose neighbour saturation", behavior: "identities whose neighbour list was full are counted and flagged on the result", layer: "unit" }
     it "counts the identities whose neighbour list was full" do
       6.times { |index| identity("Ledger posts entry number #{index}", line: index + 1) }
 
@@ -648,6 +693,7 @@ RSpec.describe NearDuplicateClusters do
       expect(result.clusters.first).to be_saturated
     end
 
+    # @intent: { entity: "NearDuplicateClusters", action: "disclose neighbour saturation", behavior: "nothing about saturation is claimed when every neighbour list had room", layer: "unit" }
     it "says nothing about saturation when no list was full" do
       identity(EXPIRED, line: 3)
       identity(OUTRIGHT, line: 9)
@@ -657,6 +703,7 @@ RSpec.describe NearDuplicateClusters do
 
     # Single linkage: membership is transitive while similarity is not, so the two ends of a chain
     # can sit further apart than the threshold. The range is what makes that visible on the row.
+    # @intent: { entity: "NearDuplicateClusters", action: "report edge range", behavior: "a cluster reports its tightest and loosest internal edge, exposing single-linkage chains", layer: "unit" }
     it "reports the tightest and loosest edge inside a cluster" do
       identity(EXPIRED, line: 3)
       identity(OUTRIGHT, line: 9)
@@ -671,6 +718,7 @@ RSpec.describe NearDuplicateClusters do
   end
 
   describe "the tenant boundary" do
+    # @intent: { entity: "NearDuplicateClusters", action: "guard the tenant boundary", behavior: "no cluster can span two repositories even when the same text exists in both", layer: "unit" }
     it "does not let a cluster cross repositories" do
       other = create_repository(user: create_user(github_uid: "2002", github_handle: "other"),
                                 github_full_name: "acme/other")
@@ -683,6 +731,7 @@ RSpec.describe NearDuplicateClusters do
     end
   end
 
+  # @intent: { entity: "NearDuplicateClusters", action: "avoid verdicts", behavior: "the object exposes no redundant or duplicate verdict method anywhere on its surface", layer: "unit" }
   it "returns no verdict about any of it" do
     expect(described_class.instance_methods).not_to include(:redundant?)
     expect(described_class::Cluster.instance_methods).not_to include(:redundant?, :duplicate?)
@@ -835,6 +884,7 @@ RSpec.describe NearDuplicateClusters do
       connection.execute("SET LOCAL cpu_operator_cost = #{previous}") if previous
     end
 
+    # @intent: { entity: "NearDuplicateClusters", action: "plan the neighbour query", behavior: "the per-identity neighbour search is answered by the HNSW index rather than a scan", layer: "unit" }
     it "answers each identity's neighbour question off the HNSW index" do
       plan = plan_for_actual_sql { described_class.for(repository) }
 
@@ -850,6 +900,7 @@ RSpec.describe NearDuplicateClusters do
     # scan of `index_spec_identities_on_repository_id` that sorts what it finds LOOKS like an index
     # scan in the plan and IS an all-pairs join in the profile. Refusing only `Seq Scan` would pass
     # over the shape this read most plausibly regresses into.
+    # @intent: { entity: "NearDuplicateClusters", action: "plan the neighbour query", behavior: "neither spelling of the quadratic all-siblings scan appears in the executed plan", layer: "unit" }
     it "never walks one identity's siblings to find its neighbours" do
       plan = plan_for_actual_sql { described_class.for(repository) }
 
@@ -890,6 +941,7 @@ RSpec.describe NearDuplicateClusters do
     # The seed side is a different question from the neighbour side, and only the neighbour side is
     # the quadratic one. This repository's own rows are the population being reported on, so they
     # are all visited by construction — what matters is that the OTHER tenant's are not.
+    # @intent: { entity: "NearDuplicateClusters", action: "plan the neighbour query", behavior: "seeding the search visits only this repository's identities, not the other tenant's", layer: "unit" }
     it "visits only this repository's identities to seed the search" do
       plan = plan_for_actual_sql { described_class.for(repository) }
 
@@ -900,6 +952,7 @@ RSpec.describe NearDuplicateClusters do
     # ⭐ The member-weight join, at scale. It is the one join a later reader is most likely to think
     # is decorative, and re-expanding a cluster's weight through a sequential scan of every
     # observation in the database is how it would come to look expensive enough to remove.
+    # @intent: { entity: "NearDuplicateClusters", action: "plan the weight join", behavior: "member weight is re-expanded through the by-identity observations index rather than a sequential scan", layer: "unit" }
     it "re-expands member weight through the by-identity index" do
       plan = plan_for_actual_sql { described_class.for(repository) }
 
@@ -907,6 +960,7 @@ RSpec.describe NearDuplicateClusters do
       expect(plan).not_to match(/Seq Scan on spec_observations o\b/)
     end
 
+    # @intent: { entity: "NearDuplicateClusters", action: "bound query count", behavior: "the number of questions asked is fixed regardless of how large the repository is", layer: "unit" }
     it "asks a fixed number of questions however large the suite is" do
       small = create_repository(user: create_user(github_uid: "4004", github_handle: "small"),
                                 github_full_name: "acme/small")
@@ -923,6 +977,7 @@ RSpec.describe NearDuplicateClusters do
     # presence. A bare total cannot tell "one read per question" from "one question read twice", so
     # the number is asserted next to the list it stands for. Four of the eight are planner/recall
     # directives and their bookends, and none of them depends on how much the repository holds.
+    # @intent: { entity: "NearDuplicateClusters", action: "bound query count", behavior: "exactly eight named statements run whatever the read finds, in a fixed shape", layer: "unit" }
     it "reads spec_identities twice and spec_observations once, whatever it finds" do
       statements = executed_sql { described_class.for(repository) }
 
@@ -940,6 +995,7 @@ RSpec.describe NearDuplicateClusters do
     # to the block that asked for it. This example runs inside the suite's per-example transaction,
     # so it IS the nested case: a caller who wrapped this read in a transaction of their own and
     # went on running unrelated queries under a 1024× operator price they never asked for.
+    # @intent: { entity: "NearDuplicateClusters", action: "restore planner state", behavior: "the temporarily raised vector operator cost is restored for the caller before the read returns", layer: "unit" }
     it "puts the operator price back for whoever called it" do
       cost = -> { ActiveRecord::Base.connection.select_value("SHOW cpu_operator_cost") }
       before = cost.call

@@ -77,6 +77,7 @@ RSpec.describe SpecDirectoryFileGrowth do
       )
     end
 
+    # @intent: { entity: "SpecDirectoryFileGrowth", action: "rank the area's files by movement", behavior: "rows come out ordered by absolute change descending so a file that lost five examples tops one that gained three, each carrying the previous count, the latest count and a signed change label", layer: "unit" }
     it "carries each file's count then, its count now, and the movement between them" do
       expect(rows_as_read(moved_area)).to eq(
         [["spec/models/legacy_spec.rb", 6, 1, "−5"],
@@ -85,6 +86,7 @@ RSpec.describe SpecDirectoryFileGrowth do
       )
     end
 
+    # @intent: { entity: "SpecDirectoryFileGrowth", action: "report its state flags for a moving area", behavior: "comparable, recorded and any_movement are all true with state :comparable when two fully recorded runs differenced to real per-file movement", layer: "unit" }
     it "is comparable, has recorded rows, and says the area's movement is real" do
       drill_in = moved_area
 
@@ -97,6 +99,7 @@ RSpec.describe SpecDirectoryFileGrowth do
     # The counts are this AREA's, never the runs'. The fixture puts a much larger population in a
     # second area precisely so an object reading the parent read's whole-run totals — the same
     # figures under the same names one rung up — produces visibly wrong denominators here.
+    # @intent: { entity: "SpecDirectoryFileGrowth", action: "scope its totals to the asked-for area", behavior: "previous_recorded_count, latest_recorded_count and file_count count only the requested directory's rows, ignoring a much larger population sitting in a second area", layer: "unit" }
     it "counts its totals over the asked-for area and not over the whole run" do
       drill_in = build(
         previous_specs: file_specs("spec/models/order_spec.rb", 2) +
@@ -114,6 +117,7 @@ RSpec.describe SpecDirectoryFileGrowth do
     # admitting it cannot tell a relocation from a gain and a loss; here both halves are named, and
     # named as STATES rather than differenced against a zero that was never a measurement of that
     # file. The object still asserts no correspondence between the two — it counts rows.
+    # @intent: { entity: "SpecDirectoryFileGrowth", action: "state vanished and appeared files outright", behavior: "a file present only in the earlier run reads as a removal and one present only in the later run as a new file, never as a count differenced against a zero that never measured that file", layer: "unit" }
     it "names a vanished file and an appeared one rather than differencing either from a zero" do
       drill_in = build(
         previous_specs: file_specs("spec/models/user_spec.rb", 4),
@@ -132,6 +136,7 @@ RSpec.describe SpecDirectoryFileGrowth do
     # all — and three numbers in a row announce as three unattached numbers. So the direction and
     # what it was measured against are spelled out. The two one-sided readings name the FILE grain:
     # the sibling one rung up says "area", and a struct reused across the two would say it here.
+    # @intent: { entity: "SpecDirectoryFileGrowth", action: "spell movements out in words", behavior: "change_reading renders each movement as a full sentence naming the file grain — counts then and now, a file the previous run lacked, or unchanged — instead of bare signed numbers", layer: "unit" }
     it "spells every movement out in words" do
       drill_in = build(
         previous_specs: file_specs("spec/models/legacy_spec.rb", 6) +
@@ -149,6 +154,7 @@ RSpec.describe SpecDirectoryFileGrowth do
     # An area whose every file holds the same number of examples in both runs. A real answer — and
     # the one a reader who suspected a rename most wants confirmed — and specifically NOT one of the
     # six no-comparison states: the runs compared fine and nothing moved.
+    # @intent: { entity: "SpecDirectoryFileGrowth", action: "distinguish a steady area from a refused one", behavior: "an area where every file held exactly still stays comparable and recorded with any_movement false and both files counted, rather than collapsing into a no-comparison state", layer: "unit" }
     it "is comparable and recorded but shows no movement where every file held still" do
       drill_in = build(
         previous_specs: file_specs("spec/models/order_spec.rb", 3) +
@@ -167,6 +173,7 @@ RSpec.describe SpecDirectoryFileGrowth do
     # reader types, edits and bookmarks, so a typo, a stale bookmark and a directory deleted before
     # both runs all arrive here — an ordinary answer, and deliberately NOT spelled as one of the six
     # states, which are facts about the RUNS. The path is held so the empty state can name it.
+    # @intent: { entity: "SpecDirectoryFileGrowth", action: "answer for an unrecorded area without refusing", behavior: "asking about a directory neither run touched yields comparable true, recorded false, empty rows and a retained path, so a typo or stale bookmark is not misreported as incomparable runs", layer: "unit" }
     it "reports an area neither run recorded as unrecorded rather than as incomparable" do
       drill_in = build(
         previous_specs: file_specs("spec/models/order_spec.rb", 2),
@@ -185,6 +192,7 @@ RSpec.describe SpecDirectoryFileGrowth do
     # figure a caption saying "of the N either run recorded" needs and `rows.size` is not — and
     # `truncated?` is what makes the surface SAY so rather than leaving a reader to infer it from a
     # list whose length happens to equal a limit they cannot see.
+    # @intent: { entity: "SpecDirectoryFileGrowth", action: "cap the list while counting everything", behavior: "rows are truncated to the limit yet file_count still counts all files the comparison covered and truncated? flags the cut for the caption to disclose", layer: "unit" }
     it "caps the list while counting the comparison it is the head of" do
       drill_in = build(
         previous_specs: file_specs("spec/models/gone_spec.rb", 1),
@@ -197,6 +205,7 @@ RSpec.describe SpecDirectoryFileGrowth do
       expect(drill_in).to be_truncated
     end
 
+    # @intent: { entity: "SpecDirectoryFileGrowth", action: "report an uncut list as whole", behavior: "truncated? is false exactly when file_count equals rows.size, so a full listing never claims to hide files", layer: "unit" }
     it "is not truncated where the list shows every file the comparison covered" do
       drill_in = build(
         previous_specs: file_specs("spec/models/order_spec.rb", 2),
@@ -211,6 +220,7 @@ RSpec.describe SpecDirectoryFileGrowth do
     # only ever appear in the tail — and they appear exactly when fewer files moved than the cap has
     # room for. Asserted in BOTH directions, because a clause that is always true is a description
     # of nothing.
+    # @intent: { entity: "SpecDirectoryFileGrowth", action: "say whether unmoved files made the list", behavior: "any_unmoved is true when a steady file sits inside the cap and flips to false once every listed file moved, asserted in both directions", layer: "unit" }
     it "knows whether the movement ran out before the list did" do
       ran_out = build(
         previous_specs: file_specs("spec/models/order_spec.rb", 2) +
@@ -235,6 +245,7 @@ RSpec.describe SpecDirectoryFileGrowth do
     # The default limit is this panel's OWN constant, asserted by name. Its neighbour
     # `SPEC_DIRECTORY_FILES_LIMIT` caps one run's listing of the same area's files, so a reuse of it
     # would pass every example above and silently make one edit move two panels.
+    # @intent: { entity: "SpecDirectoryFileGrowth", action: "default to its own limit", behavior: "an unlimited build returns exactly SPEC_DIRECTORY_FILE_GROWTH_LIMIT rows, asserted distinct from the neighbouring SPEC_DIRECTORY_FILES_LIMIT so one edit cannot silently move two panels", layer: "unit" }
     it "defaults to the panel's own limit and not the neighbouring listing's" do
       drill_in = build(
         previous_specs: file_specs("spec/models/gone_spec.rb", 1),
@@ -262,6 +273,7 @@ RSpec.describe SpecDirectoryFileGrowth do
       latest_unrecorded: -> { { previous_specs: file_specs("spec/models/order_spec.rb", 3), latest_total: 40 } },
       neither_recorded: -> { { previous_total: 40, latest_total: 42 } }
     }.each do |state, fixture|
+      # @intent: { entity: "SpecDirectoryFileGrowth", action: "inherit each parent refusal by name", behavior: "for each of the five recorder-produced no-comparison states the drill-in returns that exact state symbol, reports itself incomparable and produces no rows", layer: "unit" }
       it "refuses to compare, naming '#{state}', exactly as the panel above does" do
         drill_in = build(**instance_exec(&fixture))
 
@@ -275,6 +287,7 @@ RSpec.describe SpecDirectoryFileGrowth do
     # rather than what they measured: a sharded run differenced against a complete one reports every
     # file shrinking. `shard_id` is what `Ingest::RunRecorder` turns into the `test_run_shards` row
     # `TestRun#assembled_like?` counts.
+    # @intent: { entity: "SpecDirectoryFileGrowth", action: "refuse runs assembled from different parts", behavior: "a sharded latest run differenced against a complete previous one yields state :assembled_differently and comparable false rather than a bogus across-the-board shrinkage", layer: "unit" }
     it "refuses to compare two runs assembled from different numbers of parts" do
       drill_in = build(previous_specs: file_specs("spec/models/order_spec.rb", 4),
                        latest_specs: file_specs("spec/models/order_spec.rb", 2, offset: 100),
@@ -286,6 +299,7 @@ RSpec.describe SpecDirectoryFileGrowth do
 
     # The refusal is not merely reported, it is TOTAL: every figure the caption would be built from
     # is zero, so nothing downstream can render a sentence about a comparison that was not made.
+    # @intent: { entity: "SpecDirectoryFileGrowth", action: "zero every figure on refusal", behavior: "in a refused state file_count, both recorded counts, recorded, any_movement and truncated are all zero or false, leaving no numbers a caption could build a comparison sentence from", layer: "unit" }
     it "carries no figures at all in a state it refused" do
       drill_in = build(previous_specs: file_specs("spec/models/order_spec.rb", 3), latest_total: 40)
 
@@ -300,6 +314,7 @@ RSpec.describe SpecDirectoryFileGrowth do
     # The area asked for is still named. The surface renders nothing in these states, but an object
     # that dropped its own subject on the way through the gate would be a trap for the next caller
     # that wants to say WHICH area it declined to compare.
+    # @intent: { entity: "SpecDirectoryFileGrowth", action: "keep naming the asked-for area", behavior: "the path passed in survives the refusal unchanged so a later caller can still state which area was declined", layer: "unit" }
     it "still names the area it was asked about" do
       drill_in = build(previous_specs: file_specs("spec/models/order_spec.rb", 3), latest_total: 40,
                        path: "spec/models")
@@ -326,6 +341,7 @@ RSpec.describe SpecDirectoryFileGrowth do
       end
     end
 
+    # @intent: { entity: "SpecDirectoryFileGrowth", action: "query nothing when the parent refuses", behavior: "building the drill-in under an incomparable parent issues no per-run count-filtered group-by on spec_observations at all", layer: "unit" }
     it "asks the observations table nothing where the parent panel cannot compare" do
       ingest(commit_sha: "prev00000000001", total: 40)
       repository.test_runs.last.update!(created_at: 2.hours.ago)
@@ -345,6 +361,7 @@ RSpec.describe SpecDirectoryFileGrowth do
     # does not grow with the area. Measured as a difference against ten times the examples, so an
     # implementation that counted per row, or took a second round trip for the captions, shows up
     # here whatever the absolute number happens to be.
+    # @intent: { entity: "SpecDirectoryFileGrowth", action: "hold its query count flat", behavior: "the whole comparison costs exactly one query whether the area holds thirty examples or three hundred, so no per-row counting or second caption round trip creeps in", layer: "unit" }
     it "costs one query, and the same one whether the area holds thirty examples or three hundred" do
       ingest(commit_sha: "prev00000000001", specs: file_specs("spec/models/order_spec.rb", 10))
       repository.test_runs.last.update!(created_at: 2.hours.ago)

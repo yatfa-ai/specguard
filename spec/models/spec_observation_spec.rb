@@ -48,6 +48,7 @@ RSpec.describe SpecObservation do
     describe "what they return" do
       before { seed(run) }
 
+      # @intent: { entity: "SpecObservation", action: "read one run's observation rows through scopes and rollups", behavior: "the slowest-20 scope returns exactly twenty rows of the given run, ordered by descending duration and never leaking another run's rows", layer: "unit" }
       it "gives the 20 slowest examples, in order, scoped to the run" do
         rows = slowest.to_a
 
@@ -56,12 +57,14 @@ RSpec.describe SpecObservation do
         expect(rows.map(&:duration_seconds)).to eq(rows.map(&:duration_seconds).sort.reverse)
       end
 
+      # @intent: { entity: "SpecObservation", action: "read one run's observation rows through scopes and rollups", behavior: "the failed-outcome scope counts only the given run's failures, confirming the outcome filter and run filter compose", layer: "unit" }
       it "gives this run's failures and nobody else's" do
         expect(failures.count).to eq(rows_per_run / 50)
         expect(failures.pluck(:outcome).uniq).to eq(["failed"])
         expect(failures.pluck(:test_run_id).uniq).to eq([run.id])
       end
 
+      # @intent: { entity: "SpecObservation", action: "read one run's observation rows through scopes and rollups", behavior: "grouping by spec_file_path yields one total per file and the totals reconcile to the run's overall duration sum, catching dropped or double-counted rows", layer: "unit" }
       it "totals duration for every file of the run, and only the run" do
         totals = run.spec_observations.group(:spec_file_path).sum(:duration_seconds)
 
@@ -72,6 +75,7 @@ RSpec.describe SpecObservation do
       # The same aggregate through the read the panel actually makes. Asserted against the run's
       # own total for the reason the example above is: a rollup that loses or double-counts a
       # file's rows is still a plausible-looking list of files, and the sum is what catches it.
+      # @intent: { entity: "SpecObservation", action: "read one run's observation rows through scopes and rollups", behavior: "the panel's file-durations read returns every file of the run with totals and row counts that reconcile to the run's own sums", layer: "unit" }
       it "rolls the whole run up by file through the read the panel makes" do
         files = described_class.file_durations_in(run, limit: 100)
 
@@ -82,6 +86,7 @@ RSpec.describe SpecObservation do
         expect(files.sum { |_path, _total, recorded, _timed| recorded }).to eq(rows_per_run)
       end
 
+      # @intent: { entity: "SpecObservation", action: "read one run's observation rows through scopes and rollups", behavior: "a file-and-run scope returns only the rows of that one file in that one run", layer: "unit" }
       it "narrows to one file of one run" do
         expect(one_file.count).to eq(rows_per_run / 25)
         expect(one_file.pluck(:spec_file_path).uniq).to eq(["spec/d3/f3_spec.rb"])
@@ -93,6 +98,7 @@ RSpec.describe SpecObservation do
       # what pins the two rollups to ONE population — the by-file totals above sum to this same
       # figure, so a directory grouping that dropped the rows of a file it could not place would
       # disagree with its own sibling rather than merely look short.
+      # @intent: { entity: "SpecObservation", action: "read one run's observation rows through scopes and rollups", behavior: "the directory-durations read returns one row per directory with totals and recorded counts that reconcile to the run's whole population", layer: "unit" }
       it "rolls the whole run up by directory through the read the panel makes" do
         directories = described_class.directory_durations_in(run, limit: 100)
 
@@ -107,6 +113,7 @@ RSpec.describe SpecObservation do
       # files to a directory here, so a rollup that had silently stayed at the file grain (a
       # grouping expression that captured the whole path) would come back with 25 rows and totals
       # equal to the by-file ones.
+      # @intent: { entity: "SpecObservation", action: "read one run's observation rows through scopes and rollups", behavior: "the directory rollup returns five directory rows against twenty-five file rows over the same recorded population, proving the grouping grain is genuinely coarser", layer: "unit" }
       it "groups the areas above the files, not alongside them" do
         directories = described_class.directory_durations_in(run, limit: 100)
         files = described_class.file_durations_in(run, limit: 100)
@@ -148,6 +155,7 @@ RSpec.describe SpecObservation do
       # The whole predicate: a description ONE example carries is not a repetition, and the 500
       # uniquely-named rows the seed wrote are the proof that `HAVING COUNT(*) > 1` is doing the
       # work rather than the fixture being small.
+      # @intent: { entity: "SpecObservation", action: "read one run's observation rows through scopes and rollups", behavior: "the repeated-description read names exactly the descriptions shared by more than one example and omits unique ones", layer: "unit" }
       it "returns the descriptions carried by more than one example, and no others" do
         repeat("shared across a loop", [1.0, 2.0])
 
@@ -158,6 +166,7 @@ RSpec.describe SpecObservation do
       # the ordering the panel's whole claim rests on. The three-example group here outranks the
       # eight-example one, which is the assertion that would fail if this were ordered by
       # `COUNT(*)`.
+      # @intent: { entity: "SpecObservation", action: "read one run's observation rows through scopes and rollups", behavior: "groups of equal row count are ordered by summed wall clock, so the ranking reflects time rather than repetition count", layer: "unit" }
       it "ranks the groups by summed wall clock rather than by how many examples share the name" do
         repeat("three slow examples", [30.0, 30.0, 30.0])
         repeat("eight fast examples", Array.new(8, 0.25))
@@ -168,6 +177,7 @@ RSpec.describe SpecObservation do
       # `SUM(...) DESC` is NULLS FIRST in Postgres, so the naive ordering does not merely include
       # the group nobody timed — it names it the most expensive repetition in the run. The same
       # hazard `.directory_durations_in` carries `NULLS LAST` for, at this grain.
+      # @intent: { entity: "SpecObservation", action: "read one run's observation rows through scopes and rollups", behavior: "a group whose examples carry no timings sorts to the tail of the ranking instead of winning it on a nil sum", layer: "unit" }
       it "sorts a group nothing timed to the end rather than to the head of the ranking" do
         repeat("timed group", [0.5, 0.5])
         repeat("untimed group", [nil, nil])
@@ -178,6 +188,7 @@ RSpec.describe SpecObservation do
 
       # Each group states what its own total was summed over, because `SUM` skips NULLs silently
       # and a half-measured group is otherwise indistinguishable, as a number, from a complete one.
+      # @intent: { entity: "SpecObservation", action: "read one run's observation rows through scopes and rollups", behavior: "each group reports its example count alongside how many of those examples actually contributed a timing", layer: "unit" }
       it "counts each group's examples and how many of them reported a timing" do
         repeat("half measured", [4.0, nil, 2.0])
 
@@ -191,6 +202,7 @@ RSpec.describe SpecObservation do
       # The files are what let a reader go and look, and a group spanning two of them is a
       # disclosure the panel makes rather than an error. `ARRAY_AGG(DISTINCT …) FILTER (…)`, so the
       # list is de-duplicated and a null never arrives as a nil element inside it.
+      # @intent: { entity: "SpecObservation", action: "read one run's observation rows through scopes and rollups", behavior: "each group lists the distinct spec files its examples ran in, so shared names across files are visible", layer: "unit" }
       it "names the distinct spec files the group's examples ran in" do
         repeat("spans two files", [1.0], path: "spec/d0/a_spec.rb")
         repeat("spans two files", [1.0], path: "spec/d1/b_spec.rb")
@@ -202,6 +214,7 @@ RSpec.describe SpecObservation do
       # A null name is not a description and two nulls are not one test. Pooling them would invent
       # the largest repetition in the run out of rows that share nothing at all — here, the three
       # most expensive rows the run wrote.
+      # @intent: { entity: "SpecObservation", action: "read one run's observation rows through scopes and rollups", behavior: "rows with no description are dropped from the grouping rather than pooling into a nameless mega-group", layer: "unit" }
       it "excludes the rows carrying no description rather than pooling them into one group" do
         repeat(nil, [50.0, 50.0, 50.0], path: "spec/d0/unnamed_spec.rb")
 
@@ -212,6 +225,7 @@ RSpec.describe SpecObservation do
       # counts repeated DESCRIPTIONS and counts all of them however few come back. Without it a
       # capped list's own length is the only figure available, and three repetitions and three
       # hundred would render identically.
+      # @intent: { entity: "SpecObservation", action: "read one run's observation rows through scopes and rollups", behavior: "the population count reflects every repeated description in the run, not merely the capped page of groups", layer: "unit" }
       it "reports how many repeated descriptions the run holds, before the cap" do
         6.times { |index| repeat("group #{index}", [index + 1.0, index + 1.0]) }
 
@@ -224,6 +238,7 @@ RSpec.describe SpecObservation do
       # The two window totals describe the whole repeated population rather than the head of it
       # that fit on the page — on a truncated run those are different numbers, and a coverage
       # sentence built on the listed rows would be a claim about the page.
+      # @intent: { entity: "SpecObservation", action: "read one run's observation rows through scopes and rollups", behavior: "the example and timing totals cover every repeated description's examples, counted before the cap applies", layer: "unit" }
       it "reports the examples every repeated description covers and times, before the cap" do
         repeat("first group", [1.0, nil])
         repeat("second group", [2.0, 2.0, nil])
@@ -239,6 +254,7 @@ RSpec.describe SpecObservation do
       # The gate an empty ranking cannot provide for itself: a run that wrote no rows and a run
       # whose every description is unique both return nothing, and only the first of them is
       # silence.
+      # @intent: { entity: "SpecObservation", action: "read one run's observation rows through scopes and rollups", behavior: "one read returns both the run's total row count and its undescribed-row count", layer: "unit" }
       it "counts the run's rows and the ones carrying no description, in one read" do
         repeat(nil, Array.new(7, 0.1), path: "spec/d0/unnamed_spec.rb")
 
@@ -246,6 +262,7 @@ RSpec.describe SpecObservation do
           .to eq(recorded_count: rows_per_run + 7, unnamed_count: 7)
       end
 
+      # @intent: { entity: "SpecObservation", action: "read one run's observation rows through scopes and rollups", behavior: "a run that recorded no rows answers zero for both counters rather than nil, so the panel renders numbers not absences", layer: "unit" }
       it "reports a run that wrote no rows as zero of both rather than as an absence" do
         empty_run = create_test_run(repository: repository)
 
@@ -273,6 +290,7 @@ RSpec.describe SpecObservation do
         run.spec_observations.order(:id).limit(count).update_all(status: "annotated")
       end
 
+      # @intent: { entity: "SpecObservation", action: "read one run's observation rows through scopes and rollups", behavior: "the unannotated scope returns only rows whose status is unannotated, excluding annotated ones", layer: "unit" }
       it "returns the run's unannotated rows and no annotated one" do
         annotate(3)
         rows = described_class.unannotated_in(run, limit: rows_per_run).to_a
@@ -285,6 +303,7 @@ RSpec.describe SpecObservation do
       # The window is counted after the WHERE and before the LIMIT, so it describes the run's whole
       # unannotated population rather than the page — which is the figure the API serves as
       # `recorded_count` and invites a client to reconcile against the run's counters.
+      # @intent: { entity: "SpecObservation", action: "read one run's observation rows through scopes and rollups", behavior: "every row of a capped page carries the whole unannotated population count, not just the page's slice", layer: "unit" }
       it "counts the whole unannotated population on every row of a capped page" do
         annotate(100)
         rows = described_class.unannotated_in(run, limit: 10).to_a
@@ -297,6 +316,7 @@ RSpec.describe SpecObservation do
       # than tidy: a reader annotating one page and asking again must be walking a list, not
       # re-rolling one. `seed` writes `line_number` ascending across 25 files, so a read that had
       # kept insertion order would come back in `id` order and disagree here.
+      # @intent: { entity: "SpecObservation", action: "read one run's observation rows through scopes and rollups", behavior: "ordering is file, then line, then id, and calling the scope twice yields the identical order", layer: "unit" }
       it "orders by file, then line, then id, the same way twice" do
         first = described_class.unannotated_in(run, limit: 40).to_a
         second = described_class.unannotated_in(run, limit: 40).to_a
@@ -310,6 +330,7 @@ RSpec.describe SpecObservation do
       # A fully-annotated run is the state the metric exists to REACH, so it is an ordinary empty
       # read rather than an error — and the window has no row to ride on, which is why the caller's
       # count is a `to_i` over nil rather than an assumption that one row came back.
+      # @intent: { entity: "SpecObservation", action: "read one run's observation rows through scopes and rollups", behavior: "a run whose every example is annotated gets an empty unannotated result", layer: "unit" }
       it "returns nothing for a run whose every example is annotated" do
         annotate(rows_per_run)
 
@@ -319,6 +340,7 @@ RSpec.describe SpecObservation do
       # Scoped to ONE run, asserted rather than assumed: the whole point of the API block is that it
       # describes the run `run_anchor` names, and a read that had narrowed on `status` alone would
       # return the other run's rows too and still look right on a single-run fixture.
+      # @intent: { entity: "SpecObservation", action: "read one run's observation rows through scopes and rollups", behavior: "the scope filters on the run it was handed and not on all of the repository's rows", layer: "unit" }
       it "narrows to the run it was handed and not to the repository" do
         other = create_test_run(repository: repository, commit_sha: "feedfacecafebabf")
         seed(other)
@@ -340,6 +362,7 @@ RSpec.describe SpecObservation do
         let(:one_file) { "spec/d3/f3_spec.rb" }
         let(:one_area) { "spec/d3" }
 
+        # @intent: { entity: "SpecObservation", action: "read one run's observation rows through scopes and rollups", behavior: "the file-narrowed scope returns only that file's unannotated rows and none from a sibling file", layer: "unit" }
         it "returns one file's unannotated rows and no other file's" do
           annotate(3)
           rows = described_class.unannotated_in(run, limit: rows_per_run, spec_file: one_file).to_a
@@ -352,6 +375,7 @@ RSpec.describe SpecObservation do
           expect(described_class.unannotated_in(run, limit: rows_per_run).size).to be > rows.size
         end
 
+        # @intent: { entity: "SpecObservation", action: "read one run's observation rows through scopes and rollups", behavior: "a file-narrowed page carries the FILE's unannotated population as its denominator rather than the run's", layer: "unit" }
         it "counts the FILE's unannotated population rather than the run's" do
           in_file = run.spec_observations.where(spec_file_path: one_file).count
           rows = described_class.unannotated_in(run, limit: 5, spec_file: one_file).to_a
@@ -361,6 +385,7 @@ RSpec.describe SpecObservation do
           expect(in_file).to be < rows_per_run
         end
 
+        # @intent: { entity: "SpecObservation", action: "read one run's observation rows through scopes and rollups", behavior: "the area-narrowed scope returns only rows in the named area's files", layer: "unit" }
         it "returns one area's unannotated rows and no other area's" do
           rows = described_class.unannotated_in(run, limit: rows_per_run, spec_directory: one_area).to_a
 
@@ -376,6 +401,7 @@ RSpec.describe SpecObservation do
         # subtree" work would be a fifth directory semantics on this table. The seeded run is flat, so
         # nothing in it could tell an equality from a prefix; a subdirectory has to exist for the
         # assertion to mean anything.
+        # @intent: { entity: "SpecObservation", action: "read one run's observation rows through scopes and rollups", behavior: "rows in a subdirectory of the named area are excluded, pinning an area to the immediate parent rather than a path prefix", layer: "unit" }
         it "excludes a SUBDIRECTORY's rows, because an area is the immediate parent and not a prefix" do
           nested = "spec/d3/nested/deep_spec.rb"
           now = Time.current
@@ -397,6 +423,7 @@ RSpec.describe SpecObservation do
 
         # Both narrowings AND, with no precedence rule between them: a coherent pair is the
         # intersection, which for a file inside the area it names is the file.
+        # @intent: { entity: "SpecObservation", action: "read one run's observation rows through scopes and rollups", behavior: "supplying both a file and an area intersects the two filters rather than widening to either", layer: "unit" }
         it "intersects the two when both are given" do
           rows = described_class.unannotated_in(run, limit: rows_per_run, spec_file: one_file,
                                                      spec_directory: one_area).to_a
@@ -408,6 +435,7 @@ RSpec.describe SpecObservation do
 
         # And a contradictory pair is an honest empty intersection rather than one of the two being
         # silently dropped — which is what a precedence rule would have made it.
+        # @intent: { entity: "SpecObservation", action: "read one run's observation rows through scopes and rollups", behavior: "naming a file that does not sit under the named area yields no rows at all", layer: "unit" }
         it "returns nothing when the file named is not in the area named" do
           rows = described_class.unannotated_in(run, limit: rows_per_run, spec_file: one_file,
                                                      spec_directory: "spec/d1").to_a
@@ -417,12 +445,14 @@ RSpec.describe SpecObservation do
 
         # An unknown path is an ordinary empty read at this grain, exactly as it is one rung up: no
         # error, and specifically no prefix match onto the neighbour it was nearly spelled as.
+        # @intent: { entity: "SpecObservation", action: "read one run's observation rows through scopes and rollups", behavior: "a recorded path absent from this run answers with no rows instead of raising or inferring", layer: "unit" }
         it "answers a path this run recorded nothing for with no rows" do
           expect(described_class.unannotated_in(run, spec_file: "spec/d3/f3_spec.rbx").to_a).to be_empty
           expect(described_class.unannotated_in(run, spec_directory: "spec/d").to_a).to be_empty
         end
 
         # The narrow does not loosen the run bound: a second run's rows at the same path stay out.
+        # @intent: { entity: "SpecObservation", action: "read one run's observation rows through scopes and rollups", behavior: "the narrowed scope still filters to the handed run rather than to the repository", layer: "unit" }
         it "still narrows to the run it was handed" do
           other = create_test_run(repository: repository, commit_sha: "feedfacecafebabf")
           seed(other)
@@ -484,6 +514,7 @@ RSpec.describe SpecObservation do
         ActiveRecord::Base.connection.select_values("EXPLAIN #{relation.to_sql}").join("\n")
       end
 
+      # @intent: { entity: "SpecObservation", action: "read one run's observation rows through scopes and rollups", behavior: "EXPLAIN shows the slowest-examples read served by the by-duration index instead of a full scan", layer: "unit" }
       it "reads the slowest examples off the by-duration index" do
         plan = plan_for(slowest)
 
@@ -491,6 +522,7 @@ RSpec.describe SpecObservation do
         expect(plan).not_to match(/Seq Scan on spec_observations/)
       end
 
+      # @intent: { entity: "SpecObservation", action: "read one run's observation rows through scopes and rollups", behavior: "the failures read is served by the by-outcome index", layer: "unit" }
       it "reads the failures off the by-outcome index" do
         plan = plan_for(failures)
 
@@ -503,6 +535,7 @@ RSpec.describe SpecObservation do
       # it nothing for a whole-run grouping. What matters for this criterion is that one run is
       # read through an index rather than by walking every run's rows, and that is what the plan
       # says. The composite index earns its place on the *narrowed* read below.
+      # @intent: { entity: "SpecObservation", action: "read one run's observation rows through scopes and rollups", behavior: "the by-file totals aggregate reads via an index rather than scanning the table", layer: "unit" }
       it "reads the by-file totals off an index rather than scanning the table" do
         plan = plan_for(by_file)
 
@@ -510,6 +543,7 @@ RSpec.describe SpecObservation do
         expect(plan).not_to match(/Seq Scan on spec_observations/)
       end
 
+      # @intent: { entity: "SpecObservation", action: "read one run's observation rows through scopes and rollups", behavior: "the one-file one-run lookup goes through the by-file index", layer: "unit" }
       it "reads one file of one run straight off the by-file index" do
         plan = plan_for(one_file)
 
@@ -538,6 +572,7 @@ RSpec.describe SpecObservation do
       # An EQUALITY predicate, and deliberately not a subtree: "every row under `spec/d3/`" is a
       # PREFIX predicate, which is what a `text_pattern_ops` index serves and this read issues none
       # of. That is what let the panel ship with no migration.
+      # @intent: { entity: "SpecObservation", action: "read one run's observation rows through scopes and rollups", behavior: "the panel's single-file drill-down query plans off the by-file index", layer: "unit" }
       it "reads the panel's one-file drill-down off the by-file index" do
         plan = plan_for_actual_sql("spec_observations") { described_class.in_file(run, "spec/d3/f3_spec.rb").to_a }
 
@@ -566,6 +601,7 @@ RSpec.describe SpecObservation do
       # Captured off the wire rather than EXPLAINed from a hand-written copy, for the reason the
       # example above gives: the predicate alone is not the read the panel makes, which adds a
       # projection, an ordering and a cap on top of it.
+      # @intent: { entity: "SpecObservation", action: "read one run's observation rows through scopes and rollups", behavior: "the panel's single-description drill-down plans off an index rather than scanning", layer: "unit" }
       it "reads the panel's one-description drill-down off an index rather than scanning the table" do
         plan = plan_for_actual_sql("spec_observations") { described_class.with_description(run, "example 3").to_a }
 
@@ -596,6 +632,7 @@ RSpec.describe SpecObservation do
       # Captured off the wire rather than EXPLAINed from a hand-written copy, for the reason the two
       # examples above give: the predicate alone is not the read the block makes, which adds a
       # projection, an ordering and a cap on top of it.
+      # @intent: { entity: "SpecObservation", action: "read one run's observation rows through scopes and rollups", behavior: "the run's unannotated listing is served by an index rather than a scan", layer: "unit" }
       it "reads the run's unannotated examples off an index rather than scanning the table" do
         plan = plan_for_actual_sql("spec_observations") { described_class.unannotated_in(run).to_a }
 
@@ -618,6 +655,7 @@ RSpec.describe SpecObservation do
       # Captured off the wire rather than EXPLAINed from a hand-written copy, on this section's rule:
       # a narrowing added to the model and not to the certification would leave the certification
       # measuring a statement the endpoint no longer makes.
+      # @intent: { entity: "SpecObservation", action: "read one run's observation rows through scopes and rollups", behavior: "the single-file unannotated listing plans off an index rather than a scan", layer: "unit" }
       it "reads ONE FILE's unannotated examples off an index rather than scanning the table" do
         plan = plan_for_actual_sql("spec_observations") do
           described_class.unannotated_in(run, spec_file: "spec/d3/f3_spec.rb").to_a
@@ -627,6 +665,7 @@ RSpec.describe SpecObservation do
         expect(plan).not_to match(/Seq Scan on spec_observations/)
       end
 
+      # @intent: { entity: "SpecObservation", action: "read one run's observation rows through scopes and rollups", behavior: "the single-area unannotated listing plans off an index rather than a scan", layer: "unit" }
       it "reads ONE AREA's unannotated examples off an index rather than scanning the table" do
         plan = plan_for_actual_sql("spec_observations") { described_class.unannotated_in(run, spec_directory: "spec/d3").to_a }
 
@@ -643,6 +682,7 @@ RSpec.describe SpecObservation do
       # The ORDER BY and LIMIT this read adds over the bare grouping above sort the AGGREGATE'S
       # output — one row per file, not per example — so what has to stay true at the design point is
       # that one run's rows are still reached through an index rather than by walking every run's.
+      # @intent: { entity: "SpecObservation", action: "read one run's observation rows through scopes and rollups", behavior: "the by-file rollup the panel makes is served by an index rather than a scan", layer: "unit" }
       it "reads the panel's by-file rollup off an index rather than scanning the table" do
         plan = plan_for_actual_sql("spec_observations") { described_class.file_durations_in(run) }
 
@@ -662,6 +702,7 @@ RSpec.describe SpecObservation do
       # MEASURED here rather than argued from the sibling: this is the assertion that would have
       # sent the slice to a migration had the premise been wrong, so it is the one that must run
       # against a real planner with real statistics at the 20-run seed.
+      # @intent: { entity: "SpecObservation", action: "read one run's observation rows through scopes and rollups", behavior: "the by-directory rollup the panel makes is served by an index rather than a scan", layer: "unit" }
       it "reads the panel's by-directory rollup off an index rather than scanning the table" do
         plan = plan_for_actual_sql("spec_observations") { described_class.directory_durations_in(run) }
 
@@ -681,6 +722,7 @@ RSpec.describe SpecObservation do
       # is served by `index_spec_observations_on_test_run_id` and the aggregation sits on top of that
       # scan either way. This is the example that would have sent the slice to a migration had that
       # been wrong, so it runs against a real planner with real statistics at the 20-run seed.
+      # @intent: { entity: "SpecObservation", action: "read one run's observation rows through scopes and rollups", behavior: "the annotation-debt ranking reads off an index rather than scanning the table", layer: "unit" }
       it "reads the annotation-debt ranking off an index rather than scanning the table" do
         plan = plan_for_actual_sql("spec_observations") { described_class.unannotated_directories_in(run) }
 
@@ -693,6 +735,7 @@ RSpec.describe SpecObservation do
       # aggregation, so this read does NOT pay the sibling's price — the measured difference that
       # makes "one grouped aggregate, no new index" a claim about this read rather than a hope
       # borrowed from the one above it. An edit that adds a `DISTINCT` aggregate here reddens this.
+      # @intent: { entity: "SpecObservation", action: "read one run's observation rows through scopes and rollups", behavior: "the debt-ranking plan hash-aggregates without the sort its ordered sibling pays", layer: "unit" }
       it "hash-aggregates the debt ranking, paying none of the sibling's sort" do
         plan = plan_for_actual_sql("spec_observations") { described_class.unannotated_directories_in(run) }
 
@@ -721,6 +764,7 @@ RSpec.describe SpecObservation do
       # — the by-file rollup above does, on `SUM(duration_seconds)` — and matching a bare `Sort`
       # would pass on that one too, which is exactly the indiscriminate assertion this example
       # exists to stop being.
+      # @intent: { entity: "SpecObservation", action: "read one run's observation rows through scopes and rollups", behavior: "the distinct-description count plans with a sort and the plan discloses that cost honestly", layer: "unit" }
       it "pays for the distinct-description count with a sort, and says so in the plan" do
         plan = plan_for_actual_sql("spec_observations") { described_class.directory_durations_in(run) }
 
@@ -734,6 +778,7 @@ RSpec.describe SpecObservation do
       # statistics — hash-aggregates. So `GroupAggregate` above is caused by the column this slice
       # added rather than by the size of the table or the shape of the grouping, and a future edit
       # that removes the `DISTINCT` will be told what it just changed.
+      # @intent: { entity: "SpecObservation", action: "read one run's observation rows through scopes and rollups", behavior: "dropping the DISTINCT aggregate from the same grouping flips the plan to a hash aggregate", layer: "unit" }
       it "hash-aggregates the same grouping when the DISTINCT aggregate is taken away" do
         without_distinct = described_class.where(test_run_id: run.id)
           .group(Arel.sql(SpecObservation::DIRECTORY_EXPRESSION))
@@ -763,6 +808,7 @@ RSpec.describe SpecObservation do
       # strategy is a cost tiebreak that moves with the data, so nothing here asserts one. Where a
       # strategy IS forced rather than chosen, it is pinned: see the by-directory rollup above,
       # whose `DISTINCT` aggregate rules hashing out and whose sort is asserted for that reason.
+      # @intent: { entity: "SpecObservation", action: "read one run's observation rows through scopes and rollups", behavior: "the panel's single-directory drill-down plans off an index rather than a scan", layer: "unit" }
       it "reads the panel's one-directory drill-down off an index rather than scanning the table" do
         plan = plan_for_actual_sql("spec_observations") { described_class.files_in_directory(run, "spec/d3") }
 
@@ -808,6 +854,7 @@ RSpec.describe SpecObservation do
       # The second run is one of the nineteen the seed already built rather than a twenty-first,
       # so this example certifies the plan at exactly the table size and statistics the examples
       # above are certified at.
+      # @intent: { entity: "SpecObservation", action: "read one run's observation rows through scopes and rollups", behavior: "the two-run by-area count comparison is served by an index rather than a scan", layer: "unit" }
       it "reads the panel's two-run by-area comparison off an index rather than scanning the table" do
         previous_run = repository.test_runs.where.not(id: run.id).first
         plan = plan_for_actual_sql("spec_observations") { described_class.directory_growth_between(run, previous_run) }
@@ -829,6 +876,7 @@ RSpec.describe SpecObservation do
       # `Index Only Scan` is not available to this query at all. That is the same tradeoff
       # `.directory_durations_in` carries — the two spellings are not interchangeable and using the
       # wider one here would accept a plan this read cannot have.
+      # @intent: { entity: "SpecObservation", action: "read one run's observation rows through scopes and rollups", behavior: "the two-run by-area runtime comparison is served by an index rather than a scan", layer: "unit" }
       it "reads the panel's two-run by-area RUNTIME comparison off an index rather than scanning" do
         previous_run = repository.test_runs.where.not(id: run.id).first
         plan = plan_for_actual_sql("spec_observations") { described_class.directory_runtime_growth_between(run, previous_run) }
@@ -856,6 +904,7 @@ RSpec.describe SpecObservation do
       # of the three Postgres picks turns on the visibility map, hence on when the table was last
       # vacuumed; the `Seq Scan` assertion beside it is what keeps the claim falsifiable whichever
       # it picks.
+      # @intent: { entity: "SpecObservation", action: "read one run's observation rows through scopes and rollups", behavior: "the two-run single-area count comparison plans off an index rather than scanning", layer: "unit" }
       it "reads the panel's two-run one-area comparison off an index rather than scanning the table" do
         previous_run = repository.test_runs.where.not(id: run.id).first
         plan = plan_for_actual_sql("spec_observations") { described_class.file_growth_between(run, previous_run, "spec/d3") }
@@ -875,6 +924,7 @@ RSpec.describe SpecObservation do
       # Postgres has to touch the heap and an `Index Only Scan` is not available to this query at
       # all. Using the wider spelling here would accept a plan this read cannot have — which is
       # precisely the false-ACCEPT a query count would also give.
+      # @intent: { entity: "SpecObservation", action: "read one run's observation rows through scopes and rollups", behavior: "the two-run single-area runtime comparison plans off an index rather than scanning", layer: "unit" }
       it "reads the two-run one-area RUNTIME comparison off an index rather than scanning" do
         previous_run = repository.test_runs.where.not(id: run.id).first
         plan = plan_for_actual_sql("spec_observations") do
@@ -896,6 +946,7 @@ RSpec.describe SpecObservation do
       # specifically NOT `index_spec_observations_on_test_run_id_and_outcome` — that index is for
       # NARROWING to the failures, and reaching for it here would mean a second round trip for a
       # figure this one scan already has the rows for.
+      # @intent: { entity: "SpecObservation", action: "read one run's observation rows through scopes and rollups", behavior: "a whole run's outcome counts read off an index rather than scanning the table", layer: "unit" }
       it "counts a whole run's outcomes off an index rather than scanning the table" do
         plan = plan_for(coverage)
 
@@ -927,6 +978,7 @@ RSpec.describe SpecObservation do
       # so the aggregate has to touch the heap and an `Index Only Scan` is not available to this
       # query — the same tradeoff `.directory_durations_in` carries, which is why this asserts the
       # shared matcher rather than the widened `INDEXED_OR_COVERED_BY_RUN` beside it.
+      # @intent: { entity: "SpecObservation", action: "read one run's observation rows through scopes and rollups", behavior: "the panel's repeated-description ranking is served by an index rather than a scan", layer: "unit" }
       it "reads the panel's repeated-description ranking off an index rather than scanning" do
         plan = plan_for_actual_sql("spec_observations") { described_class.repeated_descriptions_in(run) }
 
@@ -939,6 +991,7 @@ RSpec.describe SpecObservation do
       # drops null names in its WHERE clause, so no window over it could ever have counted them —
       # and a plan assertion on the ranking alone would say nothing about the query that produces
       # the caption beside it.
+      # @intent: { entity: "SpecObservation", action: "read one run's observation rows through scopes and rollups", behavior: "the described-versus-undescribed row counts read off an index rather than a scan", layer: "unit" }
       it "counts the run's described and undescribed rows off an index rather than scanning" do
         plan = plan_for_actual_sql("spec_observations") { described_class.description_presence_in(run) }
 
@@ -1047,6 +1100,7 @@ RSpec.describe SpecObservation do
     end
 
     describe "what they return" do
+      # @intent: { entity: "SpecObservation", action: "read one run's observation rows through scopes and rollups", behavior: "one read reports how many window runs recorded rows and how many reported an outcome at all", layer: "unit" }
       it "counts the window's runs that recorded rows and those that reported an outcome" do
         expect(described_class.window_outcome_reporting(window_ids))
           .to eq(runs_with_rows: 6, runs_reporting_outcomes: 6)
@@ -1055,6 +1109,7 @@ RSpec.describe SpecObservation do
       # The gate the panel's whole honesty rests on. A window whose client sent no outcomes has
       # rows in every run and reports in none of them, and the two figures are what tell those
       # apart — a single count could not.
+      # @intent: { entity: "SpecObservation", action: "read one run's observation rows through scopes and rollups", behavior: "a run that recorded rows is distinguished from one that only declared an outcome, so the two counters answer different questions", layer: "unit" }
       it "separates a window that recorded rows from one that said how they ended" do
         SpecObservation.where(test_run_id: window_ids).update_all(outcome: nil)
 
@@ -1062,6 +1117,7 @@ RSpec.describe SpecObservation do
           .to eq(runs_with_rows: 6, runs_reporting_outcomes: 0)
       end
 
+      # @intent: { entity: "SpecObservation", action: "read one run's observation rows through scopes and rollups", behavior: "an empty window answers its coverage counts with zeros without issuing any database query", layer: "unit" }
       it "answers for a window of no runs without asking the database anything" do
         expect(described_class.window_outcome_reporting([]))
           .to eq(runs_with_rows: 0, runs_reporting_outcomes: 0)
@@ -1071,6 +1127,7 @@ RSpec.describe SpecObservation do
       # after the grouping and before the limit. Four candidates: example 7 (3 failures), the two
       # reworded examples' failing halves (3 each), and the broken example 13 (6) — ordered by
       # failure count with the identity breaking ties.
+      # @intent: { entity: "SpecObservation", action: "read one run's observation rows through scopes and rollups", behavior: "failing identities across the window are listed with the least-failing first, so the reader meets the healthiest at the head", layer: "unit" }
       it "names the identities that failed in the window, least-failing first" do
         candidates = described_class.unstable_identity_candidates_in(window_ids)
 
@@ -1081,6 +1138,7 @@ RSpec.describe SpecObservation do
         expect(candidates.map(&:last)).to all(eq(4))
       end
 
+      # @intent: { entity: "SpecObservation", action: "read one run's observation rows through scopes and rollups", behavior: "when the cap bites the kept rows are the least-failing end of the list and the population count still discloses the whole set", layer: "unit" }
       it "keeps the least-failing end of the list when the cap bites" do
         expect(described_class.unstable_identity_candidates_in(window_ids, limit: 1).map(&:first))
           .to eq([@identity_ids[6]])
@@ -1089,11 +1147,13 @@ RSpec.describe SpecObservation do
       # A row with no durable identity is not a test this read can follow across runs, so it never
       # becomes a group — and neither does the UNANNOTATED rename's passing half, which resolved to
       # a new identity and never failed under it.
+      # @intent: { entity: "SpecObservation", action: "read one run's observation rows through scopes and rollups", behavior: "rows that never resolved to an identity are never grouped under a synthetic identity of their own", layer: "unit" }
       it "never groups the unresolved rows into an identity of their own" do
         expect(described_class.unstable_identity_candidates_in(window_ids).map(&:first))
           .to all(be_present)
       end
 
+      # @intent: { entity: "SpecObservation", action: "read one run's observation rows through scopes and rollups", behavior: "each identity's failure count spans the whole window rather than only the runs that happened to be shown", layer: "unit" }
       it "composes each candidate over the whole window" do
         composed = described_class.unstable_outcome_composition_in(
           run_ids: window_ids, spec_identity_ids: [@identity_ids[6]]
@@ -1113,6 +1173,7 @@ RSpec.describe SpecObservation do
       # identity, two descriptions, one history. Under the name-grained rule this test existed as
       # TWO half-histories, each failing `#changed?` in one half, and vanished from the panel
       # entirely: the flakiest possible signal, invisible precisely because it was renamed.
+      # @intent: { entity: "SpecObservation", action: "read one run's observation rows through scopes and rollups", behavior: "a reworded annotated test keeps one continuous history with the rename disclosed rather than split into two identities", layer: "unit" }
       it "keeps a reworded annotated test's ONE history and discloses the rename" do
         composed = described_class.unstable_outcome_composition_in(
           run_ids: window_ids, spec_identity_ids: [@identity_ids[RENAMED_EXAMPLE - 1]]
@@ -1131,6 +1192,7 @@ RSpec.describe SpecObservation do
       # The UNANNOTATED rename is owner-settled and unchanged: the reword resolved to a NEW
       # identity, so the failing half is a test that failed in every one of its three runs and the
       # passing half never failed at all — two tests, neither unstable.
+      # @intent: { entity: "SpecObservation", action: "read one run's observation rows through scopes and rollups", behavior: "an unannotated reword still reads as two separate tests, because resolution had nothing declared to hold it together", layer: "unit" }
       it "still reports an unannotated reword as the two tests it resolved to" do
         composed = described_class.unstable_outcome_composition_in(
           run_ids: window_ids, spec_identity_ids: [@identity_ids[UNANNOTATED_RENAMED_EXAMPLE - 1],
@@ -1145,6 +1207,7 @@ RSpec.describe SpecObservation do
 
       # The composition is bounded to the window, not to the repository's whole history — the seven
       # runs outside it hold the same identities and must not be counted into these figures.
+      # @intent: { entity: "SpecObservation", action: "read one run's observation rows through scopes and rollups", behavior: "the window counts include only the runs it was handed and none outside it", layer: "unit" }
       it "counts only the runs of the window it was given" do
         composed = described_class.unstable_outcome_composition_in(
           run_ids: window_ids.first(2), spec_identity_ids: [@identity_ids[12]]
@@ -1156,6 +1219,7 @@ RSpec.describe SpecObservation do
         )
       end
 
+      # @intent: { entity: "SpecObservation", action: "read one run's observation rows through scopes and rollups", behavior: "the read counts how many window rows carried no description at all", layer: "unit" }
       it "counts the rows of the window that carried no description" do
         expect(described_class.unnamed_row_count_in(repository_id: repository.id, run_ids: window_ids))
           .to eq(18)
@@ -1164,11 +1228,13 @@ RSpec.describe SpecObservation do
       # The sibling exclusion: the same rows carry no name AND no identity in this seed, so both
       # counts read the same window the same way — two figures of one grain, one per column the
       # matching can be denied by.
+      # @intent: { entity: "SpecObservation", action: "read one run's observation rows through scopes and rollups", behavior: "the read counts how many window rows reached no durable identity", layer: "unit" }
       it "counts the rows of the window that reached no durable identity" do
         expect(described_class.unresolved_row_count_in(repository_id: repository.id, run_ids: window_ids))
           .to eq(18)
       end
 
+      # @intent: { entity: "SpecObservation", action: "read one run's observation rows through scopes and rollups", behavior: "a window with no runs answers its row counters with zeros without querying the database", layer: "unit" }
       it "answers for a window of no runs without asking the database anything" do
         expect(count_queries do
           expect(described_class.unstable_outcome_composition_in(
@@ -1187,6 +1253,7 @@ RSpec.describe SpecObservation do
       # UNGROUPED, so the sequence the aggregate summed over is legible again — a window whose
       # failures are the last four runs and one whose failures are scattered produce the same
       # `unstable_outcome_composition_in` tuple and different sequences here.
+      # @intent: { entity: "SpecObservation", action: "read one run's observation rows through scopes and rollups", behavior: "asking for one description returns its rows across the window in the window's own run order", layer: "unit" }
       it "returns one description's rows across the window, in the order the window was given" do
         sequence = described_class.outcome_sequence_in(
           repository_id: repository.id, run_ids: window_ids, name: "example 7"
@@ -1200,6 +1267,7 @@ RSpec.describe SpecObservation do
       # block rests on, asserted against a window handed in BACKWARDS. Ordering by either column
       # would answer this identically to the example above, which is what makes the reversal the
       # only assertion that separates them.
+      # @intent: { entity: "SpecObservation", action: "read one run's observation rows through scopes and rollups", behavior: "the returned row order follows the handed run sequence rather than the table's storage order", layer: "unit" }
       it "follows the order it was handed rather than the table's own" do
         sequence = described_class.outcome_sequence_in(
           repository_id: repository.id, run_ids: window_ids.reverse, name: "example 7"
@@ -1213,6 +1281,7 @@ RSpec.describe SpecObservation do
       # `COUNT(outcome)` and not `COUNT(*)`: a run that recorded the test and reported nothing is
       # not a pass, and a truncated list whose silence a client could not count would put that
       # separation out of reach.
+      # @intent: { entity: "SpecObservation", action: "read one run's observation rows through scopes and rollups", behavior: "each row rides the window's own example and timing counts, computed before any cap was applied", layer: "unit" }
       it "rides the window's own counts back on the rows, before the cap" do
         SpecObservation.where(test_run_id: window_ids.first, name: "example 7").update_all(outcome: nil)
 
@@ -1228,6 +1297,7 @@ RSpec.describe SpecObservation do
       # The cap takes the OLD end, because the window is handed in newest-first: "it has failed
       # since before this list starts" still names a regression, where a list cut the other way
       # answers "how is it doing lately" with the state of a month ago.
+      # @intent: { entity: "SpecObservation", action: "read one run's observation rows through scopes and rollups", behavior: "when the cap bites the kept rows are the head of the handed window order and the population count still names the whole set", layer: "unit" }
       it "keeps the head of the window when the cap bites" do
         sequence = described_class.outcome_sequence_in(
           repository_id: repository.id, run_ids: window_ids, name: "example 7", limit: 2
@@ -1238,6 +1308,7 @@ RSpec.describe SpecObservation do
 
       # Bounded to the window it was given, not to the repository's whole history — the fourteen
       # runs outside it hold the same description and must not appear in the sequence.
+      # @intent: { entity: "SpecObservation", action: "read one run's observation rows through scopes and rollups", behavior: "only the runs of the handed window are read for the description lookup", layer: "unit" }
       it "reads only the runs of the window it was given" do
         sequence = described_class.outcome_sequence_in(
           repository_id: repository.id, run_ids: window_ids.first(2), name: "example 7"
@@ -1248,12 +1319,14 @@ RSpec.describe SpecObservation do
 
       # A description the window recorded nothing under is an ordinary answer and not an error — a
       # renamed test, an edited description, a stale bookmark.
+      # @intent: { entity: "SpecObservation", action: "read one run's observation rows through scopes and rollups", behavior: "a description the window never recorded answers with no rows rather than an error", layer: "unit" }
       it "answers for a description the window never recorded, with no rows" do
         expect(described_class.outcome_sequence_in(
           repository_id: repository.id, run_ids: window_ids, name: "example 7 "
         )).to be_empty
       end
 
+      # @intent: { entity: "SpecObservation", action: "read one run's observation rows through scopes and rollups", behavior: "a window of no runs answers the description lookup empty without asking the database anything", layer: "unit" }
       it "answers for a window of no runs without asking the database anything" do
         expect(count_queries do
           expect(described_class.outcome_sequence_in(
@@ -1282,6 +1355,7 @@ RSpec.describe SpecObservation do
       # of them touching a row past the one that answers it. The point of the lateral is that the
       # cost follows the window's LENGTH and not the suite's size — the aggregate spelling of this
       # question reads every row in the window to produce two integers.
+      # @intent: { entity: "SpecObservation", action: "read one run's observation rows through scopes and rollups", behavior: "probing the window's runs goes through an index rather than reading every window row", layer: "unit" }
       it "probes the window's runs through an index rather than reading the window" do
         plan = plan_for_actual_sql("spec_observations") { described_class.window_outcome_reporting(window_ids) }
 
@@ -1293,6 +1367,7 @@ RSpec.describe SpecObservation do
       # `COVERAGE_COUNTS` declines to use and reserves in as many words for "the 'which tests
       # failed' list a later slice will want". This is that read, and the narrowing it makes
       # possible is what keeps the composition below off the whole window.
+      # @intent: { entity: "SpecObservation", action: "read one run's observation rows through scopes and rollups", behavior: "narrowing to the window's failures is served by the by-outcome index", layer: "unit" }
       it "narrows to the window's failures off the by-outcome index" do
         plan = plan_for_actual_sql("spec_observations") do
           described_class.unstable_identity_candidates_in(window_ids)
@@ -1307,6 +1382,7 @@ RSpec.describe SpecObservation do
       # duration composition rides, for the same reason: the grouping key moved to the identity, so
       # the identity index is the path and the repository predicate is dropped rather than risking
       # the planner a `repository_id`-leading alternative to it.
+      # @intent: { entity: "SpecObservation", action: "read one run's observation rows through scopes and rollups", behavior: "composing the per-identity candidates is served by the by-identity index rather than a scan", layer: "unit" }
       it "composes the candidates off the by-identity index rather than scanning the table" do
         plan = plan_for_actual_sql("spec_observations") do
           described_class.unstable_outcome_composition_in(
@@ -1324,6 +1400,7 @@ RSpec.describe SpecObservation do
       # same window bound: pinned by SHRINKING THE CANDIDATE LIST, because what has to stay true is
       # that the work follows the CANDIDATES and a single ceiling passes just as happily on a read
       # that has stopped being narrowed at all.
+      # @intent: { entity: "SpecObservation", action: "read one run's observation rows through scopes and rollups", behavior: "the query cost scales with the number of candidates rather than the size of the run window", layer: "unit" }
       it "reads on the order of the candidate count, not of the window" do
         composed = lambda do |count|
           rows_touched("spec_observations") do
@@ -1343,6 +1420,7 @@ RSpec.describe SpecObservation do
 
       # A btree indexes its nulls, so `name IS NULL` is a range of that same index and the count
       # costs what the unnamed rows cost rather than what the window does.
+      # @intent: { entity: "SpecObservation", action: "read one run's observation rows through scopes and rollups", behavior: "counting the unnamed rows also goes through the by-name index", layer: "unit" }
       it "counts the unnamed rows off the by-name index too" do
         plan = plan_for_actual_sql("spec_observations") do
           described_class.unnamed_row_count_in(repository_id: repository.id, run_ids: window_ids)
@@ -1359,6 +1437,7 @@ RSpec.describe SpecObservation do
       # index's own null range below both partials. WHICH index it picks is a cost tiebreak; what
       # this certifies is the `Seq Scan` refusal: the count reads through AN index and never walks
       # the window.
+      # @intent: { entity: "SpecObservation", action: "read one run's observation rows through scopes and rollups", behavior: "counting unresolved rows is served by an index rather than scanning", layer: "unit" }
       it "counts the unresolved rows through an index rather than scanning" do
         plan = plan_for_actual_sql("spec_observations") do
           described_class.unresolved_row_count_in(repository_id: repository.id, run_ids: window_ids)
@@ -1374,6 +1453,7 @@ RSpec.describe SpecObservation do
       # AFTERWARDS and is bounded by ONE DESCRIPTION over at most thirty runs — thirty rows here,
       # against the 6,000 the window holds — which is what makes this read constant in the size of
       # the suite rather than merely cheaper than the window.
+      # @intent: { entity: "SpecObservation", action: "read one run's observation rows through scopes and rollups", behavior: "reading one description's run sequence is served by the by-name index rather than a scan", layer: "unit" }
       it "reads one description's run sequence off the by-name index rather than scanning" do
         plan = plan_for_actual_sql("spec_observations") do
           described_class.outcome_sequence_in(repository_id: repository.id, run_ids: window_ids,
@@ -1481,6 +1561,7 @@ RSpec.describe SpecObservation do
       # The ranking the candidate step exists for: one run's slowest identities, capped, in a total
       # order. Ten identities, and they are examples 1 through 10 because the seed's durations fall
       # away monotonically from example 1.
+      # @intent: { entity: "SpecObservation", action: "read one run's observation rows through scopes and rollups", behavior: "the anchor run's slowest identities are named with the slowest first", layer: "unit" }
       it "names the anchor run's slowest identities, slowest first" do
         candidates = described_class.slowest_identity_candidates_in(anchor)
 
@@ -1490,6 +1571,7 @@ RSpec.describe SpecObservation do
       # The count rides back on every row, evaluated after the GROUP BY and before the LIMIT, so it
       # counts every identity the run holds however few are returned. 297 and not 300: the three
       # unresolved rows are not an identity and never become a group.
+      # @intent: { entity: "SpecObservation", action: "read one run's observation rows through scopes and rollups", behavior: "every capped row still carries the anchor's whole identity count as its denominator", layer: "unit" }
       it "rides the anchor's whole identity count back on every row, before the cap" do
         candidates = described_class.slowest_identity_candidates_in(anchor)
 
@@ -1500,6 +1582,7 @@ RSpec.describe SpecObservation do
       # The NUMERATOR of the coverage fraction, re-totalled back up to the run by a window over an
       # aggregate — in the same round trip as the ranking, which is what makes the caption a claim
       # about THIS list. 294: the run's 297 resolved rows less the three nothing timed.
+      # @intent: { entity: "SpecObservation", action: "read one run's observation rows through scopes and rollups", behavior: "every row rides the ranked population's timed-row count, computed before the cap", layer: "unit" }
       it "rides the ranked population's timed-row count back on every row" do
         candidates = described_class.slowest_identity_candidates_in(anchor)
 
@@ -1513,6 +1596,7 @@ RSpec.describe SpecObservation do
       # transaction between them, and a caption that could be caught rendering figures that do not
       # add up. The tuple is three wide because that population is measured ONCE, at the gate, and
       # `SlowestTests` threads it through.
+      # @intent: { entity: "SpecObservation", action: "read one run's observation rows through scopes and rollups", behavior: "the read does not repeat the resolved-population counting the gate above it already performed", layer: "unit" }
       it "does not re-count the resolved population the gate already measured" do
         candidates = described_class.slowest_identity_candidates_in(anchor)
         gate = described_class.identity_presence_in(anchor)
@@ -1521,6 +1605,7 @@ RSpec.describe SpecObservation do
         expect(gate[:recorded_count] - gate[:unresolved_count]).to eq(297)
       end
 
+      # @intent: { entity: "SpecObservation", action: "read one run's observation rows through scopes and rollups", behavior: "when the cap bites the kept rows are the slowest end of the ranking and the count still names the whole population", layer: "unit" }
       it "keeps the slowest end of the list when the cap bites" do
         candidates = described_class.slowest_identity_candidates_in(anchor, limit: 3)
 
@@ -1531,6 +1616,7 @@ RSpec.describe SpecObservation do
       # A row with no durable identity cannot be matched to itself across runs, so it never becomes
       # a group — the same refusal `.unstable_identity_candidates_in` makes for a null
       # `spec_identity_id`, at the key this read groups on.
+      # @intent: { entity: "SpecObservation", action: "read one run's observation rows through scopes and rollups", behavior: "rows unresolved to an identity never appear grouped under an identity-shaped entry", layer: "unit" }
       it "never groups the unresolved rows into an identity of their own" do
         expect(described_class.slowest_identity_candidates_in(anchor, limit: 300).map(&:first))
           .to all(be_present)
@@ -1540,6 +1626,7 @@ RSpec.describe SpecObservation do
       # Postgres, so the ordering — not an exclusion — is what keeps a list captioned "slowest" from
       # being headed by tests nothing timed. Dropping them instead would change each surviving
       # group's population, which is the trap `.file_durations_in` documents for aggregates.
+      # @intent: { entity: "SpecObservation", action: "read one run's observation rows through scopes and rollups", behavior: "identities with no timings at all sort to the very end of the list rather than being dropped from it", layer: "unit" }
       it "sorts the identities nothing timed to the very end rather than dropping them" do
         candidates = described_class.slowest_identity_candidates_in(anchor, limit: 300)
         untimed = [50, 150, 250].map { |index| identity_ids[index - 1] }
@@ -1552,6 +1639,7 @@ RSpec.describe SpecObservation do
       # changed both halves of the `file_path:line_number` coordinate midway through the window, and
       # it comes back as ONE group whose total is every run's duration summed — six runs of the same
       # test rather than two histories of three.
+      # @intent: { entity: "SpecObservation", action: "read one run's observation rows through scopes and rollups", behavior: "a test that moved files mid-window has all its runs summed into one row instead of being split at the move", layer: "unit" }
       it "sums a moved test's runs into one row rather than splitting it at the move" do
         moved = identity_ids[MOVED_EXAMPLE - 1]
 
@@ -1571,6 +1659,7 @@ RSpec.describe SpecObservation do
         expect(files.sort).to eq(["spec/after_spec.rb", "spec/before_spec.rb"])
       end
 
+      # @intent: { entity: "SpecObservation", action: "read one run's observation rows through scopes and rollups", behavior: "each identity's timing total composes over the whole window and not merely the shown portion", layer: "unit" }
       it "composes each candidate over the whole window" do
         composed = described_class.identity_duration_composition_in(
           run_ids: window_ids, spec_identity_ids: [identity_ids[6]]
@@ -1587,6 +1676,7 @@ RSpec.describe SpecObservation do
 
       # Bounded to the window, never to the repository's whole history — the fourteen runs outside
       # it hold the same identities and must not be summed into these figures.
+      # @intent: { entity: "SpecObservation", action: "read one run's observation rows through scopes and rollups", behavior: "only the handed window's runs contribute to the timing totals", layer: "unit" }
       it "counts only the runs of the window it was given" do
         composed = described_class.identity_duration_composition_in(
           run_ids: window_ids.first(2), spec_identity_ids: [identity_ids[6]]
@@ -1599,6 +1689,7 @@ RSpec.describe SpecObservation do
 
       # An identity every row of which went untimed sums to SQL NULL rather than to zero, and the
       # counts beside it are what let a surface say "not reported" instead of inventing a `0.00s`.
+      # @intent: { entity: "SpecObservation", action: "read one run's observation rows through scopes and rollups", behavior: "a test nothing in the window timed reports a nil total rather than zero, refusing to dress an absence as a measurement", layer: "unit" }
       it "reports a nil total, never a zero, for a test nothing timed" do
         composed = described_class.identity_duration_composition_in(
           run_ids: window_ids, spec_identity_ids: [identity_ids[49]]
@@ -1610,6 +1701,7 @@ RSpec.describe SpecObservation do
         expect([recorded, timed, run_count]).to eq([6, 0, 6])
       end
 
+      # @intent: { entity: "SpecObservation", action: "read one run's observation rows through scopes and rollups", behavior: "an empty window, and a window yielding no candidates, both answer without issuing any query", layer: "unit" }
       it "answers for a window of no runs, and for no candidates, without asking anything" do
         expect(count_queries do
           expect(described_class.identity_duration_composition_in(
@@ -1652,6 +1744,7 @@ RSpec.describe SpecObservation do
       # that has no bearing on this criterion. What has a bearing is the `Seq Scan` refusal beside
       # it: unscope this read from its run and the plan walks every run's rows, whichever index it
       # had before.
+      # @intent: { entity: "SpecObservation", action: "read one run's observation rows through scopes and rollups", behavior: "narrowing to the anchor run's slowest identities goes through a by-run index", layer: "unit" }
       it "narrows to the anchor run's slowest identities through a by-run index" do
         plan = plan_for_actual_sql("spec_observations") { described_class.slowest_identity_candidates_in(anchor) }
 
@@ -1661,6 +1754,7 @@ RSpec.describe SpecObservation do
 
       # ⭐ `index_spec_observations_on_spec_identity_id` — the index the schema has carried since
       # slice 1 with no cross-run reader. This is that reader, and no index was added for it.
+      # @intent: { entity: "SpecObservation", action: "read one run's observation rows through scopes and rollups", behavior: "composing the candidates for timing totals is served by the by-identity index rather than a scan", layer: "unit" }
       it "composes the candidates off the by-identity index rather than scanning the table" do
         plan = plan_for_actual_sql("spec_observations") do
           described_class.identity_duration_composition_in(
@@ -1684,6 +1778,7 @@ RSpec.describe SpecObservation do
       # ceiling is written against the runs in the TABLE and not against the window's six, and the
       # read is bounded by `BRANCH_RETENTION_RUNS` rather than by how wide a window is asked for.
       # See `.identity_duration_composition_in`, which carries the plan and the arithmetic.
+      # @intent: { entity: "SpecObservation", action: "read one run's observation rows through scopes and rollups", behavior: "the cost of the timing read scales with the candidate count rather than the window size", layer: "unit" }
       it "reads on the order of the candidate count, not of the window" do
         composed = lambda do |count|
           rows_touched("spec_observations") do
@@ -1719,12 +1814,14 @@ RSpec.describe SpecObservation do
       )
     end
 
+    # @intent: { entity: "SpecObservation", action: "read one run's observation rows through scopes and rollups", behavior: "deleting a test run removes its observations with it", layer: "unit" }
     it "goes with its TestRun" do
       observe(run)
 
       expect { run.destroy }.to change(described_class, :count).by(-1)
     end
 
+    # @intent: { entity: "SpecObservation", action: "read one run's observation rows through scopes and rollups", behavior: "deleting a repository removes its observations, including those delivered by shard rows", layer: "unit" }
     it "goes with its Repository, shards and all" do
       shard = run.test_run_shards.create!(shard_id: "1")
       observe(run, shard: shard)
@@ -1735,6 +1832,7 @@ RSpec.describe SpecObservation do
 
     # The observation belongs to its run first and to the slice that delivered it second, so
     # losing the shard row must not lose the example.
+    # @intent: { entity: "SpecObservation", action: "read one run's observation rows through scopes and rollups", behavior: "deleting the shard that delivered an observation nullifies the reference and keeps the observation row", layer: "unit" }
     it "outlives the shard that delivered it, holding a null in its place" do
       shard = run.test_run_shards.create!(shard_id: "1")
       observation = observe(run, shard: shard)
@@ -1762,6 +1860,7 @@ RSpec.describe SpecObservation do
       )
     end
 
+    # @intent: { entity: "SpecObservation", action: "read one run's observation rows through scopes and rollups", behavior: "the slowest scope returns one run's examples with the longest durations first", layer: "unit" }
     it "returns one run's examples slowest first" do
       observe(run, duration: 0.5, line_number: 1)
       observe(run, duration: 9.5, line_number: 2)
@@ -1775,6 +1874,7 @@ RSpec.describe SpecObservation do
     # HEAD of a list captioned "slowest", naming an example that never ran as the slowest thing in
     # the suite. Both halves are asserted, because "absent" and "not first" fail differently: a
     # `NULLS LAST` ordering with no exclusion passes the second and fails the first.
+    # @intent: { entity: "SpecObservation", action: "read one run's observation rows through scopes and rollups", behavior: "an example carrying no duration is excluded from the slowest listing rather than sorted to its head", layer: "unit" }
     it "excludes an untimed example rather than sorting it to the head" do
       observe(run, duration: nil, line_number: 1, name: "never ran")
       observe(run, duration: 2.0, line_number: 2, name: "ran")
@@ -1789,6 +1889,7 @@ RSpec.describe SpecObservation do
     # is gone. Rejected in Ruby after a `LIMIT`, the same fixture hands back 2 rows instead of 3:
     # the untimed rows are fetched, counted against the cap, and only then discarded, so the list
     # gets shorter on exactly the runs the exclusion matters for.
+    # @intent: { entity: "SpecObservation", action: "read one run's observation rows through scopes and rollups", behavior: "the limit is filled from timed rows even when untimed rows would otherwise occupy the slots", layer: "unit" }
     it "fills the limit from timed rows, however many untimed ones sit above them" do
       observe(run, duration: nil, line_number: 1)
       observe(run, duration: nil, line_number: 2)
@@ -1797,6 +1898,7 @@ RSpec.describe SpecObservation do
       expect(described_class.slowest_in(run, limit: 3).count).to eq(3)
     end
 
+    # @intent: { entity: "SpecObservation", action: "read one run's observation rows through scopes and rollups", behavior: "the listing stops at the handed limit", layer: "unit" }
     it "caps at the limit it was given" do
       12.times { |i| observe(run, duration: i.to_f + 1, line_number: i + 1) }
 
@@ -1804,6 +1906,7 @@ RSpec.describe SpecObservation do
       expect(described_class.slowest_in(run, limit: 3).size).to eq(3)
     end
 
+    # @intent: { entity: "SpecObservation", action: "read one run's observation rows through scopes and rollups", behavior: "the slowest listing reads only the run it was asked about and no other run's rows", layer: "unit" }
     it "reads the run it was asked about and no other" do
       other = create_test_run(repository: repository, commit_sha: "0ther")
       observe(run, duration: 1.0, line_number: 1, name: "ours")
@@ -1815,6 +1918,7 @@ RSpec.describe SpecObservation do
     # Ties are ordinary at this grain — a suite's fast examples cluster on the same rounded float —
     # so the order has to be total, or two requests against unchanged rows can list them
     # differently.
+    # @intent: { entity: "SpecObservation", action: "read one run's observation rows through scopes and rollups", behavior: "equal durations are broken by id so the ordering is total and deterministic", layer: "unit" }
     it "breaks ties by id, so equal durations have one order" do
       first = observe(run, duration: 1.5, line_number: 1)
       second = observe(run, duration: 1.5, line_number: 2)
@@ -1823,6 +1927,7 @@ RSpec.describe SpecObservation do
     end
 
     describe ".coverage_in" do
+      # @intent: { entity: "SpecObservation", action: "read one run's observation rows through scopes and rollups", behavior: "the run counters report the run's row count and how many of those rows carried a duration", layer: "unit" }
       it "counts this run's rows and the ones that carried a duration" do
         observe(run, duration: 1.0, line_number: 1)
         observe(run, duration: nil, line_number: 2)
@@ -1831,12 +1936,14 @@ RSpec.describe SpecObservation do
         expect(described_class.coverage_in(run)).to include(recorded_count: 3, timed_count: 2)
       end
 
+      # @intent: { entity: "SpecObservation", action: "read one run's observation rows through scopes and rollups", behavior: "a run that recorded nothing reads zeroes from its counters rather than nils, so captions render numbers", layer: "unit" }
       it "reads zeroes for a run that recorded nothing, rather than nils" do
         expect(described_class.coverage_in(run).values).to all(eq(0))
       end
 
       # The denominator is the rows, never `TestRun#total_specs_count` — which is derived from
       # shard reports and can legitimately disagree with how many rows the run wrote.
+      # @intent: { entity: "SpecObservation", action: "read one run's observation rows through scopes and rollups", behavior: "row counts come from the rows themselves even where the run's declared suite size disagrees", layer: "unit" }
       it "counts rows even where the run's own suite size says otherwise" do
         run.update!(total_specs_count: 4_000)
         observe(run, duration: 1.0, line_number: 1)
@@ -1848,6 +1955,7 @@ RSpec.describe SpecObservation do
       # conflict target `Ingest::ObservationRecorder` upserts on and it arrives unvalidated, so a
       # run whose client sends no ids stores a nil on every row — and nothing anywhere counted
       # them, which made an id-less producer indistinguishable from a fully-identified one.
+      # @intent: { entity: "SpecObservation", action: "read one run's observation rows through scopes and rollups", behavior: "the read counts how many rows carried an example id at all", layer: "unit" }
       it "counts the rows that carried an example id" do
         observe(run, duration: 1.0, line_number: 1)
         observe(run, duration: 1.0, line_number: 2, example_id: nil)
@@ -1859,6 +1967,7 @@ RSpec.describe SpecObservation do
       # The two ends of the axis, asserted rather than left to the mixed case above: a run every
       # row of which carries an id reads EQUAL to its row count, and a run no row of which does
       # reads zero against a non-zero denominator. Those are the two readings a producer acts on.
+      # @intent: { entity: "SpecObservation", action: "read one run's observation rows through scopes and rollups", behavior: "when every row carried an example id the id count equals the row count", layer: "unit" }
       it "reads the id count equal to the row count when every row carried one" do
         observe(run, duration: 1.0, line_number: 1)
         observe(run, duration: 1.0, line_number: 2)
@@ -1866,6 +1975,7 @@ RSpec.describe SpecObservation do
         expect(described_class.coverage_in(run)).to include(recorded_count: 2, identified_count: 2)
       end
 
+      # @intent: { entity: "SpecObservation", action: "read one run's observation rows through scopes and rollups", behavior: "a run whose rows all lack example ids reads a zero id count against a non-zero row count", layer: "unit" }
       it "reads a zero id count against the rows a wholly id-less run still wrote" do
         observe(run, duration: 1.0, line_number: 1, example_id: nil)
         observe(run, duration: 1.0, line_number: 2, example_id: nil)
@@ -1873,6 +1983,7 @@ RSpec.describe SpecObservation do
         expect(described_class.coverage_in(run)).to include(recorded_count: 2, identified_count: 0)
       end
 
+      # @intent: { entity: "SpecObservation", action: "read one run's observation rows through scopes and rollups", behavior: "outcome names are tallied off the same row population the counters read", layer: "unit" }
       it "counts the outcomes it reads by name, off the same rows" do
         observe(run, duration: 1.0, line_number: 1, outcome: "failed")
         observe(run, duration: 1.0, line_number: 2, outcome: "pending")
@@ -1889,6 +2000,7 @@ RSpec.describe SpecObservation do
       # nil on every row — and `failed_count` is then a legitimate zero that means "this run said
       # nothing", not "this run had no failures". Only `reported_outcome_count` can tell a caller
       # which zero it is holding, so both halves are asserted.
+      # @intent: { entity: "SpecObservation", action: "read one run's observation rows through scopes and rollups", behavior: "a run reporting no outcome at all is counted separately from one reporting no failures", layer: "unit" }
       it "separates a run that reported no outcome at all from one that reported no failure" do
         observe(run, duration: 1.0, line_number: 1, outcome: nil)
         observe(run, duration: 1.0, line_number: 2, outcome: nil)
@@ -1902,6 +2014,7 @@ RSpec.describe SpecObservation do
       # there is deliberately no example for a second one — a fixture writing `""` here would be
       # asserting against a row nothing in production can produce.
 
+      # @intent: { entity: "SpecObservation", action: "read one run's observation rows through scopes and rollups", behavior: "the outcome tally covers one run only and never another run's rows", layer: "unit" }
       it "counts one run's outcomes and no other run's" do
         other = create_test_run(repository: repository, commit_sha: "0ther")
         observe(run, duration: 1.0, line_number: 1, outcome: "passed")
@@ -1912,6 +2025,7 @@ RSpec.describe SpecObservation do
     end
 
     describe ".file_durations_in" do
+      # @intent: { entity: "SpecObservation", action: "read one run's observation rows through scopes and rollups", behavior: "the by-file totals list files heaviest first with each file's summed duration", layer: "unit" }
       it "totals each file's examples, heaviest file first" do
         observe(run, duration: 1.5, line_number: 1, spec_file_path: "spec/models/order_spec.rb")
         observe(run, duration: 2.5, line_number: 2, spec_file_path: "spec/models/order_spec.rb")
@@ -1929,6 +2043,7 @@ RSpec.describe SpecObservation do
       # on each including file rather than on the `spec/support/` helper that defines it — the rule
       # `Ingest::ObservationRecorder` writes `spec_file_path` for, pinned end-to-end in
       # spec/requests/api/v1/ingest_spec.rb.
+      # @intent: { entity: "SpecObservation", action: "read one run's observation rows through scopes and rollups", behavior: "a shared example group's duration lands on the including file rather than on a support helper path", layer: "unit" }
       it "attributes a shared example group's time to the file that included it" do
         observe(run, duration: 1.5, line_number: 4, file_path: "spec/support/shared_examples.rb",
                      spec_file_path: "spec/models/order_spec.rb",
@@ -1948,6 +2063,7 @@ RSpec.describe SpecObservation do
       # into Ruby, and `SUM(...) DESC` is NULLS FIRST in Postgres — so a file NONE of whose
       # examples were timed comes back as a measured zero AND is named the heaviest file in the
       # run. Both halves are asserted because they fail differently.
+      # @intent: { entity: "SpecObservation", action: "read one run's observation rows through scopes and rollups", behavior: "a file whose rows carried no timings yields a nil total sorted below every numeric one", layer: "unit" }
       it "hands back a nil for a file that reported no timing at all, sorted below every total" do
         observe(run, duration: nil, line_number: 1, spec_file_path: "spec/models/never_ran_spec.rb")
         observe(run, duration: nil, line_number: 2, spec_file_path: "spec/models/never_ran_spec.rb")
@@ -1964,6 +2080,7 @@ RSpec.describe SpecObservation do
       # total alone cannot say so — it is an ordinary-looking number — so the two counts come back
       # in the same pass, off the same rows, rather than as a second question a caller might not
       # think to ask.
+      # @intent: { entity: "SpecObservation", action: "read one run's observation rows through scopes and rollups", behavior: "each file's row count is reported beside the count of its rows that carried a duration", layer: "unit" }
       it "counts each file's rows against the ones that carried a duration" do
         observe(run, duration: 4.0, line_number: 1, spec_file_path: "spec/models/order_spec.rb")
         observe(run, duration: nil, line_number: 2, spec_file_path: "spec/models/order_spec.rb")
@@ -1972,6 +2089,7 @@ RSpec.describe SpecObservation do
         expect(described_class.file_durations_in(run)).to eq([["spec/models/order_spec.rb", 4.0, 3, 1, 1]])
       end
 
+      # @intent: { entity: "SpecObservation", action: "read one run's observation rows through scopes and rollups", behavior: "the by-file read queries only the handed run", layer: "unit" }
       it "reads the run it was asked about and no other" do
         other = create_test_run(repository: repository, commit_sha: "0ther")
         observe(run, duration: 1.0, line_number: 1, spec_file_path: "spec/ours_spec.rb")
@@ -1980,6 +2098,7 @@ RSpec.describe SpecObservation do
         expect(described_class.file_durations_in(run)).to eq([["spec/ours_spec.rb", 1.0, 1, 1, 1]])
       end
 
+      # @intent: { entity: "SpecObservation", action: "read one run's observation rows through scopes and rollups", behavior: "the by-file listing honours a handed limit and falls back to the panel's own default when none is given", layer: "unit" }
       it "caps at the limit it was given, and defaults to the panel's own" do
         12.times { |i| observe(run, duration: i.to_f + 1, line_number: i + 1, spec_file_path: "spec/f#{i}_spec.rb") }
 
@@ -1993,6 +2112,7 @@ RSpec.describe SpecObservation do
       # count taken after the `LIMIT`, which is what `rows.size` is, reports the cap back as if it
       # were the suite. `COUNT(*) OVER ()` runs after `GROUP BY` and before `LIMIT`, so it counts
       # FILES rather than rows and counts all of them however few come back.
+      # @intent: { entity: "SpecObservation", action: "read one run's observation rows through scopes and rollups", behavior: "the total-file count is reported however many rows the limit returned", layer: "unit" }
       it "reports how many files the run touched in total, whatever the limit returns" do
         12.times { |i| observe(run, duration: i.to_f + 1, line_number: i + 1, spec_file_path: "spec/f#{i}_spec.rb") }
 
@@ -2003,6 +2123,7 @@ RSpec.describe SpecObservation do
       # Groups, not rows: a run whose twelve examples sit in two files touched two files. The
       # cheapest wrong reading of this column is the row count, and one example per file cannot
       # tell the two apart.
+      # @intent: { entity: "SpecObservation", action: "read one run's observation rows through scopes and rollups", behavior: "the count is of distinct files, not of the examples inside them", layer: "unit" }
       it "counts the files rather than the examples in them" do
         12.times { |i| observe(run, duration: 1.0, line_number: i + 1, spec_file_path: "spec/f#{i % 2}_spec.rb") }
 
@@ -2012,6 +2133,7 @@ RSpec.describe SpecObservation do
       # Two files totalling the same is ordinary — a run where several files hold one fast example
       # each — so the order has to be total, or two requests against unchanged rows list them
       # differently.
+      # @intent: { entity: "SpecObservation", action: "read one run's observation rows through scopes and rollups", behavior: "files with equal totals are broken by path so the ordering is deterministic", layer: "unit" }
       it "breaks ties by path, so equal totals have one order" do
         observe(run, duration: 1.5, line_number: 1, spec_file_path: "spec/b_spec.rb")
         observe(run, duration: 1.5, line_number: 2, spec_file_path: "spec/a_spec.rb")
@@ -2019,6 +2141,7 @@ RSpec.describe SpecObservation do
         expect(described_class.file_durations_in(run).map(&:first)).to eq(["spec/a_spec.rb", "spec/b_spec.rb"])
       end
 
+      # @intent: { entity: "SpecObservation", action: "read one run's observation rows through scopes and rollups", behavior: "a run that recorded nothing reads no files at all from the rollup", layer: "unit" }
       it "reads no files for a run that recorded nothing" do
         expect(described_class.file_durations_in(run)).to eq([])
       end
@@ -2031,6 +2154,7 @@ RSpec.describe SpecObservation do
       # orders these two areas the other way round — `refund_spec.rb` at 9.0 is the heaviest FILE
       # in the run and `spec/models` is not the heaviest AREA — which is the assertion that would
       # fail if this method were the by-file rollup relabelled.
+      # @intent: { entity: "SpecObservation", action: "read one run's observation rows through scopes and rollups", behavior: "the by-directory totals list areas heaviest first with each area's summed duration", layer: "unit" }
       it "totals each directory's examples, heaviest directory first" do
         observe(run, duration: 1.5, line_number: 1, spec_file_path: "spec/models/order_spec.rb")
         observe(run, duration: 2.5, line_number: 2, spec_file_path: "spec/models/refund_spec.rb")
@@ -2049,6 +2173,7 @@ RSpec.describe SpecObservation do
       # own area and its time does not roll into `spec/models`. Every row therefore sits at the
       # depth of its own file, the areas are disjoint, and the totals sum to the run — the property
       # a nesting rollup would lose by counting the deep rows twice.
+      # @intent: { entity: "SpecObservation", action: "read one run's observation rows through scopes and rollups", behavior: "grouping uses the immediate parent path, so a nested directory's rows do not roll into its ancestor's total", layer: "unit" }
       it "groups on the immediate parent, so nested areas do not roll into their ancestors" do
         observe(run, duration: 1.0, line_number: 1, spec_file_path: "spec/models/order_spec.rb")
         observe(run, duration: 2.0, line_number: 2, spec_file_path: "spec/models/orders/refund_spec.rb")
@@ -2064,6 +2189,7 @@ RSpec.describe SpecObservation do
       # DROPPING the row would understate the run's wall clock at the one grain that is supposed to
       # account for all of it — so it is coalesced to `.`, which is what `Pathname#dirname` calls
       # that directory.
+      # @intent: { entity: "SpecObservation", action: "read one run's observation rows through scopes and rollups", behavior: "rows living at the repository root are grouped under a root name instead of being lost to a null group", layer: "unit" }
       it "names the repository root rather than losing the rows that sit in it" do
         observe(run, duration: 3.0, line_number: 1, spec_file_path: "smoke_spec.rb")
         observe(run, duration: 1.0, line_number: 2, spec_file_path: "spec/models/order_spec.rb")
@@ -2077,6 +2203,7 @@ RSpec.describe SpecObservation do
       # Grouped by the area that RAN the example, so a shared example group's time lands on each
       # including area rather than on `spec/support` — the rule `Ingest::ObservationRecorder` writes
       # `spec_file_path` for, one rung up from where `.file_durations_in` asserts it.
+      # @intent: { entity: "SpecObservation", action: "read one run's observation rows through scopes and rollups", behavior: "a shared example group's duration lands on the including area rather than the helper's own area", layer: "unit" }
       it "attributes a shared example group's time to the area that included it" do
         observe(run, duration: 1.5, line_number: 4, file_path: "spec/support/shared_examples.rb",
                      spec_file_path: "spec/models/order_spec.rb",
@@ -2097,6 +2224,7 @@ RSpec.describe SpecObservation do
       # way back into Ruby, and `SUM(...) DESC` is NULLS FIRST in Postgres, so an area NONE of whose
       # examples were timed comes back as a measured zero AND is named the heaviest area in the run.
       # Both halves are asserted because they fail differently.
+      # @intent: { entity: "SpecObservation", action: "read one run's observation rows through scopes and rollups", behavior: "an area whose rows carried no timings yields a nil total sorted below every numeric total", layer: "unit" }
       it "hands back a nil for an area that reported no timing at all, sorted below every total" do
         observe(run, duration: nil, line_number: 1, spec_file_path: "spec/system/never_ran_spec.rb")
         observe(run, duration: nil, line_number: 2, spec_file_path: "spec/system/also_never_spec.rb")
@@ -2113,6 +2241,7 @@ RSpec.describe SpecObservation do
       # total alone cannot say so — it is an ordinary-looking number — so the two counts come back
       # in the same pass, off the same rows, rather than as a second question a caller might not
       # think to ask.
+      # @intent: { entity: "SpecObservation", action: "read one run's observation rows through scopes and rollups", behavior: "each area's row count is reported beside the count of its timed rows", layer: "unit" }
       it "counts each area's rows against the ones that carried a duration" do
         observe(run, duration: 4.0, line_number: 1, spec_file_path: "spec/models/order_spec.rb")
         observe(run, duration: nil, line_number: 2, spec_file_path: "spec/models/order_spec.rb")
@@ -2125,6 +2254,7 @@ RSpec.describe SpecObservation do
       # descriptions an area's examples carry. Four examples over two descriptions is the shape the
       # reading is about — a `COUNT(*)` retyped as a distinct count, or a distinct count taken over
       # `example_id` rather than `name`, both come back as 4 here and neither is a behavior count.
+      # @intent: { entity: "SpecObservation", action: "read one run's observation rows through scopes and rollups", behavior: "the description count per area tallies distinct descriptions rather than examples", layer: "unit" }
       it "counts each area's distinct descriptions, not its examples" do
         observe(run, duration: 1.0, line_number: 1, name: "settles an invoice",
                      spec_file_path: "spec/models/order_spec.rb")
@@ -2144,6 +2274,7 @@ RSpec.describe SpecObservation do
       # redundant area obtainable, invented out of silence rather than measured. The count of NAMED
       # rows rides back in the same tuple so that zero is separable from a measurement: 0 distinct
       # over 0 named is "nothing to count", which is not "nothing distinct to count".
+      # @intent: { entity: "SpecObservation", action: "read one run's observation rows through scopes and rollups", behavior: "an area whose examples carry no description reads zero named rows rather than erroring", layer: "unit" }
       it "reports no named rows for an area whose examples carry no description at all" do
         observe(run, duration: 1.0, line_number: 1, name: nil, spec_file_path: "spec/models/order_spec.rb")
         observe(run, duration: 1.0, line_number: 2, name: nil, spec_file_path: "spec/models/order_spec.rb")
@@ -2157,6 +2288,7 @@ RSpec.describe SpecObservation do
       # `recorded_count`. Both figures come back, so the excluded rows are subtractable rather than
       # silent — 2 distinct over 3 named of 5 recorded, where reading 2 against 5 overstates the
       # repetition by counting rows the aggregate never saw.
+      # @intent: { entity: "SpecObservation", action: "read one run's observation rows through scopes and rollups", behavior: "an area's distinct-description count is computed over its named rows only, leaving unnamed rows out of the denominator", layer: "unit" }
       it "counts an area's distinct descriptions over its named rows, not over all of them" do
         observe(run, duration: 1.0, line_number: 1, name: "settles an invoice",
                      spec_file_path: "spec/models/order_spec.rb")
@@ -2173,6 +2305,7 @@ RSpec.describe SpecObservation do
       # One description in two AREAS is one distinct behavior in each of them, not one across the
       # run: the counts are per group, and a distinct count taken over the whole run before the
       # grouping would report one of these two areas as carrying no description of its own.
+      # @intent: { entity: "SpecObservation", action: "read one run's observation rows through scopes and rollups", behavior: "each area's description count is attributed to that area and not pooled against the run as a whole", layer: "unit" }
       it "counts each area's descriptions against that area rather than against the run" do
         observe(run, duration: 2.0, line_number: 1, name: "settles an invoice",
                      spec_file_path: "spec/models/order_spec.rb")
@@ -2185,6 +2318,7 @@ RSpec.describe SpecObservation do
         )
       end
 
+      # @intent: { entity: "SpecObservation", action: "read one run's observation rows through scopes and rollups", behavior: "the by-directory read queries only the handed run", layer: "unit" }
       it "reads the run it was asked about and no other" do
         other = create_test_run(repository: repository, commit_sha: "0ther")
         observe(run, duration: 1.0, line_number: 1, spec_file_path: "spec/ours/a_spec.rb")
@@ -2196,6 +2330,7 @@ RSpec.describe SpecObservation do
       # Its OWN limit, not the by-file one. The two constants happen to be equal today, which is
       # why the default is asserted through `HEAVIEST_DIRECTORIES_LIMIT` by name — a reuse of
       # `HEAVIEST_FILES_LIMIT` would pass this example and silently make one edit move both rungs.
+      # @intent: { entity: "SpecObservation", action: "read one run's observation rows through scopes and rollups", behavior: "the by-directory listing honours a handed limit and defaults to the panel's own", layer: "unit" }
       it "caps at the limit it was given, and defaults to the panel's own" do
         12.times { |i| observe(run, duration: i.to_f + 1, line_number: i + 1, spec_file_path: "spec/d#{i}/a_spec.rb") }
 
@@ -2209,6 +2344,7 @@ RSpec.describe SpecObservation do
       # length that equals its own limit and cannot tell three areas from three hundred.
       # `COUNT(*) OVER ()` runs after `GROUP BY` and before `LIMIT`, so it counts AREAS rather than
       # rows and counts all of them however few come back.
+      # @intent: { entity: "SpecObservation", action: "read one run's observation rows through scopes and rollups", behavior: "the total-directory count is disclosed regardless of how many rows the limit returned", layer: "unit" }
       it "reports how many directories the run touched in total, whatever the limit returns" do
         12.times { |i| observe(run, duration: i.to_f + 1, line_number: i + 1, spec_file_path: "spec/d#{i}/a_spec.rb") }
 
@@ -2219,6 +2355,7 @@ RSpec.describe SpecObservation do
       # Groups, not rows and not FILES: twelve examples in twelve files under two directories
       # touched two areas. Both wrong readings — the row count and the file count — are ruled out
       # at once, and neither would be distinguishable with one file per area.
+      # @intent: { entity: "SpecObservation", action: "read one run's observation rows through scopes and rollups", behavior: "the count is of directories, not of the files or examples inside them", layer: "unit" }
       it "counts the directories rather than the files or examples in them" do
         12.times do |i|
           observe(run, duration: 1.0, line_number: i + 1, spec_file_path: "spec/d#{i % 2}/f#{i}_spec.rb")
@@ -2229,6 +2366,7 @@ RSpec.describe SpecObservation do
 
       # Two areas totalling the same is ordinary, so the order has to be total, or two requests
       # against unchanged rows list them differently.
+      # @intent: { entity: "SpecObservation", action: "read one run's observation rows through scopes and rollups", behavior: "areas with equal totals are broken by directory name so the ordering is deterministic", layer: "unit" }
       it "breaks ties by directory, so equal totals have one order" do
         observe(run, duration: 1.5, line_number: 1, spec_file_path: "spec/b/a_spec.rb")
         observe(run, duration: 1.5, line_number: 2, spec_file_path: "spec/a/a_spec.rb")
@@ -2236,6 +2374,7 @@ RSpec.describe SpecObservation do
         expect(described_class.directory_durations_in(run).map(&:first)).to eq(["spec/a", "spec/b"])
       end
 
+      # @intent: { entity: "SpecObservation", action: "read one run's observation rows through scopes and rollups", behavior: "a run that recorded nothing reads no directories from the rollup", layer: "unit" }
       it "reads no directories for a run that recorded nothing" do
         expect(described_class.directory_durations_in(run)).to eq([])
       end
@@ -2251,6 +2390,7 @@ RSpec.describe SpecObservation do
       # is the heaviest area by wall clock here and carries no debt at all; `spec/models` is the
       # lightest and leads this ranking. A read that had ordered by `SUM(duration_seconds)`, or by
       # `COUNT(*)`, produces a different first row.
+      # @intent: { entity: "SpecObservation", action: "read one run's observation rows through scopes and rollups", behavior: "areas are ranked by unannotated row count with each area's whole population as the denominator", layer: "unit" }
       it "ranks areas by unannotated count, against each area's whole population" do
         observe(run, duration: 0.1, line_number: 1, status: "unannotated",
                      spec_file_path: "spec/models/order_spec.rb")
@@ -2283,6 +2423,7 @@ RSpec.describe SpecObservation do
       # predicate rides the AGGREGATE and the WHERE stays open at the run — a read that had narrowed
       # `where(status: "unannotated")` instead returns `[..., 2, 2, ...]` here, a denominator equal to
       # its numerator on every row and no operand at all. This is the example that fails it.
+      # @intent: { entity: "SpecObservation", action: "read one run's observation rows through scopes and rollups", behavior: "the denominator counts each area's entire row population rather than doubling its unannotated rows", layer: "unit" }
       it "counts each area's whole population as the denominator, not its unannotated rows twice" do
         observe(run, duration: 0.1, line_number: 1, status: "unannotated",
                      spec_file_path: "spec/models/order_spec.rb")
@@ -2297,6 +2438,7 @@ RSpec.describe SpecObservation do
       # A fully-annotated area is a ROW carrying a zero and sorted last, never an omission. It is the
       # state the metric exists to reach, and dropping it would make `COUNT(*) OVER ()` describe a
       # different population from the one `.directory_durations_in` discloses under the same name.
+      # @intent: { entity: "SpecObservation", action: "read one run's observation rows through scopes and rollups", behavior: "an area with zero unannotated rows stays in the ranking at the bottom with a zero rather than dropping out", layer: "unit" }
       it "keeps a fully-annotated area in the ranking, at the bottom, with a zero" do
         observe(run, duration: 0.1, line_number: 1, status: "annotated",
                      spec_file_path: "spec/models/order_spec.rb")
@@ -2317,6 +2459,7 @@ RSpec.describe SpecObservation do
       # cannot be written through the app. It is written straight to the row here for exactly that
       # reason: this example is a guard against a FUTURE vocabulary, and the only way to state it is
       # to build the row the app cannot yet produce.
+      # @intent: { entity: "SpecObservation", action: "read one run's observation rows through scopes and rollups", behavior: "the debt count matches the literal unannotated status rather than every non-annotated value", layer: "unit" }
       it "counts the literal 'unannotated' rather than everything that is not 'annotated'" do
         observe(run, duration: 0.1, line_number: 1, status: "unannotated",
                      spec_file_path: "spec/models/order_spec.rb")
@@ -2339,6 +2482,7 @@ RSpec.describe SpecObservation do
       # together still leave ties to the planner. The cap makes that load-bearing rather than tidy: a
       # client comparing this ranking across two requests must not read a re-shuffle as a change in
       # the suite.
+      # @intent: { entity: "SpecObservation", action: "read one run's observation rows through scopes and rollups", behavior: "tied areas are ordered by the directory expression ascending so the ranking is deterministic", layer: "unit" }
       it "breaks a tie on the directory expression, ascending" do
         observe(run, duration: 0.1, line_number: 1, status: "unannotated",
                      spec_file_path: "spec/zebra/z_spec.rb")
@@ -2356,6 +2500,7 @@ RSpec.describe SpecObservation do
       # `DIRECTORY_EXPRESSION` rather than by a predicate — which is why it is pinned. Nobody can
       # break this with a bad `LIKE`; they would break it by "fixing" the map into a subtree rollup,
       # which reads as the tidier answer and is a fifth directory semantics on this table.
+      # @intent: { entity: "SpecObservation", action: "read one run's observation rows through scopes and rollups", behavior: "a nested area's debt stays in its own row rather than rolling into its ancestor's", layer: "unit" }
       it "groups on the immediate parent, so a nested area's debt does not roll into its ancestor" do
         observe(run, duration: 0.1, line_number: 1, status: "unannotated",
                      spec_file_path: "spec/models/order_spec.rb")
@@ -2373,6 +2518,7 @@ RSpec.describe SpecObservation do
       # back SQL NULL for it. `DIRECTORY_EXPRESSION` coalesces it to `.` — what `Pathname#dirname`
       # calls that directory — so the row is a named area a client can hand straight back to
       # `?spec_directory=`, rather than an unnamed key it can only look at.
+      # @intent: { entity: "SpecObservation", action: "read one run's observation rows through scopes and rollups", behavior: "root-level specs are grouped under a literal dot name instead of a null group key", layer: "unit" }
       it "names the repository root `.` rather than grouping the run's root specs under a null" do
         observe(run, duration: 0.1, line_number: 1, status: "unannotated",
                      spec_file_path: "smoke_spec.rb")
@@ -2388,6 +2534,7 @@ RSpec.describe SpecObservation do
       # `spec_file_path` for. Getting this backwards sends a reader to a `spec/support/` helper to
       # annotate tests that are not in it, which is the same failure the worklist's own row shape
       # guards against one grain down.
+      # @intent: { entity: "SpecObservation", action: "read one run's observation rows through scopes and rollups", behavior: "a shared example group's unannotated debt lands on the area that ran it", layer: "unit" }
       it "attributes a shared example group's debt to the area that included it" do
         observe(run, duration: 0.1, line_number: 4, status: "unannotated",
                      file_path: "spec/support/shared_examples.rb",
@@ -2404,6 +2551,7 @@ RSpec.describe SpecObservation do
       # LIMIT — so it counts the areas the RUN touched rather than the rows that fit on the page. The
       # figure a caption is built from, and the reason a truncated list cannot wear the shape of a
       # complete one.
+      # @intent: { entity: "SpecObservation", action: "read one run's observation rows through scopes and rollups", behavior: "every capped row carries the total number of areas the run touched", layer: "unit" }
       it "discloses how many areas the run touched, on every row, past the cap" do
         6.times do |index|
           observe(run, duration: 0.1, line_number: index + 1, status: "unannotated",
@@ -2423,6 +2571,7 @@ RSpec.describe SpecObservation do
 
       # One run, never the repository's history — the same narrow every read on this endpoint takes,
       # and the one that makes the aggregate affordable.
+      # @intent: { entity: "SpecObservation", action: "read one run's observation rows through scopes and rollups", behavior: "the area count covers one run's areas only and not every run's", layer: "unit" }
       it "counts one run's areas rather than every run's" do
         other = create_test_run(repository: repository, commit_sha: "b" * 40)
         observe(run, duration: 0.1, line_number: 1, status: "unannotated",
@@ -2435,6 +2584,7 @@ RSpec.describe SpecObservation do
           .to eq([["spec/requests", 1, 1, 1, 0, 0, 1]])
       end
 
+      # @intent: { entity: "SpecObservation", action: "read one run's observation rows through scopes and rollups", behavior: "a run that recorded nothing reads no directories from the debt ranking", layer: "unit" }
       it "reads no directories for a run that recorded nothing" do
         expect(described_class.unannotated_directories_in(run)).to eq([])
       end
@@ -2447,6 +2597,7 @@ RSpec.describe SpecObservation do
       # THE question this read exists for, and the reason the by-file rollup could not answer it:
       # `spec/models` here holds three files none of which is the run's heaviest, and a by-file top
       # ten would surface `spec/requests/checkout_spec.rb` instead of any of them.
+      # @intent: { entity: "SpecObservation", action: "read one run's observation rows through scopes and rollups", behavior: "the area drill-down lists that area's files with summed durations heaviest first", layer: "unit" }
       it "totals each file of the area it was asked about, heaviest file first" do
         observe(run, duration: 3.5, line_number: 1, spec_file_path: "spec/models/order_spec.rb")
         observe(run, duration: 1.0, line_number: 2, spec_file_path: "spec/models/refund_spec.rb")
@@ -2465,6 +2616,7 @@ RSpec.describe SpecObservation do
       # is its own row in `.directory_durations_in` — a prefix `LIKE 'spec/models/%'` would gather
       # it in, double-count its rows against the rollup one rung up, and re-open the drill-down
       # tree that read's comment says is a different question.
+      # @intent: { entity: "SpecObservation", action: "read one run's observation rows through scopes and rollups", behavior: "the drill-down reads the area at exactly its own depth without sweeping nested areas in", layer: "unit" }
       it "reads the area at its own depth, gathering no nested area into it" do
         observe(run, duration: 1.0, line_number: 1, spec_file_path: "spec/models/order_spec.rb")
         observe(run, duration: 2.0, line_number: 2, spec_file_path: "spec/models/orders/refund_spec.rb")
@@ -2478,6 +2630,7 @@ RSpec.describe SpecObservation do
       # The area name is computed by the SAME expression the rollup above groups by, so the path a
       # link carries is a path this read can answer. A repository-root file's area is `.` there and
       # has to be `.` here, or the one row the rollup names that way opens an empty panel.
+      # @intent: { entity: "SpecObservation", action: "read one run's observation rows through scopes and rollups", behavior: "the repository root is answered under the same name the directory rollup gives it", layer: "unit" }
       it "answers for the repository root under the name the rollup gives it" do
         observe(run, duration: 3.0, line_number: 1, spec_file_path: "smoke_spec.rb")
         observe(run, duration: 1.0, line_number: 2, spec_file_path: "spec/models/order_spec.rb")
@@ -2489,6 +2642,7 @@ RSpec.describe SpecObservation do
       # — the rule `Ingest::ObservationRecorder` writes `spec_file_path` for, and the rule the
       # rollup one rung up is asserted against. A read keyed on `file_path` would list
       # `spec/support/shared_examples.rb` under an area that never included it.
+      # @intent: { entity: "SpecObservation", action: "read one run's observation rows through scopes and rollups", behavior: "a shared example group's row is listed under the file that ran it, not the helper", layer: "unit" }
       it "lists a shared example group's row under the file that ran it" do
         observe(run, duration: 1.5, line_number: 4, file_path: "spec/support/shared_examples.rb",
                      spec_file_path: "spec/models/order_spec.rb",
@@ -2504,6 +2658,7 @@ RSpec.describe SpecObservation do
       # into Ruby, and `SUM(...) DESC` is NULLS FIRST in Postgres — so a file NONE of whose
       # examples were timed comes back as a measured zero AND is named the heaviest file in the
       # area. Both halves are asserted because they fail differently.
+      # @intent: { entity: "SpecObservation", action: "read one run's observation rows through scopes and rollups", behavior: "a file in the area whose rows carried no timings yields a nil total sorted below every numeric one", layer: "unit" }
       it "hands back a nil for a file that reported no timing at all, sorted below every total" do
         observe(run, duration: nil, line_number: 1, spec_file_path: "spec/models/never_ran_spec.rb")
         observe(run, duration: 0.25, line_number: 2, spec_file_path: "spec/models/quick_spec.rb")
@@ -2515,6 +2670,7 @@ RSpec.describe SpecObservation do
         expect(files.last[1]).to be_nil
       end
 
+      # @intent: { entity: "SpecObservation", action: "read one run's observation rows through scopes and rollups", behavior: "each listed file's row count is reported beside its timed-row count", layer: "unit" }
       it "counts each file's rows against the ones that carried a duration" do
         observe(run, duration: 4.0, line_number: 1, spec_file_path: "spec/models/order_spec.rb")
         observe(run, duration: nil, line_number: 2, spec_file_path: "spec/models/order_spec.rb")
@@ -2523,6 +2679,7 @@ RSpec.describe SpecObservation do
           .to eq([["spec/models/order_spec.rb", 4.0, 2, 1, 1, 2, 1]])
       end
 
+      # @intent: { entity: "SpecObservation", action: "read one run's observation rows through scopes and rollups", behavior: "the drill-down reads only the run it was handed", layer: "unit" }
       it "reads the run it was asked about and no other" do
         other = create_test_run(repository: repository, commit_sha: "0ther")
         observe(run, duration: 1.0, line_number: 1, spec_file_path: "spec/models/ours_spec.rb")
@@ -2535,6 +2692,7 @@ RSpec.describe SpecObservation do
       # Its OWN limit, not the by-file rollup's and not the by-file drill-down's. The default is
       # asserted through `SPEC_DIRECTORY_FILES_LIMIT` by name, so a reuse of either sibling constant
       # cannot pass this example by happening to be equal today.
+      # @intent: { entity: "SpecObservation", action: "read one run's observation rows through scopes and rollups", behavior: "the drill-down honours a handed limit and defaults to the panel's own", layer: "unit" }
       it "caps at the limit it was given, and defaults to the panel's own" do
         (described_class::SPEC_DIRECTORY_FILES_LIMIT + 2).times do |i|
           observe(run, duration: i.to_f + 1, line_number: i + 1,
@@ -2550,6 +2708,7 @@ RSpec.describe SpecObservation do
       # What the capped list is the head OF, in the same round trip. `COUNT(*) OVER ()` runs after
       # `GROUP BY` and before `LIMIT`, so it counts the area's FILES rather than the rows on the
       # page — twelve files holding twenty-four examples is twelve, not twenty-four and not the cap.
+      # @intent: { entity: "SpecObservation", action: "read one run's observation rows through scopes and rollups", behavior: "the total-file count of the area is reported however many rows the limit returned", layer: "unit" }
       it "reports how many files the area holds, whatever the limit returns" do
         12.times do |i|
           2.times do |j|
@@ -2569,6 +2728,7 @@ RSpec.describe SpecObservation do
       # over the files that fit. `SUM(COUNT(...)) OVER ()` is what reaches them from a read grouped
       # by file — and the cap is what makes the distinction real, so the limit here is below the
       # file count on purpose.
+      # @intent: { entity: "SpecObservation", action: "read one run's observation rows through scopes and rollups", behavior: "the area's own example and timing totals are counted before the cap applies", layer: "unit" }
       it "reports the area's own example counts, counted before the cap" do
         4.times do |i|
           observe(run, duration: 1.0, line_number: (i * 2) + 1, spec_file_path: "spec/models/f#{i}_spec.rb")
@@ -2584,6 +2744,7 @@ RSpec.describe SpecObservation do
 
       # Two files totalling the same is ordinary inside one area, so the order has to be total or
       # two requests against unchanged rows list them differently.
+      # @intent: { entity: "SpecObservation", action: "read one run's observation rows through scopes and rollups", behavior: "files with equal totals are broken by path so the drill-down ordering is deterministic", layer: "unit" }
       it "breaks ties by path, so equal totals have one order" do
         observe(run, duration: 1.5, line_number: 1, spec_file_path: "spec/models/b_spec.rb")
         observe(run, duration: 1.5, line_number: 2, spec_file_path: "spec/models/a_spec.rb")
@@ -2594,6 +2755,7 @@ RSpec.describe SpecObservation do
 
       # An area this run recorded nothing for is an ordinary answer — a stale bookmark, a deleted
       # directory, a typo — and not an error. No rows, and specifically not the whole run's files.
+      # @intent: { entity: "SpecObservation", action: "read one run's observation rows through scopes and rollups", behavior: "an area the run recorded nothing in yields no file rows", layer: "unit" }
       it "reads no files for an area the run recorded nothing in" do
         observe(run, duration: 1.0, line_number: 1, spec_file_path: "spec/models/order_spec.rb")
 
@@ -2622,6 +2784,7 @@ RSpec.describe SpecObservation do
 
       # The pivot itself: one row per AREA carrying both runs' counts, not one row per (area, run)
       # pair left for a caller to fold together.
+      # @intent: { entity: "SpecObservation", action: "read one run's observation rows through scopes and rollups", behavior: "one row carries an area's previous and latest example counts side by side", layer: "unit" }
       it "puts both runs' counts for an area on one row" do
         observe_area(previous_run, "spec/models", 2)
         observe_area(previous_run, "spec/requests", 1, from: 10)
@@ -2640,6 +2803,7 @@ RSpec.describe SpecObservation do
       # change would put every shrinkage below every growth and off the end of the cap. Asserted at
       # `limit: 1` as well, so the claim is about which area SURVIVES the cap rather than only about
       # the order two surviving rows happen to sit in.
+      # @intent: { entity: "SpecObservation", action: "read one run's observation rows through scopes and rollups", behavior: "areas are ranked by absolute movement so a large shrinkage outranks a smaller growth", layer: "unit" }
       it "ranks by absolute movement, so a shrinkage outranks a smaller growth" do
         observe_area(previous_run, "spec/legacy", 6)
         observe_area(previous_run, "spec/models", 1, from: 20)
@@ -2658,6 +2822,7 @@ RSpec.describe SpecObservation do
       # than being dropped — the caller needs the row in order to say "new area" at all. It is the
       # SUM totals beside it that let the caller tell this from a run that recorded nothing
       # anywhere, which is why they are asserted here rather than only in their own example.
+      # @intent: { entity: "SpecObservation", action: "read one run's observation rows through scopes and rollups", behavior: "an area only the latest run recorded appears with a zero for the run that missed it rather than being dropped", layer: "unit" }
       it "reports an area only the latest run recorded, with a zero for the run that did not" do
         observe_area(previous_run, "spec/models", 3)
         observe_area(run, "spec/models", 3)
@@ -2669,6 +2834,7 @@ RSpec.describe SpecObservation do
         )
       end
 
+      # @intent: { entity: "SpecObservation", action: "read one run's observation rows through scopes and rollups", behavior: "an area only the previous run recorded appears with a zero on the latest side rather than vanishing", layer: "unit" }
       it "reports an area only the previous run recorded, with a zero for the run that did not" do
         observe_area(previous_run, "spec/models", 3)
         observe_area(previous_run, "spec/system", 4, from: 20)
@@ -2684,6 +2850,7 @@ RSpec.describe SpecObservation do
       # the `IN` list would give each area the SUM of both sides and every change would be zero.
       # Same paths in both runs and different totals, so a read that conflated them would produce
       # `[9, 9]` here rather than `[4, 5]`.
+      # @intent: { entity: "SpecObservation", action: "read one run's observation rows through scopes and rollups", behavior: "each side's row count is attributed to that run alone and never mixed across the pair", layer: "unit" }
       it "counts each run's rows against that run and not against the pair" do
         observe_area(previous_run, "spec/models", 4)
         observe_area(run, "spec/models", 5)
@@ -2695,6 +2862,7 @@ RSpec.describe SpecObservation do
       # A third run on the same repository is not part of this comparison, and its rows must not
       # reach either column or either total. The obvious way to get this wrong — narrowing on
       # `repository_id`, or on the branch — is what this rules out.
+      # @intent: { entity: "SpecObservation", action: "read one run's observation rows through scopes and rollups", behavior: "the comparison reads exactly the two runs it was handed and no others", layer: "unit" }
       it "reads the two runs it was asked about and no others" do
         other = create_test_run(repository: repository, commit_sha: "0ther99")
         observe_area(previous_run, "spec/models", 1)
@@ -2707,6 +2875,7 @@ RSpec.describe SpecObservation do
 
       # Two areas that moved the same distance is ordinary — a rename moves exactly that way — so
       # the order has to be total, or two requests against unchanged rows list them differently.
+      # @intent: { entity: "SpecObservation", action: "read one run's observation rows through scopes and rollups", behavior: "areas with equal movement are broken by directory name so the ranking is deterministic", layer: "unit" }
       it "breaks ties by directory, so equal movements have one order" do
         observe_area(previous_run, "spec/b", 3)
         observe_area(previous_run, "spec/a", 3, from: 20)
@@ -2721,6 +2890,7 @@ RSpec.describe SpecObservation do
       # exactly why the default is asserted through `MOVED_DIRECTORIES_LIMIT` by name: a reuse of
       # `HEAVIEST_DIRECTORIES_LIMIT` would pass this example and silently make one edit move both
       # panels.
+      # @intent: { entity: "SpecObservation", action: "read one run's observation rows through scopes and rollups", behavior: "the comparison honours a handed limit and defaults to the panel's own", layer: "unit" }
       it "caps at the limit it was given, and defaults to the panel's own" do
         12.times { |i| observe_area(run, "spec/d#{i}", i + 1, from: (i * 20) + 1) }
         observe_area(previous_run, "spec/models", 1)
@@ -2736,6 +2906,7 @@ RSpec.describe SpecObservation do
       # `COUNT(*) OVER ()` runs after `GROUP BY` and before `LIMIT`, so a truncated read reports the
       # same total an untruncated one does. Twelve areas in the latest run and one that only the
       # previous run has: thirteen, which neither run alone could have produced.
+      # @intent: { entity: "SpecObservation", action: "read one run's observation rows through scopes and rollups", behavior: "the total area count of the comparison is disclosed regardless of the limit", layer: "unit" }
       it "reports how many areas the comparison covered, whatever the limit returns" do
         12.times { |i| observe_area(run, "spec/d#{i}", i + 1, from: (i * 20) + 1) }
         observe_area(previous_run, "spec/gone", 1)
@@ -2756,6 +2927,7 @@ RSpec.describe SpecObservation do
       # "the previous run recorded nothing", which is precisely the state the panel withholds the
       # whole comparison for: the defect would be a page announcing no comparison on two runs that
       # are perfectly comparable.
+      # @intent: { entity: "SpecObservation", action: "read one run's observation rows through scopes and rollups", behavior: "each run's total recorded count is reported before any limit applied", layer: "unit" }
       it "reports what each run recorded in total, before the limit" do
         12.times { |i| observe_area(run, "spec/d#{i}", 1, from: (i * 20) + 1) }
         observe_area(run, "spec/d0", 1, from: 500)
@@ -2772,6 +2944,7 @@ RSpec.describe SpecObservation do
       # Zero groups, which for this read means neither run wrote a row — a group exists here if and
       # only if a row does. The caller depends on that equivalence to name the state, so it is
       # pinned rather than left as a property of the SQL.
+      # @intent: { entity: "SpecObservation", action: "read one run's observation rows through scopes and rollups", behavior: "two runs that recorded no examples yield an empty comparison rather than nil-filled rows", layer: "unit" }
       it "reads nothing at all for two runs that recorded no examples" do
         expect(described_class.directory_growth_between(run, previous_run)).to eq([])
       end
@@ -2780,6 +2953,7 @@ RSpec.describe SpecObservation do
       # different partition of the suite from the by-duration panel's. Asserted through the shape
       # that would break first if the expression were re-derived here: the IMMEDIATE parent, with a
       # root-level file coalesced rather than dropped.
+      # @intent: { entity: "SpecObservation", action: "read one run's observation rows through scopes and rollups", behavior: "area assignment of rows matches the by-duration rollup's assignment exactly", layer: "unit" }
       it "areas the rows exactly as the by-duration rollup does" do
         observe(previous_run, duration: 1.0, line_number: 1, spec_file_path: "spec/models/a_spec.rb")
         observe(run, duration: 1.0, line_number: 1, spec_file_path: "spec/models/orders/a_spec.rb")
@@ -2812,6 +2986,7 @@ RSpec.describe SpecObservation do
 
       # The pivot itself: one row per FILE carrying both runs' counts, not one row per (file, run)
       # pair left for a caller to fold together.
+      # @intent: { entity: "SpecObservation", action: "read one run's observation rows through scopes and rollups", behavior: "one row carries a file's previous and latest example counts side by side", layer: "unit" }
       it "puts both runs' counts for a file on one row" do
         observe_file(previous_run, "spec/models/order_spec.rb", 2)
         observe_file(previous_run, "spec/models/user_spec.rb", 1, from: 10)
@@ -2829,6 +3004,7 @@ RSpec.describe SpecObservation do
       # make visible, and signed ranking puts every loss below every gain and off the end of the
       # cap. Asserted at `limit: 1` as well, so the claim is about which file SURVIVES the cap
       # rather than only about the order two surviving rows sit in.
+      # @intent: { entity: "SpecObservation", action: "read one run's observation rows through scopes and rollups", behavior: "files are ranked by absolute movement so a shrinkage outranks a smaller growth", layer: "unit" }
       it "ranks by absolute movement, so a shrinkage outranks a smaller growth" do
         observe_file(previous_run, "spec/models/legacy_spec.rb", 6)
         observe_file(previous_run, "spec/models/order_spec.rb", 1, from: 20)
@@ -2849,6 +3025,7 @@ RSpec.describe SpecObservation do
       # relocation from a gain-and-a-loss; here both operands are on the table. The read still
       # asserts no correspondence between the two files — it counts rows — which is why the fixture
       # gives them different line numbers throughout.
+      # @intent: { entity: "SpecObservation", action: "read one run's observation rows through scopes and rollups", behavior: "a file that vanished and one that appeared show as two separate rows even where the area's total did not move", layer: "unit" }
       it "shows a vanished file and an appeared one as two rows where the area itself did not move" do
         observe_file(previous_run, "spec/models/user_spec.rb", 4)
         observe_file(run, "spec/models/users_spec.rb", 4, from: 50)
@@ -2863,6 +3040,7 @@ RSpec.describe SpecObservation do
 
       # A file the earlier run never wrote a row for comes back with a real 0 on that side rather
       # than being dropped — the caller needs the row in order to say "new file" at all.
+      # @intent: { entity: "SpecObservation", action: "read one run's observation rows through scopes and rollups", behavior: "a file only the latest run recorded appears with a zero on the previous side rather than being dropped", layer: "unit" }
       it "reports a file only the latest run recorded, with a zero for the run that did not" do
         observe_file(previous_run, "spec/models/order_spec.rb", 3)
         observe_file(run, "spec/models/order_spec.rb", 3, from: 20)
@@ -2879,6 +3057,7 @@ RSpec.describe SpecObservation do
       # the same constant — so `spec/models/orders` is its own area exactly as it is its own row in
       # the panel this drills out of. A prefix `LIKE 'spec/models/%'` would gather it in and this
       # panel would double-count rows against the one above it on a single click.
+      # @intent: { entity: "SpecObservation", action: "read one run's observation rows through scopes and rollups", behavior: "the file comparison reads the area at its own depth without sweeping nested areas in", layer: "unit" }
       it "reads the area at its own depth, gathering no nested area into it" do
         observe_file(previous_run, "spec/models/order_spec.rb", 1)
         observe_file(previous_run, "spec/models/orders/refund_spec.rb", 5, from: 10)
@@ -2894,6 +3073,7 @@ RSpec.describe SpecObservation do
       # The area name is computed by the SAME expression the panel above groups by, so the path a
       # link carries is a path this read can answer. A repository-root file's area is `.` up there
       # and has to be `.` here, or the one row that panel names that way opens an empty drill-in.
+      # @intent: { entity: "SpecObservation", action: "read one run's observation rows through scopes and rollups", behavior: "a root-level file is named the same way the panel above names it", layer: "unit" }
       it "answers for the repository root under the name the panel above gives it" do
         observe_file(previous_run, "smoke_spec.rb", 1)
         observe_file(run, "smoke_spec.rb", 3, from: 10)
@@ -2905,6 +3085,7 @@ RSpec.describe SpecObservation do
 
       # The two runs' rows are counted apart, which is the whole method: a single `COUNT(*)` over
       # the `IN` list would give each file the SUM of both sides and every change would be zero.
+      # @intent: { entity: "SpecObservation", action: "read one run's observation rows through scopes and rollups", behavior: "each run's row count for a file is attributed to that run alone and not the pair", layer: "unit" }
       it "counts each run's rows against that run and not against the pair" do
         observe_file(previous_run, "spec/models/order_spec.rb", 4)
         observe_file(run, "spec/models/order_spec.rb", 5, from: 20)
@@ -2915,6 +3096,7 @@ RSpec.describe SpecObservation do
 
       # A third run on the same repository is not part of this comparison, and its rows must not
       # reach either column or either total — including a run that touched the very same file.
+      # @intent: { entity: "SpecObservation", action: "read one run's observation rows through scopes and rollups", behavior: "the file comparison reads exactly the two runs it was handed", layer: "unit" }
       it "reads the two runs it was asked about and no others" do
         other = create_test_run(repository: repository, commit_sha: "0ther99")
         observe_file(previous_run, "spec/models/order_spec.rb", 1)
@@ -2929,6 +3111,7 @@ RSpec.describe SpecObservation do
       # them — the rule `Ingest::ObservationRecorder` writes `spec_file_path` for, and the rule both
       # rollups above are asserted against. A read keyed on `file_path` would list
       # `spec/support/shared_examples.rb` under an area that never included it.
+      # @intent: { entity: "SpecObservation", action: "read one run's observation rows through scopes and rollups", behavior: "a shared example group's row counts against the file that ran it", layer: "unit" }
       it "counts a shared example group's row against the file that ran it" do
         observe(previous_run, duration: 1.0, line_number: 4, file_path: "spec/support/shared_examples.rb",
                               spec_file_path: "spec/models/order_spec.rb",
@@ -2945,6 +3128,7 @@ RSpec.describe SpecObservation do
       # Two files that moved the same distance is ordinary — a rename moves exactly that way, and
       # this panel puts both halves of one on the page — so the order has to be total, or two
       # requests against unchanged rows list them differently.
+      # @intent: { entity: "SpecObservation", action: "read one run's observation rows through scopes and rollups", behavior: "files with equal movement are broken by path so the ranking is deterministic", layer: "unit" }
       it "breaks ties by path, so equal movements have one order" do
         observe_file(previous_run, "spec/models/b_spec.rb", 3)
         observe_file(previous_run, "spec/models/a_spec.rb", 3, from: 20)
@@ -2959,6 +3143,7 @@ RSpec.describe SpecObservation do
       # NAME. The neighbouring `SPEC_DIRECTORY_FILES_LIMIT` caps one run's listing of the same
       # area's files and this caps the two-run UNION of them, so a reuse of it would pass any
       # example asserting a bare number and silently make one edit move both panels.
+      # @intent: { entity: "SpecObservation", action: "read one run's observation rows through scopes and rollups", behavior: "the file comparison honours a handed limit and defaults to the panel's own", layer: "unit" }
       it "caps at the limit it was given, and defaults to the panel's own" do
         32.times { |i| observe_file(run, "spec/models/f#{i}_spec.rb", i + 1, from: (i * 40) + 1) }
         observe_file(previous_run, "spec/models/gone_spec.rb", 1)
@@ -2979,6 +3164,7 @@ RSpec.describe SpecObservation do
       # here holds twelve — because a `COUNT(*)` where the window total belongs reads the leading
       # GROUP's size, and a fixture where those two numbers coincide is green under exactly that
       # mutation.
+      # @intent: { entity: "SpecObservation", action: "read one run's observation rows through scopes and rollups", behavior: "the total file count of the comparison is disclosed regardless of the limit", layer: "unit" }
       it "reports how many files the comparison covered, whatever the limit returns" do
         12.times { |i| observe_file(run, "spec/models/f#{i}_spec.rb", i + 1, from: (i * 40) + 1) }
         observe_file(previous_run, "spec/models/gone_spec.rb", 1)
@@ -2997,6 +3183,7 @@ RSpec.describe SpecObservation do
       # does not survive the cap, so the rows on hand carry ZERO of its examples while the run
       # recorded one in this area. A caller deriving the figure from the rows would read "the
       # previous run recorded nothing here" off a comparison that is perfectly sound.
+      # @intent: { entity: "SpecObservation", action: "read one run's observation rows through scopes and rollups", behavior: "each run's total recorded count inside the area is reported before the limit applied", layer: "unit" }
       it "reports what each run recorded in this area in total, before the limit" do
         12.times { |i| observe_file(run, "spec/models/f#{i}_spec.rb", 1, from: (i * 40) + 1) }
         observe_file(run, "spec/models/f0_spec.rb", 1, from: 900)
@@ -3015,6 +3202,7 @@ RSpec.describe SpecObservation do
       # rung up returns whole-run totals under the same position. Rows in a SECOND area are what
       # tells the two apart, and a read that reported the run's totals here would divide an area's
       # population by the suite's.
+      # @intent: { entity: "SpecObservation", action: "read one run's observation rows through scopes and rollups", behavior: "the comparison's totals are counted over the asked-for area and not over the whole runs", layer: "unit" }
       it "counts its totals over the asked-for area and not over the whole run" do
         observe_file(previous_run, "spec/models/order_spec.rb", 2)
         observe_file(previous_run, "spec/requests/checkout_spec.rb", 40, from: 100)
@@ -3029,6 +3217,7 @@ RSpec.describe SpecObservation do
       # here if and only if a row does. `?spec_directory=` is a URL a reader types and bookmarks, so
       # a typo and a deleted directory both arrive here and neither is an error; the caller depends
       # on the empty read to name that state, so it is pinned rather than left to the SQL.
+      # @intent: { entity: "SpecObservation", action: "read one run's observation rows through scopes and rollups", behavior: "an area neither run recorded yields an empty comparison rather than a refusal", layer: "unit" }
       it "reads nothing at all for an area neither run recorded" do
         observe_file(previous_run, "spec/models/order_spec.rb", 1)
         observe_file(run, "spec/models/order_spec.rb", 2, from: 20)
@@ -3056,6 +3245,7 @@ RSpec.describe SpecObservation do
 
       # The pivot itself: one row per AREA carrying both runs' summed seconds and the coverage each
       # was summed over, not one row per (area, run) pair left for a caller to fold together.
+      # @intent: { entity: "SpecObservation", action: "read one run's observation rows through scopes and rollups", behavior: "one row carries an area's previous and latest summed seconds side by side", layer: "unit" }
       it "puts both runs' summed seconds for an area on one row" do
         observe_area(previous_run, "spec/models", 2, each: 1.0)
         observe_area(previous_run, "spec/requests", 1, each: 2.0, from: 10)
@@ -3072,6 +3262,7 @@ RSpec.describe SpecObservation do
       # `spec/models` gained no examples at all and got 30 seconds slower; `spec/system` gained two
       # examples and a tenth of a second. Rank these areas by `ABS(latest_count - previous_count)`
       # and the slowdown sorts LAST — which at the shipped cap of ten is off the panel entirely.
+      # @intent: { entity: "SpecObservation", action: "read one run's observation rows through scopes and rollups", behavior: "an area that slowed down without gaining a single example still shows a movement, proving the ranking reads time not rows", layer: "unit" }
       it "names an area that got slower without gaining a single example" do
         observe_area(previous_run, "spec/models", 2, each: 1.0)
         observe_area(previous_run, "spec/system", 1, each: 0.1, from: 20)
@@ -3093,6 +3284,7 @@ RSpec.describe SpecObservation do
       # The other direction of the same independence: four fast specs where one slow one used to be
       # is a GAIN of three examples and a LOSS of nine seconds. A panel ranking counts calls this
       # the biggest growth in the suite; this one calls it the biggest win.
+      # @intent: { entity: "SpecObservation", action: "read one run's observation rows through scopes and rollups", behavior: "an area that gained examples yet lost time reports both facts, so growth cannot masquerade as slowing", layer: "unit" }
       it "reports an area that gained examples and lost time" do
         observe_area(previous_run, "spec/models", 1, each: 10.0)
         observe_area(run, "spec/models", 4, each: 0.25)
@@ -3105,6 +3297,7 @@ RSpec.describe SpecObservation do
       # answers "which areas changed pace" exactly as much as one that added them, and a `DESC`-only
       # ordering on the signed change would put every win below every regression and off the cap.
       # Asserted at `limit: 1` too, so the claim is about which area SURVIVES the cap.
+      # @intent: { entity: "SpecObservation", action: "read one run's observation rows through scopes and rollups", behavior: "areas are ranked by absolute runtime movement so a big speedup outranks a smaller slowdown", layer: "unit" }
       it "ranks by absolute movement, so a speedup outranks a smaller slowdown" do
         observe_area(previous_run, "spec/legacy", 1, each: 12.0)
         observe_area(previous_run, "spec/models", 1, each: 1.0, from: 20)
@@ -3122,6 +3315,7 @@ RSpec.describe SpecObservation do
       # without `NULLS LAST` the area nobody MEASURED heads a panel about slowdowns, above a real
       # 8-second regression. Both halves asserted: the nil comes back as a nil (never a 0.0 the
       # caller would render "0.00s"), and it sorts last.
+      # @intent: { entity: "SpecObservation", action: "read one run's observation rows through scopes and rollups", behavior: "an area whose rows carry no timings sums to nil and ranks last rather than winning on nil arithmetic", layer: "unit" }
       it "sums an untimed area to nil and ranks it last rather than first" do
         observe_area(previous_run, "spec/quiet", 3, each: nil)
         observe_area(previous_run, "spec/models", 1, each: 1.0, from: 20)
@@ -3138,6 +3332,7 @@ RSpec.describe SpecObservation do
       # An area timed on ONE side only is the same hazard wearing a worse face: it is not a 12-second
       # win, it is a run that stopped reporting. The subtraction is NULL either way, so it sorts last
       # beside the never-timed area — and the caller gets the real total on the side that has one.
+      # @intent: { entity: "SpecObservation", action: "read one run's observation rows through scopes and rollups", behavior: "an area timed on only one side is left unranked rather than announced as a win or a loss", layer: "unit" }
       it "leaves an area timed on only one side unranked rather than calling it a win" do
         observe_area(previous_run, "spec/models", 2, each: 6.0)
         observe_area(previous_run, "spec/system", 1, each: 1.0, from: 20)
@@ -3155,6 +3350,7 @@ RSpec.describe SpecObservation do
       # `SUM` skips NULLs silently, so a total covering half an area is indistinguishable from a
       # total covering all of it unless the row says which. Both counts per side, so a caller can
       # state a total against what it was summed over.
+      # @intent: { entity: "SpecObservation", action: "read one run's observation rows through scopes and rollups", behavior: "each side's total discloses how many of its rows actually carried a timing", layer: "unit" }
       it "states how much of each side each total was summed over" do
         observe_area(previous_run, "spec/models", 2, each: 1.0)
         observe_area(previous_run, "spec/models", 2, each: nil, from: 50)
@@ -3168,6 +3364,7 @@ RSpec.describe SpecObservation do
       # list would give each area the total of both sides and every change would be zero. Same paths
       # in both runs and different totals, so a read that conflated them would produce `[9.0, 9.0]`
       # here rather than `[4.0, 5.0]`.
+      # @intent: { entity: "SpecObservation", action: "read one run's observation rows through scopes and rollups", behavior: "each run's seconds are summed against that run alone and never across the pair", layer: "unit" }
       it "sums each run's rows against that run and not against the pair" do
         observe_area(previous_run, "spec/models", 2, each: 2.0)
         observe_area(run, "spec/models", 2, each: 2.5)
@@ -3180,6 +3377,7 @@ RSpec.describe SpecObservation do
       # directories — and only each run's OWN total catches it. Asserted per side, because the two
       # sides are separate `FILTER`s and a bug that leaked rows across the boundary would still
       # reconcile against the pair's combined total.
+      # @intent: { entity: "SpecObservation", action: "read one run's observation rows through scopes and rollups", behavior: "each side's sum reconciles against that run's own whole-run total, so no area's rows are lost or doubled", layer: "unit" }
       it "reconciles each side against that run's own total, so no area's rows are lost or doubled" do
         observe_area(previous_run, "spec/models", 3, each: 1.5)
         observe_area(previous_run, "spec/system", 2, each: 0.25, from: 20)
@@ -3200,6 +3398,7 @@ RSpec.describe SpecObservation do
       # A third run on the same repository is not part of this comparison, and its seconds must not
       # reach either column or either total. The obvious way to get this wrong — narrowing on
       # `repository_id`, or on the branch — is what this rules out.
+      # @intent: { entity: "SpecObservation", action: "read one run's observation rows through scopes and rollups", behavior: "the runtime comparison reads exactly the two runs it was handed", layer: "unit" }
       it "reads the two runs it was asked about and no others" do
         other = create_test_run(repository: repository, commit_sha: "0ther99")
         observe_area(previous_run, "spec/models", 1, each: 1.0)
@@ -3212,6 +3411,7 @@ RSpec.describe SpecObservation do
 
       # Two areas that moved the same distance is ordinary — a rename moves exactly that way — so
       # the order has to be total, or two requests against unchanged rows list them differently.
+      # @intent: { entity: "SpecObservation", action: "read one run's observation rows through scopes and rollups", behavior: "areas with equal movement are broken by directory name so the ranking is deterministic", layer: "unit" }
       it "breaks ties by directory, so equal movements have one order" do
         observe_area(previous_run, "spec/b", 1, each: 1.0)
         observe_area(previous_run, "spec/a", 1, each: 1.0, from: 20)
@@ -3230,6 +3430,7 @@ RSpec.describe SpecObservation do
       # Every area is in BOTH runs, so every area has a real movement to be ranked by — a fixture
       # where each area sat on one side only would rank nothing at all (the key is NULL and sorts
       # last) and would be green under an implementation with no ordering to speak of.
+      # @intent: { entity: "SpecObservation", action: "read one run's observation rows through scopes and rollups", behavior: "the runtime comparison honours a handed limit and defaults to the panel's own", layer: "unit" }
       it "caps at the limit it was given, and defaults to the panel's own" do
         12.times { |i| observe_area(previous_run, "spec/d#{i}", 1, each: 1.0, from: (i * 40) + 1) }
         12.times { |i| observe_area(run, "spec/d#{i}", 1, each: i + 1.0, from: (i * 40) + 20) }
@@ -3245,6 +3446,7 @@ RSpec.describe SpecObservation do
       # OVER ()` runs after `GROUP BY` and before `LIMIT`, so a truncated read reports the same
       # total an untruncated one does. Twelve areas in the latest run and one only the previous run
       # has: thirteen, which neither run alone could have produced.
+      # @intent: { entity: "SpecObservation", action: "read one run's observation rows through scopes and rollups", behavior: "the total area count of the comparison is disclosed regardless of the limit", layer: "unit" }
       it "reports how many areas the comparison covered, whatever the limit returns" do
         12.times { |i| observe_area(run, "spec/d#{i}", 1, each: i + 1.0, from: (i * 20) + 1) }
         observe_area(previous_run, "spec/gone", 1, each: 1.0)
@@ -3263,6 +3465,7 @@ RSpec.describe SpecObservation do
       # area whose movement does not survive the cap, so the rows on hand carry NONE of its examples
       # while the run recorded two. A caller deriving these from the rows would read "the previous
       # run recorded nothing" and withhold a comparison between two perfectly comparable runs.
+      # @intent: { entity: "SpecObservation", action: "read one run's observation rows through scopes and rollups", behavior: "each run's recorded and timed totals are reported before any limit applied", layer: "unit" }
       it "reports what each run recorded and timed in total, before the limit" do
         12.times { |i| observe_area(run, "spec/d#{i}", 1, each: i + 1.0, from: (i * 20) + 1) }
         observe_area(run, "spec/d0", 1, each: nil, from: 500)
@@ -3280,6 +3483,7 @@ RSpec.describe SpecObservation do
 
       # Zero groups, which for this read means neither run wrote a row — a group exists here if and
       # only if a row does. The caller depends on that equivalence to name the state.
+      # @intent: { entity: "SpecObservation", action: "read one run's observation rows through scopes and rollups", behavior: "two runs that recorded no examples yield an empty runtime comparison", layer: "unit" }
       it "reads nothing at all for two runs that recorded no examples" do
         expect(described_class.directory_runtime_growth_between(run, previous_run)).to eq([])
       end
@@ -3287,6 +3491,7 @@ RSpec.describe SpecObservation do
       # Two runs that recorded rows and timed none of them is NOT an empty read: the groups are
       # there, with real counts and nil sums. That is what lets the caller say "reported no timings"
       # rather than "recorded no per-example detail" — one blank panel, two different things to fix.
+      # @intent: { entity: "SpecObservation", action: "read one run's observation rows through scopes and rollups", behavior: "two runs that recorded rows but timed none return real group rows carrying nil sums rather than nothing", layer: "unit" }
       it "reads real groups with nil sums for two runs that timed nothing" do
         observe_area(previous_run, "spec/models", 2, each: nil)
         observe_area(run, "spec/models", 3, each: nil, from: 50)
@@ -3299,6 +3504,7 @@ RSpec.describe SpecObservation do
       # different partition of the suite from the other three. Asserted through the shape that would
       # break first if the expression were re-derived here: the IMMEDIATE parent, with a root-level
       # file coalesced rather than dropped.
+      # @intent: { entity: "SpecObservation", action: "read one run's observation rows through scopes and rollups", behavior: "the runtime comparison assigns rows to areas exactly as the by-duration rollup does", layer: "unit" }
       it "areas the rows exactly as the by-duration rollup does" do
         observe(previous_run, duration: 1.0, line_number: 1, spec_file_path: "spec/models/a_spec.rb")
         observe(run, duration: 1.0, line_number: 1, spec_file_path: "spec/models/orders/a_spec.rb")
@@ -3333,6 +3539,7 @@ RSpec.describe SpecObservation do
 
       # The pivot itself: one row per FILE carrying both runs' summed seconds and the coverage each
       # was summed over, not one row per (file, run) pair left for a caller to fold together.
+      # @intent: { entity: "SpecObservation", action: "read one run's observation rows through scopes and rollups", behavior: "one row carries a file's previous and latest summed seconds side by side", layer: "unit" }
       it "puts both runs' summed seconds for a file on one row" do
         observe_file(previous_run, "spec/models/order_spec.rb", 2, each: 1.0)
         observe_file(previous_run, "spec/models/user_spec.rb", 1, each: 2.0, from: 10)
@@ -3351,6 +3558,7 @@ RSpec.describe SpecObservation do
       # them the other way round and puts the 30-second regression LAST — which at a cap is off the
       # list entirely. And the AREA runtime read cannot name either file: one grain up this is a
       # single `spec/models` row.
+      # @intent: { entity: "SpecObservation", action: "read one run's observation rows through scopes and rollups", behavior: "a file that slowed down without a single new example still moves, showing the read measures time and not row counts", layer: "unit" }
       it "names a file that got slower without gaining a single example" do
         observe_file(previous_run, "spec/models/order_spec.rb", 2, each: 1.0)
         observe_file(previous_run, "spec/models/user_spec.rb", 1, each: 0.1, from: 20)
@@ -3373,6 +3581,7 @@ RSpec.describe SpecObservation do
 
       # The other direction of the same independence: four fast examples where one slow one used to
       # be is a GAIN of three examples and a LOSS of nine seconds.
+      # @intent: { entity: "SpecObservation", action: "read one run's observation rows through scopes and rollups", behavior: "a file that gained examples yet lost time reports both facts at once", layer: "unit" }
       it "reports a file that gained examples and lost time" do
         observe_file(previous_run, "spec/models/order_spec.rb", 1, each: 10.0)
         observe_file(run, "spec/models/order_spec.rb", 4, each: 0.25, from: 20)
@@ -3386,6 +3595,7 @@ RSpec.describe SpecObservation do
       # signed ranking puts every speedup below every slowdown and off the end of the cap. Asserted
       # at `limit: 1` as well, so the claim is about which file SURVIVES the cap rather than only
       # about the order two surviving rows sit in.
+      # @intent: { entity: "SpecObservation", action: "read one run's observation rows through scopes and rollups", behavior: "files are ranked by absolute runtime movement so a speedup outranks a smaller slowdown", layer: "unit" }
       it "ranks by absolute movement, so a speedup outranks a smaller slowdown" do
         observe_file(previous_run, "spec/models/legacy_spec.rb", 1, each: 12.0)
         observe_file(previous_run, "spec/models/order_spec.rb", 1, each: 1.0, from: 20)
@@ -3403,6 +3613,7 @@ RSpec.describe SpecObservation do
       # one file that appeared and one that vanished carrying the same seconds. One rung up this is a
       # single `±0` row and the reader is told the panel cannot tell a relocation from a coincidence;
       # here both operands are on the page.
+      # @intent: { entity: "SpecObservation", action: "read one run's observation rows through scopes and rollups", behavior: "a renamed file shows as one row nil-then-seconds beside one seconds-then-nil, never as two deltas", layer: "unit" }
       it "shows a rename as one file at nil-then-seconds beside one at seconds-then-nil" do
         observe_file(previous_run, "spec/models/legacy_user_spec.rb", 2, each: 3.0)
         observe_file(run, "spec/models/user_spec.rb", 2, each: 3.0, from: 20)
@@ -3420,6 +3631,7 @@ RSpec.describe SpecObservation do
       # two above. Both runs RAN `order_spec.rb`; the latest sent no durations for it. `SUM` over
       # nothing is NULL and NOT zero, and both RECORDED counts are real on both sides, which is what
       # lets the caller say "the telemetry went quiet" rather than "this file now takes no time".
+      # @intent: { entity: "SpecObservation", action: "read one run's observation rows through scopes and rollups", behavior: "a file only one run timed keeps its recorded count while its sum reads nil, keeping measurement and timing apart", layer: "unit" }
       it "reads a real recorded count with a nil sum for a file only one run timed" do
         observe_file(previous_run, "spec/models/order_spec.rb", 2, each: 4.0)
         observe_file(run, "spec/models/order_spec.rb", 3, each: nil, from: 20)
@@ -3431,6 +3643,7 @@ RSpec.describe SpecObservation do
       # The same absence one step further: rows on both sides, timings on neither. Real groups, real
       # recorded counts, nil sums and zero timed counts — never an empty read, which is the state a
       # caller must be able to tell apart from "neither run recorded anything here".
+      # @intent: { entity: "SpecObservation", action: "read one run's observation rows through scopes and rollups", behavior: "a file neither run timed returns real rows carrying nil sums rather than no rows at all", layer: "unit" }
       it "reads real groups with nil sums for a file neither run timed" do
         observe_file(previous_run, "spec/models/order_spec.rb", 2, each: nil)
         observe_file(run, "spec/models/order_spec.rb", 3, each: nil, from: 20)
@@ -3443,6 +3656,7 @@ RSpec.describe SpecObservation do
       # and `DESC` alone is NULLS FIRST — which would name the file NOBODY MEASURED the biggest mover
       # in the area and put it at the head of a list about slowdowns. Asserted with a real mover
       # present, so the claim is about where the NULL row sorts relative to a row that moved.
+      # @intent: { entity: "SpecObservation", action: "read one run's observation rows through scopes and rollups", behavior: "a file with an absent side sorts below every comparable file instead of among them", layer: "unit" }
       it "sorts a file it cannot compare below every file it can" do
         observe_file(previous_run, "spec/models/order_spec.rb", 1, each: 1.0)
         observe_file(previous_run, "spec/models/ghost_spec.rb", 1, each: nil, from: 20)
@@ -3456,6 +3670,7 @@ RSpec.describe SpecObservation do
       # The tie-break, which is the half of the ordering a client is told it can reproduce: two files
       # that moved by the same absolute seconds are ordered by PATH, not by whichever the aggregate
       # happened to emit first.
+      # @intent: { entity: "SpecObservation", action: "read one run's observation rows through scopes and rollups", behavior: "files with equal movement are broken by path so the ordering is deterministic", layer: "unit" }
       it "breaks a tie on equal movement by path" do
         observe_file(previous_run, "spec/models/z_spec.rb", 1, each: 5.0)
         observe_file(previous_run, "spec/models/a_spec.rb", 1, each: 1.0, from: 20)
@@ -3470,6 +3685,7 @@ RSpec.describe SpecObservation do
       # `.file_growth_between` pins, and it has to be pinned separately here because a second
       # hand-copy of the area expression is exactly what would drift. A subtree file must NOT appear
       # under its parent's ask, and the parent's ask must not appear under the subtree's.
+      # @intent: { entity: "SpecObservation", action: "read one run's observation rows through scopes and rollups", behavior: "the single-area runtime comparison narrows to that area exactly and never to its subtree", layer: "unit" }
       it "narrows to one area exactly, and never to its subtree" do
         observe_file(previous_run, "spec/models/order_spec.rb", 1, each: 1.0)
         observe_file(previous_run, "spec/models/orders/refund_spec.rb", 1, each: 1.0, from: 20)
@@ -3486,6 +3702,7 @@ RSpec.describe SpecObservation do
       # A root-level file is COALESCED into `"."` rather than dropped, which is the same area key
       # every other rollup on this table uses — so this read's areas cannot be a different partition
       # of the suite from the other three.
+      # @intent: { entity: "SpecObservation", action: "read one run's observation rows through scopes and rollups", behavior: "a root-level file is grouped the same way the by-duration rollup groups it", layer: "unit" }
       it "areas a root-level file as the by-duration rollup does" do
         observe_file(previous_run, "smoke_spec.rb", 1, each: 1.0)
         observe_file(run, "smoke_spec.rb", 1, each: 4.0, from: 20)
@@ -3498,6 +3715,7 @@ RSpec.describe SpecObservation do
       # of 5 files" without describing a different row set from the table under it. All five figures
       # are identical on every returned row and are the AREA's, and the assertion is made at two
       # different caps over one fixture so the figures cannot be `rows.size` in disguise.
+      # @intent: { entity: "SpecObservation", action: "read one run's observation rows through scopes and rollups", behavior: "the area's whole file and row population is counted before the limit applies", layer: "unit" }
       it "counts every file and every row in the area before the limit applies" do
         observe_file(previous_run, "spec/models/a_spec.rb", 2, each: 1.0)
         observe_file(previous_run, "spec/models/b_spec.rb", 2, each: 2.0, from: 20)
@@ -3524,6 +3742,7 @@ RSpec.describe SpecObservation do
       # The AREA's totals and never the RUN's — the hazard `.file_growth_between` states and which is
       # doubled here, because there are two pairs of them. Rows outside the asked-for area move both
       # the suite's recorded and its timed totals and must move neither of these.
+      # @intent: { entity: "SpecObservation", action: "read one run's observation rows through scopes and rollups", behavior: "the totals are counted only over the asked-for area's rows", layer: "unit" }
       it "counts only the asked-for area's rows in its totals" do
         observe_file(previous_run, "spec/models/order_spec.rb", 2, each: 1.0)
         observe_file(previous_run, "spec/services/payment_spec.rb", 9, each: 1.0, from: 20)
@@ -3537,6 +3756,7 @@ RSpec.describe SpecObservation do
       # An area neither run recorded is an EMPTY READ and not an error — a stale bookmark, a typo, a
       # directory deleted since. A group exists here if and only if a row does, which is what lets
       # the caller detect this state without a second count.
+      # @intent: { entity: "SpecObservation", action: "read one run's observation rows through scopes and rollups", behavior: "an area neither run recorded yields no rows at all", layer: "unit" }
       it "returns nothing at all for an area neither run recorded" do
         observe_file(previous_run, "spec/models/order_spec.rb", 2, each: 1.0)
         observe_file(run, "spec/models/order_spec.rb", 2, each: 2.0, from: 20)
@@ -3546,6 +3766,7 @@ RSpec.describe SpecObservation do
 
       # A third run's rows are not in this comparison. The read narrows on an `IN` list of exactly
       # two ids, and a suite with history either side of the pair must not leak into either operand.
+      # @intent: { entity: "SpecObservation", action: "read one run's observation rows through scopes and rollups", behavior: "the comparison reads only the two runs it was handed", layer: "unit" }
       it "reads only the two runs it was given" do
         other_run = create_test_run(repository: repository, commit_sha: "other99")
         observe_file(previous_run, "spec/models/order_spec.rb", 1, each: 1.0)
@@ -3558,6 +3779,7 @@ RSpec.describe SpecObservation do
     end
 
     describe "how a row states itself" do
+      # @intent: { entity: "SpecObservation", action: "read one run's observation rows through scopes and rollups", behavior: "an example's label comes from the name the client sent", layer: "unit" }
       it "labels itself by name" do
         row = observe(run, duration: 1.0, line_number: 12, name: "Invoice finalize locks the items")
 
@@ -3566,12 +3788,14 @@ RSpec.describe SpecObservation do
 
       # `name` is nullable — `Ingest::ObservationRecorder` writes it through `presence_of` — and a
       # blank label is a row the reader can neither identify nor go and find.
+      # @intent: { entity: "SpecObservation", action: "read one run's observation rows through scopes and rollups", behavior: "with no name from the client the label falls back to the example's definition site", layer: "unit" }
       it "falls back to its definition site where the client sent no name" do
         row = observe(run, duration: 1.0, line_number: 12, name: nil)
 
         expect(row.label).to eq("spec/a_spec.rb:12")
       end
 
+      # @intent: { entity: "SpecObservation", action: "read one run's observation rows through scopes and rollups", behavior: "a blank name is treated as absent so the fallback fires", layer: "unit" }
       it "treats a blank name as no name" do
         expect(observe(run, duration: 1.0, line_number: 12, name: "").label).to eq("spec/a_spec.rb:12")
       end
@@ -3579,6 +3803,7 @@ RSpec.describe SpecObservation do
       # `line_number` is the DEFINITION site's line, so the coordinate is built from `file_path`.
       # Pairing it with `spec_file_path` — the including file, different only for a shared example
       # group — would print two halves that come from different files.
+      # @intent: { entity: "SpecObservation", action: "read one run's observation rows through scopes and rollups", behavior: "the located file attribute resolves to the file the line number belongs to", layer: "unit" }
       it "locates itself by the file the line number belongs to" do
         row = observe(run, duration: 1.0, line_number: 7, file_path: "spec/support/shared.rb",
                            spec_file_path: "spec/models/invoice_spec.rb")
@@ -3588,26 +3813,31 @@ RSpec.describe SpecObservation do
 
       # `TestRun.humanized_seconds` rounds to a tenth, which renders a real 0.04s measurement as
       # "0.0s" — a measurement wearing the spelling of a zero, at the head of a "slowest" list.
+      # @intent: { entity: "SpecObservation", action: "read one run's observation rows through scopes and rollups", behavior: "a duration under a second formats with enough precision that a real measurement can never print as zero", layer: "unit" }
       it "renders a sub-minute duration at a precision that cannot print a real measurement as zero" do
         expect(observe(run, duration: 0.04, line_number: 1).duration_label).to eq("0.04s")
         expect(observe(run, duration: 12.5, line_number: 2).duration_label).to eq("12.50s")
       end
 
+      # @intent: { entity: "SpecObservation", action: "read one run's observation rows through scopes and rollups", behavior: "a duration below the formatting resolution is called out as such instead of printing 0.00s", layer: "unit" }
       it "says a duration is below its own resolution rather than printing a zero" do
         expect(observe(run, duration: 0.004, line_number: 1).duration_label).to eq("< 0.01s")
       end
 
       # A minute and over reads in the words this page already gives a run or a shard.
+      # @intent: { entity: "SpecObservation", action: "read one run's observation rows through scopes and rollups", behavior: "a duration of a minute or more uses the page's duration wording", layer: "unit" }
       it "hands a long example to the page's own duration wording" do
         expect(observe(run, duration: 252.0, line_number: 1).duration_label).to eq("4m 12s")
       end
 
+      # @intent: { entity: "SpecObservation", action: "read one run's observation rows through scopes and rollups", behavior: "an untimed row is reported as having no timing rather than formatting nil as zero seconds", layer: "unit" }
       it "says an untimed row reported nothing, rather than formatting a nil as zero" do
         expect(observe(run, duration: nil, line_number: 1).duration_label).to eq("not reported")
       end
 
       # The row half of the outcome disclosure. `outcome` is nullable and nothing platform-side
       # validates the string, so the cell quotes what arrived rather than interpreting it.
+      # @intent: { entity: "SpecObservation", action: "read one run's observation rows through scopes and rollups", behavior: "the outcome wording echoes the word CI itself reported", layer: "unit" }
       it "quotes the outcome CI reported, in CI's own word for it" do
         expect(observe(run, duration: 1.0, line_number: 1, outcome: "failed").outcome_label).to eq("failed")
         expect(observe(run, duration: 1.0, line_number: 2, outcome: "passed").outcome_label).to eq("passed")
@@ -3616,6 +3846,7 @@ RSpec.describe SpecObservation do
       # THE example this column exists for, and the `#duration_label` nil-guard wearing the worse
       # colour: "the client sent no outcome" made indistinguishable from "this test passed", on a
       # row that is in a "slowest" list and may have been slow because it was hanging.
+      # @intent: { entity: "SpecObservation", action: "read one run's observation rows through scopes and rollups", behavior: "a row with no outcome reads as reporting none and is not styled as a pass", layer: "unit" }
       it "says a row with no outcome reported none, and does not wear a pass's colour" do
         row = observe(run, duration: 1.0, line_number: 1, outcome: nil)
 
@@ -3625,6 +3856,7 @@ RSpec.describe SpecObservation do
                                                         outcome: "passed").outcome_tone)
       end
 
+      # @intent: { entity: "SpecObservation", action: "read one run's observation rows through scopes and rollups", behavior: "the three outcome names the producer is known to send are each toned appropriately", layer: "unit" }
       it "tones the three names the producer is known to send" do
         expect(observe(run, duration: 1.0, line_number: 1, outcome: "failed").outcome_tone).to eq(:error)
         expect(observe(run, duration: 1.0, line_number: 2, outcome: "pending").outcome_tone).to eq(:warning)
@@ -3634,6 +3866,7 @@ RSpec.describe SpecObservation do
       # Nothing platform-side validates this string — `Ingest::Payload` does not — so an
       # unrecognised value has to be echoed and left uncoloured. Folding it into the pass tone
       # would be the page asserting a verdict over a value nobody checked.
+      # @intent: { entity: "SpecObservation", action: "read one run's observation rows through scopes and rollups", behavior: "an unrecognized outcome is echoed verbatim without being coloured as a pass", layer: "unit" }
       it "echoes an outcome it does not recognise without colouring it as a pass" do
         row = observe(run, duration: 1.0, line_number: 1, outcome: "aborted")
 
@@ -3646,6 +3879,7 @@ RSpec.describe SpecObservation do
   # The coordinate identifies the *code*, and a table-driven loop or a shared example group puts
   # many examples on one. `spec_intents` carries a unique index on exactly that triple; repeating
   # it here would collapse the grain this table exists to hold.
+  # @intent: { entity: "SpecObservation", action: "read one run's observation rows through scopes and rollups", behavior: "no unique index exists on the location triple, so two examples on one line are both kept", layer: "unit" }
   it "carries no unique index on the location triple that collapses examples onto code" do
     location_indexes = ActiveRecord::Base.connection.indexes(:spec_observations).select do |index|
       index.unique && index.columns.sort == %w[file_path line_number repository_id]
@@ -3654,6 +3888,7 @@ RSpec.describe SpecObservation do
     expect(location_indexes).to be_empty
   end
 
+  # @intent: { entity: "SpecObservation", action: "read one run's observation rows through scopes and rollups", behavior: "uniqueness of example ids is scoped within a single run, matching what the client can actually claim", layer: "unit" }
   it "is unique only within one run, which is all the client claims for an example id" do
     unique = ActiveRecord::Base.connection.indexes(:spec_observations).select(&:unique)
 
@@ -3690,6 +3925,7 @@ RSpec.describe SpecObservation do
       end
     end
 
+    # @intent: { entity: "SpecObservation", action: "read one run's observation rows through scopes and rollups", behavior: "the new reading engine and the old one return the same row-for-row verdicts on which descriptions are readable", layer: "unit" }
     it "agrees, row for row, on which descriptions yield a reading" do
       observe_corpus
 
@@ -3703,6 +3939,7 @@ RSpec.describe SpecObservation do
 
     # The verdicts themselves, not merely that the two engines agree on them — two engines can agree
     # by both being wrong, and the corpus is what says which answer is right.
+    # @intent: { entity: "SpecObservation", action: "read one run's observation rows through scopes and rollups", behavior: "every corpus entry the reading engine claims readable parses exactly as the corpus's own expectation states", layer: "unit" }
     it "reads the corpus the way the corpus says it must" do
       observe_corpus
 
@@ -3716,6 +3953,7 @@ RSpec.describe SpecObservation do
     # unconditionally — the same precedence `Ingest::SpecSignal` applies one grain down — and
     # `#derived_intent` is nil for it, so no surface can put the platform's guess beside the author's
     # declaration as though the two were comparable evidence.
+    # @intent: { entity: "SpecObservation", action: "read one run's observation rows through scopes and rollups", behavior: "an annotated row is treated as authored and the engine derives no intent for it", layer: "unit" }
     it "reads an annotated row as authored and offers no derived intent for it" do
       row = described_class.create!(
         test_run: run, repository: repository, example_id: "./spec/a_spec.rb[1:1]",
@@ -3733,6 +3971,7 @@ RSpec.describe SpecObservation do
 
     # A row that carries no description at all — `name` is nullable, and `NULL ~ '…'` is NULL rather
     # than false, which a bare `WHEN` would fall through on but which is worth not relying on.
+    # @intent: { entity: "SpecObservation", action: "read one run's observation rows through scopes and rollups", behavior: "a row with no description is unreadable in both the old and new engines", layer: "unit" }
     it "reads a row with no description as unreadable in both engines" do
       row = described_class.create!(
         test_run: run, repository: repository, example_id: "./spec/a_spec.rb[1:1]",
@@ -3760,6 +3999,7 @@ RSpec.describe SpecObservation do
 
     # The three states, over one run, from one aggregate — and `recorded` beside them so nothing has
     # to divide by the run's counters, which count a different population.
+    # @intent: { entity: "SpecObservation", action: "read one run's observation rows through scopes and rollups", behavior: "a run's rows split into the three annotation statuses with the population they were counted from disclosed", layer: "unit" }
     it "splits the run's rows three ways and carries the population they were counted from" do
       observe(name: "Invoice#finalize locks the line items once finalized", status: "annotated",
               line_number: 1, intent_entity: "Invoice", intent_action: "finalize",
@@ -3782,6 +4022,7 @@ RSpec.describe SpecObservation do
     # reports them as derived — and NOTHING here can move `annotated_specs_count`, so the run still
     # reads 0% annotated. A derived reading cannot disguise a client failure as a healthy suite,
     # because the two figures answer different questions and only one of them moved.
+    # @intent: { entity: "SpecObservation", action: "read one run's observation rows through scopes and rollups", behavior: "a run whose scanner failed cannot be made to look annotated no matter what its rows say", layer: "unit" }
     it "cannot make a run whose scanner failed look annotated" do
       run.update!(total_specs_count: 2, annotated_specs_count: 0)
       observe(name: "Order#settle clears the outstanding balance", line_number: 1)
@@ -3794,6 +4035,7 @@ RSpec.describe SpecObservation do
 
     # A run that stored no per-example rows is three zeros AND `recorded: 0`, which is the pair that
     # tells "nobody sent the detail" from "nothing is readable". Three zeros alone cannot.
+    # @intent: { entity: "SpecObservation", action: "read one run's observation rows through scopes and rollups", behavior: "a run with no rows answers unrecorded rather than reading as fully readable", layer: "unit" }
     it "answers a run with no rows with an unrecorded reading rather than a readable one" do
       readings = described_class.reading_counts_in(run)
 
@@ -3822,6 +4064,7 @@ RSpec.describe SpecObservation do
   # Asserted on the hash `#signal` BUILDS rather than only on the text that comes out, because the
   # text assertion alone is satisfied by `SpecSignal` ignoring an extra key it was handed — which
   # would leave this method quietly passing the layer across a boundary it has no business crossing.
+  # @intent: { entity: "SpecObservation", action: "read one run's observation rows through scopes and rollups", behavior: "a row's textual representation is built from the intent triple and name, and never mentions the stored layer", layer: "unit" }
   it "represents a row by its intent triple and its name, never by the layer stored beside them" do
     repository = create_repository
     run = create_test_run(repository: repository)
