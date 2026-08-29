@@ -117,6 +117,7 @@ RSpec.describe "GET /api/v1/repository — latest_run.spec_file_examples", type:
     # already serves, and the FILE's two population figures sit beside them. The array is asserted
     # as a SEQUENCE — `eq`, not `match_array` — because "slowest first, untimed last" is half of
     # what this key promises, and the untimed row's position is the half a set comparison drops.
+    # @intent: { entity: "SpecFileExamples", action: "rank the file's examples", behavior: "rows for the asked-for file are ordered slowest first with untimed examples trailing", layer: "request" }
     it "lists that file's examples slowest-first, untimed last, with what each row is" do
       expect(block(query: { spec_file: TARGET_FILE })).to eq(
         "path" => TARGET_FILE,
@@ -151,6 +152,7 @@ RSpec.describe "GET /api/v1/repository — latest_run.spec_file_examples", type:
     # `eq` above — the pattern the sibling drill-in's contract example sets, and for the same
     # reason: a guard whose stated subject IS the key set survives a fixture whose numbers change,
     # and says out loud what a new key owes this block before it ships.
+    # @intent: { entity: "SpecFileExamples", action: "pin the keys", behavior: "the block serves exactly the key set this contract enumerates and nothing beyond it", layer: "request" }
     it "serves exactly the spec_file_examples keys this contract pins" do
       served = block(query: { spec_file: TARGET_FILE })
 
@@ -166,6 +168,7 @@ RSpec.describe "GET /api/v1/repository — latest_run.spec_file_examples", type:
     # because the tempting repair — folding the serialized rows to re-derive it — would compute the
     # PAGE's figure under the file's name, which is what every count on this block is arranged to
     # avoid. The `eq` above would go red on it too; this says WHY it must.
+    # @intent: { entity: "SpecFileExamples", action: "invent no coverage figure", behavior: "no outcome-coverage number appears that the underlying object does not itself count", layer: "request" }
     it "invents no outcome-coverage figure the object it reads does not count" do
       expect(block(query: { spec_file: TARGET_FILE })).not_to have_key("reported_outcome_count")
       expect(SpecFileExamples.instance_methods).not_to include(:reported_outcome_count)
@@ -179,6 +182,7 @@ RSpec.describe "GET /api/v1/repository — latest_run.spec_file_examples", type:
     # here. Every figure is taken off the RESPONSE, so it is the endpoint's own blocks disagreeing:
     # the run-wide slowest ten hold no row of the opened file, and the by-file ranking names the
     # file without listing anything inside it.
+    # @intent: { entity: "SpecFileExamples", action: "list file-only examples", behavior: "examples the run-wide slowest ranking holds none of still appear here", layer: "request" }
     it "lists examples the run-wide slowest ranking holds none of" do
       body = get_repository(query: { spec_file: TARGET_FILE })["latest_run"]
 
@@ -196,6 +200,7 @@ RSpec.describe "GET /api/v1/repository — latest_run.spec_file_examples", type:
 
     # The row that separates "the file an example is IN" from "the file that RAN it". A serializer
     # serving one path under both names satisfies every other example in this file and fails here.
+    # @intent: { entity: "SpecFileExamples", action: "separate definition from inclusion", behavior: "a shared-example row names both the defining file and the including file distinctly", layer: "request" }
     it "names the definition site and the including file apart, for a shared example group" do
       shared = block(query: { spec_file: TARGET_FILE })["rows"].find { it["line_number"] == 7 }
 
@@ -207,6 +212,7 @@ RSpec.describe "GET /api/v1/repository — latest_run.spec_file_examples", type:
     # The untimed row is LISTED rather than excluded, and its nil is served as one. A `0.0` here
     # would assert an example that cost nothing, which is a measurement nobody took — the same
     # distinction the "not reported" the panel prints exists to keep.
+    # @intent: { entity: "SpecFileExamples", action: "null untimed durations", behavior: "an example that reported no duration gets null rather than a coerced zero", layer: "request" }
     it "serves a null duration for an example that reported none, never a zero" do
       rows = block(query: { spec_file: TARGET_FILE })["rows"]
 
@@ -219,6 +225,7 @@ RSpec.describe "GET /api/v1/repository — latest_run.spec_file_examples", type:
     # `SpecObservation#duration_label`, `#outcome_label` and `SpecFileExamples#coverage_label` are
     # each one call away in the object this reads from, and any of them would still satisfy the
     # assertions above if the fixture's values happened to render similarly.
+    # @intent: { entity: "SpecFileExamples", action: "serve raw values", behavior: "numbers and machine words arrive directly, never the panel's display labels", layer: "request" }
     it "serves numbers and words, never the panel's labels" do
       served = block(query: { spec_file: TARGET_FILE })
 
@@ -231,6 +238,7 @@ RSpec.describe "GET /api/v1/repository — latest_run.spec_file_examples", type:
 
     # ONE file, not the area it sits in — the rung above this one is a different key with a
     # different answer, and both are on the same response.
+    # @intent: { entity: "SpecFileExamples", action: "narrow to the file", behavior: "the ask narrows to the named file only and never to its containing area", layer: "request" }
     it "narrows to the file asked for and not to its area" do
       body = get_repository(query: { spec_file: TARGET_FILE, spec_directory: "spec/models" })["latest_run"]
 
@@ -248,6 +256,7 @@ RSpec.describe "GET /api/v1/repository — latest_run.spec_file_examples", type:
   # already refuses for an unknown `?branch=`, where the ask is RESTATED beside a zero rather than
   # answered with somebody else's rows.
   describe "the two ways this key can be empty" do
+    # @intent: { entity: "SpecFileExamples", action: "null the block when unasked", behavior: "with no spec_file parameter the key stays present holding null", layer: "request" }
     it "is null — with the key present — when no file was asked for" do
       body = get_repository
 
@@ -263,6 +272,7 @@ RSpec.describe "GET /api/v1/repository — latest_run.spec_file_examples", type:
 
     # AC2. A file the run recorded nothing for is an ordinary answer and never an error: the ask is
     # restated, the list is empty, both counts are an honest zero, and the status is 200.
+    # @intent: { entity: "SpecFileExamples", action: "empty block for silent files", behavior: "a file asked for that the run never recorded answers a present block with zero rows naming the file", layer: "request" }
     it "is a present block with no rows, naming the file, when the run recorded nothing there" do
       served = block(query: { spec_file: "spec/models/ghost_spec.rb" })
 
@@ -275,6 +285,7 @@ RSpec.describe "GET /api/v1/repository — latest_run.spec_file_examples", type:
     # The pair, side by side, which is the assertion neither example above can make on its own: a
     # client can tell the two apart WITHOUT knowing what it sent, because the second never wears the
     # first's spelling.
+    # @intent: { entity: "SpecFileExamples", action: "distinguish the two empties", behavior: "the unasked null and the asked-but-empty block are spelled differently", layer: "request" }
     it "spells the two differently, so a client can tell which one it got" do
       expect(block).to be_nil
       expect(block(query: { spec_file: "spec/models/ghost_spec.rb" })).not_to be_nil
@@ -285,6 +296,7 @@ RSpec.describe "GET /api/v1/repository — latest_run.spec_file_examples", type:
     # A near miss is one of the ordinary ways to arrive at the empty answer — a stale bookmark, a
     # file renamed since, a typed path with a character missing — and none of them is an error or a
     # prefix match onto the neighbouring file.
+    # @intent: { entity: "SpecFileExamples", action: "refuse prefix matching", behavior: "a typo answers the empty block rather than an error or a fuzzy match", layer: "request" }
     it "answers a typo with the empty block rather than an error or a prefix match" do
       served = block(query: { spec_file: "spec/models/order_spec" })
 
@@ -296,6 +308,7 @@ RSpec.describe "GET /api/v1/repository — latest_run.spec_file_examples", type:
     # There is no `latest_run` at all for a repository whose CI has never reported, so the ask
     # cannot conjure one — the rule the whole block follows, restated here because this is one of
     # the three keys on it a client can ask for by name.
+    # @intent: { entity: "SpecFileExamples", action: "omit before first run", behavior: "a repository with no recorded runs serves no spec_file_examples block at all", layer: "request" }
     it "serves no block at all when CI has never reported" do
       silent = create_repository(user: @user, github_full_name: "acme/never-ran")
 
@@ -323,6 +336,7 @@ RSpec.describe "GET /api/v1/repository — latest_run.spec_file_examples", type:
 
     # THE positive path, beside the group, which is what separates "the guard read the parameter"
     # from "the endpoint ignores this parameter entirely".
+    # @intent: { entity: "SpecFileExamples", action: "honour the parameter", behavior: "a spec_file that is a real path narrows the block to that file", layer: "request" }
     it "honours a spec_file that IS a path" do
       expect(block(query: { spec_file: TARGET_FILE })["rows"].length).to eq(4)
     end
@@ -330,6 +344,7 @@ RSpec.describe "GET /api/v1/repository — latest_run.spec_file_examples", type:
     # An empty ask is no ask, not a comparison against the empty string: `spec_file_path` is NOT
     # NULL and `Ingest::ObservationRecorder#attributes` falls back to `file_path`, so no row can
     # carry a blank and an empty ask would open a block guaranteed to hold nothing.
+    # @intent: { entity: "SpecFileExamples", action: "ignore the empty ask", behavior: "an empty spec_file behaves exactly like the parameter being absent", layer: "request" }
     it "treats an empty spec_file as no ask" do
       expect(block(query: { spec_file: "" })).to be_nil
     end
@@ -340,6 +355,7 @@ RSpec.describe "GET /api/v1/repository — latest_run.spec_file_examples", type:
   # anyway. Here the gate is the ASK and it is decided before any query is issued, so a client that
   # never sends the parameter pays nothing at all for the key's existence.
   describe "what the drill-in costs the endpoint" do
+    # @intent: { entity: "SpecFileExamples", action: "cost one query", behavior: "asking for the block adds exactly one query and none when unasked", layer: "request" }
     it "adds exactly one query when asked, and none when not" do
       # Warmed first, on the precedent the sibling cost blocks set: the very first request of an
       # example pays for state a second one does not — an API key's first use is recorded — and a
@@ -362,6 +378,7 @@ RSpec.describe "GET /api/v1/repository — latest_run.spec_file_examples", type:
     # partition it belongs to come from spec/support/observation_grain_reads.rb, which is also where
     # the argument for matching every grain POSITIVELY is made — and where this grain's pattern is
     # separated from the per-example ranking's, which also ranks this table by duration.
+    # @intent: { entity: "SpecFileExamples", action: "read only its grain", behavior: "spec_observations is read once for this grain while sibling grains' counts stay unchanged", layer: "request" }
     it "reads spec_observations once for its own grain, and leaves every other grain alone" do
       area, file, example, description, flakiness, growth, directory_files, file_examples =
         observation_reads_by_grain { get_repository(query: { spec_file: TARGET_FILE }) }
@@ -389,6 +406,7 @@ RSpec.describe "GET /api/v1/repository — latest_run.spec_file_examples", type:
     # The two drill-ins compose without either being classified as the other — the pairing that the
     # partition's own separation of these patterns exists to make assertable, and the shape neither
     # single-ask block above can speak for. Eight reads: the six, plus one per ask.
+    # @intent: { entity: "SpecFileExamples", action: "keep drill-ins separate", behavior: "both drill-ins asked at once narrow to their own grains without cross-narrowing", layer: "request" }
     it "keeps the two drill-ins in their own grains when both are asked for at once" do
       query = { spec_file: TARGET_FILE, spec_directory: "spec/models" }
 
@@ -413,6 +431,7 @@ RSpec.describe "GET /api/v1/repository — latest_run.spec_file_examples", type:
     # of 4 examples and one of 300 cost the same single query. A serializer that fetched the rows
     # and counted them in Ruby, or that took a second pass for the file's population, reads as more
     # here and as more again as the suite grows.
+    # @intent: { entity: "SpecFileExamples", action: "scale reads flat", behavior: "one spec_observations read serves a file however many examples it holds", layer: "request" }
     it "reads it once however many examples the file holds" do
       big = create_repository(user: @user, github_full_name: "acme/wide-file")
       ingest(big, Array.new(300) do |index|
@@ -449,6 +468,7 @@ RSpec.describe "GET /api/v1/repository — latest_run.spec_file_examples", type:
       repo
     end
 
+    # @intent: { entity: "SpecFileExamples", action: "cap rows and report totals", behavior: "at most the limit's rows are served while the file's full example count is still stated", layer: "request" }
     it "serves the limit's worth of rows, and says how many examples the file holds" do
       served = block(key: capped.api_keys.create!, query: { spec_file: TARGET_FILE })
 
@@ -467,6 +487,7 @@ RSpec.describe "GET /api/v1/repository — latest_run.spec_file_examples", type:
     # so a serializer that reached for either would still serve a plausible-looking page. Asserted
     # as an inequality between the constants rather than against the literal 50, which is the form
     # that stays true if the cap is ever retuned.
+    # @intent: { entity: "SpecFileExamples", action: "use its own cap", behavior: "the row cap comes from the file grain's constant and not a neighbouring one", layer: "request" }
     it "is capped by the file grain's own constant, not by a neighbouring one" do
       expect(SpecObservation::FILE_EXAMPLES_LIMIT)
         .not_to eq(SpecObservation::SPEC_DIRECTORY_FILES_LIMIT)
@@ -489,6 +510,7 @@ RSpec.describe "GET /api/v1/repository — latest_run.spec_file_examples", type:
       repo
     end
 
+    # @intent: { entity: "SpecFileExamples", action: "null silent durations", behavior: "a file where nothing was timed serves null durations plus a flag rather than zeros", layer: "request" }
     it "serves null durations rather than zeros, and says the file timed nothing" do
       served = block(key: untimed.api_keys.create!, query: { spec_file: TARGET_FILE })
 
@@ -517,6 +539,7 @@ RSpec.describe "GET /api/v1/repository — latest_run.spec_file_examples", type:
              commit_sha: "feedfacecafe0002", branch: "feature/x")
     end
 
+    # @intent: { entity: "SpecFileExamples", action: "honour the branch ask", behavior: "the block describes the latest run on the named branch, narrowing history independently", layer: "request" }
     it "describes the latest run under a branch ask, and narrows history independently" do
       body = get_repository(query: { spec_file: TARGET_FILE, branch: "main" })
 
@@ -530,6 +553,7 @@ RSpec.describe "GET /api/v1/repository — latest_run.spec_file_examples", type:
       expect(body["history"].map { it["commit_sha"] }).to eq(["feedfacecafe0001"])
     end
 
+    # @intent: { entity: "SpecFileExamples", action: "be branch-invariant", behavior: "the served drill-in body is the same with and without a branch ask", layer: "request" }
     it "serves the same drill-in with and without the branch ask" do
       with_branch = block(query: { spec_file: TARGET_FILE, branch: "main" })
 
@@ -539,6 +563,7 @@ RSpec.describe "GET /api/v1/repository — latest_run.spec_file_examples", type:
 
     # The two drill-ins are two keys with two answers on one response, and neither touches the
     # other: the area key still lists the area's FILES while the file key lists the file's EXAMPLES.
+    # @intent: { entity: "SpecFileExamples", action: "compose drill-ins", behavior: "both drill-ins answer together without either narrowing the other", layer: "request" }
     it "answers both drill-ins at once without either narrowing the other" do
       body = get_repository(query: { spec_file: TARGET_FILE, spec_directory: "spec/models" })
 
@@ -569,6 +594,7 @@ RSpec.describe "GET /api/v1/repository — latest_run.spec_file_examples", type:
     # the half the `NULLS LAST` in the read exists to get right. Every figure comes off the object
     # rather than off the fixture's numbers: two independent hand-written expectations would both
     # still pass if the endpoint started reading a different run or a different file.
+    # @intent: { entity: "SpecFileExamples", action: "agree with the panel", behavior: "the API rows and their order are the same ones the rendered panel draws from", layer: "request" }
     it "serves the same rows, in the same order, that the panel renders from" do
       served = block(query: { spec_file: TARGET_FILE })
       shown = SpecFileExamples.for(repository.latest_test_run, TARGET_FILE)
@@ -589,6 +615,7 @@ RSpec.describe "GET /api/v1/repository — latest_run.spec_file_examples", type:
     # — the duration through `SpecObservation.humanized_duration`, the seam every grain on that page
     # renders through, rather than through a hand-rolled `"%.2fs"` that would be a second definition
     # of the spelling.
+    # @intent: { entity: "SpecFileExamples", action: "match printed operands", behavior: "the block names the same examples with the same operands the panel prints", layer: "request" }
     it "names the same examples, with the same operands, as the panel prints" do
       served = block(query: { spec_file: TARGET_FILE })
       get repository_path(repository, spec_file: TARGET_FILE)

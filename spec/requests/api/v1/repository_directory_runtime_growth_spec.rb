@@ -112,6 +112,7 @@ RSpec.describe "GET /api/v1/repository — directory_runtime_growth", type: :req
 
     # No `?branch=`, no `?spec_directory=`, nothing. The dashboard answers this question with no
     # parameter and this endpoint had no key for it at all.
+    # @intent: { entity: "repository directory_runtime_growth block", action: "default without a branch", behavior: "the block is served on a request that names no branch at all", layer: "request" }
     it "carries runtime growth on a request that names no branch at all" do
       window, block = blocks
 
@@ -124,6 +125,7 @@ RSpec.describe "GET /api/v1/repository — directory_runtime_growth", type: :req
     # The operands the panel's labels are built from, and nothing that has been worded. BOTH
     # operands and not only the change: a signed duration alone cannot say whether an area of four
     # seconds gained twelve or an area of four hundred did.
+    # @intent: { entity: "repository directory_runtime_growth block", action: "serve area operands", behavior: "each area carries both summed durations, their difference, and the four comparison states around it", layer: "request" }
     it "serves each area's two summed operands, their difference and the four states of it" do
       _window, block = blocks
 
@@ -148,6 +150,7 @@ RSpec.describe "GET /api/v1/repository — directory_runtime_growth", type: :req
     # `change` above is signed in. Both halves flip together if the two runs are handed to
     # `SpecDirectoryRuntimeGrowth.for` in the wrong order, so both are stated: swapping the arguments
     # turns `spec/models` from `+5` into `-5` AND swaps these two shas.
+    # @intent: { entity: "repository directory_runtime_growth block", action: "anchor on latest run", behavior: "the comparison anchors on the newest run and baselines on the one before it, so change signs are truthful", layer: "request" }
     it "anchors on the latest run and baselines on the previous one, so every change carries its true sign" do
       window, block = blocks
 
@@ -164,6 +167,7 @@ RSpec.describe "GET /api/v1/repository — directory_runtime_growth", type: :req
     # rather than as a claim in a comment. The subtraction needs the PREVIOUS run's per-area seconds,
     # and this body has no such figure anywhere: `latest_run.spec_directories` is the LATEST run
     # only, and the only cross-run duration served is one number for the whole run.
+    # @intent: { entity: "repository directory_runtime_growth block", action: "compute from per-area sums", behavior: "the served figures are per-area sums that no rearrangement of the neighbouring run totals can reproduce", layer: "request" }
     it "reaches figures no arrangement of the keys beside it can produce" do
       body = get_repository
 
@@ -182,6 +186,7 @@ RSpec.describe "GET /api/v1/repository — directory_runtime_growth", type: :req
     # `previous_label`, `latest_label`, `coverage_label`, `change_label` and `change_reading` —
     # typographic and screen-reader spellings of these same numbers. A client served those would be
     # splitting strings and stripping glyphs to compare two rows.
+    # @intent: { entity: "repository directory_runtime_growth block", action: "serve raw numbers", behavior: "the payload carries no presenter wording or typeset glyphs, only the raw values", layer: "request" }
     it "serves no value the panel has worded, and no glyph it has typeset" do
       window, block = blocks
 
@@ -198,6 +203,7 @@ RSpec.describe "GET /api/v1/repository — directory_runtime_growth", type: :req
     # ⭐ CRITERION 6 — the cap's operands, so "am I seeing all of them" is answerable.
     # `directory_count` is counted BEFORE the `LIMIT` applies (a window function runs first), and
     # `limit` is read off the constant rather than restated.
+    # @intent: { entity: "repository directory_runtime_growth block", action: "disclose coverage", behavior: "the response names the areas covered, whether the list was cut, and the bound that cut it", layer: "request" }
     it "discloses the areas it covered, whether the list was cut, and the bound that cut it" do
       _window, block = blocks
 
@@ -210,6 +216,7 @@ RSpec.describe "GET /api/v1/repository — directory_runtime_growth", type: :req
     # how many of those carried a TIMING. "1,204 examples reported a timing" is 1,204 of something
     # unstated, and the whole reading this block turns on is whether an area got faster or merely
     # went quiet.
+    # @intent: { entity: "repository directory_runtime_growth block", action: "serve both count grains", behavior: "both sides of the comparison report both count grains, not merely the recorded pair", layer: "request" }
     it "serves both count grains on both sides, and not only the recorded pair" do
       _window, block = blocks
 
@@ -224,6 +231,7 @@ RSpec.describe "GET /api/v1/repository — directory_runtime_growth", type: :req
     # `RETIMED_DIRECTORIES_LIMIT` is a DIFFERENT constant from the count sibling's
     # `MOVED_DIRECTORIES_LIMIT`, and they hold the same number today. Asserted by NAME on both sides
     # so a later change to one does not silently rebaseline the other's block through this file.
+    # @intent: { entity: "repository directory_runtime_growth block", action: "use its own bound", behavior: "the cap is read from this block own constant, not borrowed from the count block one", layer: "request" }
     it "reads its bound off its own constant and not off the count block's" do
       _window, block = blocks
 
@@ -256,6 +264,7 @@ RSpec.describe "GET /api/v1/repository — directory_runtime_growth", type: :req
                    commit_sha: "latest000001", at: 10.days.ago)
     end
 
+    # @intent: { entity: "repository directory_runtime_growth block", action: "differ from the count grain", behavior: "an area may appear here while being absent from directory_run_growth, because the grains rank differently", layer: "request" }
     it "appears in directory_runtime_growth and is absent from directory_run_growth" do
       body = get_repository
 
@@ -271,6 +280,7 @@ RSpec.describe "GET /api/v1/repository — directory_runtime_growth", type: :req
     # The absence above is a REAL absence and not an empty sibling: the count block did answer, over
     # the same two runs, and filled its cap with areas that moved by one example each while the area
     # that lost eight seconds fell off it.
+    # @intent: { entity: "repository directory_runtime_growth block", action: "rank by movement", behavior: "absence from the count grain is explained by ranking, not by an empty count block", layer: "request" }
     it "is absent because the count grain ranks it last, not because the count block is empty" do
       body = get_repository
       count_block = body["directory_run_growth"]
@@ -285,6 +295,7 @@ RSpec.describe "GET /api/v1/repository — directory_runtime_growth", type: :req
 
     # And the row the runtime block serves for it says the movement was TIME and not SIZE: the two
     # operands are one example's duration on each side, and the area is neither new nor removed.
+    # @intent: { entity: "repository directory_runtime_growth block", action: "serve movement operands", behavior: "a movement row carries both operands even though no example count changed on either side", layer: "request" }
     it "serves the movement with both operands, and no example was added on either side" do
       _window, block = blocks
 
@@ -297,6 +308,7 @@ RSpec.describe "GET /api/v1/repository — directory_runtime_growth", type: :req
   end
 
   describe "a comparison covering more areas than the block lists" do
+    # @intent: { entity: "repository directory_runtime_growth block", action: "disclose the cap", behavior: "the response states the limit, the total it was applied to, and the bound that produced the limit", layer: "request" }
     it "discloses the cap, the total it was applied to, and the bound that produced it" do
       areas = Array.new(SpecObservation::RETIMED_DIRECTORIES_LIMIT + 2) { |index| "spec/area#{index}" }
       ingest_areas(areas.index_with { [0.25] }, commit_sha: "previous0001", at: 20.days.ago)
@@ -328,6 +340,7 @@ RSpec.describe "GET /api/v1/repository — directory_runtime_growth", type: :req
 
     # BOTH RUNS RAN IT AND ONE DID NOT TIME IT — the absence about the REPORTING rather than about
     # the area existing. This is the row the panel prints as "Not timed".
+    # @intent: { entity: "repository directory_runtime_growth block", action: "mark timing gaps", behavior: "a timing gap yields change null, comparable false and timing_gap true, never a zero change", layer: "request" }
     it "serves a timing gap as change: null, comparable: false, timing_gap: true — never change: 0" do
       _window, block = blocks
 
@@ -344,6 +357,7 @@ RSpec.describe "GET /api/v1/repository — directory_runtime_growth", type: :req
     # AN AREA ONLY ONE RUN HAS is a different fact from a timing gap, and it is `timing_gap: false` —
     # its cell already says "New area" / "Area removed", and a sentence about a run that "reported no
     # timing" would be describing a different row from the one the reader is looking at.
+    # @intent: { entity: "repository directory_runtime_growth block", action: "separate new, removed, untimed", behavior: "an area that is new or removed is told apart from one that merely went untimed", layer: "request" }
     it "tells an area that is new or removed apart from one that went untimed" do
       _window, block = blocks
 
@@ -365,6 +379,7 @@ RSpec.describe "GET /api/v1/repository — directory_runtime_growth", type: :req
 
     # The untimed rows sort LAST — the read asks `NULLS LAST` — which is what `order` says and what
     # lets an untimed row appear on a capped list at all: the movement ran out before the cap did.
+    # @intent: { entity: "repository directory_runtime_growth block", action: "order operands-last", behavior: "rows with nothing to subtract sort last, exactly as the documented order token requires", layer: "request" }
     it "sorts the rows with nothing to subtract last, as its order token says" do
       window, block = blocks
 
@@ -375,6 +390,7 @@ RSpec.describe "GET /api/v1/repository — directory_runtime_growth", type: :req
 
     # The TIMED denominators are what make that row readable, and they differ from the RECORDED ones
     # here — which is the whole reason this block serves four counts and the count sibling serves two.
+    # @intent: { entity: "repository directory_runtime_growth block", action: "re-time denominators", behavior: "the timed denominators served can differ from the ones recorded, proving they are recomputed", layer: "request" }
     it "serves timed denominators that differ from the recorded ones" do
       _window, block = blocks
 
@@ -398,6 +414,7 @@ RSpec.describe "GET /api/v1/repository — directory_runtime_growth", type: :req
 
     def fresh_repository = create_repository(user: @user, github_full_name: "acme/r#{SecureRandom.hex(4)}")
 
+    # @intent: { entity: "repository directory_runtime_growth block", action: "name the absence state", behavior: "the window names which of the twelve absence states applies and serves no rows except in the last", layer: "request" }
     it "names which of the twelve applies, and serves no rows in any but the last" do
       # SERIALIZER-LEVEL, and NOT model states: `SpecDirectoryRuntimeGrowth.for` dereferences its
       # second argument on its second line and has no nil state of its own.
@@ -516,6 +533,7 @@ RSpec.describe "GET /api/v1/repository — directory_runtime_growth", type: :req
 
     # ⭐ CRITERION 4, ON ITS OWN, BECAUSE IT IS THE ONE THAT RAISES. Stated as a status assertion
     # rather than only as a token in the table above: an unguarded accessor makes this a 500.
+    # @intent: { entity: "repository directory_runtime_growth block", action: "tolerate a single run", behavior: "a repository whose latest run has no previous run on its branch still gets 200", layer: "request" }
     it "returns 200 on a repository whose latest run has no previous run on its branch" do
       solo = fresh_repository
       ingest_areas({ "spec/models" => [1.0] }, commit_sha: "onlyrun00001", at: 10.days.ago, repo: solo)
@@ -533,6 +551,7 @@ RSpec.describe "GET /api/v1/repository — directory_runtime_growth", type: :req
     # contract block goes to the SAME KEY SET in an absence state as in a comparison, rather than
     # going absent or going short. A block that explains a `null` is worthless if it is itself
     # absent whenever the `null` happens.
+    # @intent: { entity: "repository directory_runtime_growth block", action: "keep keys uniform", behavior: "the contract key set is identical with and without a comparison to draw", layer: "request" }
     it "serves the same contract keys with no comparison as with one" do
       absent = fresh_repository
       compared = fresh_repository.tap { |repo| adjacent_runs(repo: repo) }
@@ -561,6 +580,7 @@ RSpec.describe "GET /api/v1/repository — directory_runtime_growth", type: :req
     # dropped. The block is `null` there anyway, so that "non-null exactly when `comparable`" is one
     # sentence a client can hold rather than a six-of-nine rule — and the actionable half, the state
     # token, is served unconditionally one key up.
+    # @intent: { entity: "repository directory_runtime_growth block", action: "withhold the whole block", behavior: "an absence state suppresses the entire block even though the object kept its totals", layer: "request" }
     it "withholds the whole block in an absence state whose object DID keep its totals" do
       ingest_areas({ "spec/models" => [nil, nil] }, commit_sha: "untimed00001", at: 20.days.ago)
       ingest_areas({ "spec/models" => [1.0, 1.0] }, commit_sha: "timed0000001", at: 10.days.ago)
@@ -592,6 +612,7 @@ RSpec.describe "GET /api/v1/repository — directory_runtime_growth", type: :req
                    at: 10.days.ago)
     end
 
+    # @intent: { entity: "repository directory_runtime_growth block", action: "compare newest two per branch", behavior: "the baseline is the previous run on the newest run own branch, never an interleaved row from another branch", layer: "request" }
     it "compares the two newest runs on the latest run's own branch, not the interleaved row" do
       window, block = blocks
 
@@ -606,6 +627,7 @@ RSpec.describe "GET /api/v1/repository — directory_runtime_growth", type: :req
     # NOT RE-ANCHORED BY `?branch=`, exactly like `latest_run` and unlike `history`. A client
     # narrowing the history has asked a question about a series, not for a different comparison —
     # and `branch` says which branch this one was actually taken on.
+    # @intent: { entity: "repository directory_runtime_growth block", action: "ignore branch renames", behavior: "the window keeps naming the latest run own branch even when the parameter names another", layer: "request" }
     it "keeps naming the latest run's branch under a ?branch= that names another" do
       window, block = blocks(query: { branch: "main" })
 
@@ -622,6 +644,7 @@ RSpec.describe "GET /api/v1/repository — directory_runtime_growth", type: :req
   describe "against the blocks it sits beside" do
     before { adjacent_runs }
 
+    # @intent: { entity: "repository directory_runtime_growth block", action: "state its own ordering", behavior: "this block shares the two runs with the count pair yet declares a different ordering rule, so drilling in changes nothing about the count pair answer", layer: "request" }
     it "leaves the count pair's answer exactly as it was" do
       body = get_repository
 
@@ -645,6 +668,7 @@ RSpec.describe "GET /api/v1/repository — directory_runtime_growth", type: :req
     # THE TWO PAIRS ANSWER DIFFERENT QUESTIONS OVER THE SAME TWO RUNS, and their contract blocks say
     # so: same basis, same branch, same two shas — different ORDER, because they rank by different
     # quantities and one of them can rank on a NULL.
+    # @intent: { entity: "repository directory_runtime_growth block", action: "state its own ordering", behavior: "this block shares the two runs with the count pair but declares a different ordering rule", layer: "request" }
     it "shares the two runs with the count pair and states a different ordering" do
       body = get_repository
       runtime = body["directory_runtime_growth_window"]
@@ -676,6 +700,7 @@ RSpec.describe "GET /api/v1/repository — directory_runtime_growth", type: :req
     # the same method the view calls would agree with the page no matter what either did.
     def seconds_label(seconds) = seconds.nil? ? "not reported" : format("%.2fs", seconds)
 
+    # @intent: { entity: "repository directory_runtime_growth block", action: "agree with the count pair", behavior: "the same areas are named, with the same operands and the same movements as the count pair", layer: "request" }
     it "names the same areas, with the same operands and the same movements" do
       adjacent_runs
 
@@ -705,6 +730,7 @@ RSpec.describe "GET /api/v1/repository — directory_runtime_growth", type: :req
 
     # The panel prints the previous run's sha in its caption; the block serves it as a key. Same
     # run, so an agent reading the API and a human reading the page are looking at one comparison.
+    # @intent: { entity: "repository directory_runtime_growth block", action: "agree with the panel caption", behavior: "the previous run named here is the same one the panel caption names", layer: "request" }
     it "names the same previous run the panel's caption does" do
       adjacent_runs
 
@@ -718,6 +744,7 @@ RSpec.describe "GET /api/v1/repository — directory_runtime_growth", type: :req
 
     # And the four denominators the block serves are the four the caption states, so an agent sizing
     # "recorded six, timed five" and a human reading the page cannot be given different figures.
+    # @intent: { entity: "repository directory_runtime_growth block", action: "match panel denominators", behavior: "the four denominators stated here are the same ones the panel caption states", layer: "request" }
     it "states the same four denominators the panel's caption does" do
       ingest_areas({ "spec/models" => [1.0], "spec/gap" => [nil] },
                    commit_sha: "previous0001", at: 20.days.ago)
@@ -739,6 +766,7 @@ RSpec.describe "GET /api/v1/repository — directory_runtime_growth", type: :req
   # `JSON.stringify(overview, null, 2)` and returns the object verbatim, so a key reaches
   # `get_repository_overview` if and only if it is a TOP-LEVEL key of this body.
   describe "what a passthrough client sees" do
+    # @intent: { entity: "repository directory_runtime_growth block", action: "add the pair at top level", behavior: "the drill-in adds the pair once at the top level of the response and nowhere else", layer: "request" }
     it "adds the pair at the top level, and nowhere else" do
       adjacent_runs
 
@@ -760,6 +788,7 @@ RSpec.describe "GET /api/v1/repository — directory_runtime_growth", type: :req
     # ⭐ THIS GRAIN IS THIS BLOCK'S ALONE, unlike `growth_grain_reads`, which has two readers that no
     # pattern can separate. `SpecObservation.directory_runtime_growth_between` is issued by this
     # block and by nothing else on this endpoint, so the count attributes directly.
+    # @intent: { entity: "repository directory_runtime_growth block", action: "read observations once", behavior: "spec_observations is read exactly once on an unparameterised request, and nothing is read at this grain when there is no baseline to compare against", layer: "request" }
     it "reads spec_observations exactly once on an unparameterised request" do
       adjacent_runs
       get_repository(key: api_key)
@@ -772,6 +801,7 @@ RSpec.describe "GET /api/v1/repository — directory_runtime_growth", type: :req
     # OF THE PARTS, so a read that stopped being issued and a different one that started cannot
     # cancel out into a passing number, and a read double-classified into two grains shows up as
     # parts summing to more than the total.
+    # @intent: { entity: "repository directory_runtime_growth block", action: "charge its own grain", behavior: "exactly one query is added to the table total and it is classified into no other grain", layer: "request" }
     it "adds exactly that one to the table's total, and is classified into no other grain" do
       adjacent_runs
       get_repository(key: api_key)
@@ -790,6 +820,7 @@ RSpec.describe "GET /api/v1/repository — directory_runtime_growth", type: :req
     # `spec_observations` NOTHING for this grain. The gate short-circuits before any read in five of
     # the twelve states — the two serializer states never construct the object, and three of the
     # model's own are decided from the two runs alone.
+    # @intent: { entity: "repository directory_runtime_growth block", action: "skip reads without baseline", behavior: "nothing is read at this grain when there is no baseline to compare against", layer: "request" }
     it "reads nothing for this grain where there is nothing to compare" do
       solo = create_repository(user: @user, github_full_name: "acme/solo")
       solo_key = solo.api_keys.create!
@@ -805,6 +836,7 @@ RSpec.describe "GET /api/v1/repository — directory_runtime_growth", type: :req
 
     # A gate state costs nothing either, which is the half the example above cannot show: there ARE
     # two runs here, and the read is still never issued.
+    # @intent: { entity: "repository directory_runtime_growth block", action: "skip reads on reassembly", behavior: "no read happens at this grain when the two runs were assembled by different rules", layer: "request" }
     it "reads nothing for this grain when the two runs are assembled differently" do
       run = ingest_areas({ "spec/models" => [1.0] }, commit_sha: "sharded00001", at: 20.days.ago)
       2.times { |shard| run.test_run_shards.create!(shard_id: (shard + 1).to_s, total_specs_count: 1) }
@@ -817,6 +849,7 @@ RSpec.describe "GET /api/v1/repository — directory_runtime_growth", type: :req
     end
 
     # A repository CI has never reported on does not raise, and asks nothing.
+    # @intent: { entity: "repository directory_runtime_growth block", action: "ask nothing without runs", behavior: "a repository with no runs is not queried at all at this grain", layer: "request" }
     it "asks nothing at all of a repository with no runs" do
       empty = create_repository(user: @user, github_full_name: "acme/empty")
       empty_key = empty.api_keys.create!
@@ -832,6 +865,7 @@ RSpec.describe "GET /api/v1/repository — directory_runtime_growth", type: :req
     # THIRD reader of that row, and an unmemoized accessor would make it two lookups. Matched on the
     # ROW-VALUE PREDICATE, which `Repository#previous_test_run_on_branch` issues and nothing else
     # this endpoint calls does.
+    # @intent: { entity: "repository directory_runtime_growth block", action: "look up the baseline once", behavior: "the previous run is looked up exactly once, now read by a third consumer on the page", layer: "request" }
     it "looks the previous run up exactly once, with a third reader of it now on the page" do
       adjacent_runs
       get_repository(key: api_key)
@@ -847,6 +881,7 @@ RSpec.describe "GET /api/v1/repository — directory_runtime_growth", type: :req
     # The cost does not follow the size of the suite: the aggregate is `GROUP BY` area over two run
     # ids in an `IN` list, and the row cap bounds what comes back. A relative pin rather than a
     # number that would need rebaselining.
+    # @intent: { entity: "repository directory_runtime_growth block", action: "stay flat as suite grows", behavior: "the read cost stays at one regardless of how large the suite grows", layer: "request" }
     it "costs the same one read as the suite grows" do
       adjacent_runs
       get_repository(key: api_key)

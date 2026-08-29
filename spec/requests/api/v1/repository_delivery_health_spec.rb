@@ -47,6 +47,7 @@ RSpec.describe "GET /api/v1/repository — delivery_health", type: :request do
   describe "a repository whose deliveries are all being accepted" do
     before { accept(at: 1.hour.ago) }
 
+    # @intent: { entity: "delivery_health", action: "serve the empty state", behavior: "a repository whose deliveries are all accepted still gets the full block with refusing false, a null timestamp and an empty list rather than an absent key", layer: "request" }
     it "serves the block with a negative verdict rather than omitting it" do
       health = delivery_health
 
@@ -56,6 +57,7 @@ RSpec.describe "GET /api/v1/repository — delivery_health", type: :request do
       expect(health["rejections"]).to eq([])
     end
 
+    # @intent: { entity: "rejections_window", action: "disclose bounds", behavior: "the empty state still reports the panel limit, the retention row budget and a false bounded flag, keeping the window contract unconditional", layer: "request" }
     it "discloses both bounds even with nothing to bound" do
       expect(delivery_health["rejections_window"]).to eq(
         "limit" => IngestRejection::PANEL_LIMIT,
@@ -72,6 +74,7 @@ RSpec.describe "GET /api/v1/repository — delivery_health", type: :request do
   # against the newest ACCEPTED run — rather than a window in hours. These three examples are that
   # rule at the API surface.
   describe "the refusing verdict" do
+    # @intent: { entity: "delivery_health", action: "order the verdict", behavior: "the newest refusal ordering wins, so a delivery refused after the last accepted run reads refusing true", layer: "request" }
     it "is true when the newest refusal is newer than the newest accepted run" do
       accept(at: 3.days.ago)
       refuse(at: 1.hour.ago)
@@ -79,6 +82,7 @@ RSpec.describe "GET /api/v1/repository — delivery_health", type: :request do
       expect(delivery_health["refusing"]).to be(true)
     end
 
+    # @intent: { entity: "delivery_health", action: "clear the verdict", behavior: "an accepted run landing after a refusal clears the refusing verdict, with no window to expire", layer: "request" }
     it "is false when the repository was refused and has ingested cleanly since" do
       refuse(at: 3.days.ago)
       accept(at: 1.hour.ago)
@@ -89,6 +93,7 @@ RSpec.describe "GET /api/v1/repository — delivery_health", type: :request do
     # `nil` on the accepted side is not "no comparison to make" — it is the most refusing state
     # there is, and it is the state the whole feature exists for: a repository whose every delivery
     # has been thrown away since the day it was connected.
+    # @intent: { entity: "delivery_health", action: "refuse with no history", behavior: "a repository refused before any run was ever accepted reads refusing true, the nil limb of the ordering rather than a no-comparison case", layer: "request" }
     it "is true when nothing has EVER been accepted" do
       refuse(at: 1.hour.ago)
 
@@ -96,6 +101,7 @@ RSpec.describe "GET /api/v1/repository — delivery_health", type: :request do
       expect(delivery_health["refusing"]).to be(true)
     end
 
+    # @intent: { entity: "delivery_health", action: "timestamp the refusal", behavior: "last_rejection_at reports the newest refusal own occurred_at in iso8601, not merely some recent time", layer: "request" }
     it "reports the newest refusal's timestamp beside the verdict" do
       refuse(at: 3.hours.ago)
       newest = refuse(at: 1.hour.ago)
@@ -122,6 +128,7 @@ RSpec.describe "GET /api/v1/repository — delivery_health", type: :request do
       accept(at: 1.hour.ago, commit_sha: "f" * 40)
     end
 
+    # @intent: { entity: "delivery_health", action: "ignore the pin", behavior: "a client pinning an older run with commit_sha is still told the stream is healthy, because the verdict reads the newest run rather than the re-anchored one", layer: "request" }
     it "still reports the repository as healthy, because delivery health is not anchored" do
       body = get_repository(query: { commit_sha: "0" * 40 })
 
@@ -133,6 +140,7 @@ RSpec.describe "GET /api/v1/repository — delivery_health", type: :request do
       expect(body["delivery_health"]["refusing"]).to be(false)
     end
 
+    # @intent: { entity: "delivery_health", action: "stay pin-invariant", behavior: "the whole delivery_health block is identical whether or not a run is pinned, since it is a fact about the stream", layer: "request" }
     it "gives the same verdict pinned as unpinned — the block is a fact about the stream" do
       pinned = delivery_health(query: { commit_sha: "0" * 40 })
 
@@ -142,6 +150,7 @@ RSpec.describe "GET /api/v1/repository — delivery_health", type: :request do
 
   # ── The rows ──────────────────────────────────────────────────────────────────────────────────
   describe "the listed refusals" do
+    # @intent: { entity: "rejections", action: "order newest first", behavior: "the refusal list is ordered by recency so the most recent rejection leads it", layer: "request" }
     it "lists them newest first" do
       refuse(at: 3.hours.ago, reasons: ["oldest"])
       refuse(at: 1.hour.ago, reasons: ["newest"])
@@ -150,6 +159,7 @@ RSpec.describe "GET /api/v1/repository — delivery_health", type: :request do
         .to eq([["newest"], ["oldest"]])
     end
 
+    # @intent: { entity: "rejections", action: "echo the refusal words", behavior: "the reasons served in the block are the same details string the refused ingest own 400 response carried, not a rewording", layer: "request" }
     it "serves the endpoint's own words, identical to what the client was handed in its 400" do
       post "/api/v1/ingest",
            params: { specs: [] }.to_json,
@@ -162,6 +172,7 @@ RSpec.describe "GET /api/v1/repository — delivery_health", type: :request do
       expect(delivery_health["rejections"].first["reasons"]).to eq(refusal_response["details"])
     end
 
+    # @intent: { entity: "rejections", action: "report the client", behavior: "each row reports the user agent that delivered the refused payload", layer: "request" }
     it "reports the client that delivered it" do
       refuse(at: 1.hour.ago, user_agent: "specguard-rspec/0.3.1")
 
@@ -170,18 +181,21 @@ RSpec.describe "GET /api/v1/repository — delivery_health", type: :request do
 
     # A version nobody reported must not be invented, least of all on the block whose subject is a
     # diagnosis BY client version.
+    # @intent: { entity: "rejections", action: "null the absent client", behavior: "a refusal with no User-Agent reports a null reported_client rather than an invented placeholder", layer: "request" }
     it "reports a null client rather than a placeholder when the request sent no User-Agent" do
       refuse(at: 1.hour.ago, user_agent: nil)
 
       expect(delivery_health["rejections"].first["reported_client"]).to be_nil
     end
 
+    # @intent: { entity: "rejections", action: "stamp each row", behavior: "each row carries the refusal own occurred_at in iso8601", layer: "request" }
     it "stamps when each refusal happened" do
       rejection = refuse(at: 1.hour.ago)
 
       expect(delivery_health["rejections"].first["occurred_at"]).to eq(rejection.occurred_at.iso8601)
     end
 
+    # @intent: { entity: "rejections", action: "bound the list", behavior: "one refusal past the panel limit caps the served list and raises the bounded flag", layer: "request" }
     it "bounds the list at the panel limit and says so" do
       (IngestRejection::PANEL_LIMIT + 1).times { |i| refuse(at: i.hours.ago) }
 
@@ -196,6 +210,7 @@ RSpec.describe "GET /api/v1/repository — delivery_health", type: :request do
     # history, sitting well inside `REPOSITORY_RETENTION_ROWS` — served `bounded: true` and told an
     # agent it had not been shown everything. It had. `bounded` is a fact about the population, so
     # the two examples differ by ONE refusal and disagree.
+    # @intent: { entity: "rejections_window", action: "report a whole history", behavior: "a history of exactly one full page keeps bounded false, since the entire lifetime was shown", layer: "request" }
     it "reports an unbounded window when a full page is the whole history" do
       IngestRejection::PANEL_LIMIT.times { |i| refuse(at: i.hours.ago) }
 
@@ -216,6 +231,7 @@ RSpec.describe "GET /api/v1/repository — delivery_health", type: :request do
 
     before { refuse(at: 1.hour.ago, reasons: Array.new(reason_count) { |i| "spec #{i} is invalid" }) }
 
+    # @intent: { entity: "rejections", action: "truncate reasons", behavior: "a row whose reason list exceeded the per-row bound keeps the first reasons, counts the thirty dropped and flags the truncation", layer: "request" }
     it "serves the retained reasons and counts what it dropped" do
       row = delivery_health["rejections"].first
 
@@ -224,6 +240,7 @@ RSpec.describe "GET /api/v1/repository — delivery_health", type: :request do
       expect(row["reasons_truncated"]).to be(true)
     end
 
+    # @intent: { entity: "rejections_window", action: "raise the reasons flag", behavior: "any_reasons_truncated rises on the window while bounded stays false, keeping the two truncation bounds independent", layer: "request" }
     it "raises the window's disclosure flag while the DELIVERY bound is nowhere near reached" do
       health = delivery_health
 
@@ -231,6 +248,7 @@ RSpec.describe "GET /api/v1/repository — delivery_health", type: :request do
       expect(health["rejections_window"]["bounded"]).to be(false)
     end
 
+    # @intent: { entity: "rejections", action: "report no omission", behavior: "a row that kept all its reasons reports zero omitted and a false truncation flag", layer: "request" }
     it "reports no omission on a row that kept everything" do
       refuse(at: 30.minutes.ago, reasons: ["Commit SHA is required"])
 
@@ -249,10 +267,12 @@ RSpec.describe "GET /api/v1/repository — delivery_health", type: :request do
   # one. It keeps answering the only question it can answer, and now names the key that answers the
   # other.
   describe "api_key.last_used_at, which is not a health signal" do
+    # @intent: { entity: "api_key", action: "point at the verdict block", behavior: "the api_key block names delivery_health as the reporter of acceptance, steering clients away from last_used_at as a health signal", layer: "request" }
     it "points at the block that carries the acceptance verdict" do
       expect(get_repository["api_key"]["acceptance_reported_by"]).to eq("delivery_health")
     end
 
+    # @intent: { entity: "api_key", action: "keep stamping refused uses", behavior: "a refused delivery still stamps last_used_at while refusing is true, showing exactly why the pointer is needed", layer: "request" }
     it "still moves for a delivery that was refused — which is exactly why it needs the pointer" do
       post "/api/v1/ingest",
            params: { specs: [] }.to_json,

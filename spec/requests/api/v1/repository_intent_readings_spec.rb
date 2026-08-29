@@ -78,6 +78,7 @@ RSpec.describe "GET /api/v1/repository — latest_run.intent_readings", type: :r
 
   describe "a run whose descriptions mostly derive" do
     # AC. The four figures, on a fixture where every one of them differs from every other.
+    # @intent: { entity: "intent_readings", action: "split the run three ways", behavior: "one authored, two derived and one unreadable example are counted separately with the recorded population served beside them, four rows yielding four distinct figures", layer: "request" }
     it "splits the run three ways and carries the population they were counted from" do
       expect(readings).to eq("authored" => 1, "derived" => 2, "unreadable" => 1, "recorded" => 4)
     end
@@ -85,6 +86,7 @@ RSpec.describe "GET /api/v1/repository — latest_run.intent_readings", type: :r
     # The key set as this block's stated subject, on the pattern every contract example on this
     # endpoint follows: a guard whose subject IS the key set survives a fixture whose numbers change,
     # and says out loud what a new key owes this block before it ships.
+    # @intent: { entity: "intent_readings", action: "pin the key set", behavior: "the block carries authored, derived, unreadable and recorded and nothing else - no ratio and no coverage label rides beside them", layer: "request" }
     it "serves exactly the intent_readings keys this contract pins" do
       served = readings
 
@@ -99,6 +101,7 @@ RSpec.describe "GET /api/v1/repository — latest_run.intent_readings", type: :r
     # The three states PARTITION the population — no row counted twice, no row uncounted. This is
     # what makes them safe to render side by side, and it is a property of the SQL `CASE` rather than
     # of the fixture: a `WHEN` that overlapped, or an `ELSE` that dropped a row, breaks it.
+    # @intent: { entity: "intent_readings", action: "partition the population", behavior: "the three states partition the recorded rows so their counts sum to recorded, with no row counted twice and none left out", layer: "request" }
     it "splits the recorded population exactly, with nothing counted twice and nothing left out" do
       served = readings
 
@@ -107,6 +110,7 @@ RSpec.describe "GET /api/v1/repository — latest_run.intent_readings", type: :r
 
     # ⭐ THE KEY IS UNGATED, unlike every drill-in on this endpoint. A correction a client has to opt
     # into leaves that client reading the subtraction, which is the state this change exists to end.
+    # @intent: { entity: "intent_readings", action: "serve unconditionally", behavior: "the block is ungated - present on a plain request and identical whether or not the unannotated_examples parameter is sent", layer: "request" }
     it "is served on every request, with no flag to pass" do
       expect(get_repository["latest_run"]).to have_key("intent_readings")
       expect(readings).not_to be_nil
@@ -123,6 +127,7 @@ RSpec.describe "GET /api/v1/repository — latest_run.intent_readings", type: :r
   # the same predicate over a possibly different population and is NOT that figure — it is here so
   # the three states sum to `recorded`.
   describe "what the correction did NOT change" do
+    # @intent: { entity: "annotated_specs", action: "preserve the adoption metric", behavior: "the adoption figures still answer from the run counters - total four, annotated one, ratio a quarter - derived from the payload statuses rather than the new readings", layer: "request" }
     it "leaves annotated_specs and annotated_ratio reading the run's own counters" do
       run = latest_run
 
@@ -137,6 +142,7 @@ RSpec.describe "GET /api/v1/repository — latest_run.intent_readings", type: :r
     # THE COUNTERS AND THE ROWS ARE DIFFERENT POPULATIONS, which is why `recorded` rides back with
     # the three states instead of a client dividing by `total_specs`. A run reporting totals for more
     # examples than it sent detail for is the ordinary shape of a client mid-integration.
+    # @intent: { entity: "intent_readings", action: "count detail rows", behavior: "recorded counts per-example detail rows only, so a run reporting four thousand totals over one sent row still reads derived one and recorded one", layer: "request" }
     it "counts the rows it has rather than the suite size the run reported" do
       partial = separate_repository("acme/totals-exceed-rows")
       ingest(partial,
@@ -161,6 +167,7 @@ RSpec.describe "GET /api/v1/repository — latest_run.intent_readings", type: :r
   # the scanner-failure run and a legitimately all-derived run are told apart by the same figure that
   # told them apart before — and both are reported honestly, which is the point.
   describe "a run whose scanner failed and sent everything as unannotated" do
+    # @intent: { entity: "intent_readings", action: "report a scanner failure", behavior: "a scanner failure that sends every example unannotated reads derived two and recorded two while annotated_specs stays zero and the ratio stays zero percent", layer: "request" }
     it "reads as fully derived and still reads as zero percent annotated" do
       broken = separate_repository("acme/scanner-fell-over")
       ingest(broken,
@@ -182,6 +189,7 @@ RSpec.describe "GET /api/v1/repository — latest_run.intent_readings", type: :r
   # the detail" from "nothing is readable". Three zeros alone cannot, and the block is deliberately
   # NOT `null` here: a null would say "you did not ask", and there is nothing to ask.
   describe "a run that recorded no per-example rows" do
+    # @intent: { entity: "intent_readings", action: "answer four zeros", behavior: "a run with totals but no detail rows serves four zero figures rather than null, so nobody-sent-detail stays distinguishable from nothing-is-readable", layer: "request" }
     it "answers with four zeros rather than a null, so the absence is readable as one" do
       bare = separate_repository("acme/totals-only")
       create_test_run(repository: bare, commit_sha: "norows711001", total_specs_count: 900,
@@ -200,6 +208,7 @@ RSpec.describe "GET /api/v1/repository — latest_run.intent_readings", type: :r
   # is null — this key does not survive it as four zeros, which would be a measurement invented out
   # of a repository's silence.
   describe "a repository with no run at all" do
+    # @intent: { entity: "intent_readings", action: "omit without a run", behavior: "a repository with no ingested run nulls the whole latest_run block, and the readings do not survive as invented zeros", layer: "request" }
     it "has no block, because it has no run" do
       fresh = separate_repository("acme/never-ingested")
 

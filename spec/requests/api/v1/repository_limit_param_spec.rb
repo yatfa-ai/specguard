@@ -47,6 +47,7 @@ RSpec.describe "GET /api/v1/repository — limit parameter", type: :request do
     run
   end
 
+  # @intent: { entity: "limit parameter", action: "serve defaults", behavior: "with no ask both rollups serve their shipped constants as the row count and as the published limit field", layer: "request" }
   it "serves both rollups at their shipped defaults without the ask" do
     body = get_repository
 
@@ -59,6 +60,7 @@ RSpec.describe "GET /api/v1/repository — limit parameter", type: :request do
       .to eq(SpecObservation::HEAVIEST_DIRECTORIES_LIMIT)
   end
 
+  # @intent: { entity: "limit parameter", action: "widen the rollups", behavior: "a limit of three widens both rollups to three rows each and publishes the parsed ask as the applied limit while the population counts stay fifteen", layer: "request" }
   it "widens both rollups and reports the ask as the applied limit" do
     body = get_repository(query: { limit: "3" })
 
@@ -78,6 +80,7 @@ RSpec.describe "GET /api/v1/repository — limit parameter", type: :request do
   # Criterion 3 in the one place it is fully observable: the clamp is PUBLISHED. A client that
   # asked for 99,999 and was served 15 rows can read `limit == 200` and know the figure clamped
   # rather than the population ending — the response says what it did.
+  # @intent: { entity: "limit parameter", action: "clamp the ceiling", behavior: "an ask past the ceiling is clamped and the clamped limit is published in the response, so a client can tell a clamp from the end of the population", layer: "request" }
   it "clamps an ask past the ceiling and publishes the clamped limit" do
     body = get_repository(query: { limit: "99999" })
 
@@ -95,6 +98,7 @@ RSpec.describe "GET /api/v1/repository — limit parameter", type: :request do
   # honour the ask and the published `limit` reports the parsed magnitude — pinned here because
   # the guard's rationale comment once claimed `"0x10"` answers nil when it parses to 16, and
   # only examples asserting the real behaviour keep that claim from being re-believed.
+  # @intent: { entity: "limit parameter", action: "parse a base prefix", behavior: "a base-prefixed spelling like 0xc is parsed to its magnitude twelve and honoured, with the published limit reporting the parsed figure", layer: "request" }
   it "honours a base-prefixed spelling as the magnitude it parses to" do
     body = get_repository(query: { limit: "0xc" })
 
@@ -103,6 +107,7 @@ RSpec.describe "GET /api/v1/repository — limit parameter", type: :request do
     expect(body.dig("latest_run", "spec_directories", "limit")).to eq(12)
   end
 
+  # @intent: { entity: "limit parameter", action: "parse padded input", behavior: "a whitespace-padded spelling is parsed to its magnitude and honoured in both rollups published limits", layer: "request" }
   it "honours a whitespace-padded spelling as the magnitude it parses to" do
     body = get_repository(query: { limit: " 12 " })
 

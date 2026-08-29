@@ -109,6 +109,7 @@ RSpec.describe "GET /api/v1/repository — directory_run_file_growth", type: :re
     # The rows, in the order the read ranked them: absolute movement descending, `path ASC` between
     # equals. `user_spec.rb` and `legacy_user_spec.rb` both move by 6 and sort by path; `order_spec`
     # and `refund_spec` both move by 3 and sort by path; `billing_spec` did not move at all.
+    # @intent: { entity: "DirectoryRunFileGrowth", action: "rank files by movement", behavior: "files in the asked-for area are listed largest example-count movement first", layer: "request" }
     it "names the files of the asked-for area, largest movement first" do
       window, block = blocks
 
@@ -124,6 +125,7 @@ RSpec.describe "GET /api/v1/repository — directory_run_file_growth", type: :re
     # as new beside one listed as removed is what a rename looks like from here — and the endpoint
     # asserts NEITHER reading, it serves both operands and both booleans and lets the caller pair
     # them. `new_file`/`removed_file` are not derivable from `change` alone, which is the point.
+    # @intent: { entity: "DirectoryRunFileGrowth", action: "pair new and removed files", behavior: "a file added and a file dropped sit side by side where the area grain alone would show zero change", layer: "request" }
     it "puts a new file beside a removed one, where the area grain shows nothing at all" do
       _window, block = blocks
 
@@ -144,6 +146,7 @@ RSpec.describe "GET /api/v1/repository — directory_run_file_growth", type: :re
     end
 
     # The remaining three states of the row, so the six-field shape is pinned end to end.
+    # @intent: { entity: "DirectoryRunFileGrowth", action: "serve operands and states", behavior: "each row carries before and after counts, their difference, and the new/removed/moved state", layer: "request" }
     it "serves each file's two operands, their difference and the three states of it" do
       _window, block = blocks
 
@@ -165,6 +168,7 @@ RSpec.describe "GET /api/v1/repository — directory_run_file_growth", type: :re
     # the PREVIOUS one, which is the direction every `change` is signed in; handing the two runs to
     # `SpecDirectoryFileGrowth.for` the other way round turns `order_spec.rb` from `+3` into `−3`
     # AND turns the new file into a removed one.
+    # @intent: { entity: "DirectoryRunFileGrowth", action: "anchor the comparison", behavior: "the block anchors on the latest run and baselines on the run before it", layer: "request" }
     it "anchors on the latest run and baselines on the previous one" do
       _window, block = blocks
 
@@ -181,6 +185,7 @@ RSpec.describe "GET /api/v1/repository — directory_run_file_growth", type: :re
     # THE NARROW IS AN EQUALITY ON THE AREA, exactly as `SpecObservation.files_in_directory` is.
     # `spec/services/payment_spec.rb` moved by 9 — MORE than any file listed — and is absent, which
     # is what makes the predicate falsifiable: a read that dropped it would rank that file first.
+    # @intent: { entity: "DirectoryRunFileGrowth", action: "stay inside the area", behavior: "a file far outside the named area never appears however far it moved", layer: "request" }
     it "lists no file outside the area, however far outside it moved" do
       _window, block = blocks
 
@@ -194,6 +199,7 @@ RSpec.describe "GET /api/v1/repository — directory_run_file_growth", type: :re
     # The denominators are THIS AREA'S rows and deliberately not the whole-run figures the parent
     # block serves under identically-spelled names — a client mixing the two would divide an area's
     # population by the suite's. Here the two differ, which is what makes them separable at all.
+    # @intent: { entity: "DirectoryRunFileGrowth", action: "scope denominators to the area", behavior: "the comparable and coverage denominators count files of the area, not of the whole run", layer: "request" }
     it "counts its denominators over the area, not over the run" do
       _window, block = blocks
 
@@ -209,6 +215,7 @@ RSpec.describe "GET /api/v1/repository — directory_run_file_growth", type: :re
     # `change_reading`, `previous_count_label` and `latest_count_label` — typographic and
     # screen-reader spellings of these same numbers, including the "New file" the shape above
     # renders. A client served those would be splitting strings and stripping glyphs.
+    # @intent: { entity: "DirectoryRunFileGrowth", action: "serve raw values", behavior: "no panel wording or glyph reaches the API — counts and state words only", layer: "request" }
     it "serves no value the panel has worded, and no glyph it has typeset" do
       window, block = blocks
 
@@ -223,6 +230,7 @@ RSpec.describe "GET /api/v1/repository — directory_run_file_growth", type: :re
     # The bound is this key's OWN constant — not the areas' ten and not the durations drill-down's
     # fifty — and it is served on the ALWAYS-PRESENT block, so a caller that got `null` can still
     # learn what a populated answer would have been capped at.
+    # @intent: { entity: "DirectoryRunFileGrowth", action: "disclose the bound", behavior: "the always-present block states the cap that could have cut the list", layer: "request" }
     it "discloses the bound that would cut the list, on the block that is always there" do
       window, block = blocks
 
@@ -236,6 +244,7 @@ RSpec.describe "GET /api/v1/repository — directory_run_file_growth", type: :re
   end
 
   describe "an area holding more files than the block lists" do
+    # @intent: { entity: "DirectoryRunFileGrowth", action: "cap rows and report totals", behavior: "at most the limit's rows are served while the covered file count is still stated", layer: "request" }
     it "serves the limit's worth of rows, and says how many files the comparison covered" do
       files = Array.new(SpecObservation::SPEC_DIRECTORY_FILE_GROWTH_LIMIT + 2) do |index|
         "spec/models/thing_#{index}_spec.rb"
@@ -265,6 +274,7 @@ RSpec.describe "GET /api/v1/repository — directory_run_file_growth", type: :re
     # ⭐ CRITERION 2 — no ask, no keys' worth of content and no query. `path: null` is the spelling
     # of "you did not ask", and it is a different fact from "the comparison refused", which the very
     # next example produces on the same repository.
+    # @intent: { entity: "DirectoryRunFileGrowth", action: "null when unasked", behavior: "a request naming no area serves null rows under a null path rather than an error", layer: "request" }
     it "serves null rows with a null path when no area was named" do
       window, block = blocks(query: {})
 
@@ -278,6 +288,7 @@ RSpec.describe "GET /api/v1/repository — directory_run_file_growth", type: :re
 
     # A malformed shape is NO ASK AT ALL — `RequestedSpecDirectoryParam`'s rule, which is why `path`
     # is never echoed from the raw parameter but restated as the server read it.
+    # @intent: { entity: "DirectoryRunFileGrowth", action: "ignore malformed asks", behavior: "a spec_directory that is not a string is treated exactly like no ask", layer: "request" }
     it "treats a shape that is not a string as no ask" do
       window, block = blocks(query: { spec_directory: ["spec/models"] })
 
@@ -288,6 +299,7 @@ RSpec.describe "GET /api/v1/repository — directory_run_file_growth", type: :re
     # An area NEITHER RUN RECORDED is an ordinary answer and not an error — a stale bookmark, a
     # directory deleted since, a typo. The comparison is comparable, the ask is restated, and the
     # rows are simply empty. Distinct from every refusal below, and distinct from no ask at all.
+    # @intent: { entity: "DirectoryRunFileGrowth", action: "empty list for untouched areas", behavior: "an area neither run recorded answers an empty row list, not null and not a refusal", layer: "request" }
     it "answers an area neither run touched with an empty list, not a null and not an error" do
       window, block = blocks(query: { spec_directory: "spec/ghosts" })
 
@@ -302,6 +314,7 @@ RSpec.describe "GET /api/v1/repository — directory_run_file_growth", type: :re
     # directory rather than a prefix `LIKE` — the same definition of "area" the sibling drill-in
     # and the parent panel use, so one ask cannot open two blocks that disagree about what an area
     # is.
+    # @intent: { entity: "DirectoryRunFileGrowth", action: "treat subdirectories as areas", behavior: "a nested directory is its own area rather than folded into its parent's", layer: "request" }
     it "treats a subdirectory as its own area rather than part of its parent's" do
       ingest_files({ "spec/models/orders/refund_spec.rb" => 4 }, commit_sha: "nested000001",
                    at: 5.days.ago)
@@ -317,6 +330,7 @@ RSpec.describe "GET /api/v1/repository — directory_run_file_growth", type: :re
     # ONE ASK, TWO BLOCKS — `?spec_directory=` is deliberately not split in two. The durations
     # drill-in inside `latest_run` and this growth drill-in answer the SAME ask in different grains,
     # and they name the same area.
+    # @intent: { entity: "DirectoryRunFileGrowth", action: "share the one parameter", behavior: "the durations drill-in and this one both key off the single spec_directory parameter", layer: "request" }
     it "opens the durations drill-in and this one off the one parameter" do
       body = get_repository(query: { spec_directory: "spec/models" })
 
@@ -353,6 +367,7 @@ RSpec.describe "GET /api/v1/repository — directory_run_file_growth", type: :re
     # its first line. The two SERIALIZER-LEVEL states are therefore the ones that raise if the
     # controller does not guard the nil itself, and they are asked here WITH the parameter set —
     # which is the only way to reach the call at all.
+    # @intent: { entity: "DirectoryRunFileGrowth", action: "spell the refusal states", behavior: "each state that cannot compare names itself and serves null rows without raising", layer: "request" }
     it "names which state applies, serves no rows in any but the last, and raises in none" do
       no_latest = fresh_repository
       no_previous = fresh_repository.tap do |repo|
@@ -450,6 +465,7 @@ RSpec.describe "GET /api/v1/repository — directory_run_file_growth", type: :re
     # latest run, so its previous side has zero rows — which a drill-in deriving its own state from
     # its own read would spell `previous_unrecorded`, announcing that the earlier run recorded
     # nothing ANYWHERE. The previous run recorded plenty; it recorded none of it here.
+    # @intent: { entity: "DirectoryRunFileGrowth", action: "scope comparability", behavior: "an area only the latest run recorded is comparable, while previous_unrecorded areas are not", layer: "request" }
     it "calls an area only the latest run recorded comparable, not previous_unrecorded" do
       ingest_files({ "spec/models/user_spec.rb" => 4 }, commit_sha: "previous0001", at: 20.days.ago)
       ingest_files({ "spec/models/user_spec.rb" => 4, "spec/new_area/thing_spec.rb" => 7 },
@@ -470,6 +486,7 @@ RSpec.describe "GET /api/v1/repository — directory_run_file_growth", type: :re
     # contract block goes to the SAME KEY SET with no comparison as with one, and with no ask as
     # with one. A block that explains a `null` is worthless if it is itself absent whenever the
     # `null` happens — and here the commonest request of all is one that produces the `null`.
+    # @intent: { entity: "DirectoryRunFileGrowth", action: "serve the unasked contract", behavior: "with no comparison possible and no ask the block still serves the full contract keys", layer: "request" }
     it "serves the same contract keys with no comparison, no ask, and a full answer" do
       absent = fresh_repository
       compared = fresh_repository.tap { |repo| adjacent_runs(repo: repo) }
@@ -495,6 +512,7 @@ RSpec.describe "GET /api/v1/repository — directory_run_file_growth", type: :re
     # `SpecDirectoryFileGrowth.for` returns `new(path:, state:)` for a refusing parent, WITHOUT any
     # of the counts, so every aggregate falls back to its `0` default. Serving them raw would print
     # `anchor_recorded_count: 0` for a latest run that recorded four hundred rows in that very area.
+    # @intent: { entity: "DirectoryRunFileGrowth", action: "withhold dropped denominators", behavior: "a state whose object lost the denominators omits them rather than serving zeroes", layer: "request" }
     it "withholds the denominators in a state whose object dropped them, rather than serving zeroes" do
       ingest(repository, [], commit_sha: "totalsonly01", at: 20.days.ago, total: 400)
       ingest_files({ "spec/models/user_spec.rb" => 400 }, commit_sha: "recorded0001",
@@ -517,6 +535,7 @@ RSpec.describe "GET /api/v1/repository — directory_run_file_growth", type: :re
   describe "the blocks it was added beside" do
     before { adjacent_runs }
 
+    # @intent: { entity: "DirectoryRunFileGrowth", action: "leave the window untouched", behavior: "directory_run_growth and its window stay byte-identical whether the area was asked or not", layer: "request" }
     it "leaves directory_run_growth and its window byte-identical, asked and unasked" do
       unasked = get_repository
       asked = get_repository(query: { spec_directory: "spec/models" })
@@ -547,6 +566,7 @@ RSpec.describe "GET /api/v1/repository — directory_run_file_growth", type: :re
 
     # The single-run drill-in answering the SAME parameter is untouched — the two share an ask and
     # nothing else, and this pins that sharing one parameter did not merge two answers.
+    # @intent: { entity: "DirectoryRunFileGrowth", action: "leave the file list untouched", behavior: "latest_run.spec_directory_files is byte-identical under the shared spec_directory ask", layer: "request" }
     it "leaves latest_run.spec_directory_files byte-identical under the shared ask" do
       served = get_repository(query: { spec_directory: "spec/models" })
                  .dig("latest_run", "spec_directory_files")
@@ -578,6 +598,7 @@ RSpec.describe "GET /api/v1/repository — directory_run_file_growth", type: :re
       end
     end
 
+    # @intent: { entity: "DirectoryRunFileGrowth", action: "agree with the panel", behavior: "the API names the same files with the same operands and movements the panel shows", layer: "request" }
     it "names the same files, with the same operands and the same movements" do
       adjacent_runs
 
@@ -610,6 +631,7 @@ RSpec.describe "GET /api/v1/repository — directory_run_file_growth", type: :re
     # The panel prints the area's two denominators and its file count in its caption; the block
     # serves them as keys. Same figures, so an agent reading the API and a human reading the page
     # are looking at one comparison of one area.
+    # @intent: { entity: "DirectoryRunFileGrowth", action: "match the caption totals", behavior: "the block's area name, file count and denominators match what the panel caption states", layer: "request" }
     it "names the same area, the same file count and the same denominators the caption states" do
       adjacent_runs
 
@@ -630,6 +652,7 @@ RSpec.describe "GET /api/v1/repository — directory_run_file_growth", type: :re
   # verbatim with no output schema — so a key reaches `get_repository_overview` if and only if it is
   # a TOP-LEVEL key of this body.
   describe "what a passthrough client sees" do
+    # @intent: { entity: "DirectoryRunFileGrowth", action: "place the pair top-level", behavior: "the anchor and baseline pair is added at the top level and appears nowhere else", layer: "request" }
     it "adds the pair at the top level, and nowhere else" do
       adjacent_runs
 
@@ -653,6 +676,7 @@ RSpec.describe "GET /api/v1/repository — directory_run_file_growth", type: :re
     # read is issued, so a client that never sends the parameter pays nothing for the key's
     # existence — on a repository whose comparison is perfectly comparable, which is what makes the
     # zero the ASK's refusal rather than the comparison's.
+    # @intent: { entity: "DirectoryRunFileGrowth", action: "cost nothing unasked", behavior: "a request naming no area adds no query at all", layer: "request" }
     it "adds no query at all to a request that names no area" do
       adjacent_runs
       get_repository(key: api_key)
@@ -669,6 +693,7 @@ RSpec.describe "GET /api/v1/repository — directory_run_file_growth", type: :re
     # site, because the contract block reads the PARENT rather than this object, so an unmemoized
     # build would read once too and this count would still be one. What it does pin is the cost of
     # the ask itself — naming an area buys exactly this grain's single query and nothing more.
+    # @intent: { entity: "DirectoryRunFileGrowth", action: "read once when asked", behavior: "spec_observations is read exactly once for this grain when an area is named", layer: "request" }
     it "reads spec_observations exactly once for its own grain when an area is named" do
       adjacent_runs
       get_repository(key: api_key)
@@ -689,6 +714,7 @@ RSpec.describe "GET /api/v1/repository — directory_run_file_growth", type: :re
     # different grain reading twice while this one reads none. The three `+1`s under one ask are
     # this block's, the durations drill-in's and the runtime drill-in's, which is why the total
     # above is `+3`.
+    # @intent: { entity: "DirectoryRunFileGrowth", action: "leave other grains alone", behavior: "the single read for this grain leaves every sibling grain's read count unchanged", layer: "request" }
     it "reads once for its own grain and leaves every other grain alone" do
       adjacent_runs
       query = { spec_directory: "spec/models" }
@@ -715,6 +741,7 @@ RSpec.describe "GET /api/v1/repository — directory_run_file_growth", type: :re
     # ⭐ CRITERION 3's COST HALF, and the sharpest form of "the gate reads memory": a repository
     # whose parent comparison refuses asks `spec_observations` NOTHING for this grain EVEN WITH THE
     # PARAMETER SET. `SpecDirectoryFileGrowth.for` refuses on its first line, before any query.
+    # @intent: { entity: "DirectoryRunFileGrowth", action: "skip reads when refused", behavior: "where the parent comparison refuses, this grain reads nothing even under the ask", layer: "request" }
     it "reads nothing for this grain where the parent comparison refuses, even under the ask" do
       solo = create_repository(user: @user, github_full_name: "acme/solo")
       solo_key = solo.api_keys.create!
@@ -737,6 +764,7 @@ RSpec.describe "GET /api/v1/repository — directory_run_file_growth", type: :re
 
     # A repository CI has never reported on does not raise under the ask, and asks nothing — the
     # nil-growth path again, measured rather than asserted.
+    # @intent: { entity: "DirectoryRunFileGrowth", action: "read nothing without runs", behavior: "a repository with no runs issues no query for this grain", layer: "request" }
     it "asks nothing at all of a repository with no runs" do
       empty = create_repository(user: @user, github_full_name: "acme/empty")
       empty_key = empty.api_keys.create!
@@ -753,6 +781,7 @@ RSpec.describe "GET /api/v1/repository — directory_run_file_growth", type: :re
 
     # The cost follows the size of the AREA rather than of the suite, and the cap bounds what comes
     # back — a relative pin rather than a number that would need rebaselining.
+    # @intent: { entity: "DirectoryRunFileGrowth", action: "scale reads flat", behavior: "the grain costs the same single read as the suite and area grow", layer: "request" }
     it "costs the same one read as the suite and the area grow" do
       adjacent_runs
       query = { spec_directory: "spec/models" }

@@ -91,6 +91,7 @@ RSpec.describe "GET /api/v1/repository — latest_run.spec_directory_files", typ
     # AC1. The block exists, its rows carry the four operands rather than a path and a number, and
     # the area's own three figures sit beside them. The array is asserted as a SEQUENCE — `eq`, not
     # `match_array` — because "heaviest first" is half of what this key promises.
+    # @intent: { entity: "spec_directory_files", action: "list the area files heaviest first", behavior: "the block serves files ordered by summed seconds with per-file recorded and timed counts and the area own population figures", layer: "request" }
     it "lists that area's spec files heaviest-first, with what each total was summed over" do
       expect(block(query: { spec_directory: "spec/models" })).to eq(
         "path" => "spec/models",
@@ -113,6 +114,7 @@ RSpec.describe "GET /api/v1/repository — latest_run.spec_directory_files", typ
     # `eq` above — the pattern the by-area rollup's contract example sets, and for the same reason:
     # a guard whose stated subject IS the key set survives a fixture whose numbers change, and says
     # out loud what a new key owes this block before it ships.
+    # @intent: { entity: "spec_directory_files", action: "pin the key set", behavior: "the block and its rows serve exactly the contract keys named, so any new key owes this block a stated reason", layer: "request" }
     it "serves exactly the spec_directory_files keys this contract pins" do
       served = block(query: { spec_directory: "spec/models" })
 
@@ -126,6 +128,7 @@ RSpec.describe "GET /api/v1/repository — latest_run.spec_directory_files", typ
     # read. Every figure is taken off the RESPONSE, so it is the endpoint's own three blocks
     # disagreeing: the heaviest file in the run belongs to no row here, and the file this list heads
     # with is not the file that ranking heads with.
+    # @intent: { entity: "spec_directory_files", action: "differ from the run-wide file ranking", behavior: "the heaviest file run-wide is absent here and this list heads with another file, proving the block is not the by-file rollup filtered", layer: "request" }
     it "lists files the run-wide by-file ranking heads with something else" do
       body = get_repository(query: { spec_directory: "spec/models" })["latest_run"]
 
@@ -143,6 +146,7 @@ RSpec.describe "GET /api/v1/repository — latest_run.spec_directory_files", typ
     # page's. `recorded_count` counts an example the list's own rows do not distinguish, and
     # `timed_count` is smaller than it — a serializer folding the serialized rows to re-derive
     # either would be computing the page's figure under the area's name.
+    # @intent: { entity: "spec_directory_files", action: "count the area population", behavior: "recorded_count and timed_count are counted over the area examples and can both differ from the listed rows length", layer: "request" }
     it "counts the area's examples, not the listed files' rows" do
       served = block(query: { spec_directory: "spec/models" })
 
@@ -156,6 +160,7 @@ RSpec.describe "GET /api/v1/repository — latest_run.spec_directory_files", typ
     # `Row#duration_label` and `Row#coverage_label` are one call away in the presenter this reads
     # from, and either would still satisfy the assertions above if the fixture's numbers happened to
     # render similarly.
+    # @intent: { entity: "spec_directory_files", action: "serve numbers never labels", behavior: "no serialized value is a duration or coverage string the panel would print; totals are floats or null and counts integers", layer: "request" }
     it "serves numbers, never the panel's labels" do
       served = block(query: { spec_directory: "spec/models" })
 
@@ -170,12 +175,14 @@ RSpec.describe "GET /api/v1/repository — latest_run.spec_directory_files", typ
   # groups at one depth — a prefix `LIKE` would gather the nested area in, double-count its rows
   # against that rollup, and re-open a drill-down TREE that is a different feature.
   describe "the depth an area is read at" do
+    # @intent: { entity: "spec_directory_files", action: "compare the area by equality", behavior: "a nested area under the asked directory contributes no rows to its ancestor because the narrow is exact rather than a prefix match", layer: "request" }
     it "gathers no nested area into its ancestor" do
       expect(block(query: { spec_directory: "spec/models" })["rows"].map { it["path"] })
         .to eq(["spec/models/refund_spec.rb", "spec/models/order_spec.rb", "spec/models/user_spec.rb"])
       expect(block(query: { spec_directory: "spec/models" })["file_count"]).to eq(3)
     end
 
+    # @intent: { entity: "spec_directory_files", action: "answer the nested area itself", behavior: "asking for the nested directory serves its own files under its own name with its own counts", layer: "request" }
     it "answers for the nested area under its own name" do
       served = block(query: { spec_directory: "spec/models/orders" })
 
@@ -186,6 +193,7 @@ RSpec.describe "GET /api/v1/repository — latest_run.spec_directory_files", typ
     # The area a `spec_directories` row is NAMED by is computed by the same expression this read
     # narrows on, so every path a client can take out of that rollup is a path this key can answer —
     # including the one the rollup spells `.`.
+    # @intent: { entity: "spec_directory_files", action: "answer the repository root", behavior: "the dot spelling the rollup names top-level files with is itself an answerable ask, so every rollup path leads somewhere", layer: "request" }
     it "answers for the repository root under the name the rollup gives it" do
       root = create_repository(user: @user, github_full_name: "acme/root-files")
       ingest(root, [example_spec(file_path: "smoke_spec.rb", duration: 3.0, line_number: 1),
@@ -206,6 +214,7 @@ RSpec.describe "GET /api/v1/repository — latest_run.spec_directory_files", typ
   # refuses for an unknown `?branch=`, where the ask is RESTATED beside a zero rather than answered
   # with somebody else's rows.
   describe "the two ways this key can be empty" do
+    # @intent: { entity: "spec_directory_files", action: "spell an unasked block as null", behavior: "with no spec_directory parameter the key is present but null while the rest of latest_run is untouched", layer: "request" }
     it "is null — with the key present — when no area was asked for" do
       body = get_repository
 
@@ -217,6 +226,7 @@ RSpec.describe "GET /api/v1/repository — latest_run.spec_directory_files", typ
       expect(body.dig("latest_run", "spec_directories", "rows").length).to eq(3)
     end
 
+    # @intent: { entity: "spec_directory_files", action: "answer an empty area with a block", behavior: "an area with no recorded rows yields a present block with zero counts naming the asked path, not an error", layer: "request" }
     it "is a present block with no rows, naming the area, when the run recorded nothing there" do
       served = block(query: { spec_directory: "spec/ghosts" })
 
@@ -229,6 +239,7 @@ RSpec.describe "GET /api/v1/repository — latest_run.spec_directory_files", typ
     # The pair, side by side, which is the assertion neither example above can make on its own: a
     # client can tell the two apart WITHOUT knowing what it sent, because the second never wears the
     # first's spelling.
+    # @intent: { entity: "spec_directory_files", action: "distinguish the two empty answers", behavior: "null versus a present empty block keeps no-ask separable from asked-but-empty without the client remembering its request", layer: "request" }
     it "spells the two differently, so a client can tell which one it got" do
       expect(block).to be_nil
       expect(block(query: { spec_directory: "spec/ghosts" })).not_to be_nil
@@ -237,6 +248,7 @@ RSpec.describe "GET /api/v1/repository — latest_run.spec_directory_files", typ
 
     # A near miss is one of the ordinary ways to arrive at the empty answer — a stale bookmark, a
     # directory renamed since, a typed path with a character missing — and none of them is an error.
+    # @intent: { entity: "spec_directory_files", action: "answer a typo with the empty block", behavior: "a near-miss path gets the empty block naming it rather than a prefix match, an error, or somebody else rows", layer: "request" }
     it "answers a typo with the empty block rather than an error or a prefix match" do
       served = block(query: { spec_directory: "spec/model" })
 
@@ -248,6 +260,7 @@ RSpec.describe "GET /api/v1/repository — latest_run.spec_directory_files", typ
     # There is no `latest_run` at all for a repository whose CI has never reported, so the ask
     # cannot conjure one — the rule the whole block follows, restated here because this is one of
     # the three keys on it a client can ask for by name.
+    # @intent: { entity: "spec_directory_files", action: "stay null for a silent repository", behavior: "a repository CI never reported on has no latest_run at all, so the ask cannot conjure one", layer: "request" }
     it "serves no block at all when CI has never reported" do
       silent = create_repository(user: @user, github_full_name: "acme/never-ran")
 
@@ -275,6 +288,7 @@ RSpec.describe "GET /api/v1/repository — latest_run.spec_directory_files", typ
 
     # THE positive path, beside the group, which is what separates "the guard read the parameter"
     # from "the endpoint ignores this parameter entirely".
+    # @intent: { entity: "spec_directory_files", action: "honour a well-formed path", behavior: "a genuine directory string serves that area rows, separating a reading guard from a parameter the endpoint ignores", layer: "request" }
     it "honours a spec_directory that IS a path" do
       expect(block(query: { spec_directory: "spec/models" })["rows"].length).to eq(3)
     end
@@ -282,6 +296,7 @@ RSpec.describe "GET /api/v1/repository — latest_run.spec_directory_files", typ
     # An empty ask is no ask, not a comparison against the empty string: `DIRECTORY_EXPRESSION`
     # coalesces a path with no separator to `.`, so no row's area can be blank and an empty ask
     # would open a block guaranteed to hold nothing.
+    # @intent: { entity: "spec_directory_files", action: "treat an empty path as no ask", behavior: "an empty spec_directory strips to no ask rather than opening a block no row could ever match", layer: "request" }
     it "treats an empty spec_directory as no ask" do
       expect(block(query: { spec_directory: "" })).to be_nil
     end
@@ -292,6 +307,7 @@ RSpec.describe "GET /api/v1/repository — latest_run.spec_directory_files", typ
   # a read that was paid for anyway. Here the gate is the ASK and it is decided before any query is
   # issued, so a client that never sends the parameter pays nothing at all for the key's existence.
   describe "what the drill-in costs the endpoint" do
+    # @intent: { entity: "spec_directory_files", action: "cost one query when asked", behavior: "the ask adds exactly one query over baseline, the empty answer costs the same one, and a malformed shape costs none", layer: "request" }
     it "adds exactly one query when asked, and none when not" do
       # Warmed first, on the precedent the sibling cost blocks set: the very first request of an
       # example pays for state a second one does not — an API key's first use is recorded — and a
@@ -316,6 +332,7 @@ RSpec.describe "GET /api/v1/repository — latest_run.spec_directory_files", typ
     # partition it belongs to come from spec/support/observation_grain_reads.rb, which is also where
     # the argument for matching every grain POSITIVELY is made — and where this grain's pattern is
     # separated from the by-file rollup's, which groups the same column and ranks the same way.
+    # @intent: { entity: "spec_directory_files", action: "read its own grain once", behavior: "the classified partition accounts for every observation read and the drill-in adds exactly one directory-files read only when asked", layer: "request" }
     it "reads spec_observations once for its own grain, and leaves every other grain alone" do
       area, file, example, description, flakiness, growth, directory_files =
         observation_reads_by_grain { get_repository(query: { spec_directory: "spec/models" }) }
@@ -344,6 +361,7 @@ RSpec.describe "GET /api/v1/repository — latest_run.spec_directory_files", typ
     # area of 4 files and one of 200 cost the same single query. A serializer that fetched the rows
     # and grouped them in Ruby, or that took a second pass for `file_count`, reads as more here and
     # as more again as the suite grows.
+    # @intent: { entity: "spec_directory_files", action: "stay flat as the area widens", behavior: "an area of two hundred files costs the same single read as one of four because the query is bounded and capped", layer: "request" }
     it "reads it once however many files the area holds" do
       big = create_repository(user: @user, github_full_name: "acme/wide-area")
       ingest(big, Array.new(200) do |index|
@@ -371,6 +389,7 @@ RSpec.describe "GET /api/v1/repository — latest_run.spec_directory_files", typ
       repo
     end
 
+    # @intent: { entity: "spec_directory_files", action: "disclose a truncated area", behavior: "an area past the limit serves the limit rows but reports the true file and recorded counts beside the limit", layer: "request" }
     it "serves the limit's worth of rows, and says how many files the area holds" do
       served = block(key: capped.api_keys.create!, query: { spec_directory: "spec/models" })
 
@@ -395,6 +414,7 @@ RSpec.describe "GET /api/v1/repository — latest_run.spec_directory_files", typ
       repo
     end
 
+    # @intent: { entity: "spec_directory_files", action: "serve null totals when untimed", behavior: "an area with no timings serves null total_seconds and a zero timed_count rather than zeros nobody measured", layer: "request" }
     it "serves null totals rather than zeros, and says the area timed nothing" do
       served = block(key: untimed.api_keys.create!, query: { spec_directory: "spec/models" })
 
@@ -417,6 +437,7 @@ RSpec.describe "GET /api/v1/repository — latest_run.spec_directory_files", typ
              commit_sha: "feedfacecafe0002", branch: "feature/x")
     end
 
+    # @intent: { entity: "spec_directory_files", action: "compose with a branch ask", behavior: "the drill-in keeps describing the newest run whatever branch the window was narrowed to, while history narrows independently", layer: "request" }
     it "describes the latest run under a branch ask, and narrows history independently" do
       body = get_repository(query: { spec_directory: "spec/models", branch: "main" })
 
@@ -430,6 +451,7 @@ RSpec.describe "GET /api/v1/repository — latest_run.spec_directory_files", typ
       expect(body["history"].map { it["commit_sha"] }).to eq(["feedfacecafe0001"])
     end
 
+    # @intent: { entity: "spec_directory_files", action: "ignore the branch for its own answer", behavior: "the block is identical with and without the branch ask because latest_run is never re-anchored", layer: "request" }
     it "serves the same drill-in with and without the branch ask" do
       with_branch = block(query: { spec_directory: "spec/models", branch: "main" })
 
@@ -455,6 +477,7 @@ RSpec.describe "GET /api/v1/repository — latest_run.spec_directory_files", typ
     # the half the `NULLS LAST` in the aggregate exists to get right. Every figure comes off the
     # presenter rather than off the fixture's numbers: two independent hand-written expectations
     # would both still pass if the endpoint started reading a different run or a different area.
+    # @intent: { entity: "spec_directory_files", action: "match the presenter the panel uses", behavior: "the serialized rows equal the presenter figures the repositories#show panel renders from for the same run and area", layer: "request" }
     it "serves the same rows, in the same order, that the panel renders from" do
       served = block(query: { spec_directory: "spec/models" })
       shown = SpecDirectoryFiles.for(repository.latest_test_run, "spec/models")
@@ -474,6 +497,7 @@ RSpec.describe "GET /api/v1/repository — latest_run.spec_directory_files", typ
     # — the duration through `SpecObservation.humanized_duration`, the seam every grain on that page
     # renders through, rather than through a hand-rolled `"%.2fs"` that would be a second definition
     # of the spelling.
+    # @intent: { entity: "spec_directory_files", action: "match the rendered page", behavior: "the panel prints labels built from the same operands the block serves, so both surfaces name the same files in the same order", layer: "request" }
     it "names the same files, with the same operands, as the panel prints" do
       served = block(query: { spec_directory: "spec/models" })
       get repository_path(repository, spec_directory: "spec/models")

@@ -31,12 +31,14 @@ RSpec.describe "POST /api/v1/ingest", type: :request do
       )
     end
 
+    # @intent: { entity: "POST /api/v1/ingest", action: "accept a well-formed run", behavior: "a structurally valid JSON envelope from a repository key is acknowledged with 202 Accepted rather than an error status", layer: "request" }
     it "accepts it with 202" do
       ingest(body)
 
       expect(response).to have_http_status(:accepted)
     end
 
+    # @intent: { entity: "TestRun", action: "record a run", behavior: "one POST creates exactly one row carrying the repository, commit, branch, duration and spec counts belonging to that delivery", layer: "request" }
     it "records a TestRun whose counts are derived from the specs it was sent" do
       expect { ingest(body) }.to change(TestRun, :count).by(1)
 
@@ -49,6 +51,7 @@ RSpec.describe "POST /api/v1/ingest", type: :request do
       expect(run.annotated_specs_count).to eq(2)
     end
 
+    # @intent: { entity: "TestRun", action: "derive spec counts", behavior: "total and annotated counts are computed server-side from the specs array, so client-supplied counter values are ignored on the wire", layer: "request" }
     it "derives the counts itself rather than trusting the ones the client sent" do
       ingest(body.merge(total_specs_count: 999, annotated_specs_count: 999))
 
@@ -56,6 +59,7 @@ RSpec.describe "POST /api/v1/ingest", type: :request do
       expect(TestRun.last.annotated_specs_count).to eq(2)
     end
 
+    # @intent: { entity: "POST /api/v1/ingest", action: "answer with the documented body", behavior: "the 202 response is exactly the published field set: run id, totals, ratio, recorded and identified counts, and embedding status", layer: "request" }
     it "returns the documented body" do
       ingest(body)
 
@@ -73,6 +77,7 @@ RSpec.describe "POST /api/v1/ingest", type: :request do
     # The 100× trap: `TestRun#annotated_ratio` is 66.7 and the dashboard prints it with a `%`,
     # while the API field is documented as a 0–1 fraction. Pinned here because the two are
     # indistinguishable in a JSON body until a client is already 100× wrong.
+    # @intent: { entity: "annotated_ratio", action: "render the fraction", behavior: "the API field is a 0-1 fraction even though the model and dashboard carry the same figure as a percentage, so the two scales never leak across", layer: "request" }
     it "reports annotated_ratio as a 0-1 fraction, not the dashboard's percentage" do
       ingest(body)
 
@@ -83,11 +88,13 @@ RSpec.describe "POST /api/v1/ingest", type: :request do
     # Identity resolution is `Ingest::IdentityResolutionJob`'s and writes `spec_identities`.
     # `spec_intents` is a different table with a different (positional) key and no writer at all —
     # see `db/migrate/20260811120000_create_spec_identities.rb` for why identity did not go there.
+    # @intent: { entity: "SpecIntent", action: "avoid side writes", behavior: "a successful delivery leaves the positional spec_intents table untouched because identity resolution owns that seam asynchronously", layer: "request" }
     it "persists no spec_intents" do
       expect { ingest(body) }.not_to change(SpecIntent, :count)
     end
 
     # The seam is filled, so it may finally say so — and only because it genuinely enqueued.
+    # @intent: { entity: "POST /api/v1/ingest", action: "report embedding status", behavior: "queued is answered only when an IdentityResolutionJob was genuinely enqueued, and the job argument is the run id alone", layer: "request" }
     it "reports queued, and has a job to show for it" do
       expect { ingest(body) }.to have_enqueued_job(Ingest::IdentityResolutionJob)
 
@@ -100,6 +107,7 @@ RSpec.describe "POST /api/v1/ingest", type: :request do
     # The synchronous half answers 202 before any per-spec work, so nothing is resolved yet at the
     # moment the client reads the body. Asserted rather than assumed: a resolution that had crept
     # into the request would be 20,000 embeddings inside the run's `FOR UPDATE` lock.
+    # @intent: { entity: "SpecIdentity", action: "defer resolution inline", behavior: "nothing is resolved during the request: no identity rows appear and every observation keeps a null spec_identity_id until the job runs", layer: "request" }
     it "resolves nothing inline — the identity work is genuinely asynchronous" do
       expect { ingest(body) }.not_to change(SpecIdentity, :count)
 
@@ -109,6 +117,7 @@ RSpec.describe "POST /api/v1/ingest", type: :request do
     # The columns the resolver reads. Until now `Ingest::Payload` validated the intent triple,
     # counted it into `annotated_specs_count` and then dropped it, which forced every cross-run
     # read onto `name` alone and made annotating a test change nothing about its identity.
+    # @intent: { entity: "SpecObservation", action: "store the intent triple", behavior: "entity, action and behavior sent for an annotated example are persisted verbatim on that example row for the resolver to read later", layer: "request" }
     it "keeps the intent triple the client sent, at the observation" do
       ingest(body)
 
@@ -119,6 +128,7 @@ RSpec.describe "POST /api/v1/ingest", type: :request do
         .to eq(["Invoice", "finalize", "locks the line items once the invoice is finalized"])
     end
 
+    # @intent: { entity: "SpecObservation", action: "null the intent columns", behavior: "an unannotated example stores nulls for entity, action and behavior instead of any defaulted or invented triple", layer: "request" }
     it "leaves an unannotated example's intent columns null rather than inventing a triple" do
       ingest(body)
 
@@ -137,6 +147,7 @@ RSpec.describe "POST /api/v1/ingest", type: :request do
     # Asserted by READING THE ROW BACK, never by expecting the recorder to have been called with
     # something: a message expectation would pass against a column that was never added and against
     # an `upsert_all` that silently dropped the key.
+    # @intent: { entity: "SpecObservation", action: "store the declared layer", behavior: "the intent_layer column keeps the layer value each annotated example declared, read back from the row rather than from the recorder call", layer: "request" }
     it "keeps the layer each annotated example declared, at the observation" do
       ingest(body)
 
@@ -152,6 +163,7 @@ RSpec.describe "POST /api/v1/ingest", type: :request do
     # of a nil intent — and specifically the `presence_of` path, which is what keeps `""` from
     # reaching the column. A blank string would make "declared no layer" indistinguishable from a
     # layer whose name is empty, so `be_nil` is asserted rather than `be_blank`.
+    # @intent: { entity: "SpecObservation", action: "null the layer column", behavior: "an unannotated example stores a null layer, never an empty string, so absence stays distinguishable from a blank name", layer: "request" }
     it "leaves an unannotated example's layer null rather than defaulting or blanking it" do
       ingest(body)
 
@@ -170,6 +182,7 @@ RSpec.describe "POST /api/v1/ingest", type: :request do
     # raised and a 202 returned. The failure is completely silent, which is why the ORDER here is
     # load bearing and stated: unannotated FIRST, annotated SECOND. Reversing the fixture makes this
     # example pass against the broken recorder.
+    # @intent: { entity: "SpecObservation", action: "keep layers under mixed keys", behavior: "upsert_all takes its column list from the first row, so an unannotated spec leading the payload still cannot strip the layer off later rows", layer: "request" }
     it "keeps an annotated example's layer when the first spec of the delivery is unannotated" do
       ingest(ingest_payload(specs: [unannotated_spec(file_path: "spec/models/user_spec.rb", line_number: 1),
                                     annotated_spec(file_path: "spec/requests/checkout_spec.rb",
@@ -189,6 +202,7 @@ RSpec.describe "POST /api/v1/ingest", type: :request do
     # Nothing derived may ever be written to this column (see the migration): a column mixing an
     # author's claim with a directory guess could answer neither "what did this test say it was?"
     # nor "where does this file sit?".
+    # @intent: { entity: "SpecObservation", action: "honour the declared layer", behavior: "a spec declaring request while living under spec/models keeps request, so path-derived inference never overrides the annotation", layer: "request" }
     it "stores the DECLARED layer even when the file's directory implies a different one" do
       ingest(ingest_payload(specs: [annotated_spec(file_path: "spec/models/invoice_spec.rb",
                                                    line_number: 4, layer: "request")]))
@@ -199,6 +213,7 @@ RSpec.describe "POST /api/v1/ingest", type: :request do
       expect(observation.intent_layer).to eq("request")
     end
 
+    # @intent: { entity: "TestRun", action: "scope by credential", behavior: "the run is attributed to the repository that owns the presented API key and no other repository gains a run", layer: "request" }
     it "scopes the run to the repository behind the key" do
       other = create_repository(user: create_user(github_uid: "2002", github_handle: "hubot"),
                                 github_full_name: "acme/ledger")
@@ -208,6 +223,7 @@ RSpec.describe "POST /api/v1/ingest", type: :request do
       expect(repository.test_runs).to be_empty
     end
 
+    # @intent: { entity: "TestRun", action: "allow omitted metadata", behavior: "when branch and duration are absent from the envelope their columns stay null rather than being defaulted", layer: "request" }
     it "leaves branch and duration blank when the client omits them" do
       ingest(ingest_payload)
 
@@ -241,6 +257,7 @@ RSpec.describe "POST /api/v1/ingest", type: :request do
       ingest_payload(commit_sha: "deadbee", branch: "main", ci_run_id: ci_run_id, specs: specs, **attrs)
     end
 
+    # @intent: { entity: "TestRun", action: "accumulate shards into one run", behavior: "four POSTs sharing a ci_run_id land as a single row whose denominator and annotated numerator cover the whole suite", layer: "request" }
     it "lands the whole run as one TestRun whose denominator is the whole suite" do
       expect { shards.each { |shard| ingest(shard_payload(**shard)) } }
         .to change(TestRun, :count).by(1)
@@ -253,6 +270,7 @@ RSpec.describe "POST /api/v1/ingest", type: :request do
 
     # Summing would report ~4× the wall clock, because the shards ran at the same time. The number
     # has to be reconcilable with what the operator's CI dashboard shows for the build.
+    # @intent: { entity: "TestRun", action: "take the slowest shard duration", behavior: "duration is a maximum over the shards because they ran concurrently, never a sum of their wall clocks", layer: "request" }
     it "reports the slowest shard's duration, not the sum of all four" do
       [61.0, 58.5, 74.25, 60.0].each_with_index do |duration, index|
         ingest(shard_payload(**shards[index], duration_seconds: duration))
@@ -261,6 +279,7 @@ RSpec.describe "POST /api/v1/ingest", type: :request do
       expect(TestRun.last.duration_seconds).to eq(74.25)
     end
 
+    # @intent: { entity: "TestRun", action: "widen the duration", behavior: "a later shard reporting a longer duration raises the run maximum even when the slowest shard arrived first", layer: "request" }
     it "widens the duration even when the slowest shard arrives first" do
       ingest(shard_payload(total: 2, annotated: 1, duration_seconds: 90.0))
       ingest(shard_payload(total: 2, annotated: 1, duration_seconds: 10.0))
@@ -268,6 +287,7 @@ RSpec.describe "POST /api/v1/ingest", type: :request do
       expect(TestRun.last.duration_seconds).to eq(90.0)
     end
 
+    # @intent: { entity: "TestRun", action: "keep a lone duration", behavior: "when only the first shard reports a duration the run keeps that measurement instead of losing it to later nils", layer: "request" }
     it "takes the first shard's duration when a later shard reports none" do
       ingest(shard_payload(total: 2, annotated: 1, duration_seconds: 12.5))
       ingest(shard_payload(total: 2, annotated: 1))
@@ -277,6 +297,7 @@ RSpec.describe "POST /api/v1/ingest", type: :request do
 
     # `update_counters` writes past the loaded instance, so an un-reloaded record would answer with
     # the previous shard's numbers — the client would read a total that never existed.
+    # @intent: { entity: "POST /api/v1/ingest", action: "answer with running totals", behavior: "each shard response reflects the run accumulated so far, including counts written by update_counters past the loaded instance", layer: "request" }
     it "answers each shard with the run's totals so far, not the stale ones" do
       ingest(shard_payload(total: 10, annotated: 4))
       ingest(shard_payload(total: 6, annotated: 2))
@@ -289,6 +310,7 @@ RSpec.describe "POST /api/v1/ingest", type: :request do
       )
     end
 
+    # @intent: { entity: "TestRun", action: "fix run identity", behavior: "commit and branch stay as the first shard named them, so late arrivals cannot re-key the accumulated run", layer: "request" }
     it "keeps the run under the commit and branch the first shard named" do
       shards.each { |shard| ingest(shard_payload(**shard)) }
 
@@ -297,6 +319,7 @@ RSpec.describe "POST /api/v1/ingest", type: :request do
 
     # `commit_sha` cannot be the key: a re-run of the same commit is genuinely a second run, and
     # merging the two would hide a suite that changed between them.
+    # @intent: { entity: "TestRun", action: "separate runs by run id", behavior: "two builds of the same commit with different ci_run_ids are two runs, never merged into one row", layer: "request" }
     it "keeps two CI runs of the same commit apart when their run ids differ" do
       expect do
         ingest(shard_payload(total: 4, annotated: 2, ci_run_id: "gha-42"))
@@ -306,6 +329,7 @@ RSpec.describe "POST /api/v1/ingest", type: :request do
       expect(TestRun.pluck(:total_specs_count)).to all(eq(4))
     end
 
+    # @intent: { entity: "TestRun", action: "scope accumulation by repository", behavior: "the ci_run_id key is scoped to the repository behind the credential, so the same run id in two repositories never collides", layer: "request" }
     it "scopes accumulation to the repository behind the key, not to the run id alone" do
       other = create_repository(user: create_user(github_uid: "2002", github_handle: "hubot"),
                                 github_full_name: "acme/ledger")
@@ -349,6 +373,7 @@ RSpec.describe "POST /api/v1/ingest", type: :request do
 
     def run_all_shards = shards.each { |shard| ingest(shard_payload(**shard)) }
 
+    # @intent: { entity: "TestRun", action: "land the first attempt", behavior: "delivering every named shard once produces a single run whose totals already span the whole suite", layer: "request" }
     it "still lands the first attempt as one TestRun over the whole suite" do
       expect { run_all_shards }.to change(TestRun, :count).by(1)
 
@@ -357,6 +382,7 @@ RSpec.describe "POST /api/v1/ingest", type: :request do
 
     # "Re-run all jobs". Every shard reports a second time under the same run id. Adding would give
     # a 40,000 denominator for a 20,000-example suite.
+    # @intent: { entity: "TestRun", action: "stay idempotent on full redelivery", behavior: "every shard reporting a second time under the same run id leaves the denominator unchanged instead of doubling it", layer: "request" }
     it "does not double the suite when every shard reports again" do
       run_all_shards
 
@@ -371,6 +397,7 @@ RSpec.describe "POST /api/v1/ingest", type: :request do
     # full re-run — so this is the ordinary path, not a corner. Re-adding shard 3 on top of itself
     # gave a 25,100 denominator for a 20,000-example suite, with the ratio dragged off by however
     # annotated that shard happened to be.
+    # @intent: { entity: "TestRun", action: "stay truthful on partial re-run", behavior: "re-running only the failed shard keeps the run totals correct, the exact gesture a sharded suite exists to support", layer: "request" }
     it "reports the truth when only the failed shard is re-run" do
       run_all_shards
 
@@ -383,6 +410,7 @@ RSpec.describe "POST /api/v1/ingest", type: :request do
     # And the re-run is genuinely a *refresh*, not a no-op: a shard whose numbers changed between
     # attempts — someone pushed an annotation, a file moved between shards — replaces its own
     # slice rather than being ignored.
+    # @intent: { entity: "TestRun", action: "refresh a re-run shard", behavior: "a shard whose numbers changed between attempts replaces its own slice rather than being ignored as a duplicate", layer: "request" }
     it "takes the re-run shard's new numbers in place of its old ones" do
       run_all_shards
 
@@ -392,6 +420,7 @@ RSpec.describe "POST /api/v1/ingest", type: :request do
       expect(TestRun.sole).to have_attributes(total_specs_count: 20_000, annotated_specs_count: 5500)
     end
 
+    # @intent: { entity: "TestRunShard", action: "keep one row per shard", behavior: "repeat deliveries of a named shard update the same shard row instead of appending one row per POST", layer: "request" }
     it "keeps one row per shard rather than one per delivery" do
       run_all_shards
       run_all_shards
@@ -402,6 +431,7 @@ RSpec.describe "POST /api/v1/ingest", type: :request do
     # `duration_seconds` is a MAX over the shards, and it is derived like the counts are — so when
     # the slowest shard is re-run and comes back faster, the run gets *faster*. An implementation
     # that only ever widened the maximum would be stuck at the old high-water mark forever.
+    # @intent: { entity: "TestRun", action: "narrow the duration", behavior: "when the slowest shard re-runs faster the run maximum comes down, so it is a true max and not a high-water mark", layer: "request" }
     it "narrows the duration when the slowest shard is re-run and comes back faster" do
       shards.each_with_index { |shard, index| ingest(shard_payload(**shard, duration_seconds: [61.0, 58.5, 74.25, 60.0][index])) }
       expect(TestRun.sole.duration_seconds).to eq(74.25)
@@ -413,6 +443,7 @@ RSpec.describe "POST /api/v1/ingest", type: :request do
 
     # A shard index is only unique *within* a run — every run has a shard "1". Scoping the key to
     # the run is what stops two builds' shard 1s from overwriting each other.
+    # @intent: { entity: "TestRunShard", action: "scope shard names to runs", behavior: "a shard id is unique only within its run, so two builds sharing a shard name never overwrite each other", layer: "request" }
     it "does not let one run's shard overwrite another run's shard of the same name" do
       ingest(shard_payload(total: 10, annotated: 4, shard_id: "1"))
       ingest(shard_payload(total: 20, annotated: 9, shard_id: "1", ci_run_id: "gha-43"))
@@ -427,6 +458,7 @@ RSpec.describe "POST /api/v1/ingest", type: :request do
     # indistinguishable — so they are counted (losing one would be worse) but a redelivery is
     # counted again. `Ingest::RunRecorder#upsert_shard` and the client README's sharding section
     # both say so; this is the executable version of that sentence.
+    # @intent: { entity: "TestRun", action: "count unnamed shard redeliveries", behavior: "slices the client did not name are counted on arrival, so a redelivery of an unnamed slice is honestly counted twice", layer: "request" }
     it "cannot deduplicate shards the client did not name, and counts a redelivery twice" do
       ingest(shard_payload(total: 100, annotated: 25, shard_id: nil))
       ingest(shard_payload(total: 100, annotated: 25, shard_id: nil))
@@ -439,6 +471,7 @@ RSpec.describe "POST /api/v1/ingest", type: :request do
   # where a non-partial one would show itself: every laptop run in a repository collapsing into a
   # single ever-growing row.
   describe "a run that no CI provider named" do
+    # @intent: { entity: "TestRun", action: "give unnamed runs their own rows", behavior: "without a ci_run_id each delivery is its own run, so local laptop runs never collapse into one growing row", layer: "request" }
     it "gives each unidentified run its own TestRun, exactly as before" do
       expect do
         ingest(ingest_payload(commit_sha: "deadbee", specs: [annotated_spec]))
@@ -449,6 +482,7 @@ RSpec.describe "POST /api/v1/ingest", type: :request do
       expect(TestRun.pluck(:total_specs_count)).to eq([1, 1])
     end
 
+    # @intent: { entity: "TestRun", action: "blank means absent", behavior: "a whitespace ci_run_id is treated as no run id at all and cannot act as an accumulation key", layer: "request" }
     it "treats a blank ci_run_id as no run id at all rather than as a key" do
       expect do
         ingest(ingest_payload(ci_run_id: "   ", specs: [annotated_spec]))
@@ -471,6 +505,7 @@ RSpec.describe "POST /api/v1/ingest", type: :request do
     end
     let(:recorder) { Ingest::RunRecorder.new(repository, attributes, shard_id: "shard-2") }
 
+    # @intent: { entity: "Ingest::RunRecorder", action: "recover from a lost race", behavior: "when the run row appears between lookup and insert the loser rescues the uniqueness error and folds its counts into the winner", layer: "request" }
     it "recovers when the row appears between the lookup and the insert, without losing counts" do
       winner = nil
       lookups = 0
@@ -501,6 +536,7 @@ RSpec.describe "POST /api/v1/ingest", type: :request do
                                      duration_seconds: 40.0)
     end
 
+    # @intent: { entity: "Ingest::RunRecorder", action: "cap collision retries", behavior: "an unresolvable unique violation is re-raised after a bounded number of attempts instead of retrying forever", layer: "request" }
     it "gives up rather than retrying forever when the collision never resolves" do
       # A row that is always absent on lookup and always present on insert — the pathological case
       # the attempt cap exists for. Retrying it forever would hang the request instead.
@@ -557,6 +593,7 @@ RSpec.describe "POST /api/v1/ingest", type: :request do
       end
     end
 
+    # @intent: { entity: "Ingest::RunRecorder", action: "survive a shard write race", behavior: "two deliveries of the same shard writing at once leave one shard row, last writer winning, with the run recomputed from it", layer: "request" }
     it "overwrites the winner's row rather than raising when both deliveries write at once" do
       winner = nil
       raced = false
@@ -595,6 +632,7 @@ RSpec.describe "POST /api/v1/ingest", type: :request do
   # Missing annotations are never an ingestion failure — only malformed ones are. Adoption of the
   # protocol has to be opt-in and gradual, so a suite that annotates nothing still reports.
   describe "a run with no annotations" do
+    # @intent: { entity: "POST /api/v1/ingest", action: "accept an unannotated suite", behavior: "a run of only unannotated specs is accepted with a zero ratio, because adoption of the protocol is gradual by design", layer: "request" }
     it "accepts a run of entirely unannotated specs" do
       ingest(ingest_payload(specs: [unannotated_spec(line_number: 1),
                                     unannotated_spec(line_number: 2)]))
@@ -609,6 +647,7 @@ RSpec.describe "POST /api/v1/ingest", type: :request do
     # the body so a client can still see the suite was empty. `GET /api/v1/repository` answers the
     # same run the same way — pinned directly in repository_latest_run_spec.rb, since two request
     # specs that cannot see each other is what let these two endpoints disagree in the first place.
+    # @intent: { entity: "POST /api/v1/ingest", action: "accept an empty spec list", behavior: "an empty specs array still answers 202 with zero counts and a null ratio, since nothing was measured", layer: "request" }
     it "accepts a run that reported no specs at all" do
       ingest(ingest_payload(specs: []))
 
@@ -626,6 +665,7 @@ RSpec.describe "POST /api/v1/ingest", type: :request do
     # Worth pinning rather than inferring: the public integration guide documents when a client
     # must parse this field as nullable, and stating the rule per-request instead of per-run sends
     # a sharded reporter looking for a `null` it will never see.
+    # @intent: { entity: "POST /api/v1/ingest", action: "answer numbers for an empty shard", behavior: "an empty shard of a run that already has specs gets a numeric ratio because the run totals are recomputed from all shards", layer: "request" }
     it "reports a number, not null, for an empty shard of a run that has specs" do
       ingest(ingest_payload(commit_sha: "deadbee", ci_run_id: "gha-42", shard_id: "1",
                             specs: [unannotated_spec(line_number: 1), unannotated_spec(line_number: 2)]))
@@ -641,6 +681,7 @@ RSpec.describe "POST /api/v1/ingest", type: :request do
     # and they answered the same run `0.0` and `null` respectively for as long as that was true.
     # A single `TestRun#annotated_fraction` is what makes them agree; this reads BOTH bodies in one
     # example so the agreement is asserted rather than inferred from two files independently.
+    # @intent: { entity: "annotated_ratio", action: "agree across endpoints", behavior: "the ingest response and the repository show read the same run with the same null ratio, so the two surfaces cannot drift", layer: "request" }
     it "agrees with GET /api/v1/repository about the same run" do
       ingest(ingest_payload(specs: []))
       ingested = response.parsed_body
@@ -657,6 +698,7 @@ RSpec.describe "POST /api/v1/ingest", type: :request do
   # suite that annotates nothing it is the only thing describing a test, so it is the field the
   # cold-start case rests on — and the envelope used to drop it at the door.
   describe "the text that represents a test" do
+    # @intent: { entity: "SpecObservation", action: "accept a named spec", behavior: "an unannotated spec carrying a name is accepted and the name is stored verbatim as the example representation", layer: "request" }
     it "accepts an unannotated spec carrying a name" do
       ingest(ingest_payload(specs: [unannotated_spec(name: "User is valid with a handle")]))
 
@@ -668,6 +710,7 @@ RSpec.describe "POST /api/v1/ingest", type: :request do
     # word about it, and there is no field on which to record that condition. Rejected and named,
     # rather than accepted and silently unrepresentable. No conforming client is affected — the
     # formatter has always sent `name`.
+    # @intent: { entity: "POST /api/v1/ingest", action: "reject an unrepresentable spec", behavior: "a spec with neither intent nor name is refused with a 400 that names the offending file and line, and nothing is persisted", layer: "request" }
     it "rejects a spec with neither an intent nor a name, naming the offending spec" do
       ingest(ingest_payload(specs: [unannotated_spec(file_path: "spec/models/user_spec.rb",
                                                      line_number: 40).except(:name)]))
@@ -679,12 +722,14 @@ RSpec.describe "POST /api/v1/ingest", type: :request do
 
     # The annotation is a different field from the name, and this is what keeps the rejection above
     # from quietly becoming "annotations are mandatory".
+    # @intent: { entity: "POST /api/v1/ingest", action: "accept an intent in lieu of a name", behavior: "an annotated spec without a name passes, since its intent triple already represents it downstream", layer: "request" }
     it "accepts an annotated spec that carries no name, because its intent already represents it" do
       ingest(ingest_payload(specs: [annotated_spec.except(:name)]))
 
       expect(response).to have_http_status(:accepted)
     end
 
+    # @intent: { entity: "POST /api/v1/ingest", action: "reject a blank name", behavior: "a name that is present but not a non-empty string is refused, and the run is not written", layer: "request" }
     it "rejects a name that is present but not a non-empty string" do
       ingest(ingest_payload(specs: [unannotated_spec(name: "   ")]))
 
@@ -693,6 +738,7 @@ RSpec.describe "POST /api/v1/ingest", type: :request do
       expect(TestRun.count).to eq(0)
     end
 
+    # @intent: { entity: "POST /api/v1/ingest", action: "reject a mistyped name", behavior: "a name of the wrong type is refused even when the spec also carries an intent that would outrank it", layer: "request" }
     it "rejects a name of the wrong type even when an intent would outrank it" do
       ingest(ingest_payload(specs: [annotated_spec(name: 42)]))
 
@@ -702,6 +748,7 @@ RSpec.describe "POST /api/v1/ingest", type: :request do
 
     # The class's stated contract is *collect every failure, never raise on the first* — a client
     # fixing a malformed suite has to see the whole list, not one entry per round trip.
+    # @intent: { entity: "POST /api/v1/ingest", action: "collect every spec error", behavior: "each offending spec contributes one entry to details alongside envelope errors, so a client fixes the whole suite in one round trip", layer: "request" }
     it "reports one error per offending spec, collected alongside the envelope's other errors" do
       ingest(ingest_payload(specs: [unannotated_spec(line_number: 1, name: ""),
                                     unannotated_spec(line_number: 2, name: 42),
@@ -716,6 +763,7 @@ RSpec.describe "POST /api/v1/ingest", type: :request do
     end
 
     # One error, not two: a blank name on a spec with no intent breaks one rule about one field.
+    # @intent: { entity: "POST /api/v1/ingest", action: "report one error per rule broken", behavior: "a spec that is both nameless and unrepresentable yields a single detail entry, not one per violated rule", layer: "request" }
     it "does not double-report a spec that is both nameless and unrepresentable" do
       ingest(ingest_payload(specs: [unannotated_spec(name: "")]))
 
@@ -734,6 +782,7 @@ RSpec.describe "POST /api/v1/ingest", type: :request do
        unannotated_spec(file_path: "spec/models/user_spec.rb", line_number: 3)]
     end
 
+    # @intent: { entity: "POST /api/v1/ingest", action: "hand the whole population to the seam", behavior: "the embedding seam receives every spec, annotated or not, so mid-adoption suites still have something to embed", layer: "request" }
     it "receives every spec in the run, annotated or not" do
       handed = nil
       allow_any_instance_of(Api::V1::IngestsController)
@@ -751,6 +800,7 @@ RSpec.describe "POST /api/v1/ingest", type: :request do
 
     # Widening what the seam sees must not weaken what it claims. The rule is the same one it was
     # written under: `"queued"` only when a job was genuinely enqueued.
+    # @intent: { entity: "POST /api/v1/ingest", action: "queue for a mixed population", behavior: "the queued status holds for a mixed population, since the seam was widened without weakening what it claims", layer: "request" }
     it "reports queued for a mixed population, annotated and not" do
       ingest(ingest_payload(specs: specs))
 
@@ -759,6 +809,7 @@ RSpec.describe "POST /api/v1/ingest", type: :request do
 
     # The other half of that rule, and the one that keeps it from being vacuous: a payload with
     # nothing to represent schedules nothing and says so.
+    # @intent: { entity: "POST /api/v1/ingest", action: "report pending for nothing to embed", behavior: "a payload with no representable spec schedules no job and answers pending rather than queued", layer: "request" }
     it "reports pending, and enqueues nothing, when there is no spec to embed" do
       expect { ingest(ingest_payload(specs: [])) }
         .not_to have_enqueued_job(Ingest::IdentityResolutionJob)
@@ -766,6 +817,7 @@ RSpec.describe "POST /api/v1/ingest", type: :request do
       expect(response.parsed_body["embedding_status"]).to eq("pending")
     end
 
+    # @intent: { entity: "POST /api/v1/ingest", action: "count the population and the slice", behavior: "the response separates the whole-spec total from the annotated slice so both adoption figures are visible", layer: "request" }
     it "counts the whole population and the annotated slice separately" do
       ingest(ingest_payload(specs: specs))
 
@@ -775,6 +827,7 @@ RSpec.describe "POST /api/v1/ingest", type: :request do
   end
 
   describe "an intent that fails the OpenTestIntent schema" do
+    # @intent: { entity: "POST /api/v1/ingest", action: "reject a short behavior", behavior: "a behavior under the schema minimum is refused with a 400 naming the file and line, and no run is written", layer: "request" }
     it "rejects a behavior below the schema's minimum length, naming the offending spec" do
       ingest(ingest_payload(specs: [annotated_spec(line_number: 12),
                                     annotated_spec(file_path: "spec/models/order_spec.rb",
@@ -786,6 +839,7 @@ RSpec.describe "POST /api/v1/ingest", type: :request do
       expect(TestRun.count).to eq(0)
     end
 
+    # @intent: { entity: "POST /api/v1/ingest", action: "reject an unknown intent property", behavior: "an intent carrying a property outside the OpenTestIntent schema is refused with the path named", layer: "request" }
     it "rejects a property the schema does not allow" do
       ingest(ingest_payload(specs: [annotated_spec(severity: "high")]))
 
@@ -793,6 +847,7 @@ RSpec.describe "POST /api/v1/ingest", type: :request do
       expect(response.parsed_body["message"]).to include("/severity")
     end
 
+    # @intent: { entity: "POST /api/v1/ingest", action: "reject a layer outside the enum", behavior: "an intent layer not in the four-token enum is refused with the field path in the message", layer: "request" }
     it "rejects a layer outside the enum" do
       ingest(ingest_payload(specs: [annotated_spec(layer: "acceptance")]))
 
@@ -800,6 +855,7 @@ RSpec.describe "POST /api/v1/ingest", type: :request do
       expect(response.parsed_body["message"]).to include("/layer")
     end
 
+    # @intent: { entity: "POST /api/v1/ingest", action: "reject a missing intent", behavior: "a spec marked annotated with no intent object is refused, since the status claims a triple that is not there", layer: "request" }
     it "rejects an annotated spec with no intent at all" do
       ingest(ingest_payload(specs: [annotated_spec.merge(intent: nil)]))
 
@@ -807,6 +863,7 @@ RSpec.describe "POST /api/v1/ingest", type: :request do
       expect(response.parsed_body["message"]).to include("intent is required")
     end
 
+    # @intent: { entity: "POST /api/v1/ingest", action: "list every schema offender", behavior: "multiple failing specs each contribute to details so the client sees all of them, not just the first", layer: "request" }
     it "reports every offending spec, not just the first" do
       ingest(ingest_payload(specs: [annotated_spec(line_number: 1, behavior: "no"),
                                     annotated_spec(line_number: 2, layer: "acceptance")]))
@@ -816,6 +873,7 @@ RSpec.describe "POST /api/v1/ingest", type: :request do
   end
 
   describe "a malformed envelope" do
+    # @intent: { entity: "POST /api/v1/ingest", action: "reject a missing commit", behavior: "a body without commit_sha is refused with a 400 and no run row is created", layer: "request" }
     it "rejects a missing commit_sha" do
       ingest({ specs: [] })
 
@@ -824,12 +882,14 @@ RSpec.describe "POST /api/v1/ingest", type: :request do
       expect(TestRun.count).to eq(0)
     end
 
+    # @intent: { entity: "POST /api/v1/ingest", action: "reject a blank commit", behavior: "a whitespace-only commit_sha fails validation the same way a missing one does", layer: "request" }
     it "rejects a blank commit_sha" do
       ingest(ingest_payload(commit_sha: "   "))
 
       expect(response).to have_http_status(:bad_request)
     end
 
+    # @intent: { entity: "POST /api/v1/ingest", action: "reject a missing specs array", behavior: "a body without specs is refused with the field named in the message", layer: "request" }
     it "rejects a missing specs array" do
       ingest({ commit_sha: "abc123" })
 
@@ -837,6 +897,7 @@ RSpec.describe "POST /api/v1/ingest", type: :request do
       expect(response.parsed_body["message"]).to include("specs")
     end
 
+    # @intent: { entity: "POST /api/v1/ingest", action: "reject a non-array specs", behavior: "specs given as an object instead of an array is refused as a bad envelope", layer: "request" }
     it "rejects specs that is not an array" do
       ingest({ commit_sha: "abc123", specs: { "0" => annotated_spec } })
 
@@ -860,6 +921,7 @@ RSpec.describe "POST /api/v1/ingest", type: :request do
     #     `spec.is_a?(Hash)` guard had been deleted.
     #
     # An array entry survives munging *and* makes the guard observable.
+    # @intent: { entity: "POST /api/v1/ingest", action: "reject a non-object entry", behavior: "a specs member that is not a JSON object is refused and diagnosed by its bare index, since it has no coordinates to name", layer: "request" }
     it "rejects a specs entry that is not a JSON object" do
       ingest(ingest_payload(specs: [annotated_spec, ["spec/models/invoice_spec.rb", 12]]))
 
@@ -876,6 +938,7 @@ RSpec.describe "POST /api/v1/ingest", type: :request do
     # because the line-only form renders a BARE INTEGER where a reader scanning for a path expects
     # one. The public integration guide documents these forms; an example each is what stops that
     # documentation drifting from `Payload#label`.
+    # @intent: { entity: "POST /api/v1/ingest", action: "label by available coordinates", behavior: "spec diagnostics fall back to whichever of file path or line number is present when only one coordinate arrived", layer: "request" }
     it "names a spec by whichever coordinate it has when it has only one" do
       ingest(ingest_payload(specs: [annotated_spec(file_path: "spec/c_spec.rb").except(:line_number)]))
 
@@ -888,6 +951,7 @@ RSpec.describe "POST /api/v1/ingest", type: :request do
         .to contain_exactly("specs[0] 9: file_path is required and must be a non-empty string")
     end
 
+    # @intent: { entity: "POST /api/v1/ingest", action: "reject a missing file path", behavior: "a spec without file_path is refused with the field named", layer: "request" }
     it "rejects a spec with no file_path" do
       ingest(ingest_payload(specs: [annotated_spec.except(:file_path)]))
 
@@ -895,6 +959,7 @@ RSpec.describe "POST /api/v1/ingest", type: :request do
       expect(response.parsed_body["message"]).to include("file_path")
     end
 
+    # @intent: { entity: "POST /api/v1/ingest", action: "reject a non-positive line number", behavior: "a line_number of zero or less is refused with the field named", layer: "request" }
     it "rejects a non-positive line_number" do
       ingest(ingest_payload(specs: [annotated_spec(line_number: 0)]))
 
@@ -902,6 +967,7 @@ RSpec.describe "POST /api/v1/ingest", type: :request do
       expect(response.parsed_body["message"]).to include("line_number")
     end
 
+    # @intent: { entity: "POST /api/v1/ingest", action: "reject an unknown status", behavior: "a spec status outside the allowed vocabulary is refused with the field named", layer: "request" }
     it "rejects an unknown status" do
       ingest(ingest_payload(specs: [annotated_spec.merge(status: "skipped")]))
 
@@ -910,6 +976,7 @@ RSpec.describe "POST /api/v1/ingest", type: :request do
     end
 
     # Dropping it silently would lose an annotation whose author believed it had shipped.
+    # @intent: { entity: "POST /api/v1/ingest", action: "reject a contradictory intent", behavior: "an unannotated spec that nevertheless carries an intent is refused rather than silently dropping the annotation", layer: "request" }
     it "rejects an unannotated spec that nevertheless carries an intent" do
       ingest(ingest_payload(specs: [unannotated_spec.merge(intent: annotated_spec[:intent])]))
 
@@ -930,6 +997,7 @@ RSpec.describe "POST /api/v1/ingest", type: :request do
     describe "a spec's own duration" do
       # The branch that used to 500. Asserted as a *status* rather than as "no exception", because
       # `NoMethodError` escaping the transaction is exactly what produced the 500.
+      # @intent: { entity: "POST /api/v1/ingest", action: "reject a Hash duration as 400", behavior: "a per-example duration arriving as a Hash is a collected validation failure, not a NoMethodError that 500s", layer: "request" }
       it "answers 400, not 500, for a Hash duration, and persists nothing" do
         ingest(ingest_payload(specs: [unannotated_spec(file_path: "spec/models/user_spec.rb",
                                                        line_number: 40,
@@ -942,6 +1010,7 @@ RSpec.describe "POST /api/v1/ingest", type: :request do
         expect(SpecObservation.count).to eq(0)
       end
 
+      # @intent: { entity: "POST /api/v1/ingest", action: "reject an Array duration", behavior: "a per-example duration arriving as an Array is refused with the standard numeric message", layer: "request" }
       it "rejects an Array duration" do
         ingest(ingest_payload(specs: [unannotated_spec(duration: [1.5])]))
 
@@ -952,6 +1021,7 @@ RSpec.describe "POST /api/v1/ingest", type: :request do
 
       # `"1.5"` is the plausible one — a producer that stringified its numbers — and `to_f` would
       # have accepted it silently. `"abc"` and `true` are the ones that fabricate 0.0 and 1.0.
+      # @intent: { entity: "POST /api/v1/ingest", action: "reject a String duration", behavior: "a stringified duration is refused even when it parses as a number, since to_f would have accepted it silently", layer: "request" }
       it "rejects a String duration even when it looks like a number" do
         ["1.5", "abc", "-3"].each do |value|
           ingest(ingest_payload(specs: [unannotated_spec(duration: value)]))
@@ -963,6 +1033,7 @@ RSpec.describe "POST /api/v1/ingest", type: :request do
         expect(SpecObservation.count).to eq(0)
       end
 
+      # @intent: { entity: "POST /api/v1/ingest", action: "reject a boolean duration", behavior: "a boolean duration is refused rather than being coerced to 1.0 and counted as a measurement", layer: "request" }
       it "rejects a boolean duration, which would otherwise be recorded as 1.0" do
         ingest(ingest_payload(specs: [unannotated_spec(duration: true)]))
 
@@ -973,6 +1044,7 @@ RSpec.describe "POST /api/v1/ingest", type: :request do
 
       # The same rule the envelope applies at the run grain, applied at the grain the run is
       # composed of — a negative timing is not a measurement at either.
+      # @intent: { entity: "POST /api/v1/ingest", action: "reject a negative duration", behavior: "the non-negative rule for run duration applies at the example grain too, so negative timings never become measurements", layer: "request" }
       it "rejects a negative duration, matching duration_seconds' rule one level up" do
         ingest(ingest_payload(specs: [unannotated_spec(duration: -0.5)]))
 
@@ -984,6 +1056,7 @@ RSpec.describe "POST /api/v1/ingest", type: :request do
       # The refusal now runs through `payload.valid? == false`, so it takes the whole 400 path —
       # including the rejection row SPGD-563 writes there. Before this change the request 500'd and
       # left no record at all, so the refusal was invisible to the observability built for it.
+      # @intent: { entity: "IngestRejection", action: "record a duration refusal", behavior: "a refused per-example duration leaves a rejection row with the collected details, keeping the refusal observable", layer: "request" }
       it "leaves an IngestRejection row behind, as every other refusal does" do
         expect { ingest(ingest_payload(specs: [unannotated_spec(duration: { seconds: 1 })])) }
           .to change(IngestRejection, :count).by(1)
@@ -993,6 +1066,7 @@ RSpec.describe "POST /api/v1/ingest", type: :request do
 
       # "Collected rather than raised" has to hold for this field too, or a client with one bad
       # duration fixes it and discovers the next error on the following round trip.
+      # @intent: { entity: "POST /api/v1/ingest", action: "collect duration errors with others", behavior: "one bad duration does not hide the other specs failures, all of which appear in the same details list", layer: "request" }
       it "does not suppress the other specs' errors" do
         ingest(ingest_payload(specs: [unannotated_spec(line_number: 1, duration: "abc"),
                                       unannotated_spec(line_number: 2, name: ""),
@@ -1009,6 +1083,7 @@ RSpec.describe "POST /api/v1/ingest", type: :request do
 
       # The accepted shapes, unchanged from `main`: the formatter's Float, an Integer, a zero, and
       # the nil the client sends for an example that never ran.
+      # @intent: { entity: "SpecObservation", action: "accept valid durations", behavior: "nil, zero, Integer and Float durations all pass through to the columns unchanged, including the null for an unrun example", layer: "request" }
       it "still accepts nil and any non-negative Integer or Float" do
         ingest(ingest_payload(specs: [unannotated_spec(file_path: "spec/a_spec.rb", line_number: 1, duration: 0.42),
                                       unannotated_spec(file_path: "spec/b_spec.rb", line_number: 2, duration: 0),
@@ -1022,6 +1097,7 @@ RSpec.describe "POST /api/v1/ingest", type: :request do
       end
     end
 
+    # @intent: { entity: "POST /api/v1/ingest", action: "reject a negative run duration", behavior: "a negative duration_seconds on the envelope is refused with the field named", layer: "request" }
     it "rejects a negative duration_seconds" do
       ingest(ingest_payload(duration_seconds: -1))
 
@@ -1034,6 +1110,7 @@ RSpec.describe "POST /api/v1/ingest", type: :request do
     # only for a branch-narrowed window, and the history and growth panels are all branch-scoped.
     # A branch arriving as a non-string would split one branch's window in two, and the drill-ins
     # read position *within* a window against a commit_sha serialized from that same fetch.
+    # @intent: { entity: "POST /api/v1/ingest", action: "reject a mistyped branch", behavior: "branch must be a string because every windowed surface narrows on it, so other types are refused", layer: "request" }
     it "rejects a branch that is not a string" do
       ingest(ingest_payload(branch: 42))
 
@@ -1046,6 +1123,7 @@ RSpec.describe "POST /api/v1/ingest", type: :request do
     # unrecognised CI provider POSTs a null branch and the formatter's git fallback is built for
     # exactly that — so a validator that rejected absence would satisfy the example above while
     # breaking the shape the platform designed an affordance for.
+    # @intent: { entity: "POST /api/v1/ingest", action: "allow an omitted branch", behavior: "an envelope without branch is ordinary and accepted, leaving the column null", layer: "request" }
     it "accepts a run that omits branch entirely" do
       ingest(ingest_payload)
 
@@ -1056,6 +1134,7 @@ RSpec.describe "POST /api/v1/ingest", type: :request do
     # A run id sent as a JSON number would key its shards on `12345` while a client that sent the
     # same build's id as a string keyed on `"12345"` — one run split over a type difference, which
     # is the exact failure the field exists to remove.
+    # @intent: { entity: "POST /api/v1/ingest", action: "reject a mistyped run id", behavior: "a ci_run_id of the wrong type is refused so one build can never split over a type difference", layer: "request" }
     it "rejects a ci_run_id that is not a string" do
       ingest(ingest_payload(ci_run_id: 12_345))
 
@@ -1066,6 +1145,7 @@ RSpec.describe "POST /api/v1/ingest", type: :request do
 
     # Absence is the ordinary shape of a run nobody's CI provider named, and must never be a
     # rejection — the local path depends on it.
+    # @intent: { entity: "POST /api/v1/ingest", action: "allow an omitted run id", behavior: "an envelope without ci_run_id is the local path and must be accepted with the column null", layer: "request" }
     it "accepts a run that omits ci_run_id entirely" do
       ingest(ingest_payload)
 
@@ -1077,6 +1157,7 @@ RSpec.describe "POST /api/v1/ingest", type: :request do
     # publishes a shard index publishes `0`, `1`, `2`, so sending them unquoted is the natural
     # mistake. `0` and `"0"` keying different shards would let a shard fail to replace itself,
     # which is the one property these ids exist to provide.
+    # @intent: { entity: "POST /api/v1/ingest", action: "reject a mistyped shard id", behavior: "a numeric shard_id is refused so 0 and the string form can never key different shards", layer: "request" }
     it "rejects a shard_id that is not a string" do
       ingest(ingest_payload(ci_run_id: "gha-42", shard_id: 0))
 
@@ -1085,6 +1166,7 @@ RSpec.describe "POST /api/v1/ingest", type: :request do
       expect(TestRun.count).to eq(0)
     end
 
+    # @intent: { entity: "POST /api/v1/ingest", action: "allow an omitted shard id", behavior: "an envelope without shard_id is accepted and the shard row stores a null id", layer: "request" }
     it "accepts a run that omits shard_id entirely" do
       ingest(ingest_payload(ci_run_id: "gha-42"))
 
@@ -1101,6 +1183,7 @@ RSpec.describe "POST /api/v1/ingest", type: :request do
     # `contain_exactly` rather than `include` is the point of the example: it is what fails if the
     # early return is dropped and the field validators start piling on entries about a body that
     # was never readable.
+    # @intent: { entity: "POST /api/v1/ingest", action: "reject a non-object body", behavior: "a JSON body that is not an object answers with exactly one field-less detail, not a pile of field errors", layer: "request" }
     it "rejects a JSON body that is not an object" do
       ingest([ingest_payload].to_json)
 
@@ -1113,6 +1196,7 @@ RSpec.describe "POST /api/v1/ingest", type: :request do
     # truncated upload, a half-flushed buffer. Like the non-object case it answers with exactly one
     # entry naming no field, which is the pair the integration guide documents as the exceptions to
     # `details` being a per-field list.
+    # @intent: { entity: "POST /api/v1/ingest", action: "reject an unparseable body", behavior: "a body that is not JSON at all is refused in the API error shape with a single field-less detail, and nothing persists", layer: "request" }
     it "rejects a body that is not JSON at all, in the API's own error shape" do
       ingest("{ not json")
 
@@ -1157,6 +1241,7 @@ RSpec.describe "POST /api/v1/ingest", type: :request do
       ingest(bytes, key: key, headers: { "Content-Encoding" => "gzip" }, path: path)
     end
 
+    # @intent: { entity: "POST /api/v1/ingest", action: "accept a gzipped body", behavior: "a Content-Encoding gzip envelope is inflated by the middleware and answered with 202 like the plain one", layer: "request" }
     it "accepts it with 202" do
       ingest_gzipped(body)
 
@@ -1166,6 +1251,7 @@ RSpec.describe "POST /api/v1/ingest", type: :request do
     # The whole acceptance criterion in one example: not "gzip works" but "gzip is
     # indistinguishable". Both bodies are posted in the same example and their answers compared to
     # each other rather than to a hand-copied literal, so the two can never drift apart silently.
+    # @intent: { entity: "POST /api/v1/ingest", action: "answer identically for gzip", behavior: "the same body compressed and uncompressed return the same response document compared to each other, so they cannot drift", layer: "request" }
     it "answers exactly what the same body answers uncompressed" do
       ingest(body)
       identity = response.parsed_body
@@ -1176,6 +1262,7 @@ RSpec.describe "POST /api/v1/ingest", type: :request do
       expect(identity).to include("total_specs" => 3, "annotated_specs" => 2, "annotated_ratio" => 0.667)
     end
 
+    # @intent: { entity: "TestRun", action: "record identically for gzip", behavior: "the persisted run from a gzipped delivery matches the uncompressed one attribute for attribute", layer: "request" }
     it "records a TestRun indistinguishable from the one the uncompressed body records" do
       ingest(body)
       identity_run = TestRun.find(response.parsed_body["test_run_id"])
@@ -1190,6 +1277,7 @@ RSpec.describe "POST /api/v1/ingest", type: :request do
     # `ActionDispatch::Request#raw_post` reads exactly CONTENT_LENGTH bytes. A body that spans
     # several inflate chunks is where a mis-set length stops being a rounding error and starts
     # truncating the JSON — and a suite big enough to be worth compressing is always this shape.
+    # @intent: { entity: "POST /api/v1/ingest", action: "carry a multi-chunk body", behavior: "a body spanning many inflate chunks arrives whole, so a misread content length cannot truncate the JSON", layer: "request" }
     it "carries a body far larger than one inflate chunk without truncating it" do
       specs = Array.new(400) { |i| annotated_spec(file_path: "spec/models/m#{i}_spec.rb", line_number: i + 1) }
       large = ingest_payload(specs: specs)
@@ -1201,6 +1289,7 @@ RSpec.describe "POST /api/v1/ingest", type: :request do
       expect(TestRun.sole.total_specs_count).to eq(400)
     end
 
+    # @intent: { entity: "POST /api/v1/ingest", action: "let validation see gzipped bodies", behavior: "a gzipped body that inflates fine but fails payload validation is refused by the endpoint validator, not the middleware", layer: "request" }
     it "leaves the endpoint's own validation in charge of a gzipped body that is bad JSON-wise" do
       ingest_gzipped(ingest_payload(duration_seconds: -1))
 
@@ -1220,6 +1309,7 @@ RSpec.describe "POST /api/v1/ingest", type: :request do
     # two gzip streams has half its run recorded as a complete run, and nothing anywhere says so.
     # `delivery_health` is structurally blind to it because the request *succeeded*: there is no
     # rejection row to find.
+    # @intent: { entity: "POST /api/v1/ingest", action: "inflate only the first gzip member", behavior: "a concatenated gzip stream is read as its first member alone and still answers 202, a documented hazard pinned not endorsed", layer: "request" }
     it "records only the first member of a concatenated gzip body, and still answers 202" do
       first = ingest_payload(
         commit_sha: "0000000f1a",
@@ -1240,6 +1330,7 @@ RSpec.describe "POST /api/v1/ingest", type: :request do
     end
 
     describe "when the body is not the gzip it claims to be" do
+      # @intent: { entity: "GzipRequestBody", action: "refuse corrupt gzip as 400", behavior: "bytes that are not gzip at all get the API bad_request shape with the corrupt message, never a 500", layer: "request" }
       it "answers 400 in the API's own error shape, not a 500" do
         ingest_raw_gzip("this is not gzip at all")
 
@@ -1250,6 +1341,7 @@ RSpec.describe "POST /api/v1/ingest", type: :request do
         expect(TestRun.count).to eq(0)
       end
 
+      # @intent: { entity: "GzipRequestBody", action: "refuse an over-cap inflate", behavior: "a body inflating past the configured ceiling is refused with 400 and the too-large message", layer: "request" }
       it "answers 400 for a body that inflates past the cap" do
         stub_const("GzipRequestBody::MAX_INFLATED_BYTES", 1024)
 
@@ -1269,6 +1361,7 @@ RSpec.describe "POST /api/v1/ingest", type: :request do
     # *both* of these requests come back as `JsonParseErrorResponder`'s parse error with a 400 —
     # so the second assertion passes for the wrong reason and proves nothing. Only the contrast
     # between the two messages tells a working inflater apart from no inflater at all.
+    # @intent: { entity: "GzipRequestBody", action: "distinguish gzip failure from JSON failure", behavior: "a corrupt gzip and a good gzip around broken JSON produce their two distinct messages, telling a working inflater from none at all", layer: "request" }
     it "tells a broken gzip apart from a broken JSON body inside a good gzip" do
       ingest_raw_gzip("this is not gzip at all")
 
@@ -1282,6 +1375,7 @@ RSpec.describe "POST /api/v1/ingest", type: :request do
 
     # The inflater sits above the auth filter, so it necessarily runs for an unauthenticated
     # request too. It must not turn a 401 into anything else.
+    # @intent: { entity: "POST /api/v1/ingest", action: "keep 401 for a gzipped request", behavior: "the inflater runs above auth but must never turn an unauthenticated gzipped request into anything but 401", layer: "request" }
     it "still answers 401 for a gzipped body with no API key" do
       ingest_gzipped(body, key: nil)
 
@@ -1298,6 +1392,7 @@ RSpec.describe "POST /api/v1/ingest", type: :request do
     # false one. That is the design point rather than an edge: a gem gzipping against an
     # installation older than `GzipRequestBody` 400s here on every run.
     describe "the row a boundary refusal leaves behind" do
+      # @intent: { entity: "IngestRejection", action: "record a corrupt-gzip refusal", behavior: "a corrupt gzip refused at the boundary leaves a rejection row attributed to the repository whose token it carried", layer: "request" }
       it "records the corrupt-gzip refusal against the repository whose token it carried" do
         expect { ingest_raw_gzip("this is not gzip at all") }
           .to change(IngestRejection, :count).by(1)
@@ -1320,6 +1415,7 @@ RSpec.describe "POST /api/v1/ingest", type: :request do
       # The DOUBLED spelling is pinned deliberately alongside the single one: `chomp("/")` strips
       # only one trailing slash and passes the example above while still failing this one.
       ["/api/v1/ingest/", "/api/v1/ingest//"].each do |spelling|
+        # @intent: { entity: "IngestRejection", action: "record at every routing spelling", behavior: "a corrupt gzip POSTed to a trailing-slash or double-slash spelling of the path still records, because the router resolves them to the same action", layer: "request" }
         it "records a corrupt gzip POSTed to #{spelling}, which routes to the same action" do
           expect { ingest_raw_gzip("this is not gzip at all", path: spelling) }
             .to change(IngestRejection, :count).by(1)
@@ -1335,11 +1431,13 @@ RSpec.describe "POST /api/v1/ingest", type: :request do
       # endpoint — the router 404s it — so no row may be attributed to it. Without this, widening
       # the gate to a prefix match would pass every example above and quietly start billing
       # refusals to a repository for requests that never reached the ingest action.
+      # @intent: { entity: "IngestRejection", action: "ignore a merely similar path", behavior: "a path that only starts with the ingest path is not this endpoint and leaves no row attributed to it", layer: "request" }
       it "records nothing for a path that merely starts with the ingest path" do
         expect { ingest_raw_gzip("this is not gzip at all", path: "/api/v1/ingest/extra") }
           .not_to change(IngestRejection, :count)
       end
 
+      # @intent: { entity: "IngestRejection", action: "record an over-cap refusal", behavior: "an inflate past the cap is recorded as its own reason so the panel can show it distinctly", layer: "request" }
       it "records an over-cap inflate as its own reason" do
         stub_const("GzipRequestBody::MAX_INFLATED_BYTES", 1024)
 
@@ -1352,6 +1450,7 @@ RSpec.describe "POST /api/v1/ingest", type: :request do
       # Valid gzip wrapping invalid JSON: inflates cleanly, then dies at the parser. A different
       # middleware answers this one, so it is a genuinely separate limb rather than the same code
       # reached twice.
+      # @intent: { entity: "IngestRejection", action: "record an unparseable gzipped body", behavior: "valid gzip wrapping invalid JSON leaves a rejection row carrying the parse-error message", layer: "request" }
       it "records an unparseable body as its own reason" do
         expect { ingest_gzipped("{ not json") }
           .to change(IngestRejection, :count).by(1)
@@ -1361,6 +1460,7 @@ RSpec.describe "POST /api/v1/ingest", type: :request do
 
       # The parse-error limb is not gzip-specific and must record on a plain identity-encoded body
       # too — which is the form every client that never compresses sends.
+      # @intent: { entity: "IngestRejection", action: "record an unparseable plain body", behavior: "the parse-error limb also records for an identity-encoded body, the form every non-compressing client sends", layer: "request" }
       it "records an unparseable body that was never gzipped at all" do
         expect { ingest("{ not json") }.to change(IngestRejection, :count).by(1)
 
@@ -1371,6 +1471,7 @@ RSpec.describe "POST /api/v1/ingest", type: :request do
       # failure as a VERSION FLOOR, and without the gem's version on the row "every delivery is
       # refused" and "every delivery from the OLD GEM is refused" are the same picture. This is the
       # path that most needs it, since a version floor 400s here rather than at the controller.
+      # @intent: { entity: "IngestRejection", action: "store the user agent", behavior: "the sending gem version from the User-Agent is kept on the rejection row so a version floor is legible", layer: "request" }
       it "stores the sending gem's user agent, which is what makes a version floor legible" do
         ingest("this is not gzip at all",
                headers: { "Content-Encoding" => "gzip", "User-Agent" => "specguard-rspec/0.1.0" })
@@ -1388,6 +1489,7 @@ RSpec.describe "POST /api/v1/ingest", type: :request do
         "a well-formed token that resolves nothing" => -> { instance_double(ApiKey, raw_token: "sgk_nope") },
         "a valid user key for the other table" => -> { create_user_api_key }
       }.each do |description, build_key|
+        # @intent: { entity: "IngestRejection", action: "write rows only for resolved credentials", behavior: "no token, an unresolvable token and a user-table token all leave no row, because attribution requires an ingest repository", layer: "request" }
         it "writes no row for #{description}" do
           expect { ingest_raw_gzip("this is not gzip at all", key: instance_exec(&build_key)) }
             .not_to change(IngestRejection, :count)
@@ -1404,6 +1506,7 @@ RSpec.describe "POST /api/v1/ingest", type: :request do
       # example green — measured, not assumed. So the gate cannot be pinned by its OUTCOME, only by
       # its MECHANISM, which is what `Api::BaseController` states it as: "The prefix decides WHICH
       # table before any of them is read — and, on a mismatch, that no table is read at all."
+      # @intent: { entity: "ApiKey", action: "gate by token prefix", behavior: "a token belonging to the other credential table selects no api_keys lookup at all, the prefix deciding which table is read", layer: "request" }
       it "reads no table at all for a token belonging to the other credential" do
         allow(ApiKey).to receive(:authenticate).and_call_original
 
@@ -1417,6 +1520,7 @@ RSpec.describe "POST /api/v1/ingest", type: :request do
       # answers compared to each other, so the two cannot drift apart silently. The no-key request
       # takes the identical 400 limb and writes no row, which makes it the exact control for "did
       # bookkeeping edit the client's answer".
+      # @intent: { entity: "POST /api/v1/ingest", action: "answer identically recorded or not", behavior: "the corrupt-gzip 400 bytes are the same whether or not bookkeeping wrote a rejection row", layer: "request" }
       it "answers the same bytes whether or not the refusal was recorded" do
         ingest_raw_gzip("this is not gzip at all", key: nil)
         unrecorded = [response.status, response.body, response.headers["content-length"]]
@@ -1438,6 +1542,7 @@ RSpec.describe "POST /api/v1/ingest", type: :request do
           allow(IngestRejection).to receive(:create!).and_raise(ActiveRecord::StatementInvalid, "boom")
         end
 
+        # @intent: { entity: "POST /api/v1/ingest", action: "keep the 400 when recording fails", behavior: "a failure writing the rejection row still answers the client the 400 already determined", layer: "request" }
         it "still answers the client the 400 it had already determined" do
           ingest_raw_gzip("this is not gzip at all")
 
@@ -1445,6 +1550,7 @@ RSpec.describe "POST /api/v1/ingest", type: :request do
           expect(response.parsed_body["message"]).to eq(GzipRequestBody::CORRUPT_MESSAGE)
         end
 
+        # @intent: { entity: "POST /api/v1/ingest", action: "report a recording failure", behavior: "a rejection write that raises is reported to Rails.error as handled rather than swallowed silently", layer: "request" }
         it "reports the failure rather than swallowing it" do
           expect(Rails.error).to receive(:report)
             .with(instance_of(ActiveRecord::StatementInvalid), hash_including(handled: true))
@@ -1458,6 +1564,7 @@ RSpec.describe "POST /api/v1/ingest", type: :request do
       # The resolution half is this layer's OWN failure mode — the controller path never had it,
       # because it is handed a `current_repository` that is already resolved. If the lookup that
       # decides who to bill the refusal to raises, the client must still get its 400.
+      # @intent: { entity: "POST /api/v1/ingest", action: "keep the 400 when lookup fails", behavior: "a raising credential lookup cannot turn the boundary 400 into a 500, and the failure is reported", layer: "request" }
       it "does not let a failing credential lookup turn the 400 into a 500" do
         allow(ApiKey).to receive(:authenticate).and_raise(ActiveRecord::StatementInvalid, "boom")
         allow(Rails.error).to receive(:report)
@@ -1475,6 +1582,7 @@ RSpec.describe "POST /api/v1/ingest", type: :request do
       # takes the same `sgk_` credential, so a corrupt body sent there resolves a perfectly good
       # repository — and recording it would claim a delivery was refused when none was attempted,
       # replacing the false "No rejected deliveries" with a false row instead.
+      # @intent: { entity: "IngestRejection", action: "scope rows to the ingest endpoint", behavior: "a corrupt gzip on another /api endpoint resolves a repository but writes no row, since no ingest delivery was attempted", layer: "request" }
       it "writes no row for a boundary refusal on a non-ingest endpoint" do
         expect do
           post "/api/v1/repository",
@@ -1492,6 +1600,7 @@ RSpec.describe "POST /api/v1/ingest", type: :request do
   # the shipped formatter has always sent — `id`, `spec_file_path`, `name`, `duration`, `outcome` —
   # were read off the wire and dropped.
   describe "the per-example rows a run leaves behind" do
+    # @intent: { entity: "SpecObservation", action: "store one row per example", behavior: "each reported spec becomes a row carrying its name and repository, annotated or not", layer: "request" }
     it "leaves one row per spec, annotated or not, each carrying the name the client sent" do
       body = ingest_payload(
         specs: [
@@ -1514,6 +1623,7 @@ RSpec.describe "POST /api/v1/ingest", type: :request do
     # The client's own measurement, turned into a platform guard: a table-driven loop writes the
     # `it` once, so all N examples report the same `(file_path, line_number)`. A key built on the
     # coordinate folds three examples onto one row and takes their durations with them.
+    # @intent: { entity: "SpecObservation", action: "key rows by example id", behavior: "a table-driven loop repeating one coordinate yields three rows, kept apart by their distinct ids", layer: "request" }
     it "keeps three examples of one table-driven loop apart, though they share a coordinate" do
       body = ingest_payload(
         specs: (1..3).map do |index|
@@ -1538,6 +1648,7 @@ RSpec.describe "POST /api/v1/ingest", type: :request do
     # `spec/support/shared_examples.rb` as its definition site, and the file that actually ran the
     # example only ever appears as `spec_file_path`. Aggregating on `file_path` would attribute
     # every including file's time to a `spec/support/` helper that ran nothing.
+    # @intent: { entity: "SpecObservation", action: "attribute shared examples to the runner", behavior: "two inclusions of a shared group share a coordinate but keep separate rows attributed by the file that ran them", layer: "request" }
     it "keeps a shared example group's two inclusions apart by the file that ran them" do
       shared = "spec/support/shared_examples.rb"
       body = ingest_payload(
@@ -1559,6 +1670,7 @@ RSpec.describe "POST /api/v1/ingest", type: :request do
       )
     end
 
+    # @intent: { entity: "SpecObservation", action: "round-trip duration and outcome", behavior: "per-example timings and outcomes persist unchanged, including the nulls for an example that never ran", layer: "request" }
     it "round-trips duration and outcome per example, nulls included" do
       body = ingest_payload(
         specs: [
@@ -1585,6 +1697,7 @@ RSpec.describe "POST /api/v1/ingest", type: :request do
     # else. `id` therefore arrives unchecked, and a repeat of one would violate the unique index
     # and take the whole ingest down with a 500. Storing one row is a better answer than losing the
     # run, and rejecting the payload belongs to envelope validation rather than to the writer.
+    # @intent: { entity: "SpecObservation", action: "collapse a repeated id gracefully", behavior: "a client repeating an example id gets one row and a 202 instead of a unique-index 500 losing the run", layer: "request" }
     it "stores one row rather than 500ing when the client repeats an example id" do
       body = ingest_payload(
         specs: [
@@ -1603,6 +1716,7 @@ RSpec.describe "POST /api/v1/ingest", type: :request do
 
     # A producer that sends no `id` at all — an older client, a third-party reporter — must not be
     # collapsed to a single row by the same dedup.
+    # @intent: { entity: "SpecObservation", action: "keep id-less examples distinct", behavior: "a payload with empty ids keeps every example row instead of collapsing to one", layer: "request" }
     it "keeps every example of a payload that carries no ids at all" do
       specs = (1..3).map { |index| unannotated_spec(file_path: "spec/#{index}_spec.rb", line_number: index, id: "") }
 
@@ -1612,6 +1726,7 @@ RSpec.describe "POST /api/v1/ingest", type: :request do
       expect(TestRun.sole.spec_observations.pluck(:example_id).uniq).to eq([nil])
     end
 
+    # @intent: { entity: "SpecObservation", action: "leave unsharded rows shardless", behavior: "an unsharded run stores rows with no shard pointer, since no shard delivered them", layer: "request" }
     it "stores an unsharded run's rows with no shard, because it has none to point at" do
       ingest(ingest_payload(specs: [unannotated_spec]))
 
@@ -1623,6 +1738,7 @@ RSpec.describe "POST /api/v1/ingest", type: :request do
     # `TestRunShard` row per POST, so the shard *counters* double on a redelivery and cannot not.
     # The rows are saved by the conflict key instead, which is keyed on the run and the example
     # rather than on the delivery.
+    # @intent: { entity: "SpecObservation", action: "dedup rows of an anonymous slice", behavior: "an unnamed sharded slice doubles its counters but not its rows, the row key conflicting where the counters cannot", layer: "request" }
     it "does not double an anonymous slice's rows, though it doubles its counters" do
       body = ingest_payload(ci_run_id: "gha-9", specs: [unannotated_spec(file_path: "spec/a_spec.rb", line_number: 1)])
 
@@ -1646,6 +1762,7 @@ RSpec.describe "POST /api/v1/ingest", type: :request do
     # loop puts N examples on — the guard two examples up exists precisely to stop that key ever
     # being adopted. The fix is the client-side one `Ingest::RunRecorder#upsert_shard` already
     # prescribes for the doubled counters: name the shards, or send ids.
+    # @intent: { entity: "SpecObservation", action: "double id-less redeliveries honestly", behavior: "an anonymous slice with empty ids doubles its rows on redelivery, a known gap with no usable key, pinned as deliberate", layer: "request" }
     it "does double an id-less anonymous slice's rows, having no key with which not to" do
       body = ingest_payload(
         ci_run_id: "gha-10",
@@ -1677,6 +1794,7 @@ RSpec.describe "POST /api/v1/ingest", type: :request do
 
       def run_all_shards = (1..4).each { |index| ingest(shard_payload(index)) }
 
+      # @intent: { entity: "SpecObservation", action: "attach rows to their shard", behavior: "every example row points at the TestRunShard that delivered it across the four-shard run", layer: "request" }
       it "stores every shard's rows against the TestRunShard row that delivered them" do
         run_all_shards
 
@@ -1689,6 +1807,7 @@ RSpec.describe "POST /api/v1/ingest", type: :request do
 
       # The 25,100-denominator lesson carried one layer down: rows written per POST inherit none of
       # the counters' idempotency unless they are keyed the same way.
+      # @intent: { entity: "SpecObservation", action: "stay row-idempotent on shard re-run", behavior: "a named shard delivering twice leaves the row count unchanged so the suite totals once", layer: "request" }
       it "leaves that shard's row count unchanged, so the suite still totals once" do
         run_all_shards
 
@@ -1697,6 +1816,7 @@ RSpec.describe "POST /api/v1/ingest", type: :request do
         expect(TestRun.sole.spec_observations.count).to eq(12)
       end
 
+      # @intent: { entity: "SpecObservation", action: "replace a re-run shard rows", behavior: "a re-run shard with fewer examples drops its stale rows instead of keeping them alongside the fresh ones", layer: "request" }
       it "replaces the re-run shard's rows rather than keeping the stale ones beside them" do
         run_all_shards
         ingest(shard_payload(2, examples: 2))
@@ -1707,6 +1827,7 @@ RSpec.describe "POST /api/v1/ingest", type: :request do
           .to match_array(%w[spec/shard2/e1_spec.rb spec/shard2/e2_spec.rb])
       end
 
+      # @intent: { entity: "SpecObservation", action: "stay row-idempotent on full re-run", behavior: "every shard delivering a second time leaves the recorded rows exactly once", layer: "request" }
       it "re-running every shard leaves the suite counted once" do
         run_all_shards
 
@@ -1715,6 +1836,7 @@ RSpec.describe "POST /api/v1/ingest", type: :request do
 
       # Criterion 9 in one example: the new table is a second, finer record of the same delivery,
       # and the headline counters are deliberately *not* re-derived from it.
+      # @intent: { entity: "TestRun", action: "derive counters from shards", behavior: "the run totals come from the shard rows and are not re-derived from the observation table beneath them", layer: "request" }
       it "leaves the run's own counters deriving from its shards, untouched" do
         run_all_shards
 
@@ -1756,6 +1878,7 @@ RSpec.describe "POST /api/v1/ingest", type: :request do
       # threw the 0.5 away: A's delete could not reach a row owned by B, so the fresh measurement
       # arrived as a conflict and lost it to the stale one — silently, with nothing in the data to
       # say the number was a run out of date.
+      # @intent: { entity: "SpecObservation", action: "keep the newest measurement", behavior: "an example moved between shards carries its latest duration, the conflict clause beating the stale row the delete cannot reach", layer: "request" }
       it "keeps the newest measurement, not the row the delete could not reach" do
         deliver("A", [["e1", 1.0], ["e2", 0.5]])
 
@@ -1766,6 +1889,7 @@ RSpec.describe "POST /api/v1/ingest", type: :request do
 
       # Ownership moves with the measurement, or the row would report a duration taken by a shard
       # the data says never ran it.
+      # @intent: { entity: "SpecObservation", action: "move shard ownership with the example", behavior: "a rebalanced example is re-pointed at the shard that actually ran it in this delivery", layer: "request" }
       it "re-points the moved example at the shard that actually ran it" do
         deliver("A", [["e1", 1.0], ["e2", 0.5]])
 
@@ -1778,6 +1902,7 @@ RSpec.describe "POST /api/v1/ingest", type: :request do
       # whatever about whether the embedding provider was reachable when the resolver last asked. So
       # the moved row keeps its place in `Ingest::IdentityResolver`'s retry backlog while its
       # measurement moves onto it, which is what lets a rescue survive a rebalancing splitter.
+      # @intent: { entity: "SpecObservation", action: "preserve the embed-failure stamp on move", behavior: "a moved row keeps its embed retry backlog while its measurement updates, so resolver rescues survive rebalancing", layer: "request" }
       it "re-measures the moved example without clearing its embed-failure stamp" do
         failed_at = 2.hours.ago.change(usec: 0)
         TestRun.sole.spec_observations.where(example_id: "./spec/e2_spec.rb[1:1]")
@@ -1796,6 +1921,7 @@ RSpec.describe "POST /api/v1/ingest", type: :request do
       # unresolved-and-unattempted and earns a fresh stamp on its own merits if the provider is
       # still down. What must not happen is a row silently keeping a stamp for an attempt that no
       # longer refers to it.
+      # @intent: { entity: "SpecObservation", action: "reset the stamp on recreation", behavior: "a row its own shard re-delivered starts a fresh embed history rather than inheriting an attempt that no longer refers to it", layer: "request" }
       it "starts the stamp afresh on a row its own shard recreated" do
         TestRun.sole.spec_observations.where(example_id: "./spec/e1_spec.rb[1:1]")
                .update_all(embed_failed_at: 2.hours.ago, embed_failure_count: 2)
@@ -1809,6 +1935,7 @@ RSpec.describe "POST /api/v1/ingest", type: :request do
       # The other side of the move, asserted so it is not mistaken for loss: B re-running without
       # the example it gave away does not take that row with it, because the row is A's now and B's
       # delete no longer matches it.
+      # @intent: { entity: "SpecObservation", action: "not reclaim a given-up example", behavior: "the shard that gave an example away cannot delete it back when it re-runs without it", layer: "request" }
       it "does not take the moved example back when the shard it left re-runs without it" do
         deliver("A", [["e1", 1.0], ["e2", 0.5]])
         deliver("B", [["e3", 2.0]])
@@ -1823,6 +1950,7 @@ RSpec.describe "POST /api/v1/ingest", type: :request do
       # deletes it and the shard that took it has not reported yet. A sharded run is whole only
       # once every shard has reported — the counters have had this property all along — so it
       # converges rather than drifting.
+      # @intent: { entity: "SpecObservation", action: "converge across a rebalance", behavior: "a moved example is absent only between the two deliveries that move it, and the run is whole again once all shards report", layer: "request" }
       it "loses an example only between the delivery that gave it up and the one that took it" do
         deliver("A", [])
 
@@ -1856,6 +1984,7 @@ RSpec.describe "POST /api/v1/ingest", type: :request do
       response.parsed_body.slice("total_specs", "recorded_specs", "identified_specs")
     end
 
+    # @intent: { entity: "POST /api/v1/ingest", action: "report full id coverage", behavior: "when every example carried an id the identified count equals the rows recorded", layer: "request" }
     it "reports an id count equal to the rows when every example carried one" do
       specs = (1..3).map { |n| unannotated_spec(file_path: "spec/#{n}_spec.rb", line_number: n) }
 
@@ -1868,6 +1997,7 @@ RSpec.describe "POST /api/v1/ingest", type: :request do
     # is the whole difference between a producer that can see it is giving up redelivery safety and
     # one that cannot. The zero is a MEASURED statement — "no row carried an id" — so it is `0` and
     # not `null`; only `annotated_ratio` is nullable here, and only because 0/0 is undefined.
+    # @intent: { entity: "POST /api/v1/ingest", action: "report zero id coverage honestly", behavior: "a payload with no ids gets a measured zero, not a null, while the rows it wrote are still counted", layer: "request" }
     it "reports a zero id count, against the rows it still wrote, for a payload carrying no ids" do
       specs = (1..3).map { |n| unannotated_spec(file_path: "spec/#{n}_spec.rb", line_number: n, id: "") }
 
@@ -1876,6 +2006,7 @@ RSpec.describe "POST /api/v1/ingest", type: :request do
       )
     end
 
+    # @intent: { entity: "POST /api/v1/ingest", action: "count ids on a mixed payload", behavior: "the identified figure counts exactly the rows carrying an id when only some do", layer: "request" }
     it "counts exactly the rows carrying an id when a payload mixes the two" do
       specs = [
         unannotated_spec(file_path: "spec/a_spec.rb", line_number: 1),
@@ -1903,6 +2034,7 @@ RSpec.describe "POST /api/v1/ingest", type: :request do
     # it is zero, which is the truth. The two figures are the same grain — rows — and `total_specs`
     # is a different one: the run's suite size, re-derived by SUM over `test_run_shards` from what
     # the client REPORTED.
+    # @intent: { entity: "POST /api/v1/ingest", action: "report no phantom shortfall", behavior: "a repeated id makes total exceed recorded, but identified equals recorded, so the true shortfall is zero", layer: "request" }
     it "reports no shortfall for a payload that carries every id but repeats one" do
       specs = [
         unannotated_spec(file_path: "spec/a_spec.rb", line_number: 1, id: "dup", name: "first"),
@@ -1924,6 +2056,7 @@ RSpec.describe "POST /api/v1/ingest", type: :request do
     # `spec/models/spec_observation_spec.rb` — "reads zeroes for a run that recorded nothing".
     # Counts read `0`; only ratios read `null`, and `annotated_ratio` is the one field here that
     # does, because a run of nothing has no share to report.
+    # @intent: { entity: "POST /api/v1/ingest", action: "read zeroes for an empty run", behavior: "a run that recorded nothing answers zeroes for the counts and null only for the ratio, per the house rule", layer: "request" }
     it "reports zeroes, not nulls, for a run that recorded no rows at all" do
       ingest(ingest_payload(specs: []))
 
@@ -1938,6 +2071,7 @@ RSpec.describe "POST /api/v1/ingest", type: :request do
     # `SpecObservation::COVERAGE_COUNTS` in a single SELECT, so a second statement carrying this
     # expression would mean someone had fetched the numerator and the denominator separately: two
     # reads of one run's rows, free to disagree with each other.
+    # @intent: { entity: "SpecObservation", action: "answer coverage in one query", behavior: "both coverage figures come out of a single COUNT select on the ingest path, never a second read that could disagree", layer: "request" }
     it "adds exactly one query to the ingest path to answer for both figures" do
       body = ingest_payload(specs: [unannotated_spec(file_path: "spec/a_spec.rb", line_number: 1)])
 
@@ -1962,6 +2096,7 @@ RSpec.describe "POST /api/v1/ingest", type: :request do
       TestRun.order(:id).last
     end
 
+    # @intent: { entity: "SpecObservation", action: "prune a fallen run", behavior: "once a branch exceeds its retention window the oldest run loses its example rows when the next one lands", layer: "request" }
     it "empties the run that falls out of the branch's window when the next one lands" do
       first = ingest_on("main", name: "a")
       second = ingest_on("main", name: "b")
@@ -1978,6 +2113,7 @@ RSpec.describe "POST /api/v1/ingest", type: :request do
     # pruned run — `recompute_totals` writes `update_columns` on the CURRENT run, and
     # `SpecObservation belongs_to :test_run` carries no `touch:` — so an exclusion here would only
     # hide a regression that gave the rule a reach over `test_runs` it is not supposed to have.
+    # @intent: { entity: "TestRun", action: "leave the pruned run intact", behavior: "pruning deletes observations only, leaving the pruned run row and both counters exactly as they were", layer: "request" }
     it "leaves the pruned run's row and both counters exactly as they were" do
       first = ingest_on("main", name: "a")
       before_prune = first.attributes
@@ -1988,6 +2124,7 @@ RSpec.describe "POST /api/v1/ingest", type: :request do
       expect(first.reload.attributes).to eq(before_prune)
     end
 
+    # @intent: { entity: "SpecObservation", action: "bound a sharded branch too", behavior: "the branch retention window applies to sharded runs after each shard transaction commits", layer: "request" }
     it "bounds a sharded run's branch too, after the shard's own transaction" do
       3.times do |index|
         ingest(ingest_payload(branch: "main", ci_run_id: "gha-#{index}", shard_id: "1",
@@ -1999,6 +2136,7 @@ RSpec.describe "POST /api/v1/ingest", type: :request do
       expect(runs.map { |run| run.test_run_shards.count }).to eq([1, 1, 1])
     end
 
+    # @intent: { entity: "SpecObservation", action: "keep branches independent", behavior: "feature branch runs never evict trunk history because the window is counted per branch", layer: "request" }
     it "does not let a feature branch's runs evict the trunk's" do
       main = ingest_on("main", name: "a")
       3.times { |index| ingest_on("feature/#{index}", name: "f#{index}") }
@@ -2006,6 +2144,7 @@ RSpec.describe "POST /api/v1/ingest", type: :request do
       expect(main.spec_observations.count).to eq(1)
     end
 
+    # @intent: { entity: "SpecObservation", action: "bucket branch-less runs separately", behavior: "runs with no branch form their own retention bucket and never touch branched windows", layer: "request" }
     it "keeps branch-less runs in their own bucket" do
       anonymous = ingest_on(nil, name: "a")
       ingest_on("main", name: "b")
@@ -2033,6 +2172,7 @@ RSpec.describe "POST /api/v1/ingest", type: :request do
       end
     end
 
+    # @intent: { entity: "SpecObservation", action: "drain an abandoned branch", behavior: "a merged branch the repository stopped writing to is drained by an ingest elsewhere, closing the gap the write-path rule could not reach", layer: "request" }
     it "drains a branch the repository has stopped writing to entirely" do
       quiet = quiet_history(branch: "feature/gone", count: 5)
 
@@ -2041,6 +2181,7 @@ RSpec.describe "POST /api/v1/ingest", type: :request do
       expect(quiet.map { |run| run.spec_observations.count }).to eq([0, 0, 0, 1, 1])
     end
 
+    # @intent: { entity: "SpecObservation", action: "scope quiet-bucket drains per repository", behavior: "draining one repository quiet branch leaves another repository history untouched", layer: "request" }
     it "leaves a second repository's quiet branch alone" do
       elsewhere = create_repository(user: create_user(github_uid: "3003", github_handle: "third"),
                                     github_full_name: "acme/third-service")
@@ -2076,6 +2217,7 @@ RSpec.describe "POST /api/v1/ingest", type: :request do
     describe "how each half of the rule fails" do
       let(:timeout) { [ActiveRecord::StatementInvalid, "canceling statement due to statement timeout"] }
 
+      # @intent: { entity: "POST /api/v1/ingest", action: "absorb a quiet-half failure", behavior: "a failing quiet-bucket prune answers an unchanged 202 and reports the error with component context, never a 500", layer: "request" }
       it "answers the quiet half's failure with an unchanged 202 and an error report" do
         allow(Ingest::QuietBucketPruner).to receive(:drain).and_raise(*timeout)
         # Captured and asserted afterwards rather than matched inline: one of the assertions is a
@@ -2103,6 +2245,7 @@ RSpec.describe "POST /api/v1/ingest", type: :request do
                                              repository_id: Repository.last.id)
       end
 
+      # @intent: { entity: "POST /api/v1/ingest", action: "fail on a current-branch prune error", behavior: "a raising observation prune fails the ingest, because unbounded table growth must not fail invisibly", layer: "request" }
       it "still fails the ingest when the current-branch half raises" do
         allow(Ingest::ObservationPruner).to receive(:prune).and_raise(*timeout)
 
@@ -2112,6 +2255,7 @@ RSpec.describe "POST /api/v1/ingest", type: :request do
       # The half that raises is the half that is contained, and no wider: a failure in the quiet
       # half must not swallow one in its sibling, which would be the asymmetry collapsing the other
       # way — into a rescue around both.
+      # @intent: { entity: "POST /api/v1/ingest", action: "contain each failure to its half", behavior: "the quiet half rescue may not swallow a current-branch prune failure, keeping the asymmetry from collapsing", layer: "request" }
       it "does not let the quiet half's rescue cover the current-branch half" do
         allow(Ingest::ObservationPruner).to receive(:prune).and_raise(*timeout)
         allow(Ingest::QuietBucketPruner).to receive(:drain).and_return(0)
@@ -2148,6 +2292,7 @@ RSpec.describe "POST /api/v1/ingest", type: :request do
       "unsharded" => {},
       "sharded" => { ci_run_id: "gha-42", shard_id: "1" }
     }.each do |path, extra|
+      # @intent: { entity: "POST /api/v1/ingest", action: "prune after commit on both paths", behavior: "both prune halves run at a shallower transaction depth than the recording they follow, on the sharded and unsharded paths alike", layer: "request" }
       it "prunes outside the transaction that recorded the run — #{path}" do
         depths = {}
 
@@ -2211,10 +2356,12 @@ RSpec.describe "POST /api/v1/ingest", type: :request do
       # request.
       before { api_key }
 
+      # @intent: { entity: "POST /api/v1/ingest", action: "spend a fixed query budget", behavior: "a single ingest on an unfilled window issues a bounded, constant number of statements regardless of suite size", layer: "request" }
       it "spends a fixed budget, of which the rule is two statements on an unfilled window" do
         expect(count_queries { ingest(ingest_payload(branch: "main")) }).to eq(9)
       end
 
+      # @intent: { entity: "POST /api/v1/ingest", action: "spend one more at the window", behavior: "a filled window adds exactly the bounded boundary delete to the fixed budget, and no more", layer: "request" }
       it "spends exactly one more once the window is full and a run falls out of it" do
         ingest(ingest_payload(branch: "main"))
         ingest(ingest_payload(branch: "main"))
@@ -2227,6 +2374,7 @@ RSpec.describe "POST /api/v1/ingest", type: :request do
   # The full auth matrix is proved once in spec/requests/api/v1/repositories_spec.rb. All this
   # endpoint owes is evidence that it inherits the filter rather than re-plumbing it.
   describe "authentication" do
+    # @intent: { entity: "POST /api/v1/ingest", action: "reject a missing credential", behavior: "no Authorization header means 401 with the standard error body and nothing recorded", layer: "request" }
     it "rejects a request with no Authorization header with 401" do
       expect { ingest(ingest_payload, key: nil) }.not_to change(TestRun, :count)
 
@@ -2234,12 +2382,14 @@ RSpec.describe "POST /api/v1/ingest", type: :request do
       expect(response.parsed_body["error"]).to eq("unauthorized")
     end
 
+    # @intent: { entity: "POST /api/v1/ingest", action: "reject a bad credential", behavior: "a well-formed token that resolves nothing is answered 401 the same as an absent one", layer: "request" }
     it "rejects a bad key with 401" do
       ingest(ingest_payload, key: nil, headers: { "Authorization" => "Bearer sgk_not-a-key" })
 
       expect(response).to have_http_status(:unauthorized)
     end
 
+    # @intent: { entity: "ApiKey", action: "stamp last use", behavior: "a successful authenticated ingest writes last_used_at on the credential that was presented", layer: "request" }
     it "records when the key was last used" do
       ingest(ingest_payload)
 

@@ -117,6 +117,7 @@ RSpec.describe "GET /api/v1/repository — unstable_tests.unstable_test_runs", t
     # AC1 at the row grain. Run identity BESIDE the test's own fields, because either half alone is
     # useless: an outcome with no commit cannot be attributed and a commit with no outcome is the
     # `history` row that already exists.
+    # @intent: { entity: "unstable_test_runs", action: "attach run identity to each row", behavior: "every served row pairs the outcome with its test_run_id, commit_sha, branch and ingested_at so a failure can be attributed to the exact CI run that recorded it", layer: "request" }
     it "carries the run's identity beside that run's record of the test" do
       served = rows(query: { branch: "main", unstable_test: flipping_test })
 
@@ -135,6 +136,7 @@ RSpec.describe "GET /api/v1/repository — unstable_tests.unstable_test_runs", t
     # AC1. One row per run of the window, in WINDOW ORDER — which is the endpoint's own newest-first
     # order and not ingest order. The sequence is the point of the block; a set would be the ranking
     # above.
+    # @intent: { entity: "unstable_test_runs", action: "order the rows newest run first", behavior: "the sequence mirrors the endpoint window order rather than ingest order, one row per run that recorded the test", layer: "request" }
     it "serves one row per run of the window, newest run first" do
       served = rows(query: { branch: "main", unstable_test: flipping_test })
 
@@ -153,6 +155,7 @@ RSpec.describe "GET /api/v1/repository — unstable_tests.unstable_test_runs", t
     # count; the join key is the `commit_sha` on the row, and the example below headed "a window the
     # description is absent from some runs of" is the same query with a hole in it, where these two
     # lists are different lengths and the positions no longer correspond.
+    # @intent: { entity: "unstable_test_runs", action: "align with the history block", behavior: "the drill-in and the history rows share one loaded window and one reading direction so their commit_sha lists join without a second fetch or a reversal", layer: "request" }
     it "shares the window and its ordering with the history rows it is meant to be joined against" do
       body = get_repository(query: { branch: "main", unstable_test: flipping_test })
       shas = body.dig("unstable_tests", "unstable_test_runs", "rows").map { it["commit_sha"] }
@@ -162,6 +165,7 @@ RSpec.describe "GET /api/v1/repository — unstable_tests.unstable_test_runs", t
 
     # AC3, said as the sentence the reader acts on: the run a failure began at is reachable by
     # walking this list from its old end, with no arithmetic over anything else in the body.
+    # @intent: { entity: "unstable_test_runs", action: "expose the first failure in the window", behavior: "walking the newest-first list to its old end names the earliest run that failed, with no arithmetic over the rest of the body", layer: "request" }
     it "names the earliest run of the window that recorded a failure" do
       served = rows(query: { branch: "main", unstable_test: flipping_test })
       first_failure = served.reverse.find { it["outcome"] == "failed" }
@@ -179,6 +183,7 @@ RSpec.describe "GET /api/v1/repository — unstable_tests.unstable_test_runs", t
     # unique, so a second default call would be a second user claiming the first one's identity.
     def second_repository(name) = create_repository(user: repository.user, github_full_name: name)
 
+    # @intent: { entity: "unstable_test_runs", action: "tell a regression from flakiness", behavior: "two windows whose ranking figures are identical get different run-ordered outcome sequences, so a failing tail reads differently from a scattered alternation", layer: "request" }
     it "distinguishes a regression from flakiness" do
       regressed = repository_with(%w[passed passed passed passed passed passed failed failed failed failed],
                                   repo: second_repository("acme/regressed"))
@@ -217,6 +222,7 @@ RSpec.describe "GET /api/v1/repository — unstable_tests.unstable_test_runs", t
   describe "a run that recorded the test and reported no outcome" do
     before { repository_with(["passed", nil, "failed", "passed", "failed"]) }
 
+    # @intent: { entity: "unstable_test_runs", action: "serialize an unreported outcome as null", behavior: "a run that recorded the test but sent no status contributes outcome null rather than a manufactured pass, keeping silent runs from rewriting the story", layer: "request" }
     it "serializes the silent run as a null outcome rather than as a pass" do
       served = rows(query: { branch: "main", unstable_test: flipping_test })
 
@@ -226,6 +232,7 @@ RSpec.describe "GET /api/v1/repository — unstable_tests.unstable_test_runs", t
 
     # The same separation as a COUNT, so a client reading a truncated list can still see how much of
     # the window said nothing — counted over the window, before the cap, rather than off the rows.
+    # @intent: { entity: "unstable_test_runs", action: "count unreported outcomes separately", behavior: "the block reports recorded_count, reported_outcome_count and unreported_outcome_count so a client sees how much of the window said nothing", layer: "request" }
     it "counts the silence separately from the reports" do
       served = block(query: { branch: "main", unstable_test: flipping_test })
 
@@ -251,6 +258,7 @@ RSpec.describe "GET /api/v1/repository — unstable_tests.unstable_test_runs", t
       end
     end
 
+    # @intent: { entity: "unstable_test_runs", action: "keep both rows of a shared description", behavior: "when one run holds two examples under the same description both rows are served in a stable line order instead of being collapsed into one", layer: "request" }
     it "serves both of the run's rows, in a stable order within the run" do
       served = rows(query: { branch: "main", unstable_test: flipping_test })
 
@@ -262,6 +270,7 @@ RSpec.describe "GET /api/v1/repository — unstable_tests.unstable_test_runs", t
 
     # And the run count is still the WINDOW's, not the row count — two figures a reader would
     # otherwise have to assume were the same one.
+    # @intent: { entity: "unstable_test_runs", action: "separate run count from row count", behavior: "the window run_count stays the count of runs while rows and recorded_count reflect examples, so duplicated descriptions do not inflate the run figure", layer: "request" }
     it "keeps the window's run count distinct from the number of rows" do
       served = block(query: { branch: "main", unstable_test: flipping_test })
 
@@ -300,6 +309,7 @@ RSpec.describe "GET /api/v1/repository — unstable_tests.unstable_test_runs", t
     # Chronologically: passed, ABSENT, failed, failed.
     before { ingest_window(["passed", nil, "failed", "failed"]) }
 
+    # @intent: { entity: "unstable_test_runs", action: "omit rows for absent runs", behavior: "runs that never recorded the description contribute no row, and the surviving rows stay newest-first with no gap-filling", layer: "request" }
     it "contributes no row for the runs that recorded nothing, keeping the rest newest-first" do
       served = rows(query: { branch: "main", unstable_test: flipping_test })
 
@@ -312,6 +322,7 @@ RSpec.describe "GET /api/v1/repository — unstable_tests.unstable_test_runs", t
     # `rows.length < run_count`, with both figures served, so the hole is countable rather than
     # merely survivable. And it is NOT a truncation: the cap did not bite, so `recorded_count` agrees
     # with the listed rows and the gap shows up as `run_count > recorded_count` instead.
+    # @intent: { entity: "unstable_test_runs", action: "disclose the hole in the counts", behavior: "rows length falls below run_count while recorded_count matches the rows, showing the gap as missing runs rather than as truncation", layer: "request" }
     it "is shorter than the window it was drawn from, and serves both figures" do
       served = block(query: { branch: "main", unstable_test: flipping_test })
 
@@ -327,6 +338,7 @@ RSpec.describe "GET /api/v1/repository — unstable_tests.unstable_test_runs", t
     # its `test_run_id`, never off its position. The third assertion is the damage itself: at the
     # last index of this list, a positional read answers `sha_for(1)` — the run that never recorded
     # the test — when the row's own run is `sha_for(0)`.
+    # @intent: { entity: "unstable_test_runs", action: "keep run identity off the position", behavior: "the shortened list no longer matches history index-for-index, and each row still carries test_run_id and commit_sha so its run stays recoverable", layer: "request" }
     it "no longer lines up index-for-index with history, so the run is read off the commit_sha" do
       body = get_repository(query: { branch: "main", unstable_test: flipping_test })
       served = body.dig("unstable_tests", "unstable_test_runs", "rows")
@@ -349,6 +361,7 @@ RSpec.describe "GET /api/v1/repository — unstable_tests.unstable_test_runs", t
   describe "the cap and the window it was drawn from" do
     before { repository_with(%w[passed failed passed passed failed]) }
 
+    # @intent: { entity: "unstable_test_runs", action: "disclose the cap and keep the recent end", behavior: "a truncated list serves limit, run_count and recorded_count and retains the newest runs so late failures survive the cut", layer: "request" }
     it "discloses its own cap and the window, and keeps the recent end of the sequence" do
       stub_const("SpecObservation::UNSTABLE_TEST_RUNS_LIMIT", 2)
 
@@ -364,6 +377,7 @@ RSpec.describe "GET /api/v1/repository — unstable_tests.unstable_test_runs", t
 
     # Uncapped, the two figures agree — which is what makes the pair readable as a cap indicator at
     # all rather than as two numbers that are always different.
+    # @intent: { entity: "unstable_test_runs", action: "agree when the cap did not bite", behavior: "below the limit the recorded_count equals the served row count and limit restates the constant, making the pair usable as a cap indicator", layer: "request" }
     it "reports the same two counts when the cap did not bite" do
       served = block(query: { branch: "main", unstable_test: flipping_test })
 
@@ -379,6 +393,7 @@ RSpec.describe "GET /api/v1/repository — unstable_tests.unstable_test_runs", t
   describe "the ways this key can be empty" do
     before { repository_with(%w[passed failed passed passed failed]) }
 
+    # @intent: { entity: "unstable_test_runs", action: "spell an unasked drill-in as null", behavior: "the key is present but null when no unstable_test parameter was sent, distinguishing no ask from an asked-about test with no rows", layer: "request" }
     it "is null — with the key present — when no test was asked for" do
       served = parent(query: { branch: "main" })
 
@@ -390,6 +405,7 @@ RSpec.describe "GET /api/v1/repository — unstable_tests.unstable_test_runs", t
     # A renamed test is the ORDINARY way to arrive here rather than the exotic one: the project's
     # identity rule is semantic, so a rename starts a new history and every bookmark to the old name
     # goes stale by design. 200, never a 404.
+    # @intent: { entity: "unstable_test_runs", action: "answer an unknown test with an empty block", behavior: "a renamed or never-recorded description yields a present block with zero rows, its counts and the asked name, never a 404", layer: "request" }
     it "is a present block with no rows, naming the test, when the window recorded none" do
       served = block(query: { branch: "main", unstable_test: "Invoice finalize locks the line-items" })
 
@@ -402,6 +418,7 @@ RSpec.describe "GET /api/v1/repository — unstable_tests.unstable_test_runs", t
 
     # The pair, side by side, which is the assertion neither example above can make on its own: a
     # client can tell the two apart WITHOUT knowing what it sent.
+    # @intent: { entity: "unstable_test_runs", action: "distinguish the two empty answers", behavior: "the no-ask reading is null while the asked-but-empty reading is a present block naming the test, so a client needs no memory of its request", layer: "request" }
     it "spells the two differently, so a client can tell which one it got" do
       expect(block(query: { branch: "main" })).to be_nil
       expect(block(query: { branch: "main", unstable_test: "no such test" })).not_to be_nil
@@ -413,6 +430,7 @@ RSpec.describe "GET /api/v1/repository — unstable_tests.unstable_test_runs", t
     # has to be: an unfiltered window is interleaved across branches, so a sequence read down it
     # would be the outcomes of DIFFERENT CODE in run order — the one reading of these rows that is
     # worse than not serving them.
+    # @intent: { entity: "unstable_test_runs", action: "gate on the branch parameter", behavior: "without a branch narrowing the whole unstable_tests block is null, preventing an interleaved cross-branch sequence read", layer: "request" }
     it "serves no block at all when the window was not narrowed to a branch" do
       body = get_repository(query: { unstable_test: flipping_test })
 
@@ -429,6 +447,7 @@ RSpec.describe "GET /api/v1/repository — unstable_tests.unstable_test_runs", t
   describe "what the ask does to the block it sits in" do
     before { repository_with(%w[passed failed passed passed failed]) }
 
+    # @intent: { entity: "unstable_tests", action: "leave the ranking byte-identical", behavior: "adding the unstable_test ask changes no key or value of the parent block beyond the new drill-in, so prior readers are unaffected", layer: "request" }
     it "leaves every existing unstable_tests key byte-identical" do
       without = parent(query: { branch: "main" })
       with = parent(query: { branch: "main", unstable_test: flipping_test })
@@ -440,6 +459,7 @@ RSpec.describe "GET /api/v1/repository — unstable_tests.unstable_test_runs", t
 
     # And the window block beside it, which is where a second fetch of "the last thirty runs" would
     # show up first.
+    # @intent: { entity: "unstable_tests_window", action: "leave the window block untouched", behavior: "the drill-in reuses the window the block already loaded and does not re-query or re-sort the window served beside it", layer: "request" }
     it "leaves the window block it is read against untouched" do
       without = get_repository(query: { branch: "main" })["unstable_tests_window"]
       with = get_repository(query: { branch: "main", unstable_test: flipping_test })["unstable_tests_window"]
@@ -454,6 +474,7 @@ RSpec.describe "GET /api/v1/repository — unstable_tests.unstable_test_runs", t
   describe "what the drill-in costs the endpoint" do
     before { repository_with(%w[passed failed passed passed failed]) }
 
+    # @intent: { entity: "unstable_test_runs", action: "cost one query only when asked", behavior: "the parameter gates exactly one extra query over baseline, the empty answer costs the same one, and a malformed shape costs none", layer: "request" }
     it "adds exactly one query when asked, and none when not" do
       # Warmed first, on the precedent the sibling cost blocks set: the very first request of an
       # example pays for state a second one does not — an API key's first use is recorded — and a
@@ -477,6 +498,7 @@ RSpec.describe "GET /api/v1/repository — unstable_tests.unstable_test_runs", t
     # different grain reading twice while this one reads none — see
     # spec/support/observation_grain_reads.rb, which is also where the argument for matching every
     # grain positively is made.
+    # @intent: { entity: "unstable_test_runs", action: "issue the sequence read only on a valid ask", behavior: "the grain-classified read fires once for a sent description, never without a branch, and not at all for a non-ask shape", layer: "request" }
     it "issues the sequence read only when the parameter was sent" do
       expect(unstable_test_runs_grain_reads { get_repository(query: { branch: "main" }) }).to be_empty
       expect(unstable_test_runs_grain_reads do
@@ -491,6 +513,7 @@ RSpec.describe "GET /api/v1/repository — unstable_tests.unstable_test_runs", t
     # The flakiness grain is unmoved by the ask, which is the read-side half of the byte-identical
     # assertion above: the drill-in reuses the window the block already loaded rather than asking for
     # it again.
+    # @intent: { entity: "unstable_tests ranking", action: "leave the ranking reads unchanged", behavior: "the flakiness grain issues the same number of reads with the ask as without it, showing the drill-in borrowed the loaded window", layer: "request" }
     it "leaves the ranking's own four reads exactly as they were" do
       without = flakiness_grain_reads { get_repository(query: { branch: "main" }) }
       with = flakiness_grain_reads do
@@ -521,6 +544,7 @@ RSpec.describe "GET /api/v1/repository — unstable_tests.unstable_test_runs", t
 
     # THE positive path, beside the group, which is what separates "the guard read the parameter"
     # from "the endpoint ignores this parameter entirely".
+    # @intent: { entity: "unstable_test_runs", action: "honour a well-formed description", behavior: "a genuine string parameter serves the test run rows, proving the guard reads the value rather than ignoring the parameter outright", layer: "request" }
     it "honours an unstable_test that IS a description" do
       expect(rows(query: { branch: "main", unstable_test: flipping_test }).length).to eq(5)
     end
@@ -528,6 +552,7 @@ RSpec.describe "GET /api/v1/repository — unstable_tests.unstable_test_runs", t
     # The silent wrong answer the guard exists for, made visible: an Array would merge a test that
     # never varied into the sequence of one that did, and the merged list is a picture of flakiness
     # nothing in the suite is doing.
+    # @intent: { entity: "unstable_test_runs", action: "refuse an array parameter as no ask", behavior: "an Array value does not become an IN list merging two tests sequences into one; the guard drops it and serves null", layer: "request" }
     it "does not merge two tests' sequences into one when handed an array" do
       served = block(query: { branch: "main", unstable_test: [flipping_test, "User signs in"] })
 
@@ -538,6 +563,7 @@ RSpec.describe "GET /api/v1/repository — unstable_tests.unstable_test_runs", t
     # NULLABLE — which is why the ranking above counts unnamed rows separately and excludes them from
     # the matching — so without `.presence` an empty ask would become `WHERE name = ''`, a query for
     # a description no row can carry and therefore a block guaranteed to be empty.
+    # @intent: { entity: "unstable_test_runs", action: "treat an empty parameter as no ask", behavior: "an empty unstable_test string is stripped to no ask rather than compared against the empty string or a blank description", layer: "request" }
     it "treats an empty unstable_test as no ask" do
       expect(block(query: { branch: "main", unstable_test: "" })).to be_nil
     end

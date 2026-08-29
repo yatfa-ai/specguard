@@ -6,6 +6,7 @@ RSpec.describe "API v1 — Bearer authentication", type: :request do
   let(:repository) { create_repository }
   let(:api_key) { repository.api_keys.create! }
 
+  # @intent: { entity: "Repository", action: "authenticate a request", behavior: "a Bearer token carrying a valid repository key resolves to that repository and the body reports its full name over HTTP 200", layer: "request" }
   it "resolves the repository behind a valid Bearer key" do
     get "/api/v1/repository", headers: { "Authorization" => "Bearer #{api_key.raw_token}" }
 
@@ -13,6 +14,7 @@ RSpec.describe "API v1 — Bearer authentication", type: :request do
     expect(response.parsed_body.dig("repository", "full_name")).to eq("acme/billing-service")
   end
 
+  # @intent: { entity: "ApiKey", action: "stamp last use", behavior: "authenticating with the Bearer key writes last_used_at, which is nil before the request and present after it", layer: "request" }
   it "records when the key was last used" do
     expect(api_key.last_used_at).to be_nil
 
@@ -21,6 +23,7 @@ RSpec.describe "API v1 — Bearer authentication", type: :request do
     expect(api_key.reload.last_used_at).to be_present
   end
 
+  # @intent: { entity: "ApiKey", action: "refuse an unknown token", behavior: "an unrecognized Bearer token answers HTTP 401 with an unauthorized JSON error rather than any repository data", layer: "request" }
   it "rejects a bad key with 401" do
     get "/api/v1/repository", headers: { "Authorization" => "Bearer sgk_definitely-not-a-key" }
 
@@ -28,18 +31,21 @@ RSpec.describe "API v1 — Bearer authentication", type: :request do
     expect(response.parsed_body["error"]).to eq("unauthorized")
   end
 
+  # @intent: { entity: "ApiKey", action: "refuse a missing header", behavior: "a request carrying no Authorization header at all is turned away with HTTP 401 before any lookup happens", layer: "request" }
   it "rejects a missing Authorization header with 401" do
     get "/api/v1/repository"
 
     expect(response).to have_http_status(:unauthorized)
   end
 
+  # @intent: { entity: "ApiKey", action: "refuse a non-Bearer scheme", behavior: "a token sent under a scheme other than Bearer, such as Basic, is refused with HTTP 401 even though the credential itself is valid", layer: "request" }
   it "rejects a non-Bearer scheme with 401" do
     get "/api/v1/repository", headers: { "Authorization" => "Basic #{api_key.raw_token}" }
 
     expect(response).to have_http_status(:unauthorized)
   end
 
+  # @intent: { entity: "Repository", action: "scope the response", behavior: "each repository key sees only the repository it was minted for, so a second repository answers under its own name when reached with its own key", layer: "request" }
   it "scopes the response to the key's own repository" do
     other = create_repository(user: create_user(github_uid: "2002", github_handle: "hubot"),
                               github_full_name: "acme/ledger")
@@ -65,6 +71,7 @@ RSpec.describe "API v1 — Bearer authentication", type: :request do
       response.parsed_body
     end
 
+    # @intent: { entity: "run_anchor", action: "disclose retention", behavior: "the retention disclosure adds exactly observations_retained and retention_runs beside the five pre-existing run_anchor keys, each unchanged in name, type and value", layer: "request" }
     it "adds exactly two keys to run_anchor and leaves the other five as they were" do
       run = create_test_run(repository: repository, branch: "main", commit_sha: "feedfacecafe",
                             total_specs_count: 12)
@@ -82,6 +89,7 @@ RSpec.describe "API v1 — Bearer authentication", type: :request do
 
     # The addition is local to `run_anchor`. Every other block is untouched, which is the half an
     # example that only read `run_anchor` could not see.
+    # @intent: { entity: "run_anchor", action: "contain the disclosure", behavior: "the two new keys appear on run_anchor only; latest_run and the delivery_health rejections window keep their original key sets untouched", layer: "request" }
     it "leaves every other block's keys exactly where they were" do
       create_test_run(repository: repository, branch: "main", total_specs_count: 12)
 
@@ -102,6 +110,7 @@ RSpec.describe "API v1 — Bearer authentication", type: :request do
     # `total_specs_count` is deliberately EQUAL on the two sides. The point is not that the runs
     # differ — it is that the RETENTION STATE differs and used to be unsayable, so anything the two
     # bodies disagree about here is the disclosure doing its job and nothing else.
+    # @intent: { entity: "run_anchor", action: "separate retention states", behavior: "a resolved run whose per-example rows aged out of branch retention reports observations_retained false while an in-window run reports true, so the two retention states are distinguishable at the wire", layer: "request" }
     it "no longer serializes an aged-out run identically to one that recorded nothing" do
       stub_const("SpecObservation::BRANCH_RETENTION_RUNS", 3)
       start = 100.days.ago
