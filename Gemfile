@@ -71,7 +71,7 @@ group :development, :test do
   # SPEC_OPTS, which only CI sets. A local `bin/rspec` therefore behaves exactly as it did before —
   # deliberate, because an unconfigured formatter does not stay quiet, it appends one JSON object
   # per line to `SPECGUARD_OUTPUT_PATH` (see the gem's formatter: api_key set → POST, unset → file).
-  gem "specguard-rspec", "~> 0.2.3", require: false
+  gem "specguard-ruby", "~> 0.3", require: false
   # Node matchers for ViewComponent unit specs (render_inline + have_css), and the browser-driven
   # system specs in spec/system.
   gem "capybara"
