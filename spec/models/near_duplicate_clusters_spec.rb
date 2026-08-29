@@ -918,18 +918,19 @@ RSpec.describe NearDuplicateClusters do
         .to eq(count_queries { described_class.for(small) })
     end
 
-    # Seven, and each of them named: the run to weigh in, the price to be restored, the correction,
-    # the pair read, the restore, the identity population, and the observation presence. A bare
-    # total cannot tell "one read per question" from "one question read twice", so the number is
-    # asserted next to the list it stands for. Three of the seven are the planner directive and its
-    # bookends, and none of them depends on how much the repository holds.
+    # Eight, and each of them named: the run to weigh in, the price to be restored, the correction,
+    # the recall directive, the pair read, the restore, the identity population, and the observation
+    # presence. A bare total cannot tell "one read per question" from "one question read twice", so
+    # the number is asserted next to the list it stands for. Four of the eight are planner/recall
+    # directives and their bookends, and none of them depends on how much the repository holds.
     it "reads spec_identities twice and spec_observations once, whatever it finds" do
       statements = executed_sql { described_class.for(repository) }
 
-      expect(statements.size).to eq(7)
+      expect(statements.size).to eq(8)
       expect(statements.grep(/FROM "test_runs"/).size).to eq(1)
       expect(statements.grep(/SHOW cpu_operator_cost/).size).to eq(1)
       expect(statements.grep(/set_config\('cpu_operator_cost'/).size).to eq(2)
+      expect(statements.grep(/SET LOCAL hnsw\.iterative_scan/i).size).to eq(1)
       expect(statements.grep(/CROSS JOIN LATERAL/).size).to eq(1)
       expect(statements.grep(/FROM "spec_identities"/).size).to eq(1)
       expect(statements.grep(/FROM "spec_observations"/).size).to eq(1)
