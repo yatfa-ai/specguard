@@ -7,6 +7,7 @@ RSpec.describe EmbeddingCacheEntry do
   let(:fingerprint) { "test-provider:v1" }
 
   describe ".store and .vectors_for" do
+    # @intent: { entity: "EmbeddingCacheEntry", action: "cache a vector", behavior: "a stored text round-trips to its vector within half-precision drift while unstored texts return nothing", layer: "unit" }
     it "returns the vector a text was stored under and nothing for a text that was not" do
       described_class.store(fingerprint, { "a stored text" => vector })
 
@@ -24,6 +25,7 @@ RSpec.describe EmbeddingCacheEntry do
       expect(drift).to be < 1e-3
     end
 
+    # @intent: { entity: "EmbeddingCacheEntry", action: "cache a vector", behavior: "vectors written under one fingerprint are invisible to a lookup under another fingerprint", layer: "unit" }
     it "partitions entries by fingerprint, so a moved fingerprint cannot read the old ones" do
       # The correctness guarantee the whole key rests on: a vector produced by one model must be
       # UNREADABLE to a deployment running another, not merely old. A wrong vector is valid,
@@ -34,6 +36,7 @@ RSpec.describe EmbeddingCacheEntry do
       expect(described_class.vectors_for(fingerprint, ["shared text"]).keys).to eq(["shared text"])
     end
 
+    # @intent: { entity: "EmbeddingCacheEntry", action: "cache a vector", behavior: "a nil vector is skipped so a refused embed is retried later instead of being remembered as failed", layer: "unit" }
     it "does not store a nil, so a refused text is asked again rather than remembered as failed" do
       # `Ingest::IdentityResolver#embed_page`'s fallback answers one text at a time and each can
       # fail on its own, so the hash it returns can carry nils. A nil is the absence of an answer.
@@ -45,6 +48,7 @@ RSpec.describe EmbeddingCacheEntry do
       expect(described_class.vectors_for(fingerprint, %w[good refused]).keys).to eq(["good"])
     end
 
+    # @intent: { entity: "EmbeddingCacheEntry", action: "cache a vector", behavior: "storing and reading a whole page each compile to a single SQL statement", layer: "unit" }
     it "writes a whole page in ONE statement and reads it back in one" do
       texts = Array.new(5) { |i| "page text #{i}" }.to_h { |text| [text, vector] }
 
@@ -52,6 +56,7 @@ RSpec.describe EmbeddingCacheEntry do
       expect(count_queries { described_class.vectors_for(fingerprint, texts.keys) }).to eq(1)
     end
 
+    # @intent: { entity: "EmbeddingCacheEntry", action: "cache a vector", behavior: "an empty text list costs zero database round trips on both the write and the read", layer: "unit" }
     it "costs no round trip at all for an empty page" do
       # `where(text_digest: [])` compiles to `1=0`, which Rails answers without asking the
       # database — the same property `Ingest::IdentityResolver#digest_index` relies on. Asserted as
@@ -60,6 +65,7 @@ RSpec.describe EmbeddingCacheEntry do
       expect(count_queries { described_class.store(fingerprint, {}) }).to eq(0)
     end
 
+    # @intent: { entity: "EmbeddingCacheEntry", action: "cache a vector", behavior: "a second store of the same text converges on the existing row instead of raising a uniqueness error", layer: "unit" }
     it "converges two concurrent writes of the same text onto one row instead of raising" do
       # Two shards of a first run embedding the same text under the same fingerprint is the
       # ordinary case, not a race to lose. Without the `ON CONFLICT` clause this raises
@@ -70,6 +76,7 @@ RSpec.describe EmbeddingCacheEntry do
       expect(described_class.count).to eq(1)
     end
 
+    # @intent: { entity: "EmbeddingCacheEntry", action: "cache a vector", behavior: "only a digest of the text is stored, and the plaintext appears in no column or attribute", layer: "unit" }
     it "never stores the text itself" do
       # The privacy shape, asserted against the schema rather than trusted from a comment. This
       # table is deployment-global while identity resolution is repository-scoped, so a `text`
@@ -89,10 +96,12 @@ RSpec.describe EmbeddingCacheEntry do
     # Criterion 5: the rule is stated as a decision with its bound, and it is QUERYABLE — a fact
     # about the table rather than a sentence in a comment.
 
+    # @intent: { entity: "EmbeddingCacheEntry", action: "define retention", behavior: "the retention bound is stated as a ninety-day named constant", layer: "unit" }
     it "states its bound as a constant" do
       expect(described_class::RETENTION_WINDOW).to eq(90.days)
     end
 
+    # @intent: { entity: "EmbeddingCacheEntry", action: "define retention", behavior: "live and expired scopes partition the table by the retention window's cutoff", layer: "unit" }
     it "names the live and the reclaimable sets as scopes" do
       described_class.store(fingerprint, { "fresh" => vector, "ancient" => vector })
       described_class.where(text_digest: SpecIdentity.digest_for("ancient"))
@@ -102,6 +111,7 @@ RSpec.describe EmbeddingCacheEntry do
       expect(described_class.expired.pluck(:text_digest)).to eq([SpecIdentity.digest_for("ancient")])
     end
 
+    # @intent: { entity: "EmbeddingCacheEntry", action: "enforce retention", behavior: "an entry past the window is refused by the read itself even though its row is still on disk", layer: "unit" }
     it "stops serving an entry once it is past the window" do
       # The window is enforced BY THE READ, so "expired" and "not cached" are the same answer to a
       # caller. That is what lets the bound be changed without anything downstream knowing.
@@ -111,6 +121,7 @@ RSpec.describe EmbeddingCacheEntry do
       expect(described_class.vectors_for(fingerprint, ["ancient"])).to be_empty
     end
 
+    # @intent: { entity: "EmbeddingCacheEntry", action: "refresh a cache hit", behavior: "re-storing an expired text revives the row so it is readable again, keeping its original created_at", layer: "unit" }
     it "REVIVES an expired entry when the text is embedded again, rather than stranding it" do
       # ⚠️ **The trap this slice's substrate sets, pinned because it fails as a silent leak.**
       #

@@ -7,6 +7,7 @@ RSpec.describe Repository do
   # Counting queries is how three separate criteria on this model are stated —
   # `previous_test_run_on_branch` costs one, `suite_size_trajectory` costs one for a whole series.
 
+  # @intent: { entity: "Repository", action: "validate a full name", behavior: "a full name that is not org/repo shaped leaves the record invalid with the must look like org/repo error on github_full_name", layer: "unit" }
   it "requires an org/repo shaped full name" do
     repository = create_user.repositories.new(github_full_name: "not-a-full-name")
 
@@ -14,16 +15,19 @@ RSpec.describe Repository do
     expect(repository.errors[:github_full_name]).to include("must look like org/repo")
   end
 
+  # @intent: { entity: "Repository", action: "derive a short name", behavior: "the short name is taken as the segment after the slash of the stored full name", layer: "unit" }
   it "derives the short name from the full name" do
     expect(create_repository(github_full_name: "acme/billing-service").name).to eq("billing-service")
   end
 
+  # @intent: { entity: "Repository", action: "normalize a pasted URL", behavior: "a pasted GitHub URL with scheme and .git suffix is stored as the bare org/repo string", layer: "unit" }
   it "normalizes a pasted GitHub URL down to org/repo" do
     repository = create_repository(github_full_name: "https://github.com/acme/billing-service.git")
 
     expect(repository.github_full_name).to eq("acme/billing-service")
   end
 
+  # @intent: { entity: "Repository", action: "register uniquely", behavior: "a second registration of the same full name by a different user fails validation so one GitHub repository yields one row", layer: "unit" }
   it "registers a given GitHub repository at most once" do
     create_repository(github_full_name: "acme/billing-service")
     duplicate = create_user(github_uid: "2002", github_handle: "hubot")
@@ -46,6 +50,7 @@ RSpec.describe Repository do
     # :derive_name` callback that normally fills it, and a NULL there fails on the NOT NULL
     # constraint FIRST — a green example about the wrong column. Supplying it leaves
     # `github_full_name` as the only thing left to refuse the row.
+    # @intent: { entity: "Repository", action: "enforce a database-level uniqueness", behavior: "saving with validation skipped still raises RecordNotUnique because the unique index on github_full_name refuses the row", layer: "unit" }
     it "enforces one row per github_full_name in the database" do
       create_repository(github_full_name: "acme/billing-service")
 
@@ -63,6 +68,7 @@ RSpec.describe Repository do
     # `errors.of_kind?(:github_full_name, :taken)` rather than matching the sentence, so a
     # translation that added a look-alike string instead of the `:taken` symbol would render
     # correctly here and still demote a raced row to `:invalid` over there.
+    # @intent: { entity: "Repository", action: "translate a lost race", behavior: "when the validation misses a concurrent commit the rescue maps the conflict to the :taken kind and sentence on github_full_name and returns false", layer: "unit" }
     it "translates the lost race into the same :taken refusal on :github_full_name" do
       create_repository(github_full_name: "acme/billing-service")
       duplicate = other_person.repositories.new(github_full_name: "acme/billing-service")
@@ -88,6 +94,7 @@ RSpec.describe Repository do
     # that opens none. This one opens a JOINABLE transaction — the kind `Api::V1::UserRepositories
     # Controller#create` actually writes — which is the only shape that can be poisoned. The query
     # after the failed save is the assertion: it either answers, or the connection is already dead.
+    # @intent: { entity: "Repository", action: "keep a transaction usable", behavior: "refusing a duplicate inside a joinable transaction leaves the connection alive so a later count on the same transaction succeeds", layer: "unit" }
     it "leaves an enclosing joinable transaction usable after refusing" do
       create_repository(github_full_name: "acme/billing-service")
       duplicate = other_person.repositories.new(github_full_name: "acme/billing-service")
@@ -105,6 +112,7 @@ RSpec.describe Repository do
     # and reports `save` as a clean refusal while the real fault stays hidden. Provoked with a
     # genuine second violation on this same table: a primary-key collision, on a row whose slug is
     # NOT a duplicate.
+    # @intent: { entity: "Repository", action: "re-raise foreign violations", behavior: "a primary-key collision on an unrelated column still raises RecordNotUnique instead of being mistranslated as a duplicate slug", layer: "unit" }
     it "re-raises a unique violation that is not the duplicate-slug index" do
       existing = create_repository(github_full_name: "acme/billing-service")
       clashing = other_person.repositories.new(id: existing.id, github_full_name: "acme/unrelated")
@@ -114,6 +122,7 @@ RSpec.describe Repository do
 
     # The bang is a different contract: a caller who chose it asked for the exception, and nothing
     # routes it through the translation above.
+    # @intent: { entity: "Repository", action: "raise from save!", behavior: "the bang variant skips the translation and surfaces the RecordNotUnique exception to the caller who asked for it", layer: "unit" }
     it "still raises from save!" do
       create_repository(github_full_name: "acme/billing-service")
       duplicate = other_person.repositories.new(github_full_name: "acme/billing-service")
@@ -127,6 +136,7 @@ RSpec.describe Repository do
     # The one seam every "go and look" link on the dashboard composes through. `#github_url` names
     # the repository; this names a LINE, which is the grain every per-example surface prints and
     # until now could not open.
+    # @intent: { entity: "Repository", action: "compose a blob URL", behavior: "github_blob_url builds the github.com blob link for the given path pinned at the given ref with the line anchor appended", layer: "unit" }
     it "composes a line-anchored blob URL at the ref it was given" do
       repository = create_repository(github_full_name: "acme/billing-service")
 
@@ -137,6 +147,7 @@ RSpec.describe Repository do
     # The ref is the CALLER's, and there is no default — a coordinate is only true against the tree
     # it was recorded from (`file_path`/`line_number` are a last known path, not an identity), so
     # pinning to a sha and pinning to `main` are different links and the caller has to say which.
+    # @intent: { entity: "Repository", action: "pin to the caller ref", behavior: "the ref segment of the blob URL is exactly whichever sha or branch the caller passed with no default of its own", layer: "unit" }
     it "pins to whatever ref the caller names rather than to a branch of its own" do
       repository = create_repository(github_full_name: "acme/billing-service")
 
@@ -150,6 +161,7 @@ RSpec.describe Repository do
     # A whole-string `url_encode` would collapse the path into one escaped filename GitHub cannot
     # resolve, and no escaping at all would let a `#` in a filename terminate the path and swallow
     # the line anchor.
+    # @intent: { entity: "Repository", action: "escape path segments", behavior: "spaces and hashes inside one path segment are percent-encoded while the slash separators stay unescaped so GitHub can resolve the path", layer: "unit" }
     it "escapes each path segment without escaping the separators" do
       repository = create_repository(github_full_name: "acme/billing-service")
 
@@ -160,6 +172,7 @@ RSpec.describe Repository do
 
     # The same rule on the ref, for the same reason: a sha needs no escaping, but a ref is a
     # caller's string and a branch name legitimately carries slashes that must stay separators.
+    # @intent: { entity: "Repository", action: "keep branch slashes", behavior: "a branch-shaped ref keeps its slash as a separator and escapes only the other characters in each segment", layer: "unit" }
     it "keeps the slashes in a branch-shaped ref" do
       repository = create_repository(github_full_name: "acme/billing-service")
 
@@ -170,6 +183,7 @@ RSpec.describe Repository do
     # It COMPOSES and asks GitHub nothing — no probe, no existence check, and so no query and no
     # network call on a hundred-row worklist. An unpushed sha or a path deleted since answers 404,
     # which is GitHub telling the truth rather than something to guard here.
+    # @intent: { entity: "Repository", action: "compose without querying", behavior: "building a blob URL for a persisted repository issues zero database queries", layer: "unit" }
     it "issues no query" do
       repository = create_repository(github_full_name: "acme/billing-service")
 
@@ -181,6 +195,7 @@ RSpec.describe Repository do
     # The third peer beside `#github_url` and `#github_blob_url`. Those answer "which repository"
     # and "which line"; this answers WHICH CHANGE — the question a panel that prints a sha leaves
     # the reader holding, and the one the product could not open at all before this method.
+    # @intent: { entity: "Repository", action: "compose a commit URL", behavior: "github_commit_url builds the github.com commit link for the ref it is handed", layer: "unit" }
     it "composes a commit URL at the ref it was given" do
       repository = create_repository(github_full_name: "acme/billing-service")
 
@@ -191,6 +206,7 @@ RSpec.describe Repository do
     # A COMMIT, never a range: it describes the ref it is handed and says nothing about what came
     # before it. A `/compare/` link would need a second ref that only row adjacency could supply,
     # and row adjacency is not commit adjacency — naming the wrong range is worse than naming none.
+    # @intent: { entity: "Repository", action: "link a single commit", behavior: "the URL names /commit/<ref> and never a compare range", layer: "unit" }
     it "links one commit rather than a range" do
       repository = create_repository(github_full_name: "acme/billing-service")
 
@@ -203,6 +219,7 @@ RSpec.describe Repository do
 
     # The ref is the CALLER's and there is no default, on the same rule `#github_blob_url` states:
     # a per-row caller must be able to pin each row to its own sha, so two refs must give two URLs.
+    # @intent: { entity: "Repository", action: "pin to the caller ref", behavior: "two different refs handed to github_commit_url produce two different commit URLs with no default ref", layer: "unit" }
     it "pins to whatever ref the caller names" do
       repository = create_repository(github_full_name: "acme/billing-service")
 
@@ -213,6 +230,7 @@ RSpec.describe Repository do
     # The same segment-wise rule as the ref above, for the same reason: a sha needs no escaping at
     # all, but a ref is a caller's string and a branch name legitimately carries slashes that must
     # survive as structure rather than be flattened into one unresolvable segment.
+    # @intent: { entity: "Repository", action: "keep branch slashes", behavior: "a branch-shaped ref keeps its slashes as separators while the space is escaped", layer: "unit" }
     it "keeps the slashes in a branch-shaped ref while escaping the rest" do
       repository = create_repository(github_full_name: "acme/billing-service")
 
@@ -222,6 +240,7 @@ RSpec.describe Repository do
 
     # It COMPOSES and asks GitHub nothing — no probe, no existence check, so no query even when a
     # panel calls it once per row. An unpushed sha answers 404, which is GitHub telling the truth.
+    # @intent: { entity: "Repository", action: "compose without querying", behavior: "building a commit URL issues zero database queries", layer: "unit" }
     it "issues no query" do
       repository = create_repository(github_full_name: "acme/billing-service")
 
@@ -234,6 +253,7 @@ RSpec.describe Repository do
     # off, so what "latest" means is pinned here directly rather than inferred through a figure
     # derived from it. `nil` — no run at all — is load-bearing and means *never ingested*; the
     # callers draw the "never reported" vs "reported and found nothing" distinction on it.
+    # @intent: { entity: "Repository", action: "return the newest run", behavior: "latest_test_run answers the most recently created run rather than an earlier one", layer: "unit" }
     it "returns the newest run rather than an earlier one" do
       repository = create_repository
       repository.test_runs.create!(commit_sha: "old", total_specs_count: 10,
@@ -244,6 +264,7 @@ RSpec.describe Repository do
       expect(repository.latest_test_run).to eq(newest)
     end
 
+    # @intent: { entity: "Repository", action: "break a tie on id", behavior: "two runs created at the same instant resolve to the higher-id row so the reading is deterministic", layer: "unit" }
     it "breaks a same-instant tie on id so the reading is deterministic" do
       repository = create_repository
       at = 1.hour.ago
@@ -255,6 +276,7 @@ RSpec.describe Repository do
       expect(repository.latest_test_run).to eq(second)
     end
 
+    # @intent: { entity: "Repository", action: "ignore foreign runs", behavior: "another repository's runs never satisfy latest_test_run, which stays nil for never ingested", layer: "unit" }
     it "ignores another repository's runs" do
       repository = create_repository
       other = create_repository(user: create_user(github_uid: "2002", github_handle: "hubot"),
@@ -268,6 +290,7 @@ RSpec.describe Repository do
     # `latest_test_run` picked whichever shard finished last — and shard completion order is not
     # stable, which made the headline move without the suite changing. Accumulation leaves one row
     # per run, so there is nothing left to pick between.
+    # @intent: { entity: "Repository", action: "read an accumulated shard row", behavior: "counter updates accumulated onto one row are what latest_test_run sees, with the summed totals rather than one shard's slice", layer: "unit" }
     it "reads a sharded run's accumulated row rather than one shard's slice of it" do
       repository = create_repository
       run = repository.test_runs.create!(commit_sha: "deadbee", ci_run_id: "gha-42",
@@ -281,6 +304,7 @@ RSpec.describe Repository do
   end
 
   describe "#recent_test_runs" do
+    # @intent: { entity: "Repository", action: "order runs newest first", behavior: "recent_test_runs hands back the runs ordered newest to oldest by creation", layer: "unit" }
     it "returns the newest runs first" do
       repository = create_repository
       repository.test_runs.create!(commit_sha: "oldest", created_at: 2.days.ago)
@@ -290,6 +314,7 @@ RSpec.describe Repository do
       expect(repository.recent_test_runs.map(&:commit_sha)).to eq(%w[newest middle oldest])
     end
 
+    # @intent: { entity: "Repository", action: "break a tie on id", behavior: "two same-instant runs order by id so the top row equals latest_test_run and the panel prints one commit", layer: "unit" }
     it "breaks a same-instant tie on id, matching #latest_test_run" do
       # The Overview panel names `latest_test_run` and this panel's top row names the same run.
       # If the two orderings disagreed — and the id tie-break is the only thing that decides a
@@ -303,6 +328,7 @@ RSpec.describe Repository do
       expect(repository.recent_test_runs.map(&:commit_sha)).to eq(%w[second first])
     end
 
+    # @intent: { entity: "Repository", action: "honour a limit", behavior: "the default bound is ten runs and an explicit limit truncates to that many newest rows", layer: "unit" }
     it "honours the limit, defaulting to ten" do
       repository = create_repository
       12.times { |i| repository.test_runs.create!(commit_sha: "sha#{i}", created_at: i.hours.ago) }
@@ -311,6 +337,7 @@ RSpec.describe Repository do
       expect(repository.recent_test_runs(limit: 3).map(&:commit_sha)).to eq(%w[sha0 sha1 sha2])
     end
 
+    # @intent: { entity: "Repository", action: "ignore foreign runs", behavior: "another repository's runs never appear in this repository's recent list", layer: "unit" }
     it "ignores another repository's runs" do
       repository = create_repository
       other = create_repository(user: create_user(github_uid: "2002", github_handle: "hubot"),
@@ -335,6 +362,7 @@ RSpec.describe Repository do
         repository
       end
 
+      # @intent: { entity: "Repository", action: "bound inside the branch", behavior: "a branch filter narrows the query before the limit so a starved main branch still returns its own newest three rows", layer: "unit" }
       it "applies the bound to the branch's own rows, not to a window filtered afterwards" do
         repository = starved_repository
 
@@ -344,6 +372,7 @@ RSpec.describe Repository do
           .to eq(%w[main5 main4 main3])
       end
 
+      # @intent: { entity: "Repository", action: "tie-break inside the window", behavior: "same-instant ordering by id holds within the branch-filtered window rather than only repository-wide", layer: "unit" }
       it "keeps the created_at/id tie-break inside the narrowed window" do
         repository = create_repository
         at = 1.hour.ago
@@ -354,6 +383,7 @@ RSpec.describe Repository do
         expect(repository.recent_test_runs(branch: "main").map(&:commit_sha)).to eq(%w[second first])
       end
 
+      # @intent: { entity: "Repository", action: "return nothing for an unknown branch", behavior: "a branch with no runs yields an empty list rather than falling back to the unfiltered history", layer: "unit" }
       it "returns nothing for a branch that never ran, rather than falling back to the whole history" do
         repository = starved_repository
 
@@ -364,6 +394,7 @@ RSpec.describe Repository do
       # because this is a public model method and `RepositoriesController` calls it too. `nil` and
       # `""` both mean "no filter" — never `WHERE branch = ''`, which matches nothing and would
       # turn an empty string into an unknown-branch answer.
+      # @intent: { entity: "Repository", action: "treat blank as no filter", behavior: "nil, empty and whitespace branch arguments all behave as no filter and return the full bounded history", layer: "unit" }
       it "treats nil and a blank string alike as no filter" do
         repository = starved_repository
 
@@ -378,6 +409,7 @@ RSpec.describe Repository do
       # of them, from every branch and every machine, into a single fictional history. A blank
       # argument must return the anonymous rows AS PART OF the unfiltered history and never as a
       # scoped series of their own.
+      # @intent: { entity: "Repository", action: "exclude anonymous pooling", behavior: "a blank filter returns the anonymous runs mixed into the unfiltered history and never a NULL-matched series of their own", layer: "unit" }
       it "never selects the anonymous runs as a branch of their own" do
         repository = create_repository
         3.times { |i| repository.test_runs.create!(commit_sha: "anon#{i}", branch: nil) }
@@ -393,6 +425,7 @@ RSpec.describe Repository do
   end
 
   describe "#previous_test_run_on_branch" do
+    # @intent: { entity: "Repository", action: "return the previous branch run", behavior: "previous_test_run_on_branch answers the newest earlier run on the same branch as the run it was asked about", layer: "unit" }
     it "returns the newest earlier run on the same branch" do
       repository = create_repository
       repository.test_runs.create!(commit_sha: "oldest", branch: "main", created_at: 3.days.ago)
@@ -402,6 +435,7 @@ RSpec.describe Repository do
       expect(repository.previous_test_run_on_branch(latest).commit_sha).to eq("middle")
     end
 
+    # @intent: { entity: "Repository", action: "exclude the anchor run", behavior: "the run passed in is never returned as its own previous run", layer: "unit" }
     it "excludes the run it was asked about" do
       repository = create_repository
       only = repository.test_runs.create!(commit_sha: "only", branch: "main")
@@ -412,6 +446,7 @@ RSpec.describe Repository do
     # The whole reason this method exists. `test_runs` is one interleaved history across every
     # branch — the "Recent runs" panel lists it that way — so the row immediately before the latest
     # is routinely a different branch, and a delta taken against it reports a change no commit made.
+    # @intent: { entity: "Repository", action: "stay on one branch", behavior: "a different branch's newer run is not returned as the previous run of the asked-about branch", layer: "unit" }
     it "does not reach across to a run on another branch" do
       repository = create_repository
       repository.test_runs.create!(commit_sha: "trunk", branch: "main", total_specs_count: 1000,
@@ -426,6 +461,7 @@ RSpec.describe Repository do
     # is a live state. Matching `branch IS NULL` would pool every anonymous run from every branch
     # and every machine into one fictional history — "SpecGuard does not know where this came from"
     # is not a branch two runs can share.
+    # @intent: { entity: "Repository", action: "decline anonymous comparisons", behavior: "runs that named no branch have no previous run instead of pooling under a NULL match", layer: "unit" }
     it "declines to compare runs that named no branch" do
       repository = create_repository
       repository.test_runs.create!(commit_sha: "anon01", branch: nil, created_at: 2.days.ago)
@@ -434,6 +470,7 @@ RSpec.describe Repository do
       expect(repository.previous_test_run_on_branch(anonymous)).to be_nil
     end
 
+    # @intent: { entity: "Repository", action: "return nil when never ingested", behavior: "a repository with no runs and a nil argument both answer nil", layer: "unit" }
     it "is nil for a repository that has never ingested a run" do
       expect(create_repository.previous_test_run_on_branch(nil)).to be_nil
     end
@@ -443,6 +480,7 @@ RSpec.describe Repository do
     # pins neither on its own. Asked about the LATEST run, a bare `id != run.id` happens to return
     # the right row, so only the `created_at` half is under test here; the example below asks about
     # a run that is not the latest, which is where a set-exclusion and a strict ordering diverge.
+    # @intent: { entity: "Repository", action: "break a tie on id", behavior: "a same-instant pair orders by id so the previous run is the twin rather than an older row being skipped", layer: "unit" }
     it "breaks a same-instant tie on id, matching #latest_test_run" do
       repository = create_repository
       at = 1.hour.ago
@@ -460,6 +498,7 @@ RSpec.describe Repository do
     # and report the suite's growth backwards. Nothing on the page asks this today (the controller
     # only ever passes the latest run), so this is the example that holds the contract while that
     # remains true.
+    # @intent: { entity: "Repository", action: "return strictly earlier runs", behavior: "the previous run is always older than the asked-about run, never the newer half of a same-instant pair", layer: "unit" }
     it "returns a strictly earlier run, never the newer half of a same-instant pair" do
       repository = create_repository
       at = 1.hour.ago
@@ -475,6 +514,7 @@ RSpec.describe Repository do
     # runs at one instant the sort does choose, and `created_at: :desc` alone leaves that choice
     # UNSPECIFIED — Postgres returns the lowest id here, which is the oldest of the three and two
     # rows away from the one the Recent-runs table prints directly beneath the latest.
+    # @intent: { entity: "Repository", action: "order tied candidates by id", behavior: "with three runs at one instant the sort itself picks by id so the previous run is the direct predecessor of the newest", layer: "unit" }
     it "orders the tied candidates by id too, not only the boundary" do
       repository = create_repository
       at = 1.hour.ago
@@ -487,6 +527,7 @@ RSpec.describe Repository do
       expect(repository.recent_test_runs.second.commit_sha).to eq("tie_b")
     end
 
+    # @intent: { entity: "Repository", action: "ignore foreign runs", behavior: "another repository's run on a branch of the same name is never returned as this repository's previous run", layer: "unit" }
     it "ignores another repository's runs on the same branch" do
       repository = create_repository
       other = create_repository(user: create_user(github_uid: "2002", github_handle: "hubot"),
@@ -505,6 +546,7 @@ RSpec.describe Repository do
     # and a page-level assertion stays green. This counts the method itself, where there is nothing
     # else in the block to hide behind.
     describe "what it costs to ask" do
+      # @intent: { entity: "Repository", action: "cost one query on a hit", behavior: "resolving a previous run on a branch costs exactly one query with no re-read of the handed-over run", layer: "unit" }
       it "is one query when there is a branch to look along" do
         repository = create_repository
         repository.test_runs.create!(commit_sha: "before", branch: "main", created_at: 2.days.ago)
@@ -514,6 +556,7 @@ RSpec.describe Repository do
         expect(count_queries { repository.previous_test_run_on_branch(latest) }).to eq(1)
       end
 
+      # @intent: { entity: "Repository", action: "cost nothing on the guard", behavior: "an anonymous or nil run returns before any query so the comparison costs zero reads", layer: "unit" }
       it "is no query at all when there is nothing to compare" do
         repository = create_repository
         anonymous = repository.test_runs.create!(commit_sha: "anon00", branch: nil)
@@ -532,6 +575,7 @@ RSpec.describe Repository do
                                    created_at: at)
     end
 
+    # @intent: { entity: "Repository", action: "order the series oldest first", behavior: "the trajectory hands back the branch's runs oldest first so the series reads left to right", layer: "unit" }
     it "returns the branch's runs oldest first, so the series reads left to right" do
       repository = create_repository
       run(repository, "oldest", at: 3.days.ago)
@@ -543,6 +587,7 @@ RSpec.describe Repository do
 
     # The anchor is the newest point of its own trajectory, which is the only reason this is `<=`
     # where `previous_test_run_on_branch` is `<`. Everything else about the comparison is identical.
+    # @intent: { entity: "Repository", action: "include the anchor run", behavior: "the anchored run is itself the newest point of its own trajectory", layer: "unit" }
     it "includes the run it is anchored on" do
       repository = create_repository
       latest = run(repository, "anchor")
@@ -550,6 +595,7 @@ RSpec.describe Repository do
       expect(repository.suite_size_trajectory(latest).map(&:commit_sha)).to eq(%w[anchor])
     end
 
+    # @intent: { entity: "Repository", action: "never reach forward", behavior: "runs ingested after the anchor are excluded from the series", layer: "unit" }
     it "never reaches forward past the run it was anchored on" do
       repository = create_repository
       anchor = run(repository, "anchor", at: 2.days.ago)
@@ -561,6 +607,7 @@ RSpec.describe Repository do
     # The whole reason it is branch-scoped, and the reason the "Recent runs" panel disclaims being
     # a series: `test_runs` is one interleaved history, so a line drawn across it would join a trunk
     # run to a feature branch's and call the gap growth.
+    # @intent: { entity: "Repository", action: "ignore other branches", behavior: "only the anchor's own branch contributes points to the series", layer: "unit" }
     it "ignores other branches" do
       repository = create_repository
       run(repository, "trunk0", branch: "main", at: 2.days.ago)
@@ -570,6 +617,7 @@ RSpec.describe Repository do
       expect(repository.suite_size_trajectory(latest).map(&:commit_sha)).to eq(%w[trunk0 trunk1])
     end
 
+    # @intent: { entity: "Repository", action: "ignore foreign repositories", behavior: "another repository's runs on a same-named branch never enter this series", layer: "unit" }
     it "ignores another repository's runs on a branch of the same name" do
       repository = create_repository
       other = create_repository(user: create_user(github_uid: "2002", github_handle: "hubot"),
@@ -583,6 +631,7 @@ RSpec.describe Repository do
     # `Ingest::Payload` writes `branch` through `.presence`, so an anonymous run is an ordinary live
     # state. Pooling every one of them under `branch IS NULL` would draw one line through runs from
     # every branch and every machine.
+    # @intent: { entity: "Repository", action: "return no series anonymously", behavior: "an anonymous or nil anchor yields an empty series without touching the database", layer: "unit" }
     it "has no series for a run that named no branch, and asks nothing of the database" do
       repository = create_repository
       anonymous = run(repository, "anon00", branch: nil)
@@ -594,6 +643,7 @@ RSpec.describe Repository do
     # DESC + LIMIT then reversed: the bound has to keep the NEWEST thirty and hand them back
     # oldest-first. An implementation that ordered ascending and limited would return the oldest
     # thirty — a chart of ancient history that stops before the run the page is about.
+    # @intent: { entity: "Repository", action: "keep the newest points", behavior: "a history longer than the bound keeps the newest runs within the limit and returns them oldest first", layer: "unit" }
     it "keeps the newest runs when the history is longer than the bound" do
       repository = create_repository
       40.times { |i| run(repository, "sha#{i.to_s.rjust(2, "0")}", at: (40 - i).days.ago) }
@@ -606,6 +656,7 @@ RSpec.describe Repository do
       expect(series.last.commit_sha).to eq("sha39")
     end
 
+    # @intent: { entity: "Repository", action: "honour a caller bound", behavior: "an explicit limit truncates the series to the newest that many runs", layer: "unit" }
     it "honours a caller's own bound" do
       repository = create_repository
       5.times { |i| run(repository, "sha#{i}", at: (5 - i).days.ago) }
@@ -618,6 +669,7 @@ RSpec.describe Repository do
     # The tie-break, which is the half of the ordering a bare `created_at` comparison loses. A
     # series is where it does the most damage: a reversed same-instant pair draws the suite jumping
     # up and back down between two runs ingested in the same second.
+    # @intent: { entity: "Repository", action: "tie-break by id", behavior: "a same-instant pair orders by id so the chart does not jump between two runs ingested in one second", layer: "unit" }
     it "orders a same-instant pair by id, the same way every other reader of this history does" do
       repository = create_repository
       at = 1.hour.ago
@@ -632,6 +684,7 @@ RSpec.describe Repository do
     describe "the shard count each point carries" do
       # Every point has to answer `assembled_like?` before it may be plotted, and that routes
       # through a memoized per-INSTANCE `pick`. Primed from the same query, it costs nothing.
+      # @intent: { entity: "Repository", action: "prime shard counts", behavior: "every point's shard_count including zero for unsharded runs is primed by the loading query and costs nothing to read", layer: "unit" }
       it "primes every row, including the unsharded corpus" do
         repository = create_repository
         run(repository, "plain0", at: 2.days.ago)
@@ -643,6 +696,7 @@ RSpec.describe Repository do
         expect(count_queries { expect(series.map(&:shard_count)).to eq([0, 3]) }).to eq(0)
       end
 
+      # @intent: { entity: "Repository", action: "isolate shard counts", behavior: "each point's shard_count counts only its own run's shard rows", layer: "unit" }
       it "does not let one run's shards inflate another's count" do
         repository = create_repository
         first = run(repository, "first0", at: 2.days.ago)
@@ -663,6 +717,7 @@ RSpec.describe Repository do
       # `COUNT(duration_seconds)` and not `COUNT(*)`: the whole point is that the two disagree on
       # exactly the rows this guard exists for, and a subquery that counted rows would prime `4`
       # here and leave the chart drawing the speed-up it draws today.
+      # @intent: { entity: "Repository", action: "prime timed shard counts", behavior: "points expose how many shards reported a duration separately from how many shards exist", layer: "unit" }
       it "primes how many of each run's shards reported a duration, which is not how many it has" do
         repository = create_repository
         full = run(repository, "fulltmd", at: 2.days.ago)
@@ -685,6 +740,7 @@ RSpec.describe Repository do
       # `0` rather than a nil — `TestRun#preload_timed_shard_count` documents the `.to_i` for
       # exactly this. `SuiteTrajectory`'s guard is `0 == 0` on those rows, so a nil leaking through
       # would turn a no-op into a comparison against nothing.
+      # @intent: { entity: "Repository", action: "prime a counted zero", behavior: "an unsharded run's timed_shard_count is a counted 0 rather than a nil so guards compare against a number", layer: "unit" }
       it "primes a really-counted zero for a run that recorded no shards" do
         repository = create_repository
         run(repository, "plain0")
@@ -702,6 +758,7 @@ RSpec.describe Repository do
       # rejected (it aggregates the whole branch before the LIMIT, so it cannot walk the ordering
       # index — ~12ms on a 40,000-run branch versus ~0.05ms), and a "simplification" toward it would
       # leave this example green while restoring the plan.
+      # @intent: { entity: "Repository", action: "keep unsharded runs", behavior: "runs with no shard rows stay in the series rather than being dropped by the shard-count subquery", layer: "unit" }
       it "does not drop a run that recorded no shards at all" do
         repository = create_repository
         run(repository, "plain0", at: 2.days.ago)
@@ -719,6 +776,7 @@ RSpec.describe Repository do
     # implementation which inflated both sides equally would leave the difference intact. This
     # counts the method itself, where there is nothing else in the block to hide behind.
     describe "what it costs to ask" do
+      # @intent: { entity: "Repository", action: "cost one query for the series", behavior: "loading the whole trajectory with shard counts costs exactly one query", layer: "unit" }
       it "is one query for the whole series, shard counts included" do
         repository = create_repository
         3.times { |i| run(repository, "sha#{i}", at: (3 - i).days.ago) }
@@ -730,6 +788,7 @@ RSpec.describe Repository do
       # The N+1 that would otherwise ship green: `shard_count` is one `pick` per instance, so the
       # cost would be invisible until a repository's history became sharded — which is exactly the
       # history this panel exists to be careful about.
+      # @intent: { entity: "Repository", action: "stay one query when sharded", behavior: "growing the history with sharded runs adds no queries and both primed counts read for free", layer: "unit" }
       it "stays one query as the history grows and its runs become sharded" do
         repository = create_repository
         3.times { |i| run(repository, "sha#{i}", at: (20 - i).days.ago) }
@@ -763,6 +822,7 @@ RSpec.describe Repository do
                                    created_at: at)
     end
 
+    # @intent: { entity: "Repository", action: "answer per branch", behavior: "latest_test_run_on_branch returns the newest run of that branch even when a newer run exists on another branch", layer: "unit" }
     it "answers with the newest run on that branch, not the newest run in the repository" do
       repository = create_repository
       run(repository, "trunk0", at: 2.days.ago)
@@ -775,6 +835,7 @@ RSpec.describe Repository do
 
     # The same ordering key every other reader of this history sorts by, tie-break included — so
     # "the newest run on main" names the same row here as it does on the Overview.
+    # @intent: { entity: "Repository", action: "break a tie by id", behavior: "two same-instant runs on one branch resolve to the higher-id row", layer: "unit" }
     it "breaks a same-instant tie by id, the way the rest of this history is ordered" do
       repository = create_repository
       at = 1.hour.ago
@@ -784,6 +845,7 @@ RSpec.describe Repository do
       expect(repository.latest_test_run_on_branch("main").commit_sha).to eq("tied_b")
     end
 
+    # @intent: { entity: "Repository", action: "ignore foreign branches", behavior: "another repository's branch of the same name never answers this query", layer: "unit" }
     it "ignores another repository's branch of the same name" do
       repository = create_repository
       other = create_repository(user: create_user(github_uid: "2002", github_handle: "hubot"),
@@ -793,6 +855,7 @@ RSpec.describe Repository do
       expect(repository.latest_test_run_on_branch("main")).to be_nil
     end
 
+    # @intent: { entity: "Repository", action: "return nil for an unseen branch", behavior: "a branch with no runs yields nil rather than a fallback to any run", layer: "unit" }
     it "has no run for a branch it has never seen" do
       repository = create_repository
       run(repository, "trunk0")
@@ -803,6 +866,7 @@ RSpec.describe Repository do
     # A blank branch is not a branch, for the reason `previous_test_run_on_branch` states at length:
     # `WHERE branch IS NULL` would pool every anonymous run from every branch and every machine.
     # Answered without a query, so a caller that falls back pays nothing for the fallback.
+    # @intent: { entity: "Repository", action: "refuse a blank branch", behavior: "nil and empty branch arguments return nil without issuing a query", layer: "unit" }
     it "refuses a blank branch outright, and asks the database nothing" do
       repository = create_repository
       repository.test_runs.create!(commit_sha: "anon00", branch: nil, total_specs_count: 100)
@@ -818,6 +882,7 @@ RSpec.describe Repository do
                                    created_at: at)
     end
 
+    # @intent: { entity: "Repository", action: "answer per commit", behavior: "latest_test_run_for_commit returns the run on the asked-for sha rather than the repository's newest run", layer: "unit" }
     it "answers with the run on that sha, not the newest run in the repository" do
       repository = create_repository
       run(repository, "older0", at: 2.days.ago)
@@ -832,6 +897,7 @@ RSpec.describe Repository do
     # `(repository_id, ci_run_id) WHERE ci_run_id IS NOT NULL` — so a CI re-run of one commit is a
     # second row and "the run for this sha" has more than one answer. The NEWEST is the answer, on
     # the ordering every other reader of this history sorts by.
+    # @intent: { entity: "Repository", action: "answer the newest rerun", behavior: "several runs on one sha resolve to the newest one", layer: "unit" }
     it "answers with the newest of several runs on one sha" do
       repository = create_repository
       run(repository, "rerun0", at: 2.days.ago, total: 10)
@@ -843,6 +909,7 @@ RSpec.describe Repository do
     # The same tie-break the two siblings use, and the half a `created_at`-only ordering would leave
     # to the database's discretion: two runs of one sha ingested in the same instant are exactly what
     # a re-run under a parallel CI matrix produces.
+    # @intent: { entity: "Repository", action: "break a tie by id", behavior: "two same-instant runs of one sha resolve to the higher-id row", layer: "unit" }
     it "breaks a same-instant tie by id, the way the rest of this history is ordered" do
       repository = create_repository
       at = 1.hour.ago
@@ -853,6 +920,7 @@ RSpec.describe Repository do
       expect(repository.latest_test_run_for_commit("tied00").total_specs_count).to eq(20)
     end
 
+    # @intent: { entity: "Repository", action: "ignore foreign runs", behavior: "another repository's run on the same sha never answers this query", layer: "unit" }
     it "ignores another repository's run on the same sha" do
       repository = create_repository
       other = create_repository(user: create_user(github_uid: "2003", github_handle: "octo"),
@@ -865,6 +933,7 @@ RSpec.describe Repository do
     # An unrecognised sha is an ordinary thing for a reader to arrive with — a stale bookmark, a
     # pruned run, a commit whose CI never reported — and it is the caller's job to fall back, which
     # `RepositoryOverview#latest_test_run` does while disclosing it on `run_anchor`.
+    # @intent: { entity: "Repository", action: "return nil for an unseen sha", behavior: "an unrecognised sha yields nil so the caller can fall back", layer: "unit" }
     it "has no run for a sha it has never seen" do
       repository = create_repository
       run(repository, "trunk0")
@@ -875,6 +944,7 @@ RSpec.describe Repository do
     # A blank sha is not a sha. `commit_sha` is NOT NULL and `TestRun` validates its presence, so
     # `WHERE commit_sha = ''` is a guaranteed-empty read — answered without a query at all, so a
     # caller holding an empty `?commit_sha=` pays nothing for the fallback.
+    # @intent: { entity: "Repository", action: "refuse a blank sha", behavior: "nil and empty sha arguments return nil without issuing a query", layer: "unit" }
     it "refuses a blank sha outright, and asks the database nothing" do
       repository = create_repository
       run(repository, "trunk0")
@@ -890,6 +960,7 @@ RSpec.describe Repository do
                                    created_at: at)
     end
 
+    # @intent: { entity: "Repository", action: "list branches with counts", behavior: "branch_histories names every branch that has runs with how many runs each holds", layer: "unit" }
     it "names every branch that has runs, with how many each has" do
       repository = create_repository
       run(repository, "trunk0", at: 3.days.ago)
@@ -903,6 +974,7 @@ RSpec.describe Repository do
     # Most history first, so a caller showing only the head of the list shows the branch a reader is
     # most likely looking for. Alphabetical would put `main` behind a dozen `feature/*` branches and
     # a truncated list would be a list with the trunk missing.
+    # @intent: { entity: "Repository", action: "order by history size", behavior: "branches are listed most history first rather than alphabetically so a truncated list keeps the trunk", layer: "unit" }
     it "orders by how much history each branch holds" do
       repository = create_repository
       run(repository, "sideaa", branch: "aaa-first-alphabetically", at: 1.minute.ago)
@@ -914,6 +986,7 @@ RSpec.describe Repository do
 
     # Ties go to the branch pushed to most recently — two idle branches with one run each are not
     # equally interesting, and the order has to be stable either way.
+    # @intent: { entity: "Repository", action: "break a tie on recency", behavior: "branches with equal run counts order by most recently pushed to", layer: "unit" }
     it "breaks a tie on how recently the branch was pushed to" do
       repository = create_repository
       run(repository, "stale0", branch: "feature/stale", at: 10.days.ago)
@@ -925,6 +998,7 @@ RSpec.describe Repository do
     # An anonymous run names no branch, so there is no branch here to offer. Pooling them under
     # `branch IS NULL` is the failure the panel's "No branch to plot a history on" state exists to
     # refuse — and a selector offering that pool would be a way to ask for it.
+    # @intent: { entity: "Repository", action: "offer nothing for anonymous runs", behavior: "runs that named no branch never appear as a selectable branch", layer: "unit" }
     it "offers nothing for the runs that named no branch" do
       repository = create_repository
       repository.test_runs.create!(commit_sha: "anon00", branch: nil, total_specs_count: 100)
@@ -933,6 +1007,7 @@ RSpec.describe Repository do
       expect(repository.branch_histories).to eq([])
     end
 
+    # @intent: { entity: "Repository", action: "ignore foreign branches", behavior: "another repository's branches never enter this repository's list", layer: "unit" }
     it "ignores another repository's branches" do
       repository = create_repository
       other = create_repository(user: create_user(github_uid: "2002", github_handle: "hubot"),
@@ -947,6 +1022,7 @@ RSpec.describe Repository do
     # that point it answers no question this panel asks, and counting it is the O(history) scan the
     # whole method exists to avoid. `capped?` carries the fact that it stopped, so a caller words it
     # "30+" instead of publishing the figure the query happened to stop at.
+    # @intent: { entity: "Repository", action: "cap the count with disclosure", behavior: "a branch longer than the trajectory window reports the window size and is marked capped while a short branch is not", layer: "unit" }
     it "caps the count at the trajectory window and says that it did" do
       repository = create_repository
       (Repository::TRAJECTORY_LIMIT + 5).times { |i| run(repository, "sha#{i}", at: (60 - i).days.ago) }
@@ -962,6 +1038,7 @@ RSpec.describe Repository do
 
     # Exactly at the window is a count that finished, not one that stopped — the off-by-one that
     # would have every trunk on the platform wearing a "30+" it never earned.
+    # @intent: { entity: "Repository", action: "spare an exact-window history", behavior: "a history that ends exactly at the window reports the full count without the capped flag", layer: "unit" }
     it "does not call a history that ends exactly at the window capped" do
       repository = create_repository
       Repository::TRAJECTORY_LIMIT.times { |i| run(repository, "sha#{i}", at: (60 - i).days.ago) }
@@ -970,6 +1047,7 @@ RSpec.describe Repository do
       expect(repository.branch_histories.first).not_to be_capped
     end
 
+    # @intent: { entity: "Repository", action: "honour caller bounds", behavior: "an explicit runs bound caps each count and a branches bound keeps the alphabetical survivors the walk names", layer: "unit" }
     it "honours a caller's own bounds" do
       repository = create_repository
       5.times { |i| run(repository, "trunk#{i}", at: (10 - i).days.ago) }
@@ -988,6 +1066,7 @@ RSpec.describe Repository do
     # was written for, `main` sorts behind every `feature/*` and is not in it. The panel would then
     # offer eight unrelated one-run branches on the page whose entire reason for existing is that
     # `main` holds the history.
+    # @intent: { entity: "Repository", action: "reach alphabetically late branches", behavior: "a branch sorting behind dozens of feature branches still heads the list because the walk is bounded far above any display size", layer: "unit" }
     it "reaches a branch that sorts alphabetically behind far more branches than a list would show" do
       repository = create_repository
       60.times { |i| run(repository, "side#{i}", branch: "feature/#{i.to_s.rjust(3, "0")}", at: (40 - i).days.ago) }
@@ -1002,6 +1081,7 @@ RSpec.describe Repository do
     # Past that bound the cut IS alphabetical, so the one branch a caller cannot afford to lose is
     # named rather than hoped for. The page pins the branch it is DRAWING: a selector rendered
     # without the option it is currently on has lost the reader it was rendered for.
+    # @intent: { entity: "Repository", action: "offer a pinned branch", behavior: "a pinned branch the walk stopped before is included in the list with its run count", layer: "unit" }
     it "offers a pinned branch the walk stopped before reaching" do
       repository = create_repository
       3.times { |i| run(repository, "side#{i}", branch: "feature/#{i}", at: (9 - i).days.ago) }
@@ -1015,6 +1095,7 @@ RSpec.describe Repository do
     # A pin keeps a branch in the list; it is never a way to put one there. An unrecognised
     # `?branch=` reaches this as a pin, and a list of the branches that HAVE runs must not answer it
     # with one that has none — that would be a selectable choice leading to an empty chart.
+    # @intent: { entity: "Repository", action: "refuse invented pins", behavior: "a pinned name with no runs never appears as a selectable branch", layer: "unit" }
     it "does not invent a pinned branch that has no runs" do
       repository = create_repository
       run(repository, "trunk0")
@@ -1022,6 +1103,7 @@ RSpec.describe Repository do
       expect(repository.branch_histories(pinned: ["feature/gone", nil]).map(&:name)).to eq(["main"])
     end
 
+    # @intent: { entity: "Repository", action: "suppress pin duplicates", behavior: "a branch the walk found anyway is not offered a second time when also pinned", layer: "unit" }
     it "does not offer a pinned branch the walk found anyway twice" do
       repository = create_repository
       run(repository, "trunk0", at: 2.days.ago)
@@ -1031,6 +1113,7 @@ RSpec.describe Repository do
         .to eq([["main", 2]])
     end
 
+    # @intent: { entity: "Repository", action: "answer nothing when never ingested", behavior: "a repository with no runs yields an empty branch list", layer: "unit" }
     it "has nothing to offer a repository CI has never reported to" do
       expect(create_repository.branch_histories).to eq([])
     end
@@ -1047,6 +1130,7 @@ RSpec.describe Repository do
     # runs per branch (which the capped count must not follow) and more branches (which the walk
     # must not turn into a query each).
     describe "what it costs to ask" do
+      # @intent: { entity: "Repository", action: "cost one query", behavior: "building the branch list costs one query regardless of run count or branch count and pins are answered inside the same query", layer: "unit" }
       it "is one query, whatever the history behind it" do
         repository = create_repository
         3.times { |i| run(repository, "sha#{i}", at: (5 - i).days.ago) }
@@ -1068,6 +1152,7 @@ RSpec.describe Repository do
     end
   end
 
+  # @intent: { entity: "Repository", action: "destroy dependents", behavior: "destroying a repository removes its api keys, test runs and spec intents with it", layer: "unit" }
   it "takes its api keys, runs and intents with it when destroyed" do
     repository = create_repository
     repository.api_keys.create!

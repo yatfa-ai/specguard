@@ -69,6 +69,7 @@ RSpec.describe SlowestTests do
 
     subject(:ranking) { described_class.for(repository, runs, branch: "main") }
 
+    # @intent: { entity: "SlowestTests", action: "rank by summed wall clock", behavior: "identities are ordered by total seconds across the window with the untimed one last rather than first", layer: "unit" }
     it "ranks the window's tests by the wall clock they cost across it, slowest first" do
       expect(ranking.rows.map(&:spec_identity_id))
         .to eq([moved.id, renamed.id, looped.id, steady.id, untimed.id])
@@ -78,6 +79,7 @@ RSpec.describe SlowestTests do
     # `file_path:line_number` coordinate midway through the window and is ONE row totalling all four
     # runs — 12 seconds, not two rows of 6. Under any positional key this is the head of the list
     # split in half and neither half at the head.
+    # @intent: { entity: "SlowestTests", action: "sum a moved test", behavior: "a test that changed file and line midway is one row totalling all four runs and is flagged moved with both files listed", layer: "unit" }
     it "keeps a moved test's history together and sums it" do
       row = ranking.rows.first
 
@@ -90,6 +92,7 @@ RSpec.describe SlowestTests do
 
     # The same guarantee on the other axis, and the one `UnstableTests` cannot make: grouped on
     # `name`, a reworded test is two tests and its runtime history starts over.
+    # @intent: { entity: "SlowestTests", action: "sum a reworded test", behavior: "a test renamed midway keeps one history totalling both spellings and is flagged renamed rather than moved", layer: "unit" }
     it "keeps a reworded test's history together and says it was reworded" do
       row = ranking.rows.find { |candidate| candidate.spec_identity_id == renamed.id }
 
@@ -101,6 +104,7 @@ RSpec.describe SlowestTests do
 
     # Eight rows across four runs, which is the pair that separates "slow in four runs" from "run
     # twice in each of two" — and the reason the total alone cannot be attributed.
+    # @intent: { entity: "SlowestTests", action: "distinguish repetition from spread", behavior: "recorded_count versus run_count separates a test run twice per run from one run once across more runs", layer: "unit" }
     it "tells a test that ran repeatedly within a run from one that ran in more runs" do
       looped_row = ranking.rows.find { |row| row.spec_identity_id == looped.id }
       steady_row = ranking.rows.find { |row| row.spec_identity_id == steady.id }
@@ -113,6 +117,7 @@ RSpec.describe SlowestTests do
 
     # Equal totals, and the tiebreak is the row count — so a repository whose tests total alike has
     # one stable order rather than one the planner picks afresh per request.
+    # @intent: { entity: "SlowestTests", action: "break ties by row count", behavior: "equal totals order deterministically by recorded row count instead of the planner's choice", layer: "unit" }
     it "breaks a tie on equal totals rather than leaving the order to the planner" do
       looped_row, steady_row = ranking.rows.values_at(2, 3)
 
@@ -123,6 +128,7 @@ RSpec.describe SlowestTests do
     # ⭐ A test nothing timed sorts LAST and says "not reported" — never `0.00s`, which would be a
     # measurement invented out of silence, and never the head of the list, which is where a naive
     # `DESC` would put it in Postgres.
+    # @intent: { entity: "SlowestTests", action: "sort untimed last", behavior: "a test with no timed rows sorts last and renders not reported rather than a zero duration", layer: "unit" }
     it "puts a test nothing timed at the end and refuses to render it as a zero" do
       row = ranking.rows.last
 
@@ -136,6 +142,7 @@ RSpec.describe SlowestTests do
     # ⭐ THE PARTITION. The deleted test cost 99 seconds a run — far more than anything in the list —
     # and is absent, because it is not in the suite being asked about. `#anchor_run` is what names
     # the run that decided so.
+    # @intent: { entity: "SlowestTests", action: "rank only the anchor suite", behavior: "a test absent from the anchor run is excluded no matter how slow it was in earlier runs of the window", layer: "unit" }
     it "ranks the anchor run's suite and not every test the window ever saw" do
       expect(ranking.rows.map(&:spec_identity_id)).not_to include(deleted.id)
       expect(ranking.anchor_run).to eq(anchor)
@@ -146,6 +153,7 @@ RSpec.describe SlowestTests do
     # The fourth state, and the ONLY one whose empty list a reader may take as "nothing was slow" —
     # which is why it is named rather than inferred. The three above are all `rows.empty?` too, and
     # a surface that branched on `any?` alone would render the same blank panel for all four.
+    # @intent: { entity: "SlowestTests", action: "name the ranked state", behavior: "a fully ranked ranking reports state ranked with recorded and resolved both true", layer: "unit" }
     it "names itself ranked, the one state an empty list could be read from" do
       expect(ranking.state).to eq(:ranked)
       expect(ranking.recorded?).to be true
@@ -154,6 +162,7 @@ RSpec.describe SlowestTests do
 
     # The window and nothing wider: a fifth run outside it holds the same tests and must not be
     # summed into their totals.
+    # @intent: { entity: "SlowestTests", action: "sum only the given window", behavior: "narrowing the run list halves the totals and the run count to the window actually asked about", layer: "unit" }
     it "sums only the runs of the window it was given" do
       narrowed = described_class.for(repository, runs.last(2), branch: "main")
 
@@ -181,6 +190,7 @@ RSpec.describe SlowestTests do
       # is on the SUM — cannot tell them apart. `#slowest_label` is what separates them: the moved
       # test totals 12s across four 3s runs, the looped one totals 4s across eight 0.5s ones, and
       # the two sit four rows apart in a list that says nothing about the difference without this.
+      # @intent: { entity: "SlowestTests", action: "state the longest single run", behavior: "slowest_label beside the total separates one long run from many cheap ones the sum cannot distinguish", layer: "unit" }
       it "states the single longest run beside the total, which the ordering cannot" do
         moved_row = ranking.rows.find { |row| row.spec_identity_id == moved.id }
         looped_row = ranking.rows.find { |row| row.spec_identity_id == looped.id }
@@ -192,6 +202,7 @@ RSpec.describe SlowestTests do
       # The same nil hazard `#duration_label` is tested for one method over, at the other aggregate:
       # an untimed group's `MAX` is SQL NULL, and rendering it as `0.00s` would report a measurement
       # invented out of silence — the single fastest test in the suite, from rows nothing timed.
+      # @intent: { entity: "SlowestTests", action: "refuse a zero longest run", behavior: "an untimed test's longest run renders not reported rather than 0.00s", layer: "unit" }
       it "refuses to render an untimed test's longest run as a zero" do
         row = ranking.rows.find { |candidate| candidate.spec_identity_id == untimed.id }
 
@@ -201,6 +212,7 @@ RSpec.describe SlowestTests do
 
       # Rows of a test's own history that carried no duration, and so are not in its total — the
       # per-row half of the disclosure the object makes for the anchor.
+      # @intent: { entity: "SlowestTests", action: "count untimed own rows", behavior: "each row reports how many of its own observations carried no duration, excluded from its total", layer: "unit" }
       it "counts the rows of its own history that carried no timing" do
         untimed_row = ranking.rows.find { |row| row.spec_identity_id == untimed.id }
         moved_row = ranking.rows.find { |row| row.spec_identity_id == moved.id }
@@ -213,6 +225,7 @@ RSpec.describe SlowestTests do
       # ⭐ How much of the window this test was seen in — 2 of 4 for one added midway, which is the
       # figure that keeps its 10 seconds from being read against the same denominator as a test that
       # ran throughout.
+      # @intent: { entity: "SlowestTests", action: "state window appearance", behavior: "the appearance label shows how many of the window's runs the test was seen in", layer: "unit" }
       it "states how much of the window it appeared in" do
         late_row = ranking.rows.find { |row| row.spec_identity_id == late.id }
         steady_row = ranking.rows.find { |row| row.spec_identity_id == steady.id }
@@ -226,6 +239,7 @@ RSpec.describe SlowestTests do
       # not know the window it is being reported over — holding one would be the second, drifting
       # spelling of the window that the class comment refuses — so the parameter is what it renders,
       # and passing a different one changes the label rather than being quietly ignored.
+      # @intent: { entity: "SlowestTests", action: "take the window parameter", behavior: "the appearance denominator is the caller's argument, so a different window changes the label rather than being ignored", layer: "unit" }
       it "takes the window it renders against rather than holding one of its own" do
         late_row = ranking.rows.find { |row| row.spec_identity_id == late.id }
 
@@ -237,6 +251,7 @@ RSpec.describe SlowestTests do
       # Seven rows in the anchor, six of them resolved, five of those timed. The fraction's halves
       # come back from one read of the run the ranking was drawn from, spelled through the one seam
       # every single-sided coverage label on this application goes through.
+      # @intent: { entity: "SlowestTests", action: "state timing coverage", behavior: "the coverage label reports timed rows over resolved rows of the ranked anchor with the untimed remainder counted", layer: "unit" }
       it "states the timing coverage of the rows it ranked" do
         expect(ranking.coverage_label).to eq("5 of 6")
         expect([ranking.resolved_count, ranking.timed_count]).to eq([6, 5])
@@ -244,6 +259,7 @@ RSpec.describe SlowestTests do
         expect(ranking.complete?).to be false
       end
 
+      # @intent: { entity: "SlowestTests", action: "disclose unresolved exclusions", behavior: "anchor rows with no durable identity are counted and excluded from the ranking with the exclusion flagged", layer: "unit" }
       it "counts the anchor's rows that carried no durable identity, and says it excluded them" do
         expect(ranking.recorded_count).to eq(7)
         expect(ranking.unresolved_count).to eq(1)
@@ -255,6 +271,7 @@ RSpec.describe SlowestTests do
       # accumulates — a suite whose every current test resolves cleanly would go on reporting
       # exclusions from runs long past. The count is over the run this ranking was actually drawn
       # from, so eighty stale unresolved rows outside the window change it by nothing.
+      # @intent: { entity: "SlowestTests", action: "scope exclusions to the run", behavior: "stale unresolved rows on runs outside the window never change the unresolved count", layer: "unit" }
       it "counts exclusions over the run it read and never over the repository" do
         stale = create_test_run(repository: repository, commit_sha: "ancient", branch: "main")
         80.times do |index|
@@ -269,6 +286,7 @@ RSpec.describe SlowestTests do
       end
 
       # A capped list that does not disclose its cap is read as the whole story.
+      # @intent: { entity: "SlowestTests", action: "disclose the cap", behavior: "a limit reports truncated with the candidate and unexamined identity counts so the list is not read as complete", layer: "unit" }
       it "discloses the identities the cap kept it from examining" do
         capped = described_class.for(repository, runs, branch: "main", limit: 2)
 
@@ -278,6 +296,7 @@ RSpec.describe SlowestTests do
         expect(capped.unexamined_count).to eq(3)
       end
 
+      # @intent: { entity: "SlowestTests", action: "report no truncation when complete", behavior: "an uncapped ranking reports not truncated and zero unexamined identities", layer: "unit" }
       it "reports no truncation when every identity of the anchor was examined" do
         expect(ranking.truncated?).to be false
         expect(ranking.unexamined_count).to eq(0)
@@ -285,6 +304,7 @@ RSpec.describe SlowestTests do
 
       # Three statements for the whole panel — a gate, a candidate step and a composition — and none
       # of them grows with the size of the suite or the length of the window.
+      # @intent: { entity: "SlowestTests", action: "bound the reads", behavior: "building the ranking costs exactly three queries regardless of suite size or window length", layer: "unit" }
       it "costs three bounded reads" do
         expect(count_queries { described_class.for(repository, runs, branch: "main").rows }).to eq(3)
       end
@@ -297,6 +317,7 @@ RSpec.describe SlowestTests do
     subject(:ranking) { described_class.for(repository, runs, branch: "main") }
 
     context "when the window holds no runs at all" do
+      # @intent: { entity: "SlowestTests", action: "answer an empty window free", behavior: "a window with no runs builds the object with zero queries, state no_runs, and nil rather than zero counts", layer: "unit" }
       it "answers without asking the database anything, and reports no figure it did not read" do
         repository # materialised before the measurement, so the count is this object's and not the fixture's
         empty = nil
@@ -321,6 +342,7 @@ RSpec.describe SlowestTests do
       # counted is this object's reads and not the fixture's inserts.
       before { runs }
 
+      # @intent: { entity: "SlowestTests", action: "distinguish unrecorded from empty", behavior: "an anchor run with no per-example rows reports state unrecorded with zero counts rather than nothing slow", layer: "unit" }
       it "says the suite has no grain at this depth rather than that nothing was slow" do
         expect(ranking.recorded?).to be false
         expect(ranking.resolved?).to be false
@@ -333,6 +355,7 @@ RSpec.describe SlowestTests do
       end
 
       # The gate is asked first and on its own, so a window with nothing to rank costs ONE read.
+      # @intent: { entity: "SlowestTests", action: "stop after the gate", behavior: "a window whose anchor recorded nothing costs one query before the candidate step is skipped", layer: "unit" }
       it "stops after the gate" do
         expect(count_queries { described_class.for(repository, runs, branch: "main").rows }).to eq(1)
       end
@@ -353,6 +376,7 @@ RSpec.describe SlowestTests do
         end
       end
 
+      # @intent: { entity: "SlowestTests", action: "distinguish unresolved from empty", behavior: "rows recorded but unresolved report state unresolved with the exclusion flagged rather than rendering as an empty suite", layer: "unit" }
       it "reports rows recorded and none of them resolved, distinguishably from an empty suite" do
         expect(ranking.recorded?).to be true
         expect(ranking.resolved?).to be false
@@ -368,11 +392,13 @@ RSpec.describe SlowestTests do
       # Every figure the candidate step would have produced is absent rather than zeroed — the step
       # never ran, and a `0` for the timing coverage of a ranking that does not exist is a
       # measurement invented out of a return statement.
+      # @intent: { entity: "SlowestTests", action: "omit unmeasured figures", behavior: "candidate, resolved and timed counts are nil rather than zeroed when the candidate step never ran", layer: "unit" }
       it "reports no figure the candidate step never measured" do
         expect([ranking.candidate_count, ranking.resolved_count, ranking.timed_count]).to all(be_nil)
         expect(ranking.truncated?).to be false
       end
 
+      # @intent: { entity: "SlowestTests", action: "stop after the gate", behavior: "the unresolved gate costs one query before the candidate step is skipped", layer: "unit" }
       it "stops after the gate" do
         expect(count_queries { described_class.for(repository, runs, branch: "main").rows }).to eq(1)
       end
@@ -384,6 +410,7 @@ RSpec.describe SlowestTests do
   # predicate — so a foreign anchor would put another tenant's row counts beside this one's list.
   # {NearDuplicateClusters} checks its own weighed run for exactly this, and this is the same read.
   describe "the tenant boundary" do
+    # @intent: { entity: "SlowestTests", action: "refuse a foreign anchor", behavior: "a window anchored on another repository's run raises ArgumentError naming the owning repository", layer: "unit" }
     it "refuses a window anchored on another repository's run" do
       other = create_repository(user: create_user(github_uid: "2002", github_handle: "other"),
                                 github_full_name: "acme/other")

@@ -86,6 +86,7 @@ RSpec.describe SpecDirectoryFileRuntimeGrowth do
       )
     end
 
+    # @intent: { entity: "SpecDirectoryFileRuntimeGrowth", action: "compare one area's files across two runs by summed duration", behavior: "each row exposes the summed seconds from both runs plus the signed difference, ordered by the magnitude of movement", layer: "unit" }
     it "carries each file's seconds then, its seconds now, and the movement between them" do
       expect(rows_as_read(retimed_area)).to eq(
         [["spec/models/legacy_spec.rb", 12.0, 2.0, -10.0],
@@ -98,6 +99,7 @@ RSpec.describe SpecDirectoryFileRuntimeGrowth do
     # not one file in that fixture changed its example count, so the count drill-in ranks nothing and
     # reports three unmoved files. A read that had become that one would be green on shape and silent
     # on the whole subject.
+    # @intent: { entity: "SpecDirectoryFileRuntimeGrowth", action: "compare one area's files across two runs by summed duration", behavior: "with unchanged example counts the runtime rows still move while the count sibling reports zero movement everywhere, proving this ranking is driven by timing and not rows", layer: "unit" }
     it "ranks files the count drill-in over the same rows cannot rank at all" do
       drill_in = retimed_area
       previous_run, latest_run = repository.test_runs.order(:created_at).to_a
@@ -109,6 +111,7 @@ RSpec.describe SpecDirectoryFileRuntimeGrowth do
       expect(counts).not_to be_any_movement
     end
 
+    # @intent: { entity: "SpecDirectoryFileRuntimeGrowth", action: "compare one area's files across two runs by summed duration", behavior: "the drill-in reports itself comparable with the same state symbol the parent panel produced", layer: "unit" }
     it "is comparable, and carries the parent panel's verdict verbatim" do
       drill_in = retimed_area
 
@@ -121,6 +124,7 @@ RSpec.describe SpecDirectoryFileRuntimeGrowth do
     # the same four figures under the same names one rung up — produces visibly wrong denominators.
     # The timed pair differs from the recorded pair inside the area too, so the two cannot be read
     # off each other.
+    # @intent: { entity: "SpecDirectoryFileRuntimeGrowth", action: "compare one area's files across two runs by summed duration", behavior: "the four per-run denominator counts cover only files under the requested area, ignoring a heavier population recorded in other directories", layer: "unit" }
     it "counts all four of its totals over the asked-for area and not over the whole run" do
       drill_in = build(
         previous_specs: file_specs("spec/models/order_spec.rb", 2, each: 1.0) +
@@ -146,6 +150,7 @@ RSpec.describe SpecDirectoryFileRuntimeGrowth do
     # arithmetic on a zero that was never a measurement of this file. `change` is nil on both rows
     # and the two predicates are what say WHICH absence each one is — the pair the API serves for
     # exactly this reason, since neither is derivable from a null `change`.
+    # @intent: { entity: "SpecDirectoryFileRuntimeGrowth", action: "compare one area's files across two runs by summed duration", behavior: "a renamed file surfaces as one row absent from the latest run beside one absent from the previous run, with nil changes and predicate flags distinguishing new from removed while neither is a timing gap", layer: "unit" }
     it "shows a relocation as a new file beside a removed one, and never as two deltas" do
       drill_in = build(
         previous_specs: file_specs("spec/models/legacy_user_spec.rb", 2, each: 6.0),
@@ -173,6 +178,7 @@ RSpec.describe SpecDirectoryFileRuntimeGrowth do
     # all, which is a fact about the RUN — the parent refuses with `latest_untimed` and this object
     # correctly builds no rows. Keeping another area timed on both sides is what makes the gap a
     # fact about THIS FILE, which is the whole distinction the object exists to hold.
+    # @intent: { entity: "SpecDirectoryFileRuntimeGrowth", action: "compare one area's files across two runs by summed duration", behavior: "a file the latest run ran but never timed keeps a nil latest side and nil change, flagged as a timing gap rather than presented as a speedup to zero", layer: "unit" }
     it "reports a file only one run timed as a timing gap and never as a speedup" do
       drill_in = build(
         previous_specs: file_specs("spec/models/order_spec.rb", 2, each: 4.0) +
@@ -208,6 +214,7 @@ RSpec.describe SpecDirectoryFileRuntimeGrowth do
     # AND that side reported no duration for it. A client is owed both facts, because "a file we
     # just added" and "a file nothing timed" are different things to go and fix, and folding them
     # would let the panel announce a magnitude it never measured.
+    # @intent: { entity: "SpecDirectoryFileRuntimeGrowth", action: "compare one area's files across two runs by summed duration", behavior: "a file present only in the latest run and unmeasured there is flagged new_file while timing_gap stays false, keeping the two absences distinct", layer: "unit" }
     it "keeps a new file's absence apart from its missing timing" do
       drill_in = build(
         previous_specs: file_specs("spec/models/order_spec.rb", 1, each: 1.0),
@@ -232,6 +239,7 @@ RSpec.describe SpecDirectoryFileRuntimeGrowth do
     # non-comparable states, which are about the RUNS and would be wrong to spell here. An object
     # that refused instead would tell a reader their two runs cannot be compared because they
     # mistyped a path.
+    # @intent: { entity: "SpecDirectoryFileRuntimeGrowth", action: "compare one area's files across two runs by summed duration", behavior: "a directory neither run recorded yields a comparable state with zero rows and zero file count rather than a refusal naming a run-level defect", layer: "unit" }
     it "reports an area neither run touched as an empty comparison, not as a refusal to compare" do
       drill_in = build(
         previous_specs: file_specs("spec/models/order_spec.rb", 2, each: 1.0),
@@ -246,6 +254,7 @@ RSpec.describe SpecDirectoryFileRuntimeGrowth do
       expect(drill_in.path).to eq("spec/ghosts")
     end
 
+    # @intent: { entity: "SpecDirectoryFileRuntimeGrowth", action: "compare one area's files across two runs by summed duration", behavior: "truncation is decided against the area's total file count, so a limited list still reports the full population and its truncated flag", layer: "unit" }
     it "truncates against the area's file count and not against its own length" do
       drill_in = build(
         previous_specs: file_specs("spec/models/gone_spec.rb", 1, each: 1.0),
@@ -260,6 +269,7 @@ RSpec.describe SpecDirectoryFileRuntimeGrowth do
       expect(drill_in).to be_truncated
     end
 
+    # @intent: { entity: "SpecDirectoryFileRuntimeGrowth", action: "compare one area's files across two runs by summed duration", behavior: "when the limit exceeds the file population the truncated flag is false and the row count equals the file count", layer: "unit" }
     it "is not truncated where the list shows every file the comparison covered" do
       drill_in = build(
         previous_specs: file_specs("spec/models/order_spec.rb", 2, each: 1.0),
@@ -276,6 +286,7 @@ RSpec.describe SpecDirectoryFileRuntimeGrowth do
     # ride in the tail of a ranking by absolute movement, so a reader meets them side by side, and a
     # `moved?` that answered false for both would make the two indistinguishable in the one place
     # they sit together. Asserted in BOTH directions on BOTH predicates.
+    # @intent: { entity: "SpecDirectoryFileRuntimeGrowth", action: "compare one area's files across two runs by summed duration", behavior: "a compared row with zero movement is comparable and unmoved, while a never-compared row with nil sides is a timing gap, so the two predicates never collapse the distinction", layer: "unit" }
     it "tells a file that did not move apart from one it could not compare" do
       ran_out = build(
         previous_specs: file_specs("spec/models/order_spec.rb", 1, each: 1.0) +
@@ -311,6 +322,7 @@ RSpec.describe SpecDirectoryFileRuntimeGrowth do
     # ranked by the OTHER quantity and holds the SAME VALUE today, so every equality against `30`
     # passes under either. Stubbed instead — a limit read from the count drill-in's constant, or from
     # a literal, does not move when this one does, which is the whole failure this guards.
+    # @intent: { entity: "SpecDirectoryFileRuntimeGrowth", action: "compare one area's files across two runs by summed duration", behavior: "stubbing the runtime growth limit changes the row count while the count sibling's constant is untouched, proving the default comes from this object's own constant", layer: "unit" }
     it "defaults to this cell's own limit and not the count drill-in's" do
       stub_const("SpecObservation::SPEC_DIRECTORY_FILE_RUNTIME_GROWTH_LIMIT", 4)
 
@@ -362,6 +374,7 @@ RSpec.describe SpecDirectoryFileRuntimeGrowth do
           latest_specs: file_specs("spec/models/o_spec.rb", 4, each: nil, offset: 100) }
       }
     }.each do |state, fixture|
+      # @intent: { entity: "SpecDirectoryFileRuntimeGrowth", action: "compare one area's files across two runs by summed duration", behavior: "for every one of eight parent refusal fixtures the drill-in returns the parent's state symbol, no rows and not comparable", layer: "unit" }
       it "refuses to compare, naming '#{state}', exactly as the panel above does" do
         drill_in = build(**instance_exec(&fixture))
 
@@ -375,6 +388,7 @@ RSpec.describe SpecDirectoryFileRuntimeGrowth do
     # rather than what they measured: a sharded run differenced against a complete one reports every
     # file shrinking. `shard_id` is what `Ingest::RunRecorder` turns into the `test_run_shards` row
     # `TestRun#assembled_like?` counts.
+    # @intent: { entity: "SpecDirectoryFileRuntimeGrowth", action: "compare one area's files across two runs by summed duration", behavior: "a sharded run differenced against a complete one is refused with the assembled_differently state rather than ranking mass shrinkage", layer: "unit" }
     it "refuses to compare two runs assembled from different numbers of parts" do
       drill_in = build(previous_specs: file_specs("spec/models/order_spec.rb", 4, each: 1.0),
                        latest_specs: file_specs("spec/models/order_spec.rb", 4, each: 9.0, offset: 100),
@@ -391,6 +405,7 @@ RSpec.describe SpecDirectoryFileRuntimeGrowth do
     # `previous_unrecorded`: "the earlier run recorded nothing ANYWHERE", printed directly beneath a
     # panel listing that run's areas. The inherited answer is `:comparable`, and the area's emptiness
     # on the previous side is the ROW's `new_file?`.
+    # @intent: { entity: "SpecDirectoryFileRuntimeGrowth", action: "compare one area's files across two runs by summed duration", behavior: "when only the latest run recorded the requested area inside two otherwise full runs, the state stays comparable and the missing side is expressed as the row's new_file flag", layer: "unit" }
     it "does not re-derive a run-level absence from one area's missing rows" do
       drill_in = build(
         previous_specs: file_specs("spec/requests/checkout_spec.rb", 4, each: 1.0),
@@ -410,6 +425,7 @@ RSpec.describe SpecDirectoryFileRuntimeGrowth do
     # re-deriving from this area's rows would find zero previous-side TIMED rows and spell it
     # `previous_untimed`: "the earlier run reported no timings ANYWHERE", printed directly beneath a
     # panel listing that run's per-area seconds.
+    # @intent: { entity: "SpecDirectoryFileRuntimeGrowth", action: "compare one area's files across two runs by summed duration", behavior: "when only the latest run timed the requested area inside two runs timed elsewhere, the state stays comparable and the row is a timing gap rather than a run-level previous_untimed refusal", layer: "unit" }
     it "does not re-derive a run-level timing absence from one area's missing timings" do
       drill_in = build(
         previous_specs: file_specs("spec/requests/checkout_spec.rb", 4, each: 1.0) +
@@ -430,6 +446,7 @@ RSpec.describe SpecDirectoryFileRuntimeGrowth do
     # none of them: the COUNT parent finds that perfectly comparable and the RUNTIME parent refuses
     # it. Gated on the wrong parent, this object would build a table of nils under a comparable
     # verdict.
+    # @intent: { entity: "SpecDirectoryFileRuntimeGrowth", action: "compare one area's files across two runs by summed duration", behavior: "two runs that recorded rows but timed none of them are comparable to the count parent yet refused by the runtime parent, and this object follows the runtime verdict", layer: "unit" }
     it "inherits the runtime parent's verdict where the count parent would have allowed it" do
       ingest(commit_sha: "prev00000000001", specs: file_specs("spec/models/o_spec.rb", 3, each: nil))
       repository.test_runs.last.update!(created_at: 2.hours.ago)
@@ -447,6 +464,7 @@ RSpec.describe SpecDirectoryFileRuntimeGrowth do
     # zero, so nothing downstream can render a sentence about a comparison that was not made. All
     # FOUR denominators, because a fabricated `anchor_timed_count` is exactly as misleading as a
     # fabricated recorded one and there are twice as many of them here.
+    # @intent: { entity: "SpecDirectoryFileRuntimeGrowth", action: "compare one area's files across two runs by summed duration", behavior: "in a refused state every denominator — file count, both recorded counts, both timed counts — reads zero alongside empty rows and no truncation", layer: "unit" }
     it "carries no figures at all in a state it refused" do
       drill_in = build(previous_specs: file_specs("spec/models/order_spec.rb", 3, each: 1.0),
                        latest_total: 40)
@@ -463,6 +481,7 @@ RSpec.describe SpecDirectoryFileRuntimeGrowth do
     # The area asked for is still named. The surface renders nothing in these states, but an object
     # that dropped its own subject on the way through the gate would be a trap for the next caller
     # that wants to say WHICH area it declined to compare.
+    # @intent: { entity: "SpecDirectoryFileRuntimeGrowth", action: "compare one area's files across two runs by summed duration", behavior: "even after refusing to compare the object still reports the directory path it was asked about", layer: "unit" }
     it "still names the area it was asked about" do
       drill_in = build(previous_specs: file_specs("spec/models/order_spec.rb", 3, each: 1.0),
                        latest_total: 40, path: "spec/models")
@@ -510,6 +529,7 @@ RSpec.describe SpecDirectoryFileRuntimeGrowth do
           latest_specs: file_specs("spec/models/o_spec.rb", 4, each: nil, offset: 100) }
       }
     }.each do |state, fixture|
+      # @intent: { entity: "SpecDirectoryFileRuntimeGrowth", action: "compare one area's files across two runs by summed duration", behavior: "across all eight parent refusal states building the drill-in issues zero per-file aggregate queries, because the gate reads the already-built parent", layer: "unit" }
       it "asks the observations table nothing in '#{state}'" do
         attrs = instance_exec(&fixture)
         ingest(commit_sha: "prev00000000001", specs: attrs[:previous_specs], total: attrs[:previous_total])
@@ -528,6 +548,7 @@ RSpec.describe SpecDirectoryFileRuntimeGrowth do
       end
     end
 
+    # @intent: { entity: "SpecDirectoryFileRuntimeGrowth", action: "compare one area's files across two runs by summed duration", behavior: "the assembled_differently refusal also issues no aggregate query before declining", layer: "unit" }
     it "asks nothing where the two runs were assembled differently" do
       ingest(commit_sha: "prev00000000001", specs: file_specs("spec/models/o_spec.rb", 3, each: 1.0))
       repository.test_runs.last.update!(created_at: 2.hours.ago)
@@ -546,6 +567,7 @@ RSpec.describe SpecDirectoryFileRuntimeGrowth do
     # it does not grow with the area. Measured as a difference against ten times the examples, so an
     # implementation that counted per row, or took a second round trip for the captions, shows up
     # here whatever the absolute number happens to be.
+    # @intent: { entity: "SpecDirectoryFileRuntimeGrowth", action: "compare one area's files across two runs by summed duration", behavior: "issuing the comparison costs exactly one aggregate query and the count stays flat when the area grows tenfold, ruling out per-row or per-caption round trips", layer: "unit" }
     it "costs one query, and the same one whether the area holds twenty examples or two hundred" do
       ingest(commit_sha: "prev00000000001", specs: file_specs("spec/models/order_spec.rb", 10, each: 1.0))
       repository.test_runs.last.update!(created_at: 2.hours.ago)

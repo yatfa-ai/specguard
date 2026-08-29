@@ -5,6 +5,7 @@ require "rails_helper"
 RSpec.describe ApiKey do
   let(:repository) { create_repository }
 
+  # @intent: { entity: "ApiKey", action: "store a token", behavior: "only the SHA-256 digest reaches the database, so the raw sgk_ value exists solely in memory after creation", layer: "unit" }
   it "never persists the raw token — only its SHA-256 digest" do
     api_key = repository.api_keys.create!
 
@@ -13,24 +14,28 @@ RSpec.describe ApiKey do
     expect(described_class.column_names).not_to include("token")
   end
 
+  # @intent: { entity: "ApiKey", action: "reveal a token", behavior: "after reload the raw token is unrecoverable, which is what makes the reveal-once contract true", layer: "unit" }
   it "cannot recover the raw token once reloaded — that is what makes reveal-once true" do
     raw = repository.api_keys.create!.raw_token
 
     expect(described_class.find_by(token_digest: described_class.digest(raw)).raw_token).to be_nil
   end
 
+  # @intent: { entity: "ApiKey", action: "issue tokens", behavior: "each created key draws a distinct random token so two keys never share a credential", layer: "unit" }
   it "issues a distinct token per key" do
     tokens = Array.new(3) { repository.api_keys.create!.raw_token }
 
     expect(tokens.uniq.size).to eq(3)
   end
 
+  # @intent: { entity: "ApiKey", action: "authenticate a token", behavior: "a valid raw token resolves back to its key row through the digest lookup", layer: "unit" }
   it "authenticates a valid raw token back to its key" do
     api_key = repository.api_keys.create!
 
     expect(described_class.authenticate(api_key.raw_token)).to eq(api_key)
   end
 
+  # @intent: { entity: "ApiKey", action: "authenticate a token", behavior: "unknown, nil and blank inputs all fail authentication rather than raising or matching anything", layer: "unit" }
   it "refuses an unknown or blank token" do
     repository.api_keys.create!
 
@@ -39,6 +44,7 @@ RSpec.describe ApiKey do
     expect(described_class.authenticate("")).to be_nil
   end
 
+  # @intent: { entity: "ApiKey", action: "show a hint", behavior: "the exposed hint identifies the key without containing any recoverable part of the token", layer: "unit" }
   it "exposes a hint that identifies the key without revealing it" do
     api_key = repository.api_keys.create!
 
@@ -46,6 +52,7 @@ RSpec.describe ApiKey do
   end
 
   describe "#regenerate!" do
+    # @intent: { entity: "ApiKey", action: "rotate keys", behavior: "the retired token stops authenticating immediately while the new one resolves to the same key", layer: "unit" }
     it "stops the previous token authenticating and authenticates the new one" do
       api_key = repository.api_keys.create!
       retired = api_key.raw_token
@@ -59,6 +66,7 @@ RSpec.describe ApiKey do
       expect(described_class.authenticate(api_key.raw_token)).to eq(api_key)
     end
 
+    # @intent: { entity: "ApiKey", action: "rotate keys", behavior: "the new digest is written to the row so every other process sees the rotation too", layer: "unit" }
     it "persists the rotation, so a reload does not resurrect the old token" do
       api_key = repository.api_keys.create!(name: "CI")
       retired = api_key.raw_token
@@ -72,6 +80,7 @@ RSpec.describe ApiKey do
         .to eq(described_class.digest(api_key.raw_token))
     end
 
+    # @intent: { entity: "ApiKey", action: "rotate keys", behavior: "after rotation the persisted form is still only the digest, with no raw-token column to leak", layer: "unit" }
     it "keeps storing the digest only — the new token is no more recoverable than the old one" do
       api_key = repository.api_keys.create!
       api_key.regenerate!
@@ -80,6 +89,7 @@ RSpec.describe ApiKey do
       expect(described_class.column_names).not_to include("token")
     end
 
+    # @intent: { entity: "ApiKey", action: "rotate keys", behavior: "rotation updates the existing row in place, preserving its name, creator and repository", layer: "unit" }
     it "rotates the same row, keeping its identity and provenance" do
       creator = create_user(github_uid: "2002", github_handle: "minter")
       api_key = repository.api_keys.create!(name: "CI — main", created_by_user: creator)
@@ -92,6 +102,7 @@ RSpec.describe ApiKey do
       expect(reloaded.repository).to eq(repository)
     end
 
+    # @intent: { entity: "ApiKey", action: "rotate keys", behavior: "repeated rotations each issue a fresh token, never repeating an earlier one", layer: "unit" }
     it "issues a distinct token on every rotation" do
       api_key = repository.api_keys.create!
       tokens = [api_key.raw_token] + Array.new(2) { api_key.regenerate!.raw_token }
@@ -99,6 +110,7 @@ RSpec.describe ApiKey do
       expect(tokens.uniq.size).to eq(3)
     end
 
+    # @intent: { entity: "ApiKey", action: "rotate keys", behavior: "the displayed hint follows the new digest's last six characters instead of the retired token's", layer: "unit" }
     it "moves the hint onto the new token" do
       api_key = repository.api_keys.create!
       retired_hint = api_key.token_hint
@@ -111,6 +123,7 @@ RSpec.describe ApiKey do
       expect(api_key.token_hint).to end_with(api_key.token_digest.last(6))
     end
 
+    # @intent: { entity: "ApiKey", action: "rotate keys", behavior: "rotated_at is stamped within the same save that writes the new digest and survives a reload", layer: "unit" }
     it "dates the rotation on the same row, in the same save as the new digest" do
       api_key = repository.api_keys.create!
 
@@ -128,6 +141,7 @@ RSpec.describe ApiKey do
       expect(reloaded.token_digest).to eq(described_class.digest(api_key.raw_token))
     end
 
+    # @intent: { entity: "ApiKey", action: "rotate keys", behavior: "regeneration leaves the recorded last use untouched rather than clearing or backdating it", layer: "unit" }
     it "leaves last_used_at exactly as it found it" do
       api_key = repository.api_keys.create!
       api_key.touch_last_used!
@@ -141,6 +155,7 @@ RSpec.describe ApiKey do
       expect(described_class.find(api_key.id).last_used_at).to eq(stamped)
     end
 
+    # @intent: { entity: "ApiKey", action: "rotate keys", behavior: "a second rotation advances rotated_at rather than leaving the first rotation's date standing", layer: "unit" }
     it "moves the rotation date on every rotation, rather than recording only the first" do
       api_key = repository.api_keys.create!
       earlier = 2.days.ago
@@ -171,11 +186,13 @@ RSpec.describe ApiKey do
       end
     end
 
+    # @intent: { entity: "ApiKey", action: "flag rotation", behavior: "a key that has never been rotated is never reported as rotated-and-unused, used or not", layer: "unit" }
     it "is false for a key that has never been rotated, used or not" do
       expect(key(last_used_at: nil)).not_to be_rotated_and_unused
       expect(key(last_used_at: rotated_at)).not_to be_rotated_and_unused
     end
 
+    # @intent: { entity: "ApiKey", action: "flag rotation", behavior: "a rotation newer than the last use reads as rotated-and-unused while the paired un-rotated key does not", layer: "unit" }
     it "is true for a key rotated after its last use" do
       expect(key(last_used_at: rotated_at - 1.hour, rotated_at: rotated_at))
         .to be_rotated_and_unused
@@ -185,11 +202,13 @@ RSpec.describe ApiKey do
       expect(key(last_used_at: rotated_at - 1.hour)).not_to be_rotated_and_unused
     end
 
+    # @intent: { entity: "ApiKey", action: "flag rotation", behavior: "a key rotated before it ever authenticated counts as rotated and unused", layer: "unit" }
     it "is true for a key rotated before it ever authenticated" do
       # Not "no comparison" — the state at its purest, with not even an inherited timestamp.
       expect(key(last_used_at: nil, rotated_at: rotated_at)).to be_rotated_and_unused
     end
 
+    # @intent: { entity: "ApiKey", action: "flag rotation", behavior: "a single successful authentication with the replacement clears the flag with no waiting window", layer: "unit" }
     it "is false again as soon as one request authenticates with the replacement" do
       api_key = key(last_used_at: rotated_at - 1.hour, rotated_at: rotated_at)
 
@@ -199,6 +218,7 @@ RSpec.describe ApiKey do
       expect(api_key).not_to be_rotated_and_unused
     end
 
+    # @intent: { entity: "ApiKey", action: "flag rotation", behavior: "a use simultaneous with the rotation does not count as newer than it, so the flag stays set", layer: "unit" }
     it "treats a use simultaneous with the rotation as not having cleared it" do
       # The boundary is stated rather than inherited from an operator: the question is whether the
       # use is NEWER than the rotation, and a tie is not newer.
