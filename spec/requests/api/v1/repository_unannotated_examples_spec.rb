@@ -804,8 +804,7 @@ RSpec.describe "GET /api/v1/repository — latest_run.unannotated_examples", typ
     # rows are not rolled up into its parent's counts. Nothing in this read compares paths, so nobody
     # could break this with a bad `LIKE` — they would break it by "fixing" the map into a subtree
     # rollup, which reads as a tidier answer and is a fifth directory semantics on this table.
-    # @intent: { entity: "repository unannotated_directories ranking", action: "row each subdirectory", behavior: "a nested directory gets its own ranking row instead of being folded into its parent area", layer: "request" }
-    # @intent: { entity: "repository unannotated_directories ranking", action: "include clean areas", behavior: "a fully annotated area still appears with a zero so the listing covers every area the run touched", layer: "request" }
+    # @intent: { entity: "repository unannotated_directories ranking", action: "row each subdirectory", behavior: "a nested directory gets its own ranking row instead of being folded into its parent, and a fully annotated area still appears with a zero so the listing covers every area the run touched", layer: "request" }
     it "gives a subdirectory its own row rather than rolling it into its parent" do
       nested = separate_repository("acme/nested-debt")
       ingest(nested,
@@ -883,8 +882,7 @@ RSpec.describe "GET /api/v1/repository — latest_run.unannotated_examples", typ
     # this `null` is what discriminates it — so the second half below reaches the SAME zero from a run
     # that did record rows and gets the map PRESENT. That is the discrimination the null buys, and it
     # is why a serializer "fixing" this disagreement into `rows: []` would be taking something away.
-    # @intent: { entity: "repository unannotated_examples map block", action: "separate map from worklist", behavior: "a run with no per-example rows leaves the map null while the worklist still answers with its own block", layer: "request" }
-    # @intent: { entity: "repository unannotated_directories worklist", action: "omit the block unasked", behavior: "the worklist block is null with its key present whenever the client did not ask for it", layer: "request" }
+    # @intent: { entity: "repository unannotated worklist and map", action: "separate map from worklist", behavior: "a run with no per-example rows leaves the map null while the worklist still answers with its own block, and the worklist block is null with its key present whenever the client did not ask for it", layer: "request" }
     it "is null for a run with no per-example rows, while the worklist answers with a block" do
       bare = separate_repository("acme/no-observations")
       create_test_run(repository: bare, commit_sha: "norows000623", duration_seconds: 42.5)
@@ -919,8 +917,7 @@ RSpec.describe "GET /api/v1/repository — latest_run.unannotated_examples", typ
   # because the empty answer here is not a stale bookmark or a deleted file but the STATE THE METRIC
   # EXISTS TO REACH.
   describe "the two ways this key can be empty" do
-    # @intent: { entity: "repository unannotated_directories worklist", action: "omit the block unasked", behavior: "the worklist block is null with its key present whenever the client did not ask for it", layer: "request" }
-    # @intent: { entity: "repository unannotated_examples drill-ins", action: "distinguish block spellings", behavior: "the two drill-in flags are spelled differently in the response so a client can tell which block it received", layer: "request" }
+    # @intent: { entity: "repository unannotated_examples drill-ins", action: "distinguish block spellings", behavior: "the two drill-in flags are spelled differently in the response so a client can tell which block it received, and the worklist block is null with its key present whenever the client did not ask for it", layer: "request" }
     it "is null — with the key present — when the block was not asked for" do
       body = get_repository
 
@@ -957,8 +954,7 @@ RSpec.describe "GET /api/v1/repository — latest_run.unannotated_examples", typ
 
     # The pair, side by side, which is the assertion neither example above can make on its own: a
     # client can tell the two apart WITHOUT knowing what it sent.
-    # @intent: { entity: "repository unannotated_examples drill-ins", action: "distinguish block spellings", behavior: "the two drill-in flags are spelled differently in the response so a client can tell which block it received", layer: "request" }
-    # @intent: { entity: "GET /api/v1/repository", action: "default to newest run", behavior: "a call with no run selector describes the repository newest run", layer: "request" }
+    # @intent: { entity: "repository unannotated_examples drill-ins", action: "distinguish block spellings", behavior: "the two drill-in flags are spelled differently in the response so a client can tell which block it received, and a call with no run selector describes the repository newest run", layer: "request" }
     it "spells the two differently, so a client can tell which one it got" do
       done = separate_repository("acme/nothing-left")
       ingest(done, [annotated_spec(file_path: annotated_file, line_number: 4)])

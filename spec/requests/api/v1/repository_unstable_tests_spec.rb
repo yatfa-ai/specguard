@@ -420,8 +420,7 @@ RSpec.describe "GET /api/v1/repository — unstable_tests", type: :request do
     # The gate is false in two states, not one, and the second is not silence: the window reported,
     # and holds exactly one run to have reported it. One run's outcome cannot have changed from
     # anything, which is arithmetic rather than a nullability detail.
-    # @intent: { entity: "repository unstable_tests block", action: "serve again on one run", behavior: "the flag is still served where exactly one run reported", layer: "request" }
-    # @intent: { entity: "repository unstable_tests block", action: "flip on two runs", behavior: "the flag turns true with the same empty list once two runs have reported", layer: "request" }
+    # @intent: { entity: "repository unstable_tests block", action: "serve again on one run", behavior: "the flag is still served where exactly one run reported, and it turns true with the same empty list once two runs have reported", layer: "request" }
     it "serves it again where exactly one run reported" do
       repository_with([nil, "failed", nil])
 
@@ -511,8 +510,7 @@ RSpec.describe "GET /api/v1/repository — unstable_tests", type: :request do
       end
     end
 
-    # @intent: { entity: "repository unstable_tests block", action: "separate quarantined tests", behavior: "a quarantined test appears as its own list and never among the flaky rows", layer: "request" }
-    # @intent: { entity: "repository unstable_tests block", action: "carry the flag on both lists", behavior: "the flag rides on rows of both lists when the window holds each kind", layer: "request" }
+    # @intent: { entity: "repository unstable_tests block", action: "separate quarantined tests", behavior: "a quarantined test appears as its own list and never among the flaky rows, with the flag riding on rows of both lists when the window holds each kind", layer: "request" }
     it "serves it as its own list and never among the flaky rows" do
       _window, block = blocks(query: { branch: "main" })
 
@@ -562,8 +560,7 @@ RSpec.describe "GET /api/v1/repository — unstable_tests", type: :request do
       repository
     end
 
-    # @intent: { entity: "repository unstable_tests block", action: "disclose the cap", behavior: "the response states the cap, both operands of it, and the bound that produced the cap", layer: "request" }
-    # @intent: { entity: "repository unstable_tests block", action: "serve the cap untripped", behavior: "where the window stayed under the limit the cap is served as not tripped", layer: "request" }
+    # @intent: { entity: "repository unstable_tests block", action: "disclose the cap", behavior: "the response states the cap, both operands of it, and the bound that produced the cap, and where the window stayed under the limit the cap is served as not tripped", layer: "request" }
     it "discloses the cap, both operands of it, and the bound that produced it" do
       stub_const("SpecObservation::UNSTABLE_CANDIDATE_LIMIT", 5)
       truncated_window(5)
@@ -600,8 +597,7 @@ RSpec.describe "GET /api/v1/repository — unstable_tests", type: :request do
   # example — so those rows are dropped from the matching before anything is grouped, and the
   # exclusion is counted. Dropping them silently is the reading this must not produce.
   describe "rows that carried no description" do
-    # @intent: { entity: "repository unstable_tests block", action: "count excluded rows", behavior: "excluded rows are counted and never pooled into a synthetic test of their own", layer: "request" }
-    # @intent: { entity: "repository unstable_tests block", action: "serve real zeros", behavior: "where every row carried a description the unnamed counter is a real zero", layer: "request" }
+    # @intent: { entity: "repository unstable_tests block", action: "count excluded rows", behavior: "excluded rows are counted and never pooled into a synthetic test of their own, and where every row carried a description the unnamed counter is a real zero", layer: "request" }
     it "counts the excluded rows and never pools them into a test of their own" do
       3.times do |index|
         ingest(repository,

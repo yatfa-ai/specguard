@@ -644,8 +644,7 @@ RSpec.describe "GET /api/v1/repository — directory_runtime_growth", type: :req
   describe "against the blocks it sits beside" do
     before { adjacent_runs }
 
-    # @intent: { entity: "repository directory_runtime_growth block", action: "leave the count pair alone", behavior: "drilling in here changes nothing about the count pair answer", layer: "request" }
-    # @intent: { entity: "repository directory_runtime_growth block", action: "state its own ordering", behavior: "this block shares the two runs with the count pair but declares a different ordering rule", layer: "request" }
+    # @intent: { entity: "repository directory_runtime_growth block", action: "state its own ordering", behavior: "this block shares the two runs with the count pair yet declares a different ordering rule, so drilling in changes nothing about the count pair answer", layer: "request" }
     it "leaves the count pair's answer exactly as it was" do
       body = get_repository
 
@@ -789,8 +788,7 @@ RSpec.describe "GET /api/v1/repository — directory_runtime_growth", type: :req
     # ⭐ THIS GRAIN IS THIS BLOCK'S ALONE, unlike `growth_grain_reads`, which has two readers that no
     # pattern can separate. `SpecObservation.directory_runtime_growth_between` is issued by this
     # block and by nothing else on this endpoint, so the count attributes directly.
-    # @intent: { entity: "repository directory_runtime_growth block", action: "read observations once", behavior: "spec_observations is read exactly once on an unparameterised request", layer: "request" }
-    # @intent: { entity: "repository directory_runtime_growth block", action: "skip reads without baseline", behavior: "nothing is read at this grain when there is no baseline to compare against", layer: "request" }
+    # @intent: { entity: "repository directory_runtime_growth block", action: "read observations once", behavior: "spec_observations is read exactly once on an unparameterised request, and nothing is read at this grain when there is no baseline to compare against", layer: "request" }
     it "reads spec_observations exactly once on an unparameterised request" do
       adjacent_runs
       get_repository(key: api_key)

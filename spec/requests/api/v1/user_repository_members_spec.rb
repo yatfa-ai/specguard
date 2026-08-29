@@ -206,8 +206,7 @@ RSpec.describe "API v1 — repository members over a user key", type: :request d
       expect(response.parsed_body.fetch("details")).to include(/already owns this repository/)
     end
 
-    # @intent: { entity: "repository members create", action: "reject ambiguous handles", behavior: "a handle matching several users yields 400 with a controller-authored sentence and creates nothing", layer: "request" }
-    # @intent: { entity: "repository members create", action: "reject unknown handles", behavior: "a handle nobody holds yields 400 with the controller own sentence and no row is created", layer: "request" }
+    # @intent: { entity: "repository members create", action: "reject ambiguous handles", behavior: "a handle matching several users yields 400 with a controller-authored sentence and creates nothing, and a handle nobody holds yields 400 with the controller own sentence and no row created", layer: "request" }
     it "answers 400 with its own sentence for an ambiguous handle, creating nothing" do
       create_user(github_uid: "8881", github_handle: "recycled")
       create_user(github_uid: "8882", github_handle: "recycled")
@@ -244,8 +243,7 @@ RSpec.describe "API v1 — repository members over a user key", type: :request d
       )
     end
 
-    # @intent: { entity: "repository members create", action: "reject malformed handles", behavior: "a syntactically invalid handle yields 400 with the controller own sentence", layer: "request" }
-    # @intent: { entity: "repository members create", action: "hide from strangers", behavior: "a non-member receives 404 rather than 403 on create", layer: "request" }
+    # @intent: { entity: "repository members create", action: "reject malformed handles", behavior: "a syntactically invalid handle yields 400 with the controller own sentence, and a non-member receives 404 rather than 403 on create", layer: "request" }
     it "answers 400 with its own sentence for a malformed handle" do
       post_member(handle: "https://github.com/octocat", permissions: %w[view])
 
@@ -305,8 +303,7 @@ RSpec.describe "API v1 — repository members over a user key", type: :request d
       expect(row.reload.granted_by_user).to eq(owner)
     end
 
-    # @intent: { entity: "repository members update", action: "persist permissions", behavior: "the submitted permissions array is stored intact through the update path", layer: "request" }
-    # @intent: { entity: "repository members update", action: "scope ids to repository", behavior: "a membership id belonging to another repository yields 404 and the other row is left untouched", layer: "request" }
+    # @intent: { entity: "repository members update", action: "persist permissions", behavior: "the submitted permissions array is stored intact through the update path, and a membership id belonging to another repository yields 404 with the other row left untouched", layer: "request" }
     it "persists the submitted permissions array intact" do
       patch member_path(row.id),
             params: { permissions: %w[view members.manage] },
@@ -365,8 +362,7 @@ RSpec.describe "API v1 — repository members over a user key", type: :request d
       expect(other_row.reload.permissions).to eq(%w[view])
     end
 
-    # @intent: { entity: "repository members update", action: "require manage permission", behavior: "a member without members.manage receives 403 on update", layer: "request" }
-    # @intent: { entity: "repository members destroy", action: "revoke a membership", behavior: "revoking removes the membership and the endpoint answers 204 with no body", layer: "request" }
+    # @intent: { entity: "repository members update", action: "require manage permission", behavior: "a member without members.manage receives 403 on update, and revoking removes the membership with the endpoint answering 204 and no body", layer: "request" }
     it "answers 403 for a member without members.manage" do
       create_membership(repository: repository, user: stranger, permissions: %w[view])
 
@@ -413,8 +409,7 @@ RSpec.describe "API v1 — repository members over a user key", type: :request d
       expect(RepositoryMembership.exists?(row.id)).to be(false)
     end
 
-    # @intent: { entity: "repository members destroy", action: "keep minted keys alive", behavior: "keys minted by the revoked member deliberately continue to authenticate after revocation", layer: "request" }
-    # @intent: { entity: "repository members destroy", action: "hide from strangers", behavior: "a non-member receives 404 on revoke, keeping the repository hidden", layer: "request" }
+    # @intent: { entity: "repository members destroy", action: "keep minted keys alive", behavior: "keys minted by the revoked member deliberately continue to authenticate after revocation, and a non-member receives 404 on revoke keeping the repository hidden", layer: "request" }
     it "deliberately leaves the revoked member's minted CI keys authenticating" do
       repository.api_keys.create!(name: "hubot pipeline", created_by_user: member)
 
@@ -437,8 +432,7 @@ RSpec.describe "API v1 — repository members over a user key", type: :request d
       expect(RepositoryMembership.exists?(other_row.id)).to be(true)
     end
 
-    # @intent: { entity: "repository members destroy", action: "require manage permission", behavior: "a member without members.manage receives 403 when attempting to revoke", layer: "request" }
-    # @intent: { entity: "repository members endpoints", action: "refuse repository keys on update", behavior: "a repository key at PATCH is refused with 401 before any change lands", layer: "request" }
+    # @intent: { entity: "repository members destroy", action: "require manage permission", behavior: "a member without members.manage receives 403 when attempting to revoke, and a repository key at PATCH is refused with 401 before any change lands", layer: "request" }
     it "answers 403 for a member without members.manage" do
       create_membership(repository: repository, user: stranger, permissions: %w[view])
 
