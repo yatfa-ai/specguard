@@ -49,11 +49,13 @@ RSpec.describe Ingest::EmbeddingCachePruner do
   def digests = EmbeddingCacheEntry.pluck(:text_digest)
 
   describe "the ceiling it works under" do
+    # @intent: { entity: "Ingest::EmbeddingCachePruner", action: "prune under a stated ceiling", behavior: "the batch-size and batches-per-resolve constants are declared positive, so each invocation is bounded by declaration rather than by backlog size", layer: "unit" }
     it "bounds one invocation by a stated ceiling rather than by the size of the backlog" do
       expect(described_class::DELETE_BATCH_SIZE).to be_positive
       expect(described_class::MAX_BATCHES_PER_RESOLVE).to be_positive
     end
 
+    # @intent: { entity: "Ingest::EmbeddingCachePruner", action: "prune expired cache entries", behavior: "candidates come from the same expired scope the read path uses, so one window definition governs both serving and deletion", layer: "integration" }
     it "reads the same set the read filter does, rather than a second spelling of the window" do
       # The disk rule and the read rule are ONE definition. A sweeper that re-derived the window —
       # `created_at`, say, which is the plausible mistake because it is the column that does not
@@ -67,6 +69,7 @@ RSpec.describe Ingest::EmbeddingCachePruner do
   end
 
   describe "what it reclaims" do
+    # @intent: { entity: "Ingest::EmbeddingCachePruner", action: "prune past-window entries", behavior: "every entry older than the retention window is deleted and the reclaim count returned equals the rows removed", layer: "integration" }
     it "deletes an entry that is past the window" do
       entries(3, age: expired_age)
 
@@ -74,6 +77,7 @@ RSpec.describe Ingest::EmbeddingCachePruner do
       expect(EmbeddingCacheEntry.count).to eq(0)
     end
 
+    # @intent: { entity: "Ingest::EmbeddingCachePruner", action: "prune with no expired rows", behavior: "the sweep is a no-op: zero deletions and the table unchanged when every entry sits inside the window", layer: "integration" }
     it "does nothing at all when every entry is inside the window" do
       entries(3, age: live_age)
 
@@ -86,6 +90,7 @@ RSpec.describe Ingest::EmbeddingCachePruner do
     # the live row survives, and — the half that is actually observable to a caller — the cache
     # still ANSWERS for it afterwards. A sweep that left the row but broke the read would pass a
     # count assertion and have destroyed the thing this table exists for.
+    # @intent: { entity: "Ingest::EmbeddingCachePruner", action: "prune a mixed table", behavior: "only the expired digests disappear; the live entries remain the entire surviving table, defeating a delete-all implementation", layer: "integration" }
     it "leaves an entry that is inside the window, while taking the expired ones around it" do
       kept = entries(2, age: live_age, prefix: "live")
       entries(3, age: expired_age, prefix: "dead")
@@ -95,6 +100,7 @@ RSpec.describe Ingest::EmbeddingCachePruner do
       expect(digests).to match_array(kept.map { |text| SpecIdentity.digest_for(text) })
     end
 
+    # @intent: { entity: "Ingest::EmbeddingCachePruner", action: "serve survivors after pruning", behavior: "vectors_for still returns round-trippable vectors for surviving rows, with a tolerance that sits between half-precision noise and a zeroed husk", layer: "integration" }
     it "still SERVES the surviving entry after a prune, which is what a caller can observe" do
       kept = entries(2, age: live_age, prefix: "live")
       entries(3, age: expired_age, prefix: "dead")
@@ -130,6 +136,7 @@ RSpec.describe Ingest::EmbeddingCachePruner do
       expect(round_trip_tolerance).to be_between(round_trip, husk_drift).exclusive
     end
 
+    # @intent: { entity: "Ingest::EmbeddingCachePruner", action: "prune around revived entries", behavior: "an expired entry whose updated_at was refreshed by a re-embed survives and is still served, so the window keys on updated_at not created_at", layer: "integration" }
     it "does not delete an expired entry that has since been REVIVED by a re-embed" do
       # The `upsert_all` `on_duplicate` path, and the one case in which the two timestamp columns
       # disagree: a text that expired and was then embedded again moves `updated_at` to now and
@@ -152,6 +159,7 @@ RSpec.describe Ingest::EmbeddingCachePruner do
       expect(EmbeddingCacheEntry.vectors_for(fingerprint, texts).keys).to eq(texts)
     end
 
+    # @intent: { entity: "Ingest::EmbeddingCachePruner", action: "prune across fingerprints", behavior: "expired rows are swept under every provider fingerprint, including retired ones, because the table key carries no tenant column", layer: "integration" }
     it "reaches every fingerprint's expired rows, because the key carries no tenant" do
       # ⭐ The asymmetry against `Ingest::ObservationPruner`, asserted rather than argued. That class
       # is handed a run and reaches only its branch's rows, so a population nothing is writing to is
@@ -179,6 +187,7 @@ RSpec.describe Ingest::EmbeddingCachePruner do
       stub_const("#{described_class}::MAX_BATCHES_PER_RESOLVE", 2)
     end
 
+    # @intent: { entity: "Ingest::EmbeddingCachePruner", action: "prune with a stubbed ceiling", behavior: "one pass reclaims exactly batch size times batches allowed and the remainder drains on the following pass", layer: "integration" }
     it "reclaims exactly its ceiling when the backlog is larger, and the rest on the next pass" do
       entries(6, age: expired_age)
 
@@ -189,6 +198,7 @@ RSpec.describe Ingest::EmbeddingCachePruner do
       expect(EmbeddingCacheEntry.count).to eq(0)
     end
 
+    # @intent: { entity: "Ingest::EmbeddingCachePruner", action: "prune repeatedly", behavior: "successive passes walk any backlog to zero without naming rows: every candidate is past the window, so whichever batch the planner picks is progress", layer: "integration" }
     it "converges whichever rows a batch happened to reach" do
       # The non-stall argument, pinned as a property rather than as an ordering. `delete_batch`
       # issues no `ORDER BY` and WHICH expired rows a batch reaches is the planner's business — the
@@ -223,6 +233,7 @@ RSpec.describe Ingest::EmbeddingCachePruner do
 
     before { entries(5, age: expired_age) }
 
+    # @intent: { entity: "Ingest::EmbeddingCachePruner", action: "prune a short batch", behavior: "an under-full batch costs exactly one DELETE statement, proving deletes are issued per batch rather than per row", layer: "integration" }
     it "issues ONE statement for a batch that does not fill" do
       stub_const("#{described_class}::DELETE_BATCH_SIZE", 10)
 
@@ -232,6 +243,7 @@ RSpec.describe Ingest::EmbeddingCachePruner do
       expect(EmbeddingCacheEntry.count).to eq(0)
     end
 
+    # @intent: { entity: "Ingest::EmbeddingCachePruner", action: "prune an exactly full batch", behavior: "a full batch is followed by one extra probing DELETE that returns nothing, exposing the batch-boundary loop shape", layer: "integration" }
     it "issues one probing statement more when the batch is EXACTLY full" do
       # The batch boundary, which an under-full fixture is structurally unable to exhibit: the loop
       # stops on a SHORT batch, so a full one is always followed by a statement that returns
@@ -246,6 +258,7 @@ RSpec.describe Ingest::EmbeddingCachePruner do
       expect(EmbeddingCacheEntry.count).to eq(0)
     end
 
+    # @intent: { entity: "Ingest::EmbeddingCachePruner", action: "prune at a narrow batch width", behavior: "statement count scales with batches (three at width two for five rows) rather than with rows, falsifying a per-row delete at multiple widths", layer: "integration" }
     it "issues one statement per batch as the batch narrows, never one per row" do
       stub_const("#{described_class}::DELETE_BATCH_SIZE", 2)
 
@@ -258,6 +271,7 @@ RSpec.describe Ingest::EmbeddingCachePruner do
       expect(EmbeddingCacheEntry.count).to eq(0)
     end
 
+    # @intent: { entity: "Ingest::EmbeddingCachePruner", action: "prune with a SQL-bound batch", behavior: "the delete is one statement carrying its own IN (SELECT ... LIMIT) bound, never a Ruby-side candidate load costing two round trips per batch", layer: "integration" }
     it "bounds the statement in SQL rather than loading the candidates into Ruby" do
       # `DELETE ... WHERE id IN (SELECT id ... LIMIT n)` — one statement per batch, with the bound
       # inside it. An implementation that selected the ids and then deleted them would issue two
@@ -271,6 +285,7 @@ RSpec.describe Ingest::EmbeddingCachePruner do
       expect(statements.sole).to match(/\ADELETE\b.*\bIN \(SELECT\b.*\bLIMIT\b/mi)
     end
 
+    # @intent: { entity: "Ingest::EmbeddingCachePruner", action: "prune an empty backlog", behavior: "when nothing is past the window the sweep pays one probing DELETE and deletes nothing, never the ceiling worth of statements", layer: "integration" }
     it "costs nothing at all when there is nothing past the window" do
       EmbeddingCacheEntry.update_all(updated_at: live_age)
 

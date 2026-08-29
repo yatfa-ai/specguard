@@ -137,6 +137,7 @@ RSpec.describe "Revealing an API key", type: :system do
   # The never-had-one case. The reveal owner reported this one as showing nothing at all, and an
   # empty keys table is the shorter of the two pages — so if the two cases were ever going to
   # diverge, they would diverge here.
+  # @intent: { entity: "ApiKeyRevealFlow", action: "mint a first API key from the repository page", behavior: "the one-time reveal panel and its plaintext token land inside the viewport despite Turbo scroll restoration and an empty keys table", layer: "system" }
   it "puts a first key on screen without the owner scrolling to find it" do
     repository = create_repository(user: @user)
 
@@ -161,6 +162,7 @@ RSpec.describe "Revealing an API key", type: :system do
   # differ in exactly the dimension this whole file is about. The owner's report distinguished them
   # — nothing on a first mint, a visible value on a later rotate — which is precisely what two
   # different page heights would produce.
+  # @intent: { entity: "ApiKeyRevealFlow", action: "rotate an existing API key via the confirm dialog", behavior: "the regenerated credential renders on screen on the taller populated page rather than above the fold the owner never reaches", layer: "system" }
   it "puts a rotated key on screen with a table full of existing keys above it" do
     repository = create_repository(user: @user)
     %w[CI Nightly Staging Release].each do |name|
@@ -186,6 +188,7 @@ RSpec.describe "Revealing an API key", type: :system do
   # controller instance: a reader who has scrolled away to read the wire-up prompt or the keys table
   # must not be dragged back. Asserted by scrolling away AFTER the reveal has landed and checking
   # that nothing pulls the page back.
+  # @intent: { entity: "ApiKeyRevealFlow", action: "scroll away after the reveal lands", behavior: "no re-scroll fires after the single reveal, so the page stays where the reader moved it", layer: "system" }
   it "leaves the reader where they scroll to afterwards" do
     repository = create_repository(user: @user)
 

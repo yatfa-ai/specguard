@@ -121,6 +121,7 @@ RSpec.describe Ingest::IdentityResolver do
     # — and it means these examples do not, on their own, isolate the similarity path. The one that
     # does is "still matches text that differs only in punctuation and whitespace" below: different
     # bytes, so the key cannot help, and only the embedding can.
+    # @intent: { entity: "Ingest::IdentityResolver", action: "resolve a line-shifted suite", behavior: "both digest equality and similarity land every observation on the identity rows run 1 already created, so the table never grows on a move", layer: "integration" }
     it "resolves a suite shifted ten lines onto the rows it already had, without growing the table" do
       first = ingest(suite, ci_run_id: "run-1")
       identities = repository.spec_identities.order(:id).pluck(:id)
@@ -132,6 +133,7 @@ RSpec.describe Ingest::IdentityResolver do
       expect(first.spec_observations.pluck(:spec_identity_id).sort).to eq(identities)
     end
 
+    # @intent: { entity: "Ingest::IdentityResolver", action: "resolve a moved test", behavior: "each identity's last known line number advances to the shifted suite's positions", layer: "integration" }
     it "moves each row's last known path to where the test now is" do
       ingest(suite, ci_run_id: "run-1")
       expect(repository.spec_identities.pluck(:line_number).sort).to eq([5, 10, 20])
@@ -141,6 +143,7 @@ RSpec.describe Ingest::IdentityResolver do
       expect(repository.spec_identities.pluck(:line_number).sort).to eq([15, 20, 30])
     end
 
+    # @intent: { entity: "Ingest::IdentityResolver", action: "resolve a moved test", behavior: "last_seen_test_run_id on every identity points at the most recent run that observed it", layer: "integration" }
     it "records the run that last saw the test, so a row says how current it is" do
       ingest(suite, ci_run_id: "run-1")
       second = ingest(suite(offset: 10), ci_run_id: "run-2")
@@ -148,6 +151,7 @@ RSpec.describe Ingest::IdentityResolver do
       expect(repository.spec_identities.pluck(:last_seen_test_run_id).uniq).to eq([second.id])
     end
 
+    # @intent: { entity: "Ingest::IdentityResolver", action: "resolve across two runs", behavior: "each identity accumulates one observation per run, keeping one test's history on one row", layer: "integration" }
     it "leaves each identity holding both runs' measurements — one test's history, finally" do
       ingest(suite, ci_run_id: "run-1")
       ingest(suite(offset: 10), ci_run_id: "run-2")
@@ -157,6 +161,7 @@ RSpec.describe Ingest::IdentityResolver do
       expect(counts).to eq([2, 2, 2])
     end
 
+    # @intent: { entity: "Ingest::IdentityResolver", action: "resolve a positional move", behavior: "three identities exist for three tests after a ten-line shift, disproving a positional identity key", layer: "integration" }
     it "keeps the position out of the identity: the same test on a different line is not a new row" do
       # The falsifier for the whole slice. A positional key — `(repository_id, file_path,
       # line_number)`, the one `spec_intents` carries — would make this six rows rather than three.
@@ -173,6 +178,7 @@ RSpec.describe Ingest::IdentityResolver do
                         name: "User#save rejects a duplicate email")]
     end
 
+    # @intent: { entity: "Ingest::IdentityResolver", action: "resolve a name-only spec", behavior: "a test with no intent payload gets its own from_name identity built from the client name", layer: "integration" }
     it "gives a name-only test an identity, with no @intent anywhere in the payload" do
       ingest(unannotated, ci_run_id: "run-1")
 
@@ -182,6 +188,7 @@ RSpec.describe Ingest::IdentityResolver do
       expect(identity).to be_from_name
     end
 
+    # @intent: { entity: "Ingest::IdentityResolver", action: "re-resolve a name-only test", behavior: "a moved name-only test re-finds the same identity row on the next run without embedding", layer: "integration" }
     it "resolves it again on the next run, from its name alone" do
       ingest(unannotated, ci_run_id: "run-1")
       first = repository.spec_identities.sole.id
@@ -196,6 +203,7 @@ RSpec.describe Ingest::IdentityResolver do
   end
 
   describe "which of the two texts supplied the identity" do
+    # @intent: { entity: "Ingest::IdentityResolver", action: "resolve an annotated spec", behavior: "the identity text is the entity-action-behavior triple and the row is marked from_intent", layer: "integration" }
     it "prefers the declared intent over the name, and says so on the row" do
       ingest([annotated_spec(name: "Invoice#finalize locks the line items")], ci_run_id: "run-1")
 
@@ -206,6 +214,7 @@ RSpec.describe Ingest::IdentityResolver do
       expect(identity).to be_from_intent
     end
 
+    # @intent: { entity: "Ingest::IdentityResolver", action: "resolve a reworded annotated test", behavior: "an annotated test whose full_description changes keeps the same identity row", layer: "integration" }
     it "keeps an annotated test's identity when its full_description is reworded" do
       ingest([annotated_spec(name: "Invoice#finalize locks the line items")], ci_run_id: "run-1")
       first = repository.spec_identities.sole.id
@@ -216,6 +225,7 @@ RSpec.describe Ingest::IdentityResolver do
       expect(repository.spec_identities.pluck(:id)).to eq([first])
     end
 
+    # @intent: { entity: "Ingest::IdentityResolver", action: "resolve a mixed suite", behavior: "identity rows split one from_intent and two from_name, matching the payload's annotation states", layer: "integration" }
     it "does not let a name-derived match be mistaken for a declared one" do
       ingest(suite, ci_run_id: "run-1")
 
@@ -254,6 +264,7 @@ RSpec.describe Ingest::IdentityResolver do
       unannotated_spec(file_path: "spec/models/other_spec.rb", line_number: 3, name: name)
     end
 
+    # @intent: { entity: "Ingest::IdentityResolver", action: "upgrade a test that gains an intent", behavior: "the existing name-derived row is rewritten in place to the triple with the same id, not duplicated", layer: "integration" }
     it "upgrades the row it already had in place, rather than inserting a second one beside it" do
       ingest([unannotated_version], ci_run_id: "run-1")
       original = repository.spec_identities.sole
@@ -269,6 +280,7 @@ RSpec.describe Ingest::IdentityResolver do
       expect(identity.text).to eq(triple)
     end
 
+    # @intent: { entity: "Ingest::IdentityResolver", action: "upgrade across two runs", behavior: "both runs' observations link to the one upgraded identity, preserving the history across the annotation boundary", layer: "integration" }
     it "leaves both runs' observations pointing at that one identity" do
       first = ingest([unannotated_version], ci_run_id: "run-1")
       second = ingest([annotated_version], ci_run_id: "run-2")
@@ -280,6 +292,7 @@ RSpec.describe Ingest::IdentityResolver do
       expect(identity.spec_observations.count).to eq(2)
     end
 
+    # @intent: { entity: "Ingest::IdentityResolver", action: "upgrade a test that gains an intent", behavior: "created_at stays at first appearance while line number and last_seen_run move to the annotating run", layer: "integration" }
     it "keeps when the test first appeared, and moves where it was last seen" do
       # An upgrade is not an insert: `created_at` says when this test first appeared and must not be
       # reset to the run that annotated it. The sighting still moves, and still through `#resight`.
@@ -295,6 +308,7 @@ RSpec.describe Ingest::IdentityResolver do
       expect(first.spec_observations.sole.spec_identity_id).to eq(identity.id)
     end
 
+    # @intent: { entity: "Ingest::IdentityResolver", action: "upgrade the vector too", behavior: "a run 3 punctuation variant of the triple re-finds the upgraded row by similarity, proving the embedding was rewritten with the text", layer: "integration" }
     it "moves the vector too, so the next run finds the row by its declaration" do
       # The falsifier for a half-done upgrade. Rewriting `text` and `text_digest` while leaving the
       # NAME's embedding on the row goes green on every example above — they all re-find it by the
@@ -312,6 +326,7 @@ RSpec.describe Ingest::IdentityResolver do
       expect(repository.spec_identities.pluck(:id)).to eq([upgraded])
     end
 
+    # @intent: { entity: "Ingest::IdentityResolver", action: "resolve an always-annotated test", behavior: "with no name-derived row to upgrade the example takes the ordinary insert as a from_intent identity", layer: "integration" }
     it "upgrades nothing when the name it would upgrade belongs to no row of this repository" do
       # The premise under every example above, stated as its own claim: the upgrade is reached by the
       # NAME's digest, so a test that was annotated from its very first run has nothing to upgrade
@@ -323,6 +338,7 @@ RSpec.describe Ingest::IdentityResolver do
       expect(identity.text).to eq(triple)
     end
 
+    # @intent: { entity: "Ingest::IdentityResolver", action: "resolve a de-annotated test", behavior: "losing the intent starts a second identity and leaves the declared row unchanged: upgrade runs name-to-intent only", layer: "integration" }
     it "does not rewrite an identity backwards when a test LOSES its @intent" do
       # **Direction is name→intent only, and this is why.** A de-annotated test presenting its name
       # is indistinguishable from an ordinary rename of an annotated one, so an upgrade that ran in
@@ -338,6 +354,7 @@ RSpec.describe Ingest::IdentityResolver do
       expect(declared).to be_from_intent
     end
 
+    # @intent: { entity: "Ingest::IdentityResolver", action: "upgrade one test in a suite", behavior: "an unrelated name-derived bystander row keeps its text and source when a different test is annotated", layer: "integration" }
     it "does not touch a name-derived row that is not this test's" do
       # The upgrade is keyed on the annotated example's OWN name and nothing looser. A repository
       # full of name-derived rows must see none of them move when one of its tests is annotated.
@@ -357,6 +374,7 @@ RSpec.describe Ingest::IdentityResolver do
       expect(bystander).to be_from_name
     end
 
+    # @intent: { entity: "Ingest::IdentityResolver", action: "upgrade within one repository", behavior: "another repository's name-derived row is never rewritten by this repository's upgrade", layer: "integration" }
     it "never reaches across the tenant boundary to upgrade another repository's row" do
       other = create_repository(user: create_user(github_uid: "2002", github_handle: "other"),
                                 github_full_name: "acme/other-service")
@@ -406,6 +424,7 @@ RSpec.describe Ingest::IdentityResolver do
       end
     end
 
+    # @intent: { entity: "Ingest::IdentityResolver", action: "upgrade a page of rows", behavior: "all five rows' name digests ride one digest-index query and every row still falls through to a real similarity lookup", layer: "integration" }
     it "asks one query for a page of annotated rows, though each carries two texts to look up" do
       # The cost of the upgrade, which is the reason it is affordable: the name's digest rides the
       # `IN` list `#digest_index` already issues. A wider list, not a second round trip — and not a
@@ -425,6 +444,7 @@ RSpec.describe Ingest::IdentityResolver do
       expect(repository.spec_identities.pluck(:signal_source).uniq).to eq(["intent"])
     end
 
+    # @intent: { entity: "Ingest::IdentityResolver", action: "upgrade a not-yet-inserted row", behavior: "no UPDATE on spec_identities is issued for a row this page has only decided to insert; both spellings end as two stable rows", layer: "integration" }
     it "refuses the upgrade when the row under the name is one THIS PAGE has not inserted yet" do
       # **The one shape deferring the insert takes the upgrade away from, pinned rather than left to
       # be discovered.** `#upgrade` names its target by id, and a row this page has only DECIDED to
@@ -493,6 +513,7 @@ RSpec.describe Ingest::IdentityResolver do
         resolver.resolve
       end
 
+      # @intent: { entity: "Ingest::IdentityResolver", action: "resolve against a conflicting winner", behavior: "the losing upgrade falls back to claim_identity and lands the observation on the winner without raising or duplicating", layer: "integration" }
       it "resolves the observation onto the winner without raising or duplicating" do
         ingest([unannotated_version], ci_run_id: "run-1")
         winner = create_spec_identity(repository: repository, text: triple, signal_source: "intent",
@@ -505,6 +526,7 @@ RSpec.describe Ingest::IdentityResolver do
         expect(winner.reload.line_number).to eq(40)
       end
 
+      # @intent: { entity: "Ingest::IdentityResolver", action: "refuse a conflicting upgrade", behavior: "the name-derived row is left byte-identical rather than half-upgraded with moved text and a stale digest", layer: "integration" }
       it "leaves the name-derived row exactly as it was rather than half-upgrading it" do
         # The failure mode a partial write invites: `text` moved, the unique `text_digest` refused,
         # and a row describing itself as two different tests. One statement, so there is no half.
@@ -519,6 +541,7 @@ RSpec.describe Ingest::IdentityResolver do
         expect(original.reload.slice(*before.keys)).to eq(before)
       end
 
+      # @intent: { entity: "Ingest::IdentityResolver", action: "resolve a sibling after a refused upgrade", behavior: "the sibling resolves through the still-true page map entry without embedding, one provider call for the whole page", layer: "integration" }
       it "leaves the page still holding the name, which the refused UPDATE kept true" do
         # The half of the map decision that is NOT the lost race. A conflict means the `UPDATE` was
         # REFUSED, so the row never left the name and the page's entry for it is still true — a
@@ -591,6 +614,7 @@ RSpec.describe Ingest::IdentityResolver do
 
       def outcomes = @outcomes ||= []
 
+      # @intent: { entity: "Ingest::IdentityResolver", action: "take the lost-upgrade branch", behavior: "a concurrently upgraded row genuinely makes #upgrade return :lost_race, so the examples below exercise a real path", layer: "integration" }
       it "really does take the losing branch, so the examples below are about something" do
         # The premise, pinned against the real method's return rather than trusted. If the page ever
         # stopped reaching `#upgrade` at all — a similarity match, a digest hit — every assertion
@@ -602,6 +626,7 @@ RSpec.describe Ingest::IdentityResolver do
         expect(outcomes).to eq([:lost_race])
       end
 
+      # @intent: { entity: "Ingest::IdentityResolver", action: "resolve a sibling across a lost upgrade", behavior: "the name-only observation is not linked to the row that moved to the triple, though the annotated one still converges onto it", layer: "integration" }
       it "does not resolve the name-only sibling onto the row that moved out from under it" do
         ingest([unannotated_version, sibling], ci_run_id: "run-1")
         shared = repository.spec_identities.sole
@@ -616,6 +641,7 @@ RSpec.describe Ingest::IdentityResolver do
         expect(unannotated).not_to eq(shared.id)
       end
 
+      # @intent: { entity: "Ingest::IdentityResolver", action: "resolve after a lost upgrade", behavior: "the upgraded row's file path and line stay with the annotated test, not the sibling's file", layer: "integration" }
       it "leaves the upgraded row's last known path belonging to the test that was annotated" do
         # The consequence a misattribution carries past the observation link: the sibling re-sights
         # through the stale key, and `#resight` moves `file_path`/`line_number`, so the row ends up
@@ -629,6 +655,7 @@ RSpec.describe Ingest::IdentityResolver do
         expect(upgraded.line_number).to eq(12)
       end
 
+      # @intent: { entity: "Ingest::IdentityResolver", action: "resolve a sibling after an upgrade", behavior: "the sibling ends with its own from_name row under the name the upgraded row released", layer: "integration" }
       it "gives the sibling a row of its own, under the name the upgraded row no longer holds" do
         ingest([unannotated_version, sibling], ci_run_id: "run-1")
 
@@ -643,6 +670,7 @@ RSpec.describe Ingest::IdentityResolver do
   end
 
   describe "a renamed unannotated test is a different test" do
+    # @intent: { entity: "Ingest::IdentityResolver", action: "resolve a renamed test", behavior: "a renamed unannotated test inserts a fourth identity and the original keeps its text", layer: "integration" }
     it "starts a new identity rather than re-pointing the old one" do
       ingest(suite, ci_run_id: "run-1")
       original = repository.spec_identities.find_by(text: "User#save rejects a duplicate email")
@@ -655,6 +683,7 @@ RSpec.describe Ingest::IdentityResolver do
       expect(original.reload.text).to eq("User#save rejects a duplicate email")
     end
 
+    # @intent: { entity: "Ingest::IdentityResolver", action: "resolve a renamed test", behavior: "the original identity keeps its observation count and location instead of donating history to the new name", layer: "integration" }
     it "leaves the old identity's history intact rather than moving it onto the new name" do
       ingest(suite, ci_run_id: "run-1")
       original = repository.spec_identities.find_by(text: "User#save rejects a duplicate email")
@@ -670,6 +699,7 @@ RSpec.describe Ingest::IdentityResolver do
   describe "the threshold, against the vectors it was chosen from" do
     # Not an assertion about a constant's value — an assertion about what the constant DOES to real
     # texts. Changing 0.95 to 0.75 leaves the constant "correct" and breaks these.
+    # @intent: { entity: "Ingest::IdentityResolver", action: "resolve similar-sounding tests", behavior: "two merely alike descriptions stay two identities under MATCH_SIMILARITY", layer: "integration" }
     it "does not merge two different tests that merely read alike" do
       ingest([unannotated_spec(file_path: "spec/a_spec.rb", line_number: 1,
                                name: "Invoice finalize locks the line items"),
@@ -680,6 +710,7 @@ RSpec.describe Ingest::IdentityResolver do
       expect(repository.spec_identities.count).to eq(2)
     end
 
+    # @intent: { entity: "Ingest::IdentityResolver", action: "resolve near-duplicate descriptions", behavior: "a pair scoring 0.9243 stays split: detectable as redundant yet never merged into one history", layer: "integration" }
     it "keeps a pair inside the duplicate-detection band as two identities" do
       # The invariant that matters between the two thresholds, as behaviour rather than as a claim
       # about a constant. These two score 0.9243 under `LexicalEmbeddingProvider` at
@@ -698,6 +729,7 @@ RSpec.describe Ingest::IdentityResolver do
       expect(repository.spec_identities.count).to eq(2)
     end
 
+    # @intent: { entity: "Ingest::IdentityResolver", action: "resolve identical descriptions", behavior: "identical text collapses onto one identity both observations share, with the last-resolved location winning", layer: "integration" }
     it "cannot separate two tests whose descriptions are identical — they collapse onto one row" do
       # Where the threshold stops mattering, demonstrated rather than asserted. The duplicates the
       # shipped surface reports are EXACT ones — `SpecObservation.repeated_descriptions_in` groups
@@ -720,6 +752,7 @@ RSpec.describe Ingest::IdentityResolver do
       expect(repository.spec_identities.sole.location).to eq("spec/models/user_spec.rb:7")
     end
 
+    # @intent: { entity: "Ingest::IdentityResolver", action: "resolve punctuation-drifted text", behavior: "normalisation-equivalent spellings match by vector where the digest cannot, landing one identity across runs", layer: "integration" }
     it "still matches text that differs only in punctuation and whitespace" do
       ingest([unannotated_spec(file_path: "spec/a_spec.rb", line_number: 1,
                                name: "Order#checkout rejects an expired card")],
@@ -753,6 +786,7 @@ RSpec.describe Ingest::IdentityResolver do
       unannotated_spec(file_path: "spec/b_spec.rb", line_number: line, name: name)
     end
 
+    # @intent: { entity: "Ingest::IdentityResolver", action: "re-ingest settled drifted text", behavior: "after the spelling is re-pointed the third ingest asks the provider nothing and still resolves", layer: "integration" }
     it "asks the provider nothing at all, where it used to ask on every ingest forever" do
       # **The figure this slice exists to move**, on the instrument that pins the unchanged path's
       # zero, so the two cannot disagree about what an embed is. Run 2 is the drift and still pays
@@ -767,6 +801,7 @@ RSpec.describe Ingest::IdentityResolver do
       expect(repository.spec_identities.count).to eq(1)
     end
 
+    # @intent: { entity: "Ingest::IdentityResolver", action: "resolve drifted text", behavior: "the existing row is re-pointed to the spelling actually presented rather than a second row being created", layer: "integration" }
     it "re-points the row it already had at the spelling that was presented" do
       ingest([one(original)], ci_run_id: "run-1")
       identity = repository.spec_identities.sole
@@ -778,6 +813,7 @@ RSpec.describe Ingest::IdentityResolver do
       expect(identity.reload.text).to eq(drifted)
     end
 
+    # @intent: { entity: "Ingest::IdentityResolver", action: "resolve drifted text repeatedly", behavior: "all three runs' observations and the latest sighting stay on the one re-pointed row", layer: "integration" }
     it "keeps the whole history on that row rather than starting one for the new spelling" do
       ingest([one(original)], ci_run_id: "run-1")
       identity = repository.spec_identities.sole
@@ -790,6 +826,7 @@ RSpec.describe Ingest::IdentityResolver do
       expect(identity.last_seen_test_run_id).to eq(third.id)
     end
 
+    # @intent: { entity: "Ingest::IdentityResolver", action: "resolve a genuine edit inside the band", behavior: "a 0.98-similarity wording change re-sights the row but leaves its text at the original spelling", layer: "integration" }
     it "leaves the text alone for an edit the provider CAN tell apart, inside the match band" do
       # The falsifier for keying this on `SpecIdentity::MATCH_SIMILARITY` instead of on
       # normalisation-equivalence. "card" → "cards" scores 0.9841 under `LexicalEmbeddingProvider`
@@ -808,6 +845,7 @@ RSpec.describe Ingest::IdentityResolver do
       expect(identity.reload.text).to eq(original)
     end
 
+    # @intent: { entity: "Ingest::IdentityResolver", action: "resolve while the refresh write fails", behavior: "a deadlock in the optional refresh propagates after the sightings and links landed, so only the spelling fails to move", layer: "integration" }
     it "keeps the page's sightings and its links when the convergence write itself fails" do
       # **The refresh is the only OPTIONAL write on this path and it must not be able to cost the two
       # that are not.** The sightings and the links are what the page decided, and `#resolve_page`
@@ -833,6 +871,7 @@ RSpec.describe Ingest::IdentityResolver do
       expect(identity.text).to eq(original)
     end
 
+    # @intent: { entity: "Ingest::IdentityResolver", action: "resolve a page carrying both spellings", behavior: "one spelling is settled per page: exactly the two batched UPDATEs and no per-row rewrite", layer: "integration" }
     it "settles one spelling for a page that carries both, rather than rewriting on every ingest" do
       # Two examples whose descriptions differ only in punctuation share ONE identity — no threshold
       # can separate them — so one of them presents a spelling the row does not hold, on every
@@ -851,6 +890,7 @@ RSpec.describe Ingest::IdentityResolver do
       expect(second.spec_observations.unresolved.count).to eq(0)
     end
 
+    # @intent: { entity: "Ingest::IdentityResolver", action: "resolve variants across a page boundary", behavior: "the spelling settled on run 2 holds on run 3 with no third UPDATE per page and one embed for the losing variant", layer: "integration" }
     it "settles one spelling for two variants that land in DIFFERENT pages, and stops writing" do
       # **The same hazard one page boundary out, which is where a per-page bound stops working.**
       # `#resolve` pages by `BATCH_SIZE` — forty pages of a suite at the design point — and nothing
@@ -902,6 +942,7 @@ RSpec.describe Ingest::IdentityResolver do
       unannotated_spec(file_path: "spec/a_spec.rb", line_number: line, name: name)
     end
 
+    # @intent: { entity: "Ingest::IdentityResolver", action: "issue the similarity lookup", behavior: "the ANN select list is exactly id, text, text_digest and signal_source, never loading the 1024-float vector", layer: "integration" }
     it "fetches the four columns its callers read and leaves the 1024-float vector in the database" do
       # **The file's own rule, on the path that runs per row.** `#digest_index`, `#resight_all` and
       # `#refresh` each state in their own words that a vector must not be loaded to be worked
@@ -928,6 +969,7 @@ RSpec.describe Ingest::IdentityResolver do
       )
     end
 
+    # @intent: { entity: "Ingest::IdentityResolver", action: "resolve through a drift on the narrowed projection", behavior: "all four projected columns satisfy the drift path: the row re-points and both runs' observations link", layer: "integration" }
     it "carries every column the match's readers ask for, on the path that reads all four" do
       # The other half of the narrowing, and the reason it cannot simply be `select(:id)`. A drift
       # is the path that reads the most off a match: `#note_drift` compares `text_digest`, then
@@ -968,6 +1010,7 @@ RSpec.describe Ingest::IdentityResolver do
                             line_number: 40)]
     end
 
+    # @intent: { entity: "Ingest::IdentityResolver", action: "resolve tied nearest matches", behavior: "observations across two runs of a third spelling all settle on the same tied identity", layer: "integration" }
     it "settles every tied observation on the same identity, run after run" do
       # A THIRD and a FOURTH spelling, one per run, because a run presenting text a row already
       # holds takes `#identical_text` and never reaches the lookup this example is about — the
@@ -982,6 +1025,7 @@ RSpec.describe Ingest::IdentityResolver do
       expect(repository.spec_observations.pluck(:spec_identity_id).uniq).to eq([kept.id])
     end
 
+    # @intent: { entity: "Ingest::IdentityResolver", action: "order tied nearest matches", behavior: "the ANN statement orders by id ascending after the distance key, making tie resolution a database guarantee", layer: "integration" }
     it "asks the database for that stability rather than hoping for it" do
       # The falsifier's backstop, and the reason it is a separate example. The one above is a
       # statement about an OUTCOME, and an outcome can be accidentally right: with a fixture this
@@ -997,6 +1041,7 @@ RSpec.describe Ingest::IdentityResolver do
       expect(lookups.sole).to match(/ORDER BY.*<=>.*,\s*"spec_identities"\."id" ASC\s*LIMIT/m)
     end
 
+    # @intent: { entity: "Ingest::IdentityResolver", action: "scope the ANN lookup", behavior: "SET LOCAL hnsw.iterative_scan relaxed_order is issued on the same connection immediately before the ANN statement", layer: "integration" }
     it "issues the ANN under-recall mitigation as SET LOCAL on the statement's own transaction" do
       # SPGD-375: `#nearest` under-recalls on the HNSW plan — measured 0.91 recall@1 at the
       # 20,000-per-tenant design point on PG 17.9 / pgvector 0.8.6, `script/ann_recall_audit.rb`
@@ -1035,6 +1080,7 @@ RSpec.describe Ingest::IdentityResolver do
     # The instrument is `counting_provider`, one level up. What that equality COSTS TO ASK is the
     # group below this one.
 
+    # @intent: { entity: "Ingest::IdentityResolver", action: "re-ingest unchanged text", behavior: "a byte-identical second run performs zero provider calls", layer: "integration" }
     it "embeds nothing at all when every text is byte-identical to a row already held" do
       ingest(suite, ci_run_id: "run-1")
 
@@ -1044,6 +1090,7 @@ RSpec.describe Ingest::IdentityResolver do
       expect(counting_provider.calls).to eq(0)
     end
 
+    # @intent: { entity: "Ingest::IdentityResolver", action: "re-ingest with one renamed test", behavior: "a renamed text still misses the equality and pays exactly one embed, proving the counter can move", layer: "integration" }
     it "still embeds a text this repository has never seen" do
       # The counter is only worth reading if it can move: same instrument, same three-example suite,
       # one of them renamed. A rename's bytes differ, so the equality cannot answer and today's path
@@ -1057,6 +1104,7 @@ RSpec.describe Ingest::IdentityResolver do
       expect(counting_provider.calls).to eq(1)
     end
 
+    # @intent: { entity: "Ingest::IdentityResolver", action: "re-ingest unchanged text", behavior: "skipped rows are still re-sighted: line numbers and last_seen_run advance with zero embeds", layer: "integration" }
     it "re-sights every row whose embed it skipped, rather than becoming a no-op" do
       # The failure mode a skip invites: returning early and never moving the row. Skipping the
       # EMBED must not skip the SIGHTING — `SpecIdentity::RESIGHTABLE` is what a re-sighting moves,
@@ -1072,6 +1120,7 @@ RSpec.describe Ingest::IdentityResolver do
       expect(repository.spec_identities.count).to eq(3)
     end
 
+    # @intent: { entity: "Ingest::IdentityResolver", action: "resolve an unchanged page", behavior: "the shortcut still returns the resolved count, links every observation, and leaves none unresolved", layer: "integration" }
     it "counts a skipped row as resolved and links it, exactly as an embedded one" do
       # What `#resolve` returns is unchanged by the shortcut: the row carries an identity, so it is
       # resolved, and it is off the work list for the next job.
@@ -1085,6 +1134,7 @@ RSpec.describe Ingest::IdentityResolver do
       expect(second.spec_observations.unresolved.count).to eq(0)
     end
 
+    # @intent: { entity: "Ingest::IdentityResolver", action: "resolve with the provider down", behavior: "known tests resolve through the digest equality without ever asking the down provider", layer: "integration" }
     it "resolves a known test even while the provider is down, because it never asks it" do
       # A consequence worth pinning rather than leaving to be discovered: the shortcut returns
       # before `#embed`, so an outage stops mattering for every test whose text this repository
@@ -1125,6 +1175,7 @@ RSpec.describe Ingest::IdentityResolver do
     def digest_lookups(&) = executed_sql(&).grep(/\ASELECT\b.*\btext_digest\b/m)
     def update_statements(&) = executed_sql(&).grep(/\AUPDATE\b/)
 
+    # @intent: { entity: "Ingest::IdentityResolver", action: "look up a page's digests", behavior: "one IN-list query answers a whole page of twelve unchanged rows instead of one per example", layer: "integration" }
     it "asks one query for a whole page's digests rather than one per example" do
       ingest(wide_suite, ci_run_id: "run-1")
       expect(repository.spec_identities.count).to eq(subjects.size)
@@ -1137,6 +1188,7 @@ RSpec.describe Ingest::IdentityResolver do
       expect(second.spec_observations.unresolved.count).to eq(0)
     end
 
+    # @intent: { entity: "Ingest::IdentityResolver", action: "write a page's decisions", behavior: "an unchanged page flushes exactly two UPDATEs — the batched re-sighting and the batched link", layer: "integration" }
     it "writes what a whole page decided in two statements, not in two per row" do
       # **The WRITE half of the same page seam, and the figure `BATCH_SIZE` now states.** Every row
       # of an unchanged re-ingest is a re-sighting, and a re-sighting is two `UPDATE`s: the
@@ -1160,6 +1212,7 @@ RSpec.describe Ingest::IdentityResolver do
       expect(repository.spec_identities.pluck(:line_number).sort).to eq((101..112).to_a)
     end
 
+    # @intent: { entity: "Ingest::IdentityResolver", action: "resolve three pages of unchanged rows", behavior: "six statements over three pages of four rows shows the write cost is O(1) per page, not per row", layer: "integration" }
     it "keeps the page's write cost flat as the page grows" do
       # The falsifier for the example above, which an implementation that issued one statement per
       # row would also pass at a page of ONE. Same two statements over a page a third the size, so
@@ -1175,6 +1228,7 @@ RSpec.describe Ingest::IdentityResolver do
       expect(second.spec_observations.unresolved.count).to eq(0)
     end
 
+    # @intent: { entity: "Ingest::IdentityResolver", action: "resolve three pages of unchanged rows", behavior: "shrinking BATCH_SIZE to a third costs exactly three digest lookups: reads scale with pages, not rows", layer: "integration" }
     it "grows with the number of PAGES and not with the number of examples" do
       # The falsifier for the one above, which a resolver that asked once for the whole suite would
       # also pass. `BATCH_SIZE` is what the lookup is grouped by, so shrinking it to a third of the
@@ -1190,6 +1244,7 @@ RSpec.describe Ingest::IdentityResolver do
       expect(second.spec_observations.unresolved.count).to eq(0)
     end
 
+    # @intent: { entity: "Ingest::IdentityResolver", action: "resolve an exactly full page", behavior: "a page that returns exactly batch_size wide costs one extra statement, the empty batch probe, and the prune's single DELETE", layer: "integration" }
     it "pays one extra read when the page comes back exactly full, and it is the batch probe" do
       # **The figure `BATCH_SIZE`'s comment commits to, for the case that constant is actually
       # about.** Every other example in this group runs an UNDER-full page — 12 rows into a page of
@@ -1220,6 +1275,7 @@ RSpec.describe Ingest::IdentityResolver do
       expect(second.spec_observations.unresolved.count).to eq(0)
     end
 
+    # @intent: { entity: "Ingest::IdentityResolver", action: "resolve a full page at half width", behavior: "the same thirteen statements at width six as at width twelve, proving cost flat in page width", layer: "integration" }
     it "costs the same full page whatever the page's width is" do
       # The falsifier for the example above, and for the word "flat" in `BATCH_SIZE`'s comment: half
       # the width, exactly full again, same 13. A resolver that had gone back to writing per row
@@ -1239,6 +1295,7 @@ RSpec.describe Ingest::IdentityResolver do
       expect(second.spec_observations.unresolved.count).to eq(0)
     end
 
+    # @intent: { entity: "Ingest::IdentityResolver", action: "sweep a stranded backlog page", behavior: "the cross-run backlog's twelve rows are read by one page query plus the run's own one, never per rescued row", layer: "integration" }
     it "asks once for the CROSS-RUN BACKLOG's page too, and not once per rescued row" do
       # **The other list.** Both examples above walk a run's OWN rows, and `#resolve` walks two
       # lists: before them comes `#retry_backlog`, the rows of EARLIER runs nothing else will
@@ -1282,6 +1339,7 @@ RSpec.describe Ingest::IdentityResolver do
       expect(stranded.spec_observations.unresolved).to be_empty
     end
 
+    # @intent: { entity: "Ingest::IdentityResolver", action: "resolve a signal-less page", behavior: "rows with no text to look up issue no digest query at all rather than hashing nil into an empty IN list", layer: "integration" }
     it "still costs nothing when a page carries no text to look up at all" do
       # A page of rows with nothing to embed — `Ingest::SpecSignal`'s `:none` case, the rows
       # `#identity_for` returns nil for — must ask the database nothing.
@@ -1324,6 +1382,7 @@ RSpec.describe Ingest::IdentityResolver do
     # the discipline that group's own `cache_statements` already keeps from the other side.
     def insert_statements(&) = executed_sql(&).grep(/\AINSERT INTO "spec_identities"/)
 
+    # @intent: { entity: "Ingest::IdentityResolver", action: "insert a page of new tests", behavior: "twelve brand-new identities are written in one INSERT per page with exactly one embed per new text", layer: "integration" }
     it "writes a whole page's new identities in one INSERT, not in one per test" do
       # Asserted as an EXACT constant rather than as "fewer than twelve", the discipline the group
       # above states: the claim is O(1) per page, and a bound that merely FELL would stay green for
@@ -1348,6 +1407,7 @@ RSpec.describe Ingest::IdentityResolver do
       expect(counting_provider.calls).to eq(subjects.size)
     end
 
+    # @intent: { entity: "Ingest::IdentityResolver", action: "insert three pages of new tests", behavior: "three statements for three pages of four tests keeps the insert count a property of the page", layer: "integration" }
     it "keeps that ONE statement a property of the page and not of the suite" do
       # The falsifier for the example above, which a per-row implementation also passes at a page of
       # ONE. Three pages of four brand-new tests: three statements, and never twelve.
@@ -1360,6 +1420,7 @@ RSpec.describe Ingest::IdentityResolver do
       expect(first.spec_observations.unresolved.count).to eq(0)
     end
 
+    # @intent: { entity: "Ingest::IdentityResolver", action: "insert duplicate text on a page", behavior: "two examples with identical text produce one row both observations link to, without the batched upsert refusing a repeated conflict key", layer: "integration" }
     it "carries a page that presents the same text twice as ONE row rather than refusing it" do
       # **The trap batching this write introduces, and it is a crash rather than a cost.** Postgres
       # refuses an `ON CONFLICT DO UPDATE` that carries two rows with the same conflict key —
@@ -1395,6 +1456,7 @@ RSpec.describe Ingest::IdentityResolver do
       expect(counting_provider.calls).to eq(1)
     end
 
+    # @intent: { entity: "Ingest::IdentityResolver", action: "resolve two new punctuation spellings", behavior: "two equivalent spellings both new on one first-run page converge on one identity via the pending match, not two", layer: "integration" }
     it "gives ONE row to two spellings of one test that are both new and both on this page" do
       # **What deferring the insert takes away, and the repair that gives it back.** `#nearest` reads
       # the table, and a row this page has decided to insert is not in it yet — so the second of two
@@ -1419,6 +1481,7 @@ RSpec.describe Ingest::IdentityResolver do
       expect(run.spec_observations.unresolved).to be_empty
     end
 
+    # @intent: { entity: "Ingest::IdentityResolver", action: "resolve two new band-matching spellings", behavior: "two non-identical-vectors spellings scoring 0.9925 still share one identity, so the repair is threshold-based not equality-based", layer: "integration" }
     it "gives ONE row to two new spellings that MATCH without embedding to the same vector" do
       # **The rest of the band the example above opens, and the reason `#nearest_pending` scans at a
       # threshold instead of looking up a vector.** These two descriptions differ by one pluralised
@@ -1458,6 +1521,7 @@ RSpec.describe Ingest::IdentityResolver do
       expect(run.spec_observations.unresolved).to be_empty
     end
 
+    # @intent: { entity: "Ingest::IdentityResolver", action: "resolve a split page boundary", behavior: "the pair lands on one identity whether the boundary keeps them together or separates them: BATCH_SIZE affects cost, not the identity graph", layer: "integration" }
     it "gives the same ONE row to that pair however the page boundary falls" do
       # **`BATCH_SIZE` decides cost and not the identity graph**, which is the property the scan
       # buys and the one a cheaper repair silently sold: with the pair split across two pages the
@@ -1477,6 +1541,7 @@ RSpec.describe Ingest::IdentityResolver do
       expect(run.spec_observations.pluck(:spec_identity_id).uniq.size).to eq(1)
     end
 
+    # @intent: { entity: "Ingest::IdentityResolver", action: "resolve a drift against page-pending rows", behavior: "a spelling presented verbatim by an earlier page is not moved by a later page's drift candidate", layer: "integration" }
     it "does not move a spelling a LATER page finds, when an earlier page's rows presented it" do
       # **The third buffer the placeholder reaches, and the only one whose loss changes what a
       # repository stores rather than what it costs.** `#substitute_pending` resolves placeholders in
@@ -1528,6 +1593,7 @@ RSpec.describe Ingest::IdentityResolver do
       expect(repository.spec_identities.sole.text).to eq(original)
     end
 
+    # @intent: { entity: "Ingest::IdentityResolver", action: "re-ingest an unchanged page", behavior: "a page that decided nothing new issues no INSERT at all rather than an empty VALUES statement", layer: "integration" }
     it "issues none at all when every test on the page is already held" do
       # The complement, and the guard on the buffer being spent rather than merely filled: a
       # re-ingest decides nothing new, so the page's insert must not be issued empty — an
@@ -1581,6 +1647,7 @@ RSpec.describe Ingest::IdentityResolver do
       run.spec_observations.where(file_path: file_path).update_all(embed_failure_count: position)
     end
 
+    # @intent: { entity: "Ingest::IdentityResolver", action: "deduplicate a page's re-sightings", behavior: "with the newest sighting ordered first for one identity and last for the other, both rows end at the newer run's location", layer: "integration" }
     it "lands the sighting the sequential path would have landed: the newest run wins" do
       provider_down
       older = ingest(pair(line_number: 5), ci_run_id: "run-1")
@@ -1614,6 +1681,7 @@ RSpec.describe Ingest::IdentityResolver do
       expect([cart.last_seen_test_run_id, order.last_seen_test_run_id]).to eq([newer.id, newer.id])
     end
 
+    # @intent: { entity: "Ingest::IdentityResolver", action: "link a deduplicated page", behavior: "all four observations including the dropped sightings are linked and counted resolved", layer: "integration" }
     it "still links every observation, including the ones whose sighting it dropped" do
       # De-duplicating the SIGHTINGS must not de-duplicate the ROWS. An observation of a test is an
       # observation of it whether or not it is the most recent one — the same distinction the guard
@@ -1705,6 +1773,7 @@ RSpec.describe Ingest::IdentityResolver do
       statement[/\(VALUES (.+?)\) AS \w+/m, 1].split(/\),\s*\(/).map { |tuple| tuple[/\d+/].to_i }
     end
 
+    # @intent: { entity: "Ingest::IdentityResolver", action: "emit the batched UPDATEs", behavior: "both UPDATE statements present their VALUES tuples in ascending join-key order even though the page was walked in reverse", layer: "integration" }
     it "presents both UPDATEs' rows in join-key order, whatever order the page was read in" do
       run = stranded_backlog_walked_in_reverse
       walked = repository.spec_observations.embed_retryable
@@ -1747,6 +1816,7 @@ RSpec.describe Ingest::IdentityResolver do
       end
     end
 
+    # @intent: { entity: "Ingest::IdentityResolver", action: "emit the batched INSERT", behavior: "the page's INSERT presents its rows sorted by text_digest, the varying part of the conflict key", layer: "integration" }
     it "presents the page's INSERT rows in conflict-key order too" do
       # The third batched statement, and the same property for the same reason: an upsert that
       # conflicts locks the row it conflicts onto, so two jobs whose pages overlap should ask for the
@@ -1786,6 +1856,7 @@ RSpec.describe Ingest::IdentityResolver do
       attempts
     end
 
+    # @intent: { entity: "Ingest::IdentityResolver", action: "survive a deadlocked link", behavior: "the observation link UPDATE is retried once and the retry lands the whole page", layer: "integration" }
     it "retries the page's write once and lands it, rather than losing the pass to a collision" do
       ingest(three_specs, ci_run_id: "run-1")
       second = record(three_specs(offset: 50), ci_run_id: "run-2")
@@ -1799,6 +1870,7 @@ RSpec.describe Ingest::IdentityResolver do
       expect(second.spec_observations.unresolved).to be_empty
     end
 
+    # @intent: { entity: "Ingest::IdentityResolver", action: "survive a deadlocked re-sighting", behavior: "the guarded re-sighting is retried once and the identities end where an uncontended pass leaves them", layer: "integration" }
     it "retries the re-sighting too, and the guard still decides what lands" do
       # The other statement, and it must survive a retry differently: the link sets one column to one
       # value, while the re-sighting is guarded per row. A second attempt writes what the first would
@@ -1815,6 +1887,7 @@ RSpec.describe Ingest::IdentityResolver do
       expect(repository.spec_identities.pluck(:line_number).sort).to eq([51, 52, 53])
     end
 
+    # @intent: { entity: "Ingest::IdentityResolver", action: "survive a deadlocked INSERT", behavior: "the page's INSERT is retried once and still creates exactly one row per text", layer: "integration" }
     it "retries the page's INSERT too, and a second attempt lands one row per text" do
       # The third statement, and it survives a retry differently again — which is why it gets its own
       # example rather than being assumed to behave like the two above. The link sets one column to
@@ -1837,6 +1910,7 @@ RSpec.describe Ingest::IdentityResolver do
       expect(run.spec_observations.unresolved).to be_empty
     end
 
+    # @intent: { entity: "Ingest::IdentityResolver", action: "give up after one retry", behavior: "a second deadlock propagates out, leaving rows unresolved and unstamped for the cross-run sweep", layer: "integration" }
     it "gives up after one retry and leaves the pass in the state a died pass leaves" do
       # **Once, and not a loop.** A page that deadlocks twice is under contention this class cannot
       # resolve by trying harder, and there is already a recovery for a pass that dies: the rows stay
@@ -1865,6 +1939,7 @@ RSpec.describe Ingest::IdentityResolver do
     # the batched `INSERT` is a legal statement when the page holds that pair — and says so where it
     # does. The embed count is settled here.
 
+    # @intent: { entity: "Ingest::IdentityResolver", action: "embed a first-run duplicate text", behavior: "two examples carrying one description cost the provider one call because the created row re-enters the page map", layer: "integration" }
     it "does not make a first run embed twice for two examples carrying the same text" do
       # **The cost of a page map being a SNAPSHOT, resolved deliberately rather than discovered.**
       # The per-row `find_by` this replaced saw identities committed by EARLIER ROWS OF THE SAME
@@ -1948,6 +2023,7 @@ RSpec.describe Ingest::IdentityResolver do
       run.spec_observations.includes(:spec_identity).to_h { |row| [row.file_path, row.spec_identity&.text] }
     end
 
+    # @intent: { entity: "Ingest::IdentityResolver", action: "embed a page of new tests", behavior: "five unseen tests are embedded in one batch request with no per-row .call on the side", layer: "integration" }
     it "asks the provider ONCE for a page of five tests it has never seen" do
       # **The slice, stated as the figure it moves.** Five new tests were five sequential provider
       # requests — 20,000 of them for a changed suite at the design point, against an endpoint that
@@ -1969,6 +2045,7 @@ RSpec.describe Ingest::IdentityResolver do
       expect(repository.spec_identities.count).to eq(5)
     end
 
+    # @intent: { entity: "Ingest::IdentityResolver", action: "re-ingest a fully held page", behavior: "the second run asks for nothing by either entry point: the shortcut precedes the batch", layer: "integration" }
     it "still asks for nothing at all when the page's every text is already held" do
       # The identical-text shortcut runs BEFORE a text joins the request, so the optimisation the
       # two groups above assert is not undone by a batch that embeds its page indiscriminately.
@@ -1982,6 +2059,7 @@ RSpec.describe Ingest::IdentityResolver do
       expect(repository.spec_identities.count).to eq(5)
     end
 
+    # @intent: { entity: "Ingest::IdentityResolver", action: "embed duplicate text in a batch", behavior: "the page's request is deduped to the single distinct text", layer: "integration" }
     it "asks once for two examples carrying the same text, not once each" do
       # The page's request is deduped for the reason `#digest_index`'s `IN` list is: the vector is a
       # pure function of the text, so two examples with one description are one thing to ask about.
@@ -1995,6 +2073,7 @@ RSpec.describe Ingest::IdentityResolver do
       expect(batching_provider.batched).to eq(["is valid"])
     end
 
+    # @intent: { entity: "Ingest::IdentityResolver", action: "pair vectors with texts", behavior: "every stored vector round-trips its own text within 1e-3 while any neighbour pairing lands far outside, and run 2's drift resolves by the vector each row holds", layer: "integration" }
     it "gives each test the vector for its own text, and not its neighbour's" do
       # **The ORDER CONTRACT, consumed.** The page's vectors come back positionally and are pinned
       # to rows positionally, so a page paired one place out would give every test its neighbour's
@@ -2074,6 +2153,7 @@ RSpec.describe Ingest::IdentityResolver do
       expect(identity_by_file(first)).to eq(punctuated.to_h { |spec| [spec[:file_path], spec[:name]] })
     end
 
+    # @intent: { entity: "Ingest::IdentityResolver", action: "contain a failed batch", behavior: "one unembeddable text fails alone after the page fallback: four rows resolve, the poison row is stamped and retryable", layer: "integration" }
     it "contains a failed page to the row that caused it, rather than stamping all five" do
       # **SPGD-367 through a batch, which is the whole risk of batching this call.** A request fails
       # as a request: the provider cannot say WHICH input it refused, because one unembeddable text
@@ -2132,6 +2212,7 @@ RSpec.describe Ingest::IdentityResolver do
       provider
     end
 
+    # @intent: { entity: "Ingest::IdentityResolver", action: "trip the provider breaker", behavior: "after a page's batch and both per-signal retries fail, later pages are never put on the wire and zero identities are written", layer: "integration" }
     it "stops asking a provider that failed a whole page's batch AND every one of its retries" do
       # **The bound this slice exists for, and it did not exist at all before it.** The fallback
       # above is per PAGE, so a provider that is simply down was asked once per page plus once per
@@ -2161,6 +2242,7 @@ RSpec.describe Ingest::IdentityResolver do
       expect(repository.spec_identities.count).to eq(0)
     end
 
+    # @intent: { entity: "Ingest::IdentityResolver", action: "withhold the breaker on one-signal pages", behavior: "a page of one keeps asking across all three pages, because one refusal is evidence about the text not the provider", layer: "integration" }
     it "does not trip on a one-signal page, where a refusal is evidence about the signal" do
       # The other half of the rule, and it is not a tuning knob. The fallback's whole justification
       # is that *"one bad text and a dropped connection arrive identically"* — which is true OF ONE
@@ -2179,6 +2261,7 @@ RSpec.describe Ingest::IdentityResolver do
       expect(provider.calls).to eq(3)
     end
 
+    # @intent: { entity: "Ingest::IdentityResolver", action: "stamp rows skipped by the breaker", behavior: "all five skipped rows land in embed_retryable with one attempt each and none in the unattempted set the sweep cannot see", layer: "integration" }
     it "leaves every signal it skipped stamped and retryable, and strands none of them" do
       # **Identical observable row state is the whole licence for skipping the ask.** A skipped row
       # is stamped by `#record_resolve_failure` exactly as a refused one is, so it is in
@@ -2200,6 +2283,7 @@ RSpec.describe Ingest::IdentityResolver do
       expect(run.spec_observations.pluck(:embed_failure_count).uniq).to eq([1])
     end
 
+    # @intent: { entity: "Ingest::IdentityResolver", action: "scope the breaker to one pass", behavior: "a recovered provider is asked again on the very next resolve and all five rows resolve", layer: "integration" }
     it "does not carry the trip into the next pass, so a recovered provider is asked again" do
       # **Pass-scoped and never process-scoped**, which is the difference between this and a circuit
       # breaker. A flag that outlived its `#resolve` would leave the NEXT ingest skipping a provider
@@ -2358,6 +2442,7 @@ RSpec.describe Ingest::IdentityResolver do
     # `DELETE … WHERE id IN (SELECT … LIMIT n)`, so an unanchored `/SELECT/` counts it as a read.
     def cache_statements(&) = executed_sql(&).grep(/embedding_cache_entries/i)
 
+    # @intent: { entity: "Ingest::IdentityResolver", action: "resolve a cache-served page", behavior: "a second tenant ingesting text another repository paid for asks the provider nothing and still builds its own five identities", layer: "integration" }
     it "asks the provider NOTHING for a page another repository has already paid to embed" do
       # **The slice, stated as the figure it moves.** These five texts are new to
       # `other_repository` in every sense `#digest_index` can see: it has no identity rows at all,
@@ -2382,6 +2467,7 @@ RSpec.describe Ingest::IdentityResolver do
       expect(other_repository.spec_identities.pluck(:text)).to match_array(shared_page.pluck(:name))
     end
 
+    # @intent: { entity: "Ingest::IdentityResolver", action: "resolve text re-pointed away", behavior: "after a drift re-point removes the original digest, run 3 is still answered by the deployment's cache rather than re-billed", layer: "integration" }
     it "asks nothing again for text THIS repository's rows no longer hold" do
       # The second half of the gap, and the one that needs no second tenant.
       #
@@ -2413,6 +2499,7 @@ RSpec.describe Ingest::IdentityResolver do
       expect(repository.spec_identities.count).to eq(5)
     end
 
+    # @intent: { entity: "Ingest::IdentityResolver", action: "resolve through a tripped breaker", behavior: "a fully cached page resolves normally in the same pass where an uncached page tripped the breaker, because the cache is read first", layer: "integration" }
     it "still serves a cached page after the provider breaker has tripped on an uncached one" do
       # **The reason the breaker sits at the provider ask and not at `#page_embeddings`.** That
       # method reads the cache FIRST and passes only `texts - cached.keys` down, so a suite whose
@@ -2459,6 +2546,7 @@ RSpec.describe Ingest::IdentityResolver do
       expect(run.spec_observations.embed_failed.pluck(:name)).to match_array(uncached.pluck(:name))
     end
 
+    # @intent: { entity: "Ingest::IdentityResolver", action: "resolve an evicted sibling", behavior: "the sibling whose name the page's own upgrade evicted is never asked of the dark provider and is left stamped and retryable", layer: "integration" }
     it "asks nothing for a sibling the page's own upgrade evicted from its map" do
       # **The hole a tripped page's own return shape does not cover.** `#embed_page` answers a
       # tripped page with nil-VALUED keys and never `{}`, precisely so that no text OF THAT PAGE
@@ -2546,6 +2634,7 @@ RSpec.describe Ingest::IdentityResolver do
       expect(stranded.spec_identity_id).to be_nil
     end
 
+    # @intent: { entity: "Ingest::IdentityResolver", action: "resolve with an unfingerprinted provider", behavior: "no cache SELECT or INSERT is issued; the page embeds once exactly as before the cache existed", layer: "integration" }
     it "buys nothing at all when the provider publishes no fingerprint" do
       # **The conservative default, which is what the whole existing suite runs on.** A provider
       # that will not say what it is gets no caching rather than a guessed key — the alternative
@@ -2568,6 +2657,7 @@ RSpec.describe Ingest::IdentityResolver do
     end
 
     describe "when the provider fingerprint moves" do
+      # @intent: { entity: "Ingest::IdentityResolver", action: "resolve after a fingerprint change", behavior: "the new fingerprint misses every key and the page is re-embedded in full rather than served stale vectors", layer: "integration" }
       it "re-embeds the page rather than serving vectors the old model produced" do
         # **Unreadable rather than stale, which is the difference between a cache and a bug.** A
         # `text-embedding-3-small` vector handed to a deployment now running `-3-large` is a
@@ -2588,6 +2678,7 @@ RSpec.describe Ingest::IdentityResolver do
         expect(other_repository.spec_identities.count).to eq(5)
       end
 
+      # @intent: { entity: "Ingest::IdentityResolver", action: "preserve entries across a fingerprint change", behavior: "old-fingerprint rows remain intact and a reverted fingerprint is served again at zero cost", layer: "integration" }
       it "leaves the old entries in place, unreadable, rather than deleting them" do
         # The distinction the sentence above turns on, asserted rather than implied. Nothing sweeps
         # on a fingerprint change: the old rows are simply unreachable by any key the deployment
@@ -2624,6 +2715,7 @@ RSpec.describe Ingest::IdentityResolver do
       # this class is designed around is the cost the whole lineage exists to remove. Only a query
       # count can tell the two apart.
 
+      # @intent: { entity: "Ingest::IdentityResolver", action: "read and write the cache per page", behavior: "a cold page costs one cache SELECT, one INSERT and the pass's single prune DELETE", layer: "integration" }
       it "reads once and writes once for a page of five texts it has never seen" do
         EmbeddingGenerator.provider = caching_provider
         run = record(shared_page, ci_run_id: "run-1")
@@ -2638,6 +2730,7 @@ RSpec.describe Ingest::IdentityResolver do
         expect(statements.size).to eq(3)
       end
 
+      # @intent: { entity: "Ingest::IdentityResolver", action: "serve a fully cached page", behavior: "the page reads the cache once and issues no INSERT at all", layer: "integration" }
       it "reads once and writes NOTHING for a page that hits on every text" do
         # The write is skipped entirely rather than issued empty: a page that bought nothing has
         # nothing to remember, and `upsert_all` of an empty list is a statement with no rows.
@@ -2657,6 +2750,7 @@ RSpec.describe Ingest::IdentityResolver do
         expect(statements.size).to eq(2)
       end
 
+      # @intent: { entity: "Ingest::IdentityResolver", action: "skip the cache for empty text", behavior: "a page with nothing to look up issues neither caching statement, leaving only the prune", layer: "integration" }
       it "asks nothing at all when the page carries no text to look up" do
         # The counterpart of `#digest_index`'s "still costs nothing when a page carries no text at
         # all", and asserted the same way — as the ABSENCE of the statement rather than the
@@ -2693,6 +2787,7 @@ RSpec.describe Ingest::IdentityResolver do
       # cache call and nothing else. It does not widen what `#page_embeddings` may swallow; the
       # provider request inside it still fails exactly as loudly as it did.
 
+      # @intent: { entity: "Ingest::IdentityResolver", action: "degrade on a failed cache read", behavior: "a missing relation degrades to the previous release's behaviour: one batch embed resolves all five normally", layer: "integration" }
       it "embeds the page normally when the READ fails" do
         # `StatementInvalid` specifically, because the realistic instance of this is a deployment
         # that shipped the code before running the migration. That must degrade to the previous
@@ -2708,6 +2803,7 @@ RSpec.describe Ingest::IdentityResolver do
         expect(repository.spec_identities.count).to eq(5)
       end
 
+      # @intent: { entity: "Ingest::IdentityResolver", action: "degrade on a failed cache write", behavior: "a disk-full store loses only the next page's reuse; the current page resolves fully", layer: "integration" }
       it "resolves the page normally when the WRITE fails" do
         # The rows are already resolved by the time the write is attempted, so the only thing lost
         # is that the next page pays again.
@@ -2721,6 +2817,7 @@ RSpec.describe Ingest::IdentityResolver do
         expect(run.spec_observations.unresolved).to be_empty
       end
 
+      # @intent: { entity: "Ingest::IdentityResolver", action: "degrade on an unreadable fingerprint", behavior: "a provider whose fingerprint raises embeds normally with no cache rows written", layer: "integration" }
       it "embeds the page normally when the provider cannot say what its fingerprint is" do
         # A provider that raises where it should have answered is the same situation as one that
         # declines to answer, and it costs the ingest the same nothing.
@@ -2734,6 +2831,7 @@ RSpec.describe Ingest::IdentityResolver do
         expect(EmbeddingCacheEntry.count).to eq(0)
       end
 
+      # @intent: { entity: "Ingest::IdentityResolver", action: "preserve provider failure semantics", behavior: "the poison text still falls back per-row, is stamped and uncached, while the four successes are cached", layer: "integration" }
       it "still lets a PROVIDER failure behave exactly as it did" do
         # The other half of "narrow in scope", and the regression the wide rescue could have caused.
         # `EmbeddingGenerator::Error` must still reach `#embed_page`'s fallback and still stamp the
@@ -2769,6 +2867,7 @@ RSpec.describe Ingest::IdentityResolver do
       end
     end
 
+    # @intent: { entity: "Ingest::IdentityResolver", action: "serve a correct cached vector", behavior: "the cache-served tenant lands the identical text-to-file pairing and vectors the provider would have returned, with mis-keying landing far outside tolerance", layer: "integration" }
     it "gives a cached row the same identity a freshly embedded row gets" do
       # **The correctness backstop for every count above.** Each of those asserts that a request was
       # not made; none of them would notice if the vector served in its place were the wrong one —
@@ -2820,6 +2919,7 @@ RSpec.describe Ingest::IdentityResolver do
   end
 
   describe "the tenant boundary" do
+    # @intent: { entity: "Ingest::IdentityResolver", action: "resolve across tenants", behavior: "identical text in two repositories yields two distinct identities that never link to each other", layer: "integration" }
     it "never resolves a test onto another repository's identity" do
       other = create_repository(user: create_user(github_uid: "2002", github_handle: "other"),
                                 github_full_name: "acme/other-service")
@@ -2866,6 +2966,7 @@ RSpec.describe Ingest::IdentityResolver do
       resolver.resolve
     end
 
+    # @intent: { entity: "Ingest::IdentityResolver", action: "resolve a lost uniqueness race", behavior: "the loser's upsert converges on the winner's row instead of raising RecordNotUnique or duplicating", layer: "integration" }
     it "converges on one row instead of raising or duplicating" do
       winner = create_spec_identity(repository: repository, text: "Cart adds an item to the cart",
                                     file_path: "spec/models/cart_spec.rb", line_number: 5)
@@ -2877,6 +2978,7 @@ RSpec.describe Ingest::IdentityResolver do
       expect(SpecIdentity.sole.id).to eq(winner.id)
     end
 
+    # @intent: { entity: "Ingest::IdentityResolver", action: "re-sight a lost race's winner", behavior: "the loser's newer sighting moves the winner's location and links its observation", layer: "integration" }
     it "lands the loser's sighting on the winner and hands it the same link" do
       winner = create_spec_identity(repository: repository, text: "Cart adds an item to the cart",
                                     file_path: "spec/models/cart_spec.rb", line_number: 5)
@@ -2890,6 +2992,7 @@ RSpec.describe Ingest::IdentityResolver do
       expect(run.spec_observations.sole.spec_identity_id).to eq(winner.id)
     end
 
+    # @intent: { entity: "Ingest::IdentityResolver", action: "refuse a stale conflict sighting", behavior: "a run older than the winner's last_seen is refused its sighting but still gets its link", layer: "integration" }
     it "refuses a losing sighting from a run older than the one the winner already names" do
       # The conflict branch is a re-sighting, so it is monotonic for the reason `#resight` is. And it
       # is reachable outside a race: `#nearest` is an approximate index lookup, so an under-recalled
@@ -2911,6 +3014,7 @@ RSpec.describe Ingest::IdentityResolver do
       expect(older.spec_observations.sole.spec_identity_id).to eq(winner.id)
     end
 
+    # @intent: { entity: "Ingest::IdentityResolver", action: "contain a conflict to a re-sighting", behavior: "the winner's created_at, text, digest, source and embedding are untouched by the conflict path", layer: "integration" }
     it "leaves the winner's own identity untouched — a conflict re-sights, it does not overwrite" do
       winner = create_spec_identity(repository: repository, text: "Cart adds an item to the cart")
       # Read back from the column rather than held from the insert: pgvector stores float4, so the
@@ -2942,6 +3046,7 @@ RSpec.describe Ingest::IdentityResolver do
                                name: "User#save rejects a duplicate email")], ci_run_id: ci_run_id)
     end
 
+    # @intent: { entity: "Ingest::IdentityResolver", action: "handle an unembeddable example", behavior: "the observation stays unresolved with a NULL identity rather than an identity nothing can find again", layer: "integration" }
     it "leaves the observation unresolved rather than writing an identity nothing can find again" do
       allow(EmbeddingGenerator).to receive(:call).and_raise(EmbeddingGenerator::Error, "provider down")
 
@@ -2951,6 +3056,7 @@ RSpec.describe Ingest::IdentityResolver do
       expect(run.spec_observations.sole.spec_identity_id).to be_nil
     end
 
+    # @intent: { entity: "Ingest::IdentityResolver", action: "contain one failed embed", behavior: "the run's other test resolves normally while the poison text fails alone", layer: "integration" }
     it "does not abandon the rest of the run" do
       texts = ["Cart adds an item to the cart", "User#save rejects a duplicate email"]
       allow(EmbeddingGenerator).to receive(:call).and_wrap_original do |original, text|
@@ -2967,6 +3073,7 @@ RSpec.describe Ingest::IdentityResolver do
       expect(run.spec_observations.where.not(spec_identity_id: nil).count).to eq(1)
     end
 
+    # @intent: { entity: "Ingest::IdentityResolver", action: "stamp a failed embed", behavior: "the row carries embed_failed_at and failure count 1, distinguishing attempted-and-failed from a bare NULL", layer: "integration" }
     it "records that the embedding was attempted and failed, rather than leaving a bare NULL" do
       provider_down
 
@@ -2977,6 +3084,7 @@ RSpec.describe Ingest::IdentityResolver do
       expect(observation.embed_failure_count).to eq(1)
     end
 
+    # @intent: { entity: "Ingest::IdentityResolver", action: "separate the three unresolved populations", behavior: "failed, signalless and unattempted rows are distinguishable by queryable scopes rather than pooled in one NULL", layer: "integration" }
     it "tells a failed embed apart from a row with nothing to embed and from one not yet attempted" do
       # The three populations one NULL `spec_identity_id` used to pool, built through the real path
       # in the order that keeps each in its own state. The signalless row's name is nulled by hand
@@ -3018,6 +3126,7 @@ RSpec.describe Ingest::IdentityResolver do
       expect(repository.spec_observations.embed_unattempted_retryable).to be_empty
     end
 
+    # @intent: { entity: "Ingest::IdentityResolver", action: "rescue a failed embed", behavior: "the next unrelated ingest's sweep resolves the stranded row and credits its own run as last seen", layer: "integration" }
     it "resolves it on the next run once the provider is back — nothing is permanently lost" do
       provider_down
       first = ingest([unannotated_spec(name: "Cart adds an item to the cart")], ci_run_id: "run-1")
@@ -3034,6 +3143,7 @@ RSpec.describe Ingest::IdentityResolver do
       expect(identity.last_seen_test_run_id).to eq(first.id)
     end
 
+    # @intent: { entity: "Ingest::IdentityResolver", action: "guard a rescued sighting", behavior: "a rescued older run cannot move the identity's location off the newer run's sighting", layer: "integration" }
     it "does not let a rescued older run overwrite a newer run's last known path" do
       provider_down
       ingest([unannotated_spec(file_path: "spec/models/cart_spec.rb", line_number: 5,
@@ -3051,6 +3161,7 @@ RSpec.describe Ingest::IdentityResolver do
       expect(identity.last_seen_test_run_id).to eq(second.id)
     end
 
+    # @intent: { entity: "Ingest::IdentityResolver", action: "rescue a two-run outage", behavior: "both rows are linked and the newest run's path wins even though the older row is walked last", layer: "integration" }
     it "keeps the newest run's path when an outage spanning two runs is rescued in one sweep" do
       # The shape the whole slice exists to recover from — a provider down across MORE than one
       # ingest — and the case iteration order alone never covered. Both rows are failed, both are in
@@ -3080,6 +3191,7 @@ RSpec.describe Ingest::IdentityResolver do
       expect(second.spec_observations.sole.reload.spec_identity_id).to eq(identity.id)
     end
 
+    # @intent: { entity: "Ingest::IdentityResolver", action: "keep the first failure timestamp", behavior: "re-attempts increment the count but the original embed_failed_at stands, so the retry window cannot be pushed forward", layer: "integration" }
     it "keeps the first failure's timestamp, so re-attempting cannot push the window forward" do
       provider_down
       first = ingest([unannotated_spec(name: "Cart adds an item to the cart")], ci_run_id: "run-1")
@@ -3093,6 +3205,7 @@ RSpec.describe Ingest::IdentityResolver do
       expect(observation.embed_failure_count).to eq(2)
     end
 
+    # @intent: { entity: "Ingest::IdentityResolver", action: "stop retrying past the window", behavior: "a row past EMBED_RETRY_WINDOW is no longer re-attempted and is queryable as embed_abandoned", layer: "integration" }
     it "stops re-attempting a row once the window has closed on it" do
       provider_down
       first = ingest([unannotated_spec(name: "Cart adds an item to the cart")], ci_run_id: "run-1")
@@ -3113,6 +3226,7 @@ RSpec.describe Ingest::IdentityResolver do
       expect(repository.spec_observations.embed_abandoned.count).to eq(1)
     end
 
+    # @intent: { entity: "Ingest::IdentityResolver", action: "cap the inherited backlog", behavior: "one job rescues at most RETRY_SWEEP_LIMIT rows and later ingests drain the remainder", layer: "integration" }
     it "caps how much of a backlog one ingest inherits, and drains the rest across later ones" do
       stub_const("#{described_class}::RETRY_SWEEP_LIMIT", 1)
       provider_down
@@ -3174,6 +3288,7 @@ RSpec.describe Ingest::IdentityResolver do
       ingest(specs, ci_run_id: ci_run_id)
     end
 
+    # @intent: { entity: "Ingest::IdentityResolver", action: "log a failed flush without masking", behavior: "a page that dies on the body and deadlocks in its flush still reports the original cause in the error log", layer: "integration" }
     it "keeps the cause when the page's flush fails on the way out too" do
       # **The `ensure` must not cost the diagnosis it exists for.** `#resolve_page` flushes on every
       # exit so a page that dies keeps what it had already decided — but an `ensure` that raises
@@ -3204,6 +3319,7 @@ RSpec.describe Ingest::IdentityResolver do
       expect(messages.grep(/page flush failed with ActiveRecord::Deadlocked.*StatementInvalid/)).not_to be_empty
     end
 
+    # @intent: { entity: "Ingest::IdentityResolver", action: "strand unreached rows", behavior: "rows past the died point stay unresolved with no failure stamp, distinguishable from attempted failures", layer: "integration" }
     it "leaves the unreached rows unresolved with no stamp — the state nothing could describe" do
       run = record(suite, ci_run_id: "run-1")
 
@@ -3218,6 +3334,7 @@ RSpec.describe Ingest::IdentityResolver do
       expect(repository.spec_observations.embed_retryable).to be_empty
     end
 
+    # @intent: { entity: "Ingest::IdentityResolver", action: "surface stranded rows", behavior: "inside the grace they are invisible; past it they appear in embed_unattempted_retryable for the sweep", layer: "integration" }
     it "makes them findable once no live job could still be on its way to them" do
       run = record(suite, ci_run_id: "run-1")
       die_after(run, rows: 1)
@@ -3232,6 +3349,7 @@ RSpec.describe Ingest::IdentityResolver do
         .to eq([run.id, run.id])
     end
 
+    # @intent: { entity: "Ingest::IdentityResolver", action: "rescue stranded rows", behavior: "a later unrelated ingest resolves them without the original run ever being redelivered", layer: "integration" }
     it "resolves them on the next ingest of a different run, without redelivering the original" do
       run = record(suite, ci_run_id: "run-1")
       die_after(run, rows: 1)
@@ -3249,6 +3367,7 @@ RSpec.describe Ingest::IdentityResolver do
       )
     end
 
+    # @intent: { entity: "Ingest::IdentityResolver", action: "rescue onto an existing identity", behavior: "a stranded row and the rescuing run's same test share one identity instead of starting a second", layer: "integration" }
     it "lands a stranded row on the identity the test already had, rather than starting a second" do
       run = record(suite, ci_run_id: "run-1")
       die_after(run, rows: 1)
@@ -3266,6 +3385,7 @@ RSpec.describe Ingest::IdentityResolver do
       expect(repository.spec_identities.where(text: identity.text).count).to eq(1)
     end
 
+    # @intent: { entity: "Ingest::IdentityResolver", action: "guard a rescued unattempted sighting", behavior: "the stranded older run is linked but cannot overwrite the newer run's last known path", layer: "integration" }
     it "does not let a rescued older run overwrite a newer run's last known path" do
       # `SIGHTING_NOT_OLDER` over the never-attempted half of the backlog, which is the half where
       # the stranded row is walked FIRST and the newer sighting therefore arrives second.
@@ -3285,6 +3405,7 @@ RSpec.describe Ingest::IdentityResolver do
       expect(run.spec_observations.sole.reload.spec_identity_id).to eq(identity.id)
     end
 
+    # @intent: { entity: "Ingest::IdentityResolver", action: "skip signalless rows forever", behavior: "a row with no embeddable text never gains an identity and never acquires a failure stamp across repeated sweeps", layer: "integration" }
     it "never gives an identity to a row with nothing to embed, however many ingests sweep past it" do
       # The population the sweep now reads on every ingest and must go on doing nothing with. Its
       # name is nulled by hand because `Ingest::Payload#validate_name` refuses that shape today —
@@ -3309,6 +3430,7 @@ RSpec.describe Ingest::IdentityResolver do
       expect(identity_texts).to eq(["User#save rejects a duplicate email"])
     end
 
+    # @intent: { entity: "Ingest::IdentityResolver", action: "avoid starvation by signalless rows", behavior: "with the list ordered newest-first a genuinely stranded row is reached though an older permanent row sits at the head", layer: "integration" }
     it "is not starved by the rows that can never leave the backlog" do
       # The reason this list is ordered NEWEST first while the failure backlog is ordered
       # least-tried first. A signalless row is swept forever and resolves never — it returns from
@@ -3340,6 +3462,7 @@ RSpec.describe Ingest::IdentityResolver do
       expect(signalless.spec_observations.sole.reload.spec_identity_id).to be_nil
     end
 
+    # @intent: { entity: "Ingest::IdentityResolver", action: "abandon unattempted rows past the window", behavior: "rows outliving EMBED_RETRY_WINDOW leave the retryable set and are counted as embed_unattempted_abandoned", layer: "integration" }
     it "gives up on it once the window has closed, and leaves it queryable as such" do
       run = record(suite, ci_run_id: "run-1")
       die_after(run, rows: 1)
@@ -3370,6 +3493,7 @@ RSpec.describe Ingest::IdentityResolver do
     # repository that has lost a job. An example seeded at a limit of 1 can only ever certify the
     # first — "partial" does not exist there — so a `RETRY_SWEEP_LIMIT`-for-`remaining` mutant
     # survives it while turning one budget back into two.
+    # @intent: { entity: "Ingest::IdentityResolver", action: "spend the whole budget on failures", behavior: "when failed rows saturate RETRY_SWEEP_LIMIT the never-attempted list is not queried at all, and drains on a later ingest", layer: "integration" }
     it "does not query the never-attempted list at all when the failures have taken the whole budget" do
       stub_const("#{described_class}::RETRY_SWEEP_LIMIT", 1)
 
@@ -3394,6 +3518,7 @@ RSpec.describe Ingest::IdentityResolver do
       expect(stranded.spec_observations.unresolved).to be_empty
     end
 
+    # @intent: { entity: "Ingest::IdentityResolver", action: "share one budget across both lists", behavior: "with three slots and one failure the unattempted list gets exactly the two remaining, never a second full allowance", layer: "integration" }
     it "gives the never-attempted list only what the failures left, not a second full budget" do
       # The partial branch, and the one that pins the SUBTRACTION rather than the guard in front of
       # it. Three slots, one of them spent on a failure, three rows stranded: the sweep is entitled
@@ -3487,6 +3612,7 @@ RSpec.describe Ingest::IdentityResolver do
         [run, resolver]
       end
 
+      # @intent: { entity: "Ingest::IdentityResolver", action: "contain a poisoned inherited row", behavior: "a backlog row that raises every time no longer aborts the delivery: this run's own rows still resolve", layer: "integration" }
       it "does not abort the delivery: this run's own rows are still reached and resolved" do
         poisoned = poisoned_backlog_row
         run, resolver = sweeping_run(ci_run_id: "run-2", poison: poisoned)
@@ -3501,6 +3627,7 @@ RSpec.describe Ingest::IdentityResolver do
         expect(identity_texts).to eq(["User#save rejects a duplicate email"])
       end
 
+      # @intent: { entity: "Ingest::IdentityResolver", action: "stamp a contained row", behavior: "the contained row gains embed_failed_at and count 1 and appears in embed_retryable, not only in the job runner's failures", layer: "integration" }
       it "leaves it findable by a scope rather than only in Solid Queue's failed executions" do
         poisoned = poisoned_backlog_row
         # The premise, pinned: before the sweep this row is the unstamped kind, so a stamp after it
@@ -3515,6 +3642,7 @@ RSpec.describe Ingest::IdentityResolver do
         expect(repository.spec_observations.embed_retryable.pluck(:id)).to eq([poisoned.id])
       end
 
+      # @intent: { entity: "Ingest::IdentityResolver", action: "exclude a contained row from the count", behavior: "resolve reports one for its own row and nothing for the contained one", layer: "integration" }
       it "counts as nothing, because the count is what NOW carries an identity and it does not" do
         poisoned = poisoned_backlog_row
         _run, resolver = sweeping_run(ci_run_id: "run-2", poison: poisoned)
@@ -3524,6 +3652,7 @@ RSpec.describe Ingest::IdentityResolver do
         expect(resolver.resolve).to eq(1)
       end
 
+      # @intent: { entity: "Ingest::IdentityResolver", action: "demote a contained row in the backlog", behavior: "the contained row sorts after a less-tried failure so a scarce slot goes to the more hopeful row", layer: "integration" }
       it "sinks below a backlog row that has been tried less, so a scarce slot goes to that one" do
         poisoned = poisoned_backlog_row
         _second, resolver = sweeping_run(ci_run_id: "run-2", poison: poisoned)
@@ -3545,6 +3674,7 @@ RSpec.describe Ingest::IdentityResolver do
         expect(backlog.pluck(:id)).to eq([failed.spec_observations.sole.id, poisoned.id])
       end
 
+      # @intent: { entity: "Ingest::IdentityResolver", action: "progress past a poison row", behavior: "three deliveries each resolve their own suite, re-contain the poison row, and never grow the identity table", layer: "integration" }
       it "still lets the repository make progress on every ingest, for as long as it is retryable" do
         poisoned = poisoned_backlog_row
 
@@ -3568,6 +3698,7 @@ RSpec.describe Ingest::IdentityResolver do
         expect(identity_texts).to eq(["User#save rejects a duplicate email"])
       end
 
+      # @intent: { entity: "Ingest::IdentityResolver", action: "keep the first containment's timestamp", behavior: "a second containment increments the count but preserves the original stamp, so the window still closes", layer: "integration" }
       it "keeps the first containment's timestamp, so re-attempting cannot push the window forward" do
         poisoned = poisoned_backlog_row
         _first, first_resolver = sweeping_run(ci_run_id: "run-2", poison: poisoned)
@@ -3584,6 +3715,7 @@ RSpec.describe Ingest::IdentityResolver do
         expect(poisoned.embed_failure_count).to eq(2)
       end
 
+      # @intent: { entity: "Ingest::IdentityResolver", action: "abandon a contained row past the window", behavior: "once past EMBED_RETRY_WINDOW the row stops being swept and is queryable as embed_abandoned", layer: "integration" }
       it "gives up on it once the window has closed, and leaves it queryable as such" do
         poisoned = poisoned_backlog_row
         _second, resolver = sweeping_run(ci_run_id: "run-3", poison: poisoned)
@@ -3606,6 +3738,7 @@ RSpec.describe Ingest::IdentityResolver do
         expect(repository.spec_observations.embed_abandoned.pluck(:id)).to eq([poisoned.id])
       end
 
+      # @intent: { entity: "Ingest::IdentityResolver", action: "contain only the inherited half", behavior: "a failure in this run's own list still ends the pass, unlike an inherited row's contained failure", layer: "integration" }
       it "contains the INHERITED half only: a failure in this run's own list still ends the pass" do
         # The asymmetry, and the reason it is one. An inherited row is work this delivery volunteered
         # for on an earlier one's behalf, so its failure is contained; this run's rows are what the
@@ -3623,6 +3756,7 @@ RSpec.describe Ingest::IdentityResolver do
         expect(run.spec_observations.unresolved).not_to be_empty
       end
 
+      # @intent: { entity: "Ingest::IdentityResolver", action: "contain both halves distinctly in one pass", behavior: "the inherited poison is stamped while this run's own failure escapes unresolved and unstamped", layer: "integration" }
       it "contains the inherited row and lets this run's own out, in ONE pass" do
         # The asymmetry as a single event rather than as two examples of one side each. The example
         # above pins it with an inherited row that SUCCEEDS on the way past, which is a fair
@@ -3644,6 +3778,7 @@ RSpec.describe Ingest::IdentityResolver do
         expect(run.spec_observations.pluck(:embed_failed_at).uniq).to eq([nil])
       end
 
+      # @intent: { entity: "Ingest::IdentityResolver", action: "propagate a failed containment stamp", behavior: "when even the containment UPDATE fails the error escapes rather than reporting a clean pass", layer: "integration" }
       it "does not manufacture a clean sweep out of a database it cannot even stamp" do
         # The documented non-promise on `#claim_inherited`. The containment is itself an UPDATE, so a
         # failure broad enough to take the connection with it raises from inside the rescue and
@@ -3748,6 +3883,7 @@ RSpec.describe Ingest::IdentityResolver do
         ActiveRecord::Base.connection.execute("ANALYZE spec_observations")
       end
 
+      # @intent: { entity: "Ingest::IdentityResolver", action: "read the unattempted backlog", behavior: "EXPLAIN shows the sweep served by its partial index, already ordered, with no Sort node, stopping at the cap", layer: "integration" }
       it "reads the never-attempted backlog off its own partial index, in order, and stops at the cap" do
         # EXPLAINed from the relation the resolver ACTUALLY walks rather than from a hand-written
         # copy of it — a copy is a second definition of the query, and a plan assertion against the
@@ -3767,6 +3903,7 @@ RSpec.describe Ingest::IdentityResolver do
   end
 
   describe "running twice over the same run" do
+    # @intent: { entity: "Ingest::IdentityResolver", action: "resolve a run twice", behavior: "the second pass is a no-op because the work list is the unresolved rows", layer: "integration" }
     it "is a no-op the second time, because the work list is the unresolved rows" do
       run = ingest(suite, ci_run_id: "run-1")
 
@@ -3776,10 +3913,12 @@ RSpec.describe Ingest::IdentityResolver do
   end
 
   describe "what it reports" do
+    # @intent: { entity: "Ingest::IdentityResolver", action: "report the resolved count", behavior: "resolve returns three for a three-example suite", layer: "integration" }
     it "counts the observations it gave an identity to" do
       expect(described_class.resolve(record(suite, ci_run_id: "run-1"))).to eq(3)
     end
 
+    # @intent: { entity: "Ingest::IdentityResolver", action: "count rescued rows", behavior: "a pass that also rescues one stranded row reports two: its own plus the rescue", layer: "integration" }
     it "counts a rescued row of an earlier run, because this invocation is what resolved it" do
       allow(EmbeddingGenerator).to receive(:call).and_raise(EmbeddingGenerator::Error, "provider down")
       ingest([unannotated_spec(name: "Cart adds an item to the cart")], ci_run_id: "run-1")
@@ -3824,6 +3963,7 @@ RSpec.describe Ingest::IdentityResolver do
       run.spec_observations.unresolved.update_all(created_at: ago.ago)
     end
 
+    # @intent: { entity: "Ingest::IdentityResolver", action: "emit the completion summary", behavior: "exactly one info line per pass carries run and resolved counts, with no breaker marker on a healthy pass", layer: "integration" }
     it "says what the pass resolved, once, however many rows that was" do
       run = record(suite, ci_run_id: "run-1")
 
@@ -3841,12 +3981,14 @@ RSpec.describe Ingest::IdentityResolver do
     # The figure an operator most needs, and the one a "log it only when it is interesting" report
     # would drop. A pass that resolved nothing and a pass that never ran are the same observable
     # event without this line, which is the defect the whole slice exists for.
+    # @intent: { entity: "Ingest::IdentityResolver", action: "report an empty pass", behavior: "a pass that resolved nothing still emits its summary with resolved=0", layer: "integration" }
     it "still says so when it resolved nothing" do
       run = ingest(suite, ci_run_id: "run-1")
 
       expect(summary_of { described_class.resolve(run) }).to include("resolved=0")
     end
 
+    # @intent: { entity: "Ingest::IdentityResolver", action: "attribute repository figures", behavior: "the summary names the repository its snapshot counts belong to beside the run's own figures", layer: "integration" }
     it "reports the repository's figures beside the run's, named as the repository's" do
       run = record(suite, ci_run_id: "run-1")
 
@@ -3858,6 +4000,7 @@ RSpec.describe Ingest::IdentityResolver do
         .to include("repository=#{repository.id}")
     end
 
+    # @intent: { entity: "Ingest::IdentityResolver", action: "avoid raw unresolved counts", behavior: "a concurrent delivery's in-flight rows appear in none of the four bounded figures and no unresolved= field exists", layer: "integration" }
     it "never reports a raw unresolved count, so a concurrent delivery's rows are not a problem" do
       ingest(suite, ci_run_id: "run-1")
       # Another delivery, mid-flight: recorded and committed, not yet resolved. This is the ordinary
@@ -3874,6 +4017,7 @@ RSpec.describe Ingest::IdentityResolver do
       expect(summary).not_to match(/\bunresolved=/)
     end
 
+    # @intent: { entity: "Ingest::IdentityResolver", action: "split the failed backlog", behavior: "the summary reports embed_failed_retrying and embed_failed_gave_up as two figures during an ongoing outage", layer: "integration" }
     it "separates the failed backlog's 'still trying' from its 'stopped trying'" do
       allow(EmbeddingGenerator).to receive(:call).and_raise(EmbeddingGenerator::Error, "provider down")
       still_trying = ingest([unannotated_spec(file_path: "spec/a_spec.rb", line_number: 1,
@@ -3899,6 +4043,7 @@ RSpec.describe Ingest::IdentityResolver do
       expect(summary).to include("resolved=0", "embed_failed_retrying=2", "embed_failed_gave_up=1")
     end
 
+    # @intent: { entity: "Ingest::IdentityResolver", action: "split the never-attempted backlog", behavior: "retrying and gave-up figures are distinct and neither is labelled a failure", layer: "integration" }
     it "separates the never-attempted backlog's two bounds, and calls neither of them a failure" do
       # One slot in the sweep, so one of the two rows still inside the window is rescued and the
       # other is still waiting when the count is taken — the ordinary state of a repository whose
@@ -3942,6 +4087,7 @@ RSpec.describe Ingest::IdentityResolver do
       expect(summary).not_to match(/never_attempted\w*fail/)
     end
 
+    # @intent: { entity: "Ingest::IdentityResolver", action: "report an outage", behavior: "the three per-row warnings survive unchanged beside one page-level warning and a single summary", layer: "integration" }
     it "reports the population an outage leaves, and leaves the per-row warnings exactly as they were" do
       run = record(suite, ci_run_id: "run-1")
       allow(EmbeddingGenerator).to receive(:call).and_raise(EmbeddingGenerator::Error, "provider down")
@@ -3966,6 +4112,7 @@ RSpec.describe Ingest::IdentityResolver do
       expect(summaries(lines).sole).to include("resolved=0", "embed_failed_retrying=3")
     end
 
+    # @intent: { entity: "Ingest::IdentityResolver", action: "mark a tripped pass", behavior: "the one summary carries provider_breaker=tripped and a warn line announces the stop once at the moment it happened", layer: "integration" }
     it "names a pass that STOPPED asking the provider, rather than leaving it to be inferred" do
       # A pass that stopped asking and a pass that asked and was refused are different events, and
       # `embed_failed_retrying` cannot tell them apart: both populations are stamped identically, on
@@ -4075,6 +4222,7 @@ RSpec.describe Ingest::IdentityResolver do
         described_class.new(create_test_run(repository: repository)).send(:unresolved_bounds)
       end
 
+      # @intent: { entity: "Ingest::IdentityResolver", action: "count the report's bounds", behavior: "EXPLAIN shows all four bound counts served by an index rather than a sequential scan on a healthy repository", layer: "integration" }
       it "reads all four through an index rather than by scanning the table" do
         # The reach of this guard is measured rather than assumed, and what the measurement found is
         # worth recording because it is not symmetric. Re-seeded at `backlog_rows` of 2,000 instead
@@ -4103,6 +4251,7 @@ RSpec.describe Ingest::IdentityResolver do
       # `Index Only Scan` and not merely the index name, because the name alone survives the thing
       # worth catching: at a 2,000-row backlog this same read stays on this same index and becomes a
       # Bitmap Heap Scan, which is the version that goes back to the heap for every matching row.
+      # @intent: { entity: "Ingest::IdentityResolver", action: "count the failed backlog index-only", behavior: "the two failed-backlog counts run as Index Only Scans on the partial index built for them", layer: "integration" }
       it "counts the failed backlog off the partial index built for it, touching no heap" do
         %i[embed_failed_retrying embed_failed_gave_up].each do |label|
           plan = plan_for(bounds.fetch(label))
@@ -4163,6 +4312,7 @@ RSpec.describe Ingest::IdentityResolver do
     # fact about the code. `#record` here is `RunRecorder` alone — the synchronous half the endpoint
     # answers `202` from — so the first assertion is also the whole of the "no 202 is affected"
     # claim: the ingest request never issues this delete at all.
+    # @intent: { entity: "Ingest::IdentityResolver", action: "prune on the resolve pass", behavior: "the synchronous record path leaves the cache untouched; only resolve triggers the expired-entry reclaim", layer: "integration" }
     it "prunes on the RESOLVE pass and not on the ingest write path" do
       expired_cache_entry
 
@@ -4177,6 +4327,7 @@ RSpec.describe Ingest::IdentityResolver do
       expect(EmbeddingCacheEntry.count).to eq(0)
     end
 
+    # @intent: { entity: "Ingest::IdentityResolver", action: "prune without a fingerprint", behavior: "the reclaim is not gated on the provider fingerprint, so an inert cache's deployment still reclaims its disk", layer: "integration" }
     it "prunes even though this provider publishes no fingerprint and the cache is inert" do
       # The prune is deliberately NOT gated on `#cache_fingerprint`. Under `with lexical
       # embeddings` the provider publishes no fingerprint, so this whole pass reads nothing from the
@@ -4195,6 +4346,7 @@ RSpec.describe Ingest::IdentityResolver do
     # a cache that every caller is required to be able to lose, so the same failure must cost this
     # resolve nothing: the rows still resolve, the pass still reports, and nothing raises. Asserted
     # in a spec rather than promised in a comment, because the containment is the whole claim.
+    # @intent: { entity: "Ingest::IdentityResolver", action: "contain a prune failure", behavior: "a raising prune costs the resolve nothing: rows resolve, the pass reports, and one warn names the failure", layer: "integration" }
     it "resolves the whole run anyway when the prune fails, and says so at warn" do
       allow(Ingest::EmbeddingCachePruner).to receive(:prune)
         .and_raise(ActiveRecord::StatementInvalid, "PG::UndefinedTable: relation does not exist")
@@ -4210,6 +4362,7 @@ RSpec.describe Ingest::IdentityResolver do
       expect(lines.grep(/could not reclaim expired cache entries/).size).to eq(1)
     end
 
+    # @intent: { entity: "Ingest::IdentityResolver", action: "order the prune after the work", behavior: "a prune failure cannot discard the identities and links the pass already wrote", layer: "integration" }
     it "does not let a prune failure discard what the pass already resolved" do
       # The ordering half of the containment. The prune runs after both work lists have been walked,
       # so a raising prune cannot reach past the writes those lists made — but a prune placed ahead

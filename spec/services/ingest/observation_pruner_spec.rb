@@ -41,10 +41,12 @@ RSpec.describe Ingest::ObservationPruner do
     # retention below that depth is a shipping panel rendering blanks — and a retention EQUAL to it
     # empties that window's last point the instant one more run lands, which is the normal state of
     # a busy branch rather than an edge case.
+    # @intent: { entity: "Ingest::ObservationPruner", action: "retain branch runs", behavior: "the retention constant exceeds the deepest reader window (TRAJECTORY_LIMIT), so a pruned branch still populates every shipping comparison", layer: "unit" }
     it "retains strictly more runs than the deepest reader reads" do
       expect(SpecObservation::BRANCH_RETENTION_RUNS).to be > Repository::TRAJECTORY_LIMIT
     end
 
+    # @intent: { entity: "Ingest::ObservationPruner", action: "prune under a stated ceiling", behavior: "batch size and batches-per-ingest constants are declared positive, bounding one ingest invocation independently of backlog size", layer: "unit" }
     it "bounds one POST's deletes by a stated ceiling rather than by the size of the backlog" do
       expect(described_class::DELETE_BATCH_SIZE).to be_positive
       expect(described_class::MAX_BATCHES_PER_INGEST).to be_positive
@@ -54,6 +56,7 @@ RSpec.describe Ingest::ObservationPruner do
   describe "the window it keeps" do
     before { stub_const("SpecObservation::BRANCH_RETENTION_RUNS", 3) }
 
+    # @intent: { entity: "Ingest::ObservationPruner", action: "prune a branch window", behavior: "observations on the R most recent runs survive and everything older on that branch is emptied", layer: "integration" }
     it "keeps the R most recent runs of the branch and empties everything older" do
       runs = history(branch: "main", count: 5)
 
@@ -65,6 +68,7 @@ RSpec.describe Ingest::ObservationPruner do
     # The run's own row and both of its counters are a function of `test_run_shards`, not of these
     # rows, so pruning a run's observations must leave the suite-size history it feeds completely
     # intact — a pruned run is a point on the growth chart exactly as it was.
+    # @intent: { entity: "Ingest::ObservationPruner", action: "prune without touching run metadata", behavior: "pruned runs keep their TestRun rows and both suite-size counters, so growth-chart history is a function of shards alone", layer: "integration" }
     it "leaves the pruned runs' rows and both counters untouched" do
       runs = history(branch: "main", count: 5)
       oldest = runs.first
@@ -76,6 +80,7 @@ RSpec.describe Ingest::ObservationPruner do
       expect(oldest.branch).to eq("main")
     end
 
+    # @intent: { entity: "Ingest::ObservationPruner", action: "prune an under-filled branch", behavior: "a branch with fewer than R runs loses no observations at all", layer: "integration" }
     it "does nothing at all on a branch that has run fewer than R times" do
       runs = history(branch: "main", count: 3)
 
@@ -84,6 +89,7 @@ RSpec.describe Ingest::ObservationPruner do
 
     # The boundary is the Nth run, and the Nth run is KEPT — an off-by-one here is a whole run of
     # history deleted a run early, invisibly.
+    # @intent: { entity: "Ingest::ObservationPruner", action: "prune at the boundary", behavior: "the Nth run itself is kept and only the run behind it is emptied, pinning the off-by-one", layer: "integration" }
     it "keeps the boundary run itself and deletes the one behind it" do
       runs = history(branch: "main", count: 4)
 
@@ -100,6 +106,7 @@ RSpec.describe Ingest::ObservationPruner do
   describe "branch keying" do
     before { stub_const("SpecObservation::BRANCH_RETENTION_RUNS", 3) }
 
+    # @intent: { entity: "Ingest::ObservationPruner", action: "prune main among interleaved feature runs", behavior: "retention is keyed per branch, so main keeps all its runs even when newer feature runs dominate recent history", layer: "integration" }
     it "retains every one of main's R runs though R+5 feature runs are interleaved among them" do
       start = 100.days.ago
       main = (0...3).map { |i| run_with_observation(branch: "main", at: start + (i * 10).minutes) }
@@ -129,6 +136,7 @@ RSpec.describe Ingest::ObservationPruner do
     # a branch that stops receiving runs is now drained by the ingests still arriving on the
     # repository's live branches. What stays true is the sentence this example actually asserts —
     # `.prune` alone reaches one bucket. See spec/services/ingest/quiet_bucket_pruner_spec.rb.
+    # @intent: { entity: "Ingest::ObservationPruner", action: "prune one bucket", behavior: "an invocation reaches only the branch it was handed; other branches of the same repository, even expired, are untouched", layer: "integration" }
     it "bounds the branch the run is on and no other" do
       main = history(branch: "main", count: 5)
       feature = history(branch: "feature/x", count: 5, from: 90.days.ago)
@@ -142,6 +150,7 @@ RSpec.describe Ingest::ObservationPruner do
     # "The anonymous runs of every machine are not one branch" — so a laptop's runs are their own
     # bucket, and the bucket has two edges: it is not evicted BY a named branch, and it does not
     # evict one.
+    # @intent: { entity: "Ingest::ObservationPruner", action: "prune the branch-less bucket", behavior: "branch-less runs form their own bucket that neither evicts a named branch nor is evicted by one", layer: "integration" }
     it "gives branch-less runs their own bucket, in both directions" do
       anonymous = history(branch: nil, count: 5)
       main = history(branch: "main", count: 5, from: 90.days.ago)
@@ -152,6 +161,7 @@ RSpec.describe Ingest::ObservationPruner do
       expect(observation_counts(main)).to eq([1, 1, 1, 1, 1])
     end
 
+    # @intent: { entity: "Ingest::ObservationPruner", action: "prune branch-less runs per repository", behavior: "branch-less buckets are scoped by repository, so pruning mine never pools or drains another repository's anonymous runs", layer: "integration" }
     it "does not pool one repository's branch-less runs with another's" do
       other = create_repository(user: create_user(github_uid: "2002", github_handle: "other"),
                                 github_full_name: "acme/other-service")
@@ -174,6 +184,7 @@ RSpec.describe Ingest::ObservationPruner do
   describe "what the surfaces still read afterwards" do
     before { stub_const("SpecObservation::BRANCH_RETENTION_RUNS", 3) }
 
+    # @intent: { entity: "Ingest::ObservationPruner", action: "prune then read surfaces", behavior: "after a deep prune the previous-run comparison still resolves both sides with comparable growth rows", layer: "integration" }
     it "still answers a previous-run comparison with rows on both sides" do
       runs = history(branch: "main", count: 12)
       latest = runs.last
@@ -193,6 +204,7 @@ RSpec.describe Ingest::ObservationPruner do
   # actually populated after a prune". Runs the REAL constants rather than a stub, because the
   # thing under test is the relationship between the two numbers.
   describe "the depth a shipping reader still finds" do
+    # @intent: { entity: "Ingest::ObservationPruner", action: "prune at real retention depth", behavior: "with shipped constants, every run of a TRAJECTORY_LIMIT-deep window retains its observations while older runs empty", layer: "integration" }
     it "leaves observations on every run of a TRAJECTORY_LIMIT-deep branch window" do
       runs = history(branch: "main", count: SpecObservation::BRANCH_RETENTION_RUNS + 1)
 
@@ -213,6 +225,7 @@ RSpec.describe Ingest::ObservationPruner do
       stub_const("#{described_class}::MAX_BATCHES_PER_INGEST", 2)
     end
 
+    # @intent: { entity: "Ingest::ObservationPruner", action: "prune under a stubbed ceiling", behavior: "one invocation deletes at most batch size times max batches, leaving the rest of the backlog for later passes", layer: "integration" }
     it "deletes at most DELETE_BATCH_SIZE * MAX_BATCHES_PER_INGEST rows in one invocation" do
       runs = history(branch: "main", count: 5, rows: 3)
 
@@ -220,6 +233,7 @@ RSpec.describe Ingest::ObservationPruner do
       expect(SpecObservation.where(test_run_id: runs.first(3)).count).to eq(5)
     end
 
+    # @intent: { entity: "Ingest::ObservationPruner", action: "prune repeatedly", behavior: "successive invocations converge the branch onto the retention rule instead of attempting the whole backlog at once", layer: "integration" }
     it "converges on the rule over successive invocations" do
       runs = history(branch: "main", count: 5, rows: 3)
 
@@ -230,18 +244,21 @@ RSpec.describe Ingest::ObservationPruner do
 
     # Pinned as an absolute, not as a comparison against a baseline: one boundary lookup plus at
     # most `MAX_BATCHES_PER_INGEST` deletes, and nothing that scales with the backlog.
+    # @intent: { entity: "Ingest::ObservationPruner", action: "prune a huge backlog", behavior: "cost stays at one boundary lookup plus at most max-batches deletes regardless of backlog size", layer: "integration" }
     it "issues one boundary lookup and at most MAX_BATCHES_PER_INGEST deletes, on a huge backlog" do
       runs = history(branch: "main", count: 8, rows: 3)
 
       expect(count_queries { described_class.prune(runs.last) }).to eq(3)
     end
 
+    # @intent: { entity: "Ingest::ObservationPruner", action: "stop on an empty batch", behavior: "the loop stops at the first short batch rather than spending the whole ceiling on no-op deletes", layer: "integration" }
     it "stops early rather than spending the ceiling on statements that delete nothing" do
       runs = history(branch: "main", count: 3, rows: 1)
 
       expect(count_queries { described_class.prune(runs.last) }).to eq(2)
     end
 
+    # @intent: { entity: "Ingest::ObservationPruner", action: "prune an unfilled window", behavior: "a branch that has not yet filled its window costs exactly one query and deletes nothing", layer: "integration" }
     it "costs one query on a branch that has not yet filled its window" do
       runs = history(branch: "main", count: 1)
 

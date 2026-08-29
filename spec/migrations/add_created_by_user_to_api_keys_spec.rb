@@ -21,6 +21,7 @@ RSpec.describe AddCreatedByUserToApiKeys do
     repository.api_keys.create!(name: name)
   end
 
+  # @intent: { entity: "AddCreatedByUserToApiKeys", action: "backfill creators from repository owners", behavior: "a key minted before the column existed ends up attributed to the user who owns its repository", layer: "integration" }
   it "attributes a pre-existing key to its repository's owner" do
     repository = create_repository
     api_key = unattributed_key(repository)
@@ -30,6 +31,7 @@ RSpec.describe AddCreatedByUserToApiKeys do
     expect(api_key.reload.created_by_user).to eq(repository.user)
   end
 
+  # @intent: { entity: "AddCreatedByUserToApiKeys", action: "backfill creators from repository owners", behavior: "every legacy key across multiple owners gets attributed, each to its own repository owner rather than an arbitrary one", layer: "integration" }
   it "leaves no key unattributed" do
     owner = create_user
     other_owner = create_user(github_uid: "2002", github_handle: "hubot")
@@ -47,6 +49,7 @@ RSpec.describe AddCreatedByUserToApiKeys do
     expect(theirs.api_keys.pluck(:created_by_user_id).uniq).to eq([other_owner.id])
   end
 
+  # @intent: { entity: "AddCreatedByUserToApiKeys", action: "backfill creators from repository owners", behavior: "rows that already carry a creator keep the recorded minter even though the repository owner differs", layer: "integration" }
   it "does not overwrite a creator that is already recorded" do
     minter = create_user(github_uid: "3003", github_handle: "collaborator")
     repository = create_repository

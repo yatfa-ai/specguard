@@ -16,6 +16,7 @@ RSpec.describe GithubOrganizations do
   end
 
   describe ".from" do
+    # @intent: { entity: "GithubOrganizations", action: "group repos under a login", behavior: "repositories sharing an owner login form one entry exposing exactly those repos", layer: "unit" }
     it "groups an organization's repositories under its login" do
       orgs = described_class.from(listing([github_repo("acme/api"), github_repo("acme/web")]))
 
@@ -30,6 +31,7 @@ RSpec.describe GithubOrganizations do
     #
     # `admin?` is the sole gate and always was. Owner type now decides only what a card is
     # LABELLED, which is what `#organization?` and `#personal?` below are for.
+    # @intent: { entity: "GithubOrganizations", action: "group a personal namespace alike", behavior: "a User-owned namespace produces a group counted and offered identically to an organization one", layer: "unit" }
     it "groups a personal namespace exactly as it groups an organization" do
       orgs = described_class.from(listing([github_repo("acme/api"),
                                            github_repo("octocat/dotfiles", owner_type: "User")]))
@@ -40,6 +42,7 @@ RSpec.describe GithubOrganizations do
 
     # Criterion 1: the case the ticket opens with. A listing that is ENTIRELY personal used to
     # produce an empty chooser and the "not for you" empty state; it now produces a real one.
+    # @intent: { entity: "GithubOrganizations", action: "offer an all-personal listing", behavior: "a listing containing only personal repositories still yields a group whose administered repos are offered", layer: "unit" }
     it "offers a listing that is entirely personal" do
       orgs = described_class.from(listing([github_repo("octocat/dotfiles", owner_type: "User"),
                                            github_repo("octocat/blog", owner_type: "User")]))
@@ -50,6 +53,7 @@ RSpec.describe GithubOrganizations do
 
     # Criterion 3: one order over both kinds, by downcased login — a personal namespace does not
     # sort into a section of its own, because it is not a different kind of choice.
+    # @intent: { entity: "GithubOrganizations", action: "order namespaces together", behavior: "groups sort by downcased login regardless of owner type so mixed kinds interleave in one list", layer: "unit" }
     it "orders personal namespaces and organizations together, alphabetically" do
       orgs = described_class.from(listing([github_repo("Zebra/x"),
                                            github_repo("octocat/dotfiles", owner_type: "User"),
@@ -62,6 +66,7 @@ RSpec.describe GithubOrganizations do
 
     # Criterion 4: the two counts are per NAMESPACE and computed identically for both kinds —
     # `withheld_count` reads `admin?`, which never asked what sort of owner it was looking at.
+    # @intent: { entity: "GithubOrganizations", action: "count within personal namespaces", behavior: "administered and withheld counts are computed per namespace for User owners exactly as for organizations", layer: "unit" }
     it "counts what may be registered and what is withheld in a personal namespace too" do
       orgs = described_class.from(listing([
                                             github_repo("octocat/dotfiles", owner_type: "User"),
@@ -76,6 +81,7 @@ RSpec.describe GithubOrganizations do
     # Criterion 6: the negative control. Widening the chooser widened what is DISPLAYED and nothing
     # about what is permitted — a personal repository the viewer does not administer is still not
     # offered, exactly as an organization's is not.
+    # @intent: { entity: "GithubOrganizations", action: "hide an admin-less personal namespace", behavior: "a User-owned namespace where the viewer administers nothing produces no group at all", layer: "unit" }
     it "still leaves out a personal namespace the viewer administers nothing in" do
       orgs = described_class.from(listing([github_repo("acme/api"),
                                            github_repo("octocat/theirs", owner_type: "User",
@@ -93,6 +99,7 @@ RSpec.describe GithubOrganizations do
     # one, because `personal?` is a positive claim about what GitHub said and not the negation of
     # `organization?`. Withholding rather than inventing, the doctrine `github_api.rb:145-149`
     # states for that default, and the reason `Org` has two predicates instead of one.
+    # @intent: { entity: "GithubOrganizations", action: "offer an unreported owner type", behavior: "a repo with a nil owner type is offered and its group is marked neither organization? nor personal?", layer: "unit" }
     it "offers a repository whose owner type GitHub did not report, and marks it as neither" do
       unknown = GithubApi::Repo.new(full_name: "mystery/repo", private: false, archived: false,
                                     admin: true)
@@ -106,6 +113,7 @@ RSpec.describe GithubOrganizations do
     end
 
     # And the gate still applies to it: an unreported owner type is not a way around `admin?`.
+    # @intent: { entity: "GithubOrganizations", action: "hide an admin-less unknown namespace", behavior: "a nil-owner-type repo the viewer does not administer is excluded from the groups entirely", layer: "unit" }
     it "leaves out an unreported namespace the viewer administers nothing in" do
       unknown = GithubApi::Repo.new(full_name: "mystery/repo", private: false, archived: false,
                                     admin: false)
@@ -115,6 +123,7 @@ RSpec.describe GithubOrganizations do
 
     # The two counts a card is built from, and the reason `Org` holds the unfiltered set: the badge
     # is what may be selected, and the sentence under it is why the organization is bigger than that.
+    # @intent: { entity: "GithubOrganizations", action: "count per organization", behavior: "each group reports how many of its repos are administered and how many are withheld", layer: "unit" }
     it "counts what may be registered and what is being withheld, per organization" do
       orgs = described_class.from(listing([github_repo("acme/api"), github_repo("acme/legacy", admin: false),
                                            github_repo("beta/thing")]))
@@ -128,6 +137,7 @@ RSpec.describe GithubOrganizations do
     # An organization the viewer administers nothing in is not offered at all — a card leading to an
     # empty picker is a click that can only disappoint. It is the ONE case where something is hidden
     # rather than counted, because there is no card left to hang the count on.
+    # @intent: { entity: "GithubOrganizations", action: "hide an admin-less organization", behavior: "an organization with zero administered repositories yields no group at all", layer: "unit" }
     it "leaves out an organization the viewer administers nothing in" do
       orgs = described_class.from(listing([github_repo("acme/api"),
                                            github_repo("beta/thing", admin: false)]))
@@ -137,6 +147,7 @@ RSpec.describe GithubOrganizations do
 
     # `administered` re-sorts case-insensitively where `repos` does not, because it is the picker's
     # own order rather than the listing's.
+    # @intent: { entity: "GithubOrganizations", action: "sort the administered subset", behavior: "the administered picker order is case-insensitive by name while the listing order is left alone", layer: "unit" }
     it "offers an organization's administered repositories alphabetically, case-insensitively" do
       org = described_class.from(listing([github_repo("acme/zebra"), github_repo("acme/Apple"),
                                           github_repo("acme/hidden", admin: false)])).first
@@ -145,6 +156,7 @@ RSpec.describe GithubOrganizations do
       expect(org.withheld_count).to eq(1)
     end
 
+    # @intent: { entity: "GithubOrganizations", action: "sort the groups", behavior: "organizations are ordered case-insensitively by login", layer: "unit" }
     it "orders organizations alphabetically, case-insensitively" do
       orgs = described_class.from(listing([github_repo("Zebra/x"), github_repo("acme/y"),
                                            github_repo("Beta/z")]))
@@ -156,12 +168,14 @@ RSpec.describe GithubOrganizations do
     # listing sort it case-insensitively by name — `GithubApi#repositories` and
     # `InstallationRepositories.sources` — so sorting again here would be a second place for the
     # rule to live and a second place for it to drift. Grouping preserves the order it was given.
+    # @intent: { entity: "GithubOrganizations", action: "preserve listing order", behavior: "repos keeps the order the listing supplied instead of re-sorting it locally", layer: "unit" }
     it "keeps an organization's repositories in the order the listing supplied" do
       org = described_class.from(listing([github_repo("acme/Apple"), github_repo("acme/zebra")])).first
 
       expect(org.repos.map(&:full_name)).to eq(%w[acme/Apple acme/zebra])
     end
 
+    # @intent: { entity: "GithubOrganizations", action: "derive from a nil listing", behavior: "a nil listing produces an empty list rather than raising", layer: "unit" }
     it "answers with nothing at all when there is no listing to derive from" do
       expect(described_class.from(nil)).to eq([])
     end
@@ -170,18 +184,21 @@ RSpec.describe GithubOrganizations do
   describe ".find" do
     let(:repos) { [github_repo("acme/api"), github_repo("beta/x")] }
 
+    # @intent: { entity: "GithubOrganizations", action: "find by login", behavior: "the group whose login matches the query is returned", layer: "unit" }
     it "finds an organization by login" do
       expect(described_class.find(listing(repos), "acme").login).to eq("acme")
     end
 
     # GitHub logins are case-insensitive, and this value arrives from a query string that a person
     # can type and a bookmark can carry a differently-cased copy of.
+    # @intent: { entity: "GithubOrganizations", action: "find case-insensitively", behavior: "a differently-cased login still resolves to the same group", layer: "unit" }
     it "finds an organization whatever the case of the login asked for" do
       expect(described_class.find(listing(repos), "ACME").login).to eq("acme")
     end
 
     # A stale bookmark and a renamed organization are ordinary ways to arrive here. The caller
     # renders the chooser again; nothing raises.
+    # @intent: { entity: "GithubOrganizations", action: "miss on an unknown login", behavior: "an unknown, empty or nil login resolves to nil without raising", layer: "unit" }
     it "answers nil for an organization this listing cannot register from" do
       expect(described_class.find(listing(repos), "strangers")).to be_nil
       expect(described_class.find(listing(repos), "")).to be_nil
@@ -191,6 +208,7 @@ RSpec.describe GithubOrganizations do
     # Criterion 7. `.find` reads whatever `.from` offers, so widening the chooser widened this too
     # — the second step of the flow resolves a personal login on the same terms, and with the same
     # case-insensitivity, or step one would offer a card that step two could not open.
+    # @intent: { entity: "GithubOrganizations", action: "find a personal namespace", behavior: "a User-owned namespace is resolvable by login with the same case-insensitivity as organizations", layer: "unit" }
     it "finds a personal namespace by login, whatever its case" do
       personal = listing([github_repo("octocat/dotfiles", owner_type: "User")])
 
@@ -200,6 +218,7 @@ RSpec.describe GithubOrganizations do
 
     # And the gate holds on this path too: a namespace whose repositories the viewer does not
     # administer is not resolvable by typing its login into the query string.
+    # @intent: { entity: "GithubOrganizations", action: "miss on an admin-less personal namespace", behavior: "a personal namespace the viewer administers nothing in cannot be resolved by typing its login", layer: "unit" }
     it "answers nil for a personal namespace the viewer administers nothing in" do
       personal = listing([github_repo("octocat/theirs", owner_type: "User", admin: false)])
 
