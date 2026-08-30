@@ -87,6 +87,7 @@ RSpec.describe "Repository slowest tests", type: :request do
   end
 
   describe "a run whose examples were timed" do
+    # @intent: {"entity": "GET /repositories/:id", "action": "rank slowest examples", "behavior": "three timed examples render as rows ordered 9.50s, 3.00s then 0.42s, each with its duration and its spec/models/invoice_spec.rb line coordinate", "layer": "request"}
     it "ranks them slowest first, with the duration each one took" do
       repository = create_repository(user: @user)
       ingest(repository, [example_spec(name: "Invoice finalize locks the line items",
@@ -109,6 +110,7 @@ RSpec.describe "Repository slowest tests", type: :request do
 
     # Bounded by `SpecObservation::SLOWEST_LIMIT`: this is a list of the worst offenders, not a
     # rendering of the suite.
+    # @intent: {"entity": "GET /repositories/:id", "action": "cap slowest list", "behavior": "a 40-example run renders exactly the ten worst rows, from example 40 at the head down to example 31", "layer": "request"}
     it "lists no more than the ten slowest, however many the run recorded" do
       repository = create_repository(user: @user)
       specs = (1..40).map { |i| example_spec(name: "example #{i}", duration: i.to_f, line_number: i) }
@@ -124,6 +126,7 @@ RSpec.describe "Repository slowest tests", type: :request do
     # `name` is nullable — the client sends `nil` for an example it could not describe, and
     # `Ingest::ObservationRecorder` stores that faithfully. A blank cell here is a row the reader
     # can neither identify nor go and find.
+    # @intent: {"entity": "GET /repositories/:id", "action": "label unnamed example", "behavior": "an example recorded with no name is labelled spec/models/ledger_spec.rb:88 and the row wears no second location line", "layer": "request"}
     it "falls back to the example's file and line where the client sent no name" do
       repository = create_repository(user: @user)
       ingest(repository, [example_spec(name: nil, duration: 4.0, line_number: 88,
@@ -136,6 +139,7 @@ RSpec.describe "Repository slowest tests", type: :request do
       expect(rows.first[:location]).to be_nil
     end
 
+    # @intent: {"entity": "GET /repositories/:id", "action": "state ranking coverage", "behavior": "with both recorded examples timed the basis line reads that every one of the 2 examples this run recorded reported a duration", "layer": "request"}
     it "says the ranking covers everything, where every recorded example reported a duration" do
       repository = create_repository(user: @user)
       ingest(repository, [example_spec(name: "one", duration: 1.0, line_number: 1),
@@ -192,6 +196,7 @@ RSpec.describe "Repository slowest tests", type: :request do
               .map { |row| row.text.gsub(/\s+/, " ").strip }
     end
 
+    # @intent: {"entity": "GET /repositories/:id", "action": "link file drill-down", "behavior": "the first row's run-in link href carries spec_file=spec/models/order_spec.rb and the #spec-file-examples fragment", "layer": "request"}
     it "links each row's file into the spec-file drill-down" do
       get repository_path(two_file_run)
 
@@ -202,6 +207,7 @@ RSpec.describe "Repository slowest tests", type: :request do
     end
 
     # The definition site is not replaced by the file that ran the example; the cell states both.
+    # @intent: {"entity": "GET /repositories/:id", "action": "state definition site", "behavior": "the top row names both spec/models/order_spec.rb:1 as its definition site and spec/models/order_spec.rb as the file it ran in", "layer": "request"}
     it "still names where the example is defined, beside the file that ran it" do
       get repository_path(two_file_run)
 
@@ -211,6 +217,7 @@ RSpec.describe "Repository slowest tests", type: :request do
 
     # A list of choices with one of them taken — the same mark the sibling listings carry, so a
     # reader arriving back at this ranking is told which row they are already looking at.
+    # @intent: {"entity": "GET /repositories/:id", "action": "mark open file rows", "behavior": "with spec_file=spec/models/refund_spec.rb open, both refund rows carry aria-current=true while the order_spec row carries none", "layer": "request"}
     it "marks the rows whose file is already open, and only those" do
       get repository_path(two_file_run, spec_file: refund_spec)
 
@@ -222,6 +229,7 @@ RSpec.describe "Repository slowest tests", type: :request do
     # is the INCLUDING file and `file_path` the definition site; they differ exactly here, so the
     # path this cell printed before is a `spec/support/` file and the file that opens is one the cell
     # never named.
+    # @intent: {"entity": "GET /repositories/:id", "action": "link including file", "behavior": "a shared example defined at spec/support/shared_examples.rb:7 but run from spec/models/order_spec.rb links to spec_file=order_spec and the panel never prints order_spec:7", "layer": "request"}
     it "links the file that RAN a shared example group rather than the file defining it" do
       repository = create_repository(user: @user)
       ingest(repository, [example_spec(name: "behaves like an auditable record", duration: 9.0,
@@ -243,6 +251,7 @@ RSpec.describe "Repository slowest tests", type: :request do
     # it by falling back to `file_path`, so neither the producer nor the fixture can write a nil —
     # which is exactly why the column is set directly here. A defensive branch nothing exercises is a
     # branch that gets deleted as dead, and the cell it guards would otherwise link to nowhere.
+    # @intent: {"entity": "GET /repositories/:id", "action": "handle missing including file", "behavior": "a row with spec_file_path set to nil reads not reported with no run-in link, keeps its order_spec:1 definition link to the feedfacecafe0001 blob, and the cell holds exactly 2 links", "layer": "request"}
     it "says so rather than linking nowhere where a row has no including file" do
       repository = two_file_run
       SpecObservation.where(line_number: 1).update_all(spec_file_path: nil)
@@ -267,6 +276,7 @@ RSpec.describe "Repository slowest tests", type: :request do
     # reader opened separately — the carry-through rule
     # spec/requests/repository_drill_down_carry_spec.rb owns, asserted at this link end-to-end:
     # the href carries the three other asks AND the page it lands on still has all three open.
+    # @intent: {"entity": "GET /repositories/:id", "action": "carry asks through", "behavior": "the drill-in href carries branch=main, spec_directory and repeated_description params, and the page it opens still renders the spec-file, spec-directory and repeated-description panels", "layer": "request"}
     it "carries every other open ask through the link, and through following it" do
       description = "Order refuses a negative quantity"
       get repository_path(two_file_run, branch: "main", spec_directory: "spec/models",
@@ -289,6 +299,7 @@ RSpec.describe "Repository slowest tests", type: :request do
     # Two entry points, one destination. Asserting the href alone would pass on a link that reached a
     # panel narrowed differently from the one the by-file rollup opens; this follows both and
     # compares what the reader actually gets.
+    # @intent: {"entity": "GET /repositories/:id", "action": "match rollup panel", "behavior": "following the slowest-panel row link and the by-file rollup link yields identical one-row spec-file panels", "layer": "request"}
     it "opens the same file panel the by-file rollup opens" do
       get repository_path(two_file_run)
 
@@ -346,6 +357,7 @@ RSpec.describe "Repository slowest tests", type: :request do
 
     def blob(sha, path, line) = "https://github.com/acme/billing-service/blob/#{sha}/#{path}#L#{line}"
 
+    # @intent: {"entity": "GET /repositories/:id", "action": "link coordinate to github", "behavior": "each ranked row links its coordinate to github.com/acme/billing-service/blob/feedfacecafe0001 with #L30 and #L12 anchors, the printed coordinate as the link text", "layer": "request"}
     it "links each ranked row's coordinate to that line on GitHub" do
       repository = create_repository(user: @user)
       ingest(repository, [example_spec(name: "Order refuses a negative quantity", duration: 9.0,
@@ -367,6 +379,7 @@ RSpec.describe "Repository slowest tests", type: :request do
     # site entirely. Linking only the location line under a name would leave inert exactly the rows
     # the fallback exists for — the ones this panel's own comment calls a row the reader "can
     # neither identify nor go and find".
+    # @intent: {"entity": "GET /repositories/:id", "action": "link coordinate label", "behavior": "a nameless row labelled spec/models/ledger_spec.rb:88 links that label to the feedfacecafe0001 blob line 88 with no second location and exactly 2 links in the cell", "layer": "request"}
     it "links the coordinate on a row that wears it as its name" do
       repository = create_repository(user: @user)
       ingest(repository, [example_spec(name: nil, duration: 4.0, line_number: 88,
@@ -386,6 +399,7 @@ RSpec.describe "Repository slowest tests", type: :request do
     # `line_number` and refuses `spec_file_path` because for a shared example group the two halves
     # come from different files; the link inherits that constraint rather than reaching for the
     # column the row is drilled in by. Line 7 of `order_spec.rb` is not this example.
+    # @intent: {"entity": "GET /repositories/:id", "action": "anchor definition site", "behavior": "the shared-group row's definition link targets blob feedfacecafe0001 spec/support/shared_examples.rb#L7 and never order_spec, while the drill-in beside it still carries spec_file=order_spec", "layer": "request"}
     it "builds the link from the file the example is DEFINED in, not the file that ran it" do
       repository = create_repository(user: @user)
       ingest(repository, [example_spec(name: "behaves like an auditable record", duration: 9.0,
@@ -406,6 +420,7 @@ RSpec.describe "Repository slowest tests", type: :request do
     # last known path rather than an identity (SPGD-114): the coordinate is accurate against the
     # tree the run that recorded it was taken from, so a page anchored on an older run via
     # `?commit_sha=` must link into THAT run's tree.
+    # @intent: {"entity": "GET /repositories/:id", "action": "pin link to anchor", "behavior": "with ?commit_sha=aaaa1111bbbb2222 the definition link uses blob aaaa1111bbbb2222/order_spec#L30 and never the newer cccc3333dddd4444 sha", "layer": "request"}
     it "pins the link to the run the page is anchored on rather than the newest one" do
       repository = create_repository(user: @user)
       ingest(repository, [example_spec(name: "Order refuses a negative quantity", duration: 9.0,
@@ -422,6 +437,7 @@ RSpec.describe "Repository slowest tests", type: :request do
     end
 
     # The pairing that stops the assertion above from passing on a page that simply had one run.
+    # @intent: {"entity": "GET /repositories/:id", "action": "link newest run sha", "behavior": "unanchored, the definition link points at the newest run's blob cccc3333dddd4444/order_spec#L30", "layer": "request"}
     it "links at the newest run's sha when no anchor was asked for" do
       repository = create_repository(user: @user)
       ingest(repository, [example_spec(name: "Order refuses a negative quantity", duration: 9.0,
@@ -439,6 +455,7 @@ RSpec.describe "Repository slowest tests", type: :request do
     # A NEW TAB, the convention the "Unannotated tests here" panel introduced deliberately for the
     # app's first link that leaves it. `rel` is written out rather than left to the browsers that
     # imply it. The drill-in beside it stays in the tab, which is why this reads the two apart.
+    # @intent: {"entity": "GET /repositories/:id", "action": "open in new tab", "behavior": "the definition link carries target=_blank with rel=noopener noreferrer while the run-in drill-in link has no target", "layer": "request"}
     it "opens the file in a new tab, leaving the ranking where the reader had it" do
       repository = create_repository(user: @user)
       ingest(repository, [example_spec(name: "Order refuses a negative quantity", duration: 9.0,
@@ -465,6 +482,7 @@ RSpec.describe "Repository slowest tests", type: :request do
     # Two SINGLE-RUN repositories rather than two runs of one, on the precedent that budget sets:
     # a second run puts the cross-run comparison panel and the run-anchor lookup on the page, so
     # the two pages would differ by more than the row count.
+    # @intent: {"entity": "GET /repositories/:id", "action": "hold link query budget", "behavior": "pages rendering one linked row and ten linked rows issue the same total query count, with all ten distinct definition hrefs rendered", "layer": "request"}
     it "costs the same number of queries for ten linked rows as for one" do
       one_row = create_repository(user: @user, github_full_name: "acme/small-suite")
       ingest(one_row, [example_spec(name: "only", duration: 1.0, line_number: 1)])
@@ -535,6 +553,7 @@ RSpec.describe "Repository slowest tests", type: :request do
     end
 
     # ⭐ CRITERION 1 — one click from the ranking to the series.
+    # @intent: {"entity": "GET /repositories/:id", "action": "link name to history", "behavior": "the first row's name link href carries unstable_test=Ledger rebuild walks every entry and the #unstable-test-runs fragment", "layer": "request"}
     it "links each named row's test to its own per-run history" do
       get repository_path(two_run_repository)
 
@@ -546,6 +565,7 @@ RSpec.describe "Repository slowest tests", type: :request do
 
     # The link TEXT is what the reader was already looking at, so following it is not a jump to
     # something they were not offered.
+    # @intent: {"entity": "GET /repositories/:id", "action": "link printed label", "behavior": "the two name links read exactly Ledger rebuild walks every entry and Invoice finalize locks the line items", "layer": "request"}
     it "links the label the panel already printed" do
       get repository_path(two_run_repository)
 
@@ -555,6 +575,7 @@ RSpec.describe "Repository slowest tests", type: :request do
     # ⭐ CRITERION 1, followed rather than asserted at the href: the reader arrives at a panel that
     # actually reports this test's Duration series, and it is THIS test's — the second test on the
     # fixture is timed differently, so a link that keyed on the wrong row would print its figures.
+    # @intent: {"entity": "GET /repositories/:id", "action": "open duration series", "behavior": "following the name link renders the history panel naming that test with its Duration series 3.00s then 9.50s", "layer": "request"}
     it "opens a panel reporting that test's duration run by run" do
       get repository_path(two_run_repository)
       href = name_link(panel.first("tbody tr"))[:href]
@@ -569,6 +590,7 @@ RSpec.describe "Repository slowest tests", type: :request do
     # and every test on THIS panel is ranked by wall clock with no reference to stability — so the
     # ordinary case here is a test the "Tests whose outcome changed" ranking does not list at all.
     # A destination that silently required instability would fail exactly this row and no other.
+    # @intent: {"entity": "GET /repositories/:id", "action": "open stable test history", "behavior": "for a test the unstable-tests ranking lists nowhere (#unstable-tests-none), ?unstable_test= still returns 200 with its 3.00s and 9.50s duration rows", "layer": "request"}
     it "opens the history of a test the flakiness ranking never lists" do
       repository = two_run_repository
 
@@ -595,6 +617,7 @@ RSpec.describe "Repository slowest tests", type: :request do
     # ⭐ CRITERION 4 — a list of choices with one of them taken, and the destination is a long way
     # down the page. Asserted across BOTH rows: "the open test is marked" cannot pass by marking
     # every row, and `aria-current` is absent rather than "false" on the others.
+    # @intent: {"entity": "GET /repositories/:id", "action": "mark open test row", "behavior": "with ?unstable_test= set the open test's row link carries aria-current=true and the other row's carries none", "layer": "request"}
     it "marks the row whose test is currently open" do
       get repository_path(two_run_repository, unstable_test: slow_test)
 
@@ -606,6 +629,7 @@ RSpec.describe "Repository slowest tests", type: :request do
     # and its label already IS the coordinate, so it keeps exactly the one link it had: the
     # definition site, in a new tab. A change that linked `#label` blindly would send this row's
     # coordinate to a destination that cannot resolve it.
+    # @intent: {"entity": "GET /repositories/:id", "action": "skip nameless history link", "behavior": "a nameless row keeps exactly 2 links — the feedfacecafe0001 blob anchor at ledger_spec.rb line 88 in a new tab and the drill-in — and no href carries unstable_test=", "layer": "request"}
     it "leaves a nameless row's coordinate linked to its definition site and nothing else" do
       repository = create_repository(user: @user)
       ingest(repository, [example_spec(name: nil, duration: 4.0, line_number: 88,
@@ -628,6 +652,7 @@ RSpec.describe "Repository slowest tests", type: :request do
     # ⭐ CRITERION 3 — opening a test from here closes nothing the reader opened separately. The
     # carry-through rule spec/requests/repository_drill_down_carry_spec.rb owns, asserted at this
     # link end-to-end: the href carries the other asks AND the page it lands on still has them open.
+    # @intent: {"entity": "GET /repositories/:id", "action": "carry asks through history", "behavior": "the name link href carries branch=main, spec_file and spec_directory, and the page it opens renders the history, spec-file and spec-directory panels", "layer": "request"}
     it "carries every other open ask through the link, and through following it" do
       repository = two_run_repository
       get repository_path(repository, branch: "main", spec_file: "spec/models/invoice_spec.rb",
@@ -658,6 +683,7 @@ RSpec.describe "Repository slowest tests", type: :request do
     # the wrong place is not a weaker assertion, it is a different one.
     #
     # The fragment is therefore READ rather than discarded, and it is the subject here.
+    # @intent: {"entity": "GET /repositories/:id", "action": "anchor close back", "behavior": "Close test from a slowest-tests origin targets the #slowest-examples fragment, sheds unstable_test_from, closes the history panel and leaves #spec-directory-files open", "layer": "request"}
     it "anchors the reader back at THIS panel when they close the test" do
       repository = two_run_repository
       get repository_path(repository, spec_directory: "spec/models")
@@ -691,6 +717,7 @@ RSpec.describe "Repository slowest tests", type: :request do
     # CONSTRUCTION, could not contain the row they came from — it is not that the row was hard to
     # find, it is that the panel is incapable of listing it. The premise is asserted rather than
     # assumed, so this cannot pass by accident on a flaky fixture.
+    # @intent: {"entity": "GET /repositories/:id", "action": "return stable test reader", "behavior": "a stable test absent from the empty flakiness ranking closes back to #slowest-examples, which lists that test as a link", "layer": "request"}
     it "returns a stable slow test's reader to a panel that actually lists it" do
       repository = two_run_repository
       get repository_path(repository)
@@ -716,6 +743,7 @@ RSpec.describe "Repository slowest tests", type: :request do
     # opened a test THERE still closes back there — this ticket adds a second origin rather than
     # moving the one that existed. Asserted from this file because it is this file's change that
     # could break it.
+    # @intent: {"entity": "GET /repositories/:id", "action": "keep ranking origin", "behavior": "a test opened from the flakiness ranking makes Close test target the #unstable-tests fragment", "layer": "request"}
     it "leaves a test opened from the flakiness ranking closing back at that ranking" do
       repository = create_repository(user: @user)
       flaky = "Session expiry sweeps the cache"
@@ -738,6 +766,7 @@ RSpec.describe "Repository slowest tests", type: :request do
     # A reader who arrived by BOOKMARK or by typing the URL named no origin, and the control falls
     # back to the anchor it always had rather than to a blank fragment. This is the path every link
     # written before the qualifier existed still takes, so it is the compatibility pin.
+    # @intent: {"entity": "GET /repositories/:id", "action": "default close origin", "behavior": "with no unstable_test_from given, Close test targets the default #unstable-tests fragment", "layer": "request"}
     it "falls back to the flakiness ranking when no origin was named" do
       get repository_path(two_run_repository, unstable_test: slow_test)
 
@@ -753,6 +782,7 @@ RSpec.describe "Repository slowest tests", type: :request do
     # The three non-String shapes a query string can parse into are pinned the same way, because
     # `include?` against the allow-list does not answer for an Array or a Parameters the way this
     # reads it.
+    # @intent: {"entity": "GET /repositories/:id", "action": "ignore bogus origins", "behavior": "for every bogus, non-panel or array/hash-shaped unstable_test_from value tried, the page answers 200 and Close test falls back to #unstable-tests without echoing the value", "layer": "request"}
     it "ignores an origin naming no panel, and every shape that is not a description" do
       repository = two_run_repository
 
@@ -786,6 +816,7 @@ RSpec.describe "Repository slowest tests", type: :request do
     #
     # The two windows are pulled apart with `?branch=`: the ranking follows the newest run whatever
     # branch it is on, while the trajectory is the branch the reader asked for.
+    # @intent: {"entity": "GET /repositories/:id", "action": "render named empty state", "behavior": "asking under ?branch=main for a test only the release branch ran returns 200 with the history panel's named empty state quoting that test", "layer": "request"}
     it "renders the named empty state for a test outside the trajectory window" do
       repository = create_repository(user: @user)
       ingest(repository, [example_spec(name: other_test, duration: 1.0, line_number: 1)],
@@ -813,6 +844,7 @@ RSpec.describe "Repository slowest tests", type: :request do
     # "costs the same number of queries at 200 examples as at 3" pins, where every one of the ten
     # is accounted for. The ELEVENTH is `SpecObservation.outcome_sequence_in`, bounded by one
     # description's rows over the window rather than by the size of the suite.
+    # @intent: {"entity": "GET /repositories/:id", "action": "price history read", "behavior": "the page with ?unstable_test= issues exactly one more spec_observations query than the same page without the ask, which still renders the test", "layer": "request"}
     it "costs nothing when no test is asked for and exactly one read when one is" do
       repository = two_run_repository
 
@@ -841,6 +873,7 @@ RSpec.describe "Repository slowest tests", type: :request do
       get repository_path(repository)
     end
 
+    # @intent: {"entity": "GET /repositories/:id", "action": "report outcomes", "behavior": "the three ranked rows print failed, pending and passed verbatim in rank order", "layer": "request"}
     it "reports each ranked example's outcome, in the word CI sent" do
       outcome_run([example_spec(name: "blew up", duration: 9.0, line_number: 1, outcome: "failed"),
                    example_spec(name: "skipped", duration: 5.0, line_number: 2, outcome: "pending"),
@@ -853,6 +886,7 @@ RSpec.describe "Repository slowest tests", type: :request do
     # `result&.status&.to_s`, so an example that never ran carries none — and a blank cell, or one
     # silently wearing a pass's colour, is "the client said nothing" made byte-identical to "this
     # test passed" at the head of a list of the suite's slowest tests.
+    # @intent: {"entity": "GET /repositories/:id", "action": "render missing outcome", "behavior": "a nil-outcome row reads not reported in the secondary text tone, distinct from the passed row's success tone", "layer": "request"}
     it "reads a row with no outcome as not-reported, and not in the colour a pass wears" do
       outcome_run([example_spec(name: "silent", duration: 9.0, line_number: 1, outcome: nil),
                    example_spec(name: "fine", duration: 1.0, line_number: 2, outcome: "passed")])
@@ -867,6 +901,7 @@ RSpec.describe "Repository slowest tests", type: :request do
       expect(passed[:outcome_class]).to include("text-app-success")
     end
 
+    # @intent: {"entity": "GET /repositories/:id", "action": "colour failure", "behavior": "a failed row's outcome span carries the text-app-error class", "layer": "request"}
     it "colours a failure as a failure rather than leaving it to be read" do
       outcome_run([example_spec(name: "blew up", duration: 9.0, line_number: 1, outcome: "failed")])
 
@@ -875,6 +910,7 @@ RSpec.describe "Repository slowest tests", type: :request do
 
     # Nothing platform-side validates this string — `Ingest::Payload` does not — so an
     # unrecognised value is echoed and left uncoloured rather than folded into a pass.
+    # @intent: {"entity": "GET /repositories/:id", "action": "echo unknown outcome", "behavior": "an aborted outcome is echoed verbatim with no success colouring on the row", "layer": "request"}
     it "echoes an outcome it does not recognise without colouring it as a pass" do
       outcome_run([example_spec(name: "odd", duration: 9.0, line_number: 1, outcome: "aborted")])
 
@@ -885,6 +921,7 @@ RSpec.describe "Repository slowest tests", type: :request do
     # One grain up: nothing on this page said whether the latest run was red, so every figure the
     # panel prints was computed off a run that may have aborted a third of the way through.
     # Counted off the rows THIS RUN wrote, never off `TestRun#total_specs_count`.
+    # @intent: {"entity": "GET /repositories/:id", "action": "count outcome totals", "behavior": "the basis line reads Every one of the 4 examples this run recorded reported an outcome with 1 failed and 1 pending", "layer": "request"}
     it "states how many of the rows it recorded reported failed and pending" do
       outcome_run([example_spec(name: "one", duration: 9.0, line_number: 1, outcome: "failed"),
                    example_spec(name: "two", duration: 5.0, line_number: 2, outcome: "pending"),
@@ -900,6 +937,7 @@ RSpec.describe "Repository slowest tests", type: :request do
     # The `0 pending` here is an HONEST zero and is printed: it sits on a run that DID report
     # outcomes, so it counts pendings rather than silence — which is the distinction the
     # no-outcomes example below turns on.
+    # @intent: {"entity": "GET /repositories/:id", "action": "word remainder", "behavior": "the basis line prints 1 failed, 0 pending, and 2 reported something other than either, and never the words 2 passed", "layer": "request"}
     it "words the remainder as something other than failed or pending, never as passes" do
       outcome_run([example_spec(name: "one", duration: 9.0, line_number: 1, outcome: "failed"),
                    example_spec(name: "two", duration: 3.0, line_number: 2, outcome: "passed"),
@@ -910,6 +948,7 @@ RSpec.describe "Repository slowest tests", type: :request do
       expect(basis_line).to have_no_text("2 passed")
     end
 
+    # @intent: {"entity": "GET /repositories/:id", "action": "separate silent rows", "behavior": "the basis line separates 1 of the 3 examples reporting an outcome (1 failed, 0 pending) from the other 2 that reported none", "layer": "request"}
     it "counts the rows that said nothing separately from the ones that did" do
       outcome_run([example_spec(name: "one", duration: 9.0, line_number: 1, outcome: "failed"),
                    example_spec(name: "two", duration: 3.0, line_number: 2, outcome: nil),
@@ -923,6 +962,7 @@ RSpec.describe "Repository slowest tests", type: :request do
     # VACUOUS GREEN, refused explicitly. A run whose every row carries a nil outcome has a
     # legitimate `failed_count` of 0 — and printing that zero renders "this run said nothing" in
     # the words of "everything passed". The count must not appear at all on such a run.
+    # @intent: {"entity": "GET /repositories/:id", "action": "refuse vacuous green", "behavior": "an all-nil run prints Not one of the 2 examples this run recorded reported an outcome, no 0 failed string, and both rows read not reported", "layer": "request"}
     it "says a run that reported no outcome at all did not say, rather than printing zero failures" do
       outcome_run([example_spec(name: "one", duration: 9.0, line_number: 1, outcome: nil),
                    example_spec(name: "two", duration: 1.0, line_number: 2, outcome: nil)])
@@ -934,6 +974,7 @@ RSpec.describe "Repository slowest tests", type: :request do
     end
 
     # The denominator is the rows this run wrote here, never the Overview's suite size.
+    # @intent: {"entity": "GET /repositories/:id", "action": "count own rows", "behavior": "with total_specs_count 4000 the basis line counts the 1 recorded row (1 failed) and never prints 4,000", "layer": "request"}
     it "counts outcomes off its own rows rather than the run's suite size" do
       repository = create_repository(user: @user)
       ingest(repository, [example_spec(name: "one", duration: 1.0, line_number: 1, outcome: "failed")],
@@ -963,6 +1004,7 @@ RSpec.describe "Repository slowest tests", type: :request do
     # Both halves are asserted because they fail differently: an ordering fixed to `NULLS LAST`
     # with no exclusion passes "not at the head" and still lists the untimed rows at the bottom of
     # a list captioned "slowest", where they read as the fastest tests in the suite.
+    # @intent: {"entity": "GET /repositories/:id", "action": "exclude untimed examples", "behavior": "a run mixing 2 untimed with 2 timed examples lists only slow one and quick one, headed by the 8.0s row", "layer": "request"}
     it "leaves the untimed examples out, and specifically not at the head of the list" do
       get repository_path(mixed_run)
 
@@ -972,6 +1014,7 @@ RSpec.describe "Repository slowest tests", type: :request do
 
     # The panel states what it ranked over, because ten rows print identically whether they are the
     # worst of everything or the worst of half of it.
+    # @intent: {"entity": "GET /repositories/:id", "action": "state ranked coverage", "behavior": "the basis line reads Ranked over the 2 of 4 examples this run recorded that reported a duration, and that the 2 reporting none stayed out of the ranking", "layer": "request"}
     it "states its coverage against the rows it ranked, and says what it excluded" do
       get repository_path(mixed_run)
 
@@ -982,6 +1025,7 @@ RSpec.describe "Repository slowest tests", type: :request do
 
     # The denominator is the rows this run wrote here, never the Overview's suite size — that
     # figure is re-derived by SUM over shard reports and the two can legitimately differ.
+    # @intent: {"entity": "GET /repositories/:id", "action": "rank over own rows", "behavior": "with total_specs_count 4000 the basis line reads Ranked over the 1 of 2 examples and never prints 4,000", "layer": "request"}
     it "counts the rows it ranked rather than the run's own suite size" do
       repository = create_repository(user: @user)
       ingest(repository, [example_spec(name: "one", duration: 1.0, line_number: 1),
@@ -996,6 +1040,7 @@ RSpec.describe "Repository slowest tests", type: :request do
   end
 
   describe "a run that recorded examples and timed none of them" do
+    # @intent: {"entity": "GET /repositories/:id", "action": "render no-timings empty state", "behavior": "an all-untimed run prints No timings on this run recording 2 examples and a duration for none of them, with no table rows and no 0.00s", "layer": "request"}
     it "renders an empty state rather than a list of zeroes" do
       repository = create_repository(user: @user)
       ingest(repository, [example_spec(name: "never ran", duration: nil, line_number: 1),
@@ -1015,6 +1060,7 @@ RSpec.describe "Repository slowest tests", type: :request do
     # Outcome column, but "nothing was timed" is a fact about durations and says nothing whatever
     # about how those examples ended — and a delivery carrying no timings and a failure is exactly
     # the run that would otherwise disclose nothing at all.
+    # @intent: {"entity": "GET /repositories/:id", "action": "report outcomes untimed", "behavior": "the untimed panel still prints Every one of the 2 examples this run recorded reported an outcome with 1 failed and 0 pending", "layer": "request"}
     it "still says what those examples reported, having nothing to rank them by" do
       repository = create_repository(user: @user)
       ingest(repository, [example_spec(name: "never ran", duration: nil, line_number: 1, outcome: "failed"),
@@ -1028,6 +1074,7 @@ RSpec.describe "Repository slowest tests", type: :request do
 
     # And the same Vacuous Green refusal as the ranked branch: no timings AND no outcomes is a run
     # that said nothing, not a run with no failures.
+    # @intent: {"entity": "GET /repositories/:id", "action": "refuse untimed vacuous green", "behavior": "with no timings and no outcomes the panel prints Not one of the 2 examples this run recorded reported an outcome and never 0 failed", "layer": "request"}
     it "does not print a zero failure count where those examples reported no outcome either" do
       repository = create_repository(user: @user)
       ingest(repository, [example_spec(name: "never ran", duration: nil, line_number: 1, outcome: nil),
@@ -1046,6 +1093,7 @@ RSpec.describe "Repository slowest tests", type: :request do
   # empty panel on every such run would read as a finding about the suite when it is a fact about
   # the payload. The Overview's never-ingested empty state is this page's one statement of absence.
   describe "a run with nothing at this grain" do
+    # @intent: {"entity": "GET /repositories/:id", "action": "omit panel without examples", "behavior": "a run with total_specs_count 900 and no example rows returns 200 with no #slowest-examples panel on the page", "layer": "request"}
     it "renders no panel for a run that recorded no examples" do
       repository = create_repository(user: @user)
       create_test_run(repository: repository, total_specs_count: 900)
@@ -1056,6 +1104,7 @@ RSpec.describe "Repository slowest tests", type: :request do
       expect(panel?).to be(false)
     end
 
+    # @intent: {"entity": "GET /repositories/:id", "action": "omit panel without runs", "behavior": "a repository CI has never reported for returns 200 with no #slowest-examples panel on the page", "layer": "request"}
     it "renders no panel for a repository CI has never reported for" do
       get repository_path(create_repository(user: @user))
 
@@ -1070,6 +1119,7 @@ RSpec.describe "Repository slowest tests", type: :request do
   describe "what the panel costs" do
     # `queries_against` comes from spec/support/query_capture.rb.
 
+    # @intent: {"entity": "GET /repositories/:id", "action": "hold page query budget", "behavior": "pages over a 3-row and a 200-row suite issue equal spec_observations query counts, with the larger page pinned at exactly 12", "layer": "request"}
     it "costs the same number of queries at 200 examples as at 3" do
       small = create_repository(user: @user, github_full_name: "acme/small-suite")
       ingest(small, (1..3).map { |i| example_spec(name: "small #{i}", duration: i.to_f, line_number: i) })
@@ -1142,6 +1192,7 @@ RSpec.describe "Repository slowest tests", type: :request do
   # is now built. What it must NOT lose is the rule the claim was there to justify: the shard prose
   # still may not imply a per-test fact.
   describe "the shard prose the panel sits below" do
+    # @intent: {"entity": "GET /repositories/:id", "action": "retire stale claim", "behavior": "the show template no longer contains the stays-unanswerable claim or the no-schema-records sentence while still stating About SHARDS, never about tests", "layer": "request"}
     it "no longer tells its authors the schema cannot answer which tests are slow" do
       source = Rails.root.join("app/views/repositories/show.html.erb").read
 

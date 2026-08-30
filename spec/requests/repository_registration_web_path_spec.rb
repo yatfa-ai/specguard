@@ -21,6 +21,7 @@ RSpec.describe "Registering in a browser, after the gate moved", type: :request 
   describe "the browser asks GitHub, not the grant" do
     # The sharpest direction: the grant says yes and GitHub says no. A path consulting the grant
     # registers this; the live path refuses it.
+    # @intent: {"entity": "Repository", "action": "refuse grant-only repository", "behavior": "a name the grant lists but GitHub does not is refused with 422, no Repository row created, and the not_in_installation message rendered", "layer": "request"}
     it "refuses a repository the grant names but GitHub does not" do
       create_registration_grant(user: @user, registrable: ["acme/payments"])
       stub_github(repos: [github_repo("acme/billing-service")])
@@ -36,6 +37,7 @@ RSpec.describe "Registering in a browser, after the gate moved", type: :request 
     # The other direction, and the one that would break real people rather than merely admit them:
     # somebody who has never held a grant — everybody, on the day this ships — must still be able to
     # register in a browser exactly as they always could.
+    # @intent: {"entity": "Repository", "action": "register without grant", "behavior": "a signed-in user holding no grant at all still creates exactly one Repository row by posting a name GitHub lists live", "layer": "request"}
     it "registers for somebody who holds no grant at all" do
       expect(GithubRegistrationGrant.where(user_id: @user.id)).to be_empty
 
@@ -44,6 +46,7 @@ RSpec.describe "Registering in a browser, after the gate moved", type: :request 
       }.to change(Repository, :count).by(1)
     end
 
+    # @intent: {"entity": "Repository", "action": "register past grant age", "behavior": "a grant captured a day beyond GithubRegistrationGrant::MAX_AGE with an empty registrable list still allows the live registration, creating one Repository", "layer": "request"}
     it "registers on a live yes even when the grant is long past its bound" do
       create_registration_grant(user: @user, registrable: [],
                                 captured_at: GithubRegistrationGrant::MAX_AGE.ago - 1.day)
@@ -53,6 +56,7 @@ RSpec.describe "Registering in a browser, after the gate moved", type: :request 
       }.to change(Repository, :count).by(1)
     end
 
+    # @intent: {"entity": "Repository", "action": "refuse grant-allowed rename", "behavior": "renaming to a name the grant would have allowed but GitHub does not list answers 422 and leaves the repository still named acme/billing-service", "layer": "request"}
     it "refuses a rename the grant would have allowed" do
       create_registration_grant(user: @user, registrable: %w[acme/billing-service acme/renamed])
       stub_github(repos: [github_repo("acme/billing-service")])
@@ -70,6 +74,7 @@ RSpec.describe "Registering in a browser, after the gate moved", type: :request 
     # ownership check that ran first would produce the outage refusal. The uniqueness refusal is
     # therefore evidence that the record's own rules answered before GitHub was ever asked about
     # the name.
+    # @intent: {"entity": "Repository", "action": "validate before GitHub", "behavior": "an already-taken name is refused 422 with has already been taken and no outage message, proving the record's own rules answered before GitHub was asked", "layer": "request"}
     it "refuses an already-registered name from the record's own rules, before asking GitHub" do
       create_repository(user: create_user(github_uid: "9999", github_handle: "someone-else"),
                         github_full_name: "acme/taken")
@@ -87,6 +92,7 @@ RSpec.describe "Registering in a browser, after the gate moved", type: :request 
     # at construction — before the gate has decided whether the name is even changing. A rename form
     # submitted unchanged would then start costing a GitHub page walk, and would start failing
     # closed during an outage, for a write that changes nothing.
+    # @intent: {"entity": "Repository", "action": "skip GitHub on unchanged rename", "behavior": "a rename submitted with the name unchanged redirects to the repository page and makes zero GitHub repositories calls", "layer": "request"}
     it "asks GitHub nothing when a rename leaves the name unchanged" do
       repository = create_repository(user: @user)
       fake = stub_github(repos: [github_repo("acme/billing-service")])
@@ -99,6 +105,7 @@ RSpec.describe "Registering in a browser, after the gate moved", type: :request 
 
     # The control the example above needs: a rename that DOES change the name must still ask.
     # Without it, an implementation that never verifies anything passes.
+    # @intent: {"entity": "Repository", "action": "ask GitHub on real rename", "behavior": "a rename that actually changes the name redirects to the repository page and makes exactly one GitHub repositories call", "layer": "request"}
     it "does ask when the rename actually changes the name" do
       repository = create_repository(user: @user)
       fake = stub_github(repos: [github_repo("acme/billing-service"), github_repo("acme/renamed")])
@@ -112,6 +119,7 @@ RSpec.describe "Registering in a browser, after the gate moved", type: :request 
     # The verdict is what lets the 422 offer an install button instead of an error no field can
     # fix. It is collected inside `RepositoryRegistration` now, and the controller has to bring it
     # back out — a detail nothing else would notice going missing.
+    # @intent: {"entity": "Repository", "action": "offer install button", "behavior": "with the App not installed at all the 422 response carries the not_installed message so the form can offer an install button rather than an unfixable error", "layer": "request"}
     it "still offers the install button when the App is not installed at all" do
       uninstall_github_app(@user)
 
@@ -138,6 +146,7 @@ RSpec.describe "Registering in a browser, after the gate moved", type: :request 
   # spec that merely posted the same name twice would prove nothing, because the validation catches
   # that unaided.
   describe "losing the uniqueness race to a concurrent registration" do
+    # @intent: {"entity": "Repository", "action": "survive uniqueness race", "behavior": "when the uniqueness validation cannot see the winning row the unique-index refusal is answered with a 422 re-render of the form saying has already been taken, no Repository row created and no 500", "layer": "request"}
     it "re-renders the form with the duplicate message instead of raising" do
       create_repository(user: create_user(github_uid: "9999", github_handle: "someone-else"),
                         github_full_name: "acme/taken")

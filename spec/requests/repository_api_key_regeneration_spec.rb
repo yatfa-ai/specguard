@@ -20,6 +20,7 @@ RSpec.describe "Regenerating an API key", type: :request do
   def revealed_token = response.body[/sgk_[A-Za-z0-9_-]{20,}/]
 
   describe "the rotation itself" do
+    # @intent: {"entity": "ApiKey", "action": "rotate and reveal once", "behavior": "the POST reveals a fresh sgk_ token on the redirect, ApiKey.authenticate returns nil for the retired token and the key for the replacement, and a page reload shows no token", "layer": "request"}
     it "retires the previous token and reveals a working replacement, once" do
       api_key = repository.api_keys.create!(name: "CI")
       retired = api_key.raw_token
@@ -42,6 +43,7 @@ RSpec.describe "Regenerating an API key", type: :request do
       expect(response.body).not_to match(/sgk_[A-Za-z0-9_-]{20,}/)
     end
 
+    # @intent: {"entity": "ApiKey", "action": "cut off retired token", "behavior": "a Bearer request with the retired token gets 401 from /api/v1/repository while the replacement gets 200", "layer": "request"}
     it "rejects the retired token at the API and accepts the replacement" do
       api_key = repository.api_keys.create!(name: "CI")
       retired = api_key.raw_token
@@ -59,6 +61,7 @@ RSpec.describe "Regenerating an API key", type: :request do
       expect(response).to have_http_status(:ok)
     end
 
+    # @intent: {"entity": "ApiKey", "action": "rotate in place", "behavior": "the POST leaves ApiKey.count unchanged and preserves the row's name, its minter and its created_at", "layer": "request"}
     it "rotates the existing key instead of minting a second one" do
       minter = create_user(github_uid: "4242", github_handle: "minter")
       api_key = repository.api_keys.create!(name: "CI — main", created_by_user: minter)
@@ -75,6 +78,7 @@ RSpec.describe "Regenerating an API key", type: :request do
       expect(reloaded.created_at).to eq(api_key.created_at)
     end
 
+    # @intent: {"entity": "ApiKey", "action": "keep digest-only storage", "behavior": "ApiKey has no token column, the row's token_digest equals the digest of the revealed replacement, and no plucked digest equals the plaintext", "layer": "request"}
     it "stores no plaintext, on the row or anywhere else" do
       api_key = repository.api_keys.create!(name: "CI")
 
@@ -88,6 +92,7 @@ RSpec.describe "Regenerating an API key", type: :request do
       expect(ApiKey.pluck(:token_digest)).not_to include(replacement)
     end
 
+    # @intent: {"entity": "ApiKey", "action": "rotate token hint", "behavior": "the row's token_hint changes on rotation so the reveal prints the new hint and never the retired one", "layer": "request"}
     it "moves the key's hint onto the replacement token" do
       api_key = repository.api_keys.create!(name: "CI")
       retired_hint = api_key.token_hint
@@ -102,6 +107,7 @@ RSpec.describe "Regenerating an API key", type: :request do
       expect(response.body).not_to include(retired_hint)
     end
 
+    # @intent: {"entity": "ApiKey", "action": "stamp rotation date", "behavior": "rotated_at is stamped later than the retired token's last_used_at, which is preserved unchanged, leaving the row rotated and unused", "layer": "request"}
     it "dates the rotation, without disturbing the use the retired token stamped" do
       api_key = repository.api_keys.create!(name: "CI")
       api_key.touch_last_used!
@@ -132,12 +138,14 @@ RSpec.describe "Regenerating an API key", type: :request do
       follow_redirect!
     end
 
+    # @intent: {"entity": "ApiKey", "action": "announce replacement", "behavior": "the reveal panel reads Your regenerated API key: Staging, warns the previous token has stopped working and that this is the only time this token is shown", "layer": "request"}
     it "says the token is a replacement and that the old one has stopped working" do
       expect(response.body).to include("Your regenerated API key: Staging")
       expect(response.body).to include("previous token has stopped working")
       expect(response.body).to include("This is the only time this token is shown")
     end
 
+    # @intent: {"entity": "ApiKey", "action": "auto-copy token", "behavior": "the panel sets its auto-copy value to true and supplies both outcome messages, Copied to your clipboard and one saying the browser did not allow the copy", "layer": "request"}
     it "asks the browser to copy the token without waiting to be told" do
       expect(reveal_panel["data-copy-text-auto-copy-value"]).to eq("true")
 
@@ -148,6 +156,7 @@ RSpec.describe "Regenerating an API key", type: :request do
       expect(reveal_panel["data-copy-text-copy-failed-message-value"]).to include("did not allow")
     end
 
+    # @intent: {"entity": "ApiKey", "action": "render honest status", "behavior": "the status line renders Copy it before you leave this page. inside a role=status element, asserting no copy before JavaScript runs", "layer": "request"}
     it "starts the status line on the claim that is true with no JavaScript" do
       status = reveal_panel.find("[data-copy-text-target='status']")
 
@@ -161,6 +170,7 @@ RSpec.describe "Regenerating an API key", type: :request do
       expect(status["role"]).to eq("status")
     end
 
+    # @intent: {"entity": "ApiKey", "action": "offer token download", "behavior": "the download control is a type=button labelled Download as a file with filename value specguard-staging-api-key.txt", "layer": "request"}
     it "offers a one-time download named after the key" do
       download = reveal_panel.find("button[data-action='copy-text#download']", text: "Download as a file")
 
@@ -170,6 +180,7 @@ RSpec.describe "Regenerating an API key", type: :request do
       expect(reveal_panel["data-copy-text-download-filename-value"]).to eq("specguard-staging-api-key.txt")
     end
 
+    # @intent: {"entity": "ApiKey", "action": "isolate copy source", "behavior": "the panel's own copy source is exactly one element whose text is a bare sgk_ token, so neither clipboard nor file carries decoration", "layer": "request"}
     it "keeps the copy source holding the bare token and nothing else" do
       # The Stimulus controller copies `textContent` verbatim for both the clipboard and the file,
       # so any decoration inside this element lands in the user's password manager.
@@ -196,6 +207,7 @@ RSpec.describe "Regenerating an API key", type: :request do
     # attribute does not exist in turbo-rails 2.0.23 — `PageSnapshot#clone` only resets selects,
     # blanks password inputs and drops `<noscript>`, and `getSetting("cache-control")` reads exactly
     # this tag. An example asserting the attribute would pass while the token stayed in the cache.
+    # @intent: {"entity": "ApiKey", "action": "opt out of turbo cache", "behavior": "the token-bearing render emits a turbo-cache-control meta with content no-cache so Back cannot repaint the plaintext", "layer": "request"}
     it "keeps the render carrying the token out of Turbo's snapshot cache" do
       cache_control = Capybara.string(response.body).find("meta[name='turbo-cache-control']", visible: :all)
 
@@ -206,6 +218,7 @@ RSpec.describe "Regenerating an API key", type: :request do
   # Paired with the example above: that one alone would also pass if the meta were parked in the
   # layout for every page, which would quietly cost the whole app its snapshot cache. This is what
   # makes the assertion about THIS render rather than about the application template.
+  # @intent: {"entity": "ApiKey", "action": "preserve cache elsewhere", "behavior": "a plain repository page reveals no sgk_ token and emits no turbo-cache-control meta, leaving the app-wide snapshot cache intact", "layer": "request"}
   it "leaves the snapshot cache alone on a page with no token on it" do
     repository.api_keys.create!(name: "CI")
 
@@ -216,6 +229,7 @@ RSpec.describe "Regenerating an API key", type: :request do
   end
 
   describe "a freshly minted key" do
+    # @intent: {"entity": "ApiKey", "action": "share reveal treatment", "behavior": "a freshly minted key reads Your new API key: Staging with the same auto-copy and download controls and no previous-token warning", "layer": "request"}
     it "gets the same auto-copy and download treatment, without the rotation warning" do
       # The reveal path is shared on purpose — a newly minted token is exactly as unrecoverable as
       # a regenerated one. This is the control that keeps the UX from landing on rotation only.
@@ -234,6 +248,7 @@ RSpec.describe "Regenerating an API key", type: :request do
       Capybara.string(response.body).find("#api-keys table tbody tr", text: name).all("td")[4].text.squish
     end
 
+    # @intent: {"entity": "ApiKey", "action": "offer regenerate control", "behavior": "the key row posts to the regenerate route with Regenerate and Revoke buttons, its confirm dialog warning the token stops working immediately", "layer": "request"}
     it "offers a Regenerate control alongside Revoke, warning that the current token dies" do
       api_key = repository.api_keys.create!(name: "CI")
 
@@ -247,6 +262,7 @@ RSpec.describe "Regenerating an API key", type: :request do
         .to include("token stops working immediately")
     end
 
+    # @intent: {"entity": "ApiKey", "action": "attribute use correctly", "behavior": "after rotating a used key its cell reads not used since rotation, less than a minute ago while an identically used untouched key still reads less than a minute ago", "layer": "request"}
     it "stops attributing the retired token's use to the replacement" do
       rotated = repository.api_keys.create!(name: "Rotated")
       rotated.touch_last_used!
@@ -264,6 +280,7 @@ RSpec.describe "Regenerating an API key", type: :request do
       expect(last_used_cell("Untouched")).to eq("less than a minute ago")
     end
 
+    # @intent: {"entity": "ApiKey", "action": "explain fresh rotation", "behavior": "a key rotated before it ever authenticated reads not used since rotation in its cell rather than a bare never", "layer": "request"}
     it "says a key rotated before it ever authenticated is unused since the rotation, not 'never'" do
       never_used = repository.api_keys.create!(name: "Fresh")
 
@@ -277,6 +294,7 @@ RSpec.describe "Regenerating an API key", type: :request do
       expect(last_used_cell("Fresh")).not_to eq("never")
     end
 
+    # @intent: {"entity": "ApiKey", "action": "clear after first use", "behavior": "once the replacement authenticates the key stops being rotated and unused and its cell returns to less than a minute ago", "layer": "request"}
     it "returns the cell to a plain age the moment the replacement authenticates" do
       api_key = repository.api_keys.create!(name: "CI")
       api_key.regenerate!
@@ -299,6 +317,7 @@ RSpec.describe "Regenerating an API key", type: :request do
       create_membership(repository: repository, user: member, permissions: permissions)
     end
 
+    # @intent: {"entity": "ApiKey", "action": "permit key rotation", "behavior": "a keys.manage member's POST redirects to the page's revealed-key anchor and the retired token no longer authenticates", "layer": "request"}
     it "lets a member holding 'keys.manage' rotate a key" do
       sign_in_as_member(%w[view keys.manage])
       api_key = repository.api_keys.create!(name: "CI")
@@ -313,6 +332,7 @@ RSpec.describe "Regenerating an API key", type: :request do
       expect(ApiKey.authenticate(retired)).to be_nil
     end
 
+    # @intent: {"entity": "ApiKey", "action": "refuse unauthorized rotation", "behavior": "a view-only member's POST gets 403 and the retired token still authenticates, the gate firing before any rotation", "layer": "request"}
     it "refuses a member without 'keys.manage', leaving the token working" do
       sign_in_as_member(%w[view])
       api_key = repository.api_keys.create!(name: "CI")
@@ -326,6 +346,7 @@ RSpec.describe "Regenerating an API key", type: :request do
       expect(ApiKey.authenticate(retired)).to eq(api_key)
     end
 
+    # @intent: {"entity": "ApiKey", "action": "hide from stranger", "behavior": "a signed-in non-member's POST gets 404 with the token still working", "layer": "request"}
     it "refuses a signed-in stranger, leaving the token working" do
       sign_in_via_github(uid: "9999", info: { nickname: "hubot" })
       api_key = repository.api_keys.create!(name: "CI")
@@ -337,6 +358,7 @@ RSpec.describe "Regenerating an API key", type: :request do
       expect(ApiKey.authenticate(retired)).to eq(api_key)
     end
 
+    # @intent: {"entity": "ApiKey", "action": "scope key lookup", "behavior": "posting the key's id under another repository's path gets 404 and the token still authenticates, the lookup scoped to the path's own keys", "layer": "request"}
     it "refuses to rotate a key belonging to a different repository" do
       other = create_repository(user: @user, github_full_name: "acme/other")
       api_key = repository.api_keys.create!(name: "CI")

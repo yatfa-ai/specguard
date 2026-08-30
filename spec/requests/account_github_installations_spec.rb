@@ -31,6 +31,7 @@ RSpec.describe "Connected GitHub accounts on /account", type: :request do
 
   # SPGD-808 criterion 1 — the list itself, which is the half that existed nowhere.
   describe "the list" do
+    # @intent: {"entity": "GithubInstallation", "action": "list installations newest first", "behavior": "GET /account returns ok with a Connected GitHub accounts panel listing both acme and globex, globex appearing before acme", "layer": "request"}
     it "names every installation the signed-in user holds, newest first" do
       person = sign_in_via_github(installation: 5001)
       add_github_installation(person, installation_id: 6002, account_login: "globex")
@@ -48,6 +49,7 @@ RSpec.describe "Connected GitHub accounts on /account", type: :request do
 
     # A row recorded from a callback that carried no login. `display_name` falls back to the id, and
     # the cell must not come out blank — an unnameable row is one a reader cannot decide about.
+    # @intent: {"entity": "GithubInstallation", "action": "fall back to installation id", "behavior": "an installation recorded with no account login renders as Installation 7003 rather than a blank cell", "layer": "request"}
     it "falls back to the installation id when GitHub reported no account login" do
       person = sign_in_via_github(installation: false)
       add_github_installation(person, installation_id: 7003, account_login: nil)
@@ -57,6 +59,7 @@ RSpec.describe "Connected GitHub accounts on /account", type: :request do
       expect(response.body).to include("Installation 7003")
     end
 
+    # @intent: {"entity": "GithubInstallation", "action": "render empty state with offer", "behavior": "with no installations the panel reads No connected GitHub accounts and renders a connect form posting to /github/installation", "layer": "request"}
     it "renders an empty state, and an offer to connect, when there are none" do
       sign_in_via_github(installation: false)
       # The offer is a real Connect button rather than the unconfigured notice `github_install_button`
@@ -74,6 +77,7 @@ RSpec.describe "Connected GitHub accounts on /account", type: :request do
     # Disconnect that killed their pipelines would be found out by them and not by us. It cannot —
     # ingest authenticates on the repository's own `sgk_` key — and the panel has to SAY so, which
     # is a claim about the rendered sentence rather than about the mechanism criterion 5 measures.
+    # @intent: {"entity": "GithubInstallation", "action": "promise repositories unaffected", "behavior": "the page states on the panel that disconnecting does not affect repositories you have already registered", "layer": "request"}
     it "tells the reader on the page that registered repositories are unaffected" do
       sign_in_via_github
 
@@ -85,6 +89,7 @@ RSpec.describe "Connected GitHub accounts on /account", type: :request do
     # NON-NEGOTIABLE (b). The dialog carries the one fact a reader would otherwise get wrong in the
     # dangerous direction — believing they had revoked SpecGuard's access at the source — and the
     # one that makes this safe to press: the App being still installed means Connect brings it back.
+    # @intent: {"entity": "GithubInstallation", "action": "warn dialog is recoverable", "behavior": "the confirm dialog copy says it does NOT uninstall the SpecGuard App on GitHub and that connecting again brings this back", "layer": "request"}
     it "warns in the confirm dialog that this is not an uninstall on GitHub, and is recoverable" do
       sign_in_via_github
 
@@ -98,6 +103,7 @@ RSpec.describe "Connected GitHub accounts on /account", type: :request do
   # SPGD-808 criterion 2 — the id is a path segment a person can type, so the scoping is the whole
   # of the authorization.
   describe "another person's installation id" do
+    # @intent: {"entity": "GithubInstallation", "action": "ignore another's installation id", "behavior": "deleting another person's installation leaves their count at 1 and redirects back to /account, which renders ok after following the redirect", "layer": "request"}
     it "removes nothing and does not fail" do
       stranger = create_user(github_uid: "9009", github_handle: "mallory", installation_id: 8004)
       theirs = stranger.github_installations.sole
@@ -112,6 +118,7 @@ RSpec.describe "Connected GitHub accounts on /account", type: :request do
 
     # The miss is reported as the same outcome an already-deleted row gets. A distinct sentence for
     # "that one exists but is not yours" would confirm to somebody walking ids that it does.
+    # @intent: {"entity": "GithubInstallation", "action": "match not-found wording", "behavior": "the flash notice after disconnecting a stranger's installation is byte-identical to the one for an id that never existed, so walking ids confirms nothing", "layer": "request"}
     it "says the same thing it says about an id that never existed" do
       stranger = create_user(github_uid: "9009", github_handle: "mallory", installation_id: 8004)
       sign_in_via_github
@@ -145,6 +152,7 @@ RSpec.describe "Connected GitHub accounts on /account", type: :request do
       @live, @dead = stub_one_dead_account
     end
 
+    # @intent: {"entity": "GithubInstallation", "action": "remove picker warning", "behavior": "after disconnecting the dead globex account the new-repository picker no longer shows GitHub no longer lists globex nor any could not be read text", "layer": "request"}
     it "removes the warning from the registration picker" do
       visit_picker
       expect(response.body).to include("GitHub no longer lists globex")
@@ -156,6 +164,7 @@ RSpec.describe "Connected GitHub accounts on /account", type: :request do
       expect(response.body).not_to include("could not be read")
     end
 
+    # @intent: {"entity": "GithubInstallation", "action": "clear bulk picker warning", "behavior": "the bulk repositories picker stops showing GitHub no longer lists globex once the dead installation is disconnected", "layer": "request"}
     it "removes it from the bulk picker too" do
       get bulk_repositories_path
       expect(response.body).to include("GitHub no longer lists globex")
@@ -168,6 +177,7 @@ RSpec.describe "Connected GitHub accounts on /account", type: :request do
 
     # The cost half, measured rather than argued. `collect` walks `client.repositories` once per
     # installation, so the dead row buys a GitHub round trip per render to raise `NotFound`.
+    # @intent: {"entity": "GithubInstallation", "action": "drop dead GitHub call", "behavior": "picker renders go from two repositories calls to one after the disconnect, the remaining call being to the live installation and zero to the dead one", "layer": "request"}
     it "drops one GitHub call from every later picker render" do
       visit_picker
       before_count = @dead.calls_to(:repositories) + @live.calls_to(:repositories)
@@ -204,6 +214,7 @@ RSpec.describe "Connected GitHub accounts on /account", type: :request do
       expect(grant_for(@person)).to be_present
     end
 
+    # @intent: {"entity": "GithubInstallation", "action": "delete grant with last installation", "behavior": "disconnecting the only installation leaves the person's GithubRegistrationGrant record gone", "layer": "request"}
     it "leaves no grant behind" do
       disconnect(@person.github_installations.sole)
 
@@ -215,6 +226,7 @@ RSpec.describe "Connected GitHub accounts on /account", type: :request do
     # `destroy` cannot forge the empty grant, and the example above would pass even if the
     # controller did nothing. The forging happens on the reader's NEXT visit to a picker, which is
     # what this renders before asserting.
+    # @intent: {"entity": "GithubInstallation", "action": "withstand later picker visit", "behavior": "after the last disconnect a further picker render returns ok and still mints no fresh empty grant", "layer": "request"}
     it "still leaves no grant after the reader visits a picker again" do
       disconnect(@person.github_installations.sole)
 
@@ -224,6 +236,7 @@ RSpec.describe "Connected GitHub accounts on /account", type: :request do
       expect(grant_for(@person)).to be_nil
     end
 
+    # @intent: {"entity": "GithubInstallation", "action": "withstand bulk picker visit", "behavior": "a bulk picker render after the last disconnect, which captures on the same read, also leaves no grant behind", "layer": "request"}
     it "still leaves none after the bulk picker, which captures on the same read" do
       disconnect(@person.github_installations.sole)
 
@@ -235,6 +248,7 @@ RSpec.describe "Connected GitHub accounts on /account", type: :request do
     # The consequence the whole invariant exists for, asserted end to end at the endpoint that
     # redeems a grant. Read from `InstallationRepositories::MESSAGES` rather than quoted, so this
     # pins WHICH VERDICT is reached and cannot drift from the wording the app ships.
+    # @intent: {"entity": "GithubInstallation", "action": "answer not_granted at API", "behavior": "registering after the last disconnect answers with the not_granted message \u2014 SpecGuard has no record of the GitHub installation \u2014 and never the not_in_installation claim that the repository is missing from GitHub", "layer": "request"}
     it "makes the API say SpecGuard has no record, not that the repository is missing from GitHub" do
       key = create_user_api_key(user: @person)
       disconnect(@person.github_installations.sole)
@@ -252,6 +266,7 @@ RSpec.describe "Connected GitHub accounts on /account", type: :request do
   # installation remains, or an agent holding a key that worked a moment ago stops being able to
   # register for a reason nobody told it.
   describe "disconnecting one of several installations" do
+    # @intent: {"entity": "GithubInstallation", "action": "keep grant with installations left", "behavior": "disconnecting one of two installations keeps the grant present and the remaining installation count at 1", "layer": "request"}
     it "keeps the grant" do
       person = sign_in_via_github(installation: 5001)
       add_github_installation(person, installation_id: 6002, account_login: "globex")
@@ -269,6 +284,7 @@ RSpec.describe "Connected GitHub accounts on /account", type: :request do
   # references an installation (the sole FK is `github_installations` → `users`) and ingest reads
   # GitHub not at all, so this is a claim that can be demonstrated rather than reasoned about.
   describe "a repository registered before the disconnect" do
+    # @intent: {"entity": "GithubInstallation", "action": "preserve ingest path", "behavior": "a repository registered before the disconnect still resolves on its own sgk_ key with ok and full_name acme/billing-service, and a POST to the ingest endpoint is answered 202 and creates exactly one test run", "layer": "request"}
     it "still resolves and still ingests on its own sgk_ key" do
       person = sign_in_via_github(installation: 5001)
       repository = create_repository(user: person, github_full_name: "acme/billing-service")
@@ -288,6 +304,7 @@ RSpec.describe "Connected GitHub accounts on /account", type: :request do
       expect(response).to have_http_status(:accepted)
     end
 
+    # @intent: {"entity": "GithubInstallation", "action": "preserve repository page", "behavior": "the registered repository's page still returns ok and names acme/billing-service after the disconnect", "layer": "request"}
     it "still has its page" do
       person = sign_in_via_github(installation: 5001)
       repository = create_repository(user: person, github_full_name: "acme/billing-service")
@@ -305,6 +322,7 @@ RSpec.describe "Connected GitHub accounts on /account", type: :request do
   # and the fact the confirm dialog asserts. Driven through the real callback, because "Connect
   # again" is that flow and nothing else.
   describe "reconnecting afterwards" do
+    # @intent: {"entity": "GithubInstallation", "action": "restore row on reconnect", "behavior": "going through the real App callback after a disconnect re-records installation 5001, so the list shows acme again with no empty state and the row's installation_id is 5001", "layer": "request"}
     it "re-records the row and puts it back on the list" do
       person = sign_in_via_github(installation: 5001)
       disconnect(person.github_installations.sole)
@@ -325,6 +343,7 @@ RSpec.describe "Connected GitHub accounts on /account", type: :request do
   # credentials have been removed — which is precisely the reader left holding rows they can no
   # longer act on. `require_configured_app` guards the three actions that go to github.com and must
   # not guard this one.
+  # @intent: {"entity": "GithubInstallation", "action": "work unconfigured", "behavior": "with SpecGuard::GithubApp configured? stubbed false the disconnect still removes the installation from 1 to 0 and redirects to /account", "layer": "request"}
   it "disconnects even when the GitHub App is not configured on this instance" do
     person = sign_in_via_github(installation: 5001)
     allow(SpecGuard::GithubApp).to receive(:configured?).and_return(false)
@@ -335,6 +354,7 @@ RSpec.describe "Connected GitHub accounts on /account", type: :request do
     expect(response).to redirect_to(account_path)
   end
 
+  # @intent: {"entity": "GithubInstallation", "action": "refuse signed-out visitor", "behavior": "a signed-out visitor's disconnect leaves the installation count unchanged at 1 and the response is not ok", "layer": "request"}
   it "refuses a signed-out visitor" do
     person = create_user(github_uid: "9009", github_handle: "octocat", installation_id: 5001)
 

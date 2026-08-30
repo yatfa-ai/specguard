@@ -41,6 +41,7 @@ RSpec.describe "The public integration guide", type: :request do
   describe "reachability" do
     # The audience includes an agent handed nothing but the URL, so a redirect to sign-in is not a
     # degraded experience here — it is the guide failing to exist for the reader it is written for.
+    # @intent: {"entity": "GET /integration_guide", "action": "render for anonymous visitor", "behavior": "a GET with no session at all answers 200 OK with the Integration guide heading in the body rather than bouncing to sign-in", "layer": "request"}
     it "renders for a visitor with no session at all" do
       get integration_guide_path
 
@@ -51,6 +52,7 @@ RSpec.describe "The public integration guide", type: :request do
     # `PagesController#home` redirects a signed-in visitor to their repositories. This action
     # deliberately does not, or the URL in the repository page's prompt block would work for an
     # agent and bounce the person who copied it.
+    # @intent: {"entity": "GET /integration_guide", "action": "render for signed-in visitor", "behavior": "a GitHub-signed-in GET of the guide also answers 200 OK with the Integration guide heading in the body rather than redirecting away like the home route does", "layer": "request"}
     it "renders for a signed-in visitor too" do
       sign_in_via_github
 
@@ -67,6 +69,7 @@ RSpec.describe "The public integration guide", type: :request do
 
     before { get integration_guide_path }
 
+    # @intent: {"entity": "POST /api/v1/ingest", "action": "accept published payload", "behavior": "posting the JSON parsed out of the rendered fixture block with the Bearer api key is answered 202 accepted, so the published document matches the live wire contract", "layer": "request"}
     it "publishes a payload the ingest endpoint accepts" do
       post "/api/v1/ingest",
            params: published_payload.to_json,
@@ -82,6 +85,7 @@ RSpec.describe "The public integration guide", type: :request do
     # page as carrying the run's totals and an annotated ratio as a 0–1 fraction, and the fixture is
     # deliberately one annotated example and one unannotated one so those numbers are not both
     # trivially zero or one.
+    # @intent: {"entity": "POST /api/v1/ingest", "action": "return documented totals", "behavior": "the 202 body includes total_specs 2, annotated_specs 1 and annotated_ratio 0.5 for the fixture of one annotated and one unannotated example", "layer": "request"}
     it "produces the run the guide says it will" do
       post "/api/v1/ingest",
            params: published_payload.to_json,
@@ -101,6 +105,7 @@ RSpec.describe "The public integration guide", type: :request do
     # Asserted with `fetch` rather than `include`, because the bug being guarded is a null where a
     # number was promised: `include("annotated_ratio" => nil)` would also pass against a body that
     # omitted the key entirely, and the contract says it is present.
+    # @intent: {"entity": "POST /api/v1/ingest", "action": "accept empty specs run", "behavior": "posting the fixture with specs emptied out is answered 202 accepted with total_specs 0 and an annotated_ratio key that is present and nil", "layer": "request"}
     it "answers the empty-specs run the page says is accepted, in the shape the page documents" do
       post "/api/v1/ingest",
            params: published_payload.merge("specs" => []).to_json,
@@ -117,6 +122,7 @@ RSpec.describe "The public integration guide", type: :request do
     # pass every assertion above — the endpoint accepts a payload without them — and would have lost
     # the one thing a reader cannot discover by probing the API. So they are pinned on the payload,
     # and their effect is pinned on the stored row.
+    # @intent: {"entity": "POST /api/v1/ingest", "action": "persist observation fields", "behavior": "the fixture's first spec carries id, spec_file_path and outcome, and posting it stores a SpecObservation found by that example_id with the same path and outcome", "layer": "request"}
     it "carries the three fields the request validator never mentions, and they land" do
       spec = published_payload["specs"].first
       expect(spec).to include("id", "spec_file_path", "outcome")
@@ -135,6 +141,7 @@ RSpec.describe "The public integration guide", type: :request do
     # The guide's language-agnostic claim, made as an assertion rather than as a sentence: the
     # worked example is a Python suite, and it is accepted. An example whose paths all ended in
     # `_spec.rb` would teach the opposite of what the page says, and nothing would notice.
+    # @intent: {"entity": "GET /integration_guide", "action": "publish language-agnostic example", "behavior": "every file_path in the rendered fixture payload ends in .py, working the page's claim that nothing about the path format is Ruby-specific", "layer": "request"}
     it "works the claim that nothing in the path is Ruby-specific" do
       expect(published_payload["specs"].map { |spec| spec["file_path"] })
         .to all(end_with(".py"))
@@ -147,10 +154,12 @@ RSpec.describe "The public integration guide", type: :request do
     # The whole point of the document. The read endpoint is a connectivity check; the write endpoint
     # is the integration, and it is what was missing from every surface the product shipped before
     # this page existed.
+    # @intent: {"entity": "GET /integration_guide", "action": "name write endpoint", "behavior": "the page body includes the site endpoint string followed by /api/v1/ingest, so the write endpoint is named on the page", "layer": "request"}
     it "names the write endpoint" do
       expect(response.body).to include("#{integration_guide_endpoint}/api/v1/ingest")
     end
 
+    # @intent: {"entity": "GET /integration_guide", "action": "cover client surface", "behavior": "the page text names specguard-ruby, SpecGuard::RSpecFormatter, Minitest, specguard-lint and specguard-mcp plus the SPECGUARD_ENDPOINT and SPECGUARD_API_KEY variables", "layer": "request"}
     it "covers the Ruby client, the linter, the annotation protocol and the MCP bridge" do
       text = Capybara.string(response.body).text.gsub(/\s+/, " ")
 
@@ -167,6 +176,7 @@ RSpec.describe "The public integration guide", type: :request do
     # the SERVER does; this one pins that the PAGE still says so. Either alone permits the drift this
     # ticket's review caught — the server answering null while the document promises a fraction — and
     # only the pair closes it.
+    # @intent: {"entity": "GET /integration_guide", "action": "document null ratio", "behavior": "the page text mentions annotated_ratio within 120 characters of the word null, keeping the documented null case visible", "layer": "request"}
     it "tells the reader that annotated_ratio can be null" do
       text = Capybara.string(response.body).text.gsub(/\s+/, " ")
 
@@ -179,6 +189,7 @@ RSpec.describe "The public integration guide", type: :request do
     # shipped with no page linking it, so the only way to reach it was to already know the URL. The
     # assertion is on the ANCHOR's href, not on the text: a sentence naming the path would read the
     # same to a human and still leave a non-Ruby adopter scraping JSON out of rendered markup.
+    # @intent: {"entity": "GET /integration_guide", "action": "link schema document", "behavior": "an anchor with the schema mirror's href renders with non-empty text, offering the machine-readable contract as a download rather than only as HTML", "layer": "request"}
     it "offers the schema as a downloadable document, not only as reproduced HTML" do
       page = Capybara.string(response.body)
 
@@ -196,6 +207,7 @@ RSpec.describe "The public integration guide", type: :request do
     # Every field of the envelope and of a spec entry, so a reader never has to open server source.
     # Asserted as a set because the failure this guards against is a field going missing during an
     # edit, which no single-field assertion would catch.
+    # @intent: {"entity": "GET /integration_guide", "action": "document every field", "behavior": "the page text includes all twenty envelope and spec-entry field names from commit_sha through preconditions", "layer": "request"}
     it "documents every field the endpoint reads" do
       text = Capybara.string(response.body).text
 

@@ -121,6 +121,7 @@ RSpec.describe "Repository spec directory file growth", type: :request do
   # panel that owns it, and on the href rather than only on the element being an anchor — a link
   # pointing somewhere else is not this feature.
   describe "the way in, from the panel above" do
+    # @intent: {"entity": "SpecObservation", "action": "link area to files", "behavior": "the spec/models row's link carries spec_directory set to the escaped area and the #spec-directory-file-growth fragment", "layer": "request"}
     it "links each area of 'Areas that grew or shrank' to its per-file drill-in" do
       get repository_path(moved_area)
 
@@ -133,6 +134,7 @@ RSpec.describe "Repository spec directory file growth", type: :request do
     # A list of choices with one of them taken, and the panel it opens is a long way down the page.
     # Asserted in both directions, so an implementation stamping `aria-current` on every row — which
     # tells a screen-reader user that every area is the open one — is not green here.
+    # @intent: {"entity": "SpecObservation", "action": "mark open area only", "behavior": "the asked-for spec/models link carries aria-current true while the spec/requests link beside it carries none", "layer": "request"}
     it "marks the open area and only the open area" do
       get repository_path(moved_area, spec_directory: "spec/models")
 
@@ -142,12 +144,14 @@ RSpec.describe "Repository spec directory file growth", type: :request do
   end
 
   describe "an area that was asked for" do
+    # @intent: {"entity": "SpecObservation", "action": "omit panel without ask", "behavior": "with no spec_directory parameter the per-file drill-in does not render at all", "layer": "request"}
     it "renders no panel at all where no area was asked for" do
       get repository_path(moved_area)
 
       expect(panel?).to be(false)
     end
 
+    # @intent: {"entity": "SpecObservation", "action": "show file movement", "behavior": "order_spec.rb shows then 2 now 5 change +3 while legacy_spec.rb shows 6, 1 and \u22125", "layer": "request"}
     it "names each file's count then, its count now, and the movement between them" do
       get repository_path(moved_area, spec_directory: "spec/models")
 
@@ -157,6 +161,7 @@ RSpec.describe "Repository spec directory file growth", type: :request do
 
     # Acceptance 2, and the assertion a `DESC`-only ranking on the SIGNED change fails: the largest
     # movement in this area is a loss of five, and it has to head the list.
+    # @intent: {"entity": "SpecObservation", "action": "rank by movement size", "behavior": "the largest mover heads the list regardless of direction \u2014 legacy_spec.rb's loss of five first, then order_spec.rb, then the unmoved user_spec.rb", "layer": "request"}
     it "ranks by how far each file moved, in both directions" do
       get repository_path(moved_area, spec_directory: "spec/models")
 
@@ -167,6 +172,7 @@ RSpec.describe "Repository spec directory file growth", type: :request do
     # The narrow is an EQUALITY at one depth, the same one the durations drill-down on this very ask
     # uses. A prefix `LIKE` would gather the nested area in and this panel would double-count rows
     # against the one above it on a single click.
+    # @intent: {"entity": "SpecObservation", "action": "narrow at one depth", "behavior": "asking for spec/models lists only spec/models/order_spec.rb \u2014 the nested spec/models/orders/refund_spec.rb rows are not gathered in", "layer": "request"}
     it "reads the area at its own depth, gathering no nested area into it" do
       repository = two_runs(
         previous_specs: file_specs("spec/models/order_spec.rb", 2) +
@@ -182,6 +188,7 @@ RSpec.describe "Repository spec directory file growth", type: :request do
 
     # An area that did not move is a real answer and renders as one — `±0`, not a blank cell and not
     # `+0`, which claims a direction it does not have.
+    # @intent: {"entity": "SpecObservation", "action": "render zero movement", "behavior": "an unmoved file renders then 1 now 1 with the directionless \u00b10, not a blank cell and not +0", "layer": "request"}
     it "says so of a file that did not move rather than leaving the cell empty" do
       get repository_path(moved_area, spec_directory: "spec/models")
 
@@ -192,6 +199,7 @@ RSpec.describe "Repository spec directory file growth", type: :request do
     # single `±0` under a caption admitting it cannot tell a relocation from a gain and a loss; here
     # both halves are named as STATES, because `+4` against an absent side reads identically to an
     # existing file that gained four.
+    # @intent: {"entity": "SpecObservation", "action": "name new and removed files", "behavior": "the appeared file reads 0 then 4 labelled New file and the vanished one 4 then 0 labelled File removed", "layer": "request"}
     it "names an appeared file and a vanished one rather than differencing either from a zero" do
       repository = two_runs(
         previous_specs: file_specs("spec/models/user_spec.rb", 4),
@@ -207,6 +215,7 @@ RSpec.describe "Repository spec directory file growth", type: :request do
     # U+2212 and `±` are announced inconsistently across screen readers, and three numbers in a row
     # announce as three unattached numbers. The one-sided readings name the FILE grain — the sibling
     # one rung up says "area", and a struct shared between the two would say it here.
+    # @intent: {"entity": "SpecObservation", "action": "spell movement for reader", "behavior": "each row carries an aria-label reading 6 examples in the previous run and none now, a file the previous run did not record, or unchanged since the previous run", "layer": "request"}
     it "spells the movement out for a screen reader" do
       repository = two_runs(
         previous_specs: file_specs("spec/models/legacy_spec.rb", 6) +
@@ -229,6 +238,7 @@ RSpec.describe "Repository spec directory file growth", type: :request do
     # offer. A file the LATEST run did not record is deliberately NOT linked — `?spec_file=` reads
     # the latest run, so that link would open a guaranteed-empty panel, and naming removed files is
     # half this panel's subject. Both halves asserted, because they fail differently.
+    # @intent: {"entity": "SpecObservation", "action": "link present files only", "behavior": "the users_spec.rb the latest run holds links with both spec_file and spec_directory while the removed user_spec.rb renders no link at all", "layer": "request"}
     it "opens a listed file's examples, except for one the latest run does not have" do
       repository = two_runs(
         previous_specs: file_specs("spec/models/user_spec.rb", 4),
@@ -251,6 +261,7 @@ RSpec.describe "Repository spec directory file growth", type: :request do
     # the join is built by a conditional and the two branches meet there: an assertion stopping at
     # the end of either branch leaves the one place the sentence can be broken unobserved, which is
     # exactly where it was broken once.
+    # @intent: {"entity": "SpecObservation", "action": "state coverage and operands", "behavior": "the basis names all 3 spec files either run recorded, largest movement first in both directions, counted off the area's 9 and 7 example rows against prev000", "layer": "request"}
     it "states what the panel covered and what it was measured over" do
       get repository_path(moved_area, spec_directory: "spec/models")
 
@@ -265,6 +276,7 @@ RSpec.describe "Repository spec directory file growth", type: :request do
     # The disclosure the finer grain EARNS. One rung up the reader is told a relocation and a
     # gain-and-a-loss are indistinguishable and can do nothing about it; here they are told what to
     # look for — while the page still refuses to assert either reading.
+    # @intent: {"entity": "SpecObservation", "action": "disclose rename shape", "behavior": "the basis notes a new file beside one listed as removed is what a rename looks like from here and that the panel pairs no example with any other", "layer": "request"}
     it "discloses that a new file beside a removed one is what a rename looks like from here" do
       get repository_path(moved_area, spec_directory: "spec/models")
 
@@ -274,6 +286,7 @@ RSpec.describe "Repository spec directory file growth", type: :request do
 
     # The caption is a claim ABOUT the table, so it is carried to a screen-reader user landing on
     # the table by navigation — who otherwise meets the header row with none of it.
+    # @intent: {"entity": "SpecObservation", "action": "describe table for readers", "behavior": "the table's aria-describedby points at the spec-directory-file-growth-basis caption element", "layer": "request"}
     it "carries the caption to the table it describes" do
       get repository_path(moved_area, spec_directory: "spec/models")
 
@@ -285,6 +298,7 @@ RSpec.describe "Repository spec directory file growth", type: :request do
     #
     # Thirty-two files in the latest run and one only the previous run has: thirty-three, a figure
     # neither run alone could produce, and deliberately not equal to any single file's row count.
+    # @intent: {"entity": "SpecObservation", "action": "disclose list cap", "behavior": "the capped list shows the 30 spec files that moved most of the 33 either run recorded, with row count at the SPEC_DIRECTORY_FILE_GROWTH limit", "layer": "request"}
     it "says the list is the head of a longer one, and how long" do
       repository = new_repository
       ingest(repository, commit_sha: "prev00000000001", specs: file_specs("spec/models/gone_spec.rb", 1))
@@ -304,6 +318,7 @@ RSpec.describe "Repository spec directory file growth", type: :request do
     # Two comparable runs whose every file in the area holds the same number of examples. A real
     # answer, and the one a reader who suspected a rename most wants confirmed — so it is said in
     # words rather than rendered as a table of `±0`.
+    # @intent: {"entity": "SpecObservation", "action": "word nothing moved", "behavior": "an unchanged area renders no table rows and an empty state saying No file moved over every one of the 2 spec files", "layer": "request"}
     it "says nothing moved rather than tabulating a column of zeroes" do
       repository = two_runs(
         previous_specs: file_specs("spec/models/order_spec.rb", 3) +
@@ -322,6 +337,7 @@ RSpec.describe "Repository spec directory file growth", type: :request do
     # An area neither run recorded is an ordinary answer, not an error: `?spec_directory=` is a URL
     # a reader types, edits and bookmarks. The empty state names the path back, because an empty
     # state without a subject is a sentence about nothing.
+    # @intent: {"entity": "SpecObservation", "action": "name empty area back", "behavior": "an unrecorded area renders the empty state naming spec/ghosts and saying there are no spec files in this directory", "layer": "request"}
     it "names the area back where neither run recorded anything in it" do
       get repository_path(moved_area, spec_directory: "spec/ghosts")
 
@@ -345,6 +361,7 @@ RSpec.describe "Repository spec directory file growth", type: :request do
       "this run recorded no per-example detail" => { previous_specs: :specs, latest_total: 40 },
       "neither run recorded per-example detail" => { previous_total: 40, latest_total: 42 }
     }.each do |reason, fixture|
+      # @intent: {"entity": "SpecObservation", "action": "omit panel when incomparable", "behavior": "at each incomparable cause \u2014 a run reporting no tests or recording no per-example detail on either side \u2014 the drill-in renders nothing even with the area asked for", "layer": "request"}
       it "renders nothing where #{reason}, even with the area asked for" do
         attrs = fixture.transform_values do |value|
           value == :specs ? file_specs("spec/models/order_spec.rb", 3) : value
@@ -358,6 +375,7 @@ RSpec.describe "Repository spec directory file growth", type: :request do
 
     # The sixth, built apart because its cause is HOW the runs were assembled rather than what they
     # measured: a sharded run differenced against a complete one reports every file shrinking.
+    # @intent: {"entity": "SpecObservation", "action": "omit panel across shards", "behavior": "a sharded run differenced against a complete one renders no drill-in while the parent area panel still does", "layer": "request"}
     it "renders nothing where the two runs were assembled from different numbers of parts" do
       repository = two_runs(previous_specs: file_specs("spec/models/order_spec.rb", 4),
                             latest_specs: file_specs("spec/models/order_spec.rb", 2, offset: 100),
@@ -371,6 +389,7 @@ RSpec.describe "Repository spec directory file growth", type: :request do
 
     # And where there is no earlier run on the branch at all, so the panel above does not exist
     # either. The drill-in must not become the page's first opinion on a comparison nobody can make.
+    # @intent: {"entity": "SpecObservation", "action": "omit panel without baseline", "behavior": "with no earlier run on the branch the drill-in stays off the page even when the area is asked for", "layer": "request"}
     it "renders nothing where there is no earlier run on the branch" do
       repository = new_repository
       ingest(repository, commit_sha: "only00000000001", specs: file_specs("spec/models/order_spec.rb", 3))
@@ -398,6 +417,7 @@ RSpec.describe "Repository spec directory file growth", type: :request do
       end
     end
 
+    # @intent: {"entity": "SpecObservation", "action": "no query without ask", "behavior": "the unasked page issues none of this panel's per-file COUNT FILTER aggregates", "layer": "request"}
     it "asks the observations table nothing where no area was asked for" do
       repository = moved_area
       get repository_path(repository)
@@ -405,6 +425,7 @@ RSpec.describe "Repository spec directory file growth", type: :request do
       expect(file_growth_aggregates { get repository_path(repository) }).to be_empty
     end
 
+    # @intent: {"entity": "SpecObservation", "action": "one query when asked", "behavior": "the asked page issues exactly one of the panel's GROUP BY spec_file_path count aggregates", "layer": "request"}
     it "asks it exactly once where an area was asked for" do
       repository = moved_area
       get repository_path(repository, spec_directory: "spec/models")
@@ -416,6 +437,7 @@ RSpec.describe "Repository spec directory file growth", type: :request do
     # The gate runs before the query rather than filtering its results, so a page that cannot
     # compare pays nothing for this panel even with the ask set. An implementation that queried and
     # then discarded would be green on every rendering example above.
+    # @intent: {"entity": "SpecObservation", "action": "gate before querying", "behavior": "where the parent cannot compare, the ask triggers no aggregate query and renders no panel", "layer": "request"}
     it "asks it nothing where the panel above cannot compare, even with the area asked for" do
       repository = new_repository
       ingest(repository, commit_sha: "prev00000000001", total: 40)
@@ -432,6 +454,7 @@ RSpec.describe "Repository spec directory file growth", type: :request do
     # difference against ten times the examples, so an implementation reading a file's rows per row —
     # or taking a second round trip for the captions — shows up here whatever the page's absolute
     # query count happens to be.
+    # @intent: {"entity": "SpecObservation", "action": "constant cost by area size", "behavior": "a two-run area of 220 examples costs the same total query count as one of 22, each listing the single moved file", "layer": "request"}
     it "costs the same whether the area holds twenty examples or two hundred" do
       small = two_runs(previous_specs: file_specs("spec/models/order_spec.rb", 10),
                        latest_specs: file_specs("spec/models/order_spec.rb", 12, offset: 100))
@@ -451,6 +474,7 @@ RSpec.describe "Repository spec directory file growth", type: :request do
   # One ask, TWO panels — the durations drill-down and this one — each answering in its own grain
   # over the same area. Intended, and the property a later reader is most likely to "fix" by minting
   # a second parameter, so it is pinned rather than left to a comment.
+  # @intent: {"entity": "SpecObservation", "action": "open both drill-downs", "behavior": "one spec_directory ask renders both the durations drill-down and this growth panel", "layer": "request"}
   it "opens both drill-downs of one area on one ask" do
     get repository_path(moved_area, spec_directory: "spec/models")
 
@@ -460,6 +484,7 @@ RSpec.describe "Repository spec directory file growth", type: :request do
 
   # Read-only suite telemetry, like every panel around it: a `view` member legitimately needs to see
   # what CI reported. Nothing here is credential metadata and nothing here actions anything.
+  # @intent: {"entity": "SpecObservation", "action": "serve view-only member", "behavior": "a member whose only permission is view gets 200 and the order_spec.rb row with its +3 change", "layer": "request"}
   it "is visible to a member with only 'view'" do
     repository = moved_area
     member = sign_in_via_github(uid: "9999")

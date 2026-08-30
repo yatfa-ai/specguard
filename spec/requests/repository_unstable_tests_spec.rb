@@ -109,6 +109,7 @@ RSpec.describe "Repository unstable tests", type: :request do
   # passed in others is NAMED, with the window it was measured over, the share of it that failed,
   # and the words CI used.
   describe "a window holding a test that failed in some runs and not others" do
+    # @intent: {"entity": "SpecObservation", "action": "rank outcome-changing test", "behavior": "a test that failed 2 of its 5 runs is the sole row, seen 5 of 5, failed 2 of 5, with outcome words failed and passed", "layer": "request"}
     it "names the test, the runs compared, the runs it failed, and the outcome words seen" do
       repository = repository_with(%w[passed failed passed passed failed])
 
@@ -122,6 +123,7 @@ RSpec.describe "Repository unstable tests", type: :request do
 
     # The test that never varied is not on the list — the panel names what CHANGED, and a stable
     # test rendered beside a flaky one is the signal buried in the population it was drawn from.
+    # @intent: {"entity": "SpecObservation", "action": "omit stable test", "behavior": "the always-passing companion test never appears in the panel's rows", "layer": "request"}
     it "leaves out the test that reported the same outcome in every run" do
       repository = repository_with(%w[passed failed passed])
 
@@ -132,6 +134,7 @@ RSpec.describe "Repository unstable tests", type: :request do
 
     # A test that failed in EVERY run of the window is broken, not unstable. The panel's own words
     # for its scope, and the reason the candidate ordering sheds this end of the list first.
+    # @intent: {"entity": "SpecObservation", "action": "omit always-failing test", "behavior": "a test failed in all 3 runs yields an empty list and the none state says not one of them reported any other outcome", "layer": "request"}
     it "leaves out the test that failed in every run" do
       repository = repository_with(%w[failed failed failed])
 
@@ -145,6 +148,7 @@ RSpec.describe "Repository unstable tests", type: :request do
     # The denominator is the runs the test APPEARED in, never the length of the window. A test
     # added halfway through failed in one of the three runs that ran it, and dividing by six would
     # report a stability it was never measured for.
+    # @intent: {"entity": "SpecObservation", "action": "denominate by appearance", "behavior": "a test in 3 of 6 window runs reports seen 3 of 6 and failed 1 of 3, dividing by appearances rather than window length", "layer": "request"}
     it "measures the failures against the runs the test appeared in, not against the window" do
       repository = create_repository(user: @user)
       6.times do |index|
@@ -167,6 +171,7 @@ RSpec.describe "Repository unstable tests", type: :request do
     # The window is the one the "Suite growth" panel is drawn on, branch and all. Outcomes compared
     # across branches are outcomes of different code, so a feature branch's failure is not this
     # branch's flake.
+    # @intent: {"entity": "SpecObservation", "action": "compare within branch", "behavior": "a feature-branch failure leaves the main-anchored list empty with the basis saying on main, while asking for feature/x gets the incomparable state naming that branch", "layer": "request"}
     it "compares only the runs on the branch the page is anchored to" do
       repository = repository_with(%w[passed passed passed])
       ingest(repository,
@@ -188,6 +193,7 @@ RSpec.describe "Repository unstable tests", type: :request do
     # The window states what it was: how many runs, on which branch, and how many of them said
     # anything at all about how their examples ended. The third figure is the one a length cannot
     # substitute for.
+    # @intent: {"entity": "SpecObservation", "action": "state comparison window", "behavior": "the basis line reads Across the last 3 runs on main, every one of which reported an outcome for at least one example", "layer": "request"}
     it "states the window every figure was drawn from" do
       repository = repository_with(%w[passed failed passed])
 
@@ -199,6 +205,7 @@ RSpec.describe "Repository unstable tests", type: :request do
 
     # The matching rule is the one DECISION on this panel rather than a measurement, and a reader
     # cannot check the list against their own repository without it.
+    # @intent: {"entity": "SpecObservation", "action": "state matching rule", "behavior": "the basis says tests are matched across those runs by their durable identity and that an unannotated test is identified by description, so a rewording starts a new one", "layer": "request"}
     it "states the rule the tests were matched by" do
       repository = repository_with(%w[passed failed])
 
@@ -213,6 +220,7 @@ RSpec.describe "Repository unstable tests", type: :request do
 
     # Where the panel stops looking, said rather than left to be discovered. The search begins at
     # the runs' failures, so variance that never involved one is out of scope.
+    # @intent: {"entity": "SpecObservation", "action": "state reporting boundary", "behavior": "the basis says the search starts from what failed and that variance without ever failing is not reported by this panel", "layer": "request"}
     it "states the boundary it does not report past" do
       repository = repository_with(%w[passed failed])
 
@@ -226,6 +234,7 @@ RSpec.describe "Repository unstable tests", type: :request do
     # The scope claim above, made true. A test that alternated between two non-failing outcomes is
     # exactly what the narrowing cannot see, and a panel that quietly listed it would be describing
     # a population it does not read.
+    # @intent: {"entity": "SpecObservation", "action": "omit non-failing variance", "behavior": "a passed-pending alternation yields no rows and the none state says No example failed in any of the 4 runs", "layer": "request"}
     it "does not report a test that alternated between outcomes without ever failing" do
       repository = repository_with(%w[passed pending passed pending])
 
@@ -237,6 +246,7 @@ RSpec.describe "Repository unstable tests", type: :request do
 
     # The words are echoed, never reworded and never folded into a verdict — nothing platform-side
     # validates this string, so quoting what arrived is the only reading that cannot be wrong.
+    # @intent: {"entity": "SpecObservation", "action": "echo unknown outcome", "behavior": "the unrecognised word flaked is echoed as its own badge beside failed rather than read as a pass", "layer": "request"}
     it "echoes an outcome word it does not recognise rather than reading it as a pass" do
       repository = repository_with(%w[failed flaked])
 
@@ -248,6 +258,7 @@ RSpec.describe "Repository unstable tests", type: :request do
 
     # Silence inside a population that reported is not a pass and is not covered by the words
     # beside it. It wears `SpecObservation#outcome_label`'s own vocabulary for that reason.
+    # @intent: {"entity": "SpecObservation", "action": "count silent runs", "behavior": "two nil outcomes render as a single not reported \u00d72 entry after failed and passed", "layer": "request"}
     it "counts the runs that recorded the test and said nothing, as silence rather than as a pass" do
       repository = repository_with(["failed", "passed", nil, nil])
 
@@ -260,6 +271,7 @@ RSpec.describe "Repository unstable tests", type: :request do
   # Criterion 2 — the Vacuous Green refusal. `outcome` is nullable, so a window whose client sends
   # none produces exactly the empty list a perfectly stable window does.
   describe "a window in which fewer than two runs reported an outcome" do
+    # @intent: {"entity": "SpecObservation", "action": "refuse all-silent window", "behavior": "a nil-only window renders the incomparable state saying not one of the 3 runs on main said how any example ended and This one said nothing", "layer": "request"}
     it "says the comparison cannot be made, over a window that reported nothing at all" do
       repository = repository_with([nil, nil, nil])
 
@@ -279,6 +291,7 @@ RSpec.describe "Repository unstable tests", type: :request do
     # mirrored, a report read as silence, and it contradicts the "Slowest tests" panel drawn from
     # the same window directly above. Asserted here in BOTH directions, because a clause asserted
     # present and never asserted absent where it does not apply is how the false one shipped green.
+    # @intent: {"entity": "SpecObservation", "action": "refuse single-report window", "behavior": "with exactly one reporting run the incomparable state says that report is real but the only one here, and never claims This one said nothing", "layer": "request"}
     it "says it again over a window where exactly one run reported" do
       repository = repository_with([nil, "failed", nil])
 
@@ -296,6 +309,7 @@ RSpec.describe "Repository unstable tests", type: :request do
     # The whole point of the clause: no zero, and no empty list wearing the shape of a result. The
     # honest zero and the basis paragraph are BOTH withheld, because both are claims about a
     # comparison that did not happen.
+    # @intent: {"entity": "SpecObservation", "action": "withhold zero when silent", "behavior": "over an all-silent two-run window neither the none state, the basis nor any row renders, and no 0-tests figure appears", "layer": "request"}
     it "prints no zero and no list over it" do
       repository = repository_with([nil, nil])
 
@@ -315,6 +329,7 @@ RSpec.describe "Repository unstable tests", type: :request do
     # outcome. Two panels on one page cannot disagree about whether CI said anything, so the
     # absence is asserted here as well as on the multi-run window above — one red example would
     # not show that both states have reach.
+    # @intent: {"entity": "SpecObservation", "action": "refuse single-run window", "behavior": "one fully-reporting run renders the incomparable state saying one run's outcome cannot have changed from anything, never This one said nothing", "layer": "request"}
     it "says it over a single run that reported everything" do
       repository = repository_with(%w[failed])
 
@@ -329,6 +344,7 @@ RSpec.describe "Repository unstable tests", type: :request do
 
     # A window with no per-example rows at all is not this state — it is a repository with no
     # cross-run test history to discuss, and the panel stays off rather than explaining itself.
+    # @intent: {"entity": "SpecObservation", "action": "omit panel without examples", "behavior": "a repository whose two runs recorded no per-example rows answers 200 with no panel rendered", "layer": "request"}
     it "renders no panel at all for a window that recorded no examples" do
       repository = create_repository(user: @user)
       2.times do |index|
@@ -346,6 +362,7 @@ RSpec.describe "Repository unstable tests", type: :request do
   # Criterion 3 — the honest zero, reachable only behind the clause above, and worded against the
   # runs it was drawn from rather than the length of the window.
   describe "a window that reported outcomes and held nothing unstable" do
+    # @intent: {"entity": "SpecObservation", "action": "word clean zero", "behavior": "an all-passing window's none state says No example failed in any of the 3 runs on main that reported outcomes and that the comparison was supported", "layer": "request"}
     it "words the zero against the runs that reported, where nothing failed at all" do
       repository = repository_with(%w[passed passed passed])
 
@@ -358,6 +375,7 @@ RSpec.describe "Repository unstable tests", type: :request do
 
     # A different fact from "nothing failed", and one a reader with a permanently red test needs
     # said differently: things failed, and they always failed.
+    # @intent: {"entity": "SpecObservation", "action": "word always-failed zero", "behavior": "an always-failing window's none state says 1 description failed somewhere in the 2 runs on main and never reported any other outcome anywhere in them", "layer": "request"}
     it "words it differently where things failed and always failed" do
       repository = repository_with(%w[failed failed])
 
@@ -370,6 +388,7 @@ RSpec.describe "Repository unstable tests", type: :request do
 
     # The zero is only ever a zero of the population it counted, so the window sentence is rendered
     # over it exactly as it is over a populated list.
+    # @intent: {"entity": "SpecObservation", "action": "state zero's window", "behavior": "even over an empty result the basis still reads Across the last 2 runs on main", "layer": "request"}
     it "still states the window the zero was drawn from" do
       repository = repository_with(%w[passed passed])
 
@@ -395,6 +414,7 @@ RSpec.describe "Repository unstable tests", type: :request do
       repository
     end
 
+    # @intent: {"entity": "SpecObservation", "action": "exclude unnamed rows", "behavior": "the 3 unnamed rows stay out of the ranking while the basis counts them and says two of those are not known to be one test", "layer": "request"}
     it "excludes them from the matching and says how many rows it excluded" do
       get repository_path(unnamed_window)
 
@@ -407,6 +427,7 @@ RSpec.describe "Repository unstable tests", type: :request do
     # Counted in ROWS and worded that way. An unnamed row is precisely a row this panel cannot say
     # is a test, so reporting a number of "tests" would be the identity claim the exclusion
     # declines to make.
+    # @intent: {"entity": "SpecObservation", "action": "never pool unnamed rows", "behavior": "the list holds only the named test's single row and the basis never says 3 tests", "layer": "request"}
     it "never pools the unnamed rows into one test of their own" do
       get repository_path(unnamed_window)
 
@@ -434,6 +455,7 @@ RSpec.describe "Repository unstable tests", type: :request do
       repository
     end
 
+    # @intent: {"entity": "SpecObservation", "action": "word single exclusion", "behavior": "one unnamed row reads 1 row in this window carried no description, excluded from the matching rather than pooled into a test", "layer": "request"}
     it "states the exclusion in the singular when exactly one row carried no description" do
       get repository_path(single_unnamed_window)
 
@@ -448,6 +470,7 @@ RSpec.describe "Repository unstable tests", type: :request do
 
     # The defect this pins: a hardcoded numeral in the second clause that does not derive from the
     # count in the first, so the sentence counted 1 and quantified over 2 in one breath.
+    # @intent: {"entity": "SpecObservation", "action": "keep singular grammar", "behavior": "the single-unnamed-row window's basis never says two of those nor the ungrammatical 1 rows", "layer": "request"}
     it "never quantifies over two rows when only one carried no description" do
       get repository_path(single_unnamed_window)
 
@@ -457,6 +480,7 @@ RSpec.describe "Repository unstable tests", type: :request do
 
     # The clause is about THIS window and appears only when there is something to say. "0 rows
     # carried no description" is a sentence about arithmetic.
+    # @intent: {"entity": "SpecObservation", "action": "omit unnamed clause", "behavior": "a fully-named window's basis says nothing about rows carrying no description", "layer": "request"}
     it "says nothing about unnamed rows when every row carried a description" do
       get repository_path(repository_with(%w[passed failed]))
 
@@ -480,6 +504,7 @@ RSpec.describe "Repository unstable tests", type: :request do
       repository
     end
 
+    # @intent: {"entity": "SpecObservation", "action": "report shared description", "behavior": "the twice-carried description is kept out of the ranked rows and its own section says 6 examples under this description across 3 of 3 runs", "layer": "request"}
     it "reports it as two examples sharing a description, not as an outcome change" do
       get repository_path(shared_description_window)
 
@@ -489,6 +514,7 @@ RSpec.describe "Repository unstable tests", type: :request do
                                           normalize_ws: true)
     end
 
+    # @intent: {"entity": "SpecObservation", "action": "explain shared exclusion", "behavior": "the shared section says a description is not a key within a single run and that calling them flaky would be a false positive manufactured by the matching rule", "layer": "request"}
     it "says why the matching rule could not rule on it" do
       get repository_path(shared_description_window)
 
@@ -500,6 +526,7 @@ RSpec.describe "Repository unstable tests", type: :request do
 
     # Not silently dropped either. A dropped group is a silence the reader has no way to notice —
     # the mutation that turns this example red is deleting the section rather than the label.
+    # @intent: {"entity": "SpecObservation", "action": "avoid silent drop", "behavior": "the shared-description section renders and says 1 description varied in outcome across this window", "layer": "request"}
     it "does not leave the window looking like an honest zero" do
       get repository_path(shared_description_window)
 
@@ -511,6 +538,7 @@ RSpec.describe "Repository unstable tests", type: :request do
     # The zero directly above the section has to be worded against it. "Not one of them reported
     # any other outcome" is FALSE over this window — its shared description reported two — and it
     # would be printed inches above the section saying so.
+    # @intent: {"entity": "SpecObservation", "action": "align zero with section", "behavior": "the zero above the section reads no single-example description changed its outcome across the 3 runs, never the contradicting not-one-of-them wording", "layer": "request"}
     it "words the zero above it against what the section reports, rather than contradicting it" do
       get repository_path(shared_description_window)
 
@@ -522,6 +550,7 @@ RSpec.describe "Repository unstable tests", type: :request do
 
     # The section is a disclosure, not a fixture of the page: a window with no ambiguous group
     # renders none of it.
+    # @intent: {"entity": "SpecObservation", "action": "omit shared section", "behavior": "a window of one-example-per-run descriptions renders no shared-description section", "layer": "request"}
     it "renders no such section where every description was one example per run" do
       get repository_path(repository_with(%w[passed failed]))
 
@@ -532,6 +561,7 @@ RSpec.describe "Repository unstable tests", type: :request do
   # Criterion 6 — per the project's semantic-identity rule a test that MOVED is the same test and
   # keeps its history, so a group spanning two files is a disclosure rather than an error.
   describe "a test recorded under more than one spec file" do
+    # @intent: {"entity": "SpecObservation", "action": "label spanning files", "behavior": "a test recorded under two files is the sole row wearing the note recorded under both spec/billing and spec/models invoice_spec paths", "layer": "request"}
     it "labels the group with the files its history spans" do
       repository = create_repository(user: @user)
       [["spec/models/invoice_spec.rb", "passed"],
@@ -552,6 +582,7 @@ RSpec.describe "Repository unstable tests", type: :request do
 
     # The label is a disclosure and not a fixture of every row — a test that stayed put does not
     # wear a note saying which single file it was in.
+    # @intent: {"entity": "SpecObservation", "action": "label single file nothing", "behavior": "a test whose history sits in one file carries no file note on its row", "layer": "request"}
     it "labels nothing on a test whose history sits in one file" do
       get repository_path(repository_with(%w[passed failed]))
 
@@ -579,6 +610,7 @@ RSpec.describe "Repository unstable tests", type: :request do
       repository
     end
 
+    # @intent: {"entity": "SpecObservation", "action": "disclose candidate cap", "behavior": "with 7 failing descriptions capped at 5 the basis says the 5 that failed fewest times were compared across runs and the other 2 are not represented above", "layer": "request"}
     it "discloses that it examined only part of what failed, and which part" do
       stub_const("SpecObservation::UNSTABLE_CANDIDATE_LIMIT", 5)
 
@@ -591,6 +623,7 @@ RSpec.describe "Repository unstable tests", type: :request do
       expect(basis_line).to have_text("the other 2 are not represented above", normalize_ws: true)
     end
 
+    # @intent: {"entity": "SpecObservation", "action": "keep varying candidate", "behavior": "the fewest-failures-first ordering keeps candidate 0000 \u2014 the one description that varied \u2014 as the sole listed row", "layer": "request"}
     it "keeps the end of the candidate list a change could still be found in" do
       stub_const("SpecObservation::UNSTABLE_CANDIDATE_LIMIT", 5)
 
@@ -616,6 +649,7 @@ RSpec.describe "Repository unstable tests", type: :request do
       repository
     end
 
+    # @intent: {"entity": "SpecObservation", "action": "scope capped zero", "behavior": "under the cap the zero reads 5 of the 7 failing descriptions were compared across runs and not one of those reported any other outcome", "layer": "request"}
     it "words the zero against the descriptions it compared, not against everything that failed" do
       stub_const("SpecObservation::UNSTABLE_CANDIDATE_LIMIT", 5)
 
@@ -630,6 +664,7 @@ RSpec.describe "Repository unstable tests", type: :request do
 
     # The mutation: deleting the `#truncated?` branch restores a sentence asserting a property of
     # all seven, printed under a clause saying two of them were never examined.
+    # @intent: {"entity": "SpecObservation", "action": "disclaim unexamined descriptions", "behavior": "the caveat says the other 2 descriptions were never compared across runs so nothing here is a finding about them, and the all-seven zero wording never renders", "layer": "request"}
     it "says of the descriptions it never examined that nothing here is a finding about them" do
       stub_const("SpecObservation::UNSTABLE_CANDIDATE_LIMIT", 5)
 
@@ -648,6 +683,7 @@ RSpec.describe "Repository unstable tests", type: :request do
     # contrived one, and it is the only state in which either sentence takes its singular. Both
     # clauses are pinned in one example because one window renders both: the caveat under the zero,
     # and the disclosure on the basis line.
+    # @intent: {"entity": "SpecObservation", "action": "keep clauses singular", "behavior": "with exactly one unexamined description both clauses take the singular \u2014 the other 1 description was never compared and the other 1 is not represented above \u2014 with no plural forms", "layer": "request"}
     it "keeps both truncation clauses grammatical where exactly one description went unexamined" do
       stub_const("SpecObservation::UNSTABLE_CANDIDATE_LIMIT", 5)
 
@@ -683,6 +719,7 @@ RSpec.describe "Repository unstable tests", type: :request do
       repository
     end
 
+    # @intent: {"entity": "SpecObservation", "action": "qualify shared zero by cap", "behavior": "under the cap the shared-description zero reads among the 5 of 8 failing descriptions compared across the 2 runs and names the other 3 as never compared", "layer": "request"}
     it "qualifies the shared-description zero by the candidates it compared as well" do
       stub_const("SpecObservation::UNSTABLE_CANDIDATE_LIMIT", 5)
 
@@ -712,6 +749,7 @@ RSpec.describe "Repository unstable tests", type: :request do
     # this path either: the unqualified branch does not call it. The assertion below is a forward
     # guard on the rendered text rather than on the method — it reddens if a later change routes a
     # window the cap did not bite through a branch that appends the caveat.
+    # @intent: {"entity": "SpecObservation", "action": "leave zero unqualified", "behavior": "where the cap did not bite the zero keeps its plain 1-description wording and never says nothing here is a finding about them", "layer": "request"}
     it "leaves both zeroes unqualified where every failing description was examined" do
       get repository_path(repository_with(%w[failed failed]))
 
@@ -722,6 +760,7 @@ RSpec.describe "Repository unstable tests", type: :request do
     end
 
     # The disclosure appears only when the cap actually bit.
+    # @intent: {"entity": "SpecObservation", "action": "omit cap disclosure", "behavior": "an uncapped window's basis never says not represented above", "layer": "request"}
     it "discloses nothing where every failing description was examined" do
       get repository_path(repository_with(%w[passed failed]))
 
@@ -796,6 +835,7 @@ RSpec.describe "Repository unstable tests", type: :request do
     # and the four this example pins for THIS panel are unchanged, which is the half the assertion
     # is here to hold still. The added read moves with neither the length of the window nor the
     # size of the suite, since it counts one run's rows.
+    # @intent: {"entity": "SpecObservation", "action": "constant reads by scale", "behavior": "spec_observations reads total 19 on both a 3-run 3-example and a 30-run 200-example window, with the panel populated at 4 rows", "layer": "request"}
     it "costs the same four reads at 30 runs of 200 examples as at 3 runs of 3" do
       small = create_repository(user: @user, github_full_name: "acme/small-suite")
       3.times do |index|
@@ -842,6 +882,7 @@ RSpec.describe "Repository unstable tests", type: :request do
 
     # The candidate narrowing is what makes the composition affordable, and its `IN` list is capped
     # — so the number of round trips cannot follow how red the suite went either.
+    # @intent: {"entity": "SpecObservation", "action": "constant reads when red", "behavior": "an all-red 4-run 300-example window still costs exactly 19 spec_observations reads", "layer": "request"}
     it "costs the same reads on a window where every test failed in every run" do
       repository = create_repository(user: @user)
       4.times do |index|
@@ -857,6 +898,7 @@ RSpec.describe "Repository unstable tests", type: :request do
 
     # The gate is what it says it is: a window that cannot be compared asks nothing past the probe
     # that established it, so the state that says the least also costs the least.
+    # @intent: {"entity": "SpecObservation", "action": "gate before grouping", "behavior": "an incomparable window costs 15 reads and none of them is the outcome-narrowed window grouping over test_run_id IN", "layer": "request"}
     it "asks nothing past the gating probe on a window that cannot be compared" do
       repository = repository_with([nil, nil, nil])
 
@@ -910,6 +952,7 @@ RSpec.describe "Repository unstable tests", type: :request do
   # be one more thing to keep in step and would say nothing about THIS panel. What that guard cannot
   # see is markup that avoids every banned pattern while still hand-rolling something the component
   # library already renders, so what is asserted here is that the badges came from the component.
+  # @intent: {"entity": "SpecObservation", "action": "use badge component", "behavior": "the failed word renders inside the rounded-full text-xs badge span carrying the bg-app-error-surface class", "layer": "request"}
   it "renders its outcome words through the badge component rather than by hand" do
     get repository_path(repository_with(%w[passed failed]))
 
@@ -919,6 +962,7 @@ RSpec.describe "Repository unstable tests", type: :request do
 
   # Read-only suite telemetry, outside the `keys.manage` gate — the same class of information as
   # the panels above it. Nothing here is credential metadata and nothing here actions anything.
+  # @intent: {"entity": "SpecObservation", "action": "serve view-only member", "behavior": "a member whose only permission is view sees the panel listing the outcome-changing test", "layer": "request"}
   it "is visible to a member with only 'view'" do
     owner_repository = repository_with(%w[passed failed])
     member = create_user(github_uid: "2002", github_handle: "member")

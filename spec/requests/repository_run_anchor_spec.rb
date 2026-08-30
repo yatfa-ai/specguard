@@ -89,6 +89,7 @@ RSpec.describe "Repository run anchor", type: :request do
     # and roughly twenty panels hang off that ivar, so what is being pinned is that the RE-ANCHORING
     # is at the ivar and not at each panel — one of them reading the parameter for itself is exactly
     # how two panels on one page come to name two different commits.
+    # @intent: {"entity": "TestRun", "action": "re-anchor run-grain panels", "behavior": "with commit_sha naming the older run the Overview reads Measured on its 7-char sha and the file-duration, directory, unannotated and slowest-example panels list the older run's spec/models rows the newest run never held", "layer": "request"}
     it "describes the named run in every run-grain panel, not the repository's newest" do
       older, = two_run_history
 
@@ -109,6 +110,7 @@ RSpec.describe "Repository run anchor", type: :request do
 
     # The drill-ins are the panels that would be easiest to leave behind: each one is guarded on its
     # own ask AND on the run, and each takes the run as an argument rather than reading it.
+    # @intent: {"entity": "TestRun", "action": "drill into anchored run", "behavior": "commit_sha composed with spec_directory renders refund_spec.rb rows in the spec-directory-files and unannotated-examples drill-downs of the older run", "layer": "request"}
     it "opens a drill-down against the named run rather than against the newest one" do
       older, = two_run_history
 
@@ -121,6 +123,7 @@ RSpec.describe "Repository run anchor", type: :request do
     # Success criterion 3, first half. The resolved ask is disclosed, and it is not decoration: every
     # panel goes on correctly labelling the run it drew, which is exactly how a page pinned to a
     # three-week-old commit reads to a reader who arrived by a link.
+    # @intent: {"entity": "TestRun", "action": "disclose resolved anchor", "behavior": "the anchor notice says the page is anchored on the named run's 7-char sha and that it is the run this URL names", "layer": "request"}
     it "says the page is anchored on the run the URL named" do
       older, = two_run_history
 
@@ -154,6 +157,7 @@ RSpec.describe "Repository run anchor", type: :request do
       get [uri.path, uri.query].compact.join("?")
     end
 
+    # @intent: {"entity": "TestRun", "action": "offer un-anchor gesture", "behavior": "the Overview's Show the newest run link is present and its href query carries no commit_sha key", "layer": "request"}
     it "offers a gesture whose href drops the anchor" do
       older, = two_run_history
 
@@ -166,6 +170,7 @@ RSpec.describe "Repository run anchor", type: :request do
     # Success criterion, first half: ONE CLICK returns the page to the newest run. All three of the
     # page's statements about the anchor go with it — the Overview disclosure, and the "Recent runs"
     # marking, which is computed off `@run_anchor_run` and so clears for free with the ask.
+    # @intent: {"entity": "TestRun", "action": "return to newest run", "behavior": "following the gesture answers 200 with the Overview measuring the newest run's sha, no anchor notice and no marked Recent-runs row", "layer": "request"}
     it "returns the page to the newest run when followed" do
       older, newer = two_run_history
 
@@ -190,6 +195,7 @@ RSpec.describe "Repository run anchor", type: :request do
     # dropped a SIBLING'S ask is the failure the matrix exists for, and it would keep this green. What
     # this adds is the FOLLOW: the ask survives the href and the panel it names is still open on the
     # page the click lands on, which the matrix (an href-level spec) does not look at.
+    # @intent: {"entity": "TestRun", "action": "keep sibling asks open", "behavior": "the un-anchor href retains branch, spec_directory, spec_file and repeated_description and the landed page still shows the spec-file-examples panel for checkout_spec.rb", "layer": "request"}
     it "keeps every other ask open" do
       older, = two_run_history
       open_asks = { branch: "main",
@@ -214,6 +220,7 @@ RSpec.describe "Repository run anchor", type: :request do
     #
     # The fallback disclosure is asserted alongside the absence, so this cannot pass on a page that
     # simply failed to render the whole block.
+    # @intent: {"entity": "TestRun", "action": "hide gesture on fallback", "behavior": "where the sha names no run the notice says SpecGuard has no run for it and the Show the newest run gesture is absent", "layer": "request"}
     it "is absent where the ask fell back, which is already showing the newest run" do
       two_run_history
 
@@ -224,6 +231,7 @@ RSpec.describe "Repository run anchor", type: :request do
     end
 
     # And on the ordinary page, where there is no state to leave and no sentence to answer.
+    # @intent: {"entity": "TestRun", "action": "hide gesture without ask", "behavior": "on a default page with no commit_sha parameter the un-anchor gesture does not render", "layer": "request"}
     it "is absent when the reader asked for no anchor at all" do
       two_run_history
 
@@ -236,6 +244,7 @@ RSpec.describe "Repository run anchor", type: :request do
   describe "a sha the repository has no run for" do
     # Success criterion 2. Not a 404 and not an error — a stale bookmark, a pruned run and a commit
     # whose CI never reported are all ordinary ways to arrive here.
+    # @intent: {"entity": "TestRun", "action": "fall back to newest", "behavior": "an unknown sha answers 200 rather than 404 and the Overview measures the newest run's sha", "layer": "request"}
     it "falls back to the newest run rather than 404ing" do
       _older, newer = two_run_history
 
@@ -248,6 +257,7 @@ RSpec.describe "Repository run anchor", type: :request do
     # Success criterion 2, second half, and criterion 3. THE defect this ticket exists to close: the
     # URL names one sha, the page describes another run, and until now nothing anywhere said the ask
     # had not been honoured.
+    # @intent: {"entity": "TestRun", "action": "disclose fallback run", "behavior": "the notice names the unmatched sha and says the page is anchored on the newest run's 7-char sha instead", "layer": "request"}
     it "says the fallback happened and which run it is showing instead" do
       _older, newer = two_run_history
 
@@ -261,6 +271,7 @@ RSpec.describe "Repository run anchor", type: :request do
     # to an ask must not be able to render the same page. A guard that dropped the ask silently
     # would satisfy every assertion above about the fallback's FIGURES — they are the newest run's
     # either way — and only this separates "we fell back and said so" from "we ignored you".
+    # @intent: {"entity": "TestRun", "action": "distinguish fallback rendering", "behavior": "the body for an unresolved sha differs from the resolved-ask body and carries a non-nil anchor notice", "layer": "request"}
     it "does not render a fallback the way it renders a resolved ask" do
       older, = two_run_history
 
@@ -277,6 +288,7 @@ RSpec.describe "Repository run anchor", type: :request do
     # nothing: "anchored on — instead" would name an empty string where a commit should be, and the
     # Overview's empty state below says CI has never reported, which is true and is not what this
     # reader asked.
+    # @intent: {"entity": "TestRun", "action": "disclose empty repository", "behavior": "on a repository with no runs at all the anchor notice says there is no run at all on this repository yet", "layer": "request"}
     it "says so plainly when there is no run to fall back to either" do
       get repository_path(repository, commit_sha: "deadbeefdeadbeef")
 
@@ -291,6 +303,7 @@ RSpec.describe "Repository run anchor", type: :request do
     # one of them sending the reader to a marked row that a fallback never renders. Silence here is
     # the answer rather than a third wording: the Overview disclosed the substitution, and this panel
     # has no marking to explain.
+    # @intent: {"entity": "TestRun", "action": "silence caption on fallback", "behavior": "the Recent runs caption never says anchored and no row is marked when the ask fell back", "layer": "request"}
     it "says nothing in the Recent runs caption, which has no marked row to explain" do
       two_run_history
 
@@ -309,6 +322,7 @@ RSpec.describe "Repository run anchor", type: :request do
     #
     # Both halves asserted, because the fix moved an escape: the sha renders as the reader typed it
     # AND the raw body carries no live markup.
+    # @intent: {"entity": "TestRun", "action": "echo sha escaped once", "behavior": "a sha containing an ampersand and script markup is echoed once as typed in the notice while the raw body carries no live script markup", "layer": "request"}
     it "echoes an unvalidated sha escaped exactly once, and never as markup" do
       two_run_history
 
@@ -323,6 +337,7 @@ RSpec.describe "Repository run anchor", type: :request do
   describe "no ask at all" do
     # The page as it was. A default call must be byte-identical to the one this page served before
     # the parameter existed — the disclosure is silent, and the anchor is the newest run.
+    # @intent: {"entity": "TestRun", "action": "default to newest run", "behavior": "without the parameter the Overview measures the newest run's sha and no anchor notice renders", "layer": "request"}
     it "anchors on the newest run and says nothing about anchors" do
       _older, newer = two_run_history
 
@@ -335,6 +350,7 @@ RSpec.describe "Repository run anchor", type: :request do
     # `?commit_sha=` is "no ask", not `WHERE commit_sha = ''`. The column is NOT NULL and `TestRun`
     # validates its presence, so a blank matches nothing — and an implementation that queried on it
     # would fall back while the page claimed a request had been made.
+    # @intent: {"entity": "TestRun", "action": "treat blank as no ask", "behavior": "an empty commit_sha renders the newest-run page with no anchor notice rather than querying for an empty sha", "layer": "request"}
     it "reads a blank commit_sha as no ask rather than as an empty query" do
       _older, newer = two_run_history
 
@@ -370,6 +386,7 @@ RSpec.describe "Repository run anchor", type: :request do
     # The positive-path example the shared examples' own doc comment requires to sit beside them: a
     # guard that swallowed EVERY value would answer 200 on all three malformed shapes too, and
     # nothing above separates "the guard rejects non-Strings" from "the parameter does nothing".
+    # @intent: {"entity": "TestRun", "action": "honour string commit sha", "behavior": "a commit_sha that is a plain string re-anchors the Overview onto that run's 7-char sha", "layer": "request"}
     it "honours a commit_sha that IS a string" do
       older, = two_run_history
 
@@ -411,6 +428,7 @@ RSpec.describe "Repository run anchor", type: :request do
       older
     end
 
+    # @intent: {"entity": "TestRun", "action": "keep delivery verdict stable", "behavior": "anchoring on an older run of a healthy repository keeps the connection indicator saying Connected and never Deliveries refused", "layer": "request"}
     it "does not flip to 'refusing' when the reader anchors on an old run" do
       older = healthy_repository_with_an_older_refusal
 
@@ -422,6 +440,7 @@ RSpec.describe "Repository run anchor", type: :request do
 
     # The other half, so the example above cannot pass by the verdict having been disabled: the same
     # fixture with the newest accepted run removed IS refusing, and says so under the same anchor.
+    # @intent: {"entity": "TestRun", "action": "report refusing repository", "behavior": "with the newest accepted run removed the same anchor renders Deliveries refused in the connection indicator", "layer": "request"}
     it "still reports a genuinely refusing repository under an anchor" do
       older = healthy_repository_with_an_older_refusal
       repository.test_runs.where.not(id: older.id).destroy_all
@@ -438,6 +457,7 @@ RSpec.describe "Repository run anchor", type: :request do
   # and is NOT expected to hold under an explicit ask; the disclosure and the marked row are what
   # keep the difference from reading as a rendering bug.
   describe "the panels that are histories rather than rows" do
+    # @intent: {"entity": "TestRun", "action": "keep runs list newest first", "behavior": "under an anchor on the older run Recent runs still lists the newer sha above the older one", "layer": "request"}
     it "leaves Recent runs newest-first under an anchor on an older run" do
       older, newer = two_run_history
 
@@ -447,6 +467,7 @@ RSpec.describe "Repository run anchor", type: :request do
       expect(shas).to eq([newer.commit_sha.first(7), older.commit_sha.first(7)])
     end
 
+    # @intent: {"entity": "TestRun", "action": "mark anchored row", "behavior": "the only aria-current link in Recent runs is the anchored older run's 7-char sha", "layer": "request"}
     it "marks the anchored row rather than the top one" do
       older, = two_run_history
 
@@ -456,6 +477,7 @@ RSpec.describe "Repository run anchor", type: :request do
       expect(current).to eq([older.commit_sha.first(7)])
     end
 
+    # @intent: {"entity": "TestRun", "action": "mark nothing by default", "behavior": "a default page renders no aria-current rows in Recent runs", "layer": "request"}
     it "marks nothing when the reader chose nothing" do
       two_run_history
 
@@ -473,6 +495,7 @@ RSpec.describe "Repository run anchor", type: :request do
     # Asserted by POSITION, which is the only thing that separates them: both rows print the same
     # seven characters. Newest-first, so the re-run is row 1 and the run it re-ran is row 2, and the
     # ask resolves to the newer of the two.
+    # @intent: {"entity": "TestRun", "action": "mark one of duplicates", "behavior": "two runs sharing one sha plus a newer run yield exactly one marked row, at position 1 \u2014 the newer re-run", "layer": "request"}
     it "marks one row when two runs share a commit" do
       ingest_run(commit_sha: "0nesha00cafe0001", at: 3.hours.ago,
                  specs: [spec_in("spec/models/order_spec.rb", 1)])
@@ -486,6 +509,7 @@ RSpec.describe "Repository run anchor", type: :request do
       expect(marked_row_positions).to eq([1])
     end
 
+    # @intent: {"entity": "TestRun", "action": "qualify caption conditionally", "behavior": "the Recent runs caption gains not necessarily the newest only under an explicit anchor and never on a default page", "layer": "request"}
     it "qualifies the caption only where the qualification applies" do
       older, = two_run_history
 
@@ -500,6 +524,7 @@ RSpec.describe "Repository run anchor", type: :request do
     # `?commit_sha=` says nothing about which series to draw — that ask is `?branch=`, and this panel
     # is built around it. Asserted through the branch fallback notice, which is the panel's own
     # statement of which branch it settled on: anchoring on a run of another branch must not move it.
+    # @intent: {"entity": "TestRun", "action": "hold trajectory branch", "behavior": "anchoring on a feature-branch run leaves the suite trajectory drawing main, not feature/x", "layer": "request"}
     it "does not move the suite trajectory onto the anchored run's branch" do
       older = ingest_run(commit_sha: "0lder000cafe0001", at: 3.hours.ago, branch: "feature/x",
                          specs: [spec_in("spec/models/order_spec.rb", 1)])
@@ -535,6 +560,7 @@ RSpec.describe "Repository run anchor", type: :request do
     end
 
     # The ask IS honoured — this is not a fallback — and the panel simply cannot show it.
+    # @intent: {"entity": "TestRun", "action": "anchor beyond list bound", "behavior": "asking for the eldest of eleven runs re-anchors the Overview while Recent runs keeps its 10 rows and marks none", "layer": "request"}
     it "anchors every panel on the named run and marks no row" do
       eldest = eleven_run_history
 
@@ -548,6 +574,7 @@ RSpec.describe "Repository run anchor", type: :request do
     # The caption for that reader: which run holds the page, and that it is not one of these rows.
     # Both halves matter — dropping the sentence entirely would leave them reading ten unmarked rows
     # under a page anchored somewhere else, with the Overview's disclosure the only clue.
+    # @intent: {"entity": "TestRun", "action": "say anchor off-list", "behavior": "the caption names the anchored sha, says it is not among the most recent runs listed here and never promises a marked row", "layer": "request"}
     it "says the anchored run is not among the rows rather than promising a marked one" do
       eldest = eleven_run_history
 
@@ -577,6 +604,7 @@ RSpec.describe "Repository run anchor", type: :request do
       response.parsed_body["run_anchor"]
     end
 
+    # @intent: {"entity": "TestRun", "action": "match api resolved anchor", "behavior": "the API reports run_anchor resolved true with the older sha and the page Overview measures that same run", "layer": "request"}
     it "names the same run as the API's run_anchor for a sha that resolves" do
       older, = two_run_history
 
@@ -587,6 +615,7 @@ RSpec.describe "Repository run anchor", type: :request do
       expect(panel_text("overview")).to include("Measured on #{anchor["commit_sha"].first(7)}")
     end
 
+    # @intent: {"entity": "TestRun", "action": "match api fallback anchor", "behavior": "for an unresolvable sha the API reports resolved false with the requested sha and the web page measures and discloses the same fallback run", "layer": "request"}
     it "falls back to the same run as the API's run_anchor for a sha that does not" do
       two_run_history
 
@@ -605,6 +634,7 @@ RSpec.describe "Repository run anchor", type: :request do
   # anchor, behind the same `:view` authorization as the page it re-renders. The `rendered_controls`
   # matrix in spec/requests/repository_sharing_spec.rb is where controls are pinned, and this must
   # not enter it.
+  # @intent: {"entity": "TestRun", "action": "serve anchor to viewer", "behavior": "a view-only member gets 200, sees the older run linked in Recent runs and the Overview measuring that run", "layer": "request"}
   it "offers the run anchor to a view-only member, and the anchor answers them" do
     older, = two_run_history
     member = sign_in_via_github(uid: "9999", info: { nickname: "hubot" })
@@ -672,6 +702,7 @@ RSpec.describe "Repository run anchor", type: :request do
       [oldest, newer.last]
     end
 
+    # @intent: {"entity": "TestRun", "action": "disclose retention aging", "behavior": "a past-boundary anchored run gets a notice saying aged out of the retention window of its branch's most recent runs, hedged as may have little or nothing left to show, with no flat emptiness claim and the Overview still Measured on its sha", "layer": "request"}
     it "says so on the anchored run, and says it as retention rather than as an empty suite" do
       oldest, = history_past_the_boundary
 
@@ -723,6 +754,7 @@ RSpec.describe "Repository run anchor", type: :request do
     # — the rows are written in the shape `Ingest::ObservationRecorder` writes (see
     # `spec/models/slowest_tests_spec.rb`), and `spec/models/test_run_spec.rb:512` builds runs the
     # same way for the same reason.
+    # @intent: {"entity": "TestRun", "action": "avoid false emptiness claim", "behavior": "a past-boundary run still holding one observation renders the slowest-examples panel while the aged-out notice stays hedged and makes no flat claim of emptiness", "layer": "request"}
     it "does not tell the reader the panels are empty while a panel is rendering rows" do
       stub_const("SpecObservation::BRANCH_RETENTION_RUNS", 3)
       # A quiet bucket: four runs on a branch that has stopped ingesting, so the oldest is strictly
@@ -765,6 +797,7 @@ RSpec.describe "Repository run anchor", type: :request do
     # The other side of the branch, and the half that makes the example above mean anything: the
     # sentence is absent on a run inside the window. An element that renders unconditionally would
     # satisfy every assertion above.
+    # @intent: {"entity": "TestRun", "action": "stay silent inside window", "behavior": "anchoring on the newest run inside the retention window renders no aged-out notice at all", "layer": "request"}
     it "says nothing at all on a run still inside the retention window" do
       _oldest, newest = history_past_the_boundary
 
@@ -775,6 +808,7 @@ RSpec.describe "Repository run anchor", type: :request do
 
     # A default (unparameterised) page on an ordinary repository is untouched — no repository is
     # near the real bound, and the sentence must not appear on one that is not.
+    # @intent: {"entity": "TestRun", "action": "stay silent by default", "behavior": "a default page on an ordinary repository renders no aged-out notice while the real bound exceeds its two runs", "layer": "request"}
     it "says nothing on a default page at the real retention bound" do
       two_run_history
 
@@ -787,6 +821,7 @@ RSpec.describe "Repository run anchor", type: :request do
     # ⭐ The page and the endpoint read the SAME predicate, so they cannot disagree about a run —
     # the property the ticket asks for, asserted as an agreement rather than as two separate
     # renderings that happen to match today.
+    # @intent: {"entity": "TestRun", "action": "agree with api retention", "behavior": "the API reports observations_retained false for the oldest run and true for the newest, and the page shows the notice exactly on the run where it is false", "layer": "request"}
     it "agrees with the API's run_anchor about whether the run's observations are retained" do
       oldest, newest = history_past_the_boundary
 

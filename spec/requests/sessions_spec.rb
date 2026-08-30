@@ -3,6 +3,7 @@
 require "rails_helper"
 
 RSpec.describe "GitHub sign-in", type: :request do
+  # @intent: {"entity": "Session", "action": "sign in new user", "behavior": "completing the GitHub callback without an installation creates exactly one User row, redirects to /repositories, and the followed page includes the octocat handle", "layer": "request"}
   it "signs a new user in and lands them on their repositories" do
     # `installation: false` because this example is about the SIGN-IN response. Connecting an
     # installation drives the App's callback afterwards, which would leave `response` on the page
@@ -14,6 +15,7 @@ RSpec.describe "GitHub sign-in", type: :request do
     expect(response.body).to include("octocat")
   end
 
+  # @intent: {"entity": "Session", "action": "reuse existing user", "behavior": "a second GitHub callback for the same identity leaves User.count unchanged instead of creating a duplicate row", "layer": "request"}
   it "reuses the existing user on a second sign-in" do
     sign_in_via_github
 
@@ -23,6 +25,7 @@ RSpec.describe "GitHub sign-in", type: :request do
   # `github_handle` carries no uniqueness constraint on purpose: a recycled GitHub handle can
   # legitimately collide with an existing row's, and a constraint would turn that into a 500 in the
   # sign-in path for the innocent second person. Ambiguity is reported by `User.resolve_by_handle`.
+  # @intent: {"entity": "Session", "action": "sign in colliding handle", "behavior": "a second uid also nicknamed octocat creates its own User row and redirects to /repositories, both uids 1001 and 2002 hold the handle, and resolve_by_handle reports it ambiguous", "layer": "request"}
   it "signs a second user in when their handle collides with an existing row's" do
     sign_in_via_github(uid: "1001", info: { nickname: "octocat" }, installation: false)
 
@@ -35,6 +38,7 @@ RSpec.describe "GitHub sign-in", type: :request do
     expect(User.resolve_by_handle("octocat")).to be_ambiguous
   end
 
+  # @intent: {"entity": "Session", "action": "sign out", "behavior": "DELETE /sign_out redirects to the root path and a follow-up GET /repositories redirects there too instead of rendering the dashboard", "layer": "request"}
   it "signs the user out again" do
     sign_in_via_github
 
@@ -45,12 +49,14 @@ RSpec.describe "GitHub sign-in", type: :request do
     expect(response).to redirect_to(root_path)
   end
 
+  # @intent: {"entity": "Session", "action": "refuse signed-out dashboard", "behavior": "a signed-out GET /repositories redirects to the root path rather than rendering the dashboard", "layer": "request"}
   it "sends a signed-out visitor away from the dashboard" do
     get repositories_path
 
     expect(response).to redirect_to(root_path)
   end
 
+  # @intent: {"entity": "Session", "action": "report provider failure", "behavior": "GET /auth/failure with message invalid_credentials redirects to the root path and the followed page shows the invalid_credentials message instead of raising", "layer": "request"}
   it "reports a provider failure instead of raising" do
     get "/auth/failure", params: { message: "invalid_credentials" }
 
@@ -63,6 +69,7 @@ RSpec.describe "GitHub sign-in", type: :request do
   # chooses to sign in is one they simply outlast. Both halves are asserted: the door, and the
   # session already on the other side of it.
   describe "an archived user" do
+    # @intent: {"entity": "Session", "action": "refuse archived user", "behavior": "an archived account attempting the callback creates no User row, leaves session user_id nil, redirects to root with a page saying has been archived, keeps archived_at unchanged, and a later GET /repositories still redirects to root", "layer": "request"}
     it "is refused at the callback, and is not reactivated by it" do
       user = sign_in_via_github(installation: false)
       delete sign_out_path
@@ -90,6 +97,7 @@ RSpec.describe "GitHub sign-in", type: :request do
     # The identity upsert stays a pure upsert: it still refreshes the row it resolved. That is
     # deliberate (the row was already theirs and the refresh grants nothing), and pinned here so it
     # reads as a decision rather than as a leak someone should "fix".
+    # @intent: {"entity": "Session", "action": "refresh archived identity", "behavior": "the refused callback still upserts the identity, renaming the archived user handle to octocat-renamed while the account stays archived", "layer": "request"}
     it "still has its identity row refreshed by the refused attempt" do
       user = sign_in_via_github
       user.update!(archived_at: Time.current)
@@ -100,6 +108,7 @@ RSpec.describe "GitHub sign-in", type: :request do
       expect(user).to be_archived
     end
 
+    # @intent: {"entity": "Session", "action": "revoke live session", "behavior": "a session that already rendered GET /repositories 200 starts redirecting to root with a Sign in with GitHub to continue prompt once its user is archived, with no new callback request", "layer": "request"}
     it "stops authenticating with the session it was already holding" do
       user = sign_in_via_github
 

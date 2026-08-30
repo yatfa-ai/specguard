@@ -21,6 +21,7 @@ RSpec.describe "Account registration access", type: :request do
   end
 
   describe "with no grant ever captured" do
+    # @intent: {"entity": "RegistrationGrant", "action": "render absent state", "behavior": "a signed-in user with no grant ever captured gets a 200 account page whose panel carries data-grant-state absent and the sentence No current record", "layer": "request"}
     it "says there is no record — not that one lapsed" do
       get account_path
 
@@ -31,6 +32,7 @@ RSpec.describe "Account registration access", type: :request do
 
     # "You never had one" and "yours expired" have the same fix and are different facts. The page
     # must not report an age it does not have.
+    # @intent: {"entity": "RegistrationGrant", "action": "omit age and expiry", "behavior": "with no grant captured the page prints neither a Last refreshed nor a Lapses sentence", "layer": "request"}
     it "reports no age and no expiry" do
       get account_path
 
@@ -48,6 +50,7 @@ RSpec.describe "Account registration access", type: :request do
 
     # The three facts criterion 5 asks for, in one example because they are one sentence to a
     # reader: when it was refreshed, how much it covers, and when it lapses.
+    # @intent: {"entity": "RegistrationGrant", "action": "state age coverage expiry", "behavior": "a grant captured 2 days ago renders Last refreshed 2 days ago, Repositories covered, Lapses in 5 days and data-grant-state current", "layer": "request"}
     it "states when registration access was last refreshed, what it covers, and when it lapses" do
       get account_path
 
@@ -59,6 +62,7 @@ RSpec.describe "Account registration access", type: :request do
 
     # The count is the REGISTRABLE set, which is the set that actually permits anything —
     # `visible_full_names` grants nothing and would overstate what the reader can do.
+    # @intent: {"entity": "RegistrationGrant", "action": "count registrable set", "behavior": "the Repositories covered figure is 2, taken from the registrable pair rather than the three-repository visible set it also widened", "layer": "request"}
     it "counts the repositories it can register, not the wider visible set" do
       grant.update!(visible_full_names: %w[acme/billing-service acme/checkout acme/ledger])
 
@@ -71,6 +75,7 @@ RSpec.describe "Account registration access", type: :request do
     # The expiry shown must be the bound actually enforced. Asserted by MOVING the grant to a
     # timestamp derived from `MAX_AGE` and reading the page back, so a literal seven days written
     # into the view would survive an edit to the constant and fail here.
+    # @intent: {"entity": "RegistrationGrant", "action": "derive expiry from max age", "behavior": "a grant moved to MAX_AGE minus one day ago renders Lapses in 1 day, so the shown bound tracks the constant rather than a literal in the view", "layer": "request"}
     it "derives the expiry from `MAX_AGE` rather than restating it" do
       grant.update!(captured_at: (GithubRegistrationGrant::MAX_AGE - 1.day).ago)
 
@@ -89,6 +94,7 @@ RSpec.describe "Account registration access", type: :request do
                                 captured_at: (GithubRegistrationGrant::MAX_AGE + 1.minute).ago)
     end
 
+    # @intent: {"entity": "RegistrationGrant", "action": "render lapsed state", "behavior": "a grant captured past MAX_AGE renders data-grant-state lapsed with the sentences has lapsed and Lapsed", "layer": "request"}
     it "says the record has lapsed, and when" do
       get account_path
 
@@ -98,6 +104,7 @@ RSpec.describe "Account registration access", type: :request do
     end
 
     # The whole point of the page: the state is visible while everything else on it still works.
+    # @intent: {"entity": "RegistrationGrant", "action": "report lapse beside healthy key", "behavior": "with a used API key named Agent present the panel still reads lapsed while the key row beside it renders Agent", "layer": "request"}
     it "reports it while the key beside it goes on looking healthy" do
       key = create_user_api_key(user: person, name: "Agent")
       key.touch_last_used!
@@ -137,6 +144,7 @@ RSpec.describe "Account registration access", type: :request do
 
     before { with_configured_app }
 
+    # @intent: {"entity": "RegistrationGrant", "action": "render reconnect affordance", "behavior": "the page offers a Reconnect GitHub button whose href posts to github_installation_authorize with return_to the new-repository path", "layer": "request"}
     it "posts to the existing `github_installation_authorize` action" do
       get account_path
 
@@ -144,6 +152,7 @@ RSpec.describe "Account registration access", type: :request do
       expect(response.body).to include("Reconnect GitHub")
     end
 
+    # @intent: {"entity": "RegistrationGrant", "action": "offer reconnect in every state", "behavior": "the Reconnect GitHub button renders whether the grant is absent, current or lapsed", "layer": "request"}
     it "offers it whether the record is absent, current or lapsed" do
       get account_path
       expect(response.body).to include("Reconnect GitHub")
@@ -167,6 +176,7 @@ RSpec.describe "Account registration access", type: :request do
     # button EXACTLY as rendered (the `return_to` is read back out of the body rather than written
     # in here, so pointing the button somewhere that does not capture fails HERE), carry `state`
     # through the callback, and assert the STATE MOVED.
+    # @intent: {"entity": "RegistrationGrant", "action": "refresh grant via button", "behavior": "POSTing the authorize button exactly as rendered and completing the callback advances grant.captured_at and the panel reads current instead of lapsed", "layer": "request"}
     it "refreshes the grant when the reader follows it, and the panel stops reading lapsed" do
       grant = create_registration_grant(user: person, registrable: ["acme/billing-service"],
                                         captured_at: (GithubRegistrationGrant::MAX_AGE + 1.minute).ago)
@@ -195,6 +205,7 @@ RSpec.describe "Account registration access", type: :request do
     # inside `GithubRepositoryListing#github_sources`, so it fires only where a view renders a
     # picker — and `AccountsController` does not include that concern. Returning here would look
     # correct and refresh nothing.
+    # @intent: {"entity": "RegistrationGrant", "action": "return to capture page", "behavior": "the button's return_to is the new-repository path and never the account path, and AccountsController does not include GithubRepositoryListing", "layer": "request"}
     it "returns to a page that can actually capture, which this one cannot" do
       get account_path
 
@@ -210,6 +221,7 @@ RSpec.describe "Account registration access", type: :request do
   # no repositories, and would silently make the account page the second refresh point the ticket
   # forbids.
   describe "the cost of rendering it" do
+    # @intent: {"entity": "RegistrationGrant", "action": "render without github calls", "behavior": "rendering the account page with a current grant issues no GitHub calls and still answers 200 ok", "layer": "request"}
     it "makes no GitHub call" do
       create_registration_grant(user: person, captured_at: 3.days.ago)
       github = stub_github
@@ -220,6 +232,7 @@ RSpec.describe "Account registration access", type: :request do
       expect(github.calls).to be_empty
     end
 
+    # @intent: {"entity": "RegistrationGrant", "action": "leave grant untouched", "behavior": "rendering the page neither calls GithubRegistrationGrant.capture nor changes any attribute of the existing grant", "layer": "request"}
     it "neither captures a grant nor restamps the one it reads" do
       grant = create_registration_grant(user: person, captured_at: 3.days.ago)
       before_state = grant.attributes
@@ -233,6 +246,7 @@ RSpec.describe "Account registration access", type: :request do
 
     # One read of the grant for the page, through the `has_one`. A second would mean the view had
     # gone back for it rather than reading what the controller loaded.
+    # @intent: {"entity": "RegistrationGrant", "action": "read grant once", "behavior": "the page reads the github_registration_grants table exactly once through the has_one association", "layer": "request"}
     it "reads the grant once" do
       create_registration_grant(user: person)
 
@@ -245,6 +259,7 @@ RSpec.describe "Account registration access", type: :request do
   # A grant is one per person (unique index on `user_id`), and the page reads it through the
   # association off the SESSION — there is no parameter through which somebody else's could be
   # asked for.
+  # @intent: {"entity": "RegistrationGrant", "action": "scope to own grant", "behavior": "a stranger's grant renders nothing of itself \u2014 panel_state stays absent and the stranger-only repository name never appears", "layer": "request"}
   it "shows the signed-in person's own grant and nobody else's" do
     stranger = create_user(github_uid: "9009", github_handle: "hubot")
     create_registration_grant(user: stranger, registrable: ["acme/stranger-only"])

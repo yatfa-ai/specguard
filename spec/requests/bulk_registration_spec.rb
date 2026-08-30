@@ -24,6 +24,7 @@ RSpec.describe "Bulk organization registration", type: :request do
   end
 
   describe "GET /repositories/bulk — choosing an organization" do
+    # @intent: {"entity": "Repository", "action": "list choosable accounts", "behavior": "GET the bulk chooser with installations on acme (two repositories) and beta returns 200, offers both accounts, and badges acme with 2 repositories.", "layer": "request"}
     it "lists the organizations the App is installed on something in, with counts" do
       stub_github(repos: [github_repo("acme/api"), github_repo("acme/web"),
                           github_repo("beta/thing")])
@@ -41,6 +42,7 @@ RSpec.describe "Bulk organization registration", type: :request do
     # "withheld" set to explain any more: the OAuth listing returned every repository the user could
     # see and had to account for the ones they could not register, where an installation contains
     # only what somebody who administers those repositories deliberately handed over.
+    # @intent: {"entity": "Repository", "action": "omit empty accounts", "behavior": "Only installations contributing repositories become choices: a listing with just acme/api offers acme and renders no withheld-set readonly marker for accounts nothing was handed over from.", "layer": "request"}
     it "does not offer an organization the App is not installed on anything in" do
       stub_github(repos: [github_repo("acme/api")])
 
@@ -53,6 +55,7 @@ RSpec.describe "Bulk organization registration", type: :request do
     # SPGD-818 reversed this. It used to read "does not offer the user's own repositories as an
     # organization" — the filter that was the whole of the bug. A personal namespace is now a card
     # like any other, and it carries a marker so the page still says which kind it is.
+    # @intent: {"entity": "Repository", "action": "offer personal namespace", "behavior": "The user's own namespace renders as a card beside the organizations, with octocat linking to the bulk picker and carrying a Personal marker instead of being filtered out.", "layer": "request"}
     it "offers the user's own namespace alongside the organizations, marked as personal" do
       stub_github(repos: [github_repo("acme/api"),
                           github_repo("octocat/dotfiles", owner_type: "User")])
@@ -68,6 +71,7 @@ RSpec.describe "Bulk organization registration", type: :request do
     # Criterion 1, end to end at this layer: the listing the ticket opens with — twenty repositories
     # in one personal namespace and not an organization in sight — used to render the "not for you"
     # empty state. It now renders a chooser.
+    # @intent: {"entity": "Repository", "action": "render personal-only chooser", "behavior": "A listing made entirely of personal namespaces shows the octocat chooser with its 2 repositories count and no No repositories to register in a batch empty state.", "layer": "request"}
     it "offers a chooser for a listing that is entirely personal" do
       stub_github(repos: [github_repo("octocat/api", owner_type: "User"),
                           github_repo("octocat/blog", owner_type: "User")])
@@ -82,6 +86,7 @@ RSpec.describe "Bulk organization registration", type: :request do
 
     # Criterion 8's other half: the empty state is now reachable ONLY when the viewer administers
     # nothing anywhere. A personal-only listing is no longer one of its causes.
+    # @intent: {"entity": "Repository", "action": "render true empty state", "behavior": "When every repository on every installation is one the viewer does not administer, the chooser says No repositories to register in a batch and offers no registered-one-at-a-time hint.", "layer": "request"}
     it "says so plainly only when there is nothing at all to register" do
       stub_github(repos: [github_repo("acme/api", admin: false),
                           github_repo("octocat/theirs", owner_type: "User", admin: false)])
@@ -98,6 +103,7 @@ RSpec.describe "Bulk organization registration", type: :request do
     # admin rights over an account nobody could read.
     #
     # The sole-installation shape, where the emptiness and the unread account are the same event.
+    # @intent: {"entity": "Repository", "action": "name unlisted installation", "behavior": "A sole installation that 404s renders GitHub no longer lists acme as connected to SpecGuard while withholding both the empty-chooser sentence and the not-an-administrator claim it cannot know.", "layer": "request"}
     it "names the sole installation GitHub no longer lists rather than blaming admin rights" do
       stub_github(not_found: true)
 
@@ -114,6 +120,7 @@ RSpec.describe "Bulk organization registration", type: :request do
     # chooser's own notice: this page is showing nothing, so an offer about what is shown is false.
     # Worded identically to the single-repository picker's empty state — one helper decides it, which
     # is the whole reason the helper exists.
+    # @intent: {"entity": "Repository", "action": "keep empty-state honest", "behavior": "The empty chooser explains it could not be listed, so this page may be empty for that reason rather than because there is nothing to register, and drops the Anything-shown-here offer a showing-nothing page cannot make.", "layer": "request"}
     it "does not close an empty chooser by offering what it is not showing" do
       stub_github(not_found: true)
 
@@ -127,6 +134,7 @@ RSpec.describe "Bulk organization registration", type: :request do
     # Empty for the ORIGINAL reason plus an unread account: one installation answers with
     # repositories this viewer administers none of, and a second 404s. The chooser is empty either
     # way, and the reader is owed both facts rather than only the one this page could already see.
+    # @intent: {"entity": "Repository", "action": "name unread account", "behavior": "When one installation answers with nothing administrable and a second 404s, the chooser still names globex as no longer listed rather than blaming the reader's admin rights.", "layer": "request"}
     it "names an unread account when another installation emptied the chooser" do
       add_github_installation(@user, installation_id: 6002, account_login: "globex")
       stub_github_per_installation do |id|
@@ -142,6 +150,7 @@ RSpec.describe "Bulk organization registration", type: :request do
     # The negative that keeps this from being "always warn". A viewer who genuinely administers
     # nothing has every installation ANSWERING, so there is no account to name and the original
     # sentence is the true one — it must still be exactly what they are told.
+    # @intent: {"entity": "Repository", "action": "keep original empty state", "behavior": "A viewer who administers nothing while every installation answers still gets No repositories to register in a batch plus does not list you as an administrator of any repository, with none of the unread-account wording.", "layer": "request"}
     it "still says nothing is theirs to register when every installation answered" do
       stub_github(repos: [github_repo("acme/api", admin: false)])
 
@@ -157,6 +166,7 @@ RSpec.describe "Bulk organization registration", type: :request do
     # The card's badge counts what the reader may act on, and the sentence under it accounts for the
     # rest. Per card rather than per page, because the answer differs for every organization: `acme`
     # is mostly theirs and `beta` is mostly not.
+    # @intent: {"entity": "Repository", "action": "count withheld per card", "behavior": "Each account card badges what is actionable (acme: 1 repository) and the sentence beneath it counts the rest as 2 connected repositories you do not administer are not listed.", "layer": "request"}
     it "counts what each organization offers, and says what it is holding back" do
       stub_github(repos: [github_repo("acme/api"), github_repo("acme/legacy", admin: false),
                           github_repo("acme/vault", admin: false), github_repo("beta/thing")])
@@ -170,6 +180,7 @@ RSpec.describe "Bulk organization registration", type: :request do
     # An organization the viewer administers nothing in is the one thing that is hidden rather than
     # counted — there is no card to hang a count on, and a card leading to an empty picker is worse
     # than no card.
+    # @intent: {"entity": "Repository", "action": "hide unadministered account", "behavior": "An account the viewer administers nothing in produces no card at all, so the beta picker link is absent from the chooser while acme is still offered.", "layer": "request"}
     it "leaves out an organization the viewer administers nothing in" do
       stub_github(repos: [github_repo("acme/api"), github_repo("beta/thing", admin: false)])
 
@@ -181,6 +192,7 @@ RSpec.describe "Bulk organization registration", type: :request do
 
     # The listing cap is GLOBAL, so truncation can hide a whole account rather than some of one
     # account's repositories — a different and worse failure than a short list.
+    # @intent: {"entity": "Repository", "action": "warn on truncated listing", "behavior": "A truncated GitHub listing renders a warning that the account list may be missing an account, since the global listing cap can hide a whole account rather than part of one.", "layer": "request"}
     it "says the account list may be incomplete when GitHub's listing was truncated" do
       stub_github(repos: [github_repo("acme/api")], truncated: true)
 
@@ -198,6 +210,7 @@ RSpec.describe "Bulk organization registration", type: :request do
     # noun was accurate while it filtered to organizations. It is not any more: a viewer whose
     # chooser holds only their own namespace would be told ORGANIZATIONS are missing from it. The
     # assertion moves with the noun rather than being deleted, so the reversal is on record.
+    # @intent: {"entity": "Repository", "action": "name unreadable installation", "behavior": "An installation that errors renders This list may be incomplete and SpecGuard could not read globex just now, with the accounts noun rather than organizations now the chooser offers namespaces.", "layer": "request"}
     it "names the installation that could not be read" do
       add_github_installation(@user, installation_id: 6002, account_login: "globex")
       stub_github_per_installation do |id|
@@ -214,6 +227,7 @@ RSpec.describe "Bulk organization registration", type: :request do
 
     # The silent case on this page too: a 404 records no error, so nothing was said and a whole
     # organization simply was not there.
+    # @intent: {"entity": "Repository", "action": "name gone installation", "behavior": "A 404ing second installation is accounted for as GitHub no longer lists globex as connected to SpecGuard, with no error recorded anywhere on the page.", "layer": "request"}
     it "names an installation GitHub no longer lists" do
       add_github_installation(@user, installation_id: 6002, account_login: "globex")
       stub_github_per_installation do |id|
@@ -227,6 +241,7 @@ RSpec.describe "Bulk organization registration", type: :request do
   end
 
   describe "GET /repositories/bulk?organization= — choosing repositories" do
+    # @intent: {"entity": "Repository", "action": "list account repositories", "behavior": "Choosing acme offers only that account's installation slice, with acme/api and acme/web on the picker and beta/elsewhere from another account absent.", "layer": "request"}
     it "lists the organization's repositories the App is installed on" do
       stub_github(repos: [github_repo("acme/api"), github_repo("acme/web"),
                           github_repo("beta/elsewhere")])
@@ -242,6 +257,7 @@ RSpec.describe "Bulk organization registration", type: :request do
     # connected repositories is offered one — and is told, in the same breath, that the other is
     # connected and simply not theirs to register. Without that sentence "my repository is not in
     # the list" is indistinguishable from "SpecGuard is broken".
+    # @intent: {"entity": "Repository", "action": "scope picker to admin", "behavior": "The acme picker offers only the one administered repository and says so in the same breath: 1 repository you administer and 1 connected repository you do not administer is not listed.", "layer": "request"}
     it "offers only what the viewer administers, and says how much it is withholding" do
       stub_github(repos: [github_repo("acme/api"), github_repo("acme/legacy", admin: false)])
 
@@ -253,6 +269,7 @@ RSpec.describe "Bulk organization registration", type: :request do
     end
 
     # And it stays quiet when there is nothing to account for, which is the ordinary case.
+    # @intent: {"entity": "Repository", "action": "stay silent when full", "behavior": "An account where the viewer administers everything shows 2 repositories you administer and prints no withheld-repository sentence at all.", "layer": "request"}
     it "says nothing about withheld repositories when none was withheld" do
       stub_github(repos: [github_repo("acme/api"), github_repo("acme/legacy")])
 
@@ -264,6 +281,7 @@ RSpec.describe "Bulk organization registration", type: :request do
 
     # Offering a tick box whose only possible outcome is "skipped" is offering a click that can
     # only fail.
+    # @intent: {"entity": "Repository", "action": "disable taken rows", "behavior": "A repository this user already registered renders as an Already registered row that cannot be ticked rather than as a choice whose only possible outcome is a skip.", "layer": "request"}
     it "shows an already-registered repository as registered rather than as a choice" do
       create_repository(user: @user, github_full_name: "acme/api")
       stub_github(repos: [github_repo("acme/api"), github_repo("acme/web")])
@@ -274,6 +292,7 @@ RSpec.describe "Bulk organization registration", type: :request do
       expect(response.body).to include("already registered and cannot be")
     end
 
+    # @intent: {"entity": "Repository", "action": "render exhausted picker", "behavior": "When the only repository in the account is already registered, the picker says Nothing left to register instead of an empty form.", "layer": "request"}
     it "says so when there is nothing left to register in the organization" do
       create_repository(user: @user, github_full_name: "acme/api")
       stub_github(repos: [github_repo("acme/api")])
@@ -285,6 +304,7 @@ RSpec.describe "Bulk organization registration", type: :request do
 
     # A stale bookmark, a renamed account and a typed query string are ordinary ways to arrive
     # here. None of them is an error page.
+    # @intent: {"entity": "Repository", "action": "fall back to chooser", "behavior": "Choosing an account outside the installation, via stale bookmark or typed query, returns 200 on the chooser headed Accounts with repositories the SpecGuard GitHub App is installed on rather than an error page.", "layer": "request"}
     it "falls back to the chooser for an account the user cannot register from" do
       stub_github(repos: [github_repo("acme/api")])
 
@@ -298,6 +318,7 @@ RSpec.describe "Bulk organization registration", type: :request do
     # Step two for a personal namespace — the half a chooser that offered the card would be a lie
     # without. `GithubOrganizations.find` reads whatever `.from` offers, so this resolves on the
     # same terms, and the picker itself never asked what kind of owner it was rendering.
+    # @intent: {"entity": "Repository", "action": "list personal picker", "behavior": "Step two works for a personal namespace too: choosing octocat offers octocat/api and octocat/blog and never another account's acme/elsewhere.", "layer": "request"}
     it "lists a personal namespace's repositories when it is the one picked" do
       stub_github(repos: [github_repo("octocat/api", owner_type: "User"),
                           github_repo("octocat/blog", owner_type: "User"),
@@ -312,6 +333,7 @@ RSpec.describe "Bulk organization registration", type: :request do
 
     # Criterion 4 at this layer: the withheld sentence is per NAMESPACE and says the same thing for
     # a personal one, because it is computed from `admin?` and never read an owner type.
+    # @intent: {"entity": "Repository", "action": "scope personal picker", "behavior": "The withheld sentence is per namespace and owner-type-blind: a personal picker offers the 1 administered repository and reports 1 connected repository you do not administer is not listed.", "layer": "request"}
     it "offers only what the viewer administers in a personal namespace, and says what it withheld" do
       stub_github(repos: [github_repo("octocat/api", owner_type: "User"),
                           github_repo("octocat/theirs", owner_type: "User", admin: false)])
@@ -325,6 +347,7 @@ RSpec.describe "Bulk organization registration", type: :request do
   end
 
   describe "POST /repositories/bulk — registering" do
+    # @intent: {"entity": "Repository", "action": "register batch", "behavior": "Submitting two installation-verified names creates both Repository rows owned by the signed-in user and renders a 200 summary reading Registered 2 repositories.", "layer": "request"}
     it "registers the selected repositories and reports what it did" do
       stub_github(repos: [github_repo("acme/api"), github_repo("acme/web")])
 
@@ -356,6 +379,7 @@ RSpec.describe "Bulk organization registration", type: :request do
     # `BulkRegistration`'s passes gate on `admin?` and read no owner type — so this example is here
     # to pin that the chooser was the only thing standing in the way, and that nothing downstream
     # quietly disagrees.
+    # @intent: {"entity": "Repository", "action": "register personal batch", "behavior": "A batch drawn entirely from the user's personal namespace also creates both repositories in one submission and reports Registered 2 repositories, the pipeline gating on admin? and never reading owner type.", "layer": "request"}
     it "registers a personal namespace's repositories in one batch" do
       stub_github(repos: [github_repo("octocat/api", owner_type: "User"),
                           github_repo("octocat/blog", owner_type: "User")])
@@ -376,6 +400,7 @@ RSpec.describe "Bulk organization registration", type: :request do
     # The refusal is "not an administrator" rather than "not connected", and the difference is the
     # point: the repository IS in the installation and GitHub answers about it happily — it is
     # `permissions.admin` that says no. That is the gate the whole ticket rests on being untouched.
+    # @intent: {"entity": "Repository", "action": "refuse unadministered personal", "behavior": "A personal repository the viewer does not administer is refused with You are not an administrator and GitHub does not list you as an administrator of it, creating no row, because permissions.admin rather than connectivity is the gate.", "layer": "request"}
     it "refuses a personal repository the viewer does not administer" do
       stub_github(repos: [github_repo("octocat/theirs", owner_type: "User", admin: false)])
 
@@ -388,6 +413,7 @@ RSpec.describe "Bulk organization registration", type: :request do
 
     # The honest summary the ticket asks for: two numbers that add up to the submission, with the
     # skips broken down by reason rather than collapsed into a single failure.
+    # @intent: {"entity": "Repository", "action": "break down skip reasons", "behavior": "A mixed batch summary reads Registered 1 repository and Skipped 2, with each skip counted by reason as Already registered (1) and Not connected to the SpecGuard GitHub App (1).", "layer": "request"}
     it "reports registered and skipped separately, with the reason for each skip" do
       create_repository(user: @user, github_full_name: "acme/taken")
       stub_github(repos: [github_repo("acme/api"), github_repo("acme/taken")])
@@ -405,6 +431,7 @@ RSpec.describe "Bulk organization registration", type: :request do
     # THE example for this slice. The form is not the gate: a POST naming a repository the page
     # never offered is refused by asking GitHub which repositories the App is installed on, exactly
     # as a single registration is.
+    # @intent: {"entity": "Repository", "action": "verify batch server-side", "behavior": "A POST naming a repository the form never offered creates nothing: the server re-asks GitHub which repositories the App is installed on and refuses the name as Not connected to the SpecGuard GitHub App.", "layer": "request"}
     it "refuses a repository outside the installation even when the form never offered it" do
       stub_github(repos: [github_repo("acme/api")])
 
@@ -417,6 +444,7 @@ RSpec.describe "Bulk organization registration", type: :request do
     # one thing it can honestly say. An installation credential is answered 404 for everything
     # outside the installation, so "nobody selected it" and "it does not exist" arrive here
     # indistinguishable, and a page that claimed the second would be guessing.
+    # @intent: {"entity": "Repository", "action": "conflate unknown names", "behavior": "A repository GitHub has never heard of gets the same Not connected heading and Add it on GitHub, then pick it here advice as an unselected one, because an installation credential 404s for both indistinguishably.", "layer": "request"}
     it "names a repository GitHub cannot see no differently from an unselected one" do
       stub_github(repos: [github_repo("acme/api")])
 
@@ -428,6 +456,7 @@ RSpec.describe "Bulk organization registration", type: :request do
 
     # Fails closed: an outage that registered by default would reopen the squatting gap on every
     # GitHub 500.
+    # @intent: {"entity": "Repository", "action": "fail closed on outage", "behavior": "While GitHub cannot be reached the batch registers nothing and the summary says GitHub could not be reached, failing closed instead of reopening the squatting gap on every outage.", "layer": "request"}
     it "registers nothing while GitHub cannot be reached" do
       stub_github(unavailable: true)
 
@@ -436,6 +465,7 @@ RSpec.describe "Bulk organization registration", type: :request do
       expect(response.body).to include("GitHub could not be reached")
     end
 
+    # @intent: {"entity": "Repository", "action": "offer install button", "behavior": "A batch refused because the App is not installed registers nothing and renders the Connect your GitHub repositories button on the summary.", "layer": "request"}
     it "offers the install button when the batch was refused for a missing installation" do
       uninstall_github_app(@user)
 
@@ -453,6 +483,7 @@ RSpec.describe "Bulk organization registration", type: :request do
     # spec/support/github_api.rb), and an unconfigured instance renders the operator's notice
     # instead of a button that could only bounce the reader to a placeholder GitHub URL. Configuring
     # it for this one example is what makes the button — and its return path — exist to assert on.
+    # @intent: {"entity": "Repository", "action": "pin install return path", "behavior": "With the App configured, the install button on a refused batch carries return_to explicitly set to the bulk picker URL, pinning the value request.fullpath would only coincidentally supply because this is a POST response.", "layer": "request"}
     it "returns the user to the bulk page after installing from a refused batch" do
       allow(SpecGuard::GithubApp).to receive(:configured?).and_return(true)
       uninstall_github_app(@user)
@@ -463,6 +494,7 @@ RSpec.describe "Bulk organization registration", type: :request do
         .to include(CGI.escapeHTML("return_to=#{CGI.escape(bulk_repositories_path)}"))
     end
 
+    # @intent: {"entity": "Repository", "action": "link registered rows", "behavior": "Each registered name in the summary links to its repository page: the acme/api row carries the repository_path href of the row just created.", "layer": "request"}
     it "links to each repository it registered" do
       stub_github(repos: [github_repo("acme/api")])
 
@@ -481,6 +513,7 @@ RSpec.describe "Bulk organization registration", type: :request do
     # real browser notices the user never gets it. Removing `turbo: false` from `_picker.html.erb`
     # must break something, and this is that something at this layer. See
     # spec/system/bulk_registration_spec.rb for the same claim through an actual browser.
+    # @intent: {"entity": "Repository", "action": "opt form out of turbo", "behavior": "The picker form posting to bulk_repositories carries data-turbo false, the only reason a browser ever receives the rendered summary Turbo would otherwise discard as a non-redirect form response.", "layer": "request"}
     it "opts the picker form out of Turbo so the rendered summary reaches the browser" do
       stub_github(repos: [github_repo("acme/api")])
 
@@ -495,6 +528,7 @@ RSpec.describe "Bulk organization registration", type: :request do
     # from the listing afterwards costs a second full page walk — up to `GithubApi::MAX_PAGES` round
     # trips — to answer a question the verdict already holds.
     # `GithubRepositoryListing#github_installation_needed?` reads the verdict first.
+    # @intent: {"entity": "Repository", "action": "read listing once", "behavior": "Registering two names asks GitHub for the installation listing exactly once across the whole action, with the install-needed question reading the verdict already in hand rather than a second page walk.", "layer": "request"}
     it "asks GitHub for the listing exactly once across a registration" do
       fake = stub_github(repos: [github_repo("acme/api"), github_repo("acme/web")])
 
@@ -542,6 +576,7 @@ RSpec.describe "Bulk organization registration", type: :request do
     # Criterion 1 and criterion 3 together, and they belong in one example because the control is
     # only correct if BOTH hold: it has to reach the picker for the right account, and carry the
     # failed names WITHOUT dragging along the one that registered.
+    # @intent: {"entity": "Repository", "action": "carry failed names back", "behavior": "After a batch of one registerable and two transiently-failed names, the Try these again link targets the bulk picker with organization acme and carries exactly acme/web and acme/legacy, never the name that registered.", "layer": "request"}
     it "offers the skipped repositories back to the same account, and carries only those" do
       submit_with_unreadable_installation(%w[acme/api acme/web acme/legacy])
 
@@ -566,6 +601,7 @@ RSpec.describe "Bulk organization registration", type: :request do
     # the picker offers the whole account. `acme/api` registered on the first pass, so it comes back
     # as a disabled already-registered row rather than a tick: what is carried is the FAILED
     # remainder, not the submission.
+    # @intent: {"entity": "Repository", "action": "pre-tick carried names", "behavior": "Following the retry link lands on a picker with the carried acme/web ticked, the never-carried acme/legacy unticked, and the first-pass acme/api as a disabled unticked already-registered row.", "layer": "request"}
     it "arrives at the picker with those repositories already ticked" do
       submit_with_unreadable_installation(%w[acme/api acme/web])
       retry_link = Capybara.string(response.body).find_link("Try these again")[:href]
@@ -583,6 +619,7 @@ RSpec.describe "Bulk organization registration", type: :request do
 
     # A rate limit is the reason that most literally instructs a retry — "Try again in a few
     # minutes" — so it is the one this control exists for, and it must not read as an outage.
+    # @intent: {"entity": "Repository", "action": "offer retry on rate limit", "behavior": "A batch that failed under a rate limit renders GitHub rate limit reached and still offers Try these again, the one refusal that literally instructs a retry.", "layer": "request"}
     it "offers the retry for a rate-limited batch" do
       submit_with_unreadable_installation(%w[acme/api acme/web], failure: { forbidden: :rate_limited })
 
@@ -594,6 +631,7 @@ RSpec.describe "Bulk organization registration", type: :request do
     # `already_registered` needs nothing, and `not_in_installation` needs somebody to install the
     # App on GitHub first. Offering "try these again" here would be promising something the second
     # submission would refuse identically.
+    # @intent: {"entity": "Repository", "action": "omit terminal retry", "behavior": "A batch whose only skips are already-registered and not-connected prints Skipped 2 with both reasons and no Try these again, since a re-run would refuse the identical batch identically.", "layer": "request"}
     it "does not offer a retry when every skip is terminal" do
       create_repository(user: @user, github_full_name: "acme/taken")
       stub_github(repos: [github_repo("acme/api"), github_repo("acme/taken")])
@@ -607,6 +645,7 @@ RSpec.describe "Bulk organization registration", type: :request do
     end
 
     # And the batch where nothing was skipped at all has nothing to carry.
+    # @intent: {"entity": "Repository", "action": "omit retry on success", "behavior": "A fully successful batch reads Registered 2 repositories and offers no Try these again control, there being nothing skipped to carry.", "layer": "request"}
     it "does not offer a retry when the whole batch registered" do
       stub_github(repos: [github_repo("acme/api"), github_repo("acme/web")])
 
@@ -622,6 +661,7 @@ RSpec.describe "Bulk organization registration", type: :request do
     # `!taken && @full_names.include?(...)`, so the carried list decides what is OFFERED and the
     # registration state still decides what is SELECTABLE — a carried name can never produce a tick
     # box whose only possible outcome is "skipped".
+    # @intent: {"entity": "Repository", "action": "disable since-taken carried row", "behavior": "When a carried name is registered by another user before the retry lands, it renders as a disabled unticked row while the never-taken acme/legacy checkbox on the same page stays enabled.", "layer": "request"}
     it "shows a carried repository that has since been registered as already registered" do
       # `acme/web` is the name this example turns on, so it has to be the name that FAILS: it is
       # absent from `readable`, so it is what the retry carries. Submitting a name that registers
@@ -660,6 +700,7 @@ RSpec.describe "Bulk organization registration", type: :request do
     # Criterion 5. The retry is an addition, not a replacement — the two exits that were already
     # there still go where they went, and "Register another batch" still means the BARE picker (a
     # fresh account choice) rather than a second door onto the carried batch.
+    # @intent: {"entity": "Repository", "action": "preserve existing exits", "behavior": "The summary's other two exits keep their destinations: Back to repositories links to the repositories index and Register another batch to the bare bulk chooser, not to the carried batch.", "layer": "request"}
     it "keeps the two existing exits meaning what they meant" do
       submit_with_unreadable_installation(%w[acme/api globex/tools])
 
@@ -673,6 +714,7 @@ RSpec.describe "Bulk organization registration", type: :request do
     # rate limit is precisely the refusal that asks a human to decide WHEN, so the button stops one
     # step short and hands them a form. Also keeps the summary's own promise honest: the panel says
     # "you can submit this batch again", and this is what lets them.
+    # @intent: {"entity": "Repository", "action": "return to form not re-submit", "behavior": "Following the retry link is a GET that changes Repository.count by zero and lands on the picker with its Register selected repositories button, leaving when to resubmit to the reader.", "layer": "request"}
     it "returns the reader to the form rather than re-registering for them" do
       submit_with_unreadable_installation(%w[acme/api globex/tools])
       retry_link = Capybara.string(response.body).find_link("Try these again")[:href]
@@ -749,6 +791,7 @@ RSpec.describe "Bulk organization registration", type: :request do
     # is in BOTH vocabularies at once — it drives `authorize?` AND is a member of `RETRYABLE_SKIPS` —
     # so the reconnect panel and the retry panel render together, and the reader has to choose. Now
     # both choices keep the batch.
+    # @intent: {"entity": "Repository", "action": "carry batch on reconnect", "behavior": "A dead session credential renders Reconnect to GitHub whose return_to resolves to the bulk picker with organization acme and both submitted names carried for re-picking.", "layer": "request"}
     it "carries the account and the skipped names on the reconnect button" do
       configure_github_app
       stub_github(unauthorized: true)
@@ -771,6 +814,7 @@ RSpec.describe "Bulk organization registration", type: :request do
     # through the callback's redirect, and onto the picker — and then reads the TICKS, which are the
     # only thing the reader actually cares about. Same shape as SPGD-824's own walk for "Try these
     # again", one control along.
+    # @intent: {"entity": "Repository", "action": "round-trip reconnect carry", "behavior": "Walking the reconnect trip out through the callback redirect and back lands on a picker with acme/api and acme/web ticked while the never-carried acme/legacy row stays unticked.", "layer": "request"}
     it "arrives back at the picker with those repositories ticked after reconnecting" do
       configure_github_app
       stub_github(unauthorized: true)
@@ -813,6 +857,7 @@ RSpec.describe "Bulk organization registration", type: :request do
     # two lists differ here, and an implementation that collapsed them into one carries ZERO names
     # on this button and fails. The both-at-once case is pinned at the layer that decides it, in
     # spec/services/bulk_registration_spec.rb.
+    # @intent: {"entity": "Repository", "action": "carry names on install", "behavior": "The install button carries the not-installed names, organization acme with acme/api and acme/web, and no Try these again appears because nothing in the batch is retryable.", "layer": "request"}
     it "carries the not-installed names on the install button" do
       configure_github_app
       uninstall_github_app(@user)
@@ -834,6 +879,7 @@ RSpec.describe "Bulk organization registration", type: :request do
     # is a size-dependent one: the batch rides out through GitHub's `state`, which is part of a URL
     # on somebody else's site, and a path that grows without bound is a button that silently stops
     # working somewhere past the example anyone happened to write.
+    # @intent: {"entity": "Repository", "action": "bound emitted path", "behavior": "At every batch size from 1 through MAX_BATCH the helper-emitted return_to path stays within the GithubHelper MAX_RETURN_TO_BYTES bound, measured by calling the helper directly rather than through a request.", "layer": "request"}
     it "keeps the emitted path within the byte bound at every batch size" do
       configure_github_app
 
@@ -856,6 +902,7 @@ RSpec.describe "Bulk organization registration", type: :request do
     # A partially-ticked picker is WORSE than an unticked one: the reader submits believing it
     # complete and loses the remainder without ever being told a list was shortened. Degraded to the
     # account alone is honest, and still better than the account chooser this replaced.
+    # @intent: {"entity": "Repository", "action": "drop overflow names", "behavior": "A full-size batch the byte bound cannot fit carries exactly zero names, never a truncated prefix, and still carries organization acme so the reader lands on the right picker.", "layer": "request"}
     it "drops the names rather than truncating them when the batch will not fit" do
       configure_github_app
 
@@ -872,6 +919,7 @@ RSpec.describe "Bulk organization registration", type: :request do
     # is nothing to name — so the button emits the bare path exactly as it did before this change.
     # Asserted as an exact equality, so an `organization=` with nothing after it (which would claim
     # to know an account we do not) fails rather than passing an `include?`.
+    # @intent: {"entity": "Repository", "action": "emit bare path", "behavior": "A POST that named no organization makes the reconnect button's return_to exactly the bare bulk path, with no empty organization= parameter claiming an account the page does not know.", "layer": "request"}
     it "emits the bare path when the submission named no organization" do
       configure_github_app
       stub_github(unauthorized: true)
@@ -886,6 +934,7 @@ RSpec.describe "Bulk organization registration", type: :request do
     # Criterion 7. The unconfigured branch short-circuits before either helper builds a path, and
     # that stays true: what a reader cannot do they are told about instead of offered, and carrying
     # a batch on a button that cannot work would be the wrong half to fix.
+    # @intent: {"entity": "Repository", "action": "render operator notice", "behavior": "With the App unconfigured the refusal renders The SpecGuard GitHub App is not configured notice and no authorize button that could only bounce the reader to a placeholder URL.", "layer": "request"}
     it "still renders the operator notice rather than a button when the App is unconfigured" do
       stub_github(unauthorized: true)
 
@@ -905,6 +954,7 @@ RSpec.describe "Bulk organization registration", type: :request do
     #
     # Criterion 1, and it asserts BOTH halves the way the reconnect example above does: the panel
     # renders, and the path it carries reaches the right picker with the right names on it.
+    # @intent: {"entity": "Repository", "action": "offer github picker", "behavior": "A batch skipped only as not-in-installation renders a Choose repositories on GitHub panel whose return_to reaches the bulk picker with organization acme, both names carried, and an already-selected promise.", "layer": "request"}
     it "offers GitHub's repository picker when the batch is only outside the installation" do
       configure_github_app
       stub_github(repos: [github_repo("acme/api")])
@@ -931,6 +981,7 @@ RSpec.describe "Bulk organization registration", type: :request do
     # own repository picker, so the return leg is the installation callback (which documents itself
     # as the setup URL "after an install OR a reconfigure"), and what the reader actually cares
     # about at the end of it is the TICKS.
+    # @intent: {"entity": "Repository", "action": "round-trip github picker", "behavior": "Walking the reconfigure trip through the installation callback lands on a picker with the carried acme/theirs ticked, the never-carried acme/legacy unticked, and the first-pass acme/api a disabled already-registered row.", "layer": "request"}
     it "arrives back at the picker with those repositories ticked after choosing them" do
       configure_github_app
       stub_github(repos: [github_repo("acme/api")])
@@ -966,6 +1017,7 @@ RSpec.describe "Bulk organization registration", type: :request do
     #
     # Asserted as NO GitHub button at all rather than as an absent label, so an implementation that
     # renders the panel with different wording fails here too.
+    # @intent: {"entity": "Repository", "action": "omit button for admin skips", "behavior": "A batch skipped solely for not-administered shows You are not an administrator (1) and renders no GitHub button of any kind, because the fix belongs to somebody else.", "layer": "request"}
     it "offers no GitHub button for a batch skipped only because the user is not an administrator" do
       configure_github_app
       stub_github(repos: [github_repo("acme/vault", admin: false)])
@@ -989,6 +1041,7 @@ RSpec.describe "Bulk organization registration", type: :request do
     # none, so a submission mixing the two cannot currently be produced by the service at all. It is
     # still what the cascade has to be right about — the day a per-installation verdict makes that
     # reading reachable, this must already render ONE panel rather than two.
+    # @intent: {"entity": "Repository", "action": "prefer install panel", "behavior": "A hand-built result that is both install and choose-repositories renders only the Connect your GitHub repositories panel: the wider fix wins the elsif and two panels never appear together.", "layer": "request"}
     it "renders only the install panel for a batch holding both, never both panels" do
       configure_github_app
       outcomes = [BulkRegistration::Outcome.new(full_name: "acme/uninstalled", status: :not_installed),
@@ -1028,6 +1081,7 @@ RSpec.describe "Bulk organization registration", type: :request do
     #
     # Criteria 1 and 3 at MAX_BATCH — the largest batch the product accepts, and 72 sizes past the
     # last one that used to work.
+    # @intent: {"entity": "Repository", "action": "carry max batch intact", "behavior": "At MAX_BATCH not-installed names the handle carries every name with organization acme inside the byte bound, and the panel promises already selected rather than the degraded pick-again sentence.", "layer": "request"}
     it "carries the whole batch and promises the ticks at the largest legal size" do
       configure_github_app
       names = (1..BulkRegistration::MAX_BATCH).map { |i| format("acmecorp/repository-%05d", i) }
@@ -1068,6 +1122,7 @@ RSpec.describe "Bulk organization registration", type: :request do
     # the retry panel below): the bare path still lands the reader somewhere useful, which is the
     # same reasoning the install and authorize panels rely on. This pins that the COPY follows that
     # decision through rather than claiming a pre-selection the path cannot deliver.
+    # @intent: {"entity": "Repository", "action": "withdraw pre-selection claim", "behavior": "With no organization on the POST the button emits the bare picker path with a blank query, prints no already-selected promise, and says instead where you can pick it again and submit.", "layer": "request"}
     it "promises no pre-selection when the submission carried no organization" do
       configure_github_app
       outcomes = [BulkRegistration::Outcome.new(full_name: "acme/theirs", status: :not_in_installation)]
@@ -1128,6 +1183,7 @@ RSpec.describe "Bulk organization registration", type: :request do
       # the helper's own measurement table. An example at 30 or at 50 would pass just as well and
       # would not say where the boundary was.
       [29, BulkRegistration::MAX_BATCH].each do |size|
+        # @intent: {"entity": "Repository", "action": "restore large carry", "behavior": "At each size above the old 28-name carry limit, 29 and MAX_BATCH, the reconnect trip returns a picker with every one of the batch's names ticked and only the never-carried acme/legacy control unticked.", "layer": "request"}
         it "brings all #{size} names back ticked after reconnecting" do
           names = batch(size)
           submit_unauthorized(size)
@@ -1177,6 +1233,7 @@ RSpec.describe "Bulk organization registration", type: :request do
       # letter of that rule; the ticket asks for the sentence to be TRUE instead, so the assertion
       # is that the promise is made AND kept.
       [28, BulkRegistration::MAX_BATCH].each do |size|
+        # @intent: {"entity": "Repository", "action": "keep reconnect promise", "behavior": "At each size, 28 and MAX_BATCH, the reconnect panel's flat you-can-submit-this-batch-again sentence is backed by the path carrying every name and organization acme within the byte bound.", "layer": "request"}
         it "keeps the reconnect panel's promise at #{size} names" do
           names = batch(size)
           submit_unauthorized(size)
@@ -1196,6 +1253,7 @@ RSpec.describe "Bulk organization registration", type: :request do
           expect(path.bytesize).to be <= GithubHelper::MAX_RETURN_TO_BYTES
         end
 
+        # @intent: {"entity": "Repository", "action": "keep install promise", "behavior": "At each size, 28 and MAX_BATCH, the install panel carries every name and organization acme inside the byte bound, so its unconditioned batch-survival promise is true at both sizes.", "layer": "request"}
         it "keeps the install panel's promise at #{size} names" do
           configure_github_app
           uninstall_github_app(@user)
@@ -1220,6 +1278,7 @@ RSpec.describe "Bulk organization registration", type: :request do
       # The invariant over every size `1..MAX_BATCH` is pinned separately and deliberately
       # UNMODIFIED (see "keeps the emitted path within the byte bound at every batch size"); this is
       # the half that says the constant itself did not move.
+      # @intent: {"entity": "Repository", "action": "pin byte bound constant", "behavior": "GithubHelper MAX_RETURN_TO_BYTES still equals 1,500, pinning that the fix carried less rather than raising a bound that belongs to GitHub's URL.", "layer": "request"}
       it "meets the byte bound without the bound having moved" do
         expect(GithubHelper::MAX_RETURN_TO_BYTES).to eq(1_500)
       end
@@ -1231,6 +1290,7 @@ RSpec.describe "Bulk organization registration", type: :request do
       #
       # Asserted after a FULL round trip at MAX_BATCH, because a batch-sized cookie would survive
       # the summary render and only fail once the callback wrote the reconnected token beside it.
+      # @intent: {"entity": "Repository", "action": "protect session credential", "behavior": "Across a MAX_BATCH reconnect round trip the cookie session ends with the ghu_reconnected token and its expiry readable and holds none of the batch names that would have overflowed its 4KB ceiling.", "layer": "request"}
       it "leaves the session's GitHub credential intact across a full-size round trip" do
         names = batch(BulkRegistration::MAX_BATCH)
         submit_unauthorized(BulkRegistration::MAX_BATCH)
@@ -1278,12 +1338,14 @@ RSpec.describe "Bulk organization registration", type: :request do
         expect(picker).to have_field(type: "checkbox", with: "acme/web", checked: false)
       end
 
+      # @intent: {"entity": "Repository", "action": "ignore unknown handle", "behavior": "A picker reached with a selection handle nobody minted returns 200 on the acme account with both checkboxes left unticked.", "layer": "request"}
       it "ticks nothing for a handle nobody minted" do
         picker_with("no-such-handle")
 
         unticked_picker_for_acme
       end
 
+      # @intent: {"entity": "Repository", "action": "ignore expired handle", "behavior": "A selection handle aged past PendingBulkSelection MAX_AGE redeems nothing: the acme picker renders with both rows unticked, same as an unknown handle.", "layer": "request"}
       it "ticks nothing for a handle that has expired mid-trip" do
         selection = PendingBulkSelection.capture(user: @user, organization: "acme",
                                                  full_names: %w[acme/api acme/web])
@@ -1303,6 +1365,7 @@ RSpec.describe "Bulk organization registration", type: :request do
       # real row on this page and the leak would be visible as a tick. The control is the line below
       # it — the same handle DOES redeem for its owner — so this pins the SCOPE rather than passing
       # on a handle that redeems for nobody at all.
+      # @intent: {"entity": "Repository", "action": "scope handle to owner", "behavior": "Another user's handle ticks nothing for this reader even though acme/api is on their listing, while the same token still redeems both names for its owner, pinning the scope rather than a dead id.", "layer": "request"}
       it "ticks nothing for a handle belonging to somebody else" do
         other = create_user(github_uid: "2002", github_handle: "hubot")
         theirs = PendingBulkSelection.capture(user: other, organization: "acme",
@@ -1321,6 +1384,7 @@ RSpec.describe "Bulk organization registration", type: :request do
       #
       # A name the listing does not contain matches no row: it is not rendered, not registered, and
       # not reported. `BulkRegistration` re-verifies every name against GitHub on submit regardless.
+      # @intent: {"entity": "Repository", "action": "skip unlisted resolved name", "behavior": "A redeemed name the listing does not contain renders no field at all and registers nothing, while the listed acme/api from the same selection does tick.", "layer": "request"}
       it "matches no row for a resolved name the listing does not contain" do
         selection = PendingBulkSelection.capture(user: @user, organization: "acme",
                                                  full_names: %w[acme/api acme/not-in-the-listing])
@@ -1388,6 +1452,7 @@ RSpec.describe "Bulk organization registration", type: :request do
       # the reading was complete, so the absence IS GitHub's answer and may be reported as one. The
       # page NAMES those repositories rather than counting them, because the reader's next action is
       # specific to them — these are the ones to go back and add.
+      # @intent: {"entity": "Repository", "action": "name missing carried names", "behavior": "Over a complete listing the page names each carried absentee, acme/ledger and acme/payments, as still not connected to the SpecGuard GitHub App, says Add them to the App on GitHub, and ticks the one name that matched.", "layer": "request"}
       it "names the carried repositories the listing does not contain" do
         picker_carrying(%w[acme/api acme/ledger acme/payments])
 
@@ -1420,6 +1485,7 @@ RSpec.describe "Bulk organization registration", type: :request do
       # away), the picker must not tell them the repository is not connected and send them to GitHub
       # to add a repository that is already there. `sources.complete?` is false here, so the absence
       # is OURS, and the page says exactly that and INSTRUCTS NOTHING.
+      # @intent: {"entity": "Repository", "action": "withhold claim on partial read", "behavior": "When one installation rate-limited mid-read the page withholds the not-connected claim and its add-it instruction, reporting instead that it could not confirm acme/web.", "layer": "request"}
       it "does not claim a carried name is unconnected when the listing came back incomplete" do
         add_github_installation(@user, installation_id: 6002, account_login: "globex")
         stub_github_per_installation do |id|
@@ -1446,6 +1512,7 @@ RSpec.describe "Bulk organization registration", type: :request do
       # `new.html.erb` renders an incompleteness warning either — the `github_listing_incomplete?`
       # block is on the chooser branch — so this reading is the only thing standing between a short
       # read and a confident false sentence.
+      # @intent: {"entity": "Repository", "action": "withhold claim on truncation", "behavior": "A listing truncated by the page-walk cap also suppresses the not-connected sentence and its instruction, reporting only that it could not confirm the carried name.", "layer": "request"}
       it "does not claim a carried name is unconnected when the listing was truncated" do
         stub_github(repos: [github_repo("acme/api")], truncated: true)
 
@@ -1466,6 +1533,7 @@ RSpec.describe "Bulk organization registration", type: :request do
       # `InstallationRepositories` has already ruled on this exact wording, in its class comment:
       # `:not_administered` is told apart from `:not_in_installation` deliberately, because "it is
       # not in the installation" would be "a false statement to make to them".
+      # @intent: {"entity": "Repository", "action": "name admin gate on carry", "behavior": "A carried name visible but not administered is reported as connected: the page says GitHub does not list you as an administrator of acme/web and points at Ask an administrator, never the not-connected claim.", "layer": "request"}
       it "says a carried name it can see but not administer is connected, not missing" do
         stub_github(repos: [github_repo("acme/api"), github_repo("acme/web", admin: false)])
 
@@ -1487,6 +1555,7 @@ RSpec.describe "Bulk organization registration", type: :request do
 
       # Criterion 1. A carry in which EVERY name matched is not short, and a page that says so
       # anyway is crying wolf at the reader who did exactly what they were asked to.
+      # @intent: {"entity": "Repository", "action": "stay silent on full carry", "behavior": "A carry in which both names matched rows ticks acme/api and acme/web and prints neither the not-connected nor the could-not-confirm sentence.", "layer": "request"}
       it "says nothing when every carried name matched a row" do
         picker_carrying(%w[acme/api acme/web])
 
@@ -1501,6 +1570,7 @@ RSpec.describe "Bulk organization registration", type: :request do
       # "names were carried AND some matched no row" — NOT "some listing rows are missing". A picker
       # reached fresh took no trip and has no shortfall; a sentence there would be noise about
       # something that never happened.
+      # @intent: {"entity": "Repository", "action": "stay silent on fresh picker", "behavior": "A picker reached fresh with nothing carried returns 200 and prints no shortfall sentence, because the trigger is the carry rather than the page.", "layer": "request"}
       it "says nothing on a picker reached with no carried selection at all" do
         stub_github(repos: [github_repo("acme/api"), github_repo("acme/web")])
 
@@ -1513,6 +1583,7 @@ RSpec.describe "Bulk organization registration", type: :request do
       # ...including when the listing is genuinely missing things. This is the same page state as
       # the example above from the LISTING's point of view and differs only in what was carried, so
       # a condition wired to the listing rather than to the carry passes that one and fails here.
+      # @intent: {"entity": "Repository", "action": "stay silent on withheld rows", "behavior": "A fresh picker over a short listing still prints its own you-do-not-administer count but mints no per-name shortfall claim about repositories nobody carried.", "layer": "request"}
       it "says nothing on a fresh picker even when repositories are withheld from the listing" do
         stub_github(repos: [github_repo("acme/api"),
                             github_repo("acme/locked-down", admin: false)])
@@ -1530,6 +1601,7 @@ RSpec.describe "Bulk organization registration", type: :request do
       # An already-registered repository is NOT a shortfall. It has a row, that row is rendered
       # disabled with a badge that says exactly what happened to it, and reporting it a second time
       # as "not connected" would be false twice over — it is connected, and it is listed.
+      # @intent: {"entity": "Repository", "action": "skip registered from shortfall", "behavior": "A carried name whose row is present but already registered draws the Already registered badge and no additional not-connected claim, since it is connected and listed.", "layer": "request"}
       it "does not report a carried name whose row is present but already registered" do
         create_repository(user: @user, github_full_name: "acme/web")
 
@@ -1551,6 +1623,7 @@ RSpec.describe "Bulk organization registration", type: :request do
       # Two examples rather than one because the row is unclickable in two DIFFERENT ways, through
       # two different branches of the template, and an exclusion wired to `registerable` rather than
       # to the registration fact could pass either one alone.
+      # @intent: {"entity": "Repository", "action": "skip disabled tick advice", "behavior": "A carried Acme/API whose matching row is disabled as already registered draws no capitalisation clause, no tick-the-matching-row instruction, and no not-connected claim.", "layer": "request"}
       it "does not tell the reader to tick a row that is disabled because it is already registered" do
         create_repository(user: @user, github_full_name: "acme/api")
 
@@ -1575,6 +1648,7 @@ RSpec.describe "Bulk organization registration", type: :request do
       # empty state and NO checkbox renders at all. The clause was printing "Tick the matching row
       # below" directly above a paragraph saying there is nothing left to do — two paragraphs, one
       # page, opposite instructions.
+      # @intent: {"entity": "Repository", "action": "omit empty-picker tick advice", "behavior": "When every administered repository is taken and the picker renders its Nothing-left-to-register state with no checkbox at all, the capitalisation clause and its tick instruction are still withheld.", "layer": "request"}
       it "does not tell the reader to tick a row when the picker has no rows left to offer" do
         create_repository(user: @user, github_full_name: "acme/api")
         create_repository(user: @user, github_full_name: "acme/web")
@@ -1595,6 +1669,7 @@ RSpec.describe "Bulk organization registration", type: :request do
       # the withheld bucket — "ask an administrator of that repository to register it", about a
       # repository that is already registered. That instruction is wrong in the same way: it asks
       # for work that is already done.
+      # @intent: {"entity": "Repository", "action": "skip admin ask when registered", "behavior": "A carried name another user already registered keeps the page's you-do-not-administer count but draws no per-name does-not-list-you sentence and no Ask an administrator request for work already done.", "layer": "request"}
       it "does not ask for an administrator to register a repository that is already registered" do
         other = create_user(github_uid: "3003", github_handle: "octocat")
         create_repository(user: other, github_full_name: "acme/web")
@@ -1618,6 +1693,7 @@ RSpec.describe "Bulk organization registration", type: :request do
       # absent from GitHub — it is absent from the page the reader happens to be standing on. The
       # picker builds every batch from one account, so this is a hand-made request rather than an
       # ordinary path; the property is that it cannot produce a false sentence when it happens.
+      # @intent: {"entity": "Repository", "action": "ignore foreign-account names", "behavior": "A carried name belonging to globex is not this acme picker's to rule on: no not-connected or administrator claim is minted while the same-page acme/api ticks.", "layer": "request"}
       it "says nothing about a carried name belonging to a different account" do
         stub_github(repos: [github_repo("acme/api"), github_repo("globex/thing")])
 
@@ -1647,6 +1723,7 @@ RSpec.describe "Bulk organization registration", type: :request do
       # `dedupe`, `GithubOrganizations.find`'s `casecmp?`) — and that is what earns this name the
       # TRUE sentence rather than the false one. It is listed; it is not unconnected. Both halves
       # are asserted here because it is their disagreement this example exists to make impossible.
+      # @intent: {"entity": "Repository", "action": "report case-only mismatch", "behavior": "A carried Acme/API leaves the acme/api row unticked because the checkbox compare is case-sensitive, while the page reports it as listed under a different capitalisation naming both spellings and never claims it is unconnected.", "layer": "request"}
       it "reports a carried name that differs from a listing row only by case, and does not tick it" do
         picker_carrying(%w[Acme/API])
 
@@ -1669,6 +1746,7 @@ RSpec.describe "Bulk organization registration", type: :request do
       # Asserted as a COMPARISON against the same page rendered without a carry, rather than against
       # a hard-coded number: what matters is that carrying a short selection adds no read, and a
       # literal would silently re-pass if the page's own listing read changed underneath it.
+      # @intent: {"entity": "Repository", "action": "keep carry cost-free", "behavior": "Rendering the picker with a short carried selection issues the same number of GitHub listing reads as the same page with nothing carried, while still printing the not-connected report.", "layer": "request"}
       it "asks GitHub no more times than the same picker rendered with nothing carried" do
         fake = stub_github(repos: [github_repo("acme/api"), github_repo("acme/web")])
 
@@ -1693,6 +1771,7 @@ RSpec.describe "Bulk organization registration", type: :request do
       # — so the sentence must not learn either. This is the leg the summary's three FIX buttons
       # actually use, and the `not_in_installation` button carries, by construction, precisely the
       # names that cannot tick until GitHub's own picker is changed.
+      # @intent: {"entity": "Repository", "action": "report handle shortfall", "behavior": "A selection carried by a PendingBulkSelection handle gets the same shortfall reporting as the query-string carry: the not-connected claim names acme/ledger with acme/api ticked.", "layer": "request"}
       it "reports the shortfall for a selection carried by handle, not only by query string" do
         selection = PendingBulkSelection.capture(user: @user, organization: "acme",
                                                  full_names: %w[acme/api acme/ledger])
@@ -1728,6 +1807,7 @@ RSpec.describe "Bulk organization registration", type: :request do
   end
 
   describe "refusing a submission before it reaches GitHub" do
+    # @intent: {"entity": "Repository", "action": "refuse empty submission", "behavior": "Submitting an empty batch answers 422 with Select at least one repository and makes zero GitHub repository calls before re-offering the form.", "layer": "request"}
     it "asks again when nothing was selected" do
       fake = stub_github(repos: [github_repo("acme/api")])
 
@@ -1740,6 +1820,7 @@ RSpec.describe "Bulk organization registration", type: :request do
 
     # A bound rather than a queue — the ticket puts scheduling out of scope, so an oversized batch
     # is refused honestly instead of silently registering a prefix of it.
+    # @intent: {"entity": "Repository", "action": "refuse oversized batch", "behavior": "A submission of MAX_BATCH + 1 names answers 422 with the more-than-one-batch-can-register message and registers none of it rather than a silent prefix.", "layer": "request"}
     it "refuses a batch larger than one action may carry, and registers none of it" do
       names = Array.new(BulkRegistration::MAX_BATCH + 1) { |i| "acme/repo-#{i}" }
       stub_github(repos: names.map { |name| github_repo(name) })
@@ -1750,6 +1831,7 @@ RSpec.describe "Bulk organization registration", type: :request do
       expect(response.body).to include("more than one batch can register")
     end
 
+    # @intent: {"entity": "Repository", "action": "re-offer account on refusal", "behavior": "After the 422 refusal the re-rendered picker still lists acme/api and acme/web so the reader corrects the submission instead of starting over.", "layer": "request"}
     it "comes back to the same organization after refusing a submission" do
       stub_github(repos: [github_repo("acme/api"), github_repo("acme/web")])
 
@@ -1763,6 +1845,7 @@ RSpec.describe "Bulk organization registration", type: :request do
     # A submission that collapses to one repository is one repository, and refusing it with
     # "101 repositories is more than one batch can register" would be a true sentence about a batch
     # the user did not submit.
+    # @intent: {"entity": "Repository", "action": "cap after dedupe", "behavior": "MAX_BATCH + 1 spellings of one repository collapse to a single normalized name, register once, and answer 200 with Registered 1 repository instead of a false cap refusal.", "layer": "request"}
     it "measures the batch cap after de-duplication, not before" do
       names = Array.new(BulkRegistration::MAX_BATCH + 1) { "acme/api" }
       stub_github(repos: [github_repo("acme/api")])
@@ -1776,6 +1859,7 @@ RSpec.describe "Bulk organization registration", type: :request do
     # De-duplication runs on the NORMALISED name, so the two spellings of one repository do not
     # survive as two candidates — which would register the first and then report the second as
     # already-registered against a row this very batch had just created.
+    # @intent: {"entity": "Repository", "action": "normalize name spellings", "behavior": "Submitting acme/api, its github.com URL, and its .git slug together creates exactly one repository and reports Registered 1 repository with no self-inflicted Already registered skip.", "layer": "request"}
     it "treats a URL and a bare slug for one repository as one repository" do
       stub_github(repos: [github_repo("acme/api")])
 
@@ -1788,6 +1872,7 @@ RSpec.describe "Bulk organization registration", type: :request do
 
     # `params` can be any shape a client cares to send. A Hash where an Array is expected, and
     # non-scalar entries, must not become a 500 or a repository named `{"a"=>"b"}`.
+    # @intent: {"entity": "Repository", "action": "tolerate params shape", "behavior": "A github_full_names Hash where the form sends an Array still registers acme/api and answers 200 rather than 500ing or naming a repository after the params shape.", "layer": "request"}
     it "survives a submission that is not the shape the form sends" do
       stub_github(repos: [github_repo("acme/api")])
 
@@ -1797,6 +1882,7 @@ RSpec.describe "Bulk organization registration", type: :request do
       expect(response.body).to include("Registered 1 repository.")
     end
 
+    # @intent: {"entity": "Repository", "action": "drop non-scalar entries", "behavior": "A nested Hash entry inside github_full_names is dropped rather than stringified: acme/api registers, the answer is 200, and the summary never prints the word nested.", "layer": "request"}
     it "ignores non-scalar entries rather than naming them as repositories" do
       stub_github(repos: [github_repo("acme/api")])
 
@@ -1810,6 +1896,7 @@ RSpec.describe "Bulk organization registration", type: :request do
   end
 
   describe "when GitHub will not answer at all" do
+    # @intent: {"entity": "Repository", "action": "explain chooser outage", "behavior": "GET the chooser during a GitHub outage returns 200 with GitHub is not answering right now instead of an empty account list or a reconnect button.", "layer": "request"}
     it "explains an outage rather than rendering an empty chooser" do
       stub_github(unavailable: true)
 
@@ -1825,6 +1912,7 @@ RSpec.describe "Bulk organization registration", type: :request do
     # means the token expired or was revoked mid-session, which the session cannot tell for itself
     # because the stored expiry has not lapsed yet. The fix is a click, and this page offers the
     # same button the single-repository form does rather than sending the reader away to wait.
+    # @intent: {"entity": "Repository", "action": "offer reconnect on 401", "behavior": "A 401 rejecting the session token renders the Reconnect to GitHub button pointing at the authorize path and not the outage wording, since an expired token is a click to fix.", "layer": "request"}
     it "offers the reconnect button when GitHub rejects the user's token" do
       # Configured so the real button renders rather than the operator notice that stands in for it.
       allow(SpecGuard::GithubApp).to receive_messages(configured?: true, slug: "specguard")
@@ -1841,6 +1929,7 @@ RSpec.describe "Bulk organization registration", type: :request do
     # GitHub answered here, and said no — so "try again shortly" would be describing something else.
     # A rate limit is the one refusal that genuinely clears on its own, and it says how, which is
     # the same distinction the single-repository form makes.
+    # @intent: {"entity": "Repository", "action": "name chooser rate limit", "behavior": "A rate-limited chooser read prints GitHub refused the request with the rate limit named and does not describe it as GitHub not answering.", "layer": "request"}
     it "names the rate limit rather than reporting it as an outage" do
       stub_github(forbidden: :rate_limited)
 
@@ -1851,6 +1940,7 @@ RSpec.describe "Bulk organization registration", type: :request do
       expect(response.body).not_to include("GitHub is not answering right now")
     end
 
+    # @intent: {"entity": "Repository", "action": "offer installation onboarding", "behavior": "A user who has never connected the App gets the Connect your GitHub repositories installation prompt on the chooser page.", "layer": "request"}
     it "offers the installation when the user has never connected GitHub" do
       uninstall_github_app(@user)
 
@@ -1870,6 +1960,7 @@ RSpec.describe "Bulk organization registration", type: :request do
   # renders its summary instead of redirecting, and `ApiKey` holds the plaintext for exactly the
   # request that minted it, so the tokens are simply present in the response that created them.
   describe "the first API key of each newly registered repository" do
+    # @intent: {"entity": "ApiKey", "action": "reveal token per repository", "behavior": "Registering three repositories in one batch mints one ApiKey per row, all three accounted by full name, and the 200 summary shows three distinct sgk_ plaintexts.", "layer": "request"}
     it "shows one distinct plaintext token per newly registered repository" do
       stub_github(repos: [github_repo("acme/api"), github_repo("acme/web"), github_repo("acme/cli")])
 
@@ -1885,6 +1976,7 @@ RSpec.describe "Bulk organization registration", type: :request do
     # The keys are minted for the person who submitted the batch, and attribution has no second
     # chance — `ApiKeysController#destroy` is a hard `destroy!` with no audit row, so a key minted
     # NULL is NULL forever.
+    # @intent: {"entity": "ApiKey", "action": "attribute key creation", "behavior": "Every ApiKey minted by the batch records the submitting user's id in created_by_user_id, since the destroy path keeps no audit row to repair a NULL later.", "layer": "request"}
     it "records the submitting user as the creator of every key" do
       stub_github(repos: [github_repo("acme/api"), github_repo("acme/web")])
 
@@ -1897,6 +1989,7 @@ RSpec.describe "Bulk organization registration", type: :request do
     # token on it — when the reader navigates away, and repaints it on Back, which would make the
     # page's "only time these are shown" claim false. It is a PAGE-level decision, so it is emitted
     # once however many tokens the batch produced.
+    # @intent: {"entity": "ApiKey", "action": "emit single cache meta", "behavior": "A summary that minted keys emits exactly one name=turbo-cache-control tag, a page-level decision however many tokens the batch produced.", "layer": "request"}
     it "emits exactly one no-cache meta when keys were minted" do
       stub_github(repos: [github_repo("acme/api"), github_repo("acme/web"), github_repo("acme/cli")])
 
@@ -1908,6 +2001,7 @@ RSpec.describe "Bulk organization registration", type: :request do
     # Criterion 6, second half — and the half that says the meta is CONDITIONAL rather than always
     # on. A summary holding no tokens is an ordinary page, and suppressing the whole app's snapshot
     # cache for it would be a cost paid for nothing.
+    # @intent: {"entity": "ApiKey", "action": "skip meta without tokens", "behavior": "A summary that minted no keys because the repository was already registered leaves ApiKey.count at zero and renders no turbo-cache-control meta at all.", "layer": "request"}
     it "emits no no-cache meta when the batch minted nothing" do
       create_repository(user: @user, github_full_name: "acme/api")
       stub_github(repos: [github_repo("acme/api")])
@@ -1926,6 +2020,7 @@ RSpec.describe "Bulk organization registration", type: :request do
     # Each row opens its own scope plus a nested one for the agent prompt (a second payload in the
     # row's scope would be what Copy grabbed), which is the same split `repositories/_revealed_token`
     # makes for the same reason. Three registered rows is therefore six scopes.
+    # @intent: {"entity": "ApiKey", "action": "scope copy-text per row", "behavior": "Three registered rows open six copy-text scopes, one per token plus one per agent prompt, so each Copy and Download grabs its own payload rather than whichever came first.", "layer": "request"}
     it "gives every repository its own copy-text scope" do
       stub_github(repos: [github_repo("acme/api"), github_repo("acme/web"), github_repo("acme/cli")])
 
@@ -1937,6 +2032,7 @@ RSpec.describe "Bulk organization registration", type: :request do
     # Auto-copy is right for the single-repository reveal — one token, one clipboard — and WRONG
     # here: N blocks racing to write one clipboard on connect leaves the reader holding whichever
     # token won, which is worse than no auto-copy because it looks like it worked.
+    # @intent: {"entity": "ApiKey", "action": "disable batch auto-copy", "behavior": "The batch summary sets no copy-text-auto-copy-value anywhere, since N blocks racing for one clipboard would leave the reader holding whichever token happened to win.", "layer": "request"}
     it "never enables auto-copy on the batch summary" do
       stub_github(repos: [github_repo("acme/api"), github_repo("acme/web")])
 
@@ -1953,6 +2049,7 @@ RSpec.describe "Bulk organization registration", type: :request do
     # So the page has to SAY so, and name the recovery — regenerating the key costs a rotation
     # rather than a re-registration, and a reader who does not know that may go looking for a way to
     # register the repository a second time.
+    # @intent: {"entity": "ApiKey", "action": "warn on refresh hazard", "behavior": "The summary states Reloading this page will not bring them back and names regeneration as the recovery, because a re-submitted batch mints nothing.", "layer": "request"}
     it "states the hazard and names regeneration as the recovery" do
       stub_github(repos: [github_repo("acme/api")])
 
@@ -1963,6 +2060,7 @@ RSpec.describe "Bulk organization registration", type: :request do
     end
 
     # The same hazard, DRIVEN rather than described: the identical batch submitted a second time.
+    # @intent: {"entity": "ApiKey", "action": "mint once per batch", "behavior": "Re-submitting the identical batch leaves ApiKey.count unchanged, reads Already registered (3), and shows no sgk_ token, none of the three first-pass plaintexts either.", "layer": "request"}
     it "mints nothing on a re-submission and shows no token the second time" do
       stub_github(repos: [github_repo("acme/api"), github_repo("acme/web"), github_repo("acme/cli")])
 
@@ -1981,6 +2079,7 @@ RSpec.describe "Bulk organization registration", type: :request do
     # be handed a credential. The summary already refuses to link those rows, and this is the same
     # rule one step further — that repository may already hold keys, and it was not registered by
     # this batch.
+    # @intent: {"entity": "ApiKey", "action": "skip others' repositories", "behavior": "A batch holding another user's already-registered repository mints a key only for the row this batch registered, ApiKey.count growing by one for acme/api, and the summary shows exactly one token.", "layer": "request"}
     it "mints nothing for a repository somebody else already registered" do
       create_repository(user: create_user(github_uid: "9", github_handle: "someone"),
                         github_full_name: "acme/theirs")
@@ -2006,6 +2105,7 @@ RSpec.describe "Bulk organization registration", type: :request do
     # emits the cache-suppressing meta, the "copy these before you leave" warning and a panel headed
     # "0 API keys — this is the only time they are shown" over an empty list. That render is the
     # failure mode, and this example is what sees it.
+    # @intent: {"entity": "ApiKey", "action": "omit reveal on mint failure", "behavior": "When both registrations succeed but both mints fail, the summary still reads Registered (2) over Repository.count 2 yet renders no cache meta, no only-time warning, no copy panel, and no token.", "layer": "request"}
     it "shows no reveal apparatus when every registered row's mint failed" do
       stub_github(repos: [github_repo("acme/api"), github_repo("acme/web")])
       fail_the_mint_for("acme/api", "acme/web")
@@ -2033,6 +2133,7 @@ RSpec.describe "Bulk organization registration", type: :request do
     # Both rows still belong under "Registered (2)": the keyless one links to a repository that
     # really was registered, and it simply carries no wire-up block. A page that dropped it, or that
     # counted it among the revealed, would be lying in one direction or the other.
+    # @intent: {"entity": "ApiKey", "action": "reveal mixed batch partially", "behavior": "A batch of two where one mint failed keeps both rows under Registered (2) but heads the panel 1 API key \u2014 this is the only time it is shown, reveals one token, and prints the wire-up prompt only for acme/api.", "layer": "request"}
     it "reveals only the rows that kept a key, and still lists the one that did not" do
       stub_github(repos: [github_repo("acme/api"), github_repo("acme/web")])
       fail_the_mint_for("acme/web")
@@ -2051,6 +2152,7 @@ RSpec.describe "Bulk organization registration", type: :request do
     # The wire-up prompt carries THIS repository's own name and THIS repository's own token, which
     # is the property that makes it paste-ready. `integration_guide_agent_prompt` already takes
     # `repository:` as an argument, so it works per row unchanged.
+    # @intent: {"entity": "ApiKey", "action": "personalize agent prompts", "behavior": "Each registered row gets its own Wire this repository up prompt naming it, Repository: acme/api and Repository: acme/web each appearing exactly once with that row's token already in it.", "layer": "request"}
     it "gives each repository a prompt naming it, with its own token already in it" do
       stub_github(repos: [github_repo("acme/api"), github_repo("acme/web")])
 
@@ -2063,6 +2165,7 @@ RSpec.describe "Bulk organization registration", type: :request do
   end
 
   describe "authentication" do
+    # @intent: {"entity": "Repository", "action": "require authentication", "behavior": "After signing out, both the GET of the picker and a POST of a batch redirect to the root path and create no Repository rows.", "layer": "request"}
     it "does not let a signed-out visitor reach the picker or register anything" do
       delete sign_out_path
 
@@ -2074,6 +2177,7 @@ RSpec.describe "Bulk organization registration", type: :request do
     end
   end
 
+  # @intent: {"entity": "Repository", "action": "link from index", "behavior": "The repositories index renders a link to the bulk registration flow, so the feature is reachable from the page a signed-in user lands on.", "layer": "request"}
   it "is reachable from the repositories index" do
     get repositories_path
 

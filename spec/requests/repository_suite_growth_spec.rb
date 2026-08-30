@@ -69,6 +69,7 @@ RSpec.describe "Repository suite-size growth", type: :request do
                                  annotated_specs_count: 110, created_at: 1.minute.ago)
   end
 
+  # @intent: {"entity": "TestRun", "action": "render suite delta", "behavior": "Two whole runs on main at 1,000 and then 1,047 examples render the Tests-in-suite cell as 1,047 +47, the change sitting inside the same cell as the level it modified.", "layer": "request"}
   it "reports the suite grew, in the same cell as the size it changed" do
     repository = create_repository(user: @user)
     grew_by_47(repository)
@@ -81,6 +82,7 @@ RSpec.describe "Repository suite-size growth", type: :request do
     expect(suite_size_cell.text).to eq("1,047 +47")
   end
 
+  # @intent: {"entity": "TestRun", "action": "state delta basis", "behavior": "The basis line names the comparand a1b2c3d as the previous run on main about 3 hours ago and states that only runs on the same branch are compared.", "layer": "request"}
   it "names the run the change is measured against, and its age" do
     repository = create_repository(user: @user)
     grew_by_47(repository)
@@ -97,6 +99,7 @@ RSpec.describe "Repository suite-size growth", type: :request do
 
   # Criterion 2, and the one that makes the figure a change rather than a magnitude: `400` beside a
   # suite size reads as a second, smaller count of something, not as 400 tests gone.
+  # @intent: {"entity": "TestRun", "action": "sign the decrease", "behavior": "A drop from 1,400 to 1,000 examples renders the delta as \u2212400 with a true minus sign in the 1,000 \u2212400 cell, never as an unsigned 400 or a +400.", "layer": "request"}
   it "renders a decrease signed, never as an unsigned magnitude" do
     repository = create_repository(user: @user)
     repository.test_runs.create!(commit_sha: "beforedelete", branch: "main", total_specs_count: 1_400,
@@ -114,6 +117,7 @@ RSpec.describe "Repository suite-size growth", type: :request do
 
   # "Compared, and it did not move" is an answer, and a different one from "there was nothing to
   # compare against". Suppressing the figure here would make the two identical.
+  # @intent: {"entity": "TestRun", "action": "report unchanged suite", "behavior": "Two runs at the same 1,000 count render a \u00b10 delta rather than +0, with the basis still naming the steady predecessor run the figure was measured against.", "layer": "request"}
   it "says the suite did not move rather than falling silent" do
     repository = create_repository(user: @user)
     repository.test_runs.create!(commit_sha: "steady00000a", branch: "main", total_specs_count: 1_000,
@@ -131,6 +135,7 @@ RSpec.describe "Repository suite-size growth", type: :request do
   # Criterion 3, and the reason the whole thing is branch-scoped. `test_runs` is one interleaved
   # history — the "Recent runs" table below lists it exactly that way — so the row immediately
   # before the latest is routinely another branch entirely.
+  # @intent: {"entity": "TestRun", "action": "scope delta to branch", "behavior": "With the newest run on feature/x and only a main run before it, no delta renders at all, not a \u2212980, and the basis says No earlier run on feature/x without mentioning main or a missing branch.", "layer": "request"}
   it "does not compare across branches, and says why there is no change to show" do
     repository = create_repository(user: @user)
     repository.test_runs.create!(commit_sha: "trunkrun0001", branch: "main", total_specs_count: 1_000,
@@ -151,6 +156,7 @@ RSpec.describe "Repository suite-size growth", type: :request do
     expect(basis_line).to have_no_text("reported no branch", normalize_ws: true)
   end
 
+  # @intent: {"entity": "TestRun", "action": "name first branch run", "behavior": "A lone first run on main renders no delta and a basis line calling it the first run SpecGuard has from that branch.", "layer": "request"}
   it "says a branch's first run is its first run" do
     repository = create_repository(user: @user)
     repository.test_runs.create!(commit_sha: "firstever001", branch: "main", total_specs_count: 42)
@@ -166,6 +172,7 @@ RSpec.describe "Repository suite-size growth", type: :request do
   # `.presence` and validates a missing one as acceptable. Distinct from "no earlier run on this
   # branch" because it is a different thing to go and fix — a CI client that is not sending a
   # branch, rather than a young branch.
+  # @intent: {"entity": "TestRun", "action": "refuse branchless history", "behavior": "Two runs written with branch nil render no delta \u2014 pooling them would have claimed +47 \u2014 with the cell showing 1,047 and the basis saying the runs reported no branch.", "layer": "request"}
   it "says a run that named no branch cannot be placed in a history" do
     repository = create_repository(user: @user)
     repository.test_runs.create!(commit_sha: "earlieranon", branch: nil, total_specs_count: 1_000,
@@ -186,6 +193,7 @@ RSpec.describe "Repository suite-size growth", type: :request do
 
   # Criterion 5: the never-ingested empty state is untouched. Neither element exists — a basis line
   # explaining why there is no comparison would be a second, softer answer beside "no run at all".
+  # @intent: {"entity": "TestRun", "action": "preserve empty state", "behavior": "A repository with no runs at all keeps the No CI run has reported yet empty state, with neither a delta figure nor a basis line beside it.", "layer": "request"}
   it "leaves the never-ingested empty state alone" do
     repository = create_repository(user: @user)
 
@@ -199,6 +207,7 @@ RSpec.describe "Repository suite-size growth", type: :request do
   # The tie-break, from the surface. The Overview and the Recent-runs table are read side by side,
   # so the run compared against has to be the row the table prints directly beneath the latest —
   # not an older one a looser `created_at <` would have skipped to.
+  # @intent: {"entity": "TestRun", "action": "tie-break predecessor", "behavior": "When two runs share the latest instant at 10 and 12 examples, the delta is +2 against the same-instant twin tiedfir, matching the row the runs table prints beneath tiedsec rather than an older +7.", "layer": "request"}
   it "compares against the same-instant predecessor the runs table prints beneath the latest" do
     repository = create_repository(user: @user)
     at = 1.hour.ago
@@ -230,6 +239,7 @@ RSpec.describe "Repository suite-size growth", type: :request do
   describe "when the two runs are not the same kind of measurement" do
     # The ordinary in-flight window of every sharded CI job — the state the Overview is in for most
     # of the twenty minutes anyone is looking at it during a build.
+    # @intent: {"entity": "TestRun", "action": "withhold in-flight delta", "behavior": "A complete four-shard run followed by a run with only its first shard posted renders no delta, where the guard-less render was \u221214,990, and the cell shows just 5,010.", "layer": "request"}
     it "withholds the change while a sharded run is still arriving" do
       repository = create_repository(user: @user)
       complete_sharded_run(repository, commit_sha: "aaaaaaa11111", per_shard: 5_000)
@@ -247,6 +257,7 @@ RSpec.describe "Repository suite-size growth", type: :request do
 
     # Both compositions named, so a reader can see for themselves which side is short rather than
     # being told only that something is wrong.
+    # @intent: {"entity": "TestRun", "action": "name shard composition", "behavior": "Declining to compare, the basis names both sides \u2014 this run assembled from 1 shard report against aaaaaaa assembled from 4 \u2014 and none of the four other no-delta wordings stands in for it.", "layer": "request"}
     it "names how each run was assembled when it declines to compare them" do
       repository = create_repository(user: @user)
       complete_sharded_run(repository, commit_sha: "aaaaaaa11111", per_shard: 5_000)
@@ -266,6 +277,7 @@ RSpec.describe "Repository suite-size growth", type: :request do
 
     # The permanent form: a job cancelled after two of four shards leaves a half-sized row in the
     # history forever, and the next complete run would otherwise read the missing half as growth.
+    # @intent: {"entity": "TestRun", "action": "withhold partial-run delta", "behavior": "A complete run after a two-of-four-shards cancelled one renders no delta, shows 20,000 in the cell, and names ccccccc as assembled from 2 shard reports.", "layer": "request"}
     it "withholds the change against a run that was cancelled part-way through" do
       repository = create_repository(user: @user)
       complete_sharded_run(repository, commit_sha: "ccccccc33333", per_shard: 5_000, shards: 2)
@@ -280,6 +292,7 @@ RSpec.describe "Repository suite-size growth", type: :request do
 
     # The guard withholds, it does not disable. Two complete four-shard runs are the same kind of
     # measurement and the figure is exactly what it always was.
+    # @intent: {"entity": "TestRun", "action": "compare equal shards", "behavior": "Two complete four-shard runs at 20,000 and 20,020 still yield a +20 delta in the 20,020 +20 cell, with the basis stating only runs assembled from the same 4 shard reports are compared.", "layer": "request"}
     it "still compares two runs assembled from the same number of shards" do
       repository = create_repository(user: @user)
       complete_sharded_run(repository, commit_sha: "eeeeeee55555", per_shard: 5_000)
@@ -299,6 +312,7 @@ RSpec.describe "Repository suite-size growth", type: :request do
     # rows are written once and never re-derived, so they were always comparable and the guard must
     # not have quietly switched the feature off for them. (Every other example in this file is one
     # of these; this one says so on purpose.)
+    # @intent: {"entity": "TestRun", "action": "compare whole runs", "behavior": "Two unsharded runs at 1,000 and 1,047 render +47 with no shard clause on the basis, since runs that arrived whole were always comparable.", "layer": "request"}
     it "compares two runs that each arrived whole, as it always did" do
       repository = create_repository(user: @user)
       grew_by_47(repository)
@@ -316,6 +330,7 @@ RSpec.describe "Repository suite-size growth", type: :request do
   # asked of a count rather than of a composition. A run that reported zero tests has a count but
   # not a measurement, and the panel already says so in those words.
   describe "when a run reported no tests at all" do
+    # @intent: {"entity": "TestRun", "action": "refuse zero-count delta", "behavior": "A latest run reporting 0 tests after a 1,000 run renders no delta, keeps the cell at 0, and the basis plus panel copy say this run reported no tests rather than printing \u22121,000.", "layer": "request"}
     it "does not report the suite as having lost everything the latest run did not count" do
       repository = create_repository(user: @user)
       repository.test_runs.create!(commit_sha: "hadtests0001", branch: "main", total_specs_count: 1_000,
@@ -336,6 +351,7 @@ RSpec.describe "Repository suite-size growth", type: :request do
 
     # The mirror, which is the same defect with its sign flipped: the whole suite charged to one
     # commit as growth because the run before it reported nothing.
+    # @intent: {"entity": "TestRun", "action": "refuse empty-basis growth", "behavior": "A 1,000-example run after one that counted 0 renders no delta, not +1,000, with the basis naming the previous run zeropre as the one that reported no tests.", "layer": "request"}
     it "does not report the whole suite as growth when the previous run counted nothing" do
       repository = create_repository(user: @user)
       repository.test_runs.create!(commit_sha: "zeroprev0001", branch: "main", total_specs_count: 0,
@@ -355,6 +371,7 @@ RSpec.describe "Repository suite-size growth", type: :request do
 
     # `total_specs_count` is nullable (default `0`, no `null: false`). A NULL on the previous run
     # would otherwise render the entire suite as growth.
+    # @intent: {"entity": "TestRun", "action": "treat null as none", "behavior": "A previous run whose total_specs_count is NULL renders no delta and a basis saying it reported no tests, rather than reading the whole suite as growth.", "layer": "request"}
     it "treats a NULL count as nothing reported rather than as a suite of zero" do
       repository = create_repository(user: @user)
       earlier = repository.test_runs.create!(commit_sha: "nullcount001", branch: "main",
@@ -375,6 +392,7 @@ RSpec.describe "Repository suite-size growth", type: :request do
   # number to the first, and U+2212 — chosen precisely because it is not a hyphen — is announced
   # inconsistently across screen readers.
   describe "what the figure reads as aloud" do
+    # @intent: {"entity": "TestRun", "action": "spell out increase", "behavior": "The +47 figure's aria-label reads 47 tests more than the previous run on this branch, tying the second number to the first for a screen reader.", "layer": "request"}
     it "spells out an increase" do
       repository = create_repository(user: @user)
       grew_by_47(repository)
@@ -384,6 +402,7 @@ RSpec.describe "Repository suite-size growth", type: :request do
       expect(delta_figure["aria-label"]).to eq("47 tests more than the previous run on this branch")
     end
 
+    # @intent: {"entity": "TestRun", "action": "spell out decrease", "behavior": "A \u22121 figure announces as 1 test fewer than the previous run on this branch, with the noun inflected to the singular rather than a bare magnitude.", "layer": "request"}
     it "spells out a decrease as fewer, never as a bare magnitude" do
       repository = create_repository(user: @user)
       repository.test_runs.create!(commit_sha: "beforecut001", branch: "main", total_specs_count: 1_400,
@@ -397,6 +416,7 @@ RSpec.describe "Repository suite-size growth", type: :request do
       expect(delta_figure["aria-label"]).to eq("1 test fewer than the previous run on this branch")
     end
 
+    # @intent: {"entity": "TestRun", "action": "spell out unchanged", "behavior": "A \u00b10 figure announces as unchanged since the previous run on this branch rather than reading two bare numbers with nothing tying them together.", "layer": "request"}
     it "says a suite that did not move did not move" do
       repository = create_repository(user: @user)
       repository.test_runs.create!(commit_sha: "steadyaria01", branch: "main", total_specs_count: 1_000,
@@ -421,6 +441,7 @@ RSpec.describe "Repository suite-size growth", type: :request do
   describe "what the comparison costs the page" do
     # `count_queries` comes from spec/support/query_capture.rb.
 
+    # @intent: {"entity": "TestRun", "action": "budget comparison queries", "behavior": "Rendering the page with a comparable predecessor costs exactly three queries over the no-predecessor baseline \u2014 the shard aggregate plus the two by-area growth reads \u2014 and still prints +2.", "layer": "request"}
     it "costs one query more when it finds a run to compare against — the coverage check on it" do
       repository = create_repository(user: @user)
       repository.test_runs.create!(commit_sha: "firstofbranch", branch: "main", total_specs_count: 10,
@@ -463,6 +484,7 @@ RSpec.describe "Repository suite-size growth", type: :request do
       expect(delta_figure.text).to eq("+2")
     end
 
+    # @intent: {"entity": "TestRun", "action": "keep cost history-invariant", "behavior": "Growing the branch from three runs to eight leaves the page's query count at the same baseline, because the predecessor lookup is a LIMIT 1 rather than a history walk.", "layer": "request"}
     it "costs the same however long the branch's history is" do
       repository = create_repository(user: @user)
       3.times do |i|
@@ -485,6 +507,7 @@ RSpec.describe "Repository suite-size growth", type: :request do
 
   # The panel sits outside the `keys.manage` gate — suite telemetry, not credential metadata — so
   # the delta does too. It is the same class of fact as the suite size it modifies.
+  # @intent: {"entity": "TestRun", "action": "show to view member", "behavior": "A member holding only the view permission gets 200 on the repository page and still sees the +47 suite delta, which is telemetry rather than credential data.", "layer": "request"}
   it "is visible to a member with only 'view'" do
     repository = create_repository(user: @user)
     grew_by_47(repository)

@@ -106,6 +106,7 @@ RSpec.describe "Repository spec file examples", type: :request do
     # The panel this drills out of already rendered the path as plain text, so the way in costs no
     # query to offer — and until it existed, a reader who had found the heavy file had found the
     # end of the road.
+    # @intent: {"entity": "SpecObservation", "action": "link file to its examples", "behavior": "the heaviest-files panel links spec/models/order_spec.rb to a URL carrying spec_file= plus the #spec-file-examples anchor", "layer": "request"}
     it "links each listed file to its own examples" do
       get repository_path(two_file_run)
 
@@ -117,6 +118,7 @@ RSpec.describe "Repository spec file examples", type: :request do
 
     # A list of choices with one of them taken. The drill-down sits a long way down the page, so a
     # reader arriving back at this table has to be told which row they are already looking at.
+    # @intent: {"entity": "SpecObservation", "action": "mark open file", "behavior": "with ?spec_file= set the opened file's row in the rollup carries aria-current true while the other file's row does not", "layer": "request"}
     it "marks the open file in the panel it was opened from" do
       get repository_path(two_file_run, spec_file: ORDER_SPEC)
 
@@ -126,12 +128,14 @@ RSpec.describe "Repository spec file examples", type: :request do
 
     # `?branch=` anchors the "Suite growth" panel and nothing else. Opening a file must not
     # re-anchor a chart the reader did not touch.
+    # @intent: {"entity": "SpecObservation", "action": "carry branch ask", "behavior": "a ?branch=main ask survives into the file link's href as branch=main so opening a file never re-anchors the chart", "layer": "request"}
     it "carries a branch ask through the link rather than dropping it" do
       get repository_path(two_file_run, branch: "main")
 
       expect(files_panel.find("a", text: ORDER_SPEC)[:href]).to include("branch=main")
     end
 
+    # @intent: {"entity": "SpecObservation", "action": "omit panel without ask", "behavior": "a plain repository show returns ok and renders no #spec-file-examples panel at all", "layer": "request"}
     it "renders no panel at all when no file was asked for" do
       get repository_path(two_file_run)
 
@@ -144,6 +148,7 @@ RSpec.describe "Repository spec file examples", type: :request do
     # THE question this slice exists for: which examples are in the file the rollup says is heavy.
     # Slowest first, and scoped to the file — the other file's nine-second example is the run's
     # slowest and belongs to nothing here.
+    # @intent: {"entity": "SpecObservation", "action": "list file examples slowest first", "behavior": "the three order_spec examples list slowest first with durations 4.00s, 1.50s and 0.50s, and the other file's nine-second refund example appears nowhere in the panel", "layer": "request"}
     it "lists that file's examples, slowest first, and no other file's" do
       get repository_path(two_file_run, spec_file: ORDER_SPEC)
 
@@ -154,12 +159,14 @@ RSpec.describe "Repository spec file examples", type: :request do
       expect(panel).to have_no_text("Refund settles against the original charge")
     end
 
+    # @intent: {"entity": "SpecObservation", "action": "name listed file", "behavior": "the basis line names spec/models/order_spec.rb as the file being listed", "layer": "request"}
     it "names the file it is listing" do
       get repository_path(two_file_run, spec_file: ORDER_SPEC)
 
       expect(basis_line).to have_text(ORDER_SPEC, normalize_ws: true)
     end
 
+    # @intent: {"entity": "SpecObservation", "action": "claim full coverage", "behavior": "the basis reads All 3 examples this run recorded in it, slowest first and Every one of them reported a duration", "layer": "request"}
     it "says the list is all of the file's examples, where nothing was cut" do
       get repository_path(two_file_run, spec_file: ORDER_SPEC)
 
@@ -170,6 +177,7 @@ RSpec.describe "Repository spec file examples", type: :request do
 
     # What CI said happened, in the word CI sent, through the same seam the ranking panel above
     # renders — a row that never ran is exactly the row whose outcome a reader has come to find.
+    # @intent: {"entity": "SpecObservation", "action": "report example outcomes", "behavior": "an example the client marked failed shows the outcome failed and one whose outcome was nil shows not reported", "layer": "request"}
     it "reports each example's outcome" do
       repository = create_repository(user: @user)
       ingest(repository, [example_spec(file_path: ORDER_SPEC, duration: 1.0, line_number: 1,
@@ -184,6 +192,7 @@ RSpec.describe "Repository spec file examples", type: :request do
 
     # `name` is nullable — the client sends nil for an example it could not describe — and a blank
     # cell is a row the reader can neither identify nor go and find.
+    # @intent: {"entity": "SpecObservation", "action": "fall back to definition site", "behavior": "an example ingested with name nil renders its coordinate spec/models/order_spec.rb:42 as the row name", "layer": "request"}
     it "falls back to the definition site where the client sent no name" do
       repository = create_repository(user: @user)
       ingest(repository, [example_spec(file_path: ORDER_SPEC, duration: 1.0, line_number: 42,
@@ -197,6 +206,7 @@ RSpec.describe "Repository spec file examples", type: :request do
     # Bounded by `SpecObservation::FILE_EXAMPLES_LIMIT`, which is the file's own constant and not a
     # reuse of the ten every ranking on this page is capped at: a reader who opened a file to get
     # PAST a top ten is not served by another top ten.
+    # @intent: {"entity": "SpecObservation", "action": "cap listed examples", "behavior": "a file holding five more examples than SpecObservation::FILE_EXAMPLES_LIMIT lists exactly the limit rows, led by the slowest example", "layer": "request"}
     it "lists no more than its own limit, however many examples the file holds" do
       repository = create_repository(user: @user)
       count = SpecObservation::FILE_EXAMPLES_LIMIT + 5
@@ -214,6 +224,7 @@ RSpec.describe "Repository spec file examples", type: :request do
     # omission the panel above refuses one grain up, where the population is files and here is
     # examples. The count has to come from the FILE and not from the rows on hand, which are the
     # truncated figure.
+    # @intent: {"entity": "SpecObservation", "action": "disclose file example count", "behavior": "the basis names the file's full population from the database, reading as the capped slowest of all the examples this run recorded in it, slowest first, rather than only the rows on the page", "layer": "request"}
     it "says how many examples the file holds, not just how many it lists" do
       repository = create_repository(user: @user)
       count = SpecObservation::FILE_EXAMPLES_LIMIT + 5
@@ -239,6 +250,7 @@ RSpec.describe "Repository spec file examples", type: :request do
     # scope sentence, and the completeness sentence is asserted only on the three-row untruncated
     # file. Both halves are pinned here, so neither dropping the branch nor restoring the
     # unconditional wording can pass.
+    # @intent: {"entity": "SpecObservation", "action": "deny truncated completeness", "behavior": "with the file holding five more examples than the cap the page keeps its limit rows, drops the sentence claiming the list covers the whole of what this run recorded here, and says instead that every one of the file's examples reported a duration, so the ranking the shown rows were drawn from covers the whole", "layer": "request"}
     it "does not call a truncated page the whole of what the run recorded" do
       repository = create_repository(user: @user)
       count = SpecObservation::FILE_EXAMPLES_LIMIT + 5
@@ -274,6 +286,7 @@ RSpec.describe "Repository spec file examples", type: :request do
       repository
     end
 
+    # @intent: {"entity": "SpecObservation", "action": "list shared-group rows", "behavior": "an example defined in spec/support/shared_examples.rb but run by order_spec lists under order_spec with its definition site spec/support/shared_examples.rb:7 shown in the row", "layer": "request"}
     it "lists it under the file that ran it, showing where it is defined" do
       get repository_path(shared_group_run, spec_file: ORDER_SPEC)
 
@@ -284,12 +297,14 @@ RSpec.describe "Repository spec file examples", type: :request do
     # The definition site is `file_path` + `line_number` — never `spec_file_path` + `line_number`,
     # which on this exact row would pair two halves from different files and point at whatever sits
     # on line 7 of the including one.
+    # @intent: {"entity": "SpecObservation", "action": "pair definition coordinates", "behavior": "the panel never pairs the including file with the shared file's line number \u2014 spec/models/order_spec.rb:7 appears nowhere", "layer": "request"}
     it "does not pair the including file with the other file's line number" do
       get repository_path(shared_group_run, spec_file: ORDER_SPEC)
 
       expect(panel).to have_no_text("#{ORDER_SPEC}:7")
     end
 
+    # @intent: {"entity": "SpecObservation", "action": "say rows name definitions", "behavior": "the basis states Each row names where it is DEFINED", "layer": "request"}
     it "says the rows name where they are defined" do
       get repository_path(shared_group_run, spec_file: ORDER_SPEC)
 
@@ -300,6 +315,7 @@ RSpec.describe "Repository spec file examples", type: :request do
     # the INCLUDING file, so it contains rows defined somewhere the reader has not opened and cannot
     # reach from here. The href is built from the definition site the cell prints, never from the
     # `?spec_file=` ask the panel was opened by.
+    # @intent: {"entity": "SpecObservation", "action": "link to definition file", "behavior": "the row's definition link points at the shared file's blob URL on the anchored commit feedfacecafe0001 and its href never includes the order_spec path", "layer": "request"}
     it "links the coordinate to the file it is DEFINED in, not the file this panel is keyed on" do
       get repository_path(shared_group_run, spec_file: ORDER_SPEC)
 
@@ -315,6 +331,7 @@ RSpec.describe "Repository spec file examples", type: :request do
   # file, the list contains rows defined somewhere else "and the reader has to be able to go and
   # find them" — which is not something a reader can do with a string.
   describe "the definition site as a link" do
+    # @intent: {"entity": "SpecObservation", "action": "link rows to GitHub lines", "behavior": "each row's coordinate links to the github blob URL for the anchored run's sha at that file and line, in slowest-first order, with the printed coordinate itself as the link text", "layer": "request"}
     it "links each listed row's coordinate to that line on GitHub" do
       get repository_path(two_file_run, spec_file: ORDER_SPEC)
 
@@ -330,6 +347,7 @@ RSpec.describe "Repository spec file examples", type: :request do
     # that sent no name wears the coordinate AS its name and renders through the other site
     # entirely — and this panel's comment says both branches go through the same two seams the
     # ranking above does, so both have to be navigable or the panels disagree about one example.
+    # @intent: {"entity": "SpecObservation", "action": "link coordinate-as-name row", "behavior": "a nameless row wears spec/models/order_spec.rb:42 as its name and links it exactly once to that line's blob URL, the cell holding one anchor and no location span", "layer": "request"}
     it "links the coordinate on a row that wears it as its name" do
       repository = create_repository(user: @user)
       ingest(repository, [example_spec(file_path: ORDER_SPEC, duration: 1.0, line_number: 42,
@@ -349,6 +367,7 @@ RSpec.describe "Repository spec file examples", type: :request do
     # last known path rather than an identity (SPGD-114), so a page anchored on an older run via
     # `?commit_sha=` must link into THAT run's tree rather than at whatever has since drifted onto
     # the line.
+    # @intent: {"entity": "SpecObservation", "action": "pin link to anchored run", "behavior": "with ?commit_sha= asking for the older run the blob link uses that run's sha aaaa1111bbbb2222 and never the newest run's cccc3333dddd4444", "layer": "request"}
     it "pins the link to the run the page is anchored on rather than the newest one" do
       repository = create_repository(user: @user)
       ingest(repository, [example_spec(file_path: ORDER_SPEC, duration: 1.0, line_number: 2,
@@ -365,6 +384,7 @@ RSpec.describe "Repository spec file examples", type: :request do
     end
 
     # The pairing that stops the assertion above from passing on a page that simply had one run.
+    # @intent: {"entity": "SpecObservation", "action": "link at newest sha", "behavior": "without a commit anchor the blob link uses the newest run's sha cccc3333dddd4444", "layer": "request"}
     it "links at the newest run's sha when no anchor was asked for" do
       repository = create_repository(user: @user)
       ingest(repository, [example_spec(file_path: ORDER_SPEC, duration: 1.0, line_number: 2,
@@ -382,6 +402,7 @@ RSpec.describe "Repository spec file examples", type: :request do
     # A NEW TAB, the convention the "Unannotated tests here" panel introduced deliberately for the
     # app's first link that leaves it. The reader is mid-list on a file they narrowed to, and `rel`
     # is written out rather than left to the browsers that imply it.
+    # @intent: {"entity": "SpecObservation", "action": "open in new tab", "behavior": "every definition link carries target _blank with rel noopener noreferrer", "layer": "request"}
     it "opens the file in a new tab, leaving the list where the reader had it" do
       get repository_path(two_file_run, spec_file: ORDER_SPEC)
 
@@ -407,6 +428,7 @@ RSpec.describe "Repository spec file examples", type: :request do
 
     # `duration_seconds: :desc` alone is NULLS FIRST in Postgres, so the naive ordering does not
     # merely include the example that never ran — it names it the slowest in the file.
+    # @intent: {"entity": "SpecObservation", "action": "sink untimed examples", "behavior": "the untimed example stays in the list but last, after the timed 5.00s and 2.00s rows, rather than sorting null-first as the file's slowest", "layer": "request"}
     it "keeps the untimed examples in the list and at the end of it" do
       get repository_path(mixed_run, spec_file: ORDER_SPEC)
 
@@ -415,6 +437,7 @@ RSpec.describe "Repository spec file examples", type: :request do
                                "Order refuses a negative quantity"])
     end
 
+    # @intent: {"entity": "SpecObservation", "action": "show not reported duration", "behavior": "the untimed row's duration reads not reported and 0.00s appears nowhere in the panel", "layer": "request"}
     it "shows no duration for the untimed example rather than a zero" do
       get repository_path(mixed_run, spec_file: ORDER_SPEC)
 
@@ -425,6 +448,7 @@ RSpec.describe "Repository spec file examples", type: :request do
     # In the spelling `SpecFileDurations::Row#coverage_label` fixed for the row above, through
     # `SpecFileExamples#coverage_label` — so the file's line in the rollup and the file opened out
     # of it cannot state the same coverage two different ways.
+    # @intent: {"entity": "SpecObservation", "action": "state duration coverage", "behavior": "the basis reads Durations here cover 2 of 3 and says the other 1 reported none and sits at the END, never claiming every one of them reported a duration", "layer": "request"}
     it "states how much of the file the durations cover" do
       get repository_path(mixed_run, spec_file: ORDER_SPEC)
 
@@ -443,6 +467,7 @@ RSpec.describe "Repository spec file examples", type: :request do
     # rows of something nothing ranked, and are not the slowest of anything — and "the other 100
     # reported none and sit at the END of the list" asserts a population is visible where 54 of it
     # is absent. A reader acting on either concludes this file's untimed population is 46 examples.
+    # @intent: {"entity": "SpecObservation", "action": "word untimed tail honestly", "behavior": "with four timed examples and an untimed tail twice the limit the page shows its capped rows without calling the tail the slowest, and the basis names the 4 timed examples, how many untimed rows sit at the END of the list, and that the remaining untimed examples are not on this page at all", "layer": "request"}
     it "does not call an untimed tail the slowest, nor place absent rows at the end of the list" do
       repository = create_repository(user: @user)
       untimed = SpecObservation::FILE_EXAMPLES_LIMIT * 2
@@ -479,6 +504,7 @@ RSpec.describe "Repository spec file examples", type: :request do
     # about this run — the same reason `#slowest_examples_outcome_breakdown` omits its own
     # remainder clause when that is zero — and it sits beside a clause naming the whole population
     # as absent, which says the thing worth saying.
+    # @intent: {"entity": "SpecObservation", "action": "omit zero-remainder clause", "behavior": "when the timed examples alone exceed the cap no untimed row renders, and the basis omits any zero-count at-the-END clause, saying instead that the other 7 reported none and the cap was reached before the list got to any of them", "layer": "request"}
     it "does not report a count of zero untimed rows at the end of the list" do
       repository = create_repository(user: @user)
       timed = SpecObservation::FILE_EXAMPLES_LIMIT + 5
@@ -507,6 +533,7 @@ RSpec.describe "Repository spec file examples", type: :request do
     # The denominator is this file's rows, never the Overview's suite size — that figure is
     # re-derived by SUM over shard reports and the two can legitimately differ. There is no
     # per-file counter anywhere else to borrow in any case.
+    # @intent: {"entity": "SpecObservation", "action": "count file's own rows", "behavior": "with total_specs_count 4000 on the run the basis still reads All 2 examples this run recorded in it and neither 4,000 nor 4000 appears in the panel", "layer": "request"}
     it "counts the file's own rows rather than the run's suite size" do
       repository = create_repository(user: @user)
       ingest(repository, [example_spec(file_path: ORDER_SPEC, duration: 1.0, line_number: 1),
@@ -534,6 +561,7 @@ RSpec.describe "Repository spec file examples", type: :request do
       repository
     end
 
+    # @intent: {"entity": "SpecObservation", "action": "list fully untimed file", "behavior": "both examples list with durations reading not reported and 0.00s appears nowhere in the panel", "layer": "request"}
     it "still lists the examples, with no duration and no zero" do
       get repository_path(untimed_run, spec_file: ORDER_SPEC)
 
@@ -545,6 +573,7 @@ RSpec.describe "Repository spec file examples", type: :request do
     # "The slowest first" over a file nothing timed is a promise about an order that was never
     # measured, and on a truncated file it becomes "the 50 slowest of 340" — the sentence a reader
     # is most likely to act on, about a ranking that does not exist.
+    # @intent: {"entity": "SpecObservation", "action": "deny ranking claim", "behavior": "the basis says in the order this run recorded them and the words slowest first appear nowhere", "layer": "request"}
     it "does not claim the list is ranked" do
       get repository_path(untimed_run, spec_file: ORDER_SPEC)
 
@@ -554,6 +583,7 @@ RSpec.describe "Repository spec file examples", type: :request do
 
     # What is left to report about those rows, still reported: a delivery that timed nothing and
     # failed something would otherwise disclose nothing at all.
+    # @intent: {"entity": "SpecObservation", "action": "still report outcomes", "behavior": "the rows read failed and not reported even though no example was timed", "layer": "request"}
     it "still says what CI reported for them" do
       get repository_path(untimed_run, spec_file: ORDER_SPEC)
 
@@ -564,6 +594,7 @@ RSpec.describe "Repository spec file examples", type: :request do
     # says it exists for, and which no example above constructs: the truncation examples are all
     # timed and the untimed examples are all under the cap, so nothing stood where "the 50 slowest
     # of 340" could be written over a file nothing ranked.
+    # @intent: {"entity": "SpecObservation", "action": "word truncated untimed list", "behavior": "a capped page over an untimed file reads as the first capped batch of the file's full count of examples in the order this run recorded them, and the word slowest appears nowhere", "layer": "request"}
     it "does not call a truncated list of untimed examples the slowest of anything" do
       repository = create_repository(user: @user)
       count = SpecObservation::FILE_EXAMPLES_LIMIT + 5
@@ -585,6 +616,7 @@ RSpec.describe "Repository spec file examples", type: :request do
   # `?spec_file=` is a URL a reader types, edits and bookmarks. A path this run recorded nothing for
   # is an ordinary answer — a renamed file, a deleted one, a typo — and not a request to error on.
   describe "a file this run recorded nothing for" do
+    # @intent: {"entity": "SpecObservation", "action": "render empty state", "behavior": "asking for spec/models/ghost_spec.rb returns ok with a panel saying No examples for this file, naming that path, and rendering no tbody rows", "layer": "request"}
     it "renders an empty state naming the path, not an error" do
       get repository_path(two_file_run, spec_file: "spec/models/ghost_spec.rb")
 
@@ -594,6 +626,7 @@ RSpec.describe "Repository spec file examples", type: :request do
       expect(panel).to have_no_css("tbody tr")
     end
 
+    # @intent: {"entity": "SpecObservation", "action": "omit panel without runs", "behavior": "a repository CI has never reported for returns ok with no #spec-file-examples panel even though a file was asked for", "layer": "request"}
     it "renders no panel for a repository CI has never reported for" do
       get repository_path(create_repository(user: @user), spec_file: ORDER_SPEC)
 
@@ -618,6 +651,7 @@ RSpec.describe "Repository spec file examples", type: :request do
 
     # The positive path, beside the group it makes falsifiable: a guard that swallowed every value
     # would answer 200 on all three shapes above and render no panel here either.
+    # @intent: {"entity": "SpecObservation", "action": "honour path parameter", "behavior": "a spec_file value that is a real path renders the panel with its three example rows, where the malformed shapes render none", "layer": "request"}
     it "honours a spec-file parameter that IS a path" do
       get repository_path(two_file_run, spec_file: ORDER_SPEC)
 
@@ -628,6 +662,7 @@ RSpec.describe "Repository spec file examples", type: :request do
     # A blank ask is no ask: `spec_file_path` is NOT NULL and `Ingest::ObservationRecorder` falls
     # back to `file_path` for a producer that sends none, so no row can carry a blank — an empty
     # ask would open a panel guaranteed to be empty, which is a worse answer than not opening one.
+    # @intent: {"entity": "SpecObservation", "action": "treat blank parameter as none", "behavior": "a blank spec_file ask returns ok and renders no panel", "layer": "request"}
     it "treats a blank spec-file parameter as no ask" do
       get repository_path(two_file_run, spec_file: "")
 
@@ -650,6 +685,7 @@ RSpec.describe "Repository spec file examples", type: :request do
       repository
     end
 
+    # @intent: {"entity": "SpecObservation", "action": "hold query budget across files", "behavior": "a 200-example file costs the same number of spec_observations reads as a 3-example one \u2014 exactly 12 \u2014 with the large page rendering a full cap of rows", "layer": "request"}
     it "costs the same number of queries on a 200-example file as on a 3-example one" do
       small = repository_with(3, name: "acme/small-suite")
       large = repository_with(200, name: "acme/large-suite")
@@ -714,6 +750,7 @@ RSpec.describe "Repository spec file examples", type: :request do
     # annotation worklist reads the same ask — so the delta is 2. Both sides are pinned absolutely
     # as well as differenced: a page that stopped taking BOTH narrowed reads would still satisfy the
     # subtraction, and 10 is the figure that says the unopened page did not move.
+    # @intent: {"entity": "SpecObservation", "action": "gate reads behind ask", "behavior": "a page with no file open takes exactly 2 fewer spec_observations reads than one with a file open, 10 against 12", "layer": "request"}
     it "asks nothing of the table when no file was asked for" do
       repository = repository_with(200, name: "acme/unopened-suite")
 

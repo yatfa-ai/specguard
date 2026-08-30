@@ -32,6 +32,7 @@ RSpec.describe "The GitHub registration grant, as it is minted", type: :request 
       @user = sign_in_via_github
     end
 
+    # @intent: {"entity": "GithubRegistrationGrant", "action": "mint grant", "behavior": "rendering the registration picker for a person who can see three repositories but administers one creates a grant whose registrable_full_names is exactly acme/billing-service", "layer": "request"}
     it "grants only the repositories GitHub names this person an administrator of" do
       expect { visit_picker }.to change { grant_for(@user) }.from(nil)
 
@@ -43,6 +44,7 @@ RSpec.describe "The GitHub registration grant, as it is minted", type: :request 
     # apart from a name GitHub has never heard of. Recorded is not granted — the example above is
     # what pins that, and `spec/requests/api/v1/user_repository_registration_spec.rb` pins that a
     # visible-but-unadministered name is refused.
+    # @intent: {"entity": "GithubRegistrationGrant", "action": "record visible repositories", "behavior": "the persisted grant's visible_full_names lists all three visible names (billing-service, checkout, ledger) separately from the single registrable one", "layer": "request"}
     it "records what they can merely see, separately, so a refusal can be worded truthfully" do
       visit_picker
 
@@ -70,6 +72,7 @@ RSpec.describe "The GitHub registration grant, as it is minted", type: :request 
       grant_for(@user).update_column(:captured_at, captured_three_days_ago)
     end
 
+    # @intent: {"entity": "GithubRegistrationGrant", "action": "refuse stale overwrite", "behavior": "when a second picker render reads GitHub truncated the prior grant survives with registrable_full_names still naming both repositories and captured_at still at the three-days-ago stamp", "layer": "request"}
     it "keeps the previous grant, and its previous timestamp, when the page walk was truncated" do
       stub_github(repos: [github_repo("acme/billing-service")], truncated: true)
 
@@ -80,6 +83,7 @@ RSpec.describe "The GitHub registration grant, as it is minted", type: :request 
       expect(grant.captured_at).to eq(captured_three_days_ago)
     end
 
+    # @intent: {"entity": "GithubRegistrationGrant", "action": "refuse stale overwrite", "behavior": "when a second picker render finds GitHub unavailable the prior grant survives with both registrable names and the three-days-ago captured_at", "layer": "request"}
     it "keeps the previous grant, and its previous timestamp, when an installation would not answer" do
       stub_github(unavailable: true)
 
@@ -93,6 +97,7 @@ RSpec.describe "The GitHub registration grant, as it is minted", type: :request 
     # The control the two examples above need. Without it they pass against an implementation that
     # never writes a grant on a second render at all — which would leave every returning person's
     # grant frozen at its first reading and expiring under them.
+    # @intent: {"entity": "GithubRegistrationGrant", "action": "replace on complete read", "behavior": "when the second render's reading is complete the grant is rewritten to the single remaining name and captured_at moves past the three-days-ago stamp", "layer": "request"}
     it "does replace it when the reading was complete" do
       stub_github(repos: [github_repo("acme/billing-service")])
 
@@ -107,6 +112,7 @@ RSpec.describe "The GitHub registration grant, as it is minted", type: :request 
   # SPGD-756 call #1 and criterion 5. A merge would accumulate repositories the person has since
   # lost admin on — the exact failure the ownership gate exists to prevent — and would get worse the
   # longer an account lived.
+  # @intent: {"entity": "GithubRegistrationGrant", "action": "replace grant wholesale", "behavior": "a re-render offering only acme/billing-service narrows registrable_full_names to exactly that list, dropping the acme/checkout the earlier reading granted", "layer": "request"}
   it "replaces the grant wholesale rather than merging into it" do
     stub_github(repos: [github_repo("acme/billing-service"), github_repo("acme/checkout")])
     user = sign_in_via_github
@@ -122,6 +128,7 @@ RSpec.describe "The GitHub registration grant, as it is minted", type: :request 
   # One row per person, enforced by the database rather than by whichever code path happens to be
   # writing. SPGD-756 call #1: a per-key grant would let one person hold three divergent opinions
   # about their own GitHub access.
+  # @intent: {"entity": "GithubRegistrationGrant", "action": "keep one row per person", "behavior": "three renders of the picker change GithubRegistrationGrant count by exactly 1 and leave a single row for the signed-in user", "layer": "request"}
   it "keeps exactly one row per person however many times the page is rendered" do
     user = sign_in_via_github
 
@@ -131,6 +138,7 @@ RSpec.describe "The GitHub registration grant, as it is minted", type: :request 
 
   # The claim the refresh point is CHOSEN for: it hangs off a read the browser was already making,
   # so an active person's grant is always current and no GitHub call is added anywhere.
+  # @intent: {"entity": "GithubRegistrationGrant", "action": "mint without extra round trip", "behavior": "one render of the picker after sign-in makes exactly one call to the GitHub repositories listing — no second call to mint the grant", "layer": "request"}
   it "costs no additional GitHub round trip" do
     sign_in_via_github
     fake = stub_github(repos: [github_repo("acme/billing-service")])

@@ -19,6 +19,7 @@ RSpec.describe "Repository members", type: :request do
       sign_in_via_github
     end
 
+    # @intent: {"entity": "RepositoryMembership", "action": "list members", "behavior": "the owner's GET returns 200 with the colleague handle hubot and the keys.manage permission on the page", "layer": "request"}
     it "sees every member with their permission set" do
       create_membership(repository: repository, user: colleague, permissions: %w[view keys.manage])
 
@@ -33,6 +34,7 @@ RSpec.describe "Repository members", type: :request do
     # retains all permissions" holds structurally. This asserts the consequence rather than adding a
     # filter that would mask the invariant regressing — the same reasoning as the deliberate absence
     # of `.distinct` in RepositoriesController#index.
+    # @intent: {"entity": "RepositoryMembership", "action": "omit owner from list", "behavior": "the page links member controls for exactly the colleague's membership id and never the owner's, and offers no Revoke octocat", "layer": "request"}
     it "does not see themselves in the list" do
       membership = create_membership(repository: repository, user: colleague)
 
@@ -53,6 +55,7 @@ RSpec.describe "Repository members", type: :request do
     # A blank table says "loading failed" as readily as "nobody has access"; and the empty state is
     # where the owner picks up the one control that changes it. The inversion of slice 2b's example,
     # which asserted the page named add-by-handle as unavailable.
+    # @intent: {"entity": "RepositoryMembership", "action": "render empty state", "behavior": "with no other members the page says No one else has access, links the add form, claims Only octocat can reach this repository rather than the acme slug segment, and no longer mentions the console", "layer": "request"}
     it "sees an empty state offering the add-by-handle form, not a blank table" do
       get repository_members_path(repository)
 
@@ -70,6 +73,7 @@ RSpec.describe "Repository members", type: :request do
       expect(response.body).not_to include("created from the console")
     end
 
+    # @intent: {"entity": "RepositoryMembership", "action": "revoke member", "behavior": "DELETE on the colleague's membership drops RepositoryMembership.count by 1 and redirects to the members page", "layer": "request"}
     it "can revoke a member's access" do
       membership = create_membership(repository: repository, user: colleague)
 
@@ -105,6 +109,7 @@ RSpec.describe "Repository members", type: :request do
     # DoD bullet 1, end to end: the owner names a colleague, and the colleague sees the repository.
     # The second half is slice 2a's path, asserted here because a grant that stores a row nobody
     # gains access from closes nothing.
+    # @intent: {"entity": "RepositoryMembership", "action": "grant colleague access", "behavior": "posting handle hubot with view and keys.manage creates one membership for the colleague, redirects to the members page, and the re-signed-in colleague then sees acme/billing-service on their own repositories index", "layer": "request"}
     it "grants the colleague access, who then sees the repository in their own index" do
       colleague
 
@@ -125,6 +130,7 @@ RSpec.describe "Repository members", type: :request do
     # `params.expect(... :permissions)` drops the array and persists `[]`, which is still a working
     # membership. So this asserts the stored array itself — "a row was created" stays green either
     # way, and the owner would only ever notice as "the checkboxes do nothing".
+    # @intent: {"entity": "RepositoryMembership", "action": "store ticked permissions", "behavior": "the stored row's permissions array equals exactly view and keys.manage as ticked, not silently an empty array", "layer": "request"}
     it "stores exactly the permissions that were ticked" do
       colleague
 
@@ -137,6 +143,7 @@ RSpec.describe "Repository members", type: :request do
     # in: `view` is implied by the membership row itself (RepositoryPolicy#can?), so a member with
     # nothing ticked can still open the repository. Force-adding "view" here would make this
     # indistinguishable from the ticked case and hide the trap above.
+    # @intent: {"entity": "RepositoryMembership", "action": "store empty permission set", "behavior": "posting with nothing ticked persists permissions as an empty array, and the granted member still gets 200 opening the repository because membership itself implies access", "layer": "request"}
     it "stores an empty set when nothing is ticked, and that member can still open the repository" do
       colleague
 
@@ -153,6 +160,7 @@ RSpec.describe "Repository members", type: :request do
     # grantor holds, and fails OPEN on a nil grantor — so a `create` that forgot to name one would
     # write the only rows in the product that bound does not constrain. The model states this is the
     # writer's job; this is the assertion that the writer did it.
+    # @intent: {"entity": "RepositoryMembership", "action": "stamp owner grantor", "behavior": "the created row's granted_by_user is the signed-in owner", "layer": "request"}
     it "records the signed-in owner as the grantor" do
       colleague
 
@@ -165,6 +173,7 @@ RSpec.describe "Repository members", type: :request do
     # it is handed, so a form that permitted this would let a submitted id name someone with wider
     # rights and compute the bound against theirs — a save that reports success while the escalation
     # the validation exists to close is reopened.
+    # @intent: {"entity": "RepositoryMembership", "action": "ignore submitted grantor", "behavior": "a granted_by_user_id naming an impostor in the body is ignored and the row still records the signed-in owner as grantor", "layer": "request"}
     it "ignores a grantor submitted through the form" do
       colleague
       impostor = create_user(github_uid: "4004", github_handle: "impostor")
@@ -179,6 +188,7 @@ RSpec.describe "Repository members", type: :request do
     # Two rows legitimately share a recycled handle (see sessions_spec). Picking one would silently
     # grant a private repository to a stranger, which is the whole reason `resolve_by_handle` returns
     # a five-way answer instead of a User.
+    # @intent: {"entity": "RepositoryMembership", "action": "refuse ambiguous handle", "behavior": "with two accounts named hubot the post creates no row, answers 422, and says 2 accounts share the handle hubot", "layer": "request"}
     it "refuses an ambiguous handle without creating a row, and names how many accounts share it" do
       create_user(github_uid: "9999", github_handle: "hubot")
       create_user(github_uid: "8888", github_handle: "hubot")
@@ -192,6 +202,7 @@ RSpec.describe "Repository members", type: :request do
     # An archived person is refused at sign-in, so inviting them would hand out access nobody can
     # ever use — and describing them as "never signed in" would send the owner to ask them to do
     # the one thing the archive forbids.
+    # @intent: {"entity": "RepositoryMembership", "action": "refuse archived handle", "behavior": "posting an archived colleague's handle creates no row, answers 422, and says the account has been archived rather than that nobody has signed in as them", "layer": "request"}
     it "refuses an archived handle, saying so rather than that they have never signed in" do
       colleague.update!(archived_at: Time.current)
 
@@ -205,6 +216,7 @@ RSpec.describe "Repository members", type: :request do
     # The free correctness win in the same change: an archived row no longer holds a recycled handle
     # hostage. Before, one departed colleague and one current one sharing a string made the current
     # one uninvitable — the owner was blocked by somebody who had already left.
+    # @intent: {"entity": "RepositoryMembership", "action": "grant past archived twin", "behavior": "an archived departed row sharing the recycled handle hubot does not block the grant, the active colleague gets the membership, and the page redirects", "layer": "request"}
     it "adds the active colleague when a departed one holds the same recycled handle" do
       colleague
       create_user(github_uid: "8888", github_handle: "hubot").update!(archived_at: Time.current)
@@ -224,6 +236,7 @@ RSpec.describe "Repository members", type: :request do
     # `departed` is the sharpest pair in the matrix: an archived person must NOT be described with
     # the not-found sentence, which would tell the owner to ask them to sign in once — advice an
     # archived person is refused for taking.
+    # @intent: {"entity": "RepositoryMembership", "action": "answer each refusal distinctly", "behavior": "each of the six refusals (unknown, archived, non-handle, ambiguous, owner, existing member) answers 422 with its own sentence and none of the other five sentences", "layer": "request"}
     it "answers each refusal with its own sentence and never another's" do
       create_user(github_uid: "7777", github_handle: "twin")
       create_user(github_uid: "6666", github_handle: "twin")
@@ -252,6 +265,7 @@ RSpec.describe "Repository members", type: :request do
 
     # A rejected submission re-renders, so the owner does not retype a handle and re-tick a grid to
     # fix one word. A redirect would lose both.
+    # @intent: {"entity": "RepositoryMembership", "action": "re-render refused form", "behavior": "a refused grant re-renders with value ghost retained and keys.manage still checked while repo.delete stays unchecked", "layer": "request"}
     it "re-renders the form with what was typed and ticked" do
       add_member("ghost", %w[keys.manage])
 
@@ -272,6 +286,7 @@ RSpec.describe "Repository members", type: :request do
     # here: the validation catches that unaided, and the example would pass against the unfixed code.
     #
     # The loser must land on the same 422 with the same sentence the sequential case gets, not a 500.
+    # @intent: {"entity": "RepositoryMembership", "action": "survive double submit", "behavior": "with the uniqueness validation silenced, the losing duplicate POST still lands 422 with the membership-exists sentence instead of a 500", "layer": "request"}
     it "refuses the losing half of a double-submit with the same sentence rather than 500ing" do
       create_membership(repository: repository, user: colleague)
       allow(uniqueness_validator(RepositoryMembership)).to receive(:validate_each)
@@ -282,6 +297,7 @@ RSpec.describe "Repository members", type: :request do
       expect(response.body).to include("User already has a membership on this repository")
     end
 
+    # @intent: {"entity": "RepositoryMembership", "action": "offer form from members page", "behavior": "the members page links the new-member form, which renders 200 offering every permission in RepositoryMembership PERMISSIONS", "layer": "request"}
     it "offers the form from the members page" do
       get repository_members_path(repository)
       expect(response.body).to include(new_repository_member_path(repository))
@@ -319,6 +335,7 @@ RSpec.describe "Repository members", type: :request do
         sign_in_via_github(uid: "9999")
       end
 
+      # @intent: {"entity": "RepositoryMembership", "action": "grant as members manager", "behavior": "a member holding members.manage sees the add link, gets 200 on the form, creates a membership via POST, and is redirected to the members page", "layer": "request"}
       it "can add a member, and is offered the control that does it" do
         get repository_members_path(repository)
         expect(response.body).to include(new_repository_member_path(repository))
@@ -334,6 +351,7 @@ RSpec.describe "Repository members", type: :request do
       # grid does not offer `repo.delete` to this actor, and the model refuses it even when the
       # request is written by hand — the two halves matter separately, because only the second
       # survives a client that ignores the form.
+      # @intent: {"entity": "RepositoryMembership", "action": "bound grantable permissions", "behavior": "the grid offers members.manage but never keys.manage or repo.delete, and a hand-written POST of repo.delete is refused 422 saying the grantor does not hold: repo.delete", "layer": "request"}
       it "is offered only what they hold, and is refused anything more even by hand" do
         get new_repository_member_path(repository)
 
@@ -348,6 +366,7 @@ RSpec.describe "Repository members", type: :request do
 
       # The grantor stamp on the add door, from this actor's session rather than the owner's — the
       # bound above is only as good as the identity it is computed against.
+      # @intent: {"entity": "RepositoryMembership", "action": "stamp actor grantor", "behavior": "the row created by the members.manage colleague names that colleague as granted_by_user, not the owner", "layer": "request"}
       it "records itself as the grantor, not the owner" do
         attempt_grant
 
@@ -366,6 +385,7 @@ RSpec.describe "Repository members", type: :request do
       # result here as permission to manage members would let a view-only member start inviting
       # people." This is the example that fails if the controller ever asks the grid instead of
       # asking `can?(:members_manage)`.
+      # @intent: {"entity": "RepositoryMembership", "action": "refuse view-only grant", "behavior": "a view-only member gets 403 on both the new form and the POST, and no row is created", "layer": "request"}
       it "gets 403 on the form and the grant" do
         get new_repository_member_path(repository)
         expect(response).to have_http_status(:forbidden)
@@ -379,6 +399,7 @@ RSpec.describe "Repository members", type: :request do
     context "a signed-in user with no membership" do
       before { sign_in_via_github(uid: "7777") }
 
+      # @intent: {"entity": "RepositoryMembership", "action": "hide from non-member", "behavior": "a signed-in non-member gets 404 on both the form and the POST, keeping the repository's existence hidden", "layer": "request"}
       it "gets 404 on the form and the grant" do
         get new_repository_member_path(repository)
         expect(response).to have_http_status(:not_found)
@@ -417,6 +438,7 @@ RSpec.describe "Repository members", type: :request do
       # Criterion 1, and the reason the whole slice exists. Asserted on the SAME row — the id and
       # created_at are what separate "edited" from "revoked and re-added", and a spec that only
       # checked the stored array would stay green if the implementation destroyed and recreated.
+      # @intent: {"entity": "RepositoryMembership", "action": "narrow member in place", "behavior": "a PATCH down to view keeps the same row, with count unchanged, permissions now view, created_at preserved, and a redirect to the members page", "layer": "request"}
       it "narrows a member in place, keeping the row and the date they were added" do
         original_created_at = membership.created_at
 
@@ -434,6 +456,7 @@ RSpec.describe "Repository members", type: :request do
       # The second half is why `[]` must not be "helpfully" filled in with "view": membership itself
       # grants access (RepositoryPolicy#can?), so the colleague is narrowed, not locked out. Asserted
       # from their own session, because that is the claim the flash makes to the owner.
+      # @intent: {"entity": "RepositoryMembership", "action": "store unchecked empty set", "behavior": "a PATCH with every box unchecked stores permissions as an empty array rather than 400ing on a missing key, and the member still opens the repository with 200", "layer": "request"}
       it "stores an empty set when every box is unchecked, and that member can still open the repository" do
         expect { edit_member(membership) }.not_to change(RepositoryMembership, :count)
 
@@ -446,6 +469,7 @@ RSpec.describe "Repository members", type: :request do
         expect(response).to have_http_status(:ok)
       end
 
+      # @intent: {"entity": "RepositoryMembership", "action": "widen member", "behavior": "a PATCH can grow permissions to view, keys.manage, members.manage and repo.delete, not only narrow them", "layer": "request"}
       it "can widen a member too, not only narrow them" do
         edit_member(membership, %w[view keys.manage members.manage repo.delete])
 
@@ -456,6 +480,7 @@ RSpec.describe "Repository members", type: :request do
       # spec builder do — so this row arrives with a nil one, which is the state
       # `grantor_holds_every_granted_permission` fails OPEN on. The stamp is what converts it to a
       # bounded row.
+      # @intent: {"entity": "RepositoryMembership", "action": "stamp editor grantor", "behavior": "saving a row whose grantor was nil stamps the editing owner as granted_by_user, closing the state the bound fails open on", "layer": "request"}
       it "stamps the editor as the grantor, including on a row that had none" do
         expect(membership.granted_by_user).to be_nil
 
@@ -470,6 +495,7 @@ RSpec.describe "Repository members", type: :request do
       # `granted_by_user_id` would name a wider-rights grantor so the bound is computed against
       # theirs. All three are submitted in ONE request, so a filter that catches two of them and
       # misses the third still fails here.
+      # @intent: {"entity": "RepositoryMembership", "action": "ignore smuggled attributes", "behavior": "a PATCH carrying user_id, repository_id and granted_by_user_id for an impostor changes only permissions, and the row still belongs to the colleague, the repository, and the owner as grantor", "layer": "request"}
       it "changes nothing but the permissions, whatever else is in the body" do
         impostor = create_user(github_uid: "4004", github_handle: "impostor")
         other_repository = create_repository(user: owner, github_full_name: "acme/payments-service")
@@ -490,6 +516,7 @@ RSpec.describe "Repository members", type: :request do
       # Criterion 7's positive control: the owner's `grantable_permissions` is the full set, so the
       # grid offers everything. Without this, restricting the grid to nothing at all would pass the
       # negative assertions further down.
+      # @intent: {"entity": "RepositoryMembership", "action": "offer full grid to owner", "behavior": "the owner's edit form renders 200 listing every permission, with keys.manage pre-checked from the stored row and repo.delete unchecked", "layer": "request"}
       it "is offered every permission on the form" do
         get edit_repository_member_path(repository, membership)
 
@@ -512,6 +539,7 @@ RSpec.describe "Repository members", type: :request do
       # Without it, an owner clearing every box sends no `permissions` key at all and
       # `params.expect` raises ParameterMissing → 400 — so the narrowing this whole slice exists for
       # is the one operation that breaks, and it breaks on the form, not on the server.
+      # @intent: {"entity": "RepositoryMembership", "action": "render hidden blank", "behavior": "the edit form carries a hidden input named repository_membership[permissions][] with an empty value so an all-unticked submit still sends the key", "layer": "request"}
       it "renders the hidden blank that makes 'nothing ticked' reach the server as an empty set" do
         get edit_repository_member_path(repository, membership)
 
@@ -522,6 +550,7 @@ RSpec.describe "Repository members", type: :request do
 
       # The same contract on the add form, which shares the grid partial. Its own examples prepend
       # the blank for the same reason and are blind in the same way.
+      # @intent: {"entity": "RepositoryMembership", "action": "render hidden blank add form", "behavior": "the add form carries the matching hidden blank for membership_grant[permissions][]", "layer": "request"}
       it "renders the hidden blank on the add form too" do
         get new_repository_member_path(repository)
 
@@ -530,6 +559,7 @@ RSpec.describe "Repository members", type: :request do
         )
       end
 
+      # @intent: {"entity": "RepositoryMembership", "action": "offer edit control", "behavior": "the members list links the colleague's edit form", "layer": "request"}
       it "offers the Edit control from the members list" do
         get repository_members_path(repository)
 
@@ -561,6 +591,7 @@ RSpec.describe "Repository members", type: :request do
       # an assertion about who a page NAMES tell the actor and the owner apart.
       before { sign_in_via_github(uid: "9999", info: { nickname: "hubot" }) }
 
+      # @intent: {"entity": "RepositoryMembership", "action": "narrow another member", "behavior": "a members.manage colleague PATCHes a third party down to an empty permission set and is redirected to the members page", "layer": "request"}
       it "can narrow another member" do
         edit_member(third_party_membership)
 
@@ -576,6 +607,7 @@ RSpec.describe "Repository members", type: :request do
       # escalation slice 1d closed, while the model still looks like it is defending against it.
       # repo.delete really does destroy the repository (see repository_sharing_spec), so this is the
       # whole chain, not a permission-string comparison.
+      # @intent: {"entity": "RepositoryMembership", "action": "bound nil-grantor row", "behavior": "on a row with no grantor, a PATCH adding repo.delete is refused 422 naming the unheld permission and leaves the row untouched at view with grantor still nil", "layer": "request"}
       it "cannot grant a permission it does not hold, even on a row that had no grantor" do
         expect(third_party_membership.granted_by_user).to be_nil
 
@@ -592,6 +624,7 @@ RSpec.describe "Repository members", type: :request do
       # Criterion 4's first half. The row a member can edit includes their OWN — which is what
       # repository_membership_spec:111 was written for, reaching a controller here for the first
       # time. The bound is measured against what they hold NOW, so a grant cannot bootstrap itself.
+      # @intent: {"entity": "RepositoryMembership", "action": "refuse self escalation", "behavior": "PATCHing their own row up to members.manage and repo.delete is refused 422 and the row keeps view and members.manage", "layer": "request"}
       it "cannot escalate its own row" do
         patch repository_member_path(repository, own_membership),
               params: { repository_membership: { permissions: ["", "view", "members.manage", "repo.delete"] } }
@@ -605,6 +638,7 @@ RSpec.describe "Repository members", type: :request do
       # and so the repository does not hide from them. `#destroy` already handles the mirror case
       # (revoking yourself redirects to repositories_path); this is the softer half, since the
       # repository itself is still theirs to open.
+      # @intent: {"entity": "RepositoryMembership", "action": "de-escalate self", "behavior": "a members.manage colleague editing their own row down to view is redirected to the repository page, which renders 200, while the members page now answers 403 for them", "layer": "request"}
       it "can edit away its own 'members.manage', and is redirected somewhere it can still reach" do
         edit_member(own_membership, %w[view])
 
@@ -623,6 +657,7 @@ RSpec.describe "Repository members", type: :request do
       # Criterion 7. The grid renders `grantable_permissions`, so it never offers a box whose save
       # the model would refuse — RepositoryPolicy#grantable_permissions says this is what it is for,
       # and until this slice it had no view or controller call site at all.
+      # @intent: {"entity": "RepositoryMembership", "action": "grid within holdings", "behavior": "their edit form for a third party offers members.manage and view but never keys.manage or repo.delete", "layer": "request"}
       it "is offered only the permissions it can actually grant" do
         get edit_repository_member_path(repository, third_party_membership)
 
@@ -636,6 +671,7 @@ RSpec.describe "Repository members", type: :request do
       # The silent-narrowing disclosure. The grid cannot offer `keys.manage` to this actor, so
       # saving the form drops it — a de-escalation, and safe, but not one they asked for. Silent is
       # the part that is not acceptable on a page whose whole subject is who holds what.
+      # @intent: {"entity": "RepositoryMembership", "action": "warn about stripping", "behavior": "editing a member holding keys.manage shows Saving will also remove permissions you cannot grant naming keys.manage, and the recourse reads Ask octocat, the owning account, not the acme slug", "layer": "request"}
       it "is warned that saving will strip a permission it cannot re-grant" do
         create_membership(repository: repository, user: create_user(github_uid: "5005", github_handle: "ci-bot"),
                           permissions: %w[view keys.manage])
@@ -663,6 +699,7 @@ RSpec.describe "Repository members", type: :request do
 
       let!(:membership) { create_membership(repository: repository, user: colleague, permissions: %w[view]) }
 
+      # @intent: {"entity": "RepositoryMembership", "action": "refuse view-only edit", "behavior": "a view-only member gets 403 on both the edit form and the PATCH, and the stored permissions stay view", "layer": "request"}
       it "gets 403 on the form and the save, and changes nothing" do
         get edit_repository_member_path(repository, membership)
         expect(response).to have_http_status(:forbidden)
@@ -676,6 +713,7 @@ RSpec.describe "Repository members", type: :request do
       # see something: a member who holds `members.manage` sees Edit, and this one never reaches the
       # page that renders it. Asserted as the 403 above plus the absence here, because "no Edit
       # affordance" on a page that returns 403 would otherwise pass vacuously.
+      # @intent: {"entity": "RepositoryMembership", "action": "withhold edit control", "behavior": "the members page itself answers 403 for a view-only member and renders no edit link", "layer": "request"}
       it "is never rendered an Edit control, because the page itself is refused" do
         get repository_members_path(repository)
 
@@ -688,6 +726,7 @@ RSpec.describe "Repository members", type: :request do
     describe "a signed-in user with no membership" do
       before { sign_in_via_github(uid: "7777") }
 
+      # @intent: {"entity": "RepositoryMembership", "action": "hide edit from non-member", "behavior": "a signed-in non-member gets 404 on both the edit form and the PATCH, and the permissions stay view and keys.manage", "layer": "request"}
       it "gets 404 on the form and the save, and changes nothing" do
         get edit_repository_member_path(repository, membership)
         expect(response).to have_http_status(:not_found)
@@ -699,6 +738,7 @@ RSpec.describe "Repository members", type: :request do
     end
 
     describe "a signed-out visitor" do
+      # @intent: {"entity": "RepositoryMembership", "action": "redirect signed-out edit", "behavior": "a signed-out GET of the edit form redirects to the root path", "layer": "request"}
       it "is sent to sign in rather than shown the form" do
         get edit_repository_member_path(repository, membership)
 
@@ -712,6 +752,7 @@ RSpec.describe "Repository members", type: :request do
     # repository A and then rewrite a row belonging to repository B — a cross-tenant WRITE, which is
     # strictly worse than the cross-tenant delete, since it can also *grant*.
     describe "editing across repositories" do
+      # @intent: {"entity": "RepositoryMembership", "action": "refuse cross-repository edit", "behavior": "a members.manage admin on repository A gets 404 for both GET and PATCH naming repository B's membership id, and the victim row keeps view", "layer": "request"}
       it "refuses a membership id that belongs to a different repository" do
         other_owner = create_user(github_uid: "2002", github_handle: "other-owner")
         other_repository = create_repository(user: other_owner, github_full_name: "acme/payments-service")
@@ -778,6 +819,7 @@ RSpec.describe "Repository members", type: :request do
         sign_in_via_github(uid: "9999", info: { nickname: "hubot" })
       end
 
+      # @intent: {"entity": "RepositoryMembership", "action": "caption names real doors", "behavior": "the members.manage checkbox caption matches add, see, change and remove verbs while each door really opens: the POST adds a row, the members table shows the added member with an Edit link, the PATCH widens to view and members.manage, and the DELETE drops the row", "layer": "request"}
       it "names every door the tick opens, and each door named really opens" do
         get new_repository_member_path(repository)
         expect(response).to have_http_status(:ok)
@@ -828,6 +870,7 @@ RSpec.describe "Repository members", type: :request do
       # contain a permission this viewer may not grant, so a caption that quoted a sibling
       # permission string would break four green examples elsewhere in this file. Asserted here too
       # because THIS is the file a future caption edit is read against.
+      # @intent: {"entity": "RepositoryMembership", "action": "caption avoids sibling strings", "behavior": "the members.manage caption names capabilities without quoting the keys.manage or repo.delete permission strings", "layer": "request"}
       it "describes the capabilities without quoting a sibling permission string" do
         get new_repository_member_path(repository)
         caption = rendered_caption("members.manage")
@@ -842,6 +885,7 @@ RSpec.describe "Repository members", type: :request do
     # The owner is the only viewer offered the full grid, so this is where the other three captions
     # are reachable at all. They are accurate today; this pins that they are all still printed, so
     # deleting one is a failure rather than a blank line under a checkbox.
+    # @intent: {"entity": "RepositoryMembership", "action": "caption every box", "behavior": "the owner's add form prints a non-empty, full-stop-terminated caption under every permission in RepositoryMembership PERMISSIONS", "layer": "request"}
     it "prints a caption under every box the owner is offered" do
       repository
       sign_in_via_github
@@ -864,6 +908,7 @@ RSpec.describe "Repository members", type: :request do
     # example above: the box is left unticked, and the colleague opens the repository anyway. An
     # owner who reads the caption as "untick this to lock them out" has consented to something the
     # tick cannot do.
+    # @intent: {"entity": "RepositoryMembership", "action": "caption view implication", "behavior": "the view caption says access is implied by membership, and a grant with every box unticked still stores an empty array while the member opens the repository with 200", "layer": "request"}
     it "tells the owner that leaving 'view' unticked does not lock the member out, and it does not" do
       repository
       colleague
@@ -912,6 +957,7 @@ RSpec.describe "Repository members", type: :request do
     # a subscriber is worse than none.
     def api_key_queries(&) = queries_against("api_keys", &)
 
+    # @intent: {"entity": "RepositoryMembership", "action": "show key counts grouped", "behavior": "the page prints 2 API keys minted and 1 API key minted per member while issuing exactly one api_keys query for the whole table", "layer": "request"}
     it "shows each member's live key count, and asks for it in one grouped query" do
       repository.api_keys.create!(name: "CI — main", created_by_user: colleague)
       repository.api_keys.create!(name: "CI — release", created_by_user: colleague)
@@ -927,6 +973,7 @@ RSpec.describe "Repository members", type: :request do
       expect(queries.size).to eq(1)
     end
 
+    # @intent: {"entity": "RepositoryMembership", "action": "count live keys only", "behavior": "after one of two keys is destroyed the page reports 1 API key minted and not 2", "layer": "request"}
     it "counts only keys that are still live, so a revoked key stops being reported" do
       key = repository.api_keys.create!(name: "CI — main", created_by_user: colleague)
       repository.api_keys.create!(name: "CI — release", created_by_user: colleague)
@@ -942,6 +989,7 @@ RSpec.describe "Repository members", type: :request do
     # The count is scoped through `repository.api_keys`. A member who mints on two repositories must
     # not have the other repository's keys reported here — that would be a cross-tenant read on a
     # page whose whole subject is who can reach *this* repository.
+    # @intent: {"entity": "RepositoryMembership", "action": "scope counts per repository", "behavior": "a key the colleague minted on a different repository is not counted here, the page says 1 API key minted", "layer": "request"}
     it "does not count keys the member minted on another repository" do
       other_repository = create_repository(user: owner, github_full_name: "acme/payments-service")
       other_repository.api_keys.create!(name: "Elsewhere", created_by_user: colleague)
@@ -956,6 +1004,7 @@ RSpec.describe "Repository members", type: :request do
     # A deep link is only useful if it lands. The badge points at `#api-keys`; the panel holding the
     # Revoke lever is what has to carry that id. Asserted from both ends in one example on purpose —
     # either half alone stays green while the link goes nowhere.
+    # @intent: {"entity": "RepositoryMembership", "action": "link badge to panel", "behavior": "the badge points at the repository page's #api-keys anchor, and that page really carries an element with id api-keys", "layer": "request"}
     it "points the badge at the API keys panel, which really carries that anchor" do
       repository.api_keys.create!(name: "CI — main", created_by_user: colleague)
 
@@ -966,6 +1015,7 @@ RSpec.describe "Repository members", type: :request do
       expect(response.body).to include(%(id="api-keys"))
     end
 
+    # @intent: {"entity": "RepositoryMembership", "action": "name surviving keys", "behavior": "the revoke confirmation says The 2 API keys they minted will keep authenticating until you revoke them", "layer": "request"}
     it "names the surviving keys in the revoke confirmation" do
       repository.api_keys.create!(name: "CI — main", created_by_user: colleague)
       repository.api_keys.create!(name: "CI — release", created_by_user: colleague)
@@ -979,6 +1029,7 @@ RSpec.describe "Repository members", type: :request do
 
     # The negative control for all of the above. Without it, rendering the badge and the extra
     # sentence unconditionally would still pass every example in this block.
+    # @intent: {"entity": "RepositoryMembership", "action": "stay silent without keys", "behavior": "a member who minted nothing draws no badge-shaped text, keeps the plain Revoke hubot question, and no keep-authenticating sentence", "layer": "request"}
     it "says nothing about keys for a member who minted none" do
       get repository_members_path(repository)
 
@@ -992,6 +1043,7 @@ RSpec.describe "Repository members", type: :request do
       expect(response.body).not_to include("keep authenticating")
     end
 
+    # @intent: {"entity": "RepositoryMembership", "action": "notice surviving keys", "behavior": "revoking a member with 2 live keys flashes a notice saying the 2 keys are still live and pointing at the API keys panel", "layer": "request"}
     it "tells the owner the keys are still live after revoking the member" do
       repository.api_keys.create!(name: "CI — main", created_by_user: colleague)
       repository.api_keys.create!(name: "CI — release", created_by_user: colleague)
@@ -1005,6 +1057,7 @@ RSpec.describe "Repository members", type: :request do
       )
     end
 
+    # @intent: {"entity": "RepositoryMembership", "action": "keep plain notice", "behavior": "revoking a member who minted nothing flashes exactly Revoked hubot's access", "layer": "request"}
     it "keeps the original notice when the revoked member minted nothing" do
       membership = RepositoryMembership.find_by!(user: colleague, repository: repository)
 
@@ -1016,6 +1069,7 @@ RSpec.describe "Repository members", type: :request do
     # Both surfaces are built by string interpolation around a count, so the singular is a genuinely
     # separate code path — and "1 API keys ... are still live" is exactly the kind of sloppiness that
     # makes an owner trust the rest of the sentence less.
+    # @intent: {"entity": "RepositoryMembership", "action": "singularize one key", "behavior": "with exactly one minted key the confirm reads The 1 API key they minted will keep authenticating until you revoke it and the notice says 1 API key they minted is still live", "layer": "request"}
     it "reads correctly when the member minted exactly one key" do
       repository.api_keys.create!(name: "CI — main", created_by_user: colleague)
       membership = RepositoryMembership.find_by!(user: colleague, repository: repository)
@@ -1035,6 +1089,7 @@ RSpec.describe "Repository members", type: :request do
     # half of access does NOT revoke the credential. If someone ever "fixes" this by switching
     # `created_api_keys` to `dependent: :destroy`, this example is what stops it — silently killing
     # the owner's green CI because a colleague changed teams is the worse failure.
+    # @intent: {"entity": "RepositoryMembership", "action": "keep key authenticating", "behavior": "after the revoke deletes the membership, the key's bearer token still gets 200 from GET /api/v1/repository returning acme/billing-service, and the key row survives", "layer": "request"}
     it "leaves the revoked member's key authenticating against the API" do
       key = repository.api_keys.create!(name: "CI — main", created_by_user: colleague)
       token = key.raw_token
@@ -1080,6 +1135,7 @@ RSpec.describe "Repository members", type: :request do
         sign_in_via_github(uid: "9999")
       end
 
+      # @intent: {"entity": "RepositoryMembership", "action": "withhold count from manager", "behavior": "a viewer holding members.manage but not keys.manage still sees dependabot listed yet no N API keys minted badge", "layer": "request"}
       it "administers the member without being told how many keys exist" do
         get repository_members_path(repository)
 
@@ -1092,6 +1148,7 @@ RSpec.describe "Repository members", type: :request do
       # pinned to each other rather than merely happening to agree today. Matched against the
       # index's own badge copy — `pluralize(count, "key")`, not this page's "API key" — because a
       # regex borrowed from the members page would never match there and would pass vacuously.
+      # @intent: {"entity": "RepositoryMembership", "action": "withhold index count", "behavior": "the same viewer's repositories index shows acme/billing-service without any N keys badge", "layer": "request"}
       it "is refused the same count on the repositories index" do
         get repositories_path
 
@@ -1099,6 +1156,7 @@ RSpec.describe "Repository members", type: :request do
         expect(response.body).not_to match(/\b\d+ keys?\b/)
       end
 
+      # @intent: {"entity": "RepositoryMembership", "action": "plain confirm for manager", "behavior": "their revoke confirm keeps the original question with no sentence about surviving keys", "layer": "request"}
       it "sees the original confirm question, with no sentence about surviving keys" do
         get repository_members_path(repository)
 
@@ -1108,6 +1166,7 @@ RSpec.describe "Repository members", type: :request do
 
       # The flash is an imperative, so leaking it here is worse than leaking the badge: it would
       # tell this viewer to go review keys in a panel they cannot open. They get today's copy.
+      # @intent: {"entity": "RepositoryMembership", "action": "plain notice for manager", "behavior": "after revoking they get the plain Revoked dependabot's access notice, not an instruction to review a panel they cannot open", "layer": "request"}
       it "gets the original notice after revoking, not an instruction it cannot follow" do
         membership = RepositoryMembership.find_by!(user: third_party, repository: repository)
 
@@ -1119,6 +1178,7 @@ RSpec.describe "Repository members", type: :request do
 
       # What the badge promises has to exist at the other end of the link. It does not for this
       # viewer — which is the reason the badge is withheld rather than merely unlinked.
+      # @intent: {"entity": "RepositoryMembership", "action": "withhold panel from manager", "behavior": "their GET of the repository page renders no element with id api-keys, which is why the badge is withheld rather than unlinked", "layer": "request"}
       it "cannot open the panel the badge would have pointed at" do
         get repository_path(repository)
 
@@ -1138,6 +1198,7 @@ RSpec.describe "Repository members", type: :request do
         sign_in_via_github(uid: "9999")
       end
 
+      # @intent: {"entity": "RepositoryMembership", "action": "serve both-permission viewer", "behavior": "a viewer holding members.manage and keys.manage sees the 2 API keys minted badge, the confirm warning, and the post-revoke flash exactly as the owner does", "layer": "request"}
       it "sees the count, the confirm warning and the flash, exactly as the owner does" do
         get repository_members_path(repository)
 
@@ -1157,6 +1218,7 @@ RSpec.describe "Repository members", type: :request do
 
       # The badge's deep link, from this viewer's session: the panel and its anchor really are
       # reachable for anyone the badge is shown to.
+      # @intent: {"entity": "RepositoryMembership", "action": "open panel with keys.manage", "behavior": "the same viewer's repository page carries the id api-keys anchor the badge points at", "layer": "request"}
       it "can open the panel the badge points at" do
         get repository_path(repository)
 
@@ -1176,6 +1238,7 @@ RSpec.describe "Repository members", type: :request do
       sign_in_via_github(uid: "9999")
     end
 
+    # @intent: {"entity": "RepositoryMembership", "action": "open members page", "behavior": "a members.manage member gets 200 on the members page and sees dependabot listed", "layer": "request"}
     it "can open the members page" do
       get repository_members_path(repository)
 
@@ -1183,6 +1246,7 @@ RSpec.describe "Repository members", type: :request do
       expect(response.body).to include("dependabot")
     end
 
+    # @intent: {"entity": "RepositoryMembership", "action": "revoke another member", "behavior": "deleting the third party's row drops the count by 1, and the revoked user then gets 404 on the repository URL and no longer sees it on their index", "layer": "request"}
     it "can revoke another member, whose access really is gone afterwards" do
       membership = RepositoryMembership.find_by!(user: third_party, repository: repository)
 
@@ -1203,6 +1267,7 @@ RSpec.describe "Repository members", type: :request do
 
     # Their own access is theirs to give up, and nothing guards it. They are then a stranger to the
     # members page, so the redirect has to go somewhere that still exists.
+    # @intent: {"entity": "RepositoryMembership", "action": "revoke self", "behavior": "a member deleting their own row is redirected to repositories_path, and the members page now answers 404 for them", "layer": "request"}
     it "can revoke themselves, and is redirected off the page they just lost" do
       own_membership = RepositoryMembership.find_by!(user: colleague, repository: repository)
 
@@ -1224,12 +1289,14 @@ RSpec.describe "Repository members", type: :request do
 
     before { sign_in_via_github(uid: "9999") }
 
+    # @intent: {"entity": "RepositoryMembership", "action": "refuse view-only page", "behavior": "a view-only member gets 403 on the members page", "layer": "request"}
     it "gets 403 on the members page" do
       get repository_members_path(repository)
 
       expect(response).to have_http_status(:forbidden)
     end
 
+    # @intent: {"entity": "RepositoryMembership", "action": "refuse view-only revoke", "behavior": "their DELETE changes no rows and answers 403", "layer": "request"}
     it "cannot revoke anyone" do
       expect {
         delete repository_member_path(repository, membership)
@@ -1246,6 +1313,7 @@ RSpec.describe "Repository members", type: :request do
 
     before { sign_in_via_github(uid: "7777") }
 
+    # @intent: {"entity": "RepositoryMembership", "action": "hide from non-member", "behavior": "a signed-in non-member gets 404 on both the members page and the DELETE, and revokes nothing", "layer": "request"}
     it "gets 404 on both actions, and revokes nothing" do
       get repository_members_path(repository)
       expect(response).to have_http_status(:not_found)
@@ -1263,6 +1331,7 @@ RSpec.describe "Repository members", type: :request do
   # to repository B. The lookup must be scoped through the repository, as ApiKeysController#destroy
   # already scopes through `repository.api_keys`.
   describe "revoking across repositories" do
+    # @intent: {"entity": "RepositoryMembership", "action": "refuse cross-repository revoke", "behavior": "an admin on repository A deleting repository B's membership id changes nothing, answers 404, and the victim row survives", "layer": "request"}
     it "refuses a membership id that belongs to a different repository" do
       other_owner = create_user(github_uid: "2002", github_handle: "other-owner")
       other_repository = create_repository(user: other_owner, github_full_name: "acme/payments-service")
@@ -1335,6 +1404,7 @@ RSpec.describe "Repository members", type: :request do
     # `created_at`, which an edit does not move. A header claiming original authorship would let a
     # reader fuse the two into "hubot was added by alice three days ago" when alice only narrowed
     # hubot's permissions this morning, so the wording is asserted, not just the value.
+    # @intent: {"entity": "RepositoryMembership", "action": "word grantor column", "behavior": "the column is headed Permissions set by, never Added by or Granted by, since it holds who last set the row while the Since cell holds created_at", "layer": "request"}
     it "names the column for what it holds rather than claiming original authorship" do
       create_membership(repository: repository, user: colleague)
       sign_in_via_github
@@ -1352,6 +1422,7 @@ RSpec.describe "Repository members", type: :request do
     # account was later deleted. Migration 20260806150000 declined to backfill precisely because
     # naming the owner would be "a fabricated audit trail, which is worse than an honest NULL" —
     # so the second assertion is the point of the example, not a decoration on the first.
+    # @intent: {"entity": "RepositoryMembership", "action": "read Unknown grantor", "behavior": "a row with a nil grantor renders Unknown in its own table row and never substitutes the owner's handle", "layer": "request"}
     it "reads Unknown for a row with no grantor, and never names the owner in its place" do
       membership = create_membership(repository: repository, user: colleague)
       expect(membership.granted_by_user).to be_nil
@@ -1369,6 +1440,7 @@ RSpec.describe "Repository members", type: :request do
     # add door, and the table then names that colleague on the row they created, for a viewer who is
     # not the owner either. A cell that hardcoded `@repository.user` would pass every other example
     # in this block and fail here.
+    # @intent: {"entity": "RepositoryMembership", "action": "name acting grantor", "behavior": "after a members.manage colleague adds dependabot through the real form, the table names hubot on that row, not octocat, for a viewer who is not the owner, beside the colleague's own Unknown row", "layer": "request"}
     it "names the members.manage colleague who granted the row, to a viewer who is not the owner" do
       create_user(github_uid: "8888", github_handle: "dependabot")
       create_membership(repository: repository, user: colleague, permissions: %w[view members.manage])
@@ -1395,6 +1467,7 @@ RSpec.describe "Repository members", type: :request do
     # columns over. Distinct grantors on purpose: three rows sharing one grantor would be collapsed
     # by the per-request query cache, and a lazily-loaded `membership.granted_by_user` would still
     # look like a single query.
+    # @intent: {"entity": "RepositoryMembership", "action": "fetch grantors eagerly", "behavior": "one statement fetches the members with a LEFT OUTER JOIN on granted_by_users_, and growing the table from one row to three with distinct grantors adds no further statements", "layer": "request"}
     it "fetches the grantors with the members, not once per member" do
       add_member = lambda do |uid, handle|
         member = create_user(github_uid: uid, github_handle: handle)
@@ -1440,6 +1513,7 @@ RSpec.describe "Repository members", type: :request do
   end
 
   describe "a signed-out visitor" do
+    # @intent: {"entity": "RepositoryMembership", "action": "redirect signed-out list", "behavior": "a signed-out GET of the members page redirects to the root path", "layer": "request"}
     it "is sent to sign in rather than shown the list" do
       create_membership(repository: repository, user: colleague)
 

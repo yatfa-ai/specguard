@@ -98,6 +98,7 @@ RSpec.describe "Repository heaviest spec directories", type: :request do
 
     # The panel's whole claim: an area's wall clock is the SUM of every file under it, so an area
     # holding three middling files outranks one holding a single heavier one.
+    # @intent: {"entity": "SpecDirectoryDurations", "action": "rank heaviest directories", "behavior": "areas are ordered by summed example wall clock so spec/models totals 10.50s over three 3.5s files and outranks spec/requests at 9.00s, with spec/system last at 0.50s", "layer": "request"}
     it "ranks the directories by the wall clock the run spent in each, heaviest first" do
       get repository_path(timed_run)
 
@@ -109,6 +110,7 @@ RSpec.describe "Repository heaviest spec directories", type: :request do
     # dropped and the by-file panel left to stand in for it. The heaviest FILE on this page is in
     # `spec/requests`; the heaviest AREA is `spec/models`, which owns no row at the head of the
     # panel below. Neither list is derivable from the other and the page shows both.
+    # @intent: {"entity": "SpecDirectoryDurations", "action": "differ from file rollup", "behavior": "on the same run the by-file panel heads with spec/requests/checkout_spec.rb while the area panel heads with spec/models, an area owning none of the top files", "layer": "request"}
     it "ranks the areas differently from the files, on the same rows of the same run" do
       get repository_path(timed_run)
 
@@ -116,6 +118,7 @@ RSpec.describe "Repository heaviest spec directories", type: :request do
       expect(row_paths.first).to eq("spec/models")
     end
 
+    # @intent: {"entity": "SpecDirectoryDurations", "action": "state full coverage", "behavior": "every row shows its coverage as 3 of 3, 1 of 1 and 1 of 1, and the basis line says every example in every directory listed reported a duration", "layer": "request"}
     it "says every listed total covers the whole of its area, where every example was timed" do
       get repository_path(timed_run)
 
@@ -127,6 +130,7 @@ RSpec.describe "Repository heaviest spec directories", type: :request do
     # Bounded by `SpecObservation::HEAVIEST_DIRECTORIES_LIMIT` — its own constant, not the by-file
     # panel's: the two rank different populations and a suite that wants twenty files ranked has no
     # reason to want twenty areas ranked.
+    # @intent: {"entity": "SpecDirectoryDurations", "action": "cap listed areas", "behavior": "a run over 25 directories renders exactly HEAVIEST_DIRECTORIES_LIMIT rows, from spec/d25 first down to spec/d16 last", "layer": "request"}
     it "lists no more than the heaviest ten, however many areas the run touched" do
       get repository_path(twenty_five_directory_run)
 
@@ -138,6 +142,7 @@ RSpec.describe "Repository heaviest spec directories", type: :request do
     # A capped list that does not disclose its cap is read as the whole story — the same lie by
     # omission the per-row coverage column refuses one grain down. The caption has to name what the
     # list is the head OF, and `rows.size` cannot, because it is the truncated figure.
+    # @intent: {"entity": "SpecDirectoryDurations", "action": "disclose truncation count", "behavior": "on the capped 25-directory run the basis reads the 10 heaviest of the 25 directories the run named above recorded rather than the listed row count", "layer": "request"}
     it "says how many directories the run touched, not just how many it lists" do
       get repository_path(twenty_five_directory_run)
 
@@ -147,6 +152,7 @@ RSpec.describe "Repository heaviest spec directories", type: :request do
 
     # And the other half of the disclosure: a run whose areas all fit is not truncated, and saying
     # "the 3 heaviest of the 3 directories" would make a complete list look like a sample.
+    # @intent: {"entity": "SpecDirectoryDurations", "action": "state complete list", "behavior": "on a 3-area run the basis reads all 3 directories the run named above recorded and never prints heaviest of the", "layer": "request"}
     it "says the list is all of them, where nothing was cut" do
       get repository_path(timed_run)
 
@@ -157,6 +163,7 @@ RSpec.describe "Repository heaviest spec directories", type: :request do
     # The IMMEDIATE parent, so the areas partition the run rather than nesting: `spec/models/orders`
     # is its own row and its time does not also count inside `spec/models`. A rollup that walked
     # ancestors would double-count the deep rows and total more than the run.
+    # @intent: {"entity": "SpecDirectoryDurations", "action": "partition nested areas", "behavior": "spec/models/orders renders as its own 2.00s row and spec/models keeps only its own 1.00s, so grouping at the immediate parent never double-counts", "layer": "request"}
     it "keeps a nested area's time out of its ancestor's total" do
       repository = create_repository(user: @user)
       ingest(repository, [example_spec(file_path: "spec/models/order_spec.rb", duration: 1.0, line_number: 1),
@@ -174,6 +181,7 @@ RSpec.describe "Repository heaviest spec directories", type: :request do
     # A spec file at the repository root has no parent segment at all. Dropping those rows would
     # understate the run at the one grain that is supposed to account for all of it, and an unnamed
     # area on a ranked list is unreadable — so the root is named the way `Pathname#dirname` names it.
+    # @intent: {"entity": "SpecDirectoryDurations", "action": "name the root area", "behavior": "a root-level smoke_spec.rb renders as the row named dot carrying 3.00s ahead of spec/models at 1.00s instead of being dropped", "layer": "request"}
     it "names the repository root rather than losing the rows that sit in it" do
       repository = create_repository(user: @user)
       ingest(repository, [example_spec(file_path: "smoke_spec.rb", duration: 3.0, line_number: 1,
@@ -190,6 +198,7 @@ RSpec.describe "Repository heaviest spec directories", type: :request do
     # the file that actually RAN it appears only as `spec_file_path`. Rolling up on `file_path`
     # would attribute every including area's time to a `spec/support` that ran nothing — the exact
     # shape spec/requests/api/v1/ingest_spec.rb pins at the ingest end.
+    # @intent: {"entity": "SpecDirectoryDurations", "action": "attribute shared groups", "behavior": "examples whose file_path is spec/support/shared_examples.rb land on their spec_file_path areas, spec/requests at 2.50s and spec/models at 1.50s, and spec/support never appears as a row", "layer": "request"}
     it "lands a shared example group's time on the area that included it, not on the helper's" do
       repository = create_repository(user: @user)
       shared = "spec/support/shared_examples.rb"
@@ -223,6 +232,7 @@ RSpec.describe "Repository heaviest spec directories", type: :request do
       repository
     end
 
+    # @intent: {"entity": "SpecDirectoryDurations", "action": "state partial coverage", "behavior": "the spec/models row reads coverage 1 of 3 and duration 4.00s, its total summed over the one timed example of three", "layer": "request"}
     it "states how much of a partly timed area its total was summed over" do
       get repository_path(mixed_run)
 
@@ -233,6 +243,7 @@ RSpec.describe "Repository heaviest spec directories", type: :request do
     # Both halves fail differently. A cell rendering the aggregate's nil through
     # `group(...).sum(:duration_seconds)` prints "0.00s"; an ordering left at plain `DESC` is NULLS
     # FIRST in Postgres and names the area nothing was measured in the heaviest in the run.
+    # @intent: {"entity": "SpecDirectoryDurations", "action": "render untimed area honestly", "behavior": "the wholly untimed spec/system row reads 0 of 2 with duration not reported instead of 0.00s, and the measured spec/models still ranks first", "layer": "request"}
     it "shows no total for a wholly untimed area, and does not rank it above a measured one" do
       get repository_path(mixed_run)
 
@@ -242,6 +253,7 @@ RSpec.describe "Repository heaviest spec directories", type: :request do
       expect(panel).to have_no_text("0.00s")
     end
 
+    # @intent: {"entity": "SpecDirectoryDurations", "action": "explain coverage column", "behavior": "where totals do not all cover their areas the basis explains that an area that reported none has no total to state rather than a zero", "layer": "request"}
     it "says what the coverage column is, where the totals do not all cover their areas" do
       get repository_path(mixed_run)
 
@@ -252,6 +264,7 @@ RSpec.describe "Repository heaviest spec directories", type: :request do
     # The denominator is the rows this run wrote here, never the Overview's suite size — that figure
     # is re-derived by SUM over shard reports and the two can legitimately differ. There is no
     # by-directory counter anywhere else to borrow in any case.
+    # @intent: {"entity": "SpecDirectoryDurations", "action": "count own rows", "behavior": "with a run whose total_specs_count is 4,000 the spec/models denominator stays 1 of 2 and the panel prints neither 4,000 nor 4000", "layer": "request"}
     it "counts each area's own rows rather than the run's suite size" do
       repository = create_repository(user: @user)
       ingest(repository, [example_spec(file_path: "spec/models/order_spec.rb", duration: 1.0, line_number: 1),
@@ -267,6 +280,7 @@ RSpec.describe "Repository heaviest spec directories", type: :request do
   end
 
   describe "a run that recorded examples and timed none of them" do
+    # @intent: {"entity": "SpecDirectoryDurations", "action": "render no-timings empty state", "behavior": "a run whose examples were all untimed shows No timings on this run and no wall clock to attribute to any area, with no tbody rows and no 0.00s", "layer": "request"}
     it "renders an empty state rather than a column of zeroes" do
       repository = create_repository(user: @user)
       ingest(repository, [example_spec(file_path: "spec/models/order_spec.rb", duration: nil, line_number: 1),
@@ -284,6 +298,7 @@ RSpec.describe "Repository heaviest spec directories", type: :request do
     # DIRECTORIES, because that is the count this read has exactly. An example count summed off the
     # rows on hand would be summed over a capped ten of them and understate a wider run while
     # looking suite-wide.
+    # @intent: {"entity": "SpecDirectoryDurations", "action": "count unmeasured areas", "behavior": "twelve untimed areas produce an empty state saying this run recorded examples in 12 directories, counting past the ten-row cap", "layer": "request"}
     it "says how many directories went unmeasured, counting past the limit" do
       repository = create_repository(user: @user)
       ingest(repository, (1..12).map do |i|
@@ -301,6 +316,7 @@ RSpec.describe "Repository heaviest spec directories", type: :request do
   # panel on every such run would read as a finding about the suite when it is a fact about the
   # payload.
   describe "a run with nothing at this grain" do
+    # @intent: {"entity": "SpecDirectoryDurations", "action": "omit panel without examples", "behavior": "GET /repositories/:id answers 200 and renders no directory-durations panel for a run that recorded no per-example rows", "layer": "request"}
     it "renders no panel for a run that recorded no examples" do
       repository = create_repository(user: @user)
       create_test_run(repository: repository, total_specs_count: 900)
@@ -311,6 +327,7 @@ RSpec.describe "Repository heaviest spec directories", type: :request do
       expect(panel?).to be(false)
     end
 
+    # @intent: {"entity": "SpecDirectoryDurations", "action": "omit panel without runs", "behavior": "GET /repositories/:id answers 200 and renders no directory-durations panel for a repository CI has never reported for", "layer": "request"}
     it "renders no panel for a repository CI has never reported for" do
       get repository_path(create_repository(user: @user))
 
@@ -337,6 +354,7 @@ RSpec.describe "Repository heaviest spec directories", type: :request do
     # The reading itself: three examples over two descriptions in one area, one example over one in
     # the other. A column rendering the example count reads "3 of 3" for the first and is
     # indistinguishable from the second on the axis that matters.
+    # @intent: {"entity": "SpecDirectoryDurations", "action": "count distinct descriptions", "behavior": "spec/models renders descriptions 2 of 3 across three examples over two names while its coverage still reads 3 of 3, and spec/system reads 1 of 1", "layer": "request"}
     it "states how many distinct descriptions an area's examples carry, not how many examples ran" do
       repository = create_repository(user: @user)
       ingest(repository, [example_spec(file_path: "spec/models/order_spec.rb", duration: 3.0,
@@ -360,6 +378,7 @@ RSpec.describe "Repository heaviest spec directories", type: :request do
     # `COUNT(DISTINCT name)` skips NULLs, so an area whose producer sent no descriptions counts zero
     # of them — and a cell rendering that bare would print the single most redundant area this page
     # can describe, out of a producer's silence rather than a measurement. It says so instead.
+    # @intent: {"entity": "SpecDirectoryDurations", "action": "refuse vacuous zero", "behavior": "an area whose three examples carry nil names renders descriptions as no descriptions rather than 0 of 3 or 0 of 0", "layer": "request"}
     it "says an area carries no descriptions rather than reporting it as maximal redundancy" do
       repository = create_repository(user: @user)
       ingest(repository, [unnamed_spec(file_path: "spec/models/order_spec.rb", duration: 3.0, line_number: 1),
@@ -378,6 +397,7 @@ RSpec.describe "Repository heaviest spec directories", type: :request do
 
     # The caption is a claim ABOUT the column, so on a run where nothing was named it must not go on
     # describing a density nothing was counted for.
+    # @intent: {"entity": "SpecDirectoryDurations", "action": "explain empty column", "behavior": "where the only listed area named no examples the basis says there is nothing to count distinct rather than nothing distinct to count", "layer": "request"}
     it "says the column has nothing to count where none of the listed areas carry descriptions" do
       repository = create_repository(user: @user)
       ingest(repository, [unnamed_spec(file_path: "spec/models/order_spec.rb", duration: 3.0, line_number: 1)],
@@ -400,6 +420,7 @@ RSpec.describe "Repository heaviest spec directories", type: :request do
     # 10 heaviest of the 13", so a run-scoped sentence here contradicts the disclosure beside it.
     # This panel carries `#truncated?` precisely because the list is capped; a caption that forgets
     # the cap is the reading that whole predicate exists to refuse.
+    # @intent: {"entity": "SpecDirectoryDurations", "action": "scope caption to listed rows", "behavior": "with twelve unnamed heavy areas filling the cap and a named light area cut, the basis says nothing to state about the directories listed here beside the 10-heaviest-of-13 disclosure and never claims nothing on this run", "layer": "request"}
     it "scopes the nothing-to-count sentence to the listed areas, not to a run it cannot see" do
       repository = create_repository(user: @user)
       heavy = (1..12).map do |i|
@@ -430,6 +451,7 @@ RSpec.describe "Repository heaviest spec directories", type: :request do
     # wrong quietly: two named rows carrying one description between them, beside two the count
     # could not see. "1 of 4" would be a density over a population the aggregate never read, and the
     # excluded rows have to be visible in the same cell rather than inferable from a caption.
+    # @intent: {"entity": "SpecDirectoryDurations", "action": "show named-row density", "behavior": "two named rows sharing one description beside two unnamed render the cell as 1 of 2 (2 unnamed) with coverage 4 of 4", "layer": "request"}
     it "counts the density over an area's named rows and shows what it excluded" do
       repository = create_repository(user: @user)
       ingest(repository, [example_spec(file_path: "spec/models/order_spec.rb", duration: 1.0,
@@ -451,6 +473,7 @@ RSpec.describe "Repository heaviest spec directories", type: :request do
     # The ordinary run says the ordinary thing: no exclusion clause where nothing was excluded, for
     # the reason every other caption on this page omits its own — "(0 unnamed)" is a sentence about
     # arithmetic rather than about this area.
+    # @intent: {"entity": "SpecDirectoryDurations", "action": "omit exclusion note", "behavior": "a fully named area renders descriptions 1 of 1 with no unnamed text, the basis saying every example in every directory listed reported a description", "layer": "request"}
     it "adds no exclusion note to an area that named every one of its examples" do
       repository = create_repository(user: @user)
       ingest(repository, [example_spec(file_path: "spec/models/order_spec.rb", duration: 1.0,
@@ -471,6 +494,7 @@ RSpec.describe "Repository heaviest spec directories", type: :request do
     # the seam every bare coverage fraction in this panel is spelled through, so the
     # exclusion follows it rather than the caption prose beside it. Pinned rather than left to a
     # comment, because the accident this replaced was invisible until a four-digit run.
+    # @intent: {"entity": "SpecDirectoryDurations", "action": "spell digits consistently", "behavior": "at 1,010 rows per file the cell reads 2 of 1010 (1010 unnamed) with both halves spelled without delimiters, beside coverage 2020 of 2020", "layer": "request"}
     it "spells both halves of the cell the same way at four digits" do
       repository = create_repository(user: @user)
       named = (1..1010).map do |i|
@@ -493,6 +517,7 @@ RSpec.describe "Repository heaviest spec directories", type: :request do
     # The panel offers a ratio and takes no position on it, exactly as `RepeatedDescriptions` does
     # one grain down: several examples under one description is equally a suite testing one behavior
     # many ways and an ordinary table-driven loop or shared example group.
+    # @intent: {"entity": "SpecDirectoryDurations", "action": "offer ratio neutrally", "behavior": "the basis calls the column a ratio to review rather than a judgement about the area, and the panel never prints redundant, over-covered or duplicate", "layer": "request"}
     it "offers the ratio for review rather than calling the area redundant" do
       repository = create_repository(user: @user)
       ingest(repository, [example_spec(file_path: "spec/models/order_spec.rb", duration: 1.0,
@@ -509,6 +534,7 @@ RSpec.describe "Repository heaviest spec directories", type: :request do
 
     # Same figure, same object, one grouped aggregate: the column costs the panel no extra query.
     # `queries_against` comes from spec/support/query_capture.rb.
+    # @intent: {"entity": "SpecDirectoryDurations", "action": "reuse one aggregate", "behavior": "exactly one COUNT(DISTINCT query runs against spec_observations and it carries a COUNT(*) OVER () window, so the column adds no second aggregate", "layer": "request"}
     it "costs no query beyond the one the panel already made" do
       repository = create_repository(user: @user)
       ingest(repository, (1..30).map do |i|
@@ -528,6 +554,7 @@ RSpec.describe "Repository heaviest spec directories", type: :request do
   # it would agree with itself by construction; this one groups the rows in Ruby, off the records,
   # and compares what the reader is shown to what the run actually wrote.
   describe "what the rendered figures are" do
+    # @intent: {"entity": "SpecDirectoryDurations", "action": "verify against independent grouping", "behavior": "every rendered cell equals a Ruby-side regrouping of the run's own SpecObservation rows across four areas, each descriptions cell reading 5 of 6 over six examples", "layer": "request"}
     it "matches an independent grouping of the run's own rows" do
       repository = create_repository(user: @user)
       ingest(repository, (1..24).map do |i|
@@ -578,6 +605,7 @@ RSpec.describe "Repository heaviest spec directories", type: :request do
   describe "what the panel costs" do
     # `queries_against` comes from spec/support/query_capture.rb.
 
+    # @intent: {"entity": "SpecDirectoryDurations", "action": "hold rollup cost flat", "behavior": "the spec_observations query count on a 200-example 25-directory run equals the 3-example 3-directory run's, so the grouped read does not scale with suite size", "layer": "request"}
     it "costs the same number of queries at 200 examples over 25 directories as at 3 over 3" do
       small = create_repository(user: @user, github_full_name: "acme/small-suite")
       ingest(small, (1..3).map do |i|
@@ -642,6 +670,7 @@ RSpec.describe "Repository heaviest spec directories", type: :request do
     describe "the way in, from the panel above" do
       # The panel above already rendered the path as plain text, so the way in costs no query to
       # offer — and without it the ten areas the page names are ten dead ends.
+      # @intent: {"entity": "SpecDirectoryDurations", "action": "link area to drill-in", "behavior": "the spec/models link in the rollup carries a spec_directory query parameter alongside the directory-files anchor", "layer": "request"}
       it "links each listed directory to its own spec files" do
         get repository_path(area_run)
 
@@ -652,6 +681,7 @@ RSpec.describe "Repository heaviest spec directories", type: :request do
       end
 
       # A list of choices with one of them taken, and the drill-in sits below a long page.
+      # @intent: {"entity": "SpecDirectoryDurations", "action": "mark current area", "behavior": "with an area asked for its own link sets aria-current true while the spec/requests link stays nil", "layer": "request"}
       it "marks the open directory in the panel it was opened from" do
         get repository_path(area_run, spec_directory: "spec/models")
 
@@ -661,6 +691,7 @@ RSpec.describe "Repository heaviest spec directories", type: :request do
 
       # `?branch=` anchors the "Suite growth" panel and nothing else. Opening an area must not
       # re-anchor a chart the reader did not touch.
+      # @intent: {"entity": "SpecDirectoryDurations", "action": "carry branch param", "behavior": "a branch=main ask survives on the spec/models drill-in href so the Suite growth chart keeps its anchor", "layer": "request"}
       it "carries a branch ask through the link rather than dropping it" do
         get repository_path(area_run, branch: "main")
 
@@ -674,6 +705,7 @@ RSpec.describe "Repository heaviest spec directories", type: :request do
       # prose, in two places, said it must not, and this example is the pin that was missing. See
       # `RepositoriesHelper#drill_down_path`, where the rule is stated once instead of re-argued at
       # each of the links that obey it.
+      # @intent: {"entity": "SpecDirectoryDurations", "action": "carry open file param", "behavior": "an open spec/models/order_spec.rb file ask survives the spec/models drill-in href instead of closing the open file", "layer": "request"}
       it "carries an open file through the link rather than dropping it" do
         get repository_path(area_run, spec_file: "spec/models/order_spec.rb")
 
@@ -681,6 +713,7 @@ RSpec.describe "Repository heaviest spec directories", type: :request do
           .to include("spec_file=#{CGI.escape('spec/models/order_spec.rb')}")
       end
 
+      # @intent: {"entity": "SpecDirectoryDurations", "action": "omit panel without ask", "behavior": "with no directory asked for the page answers 200 and renders no directory-files panel", "layer": "request"}
       it "renders no panel at all when no directory was asked for" do
         get repository_path(area_run)
 
@@ -692,6 +725,7 @@ RSpec.describe "Repository heaviest spec directories", type: :request do
     describe "an area whose files were timed" do
       # THE question this rung exists for. Scoped to the area — the run's heaviest file is in
       # another one and belongs to nothing here — and heaviest file first inside it.
+      # @intent: {"entity": "SpecDirectoryDurations", "action": "list area files", "behavior": "the spec/models drill-in lists refund_spec.rb at 5.00s, order_spec.rb at 3.50s and user_spec.rb at 2.00s, and checkout_spec.rb from spec/requests never appears", "layer": "request"}
       it "lists that area's spec files, heaviest first, and no other area's" do
         get repository_path(area_run, spec_directory: "spec/models")
 
@@ -704,6 +738,7 @@ RSpec.describe "Repository heaviest spec directories", type: :request do
       # THE assertion that fails if this panel is ever fed by the by-file rollup instead of its own
       # read: not one of `spec/models`' three files is the heaviest file in the run, which is what
       # makes the area heavy and its files unreachable from a by-file top ten.
+      # @intent: {"entity": "SpecDirectoryDurations", "action": "feed from own read", "behavior": "none of the area's three files is the run's heaviest, so checkout_spec.rb is absent and refund_spec.rb heads the list, proving the panel is not fed by the by-file top ten", "layer": "request"}
       it "shows files the by-file panel's own ranking heads with something else" do
         get repository_path(area_run, spec_directory: "spec/models")
 
@@ -711,12 +746,14 @@ RSpec.describe "Repository heaviest spec directories", type: :request do
         expect(file_row_paths.first).to eq("spec/models/refund_spec.rb")
       end
 
+      # @intent: {"entity": "SpecDirectoryDurations", "action": "name open area", "behavior": "the drill-in basis names spec/models as the area it is listing", "layer": "request"}
       it "names the area it is listing" do
         get repository_path(area_run, spec_directory: "spec/models")
 
         expect(files_basis).to have_text("spec/models", normalize_ws: true)
       end
 
+      # @intent: {"entity": "SpecDirectoryDurations", "action": "state complete file list", "behavior": "the basis says all 3 spec files this run recorded in this area, heaviest first, and that every one of the 3 examples reported a duration", "layer": "request"}
       it "says the list is all of the area's files, where nothing was cut" do
         get repository_path(area_run, spec_directory: "spec/models")
 
@@ -731,6 +768,7 @@ RSpec.describe "Repository heaviest spec directories", type: :request do
       # An EQUALITY narrow at one depth, exactly as the rollup above groups at one depth. A prefix
       # `LIKE` would gather the nested area in — and would have left this slice, per
       # `SpecObservation.files_in_directory`.
+      # @intent: {"entity": "SpecDirectoryDurations", "action": "exclude nested files", "behavior": "asking for spec/models lists only order_spec.rb and never the nested spec/models/orders/refund_spec.rb, an equality narrow at one depth", "layer": "request"}
       it "does not gather a nested area's files into its ancestor" do
         repository = create_repository(user: @user)
         ingest(repository, [example_spec(file_path: "spec/models/order_spec.rb", duration: 1.0, line_number: 1),
@@ -745,6 +783,7 @@ RSpec.describe "Repository heaviest spec directories", type: :request do
       # The area name a link carries is computed by the same expression the rollup groups by, so the
       # one row the rollup names `.` has to open too — a repository-root file is otherwise a row that
       # links to an empty panel.
+      # @intent: {"entity": "SpecDirectoryDurations", "action": "open root area", "behavior": "the dot-named root row opens a panel whose only file is smoke_spec.rb", "layer": "request"}
       it "opens the repository root under the name the panel above gives it" do
         repository = create_repository(user: @user)
         ingest(repository, [example_spec(file_path: "smoke_spec.rb", duration: 3.0, line_number: 1,
@@ -758,6 +797,7 @@ RSpec.describe "Repository heaviest spec directories", type: :request do
 
       # Bounded by `SpecObservation::SPEC_DIRECTORY_FILES_LIMIT` — its own constant, not the by-file
       # rollup's ten and not the by-file drill-down's fifty.
+      # @intent: {"entity": "SpecDirectoryDurations", "action": "cap listed files", "behavior": "a 27-file area renders exactly its own SPEC_DIRECTORY_FILES_LIMIT rows rather than all twenty-seven", "layer": "request"}
       it "lists no more than its own limit, however many files the area holds" do
         get repository_path(capped_area_run, spec_directory: "spec/models")
 
@@ -767,6 +807,7 @@ RSpec.describe "Repository heaviest spec directories", type: :request do
       # A capped list that does not disclose its cap is the lie `SpecDirectoryDurations#truncated?`
       # already refuses one rung up. The count has to come from the AREA and not from the rows on
       # hand, which are the truncated figure.
+      # @intent: {"entity": "SpecDirectoryDurations", "action": "disclose file cap", "behavior": "the basis reads the limit heaviest of the 27 spec files this run recorded in this area, naming the truncated population rather than the listed count", "layer": "request"}
       it "says how many files the area holds, not just how many it lists" do
         get repository_path(capped_area_run, spec_directory: "spec/models")
 
@@ -780,6 +821,7 @@ RSpec.describe "Repository heaviest spec directories", type: :request do
       # the coverage in EXAMPLES, and on a truncated area those describe different populations. Two
       # examples per file, so a coverage figure taken off the listed rows would read 50 rather than
       # 54 and no arithmetic on the page would betray it.
+      # @intent: {"entity": "SpecDirectoryDurations", "action": "count coverage over area", "behavior": "on a capped area of two-example files the basis says every one of the 54 examples this run recorded in this area reported a duration, counting past the examples on the listed rows", "layer": "request"}
       it "counts its timing coverage over the whole area rather than over the files that fit" do
         get repository_path(capped_area_run, spec_directory: "spec/models")
 
@@ -794,6 +836,7 @@ RSpec.describe "Repository heaviest spec directories", type: :request do
     # Rung three, reached from rung two. It already shipped — what is new is that it can now be
     # reached from an area, which is the whole point of the middle rung existing.
     describe "the way on, into one of those files" do
+      # @intent: {"entity": "SpecDirectoryDurations", "action": "link file to examples", "behavior": "the refund_spec.rb row links with a spec_file parameter and the file-examples anchor into the per-example panel", "layer": "request"}
       it "links each listed file into the examples panel above" do
         get repository_path(area_run, spec_directory: "spec/models")
 
@@ -805,6 +848,7 @@ RSpec.describe "Repository heaviest spec directories", type: :request do
 
       # Both parameters on ONE URL. Opening a file out of this list must not close the area it was
       # opened from, or the reader cannot pick a second file without navigating back.
+      # @intent: {"entity": "SpecDirectoryDurations", "action": "carry area through file link", "behavior": "the refund_spec.rb link keeps the spec/models directory ask in its href so opening a file does not close the area panel", "layer": "request"}
       it "carries the area ask through, so both panels stay open together" do
         get repository_path(area_run, spec_directory: "spec/models")
 
@@ -812,6 +856,7 @@ RSpec.describe "Repository heaviest spec directories", type: :request do
           .to include("spec_directory=#{CGI.escape('spec/models')}")
       end
 
+      # @intent: {"entity": "SpecDirectoryDurations", "action": "open both panels", "behavior": "with both the directory and file asks the page renders the area panel and the examples panel and marks the open file aria-current true", "layer": "request"}
       it "opens both panels when both parameters are asked" do
         get repository_path(area_run, spec_directory: "spec/models",
                                       spec_file: "spec/models/refund_spec.rb")
@@ -821,6 +866,7 @@ RSpec.describe "Repository heaviest spec directories", type: :request do
         expect(files_panel.find("a", text: "spec/models/refund_spec.rb")["aria-current"]).to eq("true")
       end
 
+      # @intent: {"entity": "SpecDirectoryDurations", "action": "carry branch through file link", "behavior": "the file link inside the drill-in carries branch=main on its href", "layer": "request"}
       it "carries a branch ask through that link too" do
         get repository_path(area_run, branch: "main", spec_directory: "spec/models")
 
@@ -843,6 +889,7 @@ RSpec.describe "Repository heaviest spec directories", type: :request do
         Capybara.string(response.body).find("#spec-file-examples").find("a", text: "Close file")[:href]
       end
 
+      # @intent: {"entity": "SpecDirectoryDurations", "action": "keep area on close", "behavior": "the Close file control's href keeps the spec/models directory ask so closing the examples panel leaves the area panel open", "layer": "request"}
       it "keeps the area open when a file opened out of it is closed" do
         get repository_path(area_run, spec_directory: "spec/models",
                                       spec_file: "spec/models/refund_spec.rb")
@@ -853,6 +900,7 @@ RSpec.describe "Repository heaviest spec directories", type: :request do
       # The control's own claim is that it anchors at the panel the file was picked from. With an
       # area open, that panel is the area's — the by-file rollup is not where this file came from
       # and may well not list it at all.
+      # @intent: {"entity": "SpecDirectoryDurations", "action": "anchor close at area panel", "behavior": "Close file anchors at the directory-files panel the file was picked from rather than the by-file rollup", "layer": "request"}
       it "anchors back at the panel the file was actually picked from" do
         get repository_path(area_run, spec_directory: "spec/models",
                                       spec_file: "spec/models/refund_spec.rb")
@@ -864,6 +912,7 @@ RSpec.describe "Repository heaviest spec directories", type: :request do
       # a page nobody asked an area of has to close exactly as it did before this panel existed —
       # and a guard that only exercised the area-open branch would pass just as happily on a
       # control that had been hard-wired to the drill-in.
+      # @intent: {"entity": "SpecDirectoryDurations", "action": "close to file rollup", "behavior": "with no area open Close file anchors at the by-file rollup and carries no directory parameter, unchanged from before the drill-in existed", "layer": "request"}
       it "closes to the by-file rollup when no area was open" do
         get repository_path(area_run, spec_file: "spec/models/refund_spec.rb")
 
@@ -880,6 +929,7 @@ RSpec.describe "Repository heaviest spec directories", type: :request do
     describe "picking a file from the by-file rollup while an area is open" do
       def file_rollup = Capybara.string(response.body).find("#spec-file-durations")
 
+      # @intent: {"entity": "SpecDirectoryDurations", "action": "match rollup carry-through", "behavior": "picking checkout_spec.rb from the by-file rollup keeps the spec/models directory ask on its href, matching the drill-in's own refund_spec.rb link so one gesture has one outcome", "layer": "request"}
       it "keeps the area open, exactly as the drill-in's own file links do" do
         get repository_path(area_run, spec_directory: "spec/models")
 
@@ -892,6 +942,7 @@ RSpec.describe "Repository heaviest spec directories", type: :request do
 
       # The other half: a page with no area ask links exactly as it did before, so the
       # carry-through cannot quietly become an always-on parameter.
+      # @intent: {"entity": "SpecDirectoryDurations", "action": "omit area without ask", "behavior": "with no area open the by-file rollup's links carry no directory parameter", "layer": "request"}
       it "adds no area ask to a page that has none" do
         get repository_path(area_run)
 
@@ -922,6 +973,7 @@ RSpec.describe "Repository heaviest spec directories", type: :request do
 
       # The premise, asserted rather than assumed: if the fixture ever stopped excluding the area
       # the example below would pass for the wrong reason.
+      # @intent: {"entity": "SpecDirectoryDurations", "action": "open unlisted area", "behavior": "an area below the rollup cap has no row above yet opens its own panel listing spec/faint/order_spec.rb with a basis saying durations cover 1 of 2", "layer": "request"}
       it "is absent from the rollup yet opens with its own rows and counts" do
         get repository_path(unlisted_area_run, spec_directory: "spec/faint")
 
@@ -932,6 +984,7 @@ RSpec.describe "Repository heaviest spec directories", type: :request do
                                          normalize_ws: true)
       end
 
+      # @intent: {"entity": "SpecDirectoryDurations", "action": "drop absent cross-reference", "behavior": "for an area with no rollup row the basis never says the same fraction the row for this area states in the panel above", "layer": "request"}
       it "does not cross-reference a rollup row that is not on the page" do
         get repository_path(unlisted_area_run, spec_directory: "spec/faint")
 
@@ -943,6 +996,7 @@ RSpec.describe "Repository heaviest spec directories", type: :request do
       # The positive, beside it: where the row IS above, the agreement is still stated. Without
       # this, deleting the clause outright would pass — and the clause earns its place by giving a
       # reader a row to check the figure against.
+      # @intent: {"entity": "SpecDirectoryDurations", "action": "keep present cross-reference", "behavior": "where the area does appear above, the basis says durations cover 1 of 2, the same fraction the row for this area states in the panel above", "layer": "request"}
       it "still cross-references the row where the area does appear above" do
         repository = create_repository(user: @user)
         ingest(repository, [example_spec(file_path: "spec/models/order_spec.rb", duration: 4.0, line_number: 1),
@@ -971,6 +1025,7 @@ RSpec.describe "Repository heaviest spec directories", type: :request do
         repository
       end
 
+      # @intent: {"entity": "SpecDirectoryDurations", "action": "rank untimed file last", "behavior": "the untimed never_ran_spec.rb row reads coverage 0 of 1 and duration not reported below order_spec.rb's 4.00s, and the panel prints no 0.00s", "layer": "request"}
       it "keeps the untimed file in the list and below every measured one, with no zero" do
         get repository_path(mixed_area_run, spec_directory: "spec/models")
 
@@ -982,6 +1037,7 @@ RSpec.describe "Repository heaviest spec directories", type: :request do
 
       # In the spelling `SpecDirectoryDurations::Row#coverage_label` fixed for the row above, so the
       # area's line in the rollup and the area opened out of it cannot state one coverage two ways.
+      # @intent: {"entity": "SpecDirectoryDurations", "action": "state area coverage", "behavior": "the basis reads across this area's examples, durations cover 1 of 3 and never the every-one-of-the-3 wording, matching the rollup row's spelling", "layer": "request"}
       it "states how much of the area the durations cover" do
         get repository_path(mixed_area_run, spec_directory: "spec/models")
 
@@ -992,6 +1048,7 @@ RSpec.describe "Repository heaviest spec directories", type: :request do
 
       # The denominator is this area's rows, never the Overview's suite size — that figure is
       # re-derived by SUM over shard reports and the two can legitimately differ.
+      # @intent: {"entity": "SpecDirectoryDurations", "action": "count area rows", "behavior": "with total_specs_count 4,000 the drill-in's coverage denominator stays the area's 1 of 2 rows and the panel prints neither 4,000 nor 4000", "layer": "request"}
       it "counts the area's own rows rather than the run's suite size" do
         repository = create_repository(user: @user)
         ingest(repository, [example_spec(file_path: "spec/models/order_spec.rb", duration: 1.0, line_number: 1),
@@ -1013,6 +1070,7 @@ RSpec.describe "Repository heaviest spec directories", type: :request do
       # is a claim about the PAGE, `#any_timed?` is a figure about the AREA, and one timed example
       # anywhere in the area is enough to license the claim over a list whose last row this same
       # page spells "not reported".
+      # @intent: {"entity": "SpecDirectoryDurations", "action": "split ranked from unranked", "behavior": "the basis reads the 1 of this area's 2 spec files this run timed, heaviest first, then the 1 that reported no duration and nothing ranked, in path order, instead of claiming all 2 are ranked", "layer": "request"}
       it "does not claim the whole list is ranked when it ends in a file nothing timed" do
         get repository_path(mixed_area_run, spec_directory: "spec/models")
 
@@ -1042,6 +1100,7 @@ RSpec.describe "Repository heaviest spec directories", type: :request do
         repository
       end
 
+      # @intent: {"entity": "SpecDirectoryDurations", "action": "count three populations", "behavior": "with 3 timed and 27 untimed files the basis names the 3 timed heaviest first, then 22 of the 27 unranked in path order and the remaining 5 the cap kept off, never the 25 heaviest of the 30", "layer": "request"}
       it "counts the ranked head, the unranked tail and what the cap left off separately" do
         get repository_path(truncated_mixed_area_run, spec_directory: "spec/models")
 
@@ -1068,6 +1127,7 @@ RSpec.describe "Repository heaviest spec directories", type: :request do
         repository
       end
 
+      # @intent: {"entity": "SpecDirectoryDurations", "action": "list untimed files", "behavior": "an area whose two files were never timed still lists both with duration not reported on each and no 0.00s anywhere", "layer": "request"}
       it "still lists the files, with no duration and no zero" do
         get repository_path(untimed_area_run, spec_directory: "spec/models")
 
@@ -1076,6 +1136,7 @@ RSpec.describe "Repository heaviest spec directories", type: :request do
         expect(files_panel).to have_no_text("0.00s")
       end
 
+      # @intent: {"entity": "SpecDirectoryDurations", "action": "disclaim ranking", "behavior": "the basis says in path order and that not one of the 2 examples this run recorded in this area reported a duration, and never says heaviest first", "layer": "request"}
       it "does not claim the list is ranked" do
         get repository_path(untimed_area_run, spec_directory: "spec/models")
 
@@ -1092,6 +1153,7 @@ RSpec.describe "Repository heaviest spec directories", type: :request do
     # nothing for is an ordinary answer — a renamed directory, a deleted one, a typo — and not a
     # request to error on. The rule `RequestedSpecFileParam` states, unchanged at this grain.
     describe "an area this run recorded nothing for" do
+      # @intent: {"entity": "SpecDirectoryDurations", "action": "render unknown-area state", "behavior": "asking for spec/ghosts answers 200 with an empty state naming the path and no tbody rows", "layer": "request"}
       it "renders an empty state naming the path, not an error" do
         get repository_path(area_run, spec_directory: "spec/ghosts")
 
@@ -1103,6 +1165,7 @@ RSpec.describe "Repository heaviest spec directories", type: :request do
 
       # A prefix reading of the ask would answer this one with `spec/models`' files rather than
       # with nothing, which is the same fence the nested-area example draws from the other side.
+      # @intent: {"entity": "SpecDirectoryDurations", "action": "refuse partial path", "behavior": "the partial spec/mod ask renders no tbody rows rather than spec/models' files", "layer": "request"}
       it "does not answer a partial path with the area it is a prefix of" do
         get repository_path(area_run, spec_directory: "spec/mod")
 
@@ -1113,6 +1176,7 @@ RSpec.describe "Repository heaviest spec directories", type: :request do
       # rollup is a capped ten, not a catalogue of the run's areas, so on a suite of forty areas a
       # reader sent there to find the correct spelling may not find it — "the areas this run did
       # record" promises a completeness the panel does not have.
+      # @intent: {"entity": "SpecDirectoryDurations", "action": "describe rollup honestly", "behavior": "the empty state describes the panel above as listing the areas this run spent the most time in, not as listing the areas this run did record", "layer": "request"}
       it "describes the panel it points at by what that panel holds" do
         get repository_path(area_run, spec_directory: "spec/ghosts")
 
@@ -1121,6 +1185,7 @@ RSpec.describe "Repository heaviest spec directories", type: :request do
         expect(files_panel).to have_no_text("lists the areas this run did record", normalize_ws: true)
       end
 
+      # @intent: {"entity": "SpecDirectoryDurations", "action": "omit drill-in without runs", "behavior": "asking a directory of a repository CI has never reported for answers 200 and renders no drill-in panel", "layer": "request"}
       it "renders no panel for a repository CI has never reported for" do
         get repository_path(create_repository(user: @user), spec_directory: "spec/models")
 
@@ -1145,6 +1210,7 @@ RSpec.describe "Repository heaviest spec directories", type: :request do
 
       # The positive path, beside the group it makes falsifiable: a guard that swallowed every value
       # would answer 200 on all three shapes above and render no panel here either.
+      # @intent: {"entity": "SpecDirectoryDurations", "action": "honour valid path ask", "behavior": "the spec/models ask renders the panel with its three files, proving the malformed-parameter guard swallows no valid value", "layer": "request"}
       it "honours a spec-directory parameter that IS a path" do
         get repository_path(area_run, spec_directory: "spec/models")
 
@@ -1155,6 +1221,7 @@ RSpec.describe "Repository heaviest spec directories", type: :request do
       # A blank ask is no ask: `DIRECTORY_EXPRESSION` coalesces a separator-less path to `.` and
       # `spec_file_path` is NOT NULL, so no row's area can be blank — an empty ask would open a
       # panel guaranteed to be empty, which is a worse answer than not opening one.
+      # @intent: {"entity": "SpecDirectoryDurations", "action": "treat blank as no ask", "behavior": "an empty directory parameter answers 200 and renders no panel rather than opening one guaranteed empty", "layer": "request"}
       it "treats a blank spec-directory parameter as no ask" do
         get repository_path(area_run, spec_directory: "")
 
@@ -1169,6 +1236,7 @@ RSpec.describe "Repository heaviest spec directories", type: :request do
     describe "what the drill-in costs" do
       # `queries_against` comes from spec/support/query_capture.rb.
 
+      # @intent: {"entity": "SpecDirectoryDurations", "action": "gate drill-in reads", "behavior": "the spec_observations read count without the ask is exactly two fewer than with it, the file listing and the annotation worklist both sitting behind the directory gate", "layer": "request"}
       it "costs one query, and only when an area was asked for" do
         repository = capped_area_run
 
@@ -1185,6 +1253,7 @@ RSpec.describe "Repository heaviest spec directories", type: :request do
         expect(unopened.size).to eq(opened.size - 2)
       end
 
+      # @intent: {"entity": "SpecDirectoryDurations", "action": "hold drill-in cost flat", "behavior": "the 27-file area issues the same spec_observations query count as the 3-file one, so the narrowed read is bounded by the limit rather than the area", "layer": "request"}
       it "costs the same number of queries on a 27-file area as on a 3-file one" do
         small = area_run
         large = capped_area_run
