@@ -83,6 +83,7 @@ RSpec.describe "Repository runtime change", type: :request do
                   created_at: 1.minute.ago)
   end
 
+  # @intent: {"entity": "GET /repositories/:id", "action": "report runtime delta", "behavior": "a run that went from 60.0s to 510.0s shows a #runtime-delta of +7m 30s and a Total runtime cell reading 8m 30s +7m 30s, both figures printed by the same humanizer", "layer": "request"}
   it "reports the runtime change in the same cell as the runtime it changed" do
     repository = create_repository(user: @user)
     got_slower(repository)
@@ -96,6 +97,7 @@ RSpec.describe "Repository runtime change", type: :request do
     expect(cost_cell("Total runtime").text).to eq("8m 30s +7m 30s")
   end
 
+  # @intent: {"entity": "GET /repositories/:id", "action": "name delta basis", "behavior": "the basis says the total runtime is measured against a1b2c3d, the previous run on main about 3 hours ago, and carries no shard clause on the unsharded corpus", "layer": "request"}
   it "names the run the change is measured against, and its age" do
     repository = create_repository(user: @user)
     got_slower(repository)
@@ -113,6 +115,7 @@ RSpec.describe "Repository runtime change", type: :request do
 
   # The whole point of a signed figure. `400` beside a wall clock reads as a second, smaller
   # duration, not as four hundred seconds saved.
+  # @intent: {"entity": "GET /repositories/:id", "action": "sign speed-up", "behavior": "a 90.0s to 65.5s change renders as a true minus −24.5s in both the delta and the 1m 6s −24.5s cell, never the unsigned 24.5s and never a hyphen minus", "layer": "request"}
   it "renders a speed-up signed, never as an unsigned magnitude" do
     repository = create_repository(user: @user)
     unsharded_run(repository, commit_sha: "beforespeedup", total: 1_000, duration: 90.0,
@@ -131,6 +134,7 @@ RSpec.describe "Repository runtime change", type: :request do
 
   # Criterion 4. "Compared, and it did not move" is a real answer, and a suite that held its
   # runtime steady across a change is precisely the thing a reader wants confirmed.
+  # @intent: {"entity": "GET /repositories/:id", "action": "report unchanged runtime", "behavior": "two runs both at 120.0s print ±0 and the basis still names the steadyt run the change is measured against", "layer": "request"}
   it "says the runtime did not move rather than falling silent" do
     repository = create_repository(user: @user)
     unsharded_run(repository, commit_sha: "steadytime01", total: 1_000, duration: 120.0,
@@ -153,6 +157,7 @@ RSpec.describe "Repository runtime change", type: :request do
   #
   # Both rows, in one fixture: the wall clock is the MAX and moves by 0.02s, the machine time is
   # the SUM of the same four shards and moves by the same 0.02s. One zero test, asked twice.
+  # @intent: {"entity": "GET /repositories/:id", "action": "round tiny delta", "behavior": "a 0.02s move in both wall clock and machine time prints ±0 in both deltas with aria-labels saying wall clock unchanged and machine time unchanged, not +0.0s beside a label calling it slower", "layer": "request"}
   it "reads a difference too small to print as no change rather than as a signed zero" do
     repository = create_repository(user: @user)
     sharded_run(repository, commit_sha: "hairsplitold", durations: [60.0, 60.0, 60.0, 60.0])
@@ -171,6 +176,7 @@ RSpec.describe "Repository runtime change", type: :request do
   # `duration_reported?` is `!duration_seconds.nil?`, so a run that genuinely measured nothing in
   # no time at all HAS a measurement. A `present?` check would re-file it as "no timing sent" and
   # the page would withhold a change it can stand behind.
+  # @intent: {"entity": "GET /repositories/:id", "action": "difference measured zero", "behavior": "a previous run with duration 0.0 and zero examples counts as measured, so the next run at 12.5s renders +12.5s instead of no timing", "layer": "request"}
   it "differences a measured 0.0 rather than reading it as no timing" do
     repository = create_repository(user: @user)
     unsharded_run(repository, commit_sha: "measuredzero", total: 0, duration: 0.0,
@@ -184,6 +190,7 @@ RSpec.describe "Repository runtime change", type: :request do
   end
 
   describe "when one side never reported a timing" do
+    # @intent: {"entity": "GET /repositories/:id", "action": "withhold prior-missing timing", "behavior": "where the previous run reported no duration the #runtime-delta element is absent, Total runtime stays 5m, and the basis says the previous run on main (notimin) reported no timing, never the this-run wording", "layer": "request"}
     it "withholds the change when the previous run reported none, and says which side" do
       repository = create_repository(user: @user)
       unsharded_run(repository, commit_sha: "notimingprev", total: 1_000, duration: nil,
@@ -203,6 +210,7 @@ RSpec.describe "Repository runtime change", type: :request do
       expect(runtime_basis).to have_no_text("This run reported no timing", normalize_ws: true)
     end
 
+    # @intent: {"entity": "GET /repositories/:id", "action": "withhold current-missing timing", "behavior": "where this run reported no duration the delta element is absent, Total runtime reads not reported, and the basis says This run reported no timing at all", "layer": "request"}
     it "withholds the change when this run reported none, and says which side" do
       repository = create_repository(user: @user)
       unsharded_run(repository, commit_sha: "hastiming002", total: 1_000, duration: 300.0,
@@ -238,6 +246,7 @@ RSpec.describe "Repository runtime change", type: :request do
       sharded_run(repository, commit_sha: "twowentquiet", durations: [45.0, 45.0, nil, nil])
     end
 
+    # @intent: {"entity": "GET /repositories/:id", "action": "refuse telemetry-loss speedup", "behavior": "a run timing 4 of 4 shards followed by one timing only 2 of 4 renders neither runtime nor machine-time delta, shows Wall clock 45.0s, and nowhere prints −1m 45s", "layer": "request"}
     it "withholds the change rather than reporting a speed-up made of missing telemetry" do
       repository = create_repository(user: @user)
       telemetry_loss(repository)
@@ -250,6 +259,7 @@ RSpec.describe "Repository runtime change", type: :request do
       expect(overview_panel).to have_no_text("−1m 45s", normalize_ws: true)
     end
 
+    # @intent: {"entity": "GET /repositories/:id", "action": "name both denominators", "behavior": "the basis says This run timed 2 of its 4 shards, that alltime timed 4 of its 4, and that the figures were measured over different denominators, without borrowing the no-timing or measured-against wordings", "layer": "request"}
     it "names both denominators when it declines to compare them" do
       repository = create_repository(user: @user)
       telemetry_loss(repository)
@@ -267,6 +277,7 @@ RSpec.describe "Repository runtime change", type: :request do
     # Criterion 5, from the surface rather than from the other file staying green. The two guards
     # are independent: these runs ARE the same kind of size measurement — four shards each, 20,000
     # examples each — so the size delta is exactly what it always was while the runtime is withheld.
+    # @intent: {"entity": "GET /repositories/:id", "action": "keep suite-size delta", "behavior": "on the same telemetry-loss page #suite-size-delta still reads ±0 with its Suite size is measured against basis, because the size guard asks a different question", "layer": "request"}
     it "leaves the suite-size delta rendering, because that guard is a different question" do
       repository = create_repository(user: @user)
       telemetry_loss(repository)
@@ -288,6 +299,7 @@ RSpec.describe "Repository runtime change", type: :request do
       sharded_run(repository, commit_sha: "widersplit02", durations: [75.0, 50.0, 50.0, 50.0])
     end
 
+    # @intent: {"entity": "GET /repositories/:id", "action": "render sharded deltas", "behavior": "a rebalanced split shows +15.0s beside a Wall clock of 1m 15s and −15.0s beside a Machine time of 3m 45s", "layer": "request"}
     it "puts a change beside the wall clock and beside the machine time" do
       repository = create_repository(user: @user)
       rebalanced(repository)
@@ -300,6 +312,7 @@ RSpec.describe "Repository runtime change", type: :request do
       expect(cost_cell("Machine time").text).to eq("3m 45s −15.0s")
     end
 
+    # @intent: {"entity": "GET /repositories/:id", "action": "state shared basis", "behavior": "the basis names evenspl as the run the wall clock is measured against, adds and so is the machine time, and notes both of these timed 4 of their 4 shards", "layer": "request"}
     it "states that both figures share the basis, and what the two runs timed" do
       repository = create_repository(user: @user)
       rebalanced(repository)
@@ -315,6 +328,7 @@ RSpec.describe "Repository runtime change", type: :request do
 
     # The unsharded row is labelled "Total runtime" and the sharded one "Wall clock". They are one
     # column under two labels, and the basis line has to point at the row that is actually there.
+    # @intent: {"entity": "GET /repositories/:id", "action": "name basis row", "behavior": "on the sharded pair the basis never begins The total runtime, pointing only at the Wall clock row that actually rendered", "layer": "request"}
     it "names the row it is the basis for" do
       repository = create_repository(user: @user)
       rebalanced(repository)
@@ -343,6 +357,7 @@ RSpec.describe "Repository runtime change", type: :request do
       sharded_run(repository, commit_sha: "oneshardnew1", durations: [90.0])
     end
 
+    # @intent: {"entity": "GET /repositories/:id", "action": "change single cost row", "behavior": "a one-shard run moving 60.0s to 90.0s renders +30.0s beside Total runtime 1m 30s with no #machine-time-delta element and no Machine time text at all", "layer": "request"}
     it "changes the one cost row it has, and puts no change on a row that is not there" do
       repository = create_repository(user: @user)
       one_shard_pair(repository)
@@ -357,6 +372,7 @@ RSpec.describe "Repository runtime change", type: :request do
       expect(overview_panel).to have_no_text("Machine time", normalize_ws: true)
     end
 
+    # @intent: {"entity": "GET /repositories/:id", "action": "omit withheld clauses", "behavior": "the one-shard basis says the total runtime is measured against oneshar but never says and so is the machine time, never mentions timed shard counts, and never says of their 1 shard", "layer": "request"}
     it "does not name a machine time the panel withheld, or a composition it never showed" do
       repository = create_repository(user: @user)
       one_shard_pair(repository)
@@ -380,6 +396,7 @@ RSpec.describe "Repository runtime change", type: :request do
   # reason is already stated in full on `#suite-size-basis`. A second paragraph repeating it would
   # be two explanations for one absence.
   describe "when there is nothing about the runtime to explain" do
+    # @intent: {"entity": "GET /repositories/:id", "action": "stay silent on first run", "behavior": "a branch's only run renders neither #runtime-delta nor #runtime-basis while #suite-size-basis explains No earlier run on main", "layer": "request"}
     it "says nothing where the branch's first run already explains itself" do
       repository = create_repository(user: @user)
       unsharded_run(repository, commit_sha: "firstonbranch", total: 42, duration: 30.0,
@@ -393,6 +410,7 @@ RSpec.describe "Repository runtime change", type: :request do
                                                                    normalize_ws: true)
     end
 
+    # @intent: {"entity": "GET /repositories/:id", "action": "stay silent on ragged assembly", "behavior": "a complete 4-shard run beside a 1-shard-so-far run renders neither runtime element while #suite-size-basis says the runs are not measuring the same thing", "layer": "request"}
     it "says nothing where the two runs arrived in different numbers of pieces" do
       repository = create_repository(user: @user)
       sharded_run(repository, commit_sha: "fourshards01", durations: [60.0, 60.0, 60.0, 60.0])
@@ -408,6 +426,7 @@ RSpec.describe "Repository runtime change", type: :request do
     end
 
     # The never-ingested empty state renders no cost row at all, so neither element can exist.
+    # @intent: {"entity": "GET /repositories/:id", "action": "leave never-ingested state", "behavior": "a repository with no runs shows the Overview saying No CI run has reported yet and renders neither runtime element", "layer": "request"}
     it "leaves the never-ingested empty state alone" do
       repository = create_repository(user: @user)
 
@@ -424,6 +443,7 @@ RSpec.describe "Repository runtime change", type: :request do
   # figure to the first, and U+2212 — chosen precisely because it is not a hyphen — is announced
   # inconsistently across screen readers.
   describe "what the figures read as aloud" do
+    # @intent: {"entity": "GET /repositories/:id", "action": "spell slower aloud", "behavior": "the delta's aria-label reads 7m 30s slower than the previous run on this branch", "layer": "request"}
     it "spells out a slower wall clock" do
       repository = create_repository(user: @user)
       got_slower(repository)
@@ -433,6 +453,7 @@ RSpec.describe "Repository runtime change", type: :request do
       expect(runtime_delta["aria-label"]).to eq("7m 30s slower than the previous run on this branch")
     end
 
+    # @intent: {"entity": "GET /repositories/:id", "action": "spell faster aloud", "behavior": "the aria-label reads 24.5s faster than the previous run on this branch", "layer": "request"}
     it "spells out a faster wall clock" do
       repository = create_repository(user: @user)
       unsharded_run(repository, commit_sha: "wasslower001", total: 1_000, duration: 90.0,
@@ -445,6 +466,7 @@ RSpec.describe "Repository runtime change", type: :request do
       expect(runtime_delta["aria-label"]).to eq("24.5s faster than the previous run on this branch")
     end
 
+    # @intent: {"entity": "GET /repositories/:id", "action": "spell unchanged aloud", "behavior": "the aria-label reads wall clock unchanged since the previous run on this branch", "layer": "request"}
     it "says a runtime that did not move did not move" do
       repository = create_repository(user: @user)
       unsharded_run(repository, commit_sha: "steadyaria11", total: 1_000, duration: 120.0,
@@ -459,6 +481,7 @@ RSpec.describe "Repository runtime change", type: :request do
 
     # Machine time is what the suite COST, not how long anyone waited. "Slower" would describe a
     # split that got wider — more machine time, less wall clock — with the wrong word twice.
+    # @intent: {"entity": "GET /repositories/:id", "action": "spell machine time aloud", "behavior": "the machine-time aria-label reads 15.0s less machine time than the previous run on this branch and never uses the word faster", "layer": "request"}
     it "spells out machine time as more and less, never as slower and faster" do
       repository = create_repository(user: @user)
       sharded_run(repository, commit_sha: "cheapsplit01", durations: [60.0, 60.0, 60.0, 60.0])
@@ -485,6 +508,7 @@ RSpec.describe "Repository runtime change", type: :request do
   describe "what the comparison costs the page" do
     # `count_queries` comes from spec/support/query_capture.rb.
 
+    # @intent: {"entity": "GET /repositories/:id", "action": "cost same rendering or withholding", "behavior": "a page withholding its delta because only 2 of 4 shards timed issues the same query count as an identically-shaped page rendering −1m 45s", "layer": "request"}
     it "costs the same whether it renders the change or withholds it" do
       withheld = create_repository(user: @user, github_full_name: "acme/withheld")
       sharded_run(withheld, commit_sha: "wallclock001", durations: [150.0, 150.0, 150.0, 150.0])
@@ -507,6 +531,7 @@ RSpec.describe "Repository runtime change", type: :request do
       expect(runtime_delta.text).to eq("−1m 45s")
     end
 
+    # @intent: {"entity": "GET /repositories/:id", "action": "cost same sharded pair", "behavior": "a sharded page reading timed_shard_count and machine_seconds off both runs for a −15.0s machine delta issues the same query count as the unsharded baseline rendering +7m 30s", "layer": "request"}
     it "costs no more on a sharded pair than the page already paid for its shard aggregates" do
       unsharded = create_repository(user: @user, github_full_name: "acme/unsharded")
       got_slower(unsharded)
@@ -531,6 +556,7 @@ RSpec.describe "Repository runtime change", type: :request do
 
   # Suite telemetry, not credential metadata — the same class of fact as the runtime it modifies,
   # so it sits outside the `keys.manage` gate exactly as the size delta does.
+  # @intent: {"entity": "GET /repositories/:id", "action": "serve view member", "behavior": "a member whose only permission is view gets 200 on the page and still sees the +7m 30s runtime delta", "layer": "request"}
   it "is visible to a member with only 'view'" do
     repository = create_repository(user: @user)
     got_slower(repository)

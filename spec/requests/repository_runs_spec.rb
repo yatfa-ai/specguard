@@ -39,6 +39,7 @@ RSpec.describe "Repository recent runs", type: :request do
   # example — the composition sub-line's and the duration coverage's — and they pin the same panel's
   # budget against the same N+1 shape, so they must agree on what a query is.
 
+  # @intent: {"entity": "TestRun", "action": "render run columns", "behavior": "one ingested run renders the seven headers Commit through Ingested plus an unnamed actions column, with cells a1b2c3d, main, 3 reported in one piece, an unmuted 12.5s, 66.7% and an age ending in ago", "layer": "request"}
   it "lists a run's commit, branch, suite size, duration, annotation share and age" do
     repository = create_repository(user: @user)
     repository.test_runs.create!(commit_sha: "a1b2c3d4e5f6", branch: "main", total_specs_count: 3,
@@ -71,6 +72,7 @@ RSpec.describe "Repository recent runs", type: :request do
     expect(cells[AGE]).to match(/ago\z/)
   end
 
+  # @intent: {"entity": "TestRun", "action": "order newest first", "behavior": "a run created 1 hour ago heads the tbody ahead of one created 2 days ago", "layer": "request"}
   it "renders the newest run first" do
     repository = create_repository(user: @user)
     repository.test_runs.create!(commit_sha: "oldrun0", created_at: 2.days.ago, total_specs_count: 1)
@@ -83,6 +85,7 @@ RSpec.describe "Repository recent runs", type: :request do
 
   # Honest state 1. "The client sent no timing" and "the run took no time" are different facts, and
   # `0.0s` renders them identically.
+  # @intent: {"entity": "TestRun", "action": "render absent duration", "behavior": "a nil duration renders as not reported in a muted span rather than 0.0s or blank, while the row's annotated cell still reads 25.0%", "layer": "request"}
   it "says a run reported no duration rather than showing it as 0.0s" do
     repository = create_repository(user: @user)
     # A branch IS set here on purpose: with `branch: nil` the row also prints "not reported" in
@@ -108,6 +111,7 @@ RSpec.describe "Repository recent runs", type: :request do
 
   # Honest state 3. `TestRun#annotated_ratio` floors at 0.0 by guard when there is no denominator;
   # printed beside real percentages that reads as a suite measured at zero annotations.
+  # @intent: {"entity": "TestRun", "action": "render no tests", "behavior": "a run with zero tests renders its annotated cell as no tests instead of 0.0%", "layer": "request"}
   it "does not print 0% for a run that reported no tests at all" do
     repository = create_repository(user: @user)
     repository.test_runs.create!(commit_sha: "emptyrn", branch: "main", total_specs_count: 0,
@@ -120,6 +124,7 @@ RSpec.describe "Repository recent runs", type: :request do
     expect(cells[ANNOTATED]).not_to eq("0.0%")
   end
 
+  # @intent: {"entity": "TestRun", "action": "render absent branch", "behavior": "a nil branch renders as not reported in its cell while the duration cell still reads 1.0s", "layer": "request"}
   it "says a run reported no branch rather than leaving the cell blank" do
     repository = create_repository(user: @user)
     repository.test_runs.create!(commit_sha: "nobranc", branch: nil, total_specs_count: 2,
@@ -134,6 +139,7 @@ RSpec.describe "Repository recent runs", type: :request do
 
   # Honest state 2. An empty table with a header row would say "we looked and there is nothing",
   # which is true — but a repository that has never ingested has a different thing to be told.
+  # @intent: {"entity": "TestRun", "action": "render empty state", "behavior": "a repository with no runs shows No runs yet and no table element at all", "layer": "request"}
   it "renders an empty state, not an empty table, when nothing has been ingested" do
     repository = create_repository(user: @user)
 
@@ -144,6 +150,7 @@ RSpec.describe "Repository recent runs", type: :request do
     expect(runs_panel).to have_no_selector("table")
   end
 
+  # @intent: {"entity": "TestRun", "action": "cap listed runs", "behavior": "twelve ingested runs render exactly ten tbody rows", "layer": "request"}
   it "shows at most ten runs" do
     repository = create_repository(user: @user)
     12.times { |i| repository.test_runs.create!(commit_sha: "sha000#{i}", created_at: i.hours.ago) }
@@ -159,6 +166,7 @@ RSpec.describe "Repository recent runs", type: :request do
   # why the bare `find("table")` there was still passing when this slice was written. The breakage
   # was latent, not immediate: it was waiting for the first example to hold both. Verified by
   # probe — with an unscoped finder, this exact fixture raises Capybara::Ambiguous.
+  # @intent: {"entity": "TestRun", "action": "scope both tables", "behavior": "with one key and one run the page renders two tables, the recent-runs one holding only the run row and the api-keys one only the CI row", "layer": "request"}
   it "coexists with the API keys table, each separately addressable" do
     repository = create_repository(user: @user)
     repository.api_keys.create!(name: "CI")
@@ -172,6 +180,7 @@ RSpec.describe "Repository recent runs", type: :request do
     expect(page.find("#api-keys table")).to have_text("CI").and have_no_text("bothtwo")
   end
 
+  # @intent: {"entity": "TestRun", "action": "scope runs to repository", "behavior": "another repository's foreign run never appears in this one's panel", "layer": "request"}
   it "does not list another repository's runs" do
     repository = create_repository(user: @user)
     other = create_repository(user: create_user(github_uid: "3003", github_handle: "hubot"),
@@ -186,6 +195,7 @@ RSpec.describe "Repository recent runs", type: :request do
   # The panel is suite telemetry, not credential metadata and not a control — so it sits outside
   # the `keys.manage` gate, exactly like the connection-health stat above it. For a `view` member
   # the API-keys panel is absent entirely, which makes this the page's only table.
+  # @intent: {"entity": "TestRun", "action": "show panel to viewer", "behavior": "a view-only member gets 200 and sees the shared run's 50.0% and main cells, the panel sitting outside the keys.manage gate", "layer": "request"}
   it "is visible to a member with only 'view'" do
     repository = create_repository(user: @user)
     repository.test_runs.create!(commit_sha: "shared1", branch: "main", total_specs_count: 8,
@@ -216,6 +226,7 @@ RSpec.describe "Repository recent runs", type: :request do
       run
     end
 
+    # @intent: {"entity": "TestRun", "action": "qualify shard count", "behavior": "a two-shard run's tests cell reads 10,000 assembled from 2 shard reports with the clause that the count above covers those, not necessarily the whole suite", "layer": "request"}
     it "says a multi-shard run's figure covers the shards reported so far" do
       repository = create_repository(user: @user)
       sharded_run(repository, commit: "inflig2", shards: 2)
@@ -236,6 +247,7 @@ RSpec.describe "Repository recent runs", type: :request do
       expect(cell).to include("the count above covers those, not necessarily the whole suite")
     end
 
+    # @intent: {"entity": "TestRun", "action": "inflect single shard", "behavior": "a one-shard run reads assembled from 1 shard report and the count above covers that report, both clauses inflected singular", "layer": "request"}
     it "inflects a single shard report rather than printing '1 shard reports'" do
       repository = create_repository(user: @user)
       sharded_run(repository, commit: "one1shd", shards: 1)
@@ -254,6 +266,7 @@ RSpec.describe "Repository recent runs", type: :request do
       )
     end
 
+    # @intent: {"entity": "TestRun", "action": "render unsharded run", "behavior": "an unsharded run's tests cell reads 12 reported in one piece and never mentions 0 shards", "layer": "request"}
     it "says an unsharded run arrived in one piece, never as '0 shards'" do
       repository = create_repository(user: @user)
       repository.test_runs.create!(commit_sha: "laptop0", branch: "main", total_specs_count: 12,
@@ -265,6 +278,7 @@ RSpec.describe "Repository recent runs", type: :request do
       expect(run_cells("laptop0")[TESTS]).not_to include("0 shard")
     end
 
+    # @intent: {"entity": "TestRun", "action": "state composition per row", "behavior": "a 4-shard row and an unsharded 20,000 row sit in one table, each printing its own composition beneath the figure", "layer": "request"}
     it "states the composition of every row, sharded and not, in the same table" do
       repository = create_repository(user: @user)
       sharded_run(repository, commit: "mixshrd", shards: 4, created_at: 2.hours.ago)
@@ -282,6 +296,7 @@ RSpec.describe "Repository recent runs", type: :request do
     # Criterion 4 from the ticket: the existing honest states are untouched by the addition. A run
     # that reported nothing still says so in the Annotated cell, and it still states its own
     # composition — "no tests" is a fact about the report, and how the report arrived is another.
+    # @intent: {"entity": "TestRun", "action": "preserve no-tests wording", "behavior": "a zero-test run still reads no tests in the annotated cell and 0 reported in one piece in the tests cell", "layer": "request"}
     it "leaves the 'no tests' treatment alone" do
       repository = create_repository(user: @user)
       repository.test_runs.create!(commit_sha: "emptyc0", branch: "main", total_specs_count: 0,
@@ -303,6 +318,7 @@ RSpec.describe "Repository recent runs", type: :request do
     # Verified by mutation: dropping `preload_shard_counts` from the controller — leaving the view
     # to ask each row itself — turns this example red by exactly the four sharded rows added below,
     # and leaves every other example in this file green.
+    # @intent: {"entity": "TestRun", "action": "preload composition counts", "behavior": "adding four 4-shard runs to three plain ones leaves the page's total query count unchanged, the composition asked once for the panel rather than picked per row", "layer": "request"}
     it "asks how the rows were assembled once for the whole panel, not once per row" do
       repository = create_repository(user: @user)
       # The newest row is a plain run in BOTH measurements, deliberately: the Overview panel above
@@ -356,6 +372,7 @@ RSpec.describe "Repository recent runs", type: :request do
     end
 
     # The project's canonical four-shard fixture, whole: 74.25s is the MAX and the run's wall clock.
+    # @intent: {"entity": "TestRun", "action": "state slowest-of coverage", "behavior": "a run whose four shards timed 61.0, 58.5, 74.25 and 60.0 renders 1m 14s slowest of 4 shards, the MAX spelled out", "layer": "request"}
     it "says a complete run's wall clock is the slowest of all its shards" do
       repository = create_repository(user: @user)
       timed_sharded_run(repository, [61.0, 58.5, 74.25, 60.0], commit: "allshrd")
@@ -368,6 +385,7 @@ RSpec.describe "Repository recent runs", type: :request do
 
     # The same run with its slowest shard silent instead of reported would print `1m 1s` here and
     # look like a 13-second improvement. What separates the two rows is this clause and nothing else.
+    # @intent: {"entity": "TestRun", "action": "qualify silent shard", "behavior": "with the slowest shard silent the cell still prints 1m 14s but qualifies slowest of the 3 that reported in a muted sub-line", "layer": "request"}
     it "says a run with a silent shard was measured over only the shards that reported" do
       repository = create_repository(user: @user)
       timed_sharded_run(repository, [61.0, 58.5, 74.25, nil], commit: "silentx")
@@ -386,6 +404,7 @@ RSpec.describe "Repository recent runs", type: :request do
     # the one repository. So this page renders one float twice, and before this slice it worded it
     # two ways: qualified above, bare below. ONE literal, asserted on both surfaces, so neither can
     # be re-worded without the other.
+    # @intent: {"entity": "TestRun", "action": "match overview wording", "behavior": "the same run renders 1m 14s slowest of the 3 that reported in the table's top row and Wall clock (slowest of the 3 that reported) 1m 14s in the Overview, one literal on both surfaces", "layer": "request"}
     it "words the top row's coverage exactly as the Overview panel words the same run" do
       repository = create_repository(user: @user)
       timed_sharded_run(repository, [61.0, 58.5, 74.25, nil], commit: "toprow0")
@@ -403,6 +422,7 @@ RSpec.describe "Repository recent runs", type: :request do
     # uses. That predicate is about the gap between the shards recorded and the shards the suite
     # has, which is a fact about a count; this is the MAX-vs-SUM rule, which belongs to durations.
     # One shard's MAX *is* its SUM, so there is no coverage to disclose and nothing to say.
+    # @intent: {"entity": "TestRun", "action": "skip one-shard qualifier", "behavior": "a single-shard run renders just 1m 1s with no coverage qualifier", "layer": "request"}
     it "adds no qualifier to a one-shard run" do
       repository = create_repository(user: @user)
       timed_sharded_run(repository, [61.0], commit: "oneshrd")
@@ -416,6 +436,7 @@ RSpec.describe "Repository recent runs", type: :request do
     # `shard_count == 0` (`0 < 0`), so an ungated `wall_clock_coverage` would tell the ENTIRE
     # unsharded corpus — every run that named no `ci_run_id`, which is every laptop `rspec` — that
     # its wall clock was the "slowest of 0 shards".
+    # @intent: {"entity": "TestRun", "action": "skip unsharded qualifier", "behavior": "an unsharded run renders a bare 12.5s and its duration cell never contains the word shard", "layer": "request"}
     it "adds no qualifier to an unsharded run, and never says 'slowest of 0 shards'" do
       repository = create_repository(user: @user)
       repository.test_runs.create!(commit_sha: "laptop9", branch: "main", total_specs_count: 12,
@@ -431,6 +452,7 @@ RSpec.describe "Repository recent runs", type: :request do
     # separate: this run is sharded — it has a coverage to state — and has no figure to state it
     # about. A denominator printed beside "not reported" is worse than neither, and the string it
     # would print here is `0 of 4 reported`.
+    # @intent: {"entity": "TestRun", "action": "omit coverage without duration", "behavior": "a sharded run with no timed shards renders not reported in a muted span and never a 0 of 4 reported denominator", "layer": "request"}
     it "prints no coverage beside a duration that does not exist" do
       repository = create_repository(user: @user)
       timed_sharded_run(repository, [nil, nil, nil, nil], commit: "notimd0")
@@ -454,6 +476,7 @@ RSpec.describe "Repository recent runs", type: :request do
     # Verified by mutation: dropping `.preload_timed_shard_count(timed_count)` from
     # `ShardCountPreloading#preload_shard_counts` turns this example red by exactly the four sharded
     # rows added below, and leaves the composition block's budget example green.
+    # @intent: {"entity": "TestRun", "action": "preload duration coverage", "behavior": "adding four timed sharded runs leaves the total query count at the three-plain-run baseline, the timed-shard counts preloaded once for the panel", "layer": "request"}
     it "asks what each duration covered once for the whole panel, not once per row" do
       repository = create_repository(user: @user)
       # The newest row is a plain run in BOTH measurements, for the reason its sibling states: the
@@ -487,6 +510,7 @@ RSpec.describe "Repository recent runs", type: :request do
   describe "what the list is" do
     def caption = Capybara.string(response.body).find("#recent-runs-basis")
 
+    # @intent: {"entity": "TestRun", "action": "caption the list shape", "behavior": "the caption states the rows are drawn from every branch CI reports from, newest first, and that differencing rows measures not a change in the suite", "layer": "request"}
     it "says the list is every branch interleaved and not a series" do
       repository = create_repository(user: @user)
       repository.test_runs.create!(commit_sha: "capshown", branch: "main", total_specs_count: 5)
@@ -509,6 +533,7 @@ RSpec.describe "Repository recent runs", type: :request do
     # attribute AT ALL, rather than `aria-describedby=""` — is pinned at the component, in
     # spec/components/ui/table_component_spec.rb: both branches are reachable there without
     # dragging the API-keys panel's fixtures into this file.
+    # @intent: {"entity": "TestRun", "action": "wire caption to table", "behavior": "the table carries aria-describedby recent-runs-basis and that id resolves to the caption element on the page", "layer": "request"}
     it "points the table at the caption, so a reader landing on the rows still gets it" do
       repository = create_repository(user: @user)
       repository.test_runs.create!(commit_sha: "wiredup", branch: "main", total_specs_count: 5)
@@ -522,6 +547,7 @@ RSpec.describe "Repository recent runs", type: :request do
       expect(caption[:id]).to eq(table[:"aria-describedby"])
     end
 
+    # @intent: {"entity": "TestRun", "action": "skip empty-state caption", "behavior": "the empty state shows No runs yet and renders no caption element at all", "layer": "request"}
     it "does not caption an empty state, which has no rows to explain" do
       repository = create_repository(user: @user)
 

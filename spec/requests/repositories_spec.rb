@@ -10,6 +10,7 @@ RSpec.describe "Repository registration and API keys", type: :request do
   # tags is one sentence on the page whatever the source did with whitespace.
   def page_text = Capybara.string(response.body).text.gsub(/\s+/, " ")
 
+  # @intent: {"entity": "Repository", "action": "register repository", "behavior": "a signed-in user posting a valid org/repo name creates exactly one Repository owned by that user and redirects to its show page", "layer": "request"}
   it "registers a GitHub repository for the signed-in user" do
     expect {
       post repositories_path, params: { repository: { github_full_name: "acme/billing-service" } }
@@ -20,6 +21,7 @@ RSpec.describe "Repository registration and API keys", type: :request do
     expect(response).to redirect_to(repository_path(repository))
   end
 
+  # @intent: {"entity": "Repository", "action": "reject malformed name", "behavior": "posting github_full_name nonsense answers 422 unprocessable content and re-renders the form with the message must look like org/repo", "layer": "request"}
   it "re-renders the form when the name is not org/repo" do
     post repositories_path, params: { repository: { github_full_name: "nonsense" } }
 
@@ -27,6 +29,7 @@ RSpec.describe "Repository registration and API keys", type: :request do
     expect(response.body).to include("must look like org/repo")
   end
 
+  # @intent: {"entity": "ApiKey", "action": "reveal token once", "behavior": "the reveal page shows the raw sgk_ token whose digest is what was stored, a plain reload never shows it again, and the persistent panel keeps only the agent prompt naming the CI secret SPECGUARD_API_KEY", "layer": "request"}
   it "shows a newly created API key exactly once" do
     repository = register_repository
 
@@ -51,6 +54,7 @@ RSpec.describe "Repository registration and API keys", type: :request do
     expect(response.body).not_to match(/sgk_[A-Za-z0-9_-]{20,}/)
   end
 
+  # @intent: {"entity": "ApiKey", "action": "hand over curl", "behavior": "at the reveal moment the page includes a complete curl with the real Bearer token inlined, an agent prompt carrying the token and the integration guide URL, and copy saying the check is a connectivity check and not the integration", "layer": "request"}
   it "hands back a ready-to-run curl carrying the just-minted token" do
     repository = register_repository
 
@@ -87,6 +91,7 @@ RSpec.describe "Repository registration and API keys", type: :request do
   #
   # The negatives are as load-bearing as the positives: this example fails if the auth-check curl
   # comes back to this surface wearing new copy.
+  # @intent: {"entity": "ApiKey", "action": "render agent prompt", "behavior": "a repository with an existing CI key renders the Wire this repository up prompt naming the repo, the integration guide URL and the SPECGUARD_API_KEY secret, with no auth-check curl and no Connect this repository copy", "layer": "request"}
   it "hands over a copy-paste agent prompt, not an auth-check curl, with no flash present" do
     repository = create_repository(user: @user)
     repository.api_keys.create!(name: "CI")
@@ -106,6 +111,7 @@ RSpec.describe "Repository registration and API keys", type: :request do
   # The guide is the whole of the documentation this panel delegates to, so the pointer to it has to
   # be there for a reader who is not handing anything to an agent — including one who cannot mint a
   # credential and therefore never sees the prompt at all.
+  # @intent: {"entity": "Repository", "action": "link integration guide", "behavior": "the show page includes a link to the integration guide path both for a repository holding a CI key and for one with none", "layer": "request"}
   it "links to the integration guide whether or not the repository has a key" do
     with_key = create_repository(user: @user, github_full_name: "acme/with-key")
     with_key.api_keys.create!(name: "CI")
@@ -118,6 +124,7 @@ RSpec.describe "Repository registration and API keys", type: :request do
     expect(response.body).to include(%(href="#{integration_guide_path}"))
   end
 
+  # @intent: {"entity": "Repository", "action": "point at key minting", "behavior": "when the repository has no keys the show page keeps the Wire this repository up panel, drops the read-it-from-the-secret line, and adds This repository has no API key yet with a Mint a key link anchored to the api-keys panel", "layer": "request"}
   it "points at minting a key instead of a prompt for a credential that does not exist when the repository has none" do
     repository = create_repository(user: @user)
 
@@ -141,6 +148,7 @@ RSpec.describe "Repository registration and API keys", type: :request do
     expect(response.body).to include(%(id="api-keys"))
   end
 
+  # @intent: {"entity": "Repository", "action": "name whom to ask", "behavior": "a member who cannot mint keys sees This repository has no API key yet plus a sentence asking the owner by display name to mint one, and no Mint a key link", "layer": "request"}
   it "tells a member who cannot mint keys who to ask for one" do
     owner = create_user(github_uid: "8008", github_handle: "octo-owner")
     repository = create_repository(user: owner)
@@ -161,6 +169,7 @@ RSpec.describe "Repository registration and API keys", type: :request do
     expect(response.body).not_to include(%(<a href="#api-keys"))
   end
 
+  # @intent: {"entity": "ApiKey", "action": "report not connected", "behavior": "with keys present but no last_used_at anywhere the show page reads Not connected yet and never Last request", "layer": "request"}
   it "reports 'not connected' while no API key has ever been used" do
     repository = create_repository(user: @user)
     repository.api_keys.create!(name: "CI")
@@ -172,6 +181,7 @@ RSpec.describe "Repository registration and API keys", type: :request do
     expect(response.body).not_to include("Last request")
   end
 
+  # @intent: {"entity": "ApiKey", "action": "report last request", "behavior": "once any key has been used the page matches Last request some time ago and no longer reads Not connected yet", "layer": "request"}
   it "reports the last request once any API key has been used" do
     repository = create_repository(user: @user)
     repository.api_keys.create!(name: "Idle")
@@ -197,6 +207,7 @@ RSpec.describe "Repository registration and API keys", type: :request do
 
     let(:repository) { create_repository(user: @user) }
 
+    # @intent: {"entity": "ApiKey", "action": "stop claiming connected", "behavior": "after a regeneration with no further authenticated request the connection indicator drops Connected and loses its success tone", "layer": "request"}
     it "stops reading Connected while the replacement has not authenticated" do
       key = repository.api_keys.create!(name: "CI")
       key.touch_last_used!
@@ -211,6 +222,7 @@ RSpec.describe "Repository registration and API keys", type: :request do
       expect(connect_panel).to have_no_css(".text-app-success")
     end
 
+    # @intent: {"entity": "ApiKey", "action": "name rotation remedy", "behavior": "a stranded key renders Key rotated, not yet in use, says the replacement token has not reached CI, and names in the singular that nothing has authenticated since the key was regenerated", "layer": "request"}
     it "names the rotation and the remedy, rather than only withholding the good news" do
       repository.api_keys.create!(name: "CI").tap(&:touch_last_used!).regenerate!
 
@@ -227,6 +239,7 @@ RSpec.describe "Repository registration and API keys", type: :request do
       expect(connect_text).to include("Nothing has authenticated since the key was regenerated")
     end
 
+    # @intent: {"entity": "ApiKey", "action": "date oldest rotation", "behavior": "with two stranded keys the indicator reads 2 keys have been regenerated and dates the oldest rotation via time_ago_in_words, never the less-than-a-minute age of the newest one", "layer": "request"}
     it "dates the OLDEST rotation, and says how many, once more than one key is stranded" do
       # The fixture that tells the candidate aggregates apart. On a one-key set `max`, `min` and
       # `first` are indistinguishable, so every example above is blind to the choice.
@@ -265,6 +278,7 @@ RSpec.describe "Repository registration and API keys", type: :request do
       expect(connect_text).not_to include("less than a minute ago")
     end
 
+    # @intent: {"entity": "ApiKey", "action": "recover connected reading", "behavior": "the first authenticated request after a rotation restores Connected with the success tone and drops the Key rotated branch", "layer": "request"}
     it "reads Connected again on the first request that authenticates with the replacement" do
       key = repository.api_keys.create!(name: "CI")
       key.touch_last_used!
@@ -281,6 +295,7 @@ RSpec.describe "Repository registration and API keys", type: :request do
       expect(connect_panel).to have_css(".text-app-success")
     end
 
+    # @intent: {"entity": "ApiKey", "action": "leave unrotated unchanged", "behavior": "keys used but never rotated still read Connected in success tone with no Key rotated wording", "layer": "request"}
     it "leaves a repository whose keys have never been rotated exactly as it was" do
       # The control for all three examples above. Same page, same success tone, and it is what
       # catches an implementation that reports the rotated state over keys nobody has touched.
@@ -293,6 +308,7 @@ RSpec.describe "Repository registration and API keys", type: :request do
       expect(connect_panel).to have_css(".text-app-success")
     end
 
+    # @intent: {"entity": "ApiKey", "action": "date surviving key", "behavior": "with one live and one stranded key the panel reads Connected and dates Last request from the live key's own last_used_at rather than the stranded key's fresher timestamp", "layer": "request"}
     it "reports an age belonging to a key that still exists, not the newest age on the table" do
       # The mixed table, and the case a whole-repository maximum gets wrong on its own: the FRESHEST
       # `last_used_at` here belongs to the stranded key. A stat reading the maximum would render
@@ -314,6 +330,7 @@ RSpec.describe "Repository registration and API keys", type: :request do
       expect(connect_text).not_to include("Last request less than a minute ago")
     end
 
+    # @intent: {"entity": "ApiKey", "action": "prefer refusal wording", "behavior": "a refused POST to the ingest API followed by a rotation renders Deliveries refused ahead of any Key rotated sentence", "layer": "request"}
     it "keeps a refused delivery ahead of the rotation, being the more specific state" do
       key = repository.api_keys.create!(name: "CI")
       post "/api/v1/ingest",
@@ -331,6 +348,7 @@ RSpec.describe "Repository registration and API keys", type: :request do
       expect(connect_text).not_to include("Key rotated")
     end
 
+    # @intent: {"entity": "ApiKey", "action": "keep not-connected wording", "behavior": "a key rotated before ever being used still reads Not connected yet rather than borrowing the Key rotated branch", "layer": "request"}
     it "still reads 'not connected yet' when the only key was rotated before ever being used" do
       # Rotated-and-unused is true of this key, and the stat must NOT borrow the rotation branch for
       # it: nothing has ever authenticated here, which is a different sentence and the honest one.
@@ -343,6 +361,7 @@ RSpec.describe "Repository registration and API keys", type: :request do
     end
   end
 
+  # @intent: {"entity": "ApiKey", "action": "offer name field", "behavior": "the keys panel posts an api_key name input and renders a Created column for each key row", "layer": "request"}
   it "offers a name field when minting a key, and shows when each key was created" do
     repository = register_repository
     repository.api_keys.create!(name: "Staging")
@@ -354,6 +373,7 @@ RSpec.describe "Repository registration and API keys", type: :request do
     expect(response.body).to include("Created")
   end
 
+  # @intent: {"entity": "ApiKey", "action": "name key from field", "behavior": "posting api_key name Staging creates exactly one key named Staging and the redirected page shows the name", "layer": "request"}
   it "names a new API key from the form field" do
     repository = register_repository
 
@@ -368,6 +388,7 @@ RSpec.describe "Repository registration and API keys", type: :request do
     expect(response.body).to include("Staging")
   end
 
+  # @intent: {"entity": "ApiKey", "action": "default blank name", "behavior": "posting an empty name still creates the key with the default name Default CI Key", "layer": "request"}
   it "falls back to the default name when the name field is left blank" do
     repository = register_repository
 
@@ -376,6 +397,7 @@ RSpec.describe "Repository registration and API keys", type: :request do
     expect(ApiKey.last.name).to eq("Default CI Key")
   end
 
+  # @intent: {"entity": "ApiKey", "action": "default missing params", "behavior": "posting to the keys endpoint with no params at all creates the key with the default name Default CI Key", "layer": "request"}
   it "falls back to the default name when no params are sent at all" do
     repository = register_repository
 
@@ -384,6 +406,7 @@ RSpec.describe "Repository registration and API keys", type: :request do
     expect(ApiKey.last.name).to eq("Default CI Key")
   end
 
+  # @intent: {"entity": "ApiKey", "action": "revoke key", "behavior": "the delete removes exactly one ApiKey row", "layer": "request"}
   it "revokes an API key" do
     repository = register_repository
     post repository_api_keys_path(repository)
@@ -414,6 +437,7 @@ RSpec.describe "Repository registration and API keys", type: :request do
 
     def api_key_row(name) = api_keys_table.find("tbody tr", text: name)
 
+    # @intent: {"entity": "ApiKey", "action": "attribute minted key", "behavior": "posting a mint records the signed-in user as created_by_user on the new ApiKey row", "layer": "request"}
     it "attributes a newly minted key to the signed-in user" do
       repository = register_repository
 
@@ -424,6 +448,7 @@ RSpec.describe "Repository registration and API keys", type: :request do
       expect(ApiKey.last.created_by_user).to eq(@user)
     end
 
+    # @intent: {"entity": "ApiKey", "action": "name colleague minter", "behavior": "on the owner's page the row for a key minted by a keys.manage member shows that member's handle rather than the signed-in user's", "layer": "request"}
     it "names the colleague who minted a key on the owner's page" do
       # The scenario this slice exists for: a collaborator holding `keys.manage` mints a Bearer
       # credential on someone else's repository, and the owner has to be able to tell which key
@@ -440,6 +465,7 @@ RSpec.describe "Repository registration and API keys", type: :request do
       expect(api_key_row("Shared CI")).to have_text("departing-dev")
     end
 
+    # @intent: {"entity": "ApiKey", "action": "fall back to unknown", "behavior": "a key with no recorded creator renders 200 with its row reading Unknown beside the Revoke control", "layer": "request"}
     it "renders a fallback for a key with no recorded creator" do
       repository = create_repository(user: @user)
       repository.api_keys.create!(name: "Legacy CI")
@@ -470,6 +496,7 @@ RSpec.describe "Repository registration and API keys", type: :request do
         colleague
       end
 
+      # @intent: {"entity": "ApiKey", "action": "mark ex-colleague key", "behavior": "a key minted by a member whose membership was later destroyed still names the handle and adds no longer has access to the attribution", "layer": "request"}
       it "names the ex-colleague and marks the key their revoked access left behind" do
         repository = create_repository(user: @user)
         revoked_colleague(repository, handle: "revoked-dev", uid: "5005", key_name: "Their CI")
@@ -482,6 +509,7 @@ RSpec.describe "Repository registration and API keys", type: :request do
         expect(api_key_row("Their CI")).to have_text("no longer has access")
       end
 
+      # @intent: {"entity": "ApiKey", "action": "skip false markers", "behavior": "owner, current-member and unattributed keys render no no-longer-has-access marker, the unattributed one reading Unknown", "layer": "request"}
       it "marks neither the owner's key, a current member's key, nor an unattributed one" do
         repository = create_repository(user: @user)
         current = create_user(github_uid: "6006", github_handle: "current-dev")
@@ -503,6 +531,7 @@ RSpec.describe "Repository registration and API keys", type: :request do
         expect(api_key_row("Legacy CI")).to have_no_text("no longer has access")
       end
 
+      # @intent: {"entity": "ApiKey", "action": "batch membership lookup", "behavior": "adding a second distinct creator and three more key rows leaves the page's query count equal to the baseline, so the membership question is asked once for the whole table", "layer": "request"}
       it "asks about membership once for the whole table, not once per key" do
         repository = create_repository(user: @user)
         revoked_colleague(repository, handle: "revoked-dev", uid: "5005", key_name: "Their CI")
@@ -520,6 +549,7 @@ RSpec.describe "Repository registration and API keys", type: :request do
       end
     end
 
+    # @intent: {"entity": "ApiKey", "action": "add creator column", "behavior": "the header row is exactly Name, Key, Created by, Created, Last used and the blank revoke column, and each row still shows its token hint", "layer": "request"}
     it "adds the creator column without disturbing the existing key columns" do
       repository = create_repository(user: @user)
       repository.api_keys.create!(name: "CI", created_by_user: @user).touch_last_used!
@@ -533,6 +563,7 @@ RSpec.describe "Repository registration and API keys", type: :request do
     end
   end
 
+  # @intent: {"entity": "Repository", "action": "hide foreign repository", "behavior": "requesting another user's repository answers 404 not found", "layer": "request"}
   it "does not expose another user's repository" do
     other = create_repository(user: create_user(github_uid: "9999", github_handle: "someone-else"),
                               github_full_name: "other/repo")
@@ -604,6 +635,7 @@ RSpec.describe "Repository registration and API keys", type: :request do
     # What it still prints, unchanged and in the same words: the suite size, the @intent count and
     # the ratio. Those are the counters' own facts and are the one thing this change was required to
     # leave answering exactly as it did.
+    # @intent: {"entity": "TestRun", "action": "show suite figures", "behavior": "a 3-example run with 2 annotated prints Tests in suite 3, Carrying an @intent 2 and the 66.7 percent share, and no longer claims Not visible to SpecGuard or to see the other test", "layer": "request"}
     it "shows the suite denominator and the @intent share, and no longer guesses what it cannot see" do
       repository = create_repository(user: @user)
       repository.test_runs.create!(commit_sha: "feedfacecafe0001", branch: "main",
@@ -629,6 +661,7 @@ RSpec.describe "Repository registration and API keys", type: :request do
     #
     # Four rows: one annotated, two whose descriptions derive, one that reads as nothing. The
     # subtraction the panel used to render would have called all three of the last ones invisible.
+    # @intent: {"entity": "TestRun", "action": "split reading kinds", "behavior": "from four recorded rows the panel prints Carrying an @intent 1, Read from the description 2 and Not readable by SpecGuard 1, says it reads 3 and cannot read the remaining 1, and keeps the adoption share at 25.0 percent", "layer": "request"}
     it "names what it read from the descriptions, and reserves 'cannot read' for what it could not" do
       repository = create_repository(user: @user, github_full_name: "acme/readable-suite")
       Ingest::RunRecorder.record(
@@ -671,6 +704,7 @@ RSpec.describe "Repository registration and API keys", type: :request do
     # description" would name an empty set, and the caveat behind it would warn the reader about the
     # weakness of a reading nothing on the page rests on. The panel branches on `recorded?` and on
     # `unreadable?` with exactly this care; this is the third state it was missing.
+    # @intent: {"entity": "TestRun", "action": "skip derived wording", "behavior": "a fully annotated 2-example run says every one of the 2 carries an @intent, prints 100.0 percent, and renders neither the description-derived clause nor the no-preconditions caveat", "layer": "request"}
     it "says nothing about derived readings on a suite that has none" do
       repository = create_repository(user: @user, github_full_name: "acme/fully-annotated")
       Ingest::RunRecorder.record(
@@ -700,6 +734,7 @@ RSpec.describe "Repository registration and API keys", type: :request do
     # population. The "cannot read the remaining N" sentence may not be rendered at N = 0 — that is
     # what `IntentReadings#unreadable?` exists for — and the derived caveat still must be, because
     # here there IS something derived to qualify.
+    # @intent: {"entity": "TestRun", "action": "qualify derived readings", "behavior": "with one annotated and one derived example the panel keeps the derived caveat and the no-preconditions note, never prints cannot read the remaining, and holds the share at 50.0 percent", "layer": "request"}
     it "qualifies its derived readings on a suite with no unreadable examples" do
       repository = create_repository(user: @user, github_full_name: "acme/all-derived")
       Ingest::RunRecorder.record(
@@ -736,6 +771,7 @@ RSpec.describe "Repository registration and API keys", type: :request do
     # plus a behavior — so a suite written with string `describe`s throughout derives NOTHING, run
     # wide, and that repository is exactly the "genuinely unreadable" population the ticket names and
     # requires be "reported plainly as such".
+    # @intent: {"entity": "TestRun", "action": "report unreadable suite", "behavior": "when nothing derived the panel says SpecGuard cannot read 2, every one of them that carries no @intent, drops every derived-reading clause, and still prints the 0.0 percent share from the run's counters", "layer": "request"}
     it "reports an unreadable suite plainly when nothing derived at all" do
       repository = create_repository(user: @user, github_full_name: "acme/prose-described")
       Ingest::RunRecorder.record(
@@ -772,6 +808,7 @@ RSpec.describe "Repository registration and API keys", type: :request do
     # all-dark run above would give itself away: `unreadable` here is 1 of 2, not all of it, so
     # "every one of them that carries no @intent" has to be a narrowing rather than a synonym for
     # the whole run. Same arm, both sub-cases, so nothing about the wording can be true by accident.
+    # @intent: {"entity": "TestRun", "action": "narrow unreadable claim", "behavior": "with one annotated and one unreadable row the panel reads Of the 2 examples this run recorded, SpecGuard cannot read 1, drops the derived clauses, and keeps the share at 50.0 percent", "layer": "request"}
     it "narrows the unreadable claim to the unannotated rows when some carry an @intent" do
       repository = create_repository(user: @user, github_full_name: "acme/half-authored-dark")
       Ingest::RunRecorder.record(
@@ -794,6 +831,7 @@ RSpec.describe "Repository registration and API keys", type: :request do
       expect(panel).to have_text("50.0% — 1 of 2 tests carry an @intent.", normalize_ws: true)
     end
 
+    # @intent: {"entity": "TestRun", "action": "expose meter counts", "behavior": "the meter element carries aria-valuenow 2.0 and aria-valuemax 3.0, the real counts, rather than a percentage against 100", "layer": "request"}
     it "puts the real counts into the meter's accessible markup, not (ratio, 100)" do
       repository = create_repository(user: @user)
       repository.test_runs.create!(commit_sha: "feedfacecafe0002", total_specs_count: 3,
@@ -808,6 +846,7 @@ RSpec.describe "Repository registration and API keys", type: :request do
       expect(meter["aria-valuenow"]).to eq("2.0")
     end
 
+    # @intent: {"entity": "TestRun", "action": "name measured run", "behavior": "the panel states Measured on feedfac (release/2.1), naming the shortened sha and the branch of the run behind the figures", "layer": "request"}
     it "names the run the figures were measured on" do
       repository = create_repository(user: @user)
       repository.test_runs.create!(commit_sha: "feedfacecafe0003", branch: "release/2.1",
@@ -819,6 +858,7 @@ RSpec.describe "Repository registration and API keys", type: :request do
       expect(overview_panel).to have_text("Measured on feedfac (release/2.1)", normalize_ws: true)
     end
 
+    # @intent: {"entity": "TestRun", "action": "read newest run", "behavior": "with an old 100-test run and a newer 3-test run the panel prints Tests in suite 3 and not 100", "layer": "request"}
     it "reads the newest run, not the first one ingested" do
       repository = create_repository(user: @user)
       repository.test_runs.create!(commit_sha: "0ld", total_specs_count: 100, annotated_specs_count: 1)
@@ -830,6 +870,7 @@ RSpec.describe "Repository registration and API keys", type: :request do
       expect(overview_panel).not_to have_text("Tests in suite 100", normalize_ws: true)
     end
 
+    # @intent: {"entity": "TestRun", "action": "render empty state", "behavior": "a repository with no runs shows No CI run has reported yet with no percent figure and no meter element", "layer": "request"}
     it "shows an empty state — never 0% — for a repository whose CI has never reported" do
       repository = create_repository(user: @user)
 
@@ -842,6 +883,7 @@ RSpec.describe "Repository registration and API keys", type: :request do
       expect(panel).to have_no_css("[role='meter']")
     end
 
+    # @intent: {"entity": "TestRun", "action": "distinguish measured zero", "behavior": "a run of 3 specs with none annotated prints 0.0 percent, 0 of 3, with the nothing-here-to-say caveat rather than the never-reported empty state", "layer": "request"}
     it "distinguishes a run that measured zero annotations from one that never happened" do
       repository = create_repository(user: @user)
       repository.test_runs.create!(commit_sha: "feedfacecafe0004", total_specs_count: 3,
@@ -860,6 +902,7 @@ RSpec.describe "Repository registration and API keys", type: :request do
       expect(panel).to have_no_text("No CI run has reported yet", normalize_ws: true)
     end
 
+    # @intent: {"entity": "TestRun", "action": "word empty test run", "behavior": "a run reporting zero specs says reported no tests at all, suppresses the percent figure and the meter, and still prints Tests in suite 0", "layer": "request"}
     it "says so when the run itself reported no tests, rather than showing a vacuous 0%" do
       repository = create_repository(user: @user)
       repository.test_runs.create!(commit_sha: "feedfacecafe0005", total_specs_count: 0,
@@ -880,6 +923,7 @@ RSpec.describe "Repository registration and API keys", type: :request do
       expect(panel).to have_no_text("No CI run has reported yet", normalize_ws: true)
     end
 
+    # @intent: {"entity": "TestRun", "action": "label searchable intents", "behavior": "the figure reads Searchable intents 0 with its not-a-count-of-tests note, and the old Spec intents label is gone", "layer": "request"}
     it "labels the spec-intent count as a search index, not as a share of the suite" do
       repository = create_repository(user: @user)
       repository.test_runs.create!(commit_sha: "feedfacecafe0006", total_specs_count: 3,
@@ -900,6 +944,7 @@ RSpec.describe "Repository registration and API keys", type: :request do
     # column has been on the page since the Recent-runs table shipped; what is new is that it is
     # a labelled header figure here, which is a separate surface.
     describe "the latest run's total runtime" do
+      # @intent: {"entity": "TestRun", "action": "render wall clock", "behavior": "372.4 seconds renders as Total runtime 6m 12s in a non-muted span and never as 372.4s", "layer": "request"}
       it "renders the wall clock as a labelled figure, in a form a reader can read" do
         repository = create_repository(user: @user)
         repository.test_runs.create!(commit_sha: "feedfacecafe0008", total_specs_count: 3,
@@ -920,6 +965,7 @@ RSpec.describe "Repository registration and API keys", type: :request do
 
       # The panel's signature refusal, applied to this column: rendering `0.0s` would make "the
       # client sent no timing" byte-identical to "the run took no time".
+      # @intent: {"entity": "TestRun", "action": "word unreported timing", "behavior": "a nil duration renders Total runtime not reported in muted styling, never as 0.0s or 0s", "layer": "request"}
       it "says the timing was not reported rather than showing it as 0.0s" do
         repository = create_repository(user: @user)
         repository.test_runs.create!(commit_sha: "feedfacecafe0009", total_specs_count: 3,
@@ -941,6 +987,7 @@ RSpec.describe "Repository registration and API keys", type: :request do
       end
 
       # A measured zero is a measurement. The distinction only exists if both sides of it render.
+      # @intent: {"entity": "TestRun", "action": "print measured zero", "behavior": "a genuinely measured 0.0 renders Total runtime 0.0s styled as a measurement, not the not-reported wording", "layer": "request"}
       it "prints a run that genuinely measured zero seconds as zero" do
         repository = create_repository(user: @user)
         repository.test_runs.create!(commit_sha: "feedfacecafe0010", total_specs_count: 3,
@@ -959,6 +1006,7 @@ RSpec.describe "Repository registration and API keys", type: :request do
       # The meter and the ratio are suppressed for a run that reported no tests, because 0/0 has
       # no share. Wall clock is not a share: a run that measured nothing still took time, so the
       # runtime figure must NOT be gated on the same condition.
+      # @intent: {"entity": "TestRun", "action": "render timing without tests", "behavior": "a run with zero specs and 92 seconds still prints Total runtime 1m 32s while the meter and any percent figure stay suppressed", "layer": "request"}
       it "still renders for a run that reported no tests at all" do
         repository = create_repository(user: @user)
         repository.test_runs.create!(commit_sha: "feedfacecafe0011", total_specs_count: 0,
@@ -977,6 +1025,7 @@ RSpec.describe "Repository registration and API keys", type: :request do
       # The empty state stays a pure empty state: a repository whose CI has never reported has no
       # run to have taken time, so there is no runtime figure to label — not one reading zero,
       # and not one reading "not reported" either.
+      # @intent: {"entity": "TestRun", "action": "omit timing figure", "behavior": "a never-ingested repository renders no Total runtime text at all", "layer": "request"}
       it "renders no runtime figure at all for a repository whose CI has never reported" do
         repository = create_repository(user: @user)
 
@@ -993,6 +1042,7 @@ RSpec.describe "Repository registration and API keys", type: :request do
     describe "the latest run's shard composition" do
       # The defect, stated as an expectation: MAX 74.25s under the label "Total runtime" was a
       # 3.4× understatement of the only cost figure on the page.
+      # @intent: {"entity": "TestRun", "action": "name wall clock", "behavior": "the 4-shard fixture prints Wall clock (slowest of 4 shards) 1m 14s beside Machine time (all 4 added up) 4m 14s, with no Total runtime label and the machine figure un-muted", "layer": "request"}
       it "names the wall clock as the slowest shard and prints the machine time beside it" do
         repository = create_repository(user: @user)
         sharded_run(repository, [61.0, 58.5, 74.25, 60.0], commit_sha: "feedfacecafe0020")
@@ -1010,6 +1060,7 @@ RSpec.describe "Repository registration and API keys", type: :request do
         expect(panel).to have_css("dd span:not(.text-app-muted)", text: "4m 14s")
       end
 
+      # @intent: {"entity": "TestRun", "action": "state shard assembly", "behavior": "the panel says Assembled from 4 shard reports, notes they are not necessarily 4 distinct CI jobs, and carries both the suite-cost and slowest-single-shard claims", "layer": "request"}
       it "states that the run was assembled from shards, and how many" do
         repository = create_repository(user: @user)
         sharded_run(repository, [61.0, 58.5, 74.25, 60.0], commit_sha: "feedfacecafe0021")
@@ -1043,6 +1094,7 @@ RSpec.describe "Repository registration and API keys", type: :request do
       # explicitly, so a silent shard is an ordinary state. A SUM that skips it and prints the
       # remainder as a total is a confident number over a sliver — the exact thing this panel
       # refuses everywhere else.
+      # @intent: {"entity": "TestRun", "action": "floor partial timing", "behavior": "one silent shard yields Machine time (3 of 4 added up) at least 2m 15s and Wall clock (slowest of the 3 that reported) 1m, with prose naming the 1 silent shard in the singular", "layer": "request"}
       it "says the machine time is a floor when a shard reported no timing" do
         repository = create_repository(user: @user)
         sharded_run(repository, [60.0, 30.0, nil, 45.0], commit_sha: "feedfacecafe0022")
@@ -1085,6 +1137,7 @@ RSpec.describe "Repository registration and API keys", type: :request do
       # The plural side of the same branch, which nothing exercised before: `pluralize` exists only
       # to handle plurality, and a branch whose sole example supplies 1 tests the inflection it
       # never performs.
+      # @intent: {"entity": "TestRun", "action": "pluralize silent shards", "behavior": "two silent shards yield Machine time (2 of 4 added up) at least 1m 45s, Wall clock (slowest of the 2 that reported) 1m, and prose saying 2 silent shards", "layer": "request"}
       it "words the shortfall in the plural when more than one shard reported no timing" do
         repository = create_repository(user: @user)
         sharded_run(repository, [60.0, nil, nil, 45.0], commit_sha: "feedfacecafe0027")
@@ -1110,6 +1163,7 @@ RSpec.describe "Repository registration and API keys", type: :request do
       # that words have to agree with, so both need a singular example — the first round of this
       # panel shipped "those shard took" and the second shipped "adds up those 1", each because
       # only the plural reading of one of them was ever rendered.
+      # @intent: {"entity": "TestRun", "action": "word singular coverage", "behavior": "exactly one timed shard of two yields Wall clock (slowest of the 1 that reported) 1m 30s, Machine time (1 of 2 added up) at least 1m 30s, and prose saying 1 silent shard", "layer": "request"}
       it "reads correctly when exactly one shard reported a timing" do
         repository = create_repository(user: @user)
         sharded_run(repository, [90.0, nil], commit_sha: "feedfacecafe0028")
@@ -1132,6 +1186,7 @@ RSpec.describe "Repository registration and API keys", type: :request do
         expect(panel).to have_no_text("silent shards", normalize_ws: true)
       end
 
+      # @intent: {"entity": "TestRun", "action": "report absent timing", "behavior": "no shard reporting a timing prints both figures as not reported in muted styling, says the run's cost is unknown rather than zero, and never prints at least or 0.0s", "layer": "request"}
       it "reports no machine time at all when not one shard reported a timing" do
         repository = create_repository(user: @user)
         sharded_run(repository, [nil, nil, nil, nil], commit_sha: "feedfacecafe0023")
@@ -1166,6 +1221,7 @@ RSpec.describe "Repository registration and API keys", type: :request do
 
       # A measured zero is a measurement here too, and `0.0.present?` being false is how the
       # blank-check version of this would get it wrong.
+      # @intent: {"entity": "TestRun", "action": "print zero machine time", "behavior": "two shards measuring 0.0 seconds print Machine time (all 2 added up) 0.0s as a real measurement, not the not-reported wording", "layer": "request"}
       it "prints a machine time that genuinely measured zero as zero" do
         repository = create_repository(user: @user)
         sharded_run(repository, [0.0, 0.0], commit_sha: "feedfacecafe0024")
@@ -1182,6 +1238,7 @@ RSpec.describe "Repository registration and API keys", type: :request do
       # The other side of the branch, and the one the whole existing corpus takes. A single shard's
       # MAX *is* its SUM, so there is no composition to disambiguate and nothing to disambiguate it
       # with — the second figure would be the first figure printed twice under a heavier label.
+      # @intent: {"entity": "TestRun", "action": "render one-shard plainly", "behavior": "a single 372.4-second shard renders Total runtime 6m 12s with no Machine time, Wall clock or Assembled from wording", "layer": "request"}
       it "renders a one-shard run exactly as an unsharded run" do
         repository = create_repository(user: @user)
         sharded_run(repository, [372.4], commit_sha: "feedfacecafe0025")
@@ -1197,6 +1254,7 @@ RSpec.describe "Repository registration and API keys", type: :request do
 
       # And a run with no shard rows at all — every run whose client named no `ci_run_id`, which
       # is every laptop `bundle exec rspec` and the entire corpus predating sharding.
+      # @intent: {"entity": "TestRun", "action": "render unsharded plainly", "behavior": "a run with no shard rows renders Total runtime 6m 12s with no Machine time or Assembled from wording", "layer": "request"}
       it "renders a run with no shard rows exactly as before" do
         repository = create_repository(user: @user)
         repository.test_runs.create!(commit_sha: "feedfacecafe0026", total_specs_count: 3,
@@ -1229,6 +1287,7 @@ RSpec.describe "Repository registration and API keys", type: :request do
       # builds. Its arithmetic: SUM 253.75, spread across 4 shards 63.4375 (`1m 3s`), MAX 74.25
       # (`1m 14s`), so 10.8125s — 14.6% of the wait — bought nothing. Every one of those facts is
       # derivable from the stored rows and none of them had a surface.
+      # @intent: {"entity": "TestRun", "action": "decompose canonical run", "behavior": "on the 61/58.5/74.25/60 fixture the decomposition names The slowest was shard 3 at 1m 14s, the 1m 3s floor nothing can go under, and 10.8s or 14.6 percent of the wait coming from the split", "layer": "request"}
       it "names the slowest shard, the floor, and the excess on the canonical fixture" do
         repository = create_repository(user: @user)
         sharded_run(repository, [61.0, 58.5, 74.25, 60.0], commit_sha: "feedfacecafe0030")
@@ -1267,6 +1326,7 @@ RSpec.describe "Repository registration and API keys", type: :request do
       # it held four times the tests from one that held the same tests four times dearer — two
       # opposite actions behind one identical display, which is exactly what this fixture is: every
       # shard holds 5,000, so the whole of this spread is in what the tests COST.
+      # @intent: {"entity": "TestRun", "action": "list shard distribution", "behavior": "the list renders all four shards slowest-first with duration, test count and quotient each, from shard 3 1m 14s 5,000 tests 14.9ms/test down to shard 2 58.5s 11.7ms/test", "layer": "request"}
       it "shows every shard's duration, its test count and the two divided, slowest first" do
         repository = create_repository(user: @user)
         sharded_run(repository, [61.0, 58.5, 74.25, 60.0], commit_sha: "feedfacecafe0031")
@@ -1286,6 +1346,7 @@ RSpec.describe "Repository registration and API keys", type: :request do
       # and `74.25 / 5000` through that formatter renders `0.0s` — a computed zero, on the panel
       # whose rule is that a figure it cannot stand behind is withheld with its reason rather than
       # rounded away. Pinned as an absence so a later "share one formatter" tidy-up goes red.
+      # @intent: {"entity": "TestRun", "action": "resolve per-test unit", "behavior": "the per-test figure renders as 14.9ms/test and never as 0.0s, which the shared seconds formatter would round it to", "layer": "request"}
       it "renders the per-test cost in a unit that resolves it rather than rounding it to zero" do
         repository = create_repository(user: @user)
         sharded_run(repository, [61.0, 58.5, 74.25, 60.0], commit_sha: "feedfacecafe0050")
@@ -1301,6 +1362,7 @@ RSpec.describe "Repository registration and API keys", type: :request do
       # has to stay legible there — 8 tests over 61s is 7.6s each, and `7625.0ms/test` is a number
       # a reader has to divide in their head to use. The other end of the same rule the example
       # above states.
+      # @intent: {"entity": "TestRun", "action": "scale per-test unit", "behavior": "with 8 tests per shard the rows read 9.3s/test down to 7.3s/test rather than thousands of milliseconds", "layer": "request"}
       it "renders a seconds-per-test suite in seconds rather than in thousands of milliseconds" do
         repository = create_repository(user: @user)
         sharded_run(repository, [61.0, 58.5, 74.25, 60.0], spec_counts: [8, 8, 8, 8],
@@ -1319,6 +1381,7 @@ RSpec.describe "Repository registration and API keys", type: :request do
       # row with a real wall clock and NO DENOMINATOR. The list says so in words rather than
       # printing `0 tests 0.0ms/test`, which would read as "these tests are free" about a shard
       # that ran none — and the division that would produce it never happens.
+      # @intent: {"entity": "TestRun", "action": "word zero-count shard", "behavior": "a timed shard holding zero specs reads no tests reported with no quotient and no 0 tests, while its neighbours keep their 5,000 tests and ms-per-test figures", "layer": "request"}
       it "states a zero-count shard's absence rather than dividing by it" do
         repository = create_repository(user: @user)
         sharded_run(repository, [61.0, 58.5, 74.25, 60.0], spec_counts: [5000, 5000, 0, 5000],
@@ -1342,6 +1405,7 @@ RSpec.describe "Repository registration and API keys", type: :request do
       # schema, so a reader who came away thinking this page had told them which *tests* are slow
       # would have been misled by wording alone — the one failure mode this slice can cause and
       # cannot detect from arithmetic.
+      # @intent: {"entity": "TestRun", "action": "attribute excess to split", "behavior": "the page never says slowest test, slow tests or which tests, because every figure is about shards and the split rather than individual tests", "layer": "request"}
       it "attributes the excess to the split and never to individual tests" do
         repository = create_repository(user: @user)
         sharded_run(repository, [61.0, 58.5, 74.25, 60.0], commit_sha: "feedfacecafe0032")
@@ -1385,6 +1449,7 @@ RSpec.describe "Repository registration and API keys", type: :request do
         # 10.8s is lost: moving 727 of the dear shard's own tests onto its siblings lands all four
         # within 0.02s of the 63.4375s floor, which is what a duration-weighted split is for. The
         # panel said "how the suite was divided" and stopped.
+        # @intent: {"entity": "TestRun", "action": "name per-test cause", "behavior": "on equal 5,000-count shards the cause says the counts are within 0.0 percent while per-test costs spread 24.8 percent from 11.7ms/test to 14.9ms/test, so closing the gap takes a duration-weighed split", "layer": "request"}
         it "names the per-test cost when the shards hold equal numbers of tests" do
           repository = create_repository(user: @user)
           sharded_run(repository, [61.0, 58.5, 74.25, 60.0], commit_sha: "feedfacecafe0060")
@@ -1415,6 +1480,7 @@ RSpec.describe "Repository registration and API keys", type: :request do
         # machine time, per-test costs within 3.3% of each other — and one shard holding 6,000
         # tests against 4,800 on the smallest. Here evening the COUNTS out is the fix: with the
         # per-test costs already level, a count-based partitioner reaches the floor on its own.
+        # @intent: {"entity": "TestRun", "action": "name count cause", "behavior": "with counts spreading 23.1 percent and costs within 3.3 percent, the cause says the split came from how many tests each shard got and that re-dividing is what moves the number", "layer": "request"}
         it "names the split when the counts are uneven and the per-test costs are not" do
           repository = create_repository(user: @user)
           sharded_run(repository, [72.0, 61.0, 59.04, 62.0], spec_counts: [6000, 5000, 4800, 5000],
@@ -1437,6 +1503,7 @@ RSpec.describe "Repository registration and API keys", type: :request do
         # would send a reader to even out the counts of a suite whose tests are also unevenly
         # priced, and the second half of their problem would survive that fix — the 75s floor here
         # is reachable, but only by a split that weighs the durations.
+        # @intent: {"entity": "TestRun", "action": "name both causes", "behavior": "with counts spreading 52.2 percent and per-test costs 23.5 percent, the cause says both halves moved and closing the whole gap takes a split that weighs recorded durations", "layer": "request"}
         it "names both when both spreads clear the floor" do
           repository = create_repository(user: @user)
           sharded_run(repository, [120.0, 60.0, 60.0, 60.0], spec_counts: [8000, 5000, 5000, 5000],
@@ -1462,6 +1529,7 @@ RSpec.describe "Repository registration and API keys", type: :request do
         # over a 4.0% cost spread is a 5.7% imbalance that clears the materiality floor while
         # neither of its factors does. Claiming the larger of two immaterial figures as the cause
         # would be manufacturing a finding out of noise; the panel says it cannot attribute it.
+        # @intent: {"entity": "TestRun", "action": "claim no cause", "behavior": "a 5.7 percent imbalance whose counts and costs each sit within 4.0 percent still states the imbalance but says no cause is named for it here, and neither cause sentence appears", "layer": "request"}
         it "claims neither cause when neither spread clears the floor" do
           repository = create_repository(user: @user)
           sharded_run(repository, [67.6, 62.5, 62.5, 62.5], spec_counts: [5200, 5000, 5000, 5000],
@@ -1487,6 +1555,7 @@ RSpec.describe "Repository registration and API keys", type: :request do
         # the per-test spread over the three shards that DID report would be a fact about a subset
         # wearing a sentence about the run. The comparison is withheld with its reason, the line
         # `TestRun#suite_size_measured?` draws for the run-level column.
+        # @intent: {"entity": "TestRun", "action": "withhold per-test comparison", "behavior": "one shard reporting no tests makes the cause say the question is not answerable on these rows and is withheld rather than taken over the shards that did report, quoting no spread figure at all", "layer": "request"}
         it "withholds the per-test comparison when a shard reported no tests, and says why" do
           repository = create_repository(user: @user)
           sharded_run(repository, [61.0, 58.5, 74.25, 60.0], spec_counts: [5000, 5000, 0, 5000],
@@ -1515,6 +1584,7 @@ RSpec.describe "Repository registration and API keys", type: :request do
         # is expensive per test" is a fact about the run's division and never about a code area.
         # SPGD-114's file-shaped aggregation is the ticket that could say the latter, and it has
         # not shipped; this panel must not read as though it had.
+        # @intent: {"entity": "TestRun", "action": "call shard a partition", "behavior": "the cause says a shard is an arbitrary slice of the suite rather than a directory, and the page never mentions directories or which files", "layer": "request"}
         it "says a shard is a partition and not a code area" do
           repository = create_repository(user: @user)
           sharded_run(repository, [61.0, 58.5, 74.25, 60.0], commit_sha: "feedfacecafe0065")
@@ -1534,6 +1604,7 @@ RSpec.describe "Repository registration and API keys", type: :request do
         # The balanced branch has no spread to attribute a cause to, and offering one there would
         # be answering a question the numbers did not raise — the discipline the balanced branch
         # already applies when it declines the operational claim about the run.
+        # @intent: {"entity": "TestRun", "action": "skip cause on balance", "behavior": "four evenly matched 60-second shards read No shard stood out, render no cause element, and still list all four distribution rows", "layer": "request"}
         it "names no cause on a run whose shards are evenly matched" do
           repository = create_repository(user: @user)
           sharded_run(repository, [60.0, 60.0, 60.0, 60.0], commit_sha: "feedfacecafe0066")
@@ -1556,6 +1627,7 @@ RSpec.describe "Repository registration and API keys", type: :request do
         # The gate, restated for this paragraph. Every figure it prints is derived from the same
         # rows `#wall_clock_decomposable?` guards, so an undecomposable run must not acquire a
         # cause sentence where it has no decomposition to attribute.
+        # @intent: {"entity": "TestRun", "action": "gate cause on decomposition", "behavior": "a run whose decomposition is withheld for an untimed shard renders no cause element either", "layer": "request"}
         it "renders no cause sentence on a run the decomposition itself is withheld from" do
           repository = create_repository(user: @user)
           sharded_run(repository, [61.0, 58.5, nil, 60.0], commit_sha: "feedfacecafe0067")
@@ -1570,6 +1642,7 @@ RSpec.describe "Repository registration and API keys", type: :request do
       # the numerator but present in the denominator drags the floor down and pushes the excess up
       # by the same amount — the branch where a fabricated finding is easiest to produce is the one
       # that must not produce one. `[61.0, 58.5, nil, 60.0]` is the shape the API spec already uses.
+      # @intent: {"entity": "TestRun", "action": "withhold decomposition", "behavior": "an untimed shard removes both decomposition elements and prints the sentence saying a partial machine time would bias the floor and overstate the gap, so both are withheld", "layer": "request"}
       it "withholds the decomposition entirely when a shard reported no timing" do
         repository = create_repository(user: @user)
         sharded_run(repository, [61.0, 58.5, nil, 60.0], commit_sha: "feedfacecafe0033")
@@ -1607,6 +1680,7 @@ RSpec.describe "Repository registration and API keys", type: :request do
       # This is the ordinary state of every sharded run for the minutes its build takes —
       # `Repository#latest_test_run` picks the row up the instant the first shard lands — so the
       # panel renders half-delivered runs routinely rather than exceptionally.
+      # @intent: {"entity": "TestRun", "action": "withhold mid-delivery", "behavior": "while only two of four shards have landed the decomposition is withheld, the suite counter reads 10,000, and the partial 6.6s and 8.9 percent figures appear nowhere", "layer": "request"}
       it "withholds the decomposition while shard reports are still arriving" do
         repository = create_repository(user: @user)
         # The canonical run, caught at the moment shards 1 and 3 have POSTed and 2 and 4 have not.
@@ -1637,6 +1711,7 @@ RSpec.describe "Repository registration and API keys", type: :request do
       # Withheld, but not silently. A reader looking at two rendered figures and no third fact is
       # owed the difference between "we are still waiting" and "there is nothing here to say", and
       # nothing on this panel said the former before.
+      # @intent: {"entity": "TestRun", "action": "note arriving reports", "behavior": "a pending note says a shard report arrived in the last 15 minutes so more may still be coming, and that spreading their machine time across their own count would park the floor wherever the run has reached", "layer": "request"}
       it "says the reports are still arriving rather than leaving a silent gap" do
         repository = create_repository(user: @user)
         sharded_run(repository, [61.0, 74.25], names: %w[1 3], commit_sha: "feedfacecafe0045",
@@ -1663,6 +1738,7 @@ RSpec.describe "Repository registration and API keys", type: :request do
       # stop coming, decompose exactly as they always did. Pinned so a mutation that simply
       # withheld from every sharded run — which would satisfy every negative expectation above —
       # cannot pass.
+      # @intent: {"entity": "TestRun", "action": "decompose after settling", "behavior": "the same two shard rows, quiet for 16 minutes, decompose again naming The slowest was shard 3 at 1m 14s, with no pending note", "layer": "request"}
       it "decomposes those same rows once the reports have stopped coming" do
         repository = create_repository(user: @user)
         sharded_run(repository, [61.0, 74.25], names: %w[1 3], commit_sha: "feedfacecafe0046",
@@ -1677,6 +1753,7 @@ RSpec.describe "Repository registration and API keys", type: :request do
       # The other silent shape: nothing reported at all. There is no wall clock and no machine time
       # on the page to decompose, so the existing sentence already says why and a second apology
       # would be noise — but the decomposition itself must still be absent.
+      # @intent: {"entity": "TestRun", "action": "render no decomposition", "behavior": "a run where not one shard reported a timing renders neither decomposition element and no slowest-was sentence", "layer": "request"}
       it "renders no decomposition when not one shard reported a timing" do
         repository = create_repository(user: @user)
         sharded_run(repository, [nil, nil, nil, nil], commit_sha: "feedfacecafe0034")
@@ -1694,6 +1771,7 @@ RSpec.describe "Repository registration and API keys", type: :request do
       # `Ingest::RunRecorder#upsert_shard` records one row per delivery for it. Numbering those
       # rows by position would hand a reader a name their CI does not use — unactionable, and
       # pointing at a different slice on the next run.
+      # @intent: {"entity": "TestRun", "action": "name unnamed shard", "behavior": "a shard whose client sent no shard_id is called an unnamed shard in both the decomposition and the list, and the positional index it would have carried appears nowhere", "layer": "request"}
       it "calls a shard that never named itself unnamed rather than giving it an index" do
         repository = create_repository(user: @user)
         sharded_run(repository, [61.0, 58.5, 74.25, 60.0], names: ["1", "2", nil, "4"],
@@ -1714,6 +1792,7 @@ RSpec.describe "Repository registration and API keys", type: :request do
       # An evenly split run should read as evenly split. The excess is still stated — a measured
       # `0.0s` is a measurement, and muting it would file "we checked, and the split was fine"
       # under "we did not check" — but it is not dressed up as time anything could recover.
+      # @intent: {"entity": "TestRun", "action": "read balanced zero", "behavior": "four 63.4-second shards read No shard stood out with 0.0s over that floor and 0.0 percent of the wait, hedged as a statement about the reports on record and never that the wait is the suite's own length", "layer": "request"}
       it "reads a perfectly balanced run as balanced without hiding its zero" do
         repository = create_repository(user: @user)
         sharded_run(repository, [63.4, 63.4, 63.4, 63.4], commit_sha: "feedfacecafe0036")
@@ -1760,6 +1839,7 @@ RSpec.describe "Repository registration and API keys", type: :request do
       #
       # So this example is not about the arithmetic being wrong. It is about the page declining to
       # turn a partial set of reports into an operational claim about the run.
+      # @intent: {"entity": "TestRun", "action": "not deny concealed runaway", "behavior": "the canonical run minus its 74.25s runaway still decomposes as No shard stood out with 1.2s over that floor and 1.9 percent of the wait, while every sentence stays about the reports on record and never claims the wait is the suite's own length", "layer": "request"}
       it "does not deny an imbalance it cannot see when the runaway shard never arrived" do
         repository = create_repository(user: @user)
         sharded_run(repository, [61.0, 58.5, 60.0], names: %w[1 2 4],
@@ -1784,6 +1864,7 @@ RSpec.describe "Repository registration and API keys", type: :request do
       # 21.4% of a 1.4s wait, so a relative-only threshold would call it a finding. It is smaller
       # than the scheduling jitter between two runners starting the same suite — it is not a
       # property of the split at all.
+      # @intent: {"entity": "TestRun", "action": "ignore sub-second gap", "behavior": "a 0.3s gap that is 21.4 percent of a 1.4s wait reads evenly matched rather than a finding", "layer": "request"}
       it "does not call a sub-second gap a finding however large its share" do
         repository = create_repository(user: @user)
         sharded_run(repository, [1.0, 1.0, 1.0, 1.4], commit_sha: "feedfacecafe0037")
@@ -1800,6 +1881,7 @@ RSpec.describe "Repository registration and API keys", type: :request do
       # And the RELATIVE floor on its own, which the absolute one would miss: 3s clears a second
       # comfortably, but on a ten-minute wait it is 0.5% — inside the run-to-run variance of the
       # same suite on the same shards, so re-dividing them could not reliably recover it.
+      # @intent: {"entity": "TestRun", "action": "ignore tiny share", "behavior": "a 3.0s gap that is 0.5 percent of a ten-minute wait reads evenly matched rather than a finding", "layer": "request"}
       it "does not call a fraction-of-a-percent gap a finding however many seconds it is" do
         repository = create_repository(user: @user)
         sharded_run(repository, [600.0, 600.0, 600.0, 604.0], commit_sha: "feedfacecafe0038")
@@ -1815,6 +1897,7 @@ RSpec.describe "Repository registration and API keys", type: :request do
 
       # Clearing exactly one floor is not enough, and clearing both is — the pair above proves each
       # threshold fires, this proves the conjunction is not vacuous.
+      # @intent: {"entity": "TestRun", "action": "flag material gap", "behavior": "a gap clearing both floors is named as such, with 15.0s of the wait at 18.8 percent coming from how the suite was divided across shards", "layer": "request"}
       it "does call a gap that clears both floors a finding" do
         repository = create_repository(user: @user)
         sharded_run(repository, [60.0, 60.0, 60.0, 80.0], commit_sha: "feedfacecafe0039")
@@ -1834,6 +1917,7 @@ RSpec.describe "Repository registration and API keys", type: :request do
       # verdicts — the same figure meaning two things, which is this ticket's own defect one level
       # down. Both sides of the seam, asserted together, because either alone passes under the
       # rounding it is meant to be catching.
+      # @intent: {"entity": "TestRun", "action": "verdict at printed precision", "behavior": "excesses of 0.98s and 1.02s raw both print 1.0s and both take the finding verdict, rather than straddling the one-second floor on opposite sides", "layer": "request"}
       it "gives two runs that print the same excess the same verdict" do
         just_under = create_repository(user: @user, github_full_name: "acme/just-under")
         sharded_run(just_under, [17.0, 18.96], commit_sha: "feedfacecafe0047")
@@ -1855,6 +1939,7 @@ RSpec.describe "Repository registration and API keys", type: :request do
       # A run with one shard has no composition to decompose — its MAX *is* its SUM and the floor
       # is the wait — and a run with no shard rows is the entire corpus that predates sharding.
       # Both keep the page they have always had, on the rule `multi_shard?` already enforces.
+      # @intent: {"entity": "TestRun", "action": "skip degenerate runs", "behavior": "a one-shard run and a no-shard run render neither decomposition element nor any slowest-shard sentence, only Total runtime 6m 12s", "layer": "request"}
       it "adds nothing at all to a one-shard run or a run with no shards" do
         repository = create_repository(user: @user)
         sharded_run(repository, [372.4], commit_sha: "feedfacecafe0040")
@@ -1879,6 +1964,7 @@ RSpec.describe "Repository registration and API keys", type: :request do
       # the index's per-card guard and the model's preload examples use, so the failure is a count
       # and not a timeout, and three guards on the same table cannot count it three different ways.
 
+      # @intent: {"entity": "TestRun", "action": "bound shard queries", "behavior": "the page issues the same number of test_run_shards queries for a 40-shard run as for a 3-shard one, and at most three in absolute terms", "layer": "request"}
       it "costs the same number of shard queries at 40 shards as at 3" do
         small = create_repository(user: @user, github_full_name: "acme/three-way")
         sharded_run(small, Array.new(3) { |i| 60.0 + i }, commit_sha: "feedfacecafe0042")
@@ -2023,6 +2109,7 @@ RSpec.describe "Repository registration and API keys", type: :request do
       # spec/requests/repository_unannotated_directories_spec.rb, which also carries the panel's own
       # N+1 guard: the equality across two suite sizes that an absolute count here cannot tell from
       # an ordinary widening.
+      # @intent: {"entity": "TestRun", "action": "pin page query budget", "behavior": "the second render of the show page issues exactly 22 queries and genuinely renders four distribution rows of 5,000 tests", "layer": "request"}
       it "issues exactly the queries the page issued before the shard counts were read" do
         repository = create_repository(user: @user)
         sharded_run(repository, [61.0, 58.5, 74.25, 60.0], commit_sha: "feedfacecafe0068")
@@ -2079,6 +2166,7 @@ RSpec.describe "Repository registration and API keys", type: :request do
       #
       # Both viewers are exercised in the one example, and both renders asserted, so neither half
       # can pass on a page that happened to load no keys at all.
+      # @intent: {"entity": "ApiKey", "action": "gate creator preload", "behavior": "the owner's render buys exactly one IN-clause users preload for two distinct key creators, while a view member's render shows no keys table and buys none", "layer": "request"}
       it "does not buy the key-creator preload for a viewer who cannot see the keys table" do
         repository = create_repository(user: @user)
         repository.api_keys.create!(name: "CI", created_by_user: @user)
@@ -2121,6 +2209,7 @@ RSpec.describe "Repository registration and API keys", type: :request do
       end
     end
 
+    # @intent: {"entity": "TestRun", "action": "stay visible to member", "behavior": "a view member still sees Carrying an @intent 2 on the overview while the api-keys table is absent from their page", "layer": "request"}
     it "stays visible to a member who cannot manage keys" do
       owner = create_user(github_uid: "7007", github_handle: "repo-owner")
       repository = create_repository(user: owner, github_full_name: "acme/shared-service")
@@ -2193,6 +2282,7 @@ RSpec.describe "Repository registration and API keys", type: :request do
       run
     end
 
+    # @intent: {"entity": "TestRun", "action": "show ingested size", "behavior": "the index card prints 12,431 tests from the latest run and never the old N-intents badge", "layer": "request"}
     it "shows the ingested suite size, delimited, in place of the intent count" do
       repository = create_repository(user: @user)
       create_test_run(repository: repository, commit_sha: "feedfacecafe0101",
@@ -2207,6 +2297,7 @@ RSpec.describe "Repository registration and API keys", type: :request do
 
     # Both runs land in the same instant, so this also pins the id tie-break — the same one
     # `Repository#latest_test_run` uses, which is what keeps the card and `show` naming one run.
+    # @intent: {"entity": "TestRun", "action": "read newest run", "behavior": "with runs of 100 and 3 tests the card prints 3 tests and not 100", "layer": "request"}
     it "reads the newest run, not the first one ingested" do
       repository = create_repository(user: @user)
       create_test_run(repository: repository, commit_sha: "0ld", total_specs_count: 100)
@@ -2218,6 +2309,7 @@ RSpec.describe "Repository registration and API keys", type: :request do
       expect(response.body).not_to include("100 tests")
     end
 
+    # @intent: {"entity": "TestRun", "action": "word never-ingested card", "behavior": "a repository with no runs prints No runs yet and never 0 tests", "layer": "request"}
     it "says a never-ingested repository has no runs, rather than showing it as an empty suite" do
       create_repository(user: @user)
 
@@ -2228,6 +2320,7 @@ RSpec.describe "Repository registration and API keys", type: :request do
       expect(response.body).not_to include("0 tests")
     end
 
+    # @intent: {"entity": "TestRun", "action": "batch latest-run loads", "behavior": "three cards load their latest runs from exactly one test_runs SELECT, no spec_intents query runs at all, and the page prints 11 tests", "layer": "request"}
     it "loads every card's latest run in one query, however long the list is" do
       ["acme/one", "acme/two", "acme/three"].each_with_index do |full_name, index|
         create_test_run(repository: create_repository(user: @user, github_full_name: full_name),
@@ -2252,6 +2345,7 @@ RSpec.describe "Repository registration and API keys", type: :request do
     # runs table and GET /api/v1/repository all already carry this; the card was the one surface
     # that did not.
     describe "the basis of that figure" do
+      # @intent: {"entity": "TestRun", "action": "state reading age", "behavior": "the card reads Ingested 5 months ago on main beside its 12,431 tests figure", "layer": "request"}
       it "says how old the reading is and which branch reported it" do
         repository = create_repository(user: @user)
         create_test_run(repository: repository, commit_sha: "feedfacecafe0201",
@@ -2268,6 +2362,7 @@ RSpec.describe "Repository registration and API keys", type: :request do
       # `branch` is nullable and Ingest::Payload accepts a body without it, so the absence is a
       # client omission and has to read as one — never as a shortened sentence that looks complete.
       # Same words `show` gives an absent branch.
+      # @intent: {"entity": "TestRun", "action": "word absent branch", "behavior": "a run reporting no branch reads Ingested about 2 hours ago, branch not reported rather than a truncated sentence", "layer": "request"}
       it "says a branch was not reported rather than leaving it blank" do
         repository = create_repository(user: @user)
         create_test_run(repository: repository, commit_sha: "feedfacecafe0202",
@@ -2280,6 +2375,7 @@ RSpec.describe "Repository registration and API keys", type: :request do
 
       # The half-delivered run: four shards' worth of suite, two of them recorded. The card prints
       # 10,000 and must say what those 10,000 cover.
+      # @intent: {"entity": "TestRun", "action": "state shard coverage", "behavior": "a half-delivered two-shard run prints 10,000 tests and says it was assembled from 2 shard reports whose count that covers, in the exact words of the shared delivery-note helper", "layer": "request"}
       it "states what a multi-shard figure covers, in TestRun#delivery_description's words" do
         repository = create_repository(user: @user)
         run = sharded_run(repository, shards: 2, commit_sha: "feedfacecafe0203", branch: "main")
@@ -2300,6 +2396,7 @@ RSpec.describe "Repository registration and API keys", type: :request do
       # grid of cards each repeating "reported in one piece" would bury the one card that has
       # something to disclose. Zero is the exclusion `shard_count.positive?` makes, and the only
       # one.
+      # @intent: {"entity": "TestRun", "action": "skip whole-run note", "behavior": "an unsharded run prints no composition wording at all, neither reported-in-one-piece nor assembled-from", "layer": "request"}
       it "says nothing about composition for a run that arrived whole" do
         whole = create_repository(user: @user, github_full_name: "acme/laptop-run")
         create_test_run(repository: whole, commit_sha: "feedfacecafe0204", total_specs_count: 7)
@@ -2315,6 +2412,7 @@ RSpec.describe "Repository registration and API keys", type: :request do
       # basis line at all here, and that line discloses its coverage. `multi_shard?` printed
       # nothing whatsoever on this card while `SuiteTrajectory#withheld_part_way` withheld the very
       # same row for sitting at a fraction of its own suite.
+      # @intent: {"entity": "TestRun", "action": "state one-shard coverage", "behavior": "a one-shard run still gets its basis line saying assembled from 1 shard report and that the count covers that report, matching the Recent-runs helper", "layer": "request"}
       it "states what a one-shard figure covers, the card most understating its suite" do
         single = create_repository(user: @user, github_full_name: "acme/one-shard")
         run = sharded_run(single, shards: 1, commit_sha: "feedfacecafe0205")
@@ -2331,6 +2429,7 @@ RSpec.describe "Repository registration and API keys", type: :request do
 
       # A never-ingested card has no basis to state, and a "never" beside "No runs yet" would be a
       # second rendering of the same absence.
+      # @intent: {"entity": "TestRun", "action": "state no basis", "behavior": "a never-ingested card prints No runs yet and no Ingested line at all", "layer": "request"}
       it "states no basis for a repository that has never ingested" do
         create_repository(user: @user)
 
@@ -2350,6 +2449,7 @@ RSpec.describe "Repository registration and API keys", type: :request do
       # below, because a budget guard whose page never renders the expensive read is green for the
       # wrong reason — the count is only a bound on what the page ASKS, and the two assertions
       # above it are what tie it to what the page SAYS.
+      # @intent: {"entity": "TestRun", "action": "batch shard question", "behavior": "four sharded cards, then eight, each print assembled from 4 shard reports and Machine time (all 4 added up) 4m 14s while a single test_run_shards aggregate serves the whole grid at either size", "layer": "request"}
       it "asks the shard question once for the whole grid, however long the list is" do
         %w[acme/one acme/two acme/three acme/four].each_with_index do |full_name, index|
           sharded_run(create_repository(user: @user, github_full_name: full_name),
@@ -2392,6 +2492,7 @@ RSpec.describe "Repository registration and API keys", type: :request do
     describe "what each of those runs cost" do
       # The canonical 4-shard fixture: a 1m 14s wait that burned 4m 14s of machine time. The whole
       # reason a card cannot print the MAX and call it a total.
+      # @intent: {"entity": "TestRun", "action": "print cost rows", "behavior": "the card prints Wall clock (slowest of 4 shards) 1m 14s and Machine time (all 4 added up) 4m 14s with no Total runtime label, its markup matching the shared cost-rows seam", "layer": "request"}
       it "names the MAX as a wall clock and puts the machine time beside it" do
         repository = create_repository(user: @user)
         run = sharded_run(repository, shards: 4, commit_sha: "feedfacecafe0301", branch: "main",
@@ -2411,6 +2512,7 @@ RSpec.describe "Repository registration and API keys", type: :request do
       # A shard went silent, so BOTH figures cover less than the run: the SUM is a floor and the MAX
       # is a maximum over a subset. Each says so through the model's own coverage vocabulary rather
       # than through a phrase re-derived on this card.
+      # @intent: {"entity": "TestRun", "action": "state partial coverage", "behavior": "one silent shard makes the card read Wall clock (slowest of the 3 that reported) 1m 1s and Machine time (3 of 4 added up) at least 3m", "layer": "request"}
       it "states how many shards a partial cost figure covers" do
         repository = create_repository(user: @user)
         run = sharded_run(repository, shards: 4, commit_sha: "feedfacecafe0302", branch: "main",
@@ -2427,6 +2529,7 @@ RSpec.describe "Repository registration and API keys", type: :request do
       # The unsharded corpus — every `bundle exec rspec` that named no `ci_run_id`. For it the MAX
       # and the SUM are the same number, so a second row would print one figure twice under two
       # labels, and a "slowest of 0 shards" would be a composition the run does not have.
+      # @intent: {"entity": "TestRun", "action": "print plain duration", "behavior": "an unsharded 45.0-second run prints exactly one row, Total runtime 45.0s, with no Wall clock or Machine time wording", "layer": "request"}
       it "renders a plain duration, with no shard wording, for a run with no shard rows" do
         repository = create_repository(user: @user)
         run = create_test_run(repository: repository, commit_sha: "feedfacecafe0303",
@@ -2452,6 +2555,7 @@ RSpec.describe "Repository registration and API keys", type: :request do
       # with and the two pages' sentences are comparable character for character. The decoration is
       # exactly what the seam's `wall_clock:` / `machine_time:` arguments exist to keep page-specific,
       # and `repository_runtime_change_spec` covers it where it applies.
+      # @intent: {"entity": "TestRun", "action": "share cost wording", "behavior": "the card's two cost rows, Wall clock (slowest of 4 shards) and Machine time (all 4 added up), also appear verbatim on the show page the card links to", "layer": "request"}
       it "states a run's cost in the same words as the page the card links to" do
         repository = create_repository(user: @user)
         run = sharded_run(repository, shards: 4, commit_sha: "feedfacecafe0307", branch: "main",
@@ -2473,6 +2577,7 @@ RSpec.describe "Repository registration and API keys", type: :request do
       # `Ingest::Payload#validate_duration_seconds` accepts nil explicitly, so "the client sent no
       # timing" is an ordinary state — and it has to read as an absence rather than as a suite that
       # cost nothing.
+      # @intent: {"entity": "TestRun", "action": "word unreported cost", "behavior": "a run that sent no timing prints Total runtime not reported and never 0.0s", "layer": "request"}
       it "words a run that reported no timing as an absence, never as a zero" do
         repository = create_repository(user: @user)
         create_test_run(repository: repository, commit_sha: "feedfacecafe0304", total_specs_count: 7)
@@ -2491,6 +2596,7 @@ RSpec.describe "Repository registration and API keys", type: :request do
       # because nil is the value a truthiness memo cannot hold: `@machine_seconds ||= …` would
       # accept the primed nil and then re-ask for it on the first read, and a card whose shards
       # reported no timing is the only shape that exercises it. One SELECT covers the whole page.
+      # @intent: {"entity": "TestRun", "action": "word sharded absence", "behavior": "four shards with no timings print Machine time (0 of 4 added up) not reported, never 0.0s, from one shard query for the page", "layer": "request"}
       it "words a sharded run whose shards reported no timing as an absence too" do
         repository = create_repository(user: @user)
         sharded_run(repository, shards: 4, commit_sha: "feedfacecafe0305", branch: "main")
@@ -2505,6 +2611,7 @@ RSpec.describe "Repository registration and API keys", type: :request do
       # And the state that absence is not: shards that really were measured and really did add up
       # to nothing. `machine_seconds_reported?` is a `nil?` check and not a `present?` one for
       # exactly this row, and the SUM must survive priming as the `0.0` it is.
+      # @intent: {"entity": "TestRun", "action": "print measured zero", "behavior": "two shards genuinely measuring 0.0 print Machine time (all 2 added up) 0.0s rather than the not-reported wording", "layer": "request"}
       it "renders a genuinely measured zero as the measurement it is" do
         repository = create_repository(user: @user)
         sharded_run(repository, shards: 2, commit_sha: "feedfacecafe0306", branch: "main",
@@ -2518,6 +2625,7 @@ RSpec.describe "Repository registration and API keys", type: :request do
 
       # A card with no run has no cost to state, on the same rule its missing basis line follows: a
       # "not reported" beside "No runs yet" would be a second rendering of one absence.
+      # @intent: {"entity": "TestRun", "action": "state no cost", "behavior": "a never-ingested card prints No runs yet and none of Total runtime, Wall clock or Machine time", "layer": "request"}
       it "states no cost for a repository that has never ingested" do
         create_repository(user: @user)
 
@@ -2572,6 +2680,7 @@ RSpec.describe "Repository registration and API keys", type: :request do
 
     # Criterion 1, and the ordering that IS the rule: this compares two recorded facts rather than
     # asking whether a refusal is recent, so the newest thing that happened decides.
+    # @intent: {"entity": "IngestRejection", "action": "mark refusing repository", "behavior": "a refusal ten minutes after the newest accepted run draws the refused-deliveries label and note beside the still-printed 900 tests figure", "layer": "request"}
     it "marks a repository whose newest refusal lands after its newest accepted run" do
       repository = create_repository(user: @user)
       create_test_run(repository: repository, commit_sha: "cafe0001", total_specs_count: 900,
@@ -2592,6 +2701,7 @@ RSpec.describe "Repository registration and API keys", type: :request do
 
     # The other half of criterion 1. A repository that hit a bad payload and has ingested cleanly
     # since is healthy again, with no window to expire and no threshold anybody had to pick.
+    # @intent: {"entity": "IngestRejection", "action": "mark nothing when recovered", "behavior": "an accepted run landing on top of a three-day-old refusal leaves the card unmarked, still printing its 12 tests figure", "layer": "request"}
     it "marks nothing when the newest accepted run is on top of the refusal" do
       repository = create_repository(user: @user)
       refuse(repository, at: 3.days.ago)
@@ -2611,6 +2721,7 @@ RSpec.describe "Repository registration and API keys", type: :request do
     # rendered the identical neutral "No runs yet". The assertion is not merely that the refusing
     # card gained a marker: it is that the two cards no longer read the same, which is the actual
     # defect.
+    # @intent: {"entity": "IngestRejection", "action": "tell apart never-wired", "behavior": "the refusing card with no accepted run reads No runs accepted while the never-wired one keeps No runs yet, and only the refusing card carries the label", "layer": "request"}
     it "tells a never-wired repository apart from one whose every delivery is refused" do
       never_wired = create_repository(user: @user, github_full_name: "acme/never-wired")
       refused = create_repository(user: @user, github_full_name: "acme/refused")
@@ -2640,6 +2751,7 @@ RSpec.describe "Repository registration and API keys", type: :request do
     # Every card here is refusing, which is the difference between this and a green-for-the-wrong-
     # reason guard: a budget whose page never renders the read it is guarding passes trivially. The
     # marker count is asserted first, so the page provably ASKED before the count says how often.
+    # @intent: {"entity": "IngestRejection", "action": "batch refusal question", "behavior": "three refusing cards, then six, all render the label while a single ingest_rejections aggregate serves the whole grid at either size", "layer": "request"}
     it "asks the refusal question once for the whole grid, however long the list is" do
       %w[acme/one acme/two acme/three].each_with_index do |full_name, index|
         repository = create_repository(user: @user, github_full_name: full_name)
@@ -2690,6 +2802,7 @@ RSpec.describe "Repository registration and API keys", type: :request do
     # read that stopped being narrowed cannot pass by agreeing with a hand-written duplicate.
     # `index_ingest_rejections_on_repository_and_recency` is what serves it once the table is big
     # enough for the planner to prefer an index; the guard here is that there is something to serve.
+    # @intent: {"entity": "IngestRejection", "action": "scope refusal read", "behavior": "the grid's rejection SELECT is narrowed by repository_id IN to exactly the viewer's two repositories, including the one with no refusals, and never reads a stranger's repository", "layer": "request"}
     it "reads only the repositories on this page, never the whole table" do
       mine = create_repository(user: @user, github_full_name: "acme/mine")
       also_mine = create_repository(user: @user, github_full_name: "acme/also-mine")
@@ -2722,6 +2835,7 @@ RSpec.describe "Repository registration and API keys", type: :request do
     # CRITERION 6 — the marker is purely additive for the population that is not refusing. This is
     # the whole non-refusing grid asserted at once: no marker, no note, and nothing about the words
     # the cards already printed has moved.
+    # @intent: {"entity": "IngestRejection", "action": "leave non-refusing unchanged", "behavior": "a card with no refusals still prints 4,321 tests and Ingested less than a minute ago on main, with no label, no refusal note and no No runs accepted", "layer": "request"}
     it "leaves a repository with no refusals rendering exactly what it rendered before" do
       repository = create_repository(user: @user)
       create_test_run(repository: repository, commit_sha: "cafe0005", total_specs_count: 4_321,
@@ -2743,6 +2857,7 @@ RSpec.describe "Repository registration and API keys", type: :request do
     #
     # A literal would pass on a rename that moved only one of them, which is the exact failure the
     # seam exists to make impossible.
+    # @intent: {"entity": "IngestRejection", "action": "share refusal wording", "behavior": "the card and the show page's connection indicator both carry the label and the refused-deliveries note, each rendered from the same helpers", "layer": "request"}
     it "words the card and the page it links to from one seam" do
       repository = create_repository(user: @user)
       refuse(repository, at: 20.minutes.ago)
@@ -2772,6 +2887,7 @@ RSpec.describe "Repository registration and API keys", type: :request do
     # Asserted with NO accepted run, which is the strict case: this repository is not non-refusing
     # because something was ingested on top, it is non-refusing because there is no longer any
     # evidence of refusal. No new retention rule is introduced here or in the code under it.
+    # @intent: {"entity": "IngestRejection", "action": "age out refusals", "behavior": "once the retained refusal rows are deleted the card drops the label and falls back to No runs yet rather than No runs accepted", "layer": "request"}
     it "reads as non-refusing once its refusals have aged out of the retained window" do
       repository = create_repository(user: @user)
       refuse(repository, at: 1.hour.ago)
@@ -2798,6 +2914,7 @@ RSpec.describe "Repository registration and API keys", type: :request do
     # `authenticate_api_key!` stamps the key on the way IN, so this refused delivery DID record a
     # use. That is why the card cannot read this signal off the credential, and why the refusal has
     # to be carried beside the rows instead.
+    # @intent: {"entity": "IngestRejection", "action": "mark real refusal", "behavior": "a real authenticated POST to the ingest API that fails its payload leaves one rejection row, stamps the key's last_used_at, and the grid shows the label with No runs accepted", "layer": "request"}
     it "marks a card from a delivery the real endpoint refused" do
       repository = create_repository(user: @user)
       key = repository.api_keys.create!(name: "CI")
@@ -2880,6 +2997,7 @@ RSpec.describe "Repository registration and API keys", type: :request do
                                   captured_at: GithubRegistrationGrant::MAX_AGE.ago - 1.hour)
       end
 
+      # @intent: {"entity": "GithubRegistrationGrant", "action": "say recheck needed", "behavior": "an aged-out grant renders the panel with the shared lapsed state and needs to check your GitHub permissions again", "layer": "request"}
       it "says the permissions need checking again" do
         get repositories_path
 
@@ -2889,6 +3007,7 @@ RSpec.describe "Repository registration and API keys", type: :request do
 
       # Criterion 2 — the existing action, reached through the existing helper. No new route was
       # minted, so this asserts against the ROUTE HELPER rather than a path spelled out here.
+      # @intent: {"entity": "GithubRegistrationGrant", "action": "offer authorize action", "behavior": "the panel links the existing installation authorize path and offers a Reconnect to GitHub control", "layer": "request"}
       it "offers the existing authorize action as the fix" do
         get repositories_path
 
@@ -2908,6 +3027,7 @@ RSpec.describe "Repository registration and API keys", type: :request do
       # Driven to the OUTCOME rather than asserted as a `return_to=` string, because the claim is
       # that the grant stops being stale — a spec reading only the query parameter would pass
       # against a destination that repairs nothing.
+      # @intent: {"entity": "GithubRegistrationGrant", "action": "end at grant retake", "behavior": "the reconnect carries return_to pointing at the new-repository picker, visiting that picker flips the grant from stale to fresh, and the panel then renders nothing", "layer": "request"}
       it "ends the reconnect journey where the grant is actually retaken" do
         stub_github(repos: [github_repo("acme/billing-service")])
         grant = GithubRegistrationGrant.find_by(user_id: @user.id)
@@ -2953,6 +3073,7 @@ RSpec.describe "Repository registration and API keys", type: :request do
       # user throughout — this is one person's second browser session, not a second account.
       before { @user = sign_in_via_github(authorize: false) }
 
+      # @intent: {"entity": "GithubRegistrationGrant", "action": "skip picker advice", "behavior": "a session holding no GitHub credential renders the lapsed panel saying Reconnect GitHub and never tells the reader to open Register a repository", "layer": "request"}
       it "does not tell a reader with no credential to go and open the picker" do
         get repositories_path
 
@@ -2969,6 +3090,7 @@ RSpec.describe "Repository registration and API keys", type: :request do
       # the SNAPSHOT is taken. `return_to` is asserted because it is what joins them — a reconnect
       # landing back here would restore the credential and mint nothing, which is the same loop one
       # step further along.
+      # @intent: {"entity": "GithubRegistrationGrant", "action": "offer minting fix", "behavior": "following the reconnect restores the credential, the return_to picker mints the account's first grant, and the panel disappears on the next render", "layer": "request"}
       it "offers a fix that actually mints the grant" do
         stub_github(repos: [github_repo("acme/billing-service")])
         get repositories_path
@@ -2995,6 +3117,7 @@ RSpec.describe "Repository registration and API keys", type: :request do
       # The counterfactual that gives the example above its teeth: BEFORE the credential comes
       # back, opening the picker mints nothing however many times it is opened. This is the dead end
       # the old copy walked the reader into, pinned so it cannot be re-introduced as advice.
+      # @intent: {"entity": "GithubRegistrationGrant", "action": "refuse picker resolution", "behavior": "opening the picker three times before the credential returns mints no grant at all, which is why the picker is not offered as the fix", "layer": "request"}
       it "cannot be resolved by opening the picker, which is why it is not offered" do
         stub_github(repos: [github_repo("acme/billing-service")])
 
@@ -3008,6 +3131,7 @@ RSpec.describe "Repository registration and API keys", type: :request do
       # repository — and before this split a lapsed grant plus a dead session rendered exactly that
       # sentence. Routing on the credential FIRST is what makes the reassurance true where it is
       # still said.
+      # @intent: {"entity": "GithubRegistrationGrant", "action": "drop false reassurance", "behavior": "a lapsed grant plus a credential-less session renders Reconnect GitHub and never the browser-is-unaffected promise", "layer": "request"}
       it "does not promise the browser path is unaffected when it is not" do
         create_registration_grant(user: @user,
                                   captured_at: GithubRegistrationGrant::MAX_AGE.ago - 1.hour)
@@ -3021,6 +3145,7 @@ RSpec.describe "Repository registration and API keys", type: :request do
       # Criterion 5 for this population too. The credential is read from the SIGNED SESSION —
       # `github_user_token`, not `github_authorization_needed?`, whose `GithubRepositoryListing`
       # override would force `github_sources` and both call GitHub and repair the grant.
+      # @intent: {"entity": "GithubRegistrationGrant", "action": "add no round trip", "behavior": "the panel renders for a credential-less reader while the stubbed GitHub client records zero calls to repositories", "layer": "request"}
       it "adds no GitHub round trip" do
         fake = stub_github(repos: [github_repo("acme/billing-service")])
 
@@ -3088,6 +3213,7 @@ RSpec.describe "Repository registration and API keys", type: :request do
       # precisely so a fresh-but-empty grant cannot flip the verdict to a false
       # `:not_in_installation`. So the hazard this example pins is now the ABSENCE of a grant —
       # asserted as the fact it is, and the panel must still name the true state.
+      # @intent: {"entity": "GithubRegistrationGrant", "action": "persist state after picker", "behavior": "with no installation connected a picker visit mints no grant, the panel still renders naming not installed on any of your GitHub accounts, and the verifier still answers not_granted", "layer": "request"}
       it "keeps saying so after a picker visit, which does not mint a grant" do
         stub_github(repos: [github_repo("acme/billing-service")])
 
@@ -3115,6 +3241,7 @@ RSpec.describe "Repository registration and API keys", type: :request do
       # The two promises the old copy made to this reader, asserted as the falsehoods they were.
       # `page_text` for the picker claim rather than `registration_panel`, because the sentence must
       # be absent from the panel AND not reintroduced anywhere else on the page.
+      # @intent: {"entity": "GithubRegistrationGrant", "action": "promise nothing falsely", "behavior": "the panel offers none of the old promises, not registering here in the browser works now, not SpecGuard will take one, and not One more step", "layer": "request"}
       it "promises neither a snapshot nor a working browser registration" do
         get repositories_path
 
@@ -3126,6 +3253,7 @@ RSpec.describe "Repository registration and API keys", type: :request do
       # Criterion 2 for this population: the missing thing is the INSTALLATION, so the control is
       # the install action and not the reconnect — a credential would read an installation that does
       # not exist. Both asserted against ROUTE HELPERS, so no new route can satisfy this.
+      # @intent: {"entity": "GithubRegistrationGrant", "action": "offer install action", "behavior": "the panel links the existing install path with Connect repositories on GitHub, and neither the authorize path nor any Reconnect wording appears", "layer": "request"}
       it "offers the existing install action and not the reconnect" do
         get repositories_path
 
@@ -3137,6 +3265,7 @@ RSpec.describe "Repository registration and API keys", type: :request do
 
       # Criterion 5 for this population too — the whole story is read from `github_installed?`, one
       # `EXISTS` against our own table, and no listing helper is reached on this path.
+      # @intent: {"entity": "GithubRegistrationGrant", "action": "add no round trip", "behavior": "the panel renders for an uninstalled reader while the stubbed client records zero repositories calls, the state being read from the local installation rows", "layer": "request"}
       it "adds no GitHub round trip" do
         fake = stub_github(repos: [github_repo("acme/billing-service")])
 
@@ -3156,6 +3285,7 @@ RSpec.describe "Repository registration and API keys", type: :request do
     # needed to check their permissions AGAIN and would refuse UNTIL IT IS TAKEN AGAIN. Both are
     # false: nothing has been taken, so nothing can have expired.
     describe "when no grant has ever been taken" do
+      # @intent: {"entity": "GithubRegistrationGrant", "action": "claim nothing expired", "behavior": "with no grant ever taken the panel shows the shared lapsed state but never the word again", "layer": "request"}
       it "does not claim anything expired or needs re-checking" do
         expect(GithubRegistrationGrant.find_by(user_id: @user.id)).to be_nil
 
@@ -3172,6 +3302,7 @@ RSpec.describe "Repository registration and API keys", type: :request do
       # "Register a repository", already in this page's header, reaches the same picker with no
       # external round trip at all. Offering it would talk them out of a one-hop fix into a
       # three-hop one.
+      # @intent: {"entity": "GithubRegistrationGrant", "action": "skip reconnect offer", "behavior": "the page renders no authorize path and no Reconnect to GitHub, because the picker already in the header is the shorter fix", "layer": "request"}
       it "offers no external reconnect round trip" do
         get repositories_path
 
@@ -3179,6 +3310,7 @@ RSpec.describe "Repository registration and API keys", type: :request do
         expect(registration_panel).not_to include("Reconnect to GitHub")
       end
 
+      # @intent: {"entity": "GithubRegistrationGrant", "action": "point at picker", "behavior": "the panel says Register a repository, the control the page header already offers", "layer": "request"}
       it "points at the picker the page already offers" do
         get repositories_path
 
@@ -3187,6 +3319,7 @@ RSpec.describe "Repository registration and API keys", type: :request do
 
       # The promise that copy makes, driven to its outcome: opening the picker once really is the
       # whole fix. Without this the sentence above would be an unverified instruction.
+      # @intent: {"entity": "GithubRegistrationGrant", "action": "resolve via picker", "behavior": "opening the picker once mints the account's first grant and the panel renders nothing on the next visit", "layer": "request"}
       it "is resolved by opening that picker once" do
         stub_github(repos: [github_repo("acme/billing-service")])
 
@@ -3204,6 +3337,7 @@ RSpec.describe "Repository registration and API keys", type: :request do
     describe "when the grant is current" do
       before { create_registration_grant(user: @user) }
 
+      # @intent: {"entity": "GithubRegistrationGrant", "action": "silence current grant", "behavior": "a grant inside the age bound renders no panel at all", "layer": "request"}
       it "says nothing to a person whose grant is inside the bound" do
         get repositories_path
 
@@ -3213,6 +3347,7 @@ RSpec.describe "Repository registration and API keys", type: :request do
       # Criterion 4, stated as the absence of the CONTROL and not only of the sentence. A
       # current-grant reader's page is unchanged, which means no button either — asserting the
       # sentence alone would let a stray reconnect button survive on every render.
+      # @intent: {"entity": "GithubRegistrationGrant", "action": "offer no new chrome", "behavior": "a current-grant reader sees neither the lapsed sentence nor the authorize path anywhere on the page", "layer": "request"}
       it "offers a person with a current grant no new chrome" do
         get repositories_path
 
@@ -3236,6 +3371,7 @@ RSpec.describe "Repository registration and API keys", type: :request do
     describe "when the GitHub App is not configured" do
       before { allow(SpecGuard::GithubApp).to receive(:configured?).and_call_original }
 
+      # @intent: {"entity": "GithubRegistrationGrant", "action": "render nothing unconfigured", "behavior": "with the GitHub App unconfigured the index renders no lapsed-state sentence at all, there being no control to offer", "layer": "request"}
       it "renders no panel, because there is no control to offer anyone" do
         expect(SpecGuard::GithubApp).not_to be_configured
 
@@ -3247,6 +3383,7 @@ RSpec.describe "Repository registration and API keys", type: :request do
       # The specific shape of the breakage, pinned rather than left to the assertion above: the
       # operator notice must not appear WRAPPED IN the reader's panel. It has its own home on the
       # connect paths, where an operator meets it without a reader-facing sentence around it.
+      # @intent: {"entity": "GithubRegistrationGrant", "action": "avoid nested notice", "behavior": "the operator-facing unconfigured-app sentence never appears on the reader's page, so it cannot nest inside a reader-facing alert", "layer": "request"}
       it "does not nest the operator notice inside a reader-facing alert" do
         get repositories_path
 
@@ -3265,6 +3402,7 @@ RSpec.describe "Repository registration and API keys", type: :request do
     # would miss exactly the branches this adds. The session-expired one is pinned in its own
     # describe above, beside the rest of that branch's claims.
     describe "its cost" do
+      # @intent: {"entity": "GithubRegistrationGrant", "action": "add no round trip", "behavior": "a reader who has never had a grant still gets the panel while the stubbed client records zero repositories calls", "layer": "request"}
       it "adds no GitHub round trip for a reader who has never had a grant" do
         fake = stub_github(repos: [github_repo("acme/billing-service")])
 
@@ -3274,6 +3412,7 @@ RSpec.describe "Repository registration and API keys", type: :request do
         expect(fake.calls_to(:repositories)).to eq(0)
       end
 
+      # @intent: {"entity": "GithubRegistrationGrant", "action": "add no round trip", "behavior": "a lapsed-grant reader gets the panel while the stubbed client records zero repositories calls", "layer": "request"}
       it "adds no GitHub round trip for a lapsed-grant reader" do
         create_registration_grant(user: @user,
                                   captured_at: GithubRegistrationGrant::MAX_AGE.ago - 1.hour)
@@ -3285,6 +3424,7 @@ RSpec.describe "Repository registration and API keys", type: :request do
         expect(fake.calls_to(:repositories)).to eq(0)
       end
 
+      # @intent: {"entity": "GithubRegistrationGrant", "action": "add no round trip", "behavior": "a current-grant reader's render makes zero repositories calls to the stubbed client", "layer": "request"}
       it "adds no GitHub round trip for a current-grant reader" do
         create_registration_grant(user: @user)
         fake = stub_github(repos: [github_repo("acme/billing-service")])
@@ -3299,6 +3439,7 @@ RSpec.describe "Repository registration and API keys", type: :request do
       # state a reader is shown must survive being looked at — a page that healed the grant as a
       # side effect of rendering it would show the panel once and never again, with nothing else in
       # the suite able to see it.
+      # @intent: {"entity": "GithubRegistrationGrant", "action": "not repair on render", "behavior": "rendering the index twice creates no grant rows and the panel stays present, so the state survives being looked at", "layer": "request"}
       it "does not repair the grant as a side effect of rendering it" do
         stub_github(repos: [github_repo("acme/billing-service")])
 
@@ -3316,10 +3457,12 @@ RSpec.describe "Repository registration and API keys", type: :request do
     # SpecGuard in a browser. Both of those clauses are about the surface the refusal arrived on, so
     # the second and third expectations pin that the slice is the STATE half and nothing else.
     describe "its wording" do
+      # @intent: {"entity": "GithubRegistrationGrant", "action": "read wording from constant", "behavior": "the API's not_granted message in InstallationRepositories MESSAGES includes the helper's lapsed-state wording, so the browser sentence and the 400 cannot drift", "layer": "request"}
       it "is read from InstallationRepositories::MESSAGES rather than written again" do
         expect(InstallationRepositories::MESSAGES[:not_granted]).to include(lapsed_state)
       end
 
+      # @intent: {"entity": "GithubRegistrationGrant", "action": "carry browser-true half", "behavior": "the lapsed-state slice mentions neither API key nor browser, dropping the halves only true of the API surface", "layer": "request"}
       it "carries only the half that is true of a browser reader" do
         expect(lapsed_state).not_to include("API key")
         expect(lapsed_state).not_to include("browser")
@@ -3329,6 +3472,7 @@ RSpec.describe "Repository registration and API keys", type: :request do
       # two branches: "no current record" is a statement about what SpecGuard holds, and it is
       # equally true of a snapshot that expired and one that was never taken. Anything stronger
       # would be a lie to one of them — which is the whole reason the prose AROUND it is split.
+      # @intent: {"entity": "GithubRegistrationGrant", "action": "state shared fact", "behavior": "the lapsed-state sentence includes no current record, true of both an expired and a never-taken snapshot, and never the word again", "layer": "request"}
       it "states the shared fact both surfaces and both readers are about" do
         expect(lapsed_state).to include("no current record")
         expect(lapsed_state).not_to include("again")
@@ -3346,6 +3490,7 @@ RSpec.describe "Repository registration and API keys", type: :request do
     # called a second time would fail this example while adding no call site at all. (That is not
     # hypothetical: the first draft of this slice did exactly that, twice.) What must stay at one is
     # the number of places that CALL it, so that is what is counted.
+    # @intent: {"entity": "GithubRegistrationGrant", "action": "keep one capture site", "behavior": "scanning app and lib for non-comment calls to GithubRegistrationGrant.capture finds exactly one site, the one passing sources", "layer": "request"}
     it "leaves the grant with exactly one capture call site" do
       sites = Dir.glob(Rails.root.join("{app,lib}/**/*.rb")).flat_map do |path|
         File.readlines(path)
@@ -3359,6 +3504,7 @@ RSpec.describe "Repository registration and API keys", type: :request do
   end
 
   describe "renaming a repository" do
+    # @intent: {"entity": "Repository", "action": "rename preserving data", "behavior": "patching a corrected org/repo name redirects to the show page, updates github_full_name, and leaves the key, run and spec-intent rows all intact", "layer": "request"}
     it "updates the name without touching keys, runs or intents" do
       repository = create_repository(user: @user, github_full_name: "acme/billing-servce")
       repository.api_keys.create!(name: "CI")
@@ -3376,6 +3522,7 @@ RSpec.describe "Repository registration and API keys", type: :request do
       expect(repository.spec_intents.count).to eq(1)
     end
 
+    # @intent: {"entity": "Repository", "action": "normalize pasted URL", "behavior": "patching a full github.com URL stores the normalized acme/renamed name and derives the display name renamed, so GitHub is asked only about the normalized form", "layer": "request"}
     it "re-derives the display name and normalizes a pasted GitHub URL" do
       # The NORMALIZED name is what gets verified against the installation, which is the point of
       # the pairing here: GitHub is asked about `acme/renamed`, never about the pasted URL.
@@ -3389,6 +3536,7 @@ RSpec.describe "Repository registration and API keys", type: :request do
       expect(repository.name).to eq("renamed")
     end
 
+    # @intent: {"entity": "Repository", "action": "reject invalid rename", "behavior": "patching nonsense answers 422 with the must look like org/repo message, leaves the stored name unchanged, and still identifies the record by its stored name in the form", "layer": "request"}
     it "re-renders the edit form when the new name is not org/repo" do
       repository = create_repository(user: @user)
 
@@ -3403,6 +3551,7 @@ RSpec.describe "Repository registration and API keys", type: :request do
       expect(response.body).to include("acme/billing-service")
     end
 
+    # @intent: {"entity": "Repository", "action": "reject taken name", "behavior": "patching a name another user already owns answers 422 rather than raising, and leaves the stored name unchanged", "layer": "request"}
     it "rejects a name already taken by another user rather than raising" do
       create_repository(user: create_user(github_uid: "9999", github_handle: "someone-else"),
                         github_full_name: "other/repo")
@@ -3414,6 +3563,7 @@ RSpec.describe "Repository registration and API keys", type: :request do
       expect(repository.reload.github_full_name).to eq("acme/billing-service")
     end
 
+    # @intent: {"entity": "Repository", "action": "accept no-op rename", "behavior": "patching the unchanged name redirects to the show page with no Renamed flash", "layer": "request"}
     it "accepts a save that leaves the name unchanged" do
       repository = create_repository(user: @user)
 
@@ -3423,6 +3573,7 @@ RSpec.describe "Repository registration and API keys", type: :request do
       expect(flash[:notice]).not_to include("Renamed")
     end
 
+    # @intent: {"entity": "Repository", "action": "confirm rename in flash", "behavior": "an actual rename sets the notice to exactly Renamed to acme/billing-service.", "layer": "request"}
     it "confirms the rename in the flash when the name actually changed" do
       repository = create_repository(user: @user, github_full_name: "acme/billing-servce")
 
@@ -3431,6 +3582,7 @@ RSpec.describe "Repository registration and API keys", type: :request do
       expect(flash[:notice]).to eq("Renamed to acme/billing-service.")
     end
 
+    # @intent: {"entity": "Repository", "action": "link rename form", "behavior": "the repository page includes a link to the rename form's edit path", "layer": "request"}
     it "links to the rename form from the repository page" do
       repository = create_repository(user: @user)
 
@@ -3439,6 +3591,7 @@ RSpec.describe "Repository registration and API keys", type: :request do
       expect(response.body).to include(edit_repository_path(repository))
     end
 
+    # @intent: {"entity": "Repository", "action": "render rename form", "behavior": "the edit path answers 200 and renders a github_full_name input", "layer": "request"}
     it "renders the rename form" do
       repository = create_repository(user: @user)
 
@@ -3448,6 +3601,7 @@ RSpec.describe "Repository registration and API keys", type: :request do
       expect(response.body).to include('name="repository[github_full_name]"')
     end
 
+    # @intent: {"entity": "Repository", "action": "refuse foreign rename", "behavior": "both patching and viewing the rename form of another user's repository answer 404 and leave its name untouched", "layer": "request"}
     it "does not let a user rename another user's repository" do
       other = create_repository(user: create_user(github_uid: "9999", github_handle: "someone-else"),
                                 github_full_name: "other/repo")

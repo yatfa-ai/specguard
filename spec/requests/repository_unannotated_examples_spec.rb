@@ -143,6 +143,7 @@ RSpec.describe "Repository unannotated examples", type: :request do
     # by name, with enough on every row to go and open it. Asserted as a SEQUENCE (`eq`, not
     # `match_array`) because the file-navigable order is half of what the list promises — a reader
     # annotating the head and asking again must not be handed a re-shuffled list.
+    # @intent: {"entity": "GET /repositories/:id", "action": "list unannotated examples", "behavior": "the three spec/models debt rows list in file order as behaves like a billable charges once, Order settles the balance and Refund restores the stock, each with its definition coordinate and the file that ran it", "layer": "request"}
     it "lists the area's unannotated examples by name, with file path and line number" do
       get repository_path(debt_run, spec_directory: area)
 
@@ -157,6 +158,7 @@ RSpec.describe "Repository unannotated examples", type: :request do
     # The narrowing is the point: the run's OTHER unannotated example is not in this list, and the
     # area's ANNOTATED one is not either. A panel serving the run's whole debt, or the area's whole
     # population, passes neither half.
+    # @intent: {"entity": "GET /repositories/:id", "action": "narrow to area debt", "behavior": "the list holds exactly 3 rows with neither the spec/requests checkout example nor the area's annotated invoice example in it", "layer": "request"}
     it "lists neither the run's debt outside the area nor the area's annotated examples" do
       get repository_path(debt_run, spec_directory: area)
 
@@ -167,6 +169,7 @@ RSpec.describe "Repository unannotated examples", type: :request do
 
     # `?spec_file=` is the other narrowing, read by the same object off the same ask this page
     # already carries — so the panel opens one FILE's debt without a parameter of its own.
+    # @intent: {"entity": "GET /repositories/:id", "action": "narrow by spec file", "behavior": "asking ?spec_file=spec/models/refund_spec.rb narrows the worklist to the single Refund restores the stock row", "layer": "request"}
     it "narrows to one spec file when that is the ask" do
       get repository_path(debt_run, spec_file: refund_spec)
 
@@ -175,6 +178,7 @@ RSpec.describe "Repository unannotated examples", type: :request do
 
     # Both asks are AND-ed and neither wins: a file outside the area is an honest empty intersection
     # rather than one of the two having been silently dropped. The panel says so where it happens.
+    # @intent: {"entity": "GET /repositories/:id", "action": "intersect both asks", "behavior": "a spec/requests file asked under spec/models renders the panel with no rows and the sentence that both asks narrow this list and a row must match each of them", "layer": "request"}
     it "intersects the two asks rather than letting one of them win" do
       get repository_path(debt_run, spec_file: "spec/requests/checkout_spec.rb", spec_directory: area)
 
@@ -188,6 +192,7 @@ RSpec.describe "Repository unannotated examples", type: :request do
     # not a claim about the list, so it may not live inside the caption that vanishes with the table.
     # This is the pairing that stops the assertion above from being satisfied by a sentence that only
     # ever appears over an empty one.
+    # @intent: {"entity": "GET /repositories/:id", "action": "disclose overlapping asks", "behavior": "asking order_spec under spec/models lists both order_spec rows and still prints the both-asks sentence", "layer": "request"}
     it "says the same about the intersection when the two asks do overlap" do
       get repository_path(debt_run, spec_file: order_spec, spec_directory: area)
 
@@ -198,6 +203,7 @@ RSpec.describe "Repository unannotated examples", type: :request do
 
     # And it is said only where both asks are set — a sentence about two narrowings printed over one
     # is a clause about nothing, and it would tell a reader an ask was applied that never was.
+    # @intent: {"entity": "GET /repositories/:id", "action": "stay silent on single ask", "behavior": "a page asked only spec_directory prints no both-asks sentence", "layer": "request"}
     it "says nothing about an intersection when only one ask was made" do
       get repository_path(debt_run, spec_directory: area)
 
@@ -208,6 +214,7 @@ RSpec.describe "Repository unannotated examples", type: :request do
     # example group, and the row shows both. `spec_file_path` + `line_number` would be a coordinate
     # whose halves come from different files — line 7 of `order_spec.rb` is not this test — and on a
     # worklist that is a reader sent to annotate something that is not there.
+    # @intent: {"entity": "GET /repositories/:id", "action": "pair definition coordinate", "behavior": "the shared-group row pairs its line with spec/support/shared_examples/billable.rb:7 while the spec-file column shows spec/models/order_spec.rb, and the caption notes the different file an example a shared example group defines elsewhere", "layer": "request"}
     it "pairs the line number with the file the example is DEFINED in" do
       get repository_path(debt_run, spec_directory: area)
 
@@ -221,6 +228,7 @@ RSpec.describe "Repository unannotated examples", type: :request do
 
     # AC7. OPERANDS ONLY — no fraction, no threshold, no verdict. `UnannotatedExamples` and
     # `UnannotatedDirectories` both state that boundary and it governs this partial too.
+    # @intent: {"entity": "GET /repositories/:id", "action": "show operands only", "behavior": "the panel shows Named and not scored and contains neither a percent sign nor a 3 of 4 fraction", "layer": "request"}
     it "shows no percentage, fraction or verdict on a row" do
       get repository_path(debt_run, spec_directory: area)
 
@@ -231,6 +239,7 @@ RSpec.describe "Repository unannotated examples", type: :request do
 
     # A list that says nothing about its order is read as ranked, and this one ranks nothing:
     # `SpecObservation.unannotated_in` orders file-navigably and says in full that it is a worklist.
+    # @intent: {"entity": "GET /repositories/:id", "action": "call list file-navigable", "behavior": "the caption says the order is by spec file, then by line, in the order you would open them, and never slowest first", "layer": "request"}
     it "says the list is file-navigable rather than ranked" do
       get repository_path(debt_run, spec_directory: area)
 
@@ -241,6 +250,7 @@ RSpec.describe "Repository unannotated examples", type: :request do
 
     # The denominator is the rows THIS RUN wrote in this area, never the Overview's suite size —
     # that figure is re-derived by SUM over shard reports, and this list is narrowed on top of it.
+    # @intent: {"entity": "GET /repositories/:id", "action": "count narrowed population", "behavior": "with total_specs_count 4000 the caption reads All 1 example this run recorded here without an @intent, never prints 4,000, and notes it is a different population from the Overview suite size", "layer": "request"}
     it "counts the narrowed population rather than the run's reported suite size" do
       repository = create_repository(user: @user)
       ingest(repository, [unannotated_spec(file_path: order_spec, line_number: 1)],
@@ -270,6 +280,7 @@ RSpec.describe "Repository unannotated examples", type: :request do
       repository
     end
 
+    # @intent: {"entity": "GET /repositories/:id", "action": "cap worklist and disclose", "behavior": "a 112-example area renders 100 rows captioned The first 100 of the 112 examples, with The other 12 are not on this page", "layer": "request"}
     it "lists no more than the cap and says how much of the area is not on the page" do
       get repository_path(capped_run, spec_directory: area)
 
@@ -283,6 +294,7 @@ RSpec.describe "Repository unannotated examples", type: :request do
     # The other half of the same predicate, and the answer a `truncated?` hard-wired to `true` gets
     # wrong: a complete list captioned as a head tells a reader there are tests it is not showing
     # them when there are none.
+    # @intent: {"entity": "GET /repositories/:id", "action": "state complete worklist", "behavior": "the 3-row list is captioned All 3 examples this run recorded here without an @intent with no not-on-this-page clause", "layer": "request"}
     it "says the list is all of them, where nothing was cut" do
       get repository_path(debt_run, spec_directory: area)
 
@@ -302,6 +314,7 @@ RSpec.describe "Repository unannotated examples", type: :request do
       repository
     end
 
+    # @intent: {"entity": "GET /repositories/:id", "action": "render clean empty state", "behavior": "an all-annotated spec/models returns 200 with the panel present, no table rows, and the words Nothing unannotated here recording no example without an @intent in spec/models", "layer": "request"}
     it "renders the panel and says there is nothing unannotated, rather than erroring" do
       get repository_path(annotated_area_run, spec_directory: area)
 
@@ -316,6 +329,7 @@ RSpec.describe "Repository unannotated examples", type: :request do
     # And it does not wear the OTHER empty state's sentence, which is the whole point of there being
     # two: this run sent its detail, and the reason there is nothing to list is a finding about the
     # area rather than a gap in the payload.
+    # @intent: {"entity": "GET /repositories/:id", "action": "separate from missing detail", "behavior": "the all-annotated empty state never claims No per-example detail on this run", "layer": "request"}
     it "does not claim the detail is missing" do
       get repository_path(annotated_area_run, spec_directory: area)
 
@@ -327,6 +341,7 @@ RSpec.describe "Repository unannotated examples", type: :request do
     # to tell them apart. Claiming only the first over the second would be "nothing to check" wearing
     # the spelling of "everything passed", so the state discloses the other reading and points at the
     # panel that settles it — which is on the page under the same ask.
+    # @intent: {"entity": "GET /repositories/:id", "action": "disclose empty population", "behavior": "an unrecorded spec/nowhere area also prints Nothing unannotated here, discloses that a population of no examples has no unannotated ones either, and points at the spec-directory-files panel", "layer": "request"}
     it "discloses that an area this run recorded nothing in arrives here too" do
       get repository_path(annotated_area_run, spec_directory: "spec/nowhere")
 
@@ -349,6 +364,7 @@ RSpec.describe "Repository unannotated examples", type: :request do
       repository
     end
 
+    # @intent: {"entity": "GET /repositories/:id", "action": "render missing-detail state", "behavior": "a totals-only run renders the panel saying No per-example detail on this run and not that everything there is annotated, with no rows and no Nothing-unannotated wording", "layer": "request"}
     it "says the detail is missing, not that there is nothing unannotated" do
       get repository_path(totals_only_run, spec_directory: area)
 
@@ -363,6 +379,7 @@ RSpec.describe "Repository unannotated examples", type: :request do
   describe "a page nobody asked a narrowing of" do
     # AC4, first half. The panel does not render, so a reader who never picks an area sees exactly
     # what they saw before this shipped.
+    # @intent: {"entity": "GET /repositories/:id", "action": "omit panel without ask", "behavior": "an unasked page renders no #unannotated-examples panel while #unannotated-directories still lists rows", "layer": "request"}
     it "renders no panel without a narrowing ask" do
       get repository_path(debt_run)
 
@@ -376,6 +393,7 @@ RSpec.describe "Repository unannotated examples", type: :request do
     # projects — which is this read's fingerprint and nothing else's, so an assertion of ZERO cannot
     # be satisfied by a page that simply issued a different query. The paired non-zero is what stops
     # the zero from being vacuous: it proves the fingerprint matches when the read IS taken.
+    # @intent: {"entity": "GET /repositories/:id", "action": "gate read on ask", "behavior": "the unannotated_recorded_count read runs zero times on an unasked page and exactly once with ?spec_directory= asked", "layer": "request"}
     it "issues no per-example read at all until a narrowing is asked for" do
       repository = debt_run
       get repository_path(repository)
@@ -391,6 +409,7 @@ RSpec.describe "Repository unannotated examples", type: :request do
 
     # And it stays ONE read however many rows come back — the whole list is one query with its
     # population count riding back as a window, not a row-by-row walk.
+    # @intent: {"entity": "GET /repositories/:id", "action": "keep read constant", "behavior": "areas holding 3 and 100 unannotated examples each issue exactly 1 unannotated_recorded_count read", "layer": "request"}
     it "costs one read whether the area holds three examples or a hundred" do
       small = debt_run
       large = create_repository(user: @user, github_full_name: "acme/large-debt")
@@ -418,6 +437,7 @@ RSpec.describe "Repository unannotated examples", type: :request do
   # the page; this asserts the half that belongs to THIS panel: the link exists, it lands here, and
   # it is a `drill_down_path` rather than a hand-written href.
   describe "reaching the list from the ranking above it" do
+    # @intent: {"entity": "GET /repositories/:id", "action": "link ranking into panel", "behavior": "the spec/models link in the directories ranking carries both the spec_directory and the open spec_file asks and ends at the #unannotated-examples fragment", "layer": "request"}
     it "links each area to this panel, carrying an ask the reader already had open" do
       get repository_path(debt_run, spec_file: refund_spec)
 
@@ -430,6 +450,7 @@ RSpec.describe "Repository unannotated examples", type: :request do
 
     # AC3. NO NEW PARAMETER: the href writes only asks this page already had, and following it opens
     # the panel. A second parameter minted for this rung would show up as a key here.
+    # @intent: {"entity": "GET /repositories/:id", "action": "open panel without new param", "behavior": "following the ranking link opens the panel with spec_directory its only query key and Order settles the balance listed", "layer": "request"}
     it "opens the panel by following that link, with no parameter of its own" do
       get repository_path(debt_run)
       href = directories_panel.find("a", text: area, match: :prefer_exact)[:href]
@@ -443,6 +464,7 @@ RSpec.describe "Repository unannotated examples", type: :request do
     end
 
     # A list of choices with one of them taken, marked the way both sibling area links mark it.
+    # @intent: {"entity": "GET /repositories/:id", "action": "mark open area", "behavior": "the open spec/models area link carries aria-current=true while the spec/requests area link carries none", "layer": "request"}
     it "marks the open area as current" do
       get repository_path(debt_run, spec_directory: area)
 
@@ -457,6 +479,7 @@ RSpec.describe "Repository unannotated examples", type: :request do
   # a narrower question; this one hands them a task, and the task is singular and known — open that
   # file at that line and write an `@intent`. Until now the column printed where to go and stopped.
   describe "the definition site as a link" do
+    # @intent: {"entity": "GET /repositories/:id", "action": "link coordinates to github", "behavior": "the three definition links point at github.com/acme/billing-service/blob/feedfacecafe0001 anchors #L7, #L30 and #L9 in list order", "layer": "request"}
     it "links each row's coordinate to that line on GitHub" do
       get repository_path(debt_run, spec_directory: area)
 
@@ -467,6 +490,7 @@ RSpec.describe "Repository unannotated examples", type: :request do
 
     # The link text is the coordinate the panel already printed, so nothing about the row's identity
     # changed — the same string a reader was reading is now the thing they click.
+    # @intent: {"entity": "GET /repositories/:id", "action": "link coordinate itself", "behavior": "each row's link text is its printed coordinate and the panel holds exactly 3 anchors", "layer": "request"}
     it "links the coordinate itself rather than adding a second control to the row" do
       get repository_path(debt_run, spec_directory: area)
 
@@ -483,6 +507,7 @@ RSpec.describe "Repository unannotated examples", type: :request do
     #
     # `name` is nullable and the client sends nil for an example it could not describe, on the same
     # precedent spec/requests/repository_slowest_examples_spec.rb pins one panel over.
+    # @intent: {"entity": "GET /repositories/:id", "action": "link coordinate label", "behavior": "a nameless row labelled spec/models/order_spec.rb:30 links that coordinate to the feedfacecafe0001 blob line 30 as the row's only anchor", "layer": "request"}
     it "links the coordinate on a row that wears it as its name" do
       repository = create_repository(user: @user)
       ingest(repository, [unannotated_spec(file_path: order_spec, line_number: 30).merge(name: nil)])
@@ -501,6 +526,7 @@ RSpec.describe "Repository unannotated examples", type: :request do
     # come from different files; the link inherits that constraint exactly rather than reaching for
     # the column this list is ORDERED by. Line 7 of `order_spec.rb` is not this test, and on a
     # worklist that is a reader sent to annotate something that is not there.
+    # @intent: {"entity": "GET /repositories/:id", "action": "anchor definition file", "behavior": "the shared-group row's link targets blob feedfacecafe0001 spec/support/shared_examples/billable.rb#L7 with no order_spec in it, and the spec-file column stays plain text", "layer": "request"}
     it "builds the link from the file the example is DEFINED in, not the file that ran it" do
       get repository_path(debt_run, spec_directory: area)
 
@@ -518,6 +544,7 @@ RSpec.describe "Repository unannotated examples", type: :request do
     # tree the run that recorded it was taken from, so a page anchored on an older run via
     # `?commit_sha=` must link into THAT run's tree. Linking at `main` would send a reader to
     # whatever has since drifted onto line 30.
+    # @intent: {"entity": "GET /repositories/:id", "action": "pin link to anchor", "behavior": "with ?commit_sha=aaaa1111bbbb2222 the link points at blob aaaa1111bbbb2222/order_spec#L30 and never the cccc3333dddd4444 run", "layer": "request"}
     it "pins the link to the run the page is anchored on rather than the newest one" do
       repository = create_repository(user: @user)
       ingest(repository, [unannotated_spec(file_path: order_spec, line_number: 30)],
@@ -533,6 +560,7 @@ RSpec.describe "Repository unannotated examples", type: :request do
 
     # The pairing that stops the assertion above from passing on a page that simply had one run:
     # unanchored, the same repository links at the NEWEST sha.
+    # @intent: {"entity": "GET /repositories/:id", "action": "link newest run sha", "behavior": "unanchored, the definition link points at the newest run's blob cccc3333dddd4444/order_spec#L30", "layer": "request"}
     it "links at the newest run's sha when no anchor was asked for" do
       repository = create_repository(user: @user)
       ingest(repository, [unannotated_spec(file_path: order_spec, line_number: 30)],
@@ -549,6 +577,7 @@ RSpec.describe "Repository unannotated examples", type: :request do
     # reader is mid-worklist. Annotating one test and losing a hundred-row list narrowed by two asks
     # would make the panel worse to use the further through it you got. `rel` is written out rather
     # than left to the browsers that imply it.
+    # @intent: {"entity": "GET /repositories/:id", "action": "open in new tab", "behavior": "every definition link carries target=_blank and rel=noopener noreferrer", "layer": "request"}
     it "opens the file in a new tab, leaving the worklist where the reader had it" do
       get repository_path(debt_run, spec_directory: area)
 
@@ -560,6 +589,7 @@ RSpec.describe "Repository unannotated examples", type: :request do
     # partial renders and `#github_blob_url` is string composition, so a hundred links must cost
     # exactly what three cost. Compared across two narrowings of ONE page rather than across two
     # repositories, so nothing but the row count differs between the two budgets.
+    # @intent: {"entity": "GET /repositories/:id", "action": "hold link query budget", "behavior": "narrowings rendering 3 linked rows and 100 linked rows issue the same total query count with 100 distinct hrefs", "layer": "request"}
     it "costs the same number of queries for a hundred linked rows as for three" do
       repository = create_repository(user: @user)
       ingest(repository,
@@ -582,6 +612,7 @@ RSpec.describe "Repository unannotated examples", type: :request do
   # by this rung: the API and the dashboard must not be able to disagree about which tests of a run
   # are unannotated, and a divergence introduced by a later "fix" to either consumer fails here.
   describe "agreement with the JSON endpoint" do
+    # @intent: {"entity": "GET /repositories/:id", "action": "match api block", "behavior": "the web panel's 3 test names, in order, equal the API latest_run unannotated_examples rows fetched with the same spec_directory ask", "layer": "request"}
     it "names the same examples, in the same order, as the API's unannotated_examples block" do
       repository = debt_run
       key = repository.api_keys.create!
@@ -621,6 +652,7 @@ RSpec.describe "Repository unannotated examples", type: :request do
       repository
     end
 
+    # @intent: {"entity": "GET /repositories/:id", "action": "show derived reading", "behavior": "the last column reads Nothing — no @intent, and the description does not give an entity, an action and a behavior — for the unreadable row and Order settle clears the outstanding balance for the derivable one", "layer": "request"}
     it "shows the entity, action and behavior it read, rather than a badge saying it read something" do
       get repository_path(mixed_reading_run, spec_directory: area)
 
@@ -633,6 +665,7 @@ RSpec.describe "Repository unannotated examples", type: :request do
     # population is the small one, and a purely alphabetical page would bury it. `refund_spec` sorts
     # AFTER `order_spec`, so a file-navigable-only order puts the derivable row first — which is what
     # this asserts against.
+    # @intent: {"entity": "GET /repositories/:id", "action": "list unreadable first", "behavior": "Refund restores the stock, which SpecGuard cannot read, is listed ahead of the derivable Order#settle row despite sorting after it by file", "layer": "request"}
     it "lists the tests it could read nothing from first, ahead of the ones it read" do
       get repository_path(mixed_reading_run, spec_directory: area)
 
@@ -650,6 +683,7 @@ RSpec.describe "Repository unannotated examples", type: :request do
     # ordinary two-row area, the shape a reader meets first, pinning the wording that does not
     # agree. Nothing exotic was needed to reach it, which is why the count-off-by-one examples below
     # are not the whole guard: this one holds the sentence at the grain a real area has.
+    # @intent: {"entity": "GET /repositories/:id", "action": "state reading split", "behavior": "the caption says SpecGuard reads 1 of them from the description and the other 1 it cannot read at all is listed first, warns of no preconditions, and never says SpecGuard cannot see", "layer": "request"}
     it "says how many of them it read and how many it could not, and what a derived reading lacks" do
       get repository_path(mixed_reading_run, spec_directory: area)
 
@@ -666,6 +700,7 @@ RSpec.describe "Repository unannotated examples", type: :request do
     # The good branch of the same sentence. An area SpecGuard reads entirely is not "no unannotated
     # tests" — the rows are still there and still unannotated — so the caption has to say the second
     # thing without saying the first.
+    # @intent: {"entity": "GET /repositories/:id", "action": "state all readable", "behavior": "a one-row fully derivable area is captioned There is none here it cannot read at all while still listing the row", "layer": "request"}
     it "says there is nothing it cannot read, where there is nothing it cannot read" do
       repository = create_repository(user: @user)
       ingest(repository,
@@ -691,6 +726,7 @@ RSpec.describe "Repository unannotated examples", type: :request do
     # version of this sentence was branched on `derived.positive?` for exactly these reasons; this
     # is the same correction at the grain below it, which is why the negative assertions here are
     # per-clause rather than one `have_no_text` on the sentence as a whole.
+    # @intent: {"entity": "GET /repositories/:id", "action": "state none readable", "behavior": "an all-unreadable spec/requests area prints SpecGuard reads none of them, drops the last-column, preconditions and listed-first clauses, and says These are the tests it genuinely cannot see", "layer": "request"}
     it "says it read nothing here, without a derived-reading caveat, where it read nothing" do
       repository = create_repository(user: @user)
       ingest(repository,
@@ -766,6 +802,7 @@ RSpec.describe "Repository unannotated examples", type: :request do
     # every one of the hundred visible rows shows "Nothing" and all five readings are past it. The
     # caption used to say "SpecGuard reads 5 of them from the test's own description — shown in the
     # last column" over a page whose every row showed the opposite.
+    # @intent: {"entity": "GET /repositories/:id", "action": "correct capped caption", "behavior": "with 120 unreadable rows filling the cap the caption keeps the population figures (reads 5, other 120) but replaces the last-column pointer with the last column shows 0 of those 5 readings on this page and the other 5 are past the cap", "layer": "request"}
     it "does not point at the last column for readings the cap left off the page" do
       get repository_path(capped_mixed_run(unreadable: 120, derived: 5), spec_directory: area)
 
@@ -792,6 +829,7 @@ RSpec.describe "Repository unannotated examples", type: :request do
     # the 90 readings are on the page. This is the example a "0" hard-wired into the sentence, or a
     # `rows.size` printed in place of a real count of the column, goes red on — and it is the cell
     # that proves `derived_on_page` is read off the rows rather than inferred from the arm.
+    # @intent: {"entity": "GET /repositories/:id", "action": "count carried readings", "behavior": "where the cap falls inside the derived group the caption says the last column shows 60 of those 90 readings on this page and the other 30 are past the cap", "layer": "request"}
     it "counts the readings the page does carry, where the cap falls inside them" do
       get repository_path(capped_mixed_run(unreadable: 40, derived: 90), spec_directory: area)
 
@@ -809,6 +847,7 @@ RSpec.describe "Repository unannotated examples", type: :request do
     # left behind by a fix written only against the reproduction above. "SpecGuard reads all 130
     # examples here — shown in the last column" is printed two sentences after the same caption has
     # said "The other 30 are not on this page".
+    # @intent: {"entity": "GET /repositories/:id", "action": "correct all-derived cap", "behavior": "a 130-reading area with none unreadable reads all 130 from the description and captions The last column shows 100 of those 130 readings on this page and the other 30 are past the cap", "layer": "request"}
     it "does not claim the whole derived population is in the column, where the list was cut" do
       derivable = SpecObservation::UNANNOTATED_EXAMPLES_LIMIT + 30
       get repository_path(capped_mixed_run(unreadable: 0, derived: derivable), spec_directory: area)
@@ -832,6 +871,7 @@ RSpec.describe "Repository unannotated examples", type: :request do
     # is true of the page whether or not anything was cut. This example is what makes that argument
     # checkable — a fix that qualified all three arms indiscriminately would put a "past the cap"
     # clause about an empty remainder onto the one arm that never needed one.
+    # @intent: {"entity": "GET /repositories/:id", "action": "leave zero-derived arm", "behavior": "a zero-derived capped area keeps the clause that the last column says so row by row and prints no past-the-cap or readings-on-this-page wording", "layer": "request"}
     it "leaves the arm that read nothing pointing at the column, cut or not" do
       get repository_path(capped_mixed_run(unreadable: 112, derived: 0), spec_directory: area)
 
@@ -860,6 +900,7 @@ RSpec.describe "Repository unannotated examples", type: :request do
     # The three operands are asserted APART, in three examples, because they are independent counts
     # that do not move together: a single `one` flag shared across the arms would make one clause
     # agree with another clause's noun and every one of these would still pass.
+    # @intent: {"entity": "GET /repositories/:id", "action": "agree at one remainder", "behavior": "at 101 readings the caption reads the other 1 is past the cap, never the other 1 are", "layer": "request"}
     it "agrees with itself where exactly one reading is past the cap" do
       derivable = SpecObservation::UNANNOTATED_EXAMPLES_LIMIT + 1
       get repository_path(capped_mixed_run(unreadable: 0, derived: derivable), spec_directory: area)
@@ -880,6 +921,7 @@ RSpec.describe "Repository unannotated examples", type: :request do
     # rows that fill the page, and the sentence still has to count the one reading it did get.
     # This is the state SPGD-711 is steering suites toward, one dark test at a time, so it is the
     # one that must not read badly.
+    # @intent: {"entity": "GET /repositories/:id", "action": "agree at one reading", "behavior": "a single reading buried under 120 unreadable rows is worded 0 of that 1 reading, never of those 1 readings", "layer": "request"}
     it "agrees with itself where exactly one reading exists at all" do
       get repository_path(capped_mixed_run(unreadable: 120, derived: 1), spec_directory: area)
 
@@ -895,6 +937,7 @@ RSpec.describe "Repository unannotated examples", type: :request do
     # THE PRONOUN, on the other operand of the same sentence. `unreadable_count` is a THIRD
     # independent count — an area can carry one dark test beside two hundred readable ones — so it
     # needs its own example and its own fixture rather than riding the two above.
+    # @intent: {"entity": "GET /repositories/:id", "action": "agree at one unreadable", "behavior": "a single unreadable test among 200 readable ones reads that one is listed first, not those, while the plural the other 101 are past the cap still stands", "layer": "request"}
     it "agrees with itself where exactly one test is the one it cannot read" do
       get repository_path(capped_mixed_run(unreadable: 1, derived: 200), spec_directory: area)
 

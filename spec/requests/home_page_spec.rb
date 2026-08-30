@@ -23,6 +23,7 @@ RSpec.describe "The signed-out landing page", type: :request do
 
   # Both panels, asserted as nodes rather than as two strings anywhere in the body: the split is the
   # product change, so "one panel that happens to contain both titles" has to fail here.
+  # @intent: {"entity": "GET /", "action": "render availability panels", "behavior": "the landing page returns 200 and carries two distinct nodes, #answers-today titled What SpecGuard answers today and #roadmap titled What SpecGuard is being built to answer", "layer": "request"}
   it "answers with the two availability panels" do
     expect(response).to have_http_status(:ok)
 
@@ -31,6 +32,7 @@ RSpec.describe "The signed-out landing page", type: :request do
     expect(page).to have_css("#roadmap", text: "What SpecGuard is being built to answer")
   end
 
+  # @intent: {"entity": "GET /", "action": "omit unmounted endpoint claims", "behavior": "with the answers panel proven present, the body contains neither the string check-intent nor any match of /prevention/i", "layer": "request"}
   it "does not sell prevention or the unmounted /check-intent endpoint" do
     # Non-vacuous guard: the panel that used to carry the claim has to be on the page for its
     # absence from that page to mean anything.
@@ -43,6 +45,7 @@ RSpec.describe "The signed-out landing page", type: :request do
   # The general form of the bug: the storefront named a path the application would 404. Asserting
   # the absence of that one literal would not stop the next one, so this compares whatever the page
   # advertises against what the router actually serves.
+  # @intent: {"entity": "GET /", "action": "advertise only mounted routes", "behavior": "every /api/v1 path the body advertises forms a non-empty set whose difference against the application route set is empty, so no advertised endpoint 404s", "layer": "request"}
   it "names no api/v1 path that the router does not serve" do
     advertised = response.body.scan(%r{/api/v1/[a-z0-9_-]+}).uniq
 
@@ -70,6 +73,7 @@ RSpec.describe "The signed-out landing page", type: :request do
   # the convention `repositories_spec.rb` uses) and the scoping is guaranteed by the parser rather
   # than by where the panel happens to sit on the page. `find` raises if `#roadmap` is missing, so
   # there is no vacuous path: the node has to render for the assertions to mean anything.
+  # @intent: {"entity": "GET /", "action": "label unavailable answers", "behavior": "the #roadmap node says Not available yet and no longer claims it stores nothing about individual tests, a sentence false since the per-test write path shipped", "layer": "request"}
   it "labels the answers it cannot give yet as unavailable, on the panel that lists them" do
     panel = Capybara.string(response.body).find("#roadmap")
 

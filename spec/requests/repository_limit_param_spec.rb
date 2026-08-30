@@ -49,6 +49,7 @@ RSpec.describe "Repository heaviest rollup limit parameter", type: :request do
   end
 
   describe "without the ask" do
+    # @intent: {"entity": "GET /repositories/:id", "action": "default both rollups", "behavior": "with no ask both panels render ten rows of the fifteen available, each caption reading the 10 heaviest of the 15", "layer": "request"}
     it "renders both rollups at their shipped defaults" do
       get repository_path(fifteen_file_run)
 
@@ -65,6 +66,7 @@ RSpec.describe "Repository heaviest rollup limit parameter", type: :request do
     # two renders of the same fixture rather than an absolute number, which this page already pins
     # elsewhere (`repositories_spec.rb`'s budget of 22) and which would rot on the next unrelated
     # panel. `count_queries` comes from spec/support/query_capture.rb.
+    # @intent: {"entity": "GET /repositories/:id", "action": "cost no extra queries", "behavior": "the limit=15 render issues exactly the query count of the default render, the ask adding no round trips", "layer": "request"}
     it "issues the same number of queries with the ask as without it" do
       repository = fifteen_file_run
       get repository_path(repository) # warm the schema/statement caches
@@ -76,6 +78,7 @@ RSpec.describe "Repository heaviest rollup limit parameter", type: :request do
   end
 
   describe "with a widening ask" do
+    # @intent: {"entity": "GET /repositories/:id", "action": "widen both rollups", "behavior": "limit 12 widens both panels to twelve rows with captions still reading the 12 heaviest of the 15", "layer": "request"}
     it "widens both rollups and restates each population honestly" do
       get repository_path(fifteen_file_run, limit: 12)
 
@@ -90,6 +93,7 @@ RSpec.describe "Repository heaviest rollup limit parameter", type: :request do
 
     # The "All N" branch that already existed, now reachable: an ask wider than the population
     # makes the list complete, and a complete list must not wear the shape of a sample.
+    # @intent: {"entity": "GET /repositories/:id", "action": "cover whole population", "behavior": "limit 15 lists every row with captions reading All 15 files and All 15 directories the run named above recorded and no heaviest-of wording", "layer": "request"}
     it "renders the all-files branch when the ask covers the population" do
       get repository_path(fifteen_file_run, limit: 15)
 
@@ -106,6 +110,7 @@ RSpec.describe "Repository heaviest rollup limit parameter", type: :request do
     # visible in what rendered rather than silently served. The clamped size itself (200) exceeds
     # this fixture's population, so what the page shows is the complete-list state — the honest
     # statement of "we gave you at most the ceiling, and that was everything".
+    # @intent: {"entity": "GET /repositories/:id", "action": "clamp over-large ask", "behavior": "limit 99999 answers 200 and renders all 15 rows under the All-15 caption, clamped to the ceiling rather than erroring", "layer": "request"}
     it "clamps an ask past the ceiling rather than erroring" do
       get repository_path(fifteen_file_run, limit: 99_999)
 
@@ -119,6 +124,7 @@ RSpec.describe "Repository heaviest rollup limit parameter", type: :request do
     # opened from a widened page keeps the widening. Both halves are `drill_down_path`'s carry set,
     # asserted here on the links the widened page itself renders rather than on the helper in
     # isolation: what a reader can click is the contract.
+    # @intent: {"entity": "GET /repositories/:id", "action": "carry widening through links", "behavior": "on a limit-12 page the d04 row link keeps both limit=12 and its own file ask, and the widen control offers the ceiling while keeping the open d01 file", "layer": "request"}
     it "carries the widening through every drill-in link, and the drill-in back through the widening" do
       get repository_path(fifteen_file_run, limit: 12, spec_file: "spec/d01/a01_spec.rb")
 
@@ -140,6 +146,7 @@ RSpec.describe "Repository heaviest rollup limit parameter", type: :request do
     # `"0x10"` answers nil when it parses to 16, and only an example asserting the real behaviour
     # (a base prefix widens to the value it parses to) keeps a future maintainer from
     # re-believing the false half.
+    # @intent: {"entity": "GET /repositories/:id", "action": "parse base-prefixed limit", "behavior": "limit 0xc parses to twelve, rendering twelve file rows under the 12-heaviest caption", "layer": "request"}
     it "honours a base-prefixed spelling as the magnitude it parses to" do
       get repository_path(fifteen_file_run, limit: "0xc")
 
@@ -151,12 +158,14 @@ RSpec.describe "Repository heaviest rollup limit parameter", type: :request do
     # The same for whitespace-padded strings: `Integer(" 12 ")` answers 12, so the ask widens —
     # pinned so the guard's "what Kernel#Integer accepts, we honour" rule has both spellings
     # standing behind it.
+    # @intent: {"entity": "GET /repositories/:id", "action": "parse padded limit", "behavior": "a whitespace-padded 12 widens the file rollup to twelve rows, the spelling Kernel#Integer accepts", "layer": "request"}
     it "honours a whitespace-padded spelling as the magnitude it parses to" do
       get repository_path(fifteen_file_run, limit: " 12 ")
 
       expect(file_row_paths.size).to eq(12)
     end
 
+    # @intent: {"entity": "GET /repositories/:id", "action": "offer default reset", "behavior": "the widened page links Back to the 10 heaviest with an href carrying no limit=12", "layer": "request"}
     it "offers the way back to the shipped default once widened" do
       get repository_path(fifteen_file_run, limit: 12)
 

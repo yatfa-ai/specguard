@@ -194,6 +194,7 @@ RSpec.describe "Repository window slowest tests", type: :request do
   # Criterion 1 and criterion 2 together: the panel exists, it is about the WINDOW, and each row
   # states its window total beside its single worst run.
   describe "a branch window whose runs reported per-example timings" do
+    # @intent: {"entity": "GET /repositories/:id", "action": "rank window total", "behavior": "the four rows come back slowest-first by window total, from Ledger rebuild walks every entry at the head to the untimed Webhook row last", "layer": "request"}
     it "ranks the window's tests on what they cost across the whole of it, slowest first" do
       get repository_path(window_repository)
 
@@ -206,6 +207,7 @@ RSpec.describe "Repository window slowest tests", type: :request do
     # ⭐ The two figures side by side, and the pair is the point: 12 seconds is one twelve-second
     # test or four runs of a three-second one, and a list ordered on the sum alone cannot tell a
     # reader which they are looking at.
+    # @intent: {"entity": "GET /repositories/:id", "action": "state totals and coverage", "behavior": "the steady test's row reads total 12.00s, single worst run 3.00s, seen in 4 of 4 and timed 4 of 4", "layer": "request"}
     it "states each test's window total beside its single longest run and the window it was seen in" do
       get repository_path(window_repository)
 
@@ -219,6 +221,7 @@ RSpec.describe "Repository window slowest tests", type: :request do
     # The row nothing timed reads as unmeasured in BOTH duration columns and sorts last. A zero
     # would be a measurement invented out of silence, and it would make the untimed test the
     # cheapest in the suite rather than the unknown one.
+    # @intent: {"entity": "GET /repositories/:id", "action": "render unreported", "behavior": "the untimed test's row sorts last and reads not reported in both duration columns with timed 0 of 4, never a zero", "layer": "request"}
     it "renders a test nothing timed as unreported rather than as a zero" do
       get repository_path(window_repository)
 
@@ -232,6 +235,7 @@ RSpec.describe "Repository window slowest tests", type: :request do
     # A test that ran more than once inside a single run — a table-driven loop, or a shared example
     # group — is one identity and several rows, and that is what separates "slow in four runs" from
     # "run twice in each of two".
+    # @intent: {"entity": "GET /repositories/:id", "action": "disclose multi-row runs", "behavior": "a test run three times in each of two runs totals 12.00s and its seen cell adds that 6 rows mean it ran more than once in at least one run", "layer": "request"}
     it "says when a test ran more than once inside a run of the window" do
       repository = create_repository(user: @user)
       2.times do |index|
@@ -256,6 +260,7 @@ RSpec.describe "Repository window slowest tests", type: :request do
   describe "a test whose file or description changed inside the window" do
     # Under any positional key this is TWO rows of 2 seconds each, neither at the head of the list.
     # It is one row of 4, and it says where the history it summed came from.
+    # @intent: {"entity": "GET /repositories/:id", "action": "merge moved test", "behavior": "the checkout test appears as exactly one row totalling 4.00s over 4 of 4 runs, with a note naming both spec/billing and spec/models checkout_spec.rb as files it was recorded under", "layer": "request"}
     it "keeps a moved test in one row and names both files it was recorded under" do
       get repository_path(window_repository)
 
@@ -270,6 +275,7 @@ RSpec.describe "Repository window slowest tests", type: :request do
     # The same guarantee on the other axis, and the one the outcome panel on this page structurally
     # cannot make. The descriptions come back as a SET, so neither is "the current one" and the row
     # lists the other rather than promoting one and discarding the rest.
+    # @intent: {"entity": "GET /repositories/:id", "action": "merge reworded test", "behavior": "the invoice test's single row totals 2.00s over 4 of 4 and notes it was also recorded as Invoice#finalize locks the line items beside its spec/models/invoice_spec.rb file", "layer": "request"}
     it "keeps a reworded test in one row and names the other description it wore" do
       get repository_path(window_repository)
 
@@ -282,6 +288,7 @@ RSpec.describe "Repository window slowest tests", type: :request do
 
     # A test that never moved says nothing about moving — the disclosure is about this window, not
     # a decoration every row wears.
+    # @intent: {"entity": "GET /repositories/:id", "action": "stay silent when unmoved", "behavior": "the test that neither moved nor was reworded carries only its file note, with no move or reword disclosure", "layer": "request"}
     it "says nothing about a move or a reword for a test that did neither" do
       get repository_path(window_repository)
 
@@ -301,6 +308,7 @@ RSpec.describe "Repository window slowest tests", type: :request do
   # href, never the cell's text — the two are indistinguishable in a text-only reading, which is
   # exactly the state this panel was in before.
   describe "following a row's file to the examples in it" do
+    # @intent: {"entity": "GET /repositories/:id", "action": "link file", "behavior": "the steady row's file line is one anchor labelled spec/models/ledger_spec.rb whose href targets the spec_file ask with the #spec-file-examples anchor", "layer": "request"}
     it "links the file a test ran in to that file's examples on this page" do
       repository = window_repository
 
@@ -316,6 +324,7 @@ RSpec.describe "Repository window slowest tests", type: :request do
     # disclosure this whole read exists for, and linking only `files_seen.first` would make the
     # half of its history that lives in the other file the half a reader cannot reach — while the
     # row goes on naming it, which reads as an offer.
+    # @intent: {"entity": "GET /repositories/:id", "action": "link every file", "behavior": "the moved row links both spec/billing and spec/models checkout_spec.rb, each to its own drill-in href, not only the first", "layer": "request"}
     it "links every file a moved test was recorded under, not only the first" do
       repository = window_repository
 
@@ -334,6 +343,7 @@ RSpec.describe "Repository window slowest tests", type: :request do
     # cannot click. Capybara's `.text` decodes those entities, so a text-only assertion reads the
     # escaped markup as a perfectly ordinary sentence and passes: this one goes at the RAW BODY,
     # which is the only place the two spellings differ.
+    # @intent: {"entity": "GET /repositories/:id", "action": "render real anchors", "behavior": "the raw body contains spec/billing/checkout_spec.rb as a closing anchor tag and no escaped lt-a markup, while the visible line still reads recorded under one file and the other", "layer": "request"}
     it "renders a moved row's links as real anchors rather than as escaped markup" do
       get repository_path(window_repository)
 
@@ -351,6 +361,7 @@ RSpec.describe "Repository window slowest tests", type: :request do
     # fixture can write that nil — which is why the column is set directly here. A defensive branch
     # nothing exercises is a branch that gets deleted as dead, and the cell it guards would
     # otherwise offer a link to nowhere.
+    # @intent: {"entity": "GET /repositories/:id", "action": "say file unreported", "behavior": "the row whose file column was nulled prints not reported with no anchor in the file line", "layer": "request"}
     it "says the file was not reported rather than linking nowhere where no row carried one" do
       repository = window_repository
       SpecObservation.joins(:test_run)
@@ -367,6 +378,7 @@ RSpec.describe "Repository window slowest tests", type: :request do
     # The open file marked as open, so a reader who has already drilled in is told which of the
     # paths in front of them is the one the destination panel below is describing. On a MOVED row
     # this is the only thing separating the two links.
+    # @intent: {"entity": "GET /repositories/:id", "action": "mark open file", "behavior": "with spec/models/checkout_spec.rb open only that link on the moved row carries aria-current true, and the steady row's link carries none", "layer": "request"}
     it "marks the path already open as the current one and leaves its sibling unmarked" do
       repository = window_repository
 
@@ -384,6 +396,7 @@ RSpec.describe "Repository window slowest tests", type: :request do
     # `SpecFileExamples` says so in its own class comment. The row links it anyway, because the
     # alternative is a moved test navigable on one of its two files, and the destination answers
     # with its named empty state. Not a 500 and not a blank panel.
+    # @intent: {"entity": "GET /repositories/:id", "action": "land on named empty state", "behavior": "following the moved row's older-file link answers 200 with the destination panel reading No examples for this file and naming spec/models/checkout_spec.rb", "layer": "request"}
     it "lands on the destination's named empty state for a file the anchor run did not record" do
       repository = window_repository
 
@@ -402,6 +415,7 @@ RSpec.describe "Repository window slowest tests", type: :request do
     # No link comes out of a state that has no rows. The three non-`:ranked` states render a
     # sentence about why there is no ranking, and a drill-in emitted from one of them would be an
     # offer to open a file the panel has just said it cannot name.
+    # @intent: {"entity": "GET /repositories/:id", "action": "omit links when unresolved", "behavior": "the unresolved state renders no tbody rows and no spec_file anchor anywhere in the panel", "layer": "request"}
     it "emits no file link from the state where the anchor's rows are not identified yet" do
       get repository_path(window_repository(resolve: false))
 
@@ -409,6 +423,7 @@ RSpec.describe "Repository window slowest tests", type: :request do
       expect(panel).to have_no_css("a[href*='spec_file=']")
     end
 
+    # @intent: {"entity": "GET /repositories/:id", "action": "omit links when unrecorded", "behavior": "where the newest run wrote no per-example rows the unrecorded section renders and no spec_file anchor appears", "layer": "request"}
     it "emits no file link from the state where the newest run recorded no per-example detail" do
       repository = create_repository(user: @user)
       ingest(repository, [], commit_sha: "empty000000001", at: 2.days.ago)
@@ -426,6 +441,7 @@ RSpec.describe "Repository window slowest tests", type: :request do
     # which is what every run looks like for the seconds after it lands. Rendered as an empty list
     # this is "nobody has told us which tests these are" wearing the spelling of "everything is
     # fast", and only the wording separates them.
+    # @intent: {"entity": "GET /repositories/:id", "action": "say unidentified yet", "behavior": "the panel renders with no rows, an unresolved section saying nothing has been matched to a durable test yet and that the run recorded 4 rows, and no unrecorded section", "layer": "request"}
     it "says the window's tests have not been identified yet rather than showing an empty ranking" do
       get repository_path(window_repository(resolve: false))
 
@@ -439,6 +455,7 @@ RSpec.describe "Repository window slowest tests", type: :request do
 
     # The unresolved state must not be readable as a statement about how fast this suite is — the
     # single sentence the whole four-state split exists for.
+    # @intent: {"entity": "GET /repositories/:id", "action": "distinguish from fast suite", "behavior": "the unresolved state adds the sentence that this is a different fact from a suite in which nothing is slow", "layer": "request"}
     it "does not report the unidentified window as a suite with nothing slow in it" do
       get repository_path(window_repository(resolve: false))
 
@@ -448,6 +465,7 @@ RSpec.describe "Repository window slowest tests", type: :request do
 
     # A different absence, and one nothing is going to clear on its own: the newest run reported no
     # per-example detail at all, so there is no per-test grain here to rank at any identity.
+    # @intent: {"entity": "GET /repositories/:id", "action": "say no detail reported", "behavior": "the unrecorded section says the newest run reported no per-example detail at all, with no unresolved section and no rows", "layer": "request"}
     it "says the newest run reported no per-example detail when it wrote no rows" do
       repository = create_repository(user: @user)
       ingest(repository, [], commit_sha: "empty000000001", at: 2.days.ago)
@@ -464,6 +482,7 @@ RSpec.describe "Repository window slowest tests", type: :request do
     # window renders no panel at all rather than a titled panel explaining itself — and the
     # Overview's "No CI run has reported yet" is this page's one statement of that fact. The branch
     # is still written in the partial, for the reason stated there.
+    # @intent: {"entity": "GET /repositories/:id", "action": "omit without runs", "behavior": "a repository with no runs in the window renders no slowest-tests-window panel at all", "layer": "request"}
     it "renders no panel at all for a repository with no runs in the window" do
       get repository_path(create_repository(user: @user))
 
@@ -474,6 +493,7 @@ RSpec.describe "Repository window slowest tests", type: :request do
   # ⭐ CRITERION 5 — every figure in the caption comes off the object, and the three disclosures
   # that make the list readable are all stated.
   describe "what the caption states about the list" do
+    # @intent: {"entity": "GET /repositories/:id", "action": "state window and rule", "behavior": "the basis line names the 4 tests across the last 4 runs on main ordered on window TOTAL, the durable-identity matching rule, and the moved-and-reworded guarantee", "layer": "request"}
     it "names the window, the ordering and the matching rule" do
       get repository_path(window_repository)
 
@@ -488,6 +508,7 @@ RSpec.describe "Repository window slowest tests", type: :request do
 
     # ⭐ The partition, which no row can disclose: WHICH tests are here at all was decided by one
     # run, so a test that run did not report is absent however slow it was while it existed.
+    # @intent: {"entity": "GET /repositories/:id", "action": "name anchor run", "behavior": "the caption credits run3sha as the newest run that decided which tests are ranked and never names run0sha", "layer": "request"}
     it "names the run that decided which tests are ranked" do
       get repository_path(window_repository)
 
@@ -500,6 +521,7 @@ RSpec.describe "Repository window slowest tests", type: :request do
 
     # The population the ranking covers, stated as a fraction off `SpecObservation.coverage_fraction`
     # — the seam every one-sided coverage label on this application goes through.
+    # @intent: {"entity": "GET /repositories/:id", "action": "state timing coverage", "behavior": "the basis line says the ranking covers the 3 of 4 rows resolved to a durable test that reported a duration, with 1 reporting none", "layer": "request"}
     it "states how much of what the newest run identified carried a timing" do
       get repository_path(window_repository)
 
@@ -510,6 +532,7 @@ RSpec.describe "Repository window slowest tests", type: :request do
 
     # And says so as a completeness where it IS complete, rather than leaving a reader to infer it
     # from two equal numbers.
+    # @intent: {"entity": "GET /repositories/:id", "action": "state full coverage", "behavior": "where the one identified row was timed the caption reads Every one of the 1 row reported a duration, with no reported-none clause", "layer": "request"}
     it "says the ranking covers everything where every identified row was timed" do
       repository = create_repository(user: @user)
       2.times do |index|
@@ -529,6 +552,7 @@ RSpec.describe "Repository window slowest tests", type: :request do
     # sends no description leaves behind, which `Ingest::IdentityResolver` never stamps. Excluded
     # from the ranking, so the exclusion is stated: a list drawn from part of a run with nothing
     # saying which part is a claim about a population the reader cannot see.
+    # @intent: {"entity": "GET /repositories/:id", "action": "disclose unmatched rows", "behavior": "the caption states that 1 row the run recorded has not been matched to a durable test yet and is not in this ranking", "layer": "request"}
     it "discloses the anchor's rows that are not matched to any test" do
       repository = create_repository(user: @user)
       2.times do |index|
@@ -548,6 +572,7 @@ RSpec.describe "Repository window slowest tests", type: :request do
 
     # Nothing is said where nothing was excluded — a clause reading "0 rows carried no durable
     # identity" is a sentence about arithmetic rather than about this window.
+    # @intent: {"entity": "GET /repositories/:id", "action": "stay silent on exclusions", "behavior": "where every row was matched the caption carries neither the not-matched-yet clause nor the not-represented-above one", "layer": "request"}
     it "says nothing about exclusions where every row was matched and every candidate examined" do
       get repository_path(window_repository)
 
@@ -558,6 +583,7 @@ RSpec.describe "Repository window slowest tests", type: :request do
     # ⭐ The cap, and the SECOND edge it has that no sibling panel does: it bites on each test's
     # duration in the anchor run while the list is then ordered on the window total, so a test that
     # is cheap today and was expensive across the window falls through it.
+    # @intent: {"entity": "GET /repositories/:id", "action": "disclose cap", "behavior": "the capped page lists exactly the SLOWEST_LIMIT rows and says the 14 durable tests exceed what it ranks at once, the other 4 are not represented above, and a cheap-today test can fall through", "layer": "request"}
     it "discloses the cap and the two different orderings it sits between" do
       get repository_path(capped_repository)
 
@@ -574,6 +600,7 @@ RSpec.describe "Repository window slowest tests", type: :request do
     # asserted there and taken back below: under truncation the ordering that CHOSE these rows is
     # the anchor run's, so "The 10 tests that cost this suite the most" is the one thing this list
     # is not.
+    # @intent: {"entity": "GET /repositories/:id", "action": "withdraw superlative", "behavior": "the truncated caption reads 10 of the tests that cost this suite the most, never The 10 tests that cost this suite", "layer": "request"}
     it "does not claim the capped list is the window's most expensive tests" do
       get repository_path(capped_repository)
 
@@ -588,6 +615,7 @@ RSpec.describe "Repository window slowest tests", type: :request do
     # unresolved row at all — so the sentence declining to call those rows tests and the sentence
     # counting the anchor's population are talking about numbers that differ by exactly them, and a
     # figure claiming to count everything that RAN would contradict its own neighbour by 2.
+    # @intent: {"entity": "GET /repositories/:id", "action": "count resolved tests", "behavior": "with 14 named and 2 anonymous rows per run the caption reports 14 durable tests resolved and 2 unmatched rows, never 16 nor the phrase tests ran in that run", "layer": "request"}
     it "counts the anchor's resolved tests, not its rows, where both exclusions apply at once" do
       repository = create_repository(user: @user)
       2.times do |index|
@@ -620,6 +648,7 @@ RSpec.describe "Repository window slowest tests", type: :request do
   # ⭐ CRITERION 1's other half. The two panels sit on one page and a reader has to be able to tell
   # which grain each speaks at, so neither the id, the title nor the first sentence may be shared.
   describe "beside the per-run panel it must not be confused with" do
+    # @intent: {"entity": "GET /repositories/:id", "action": "distinguish from per-run", "behavior": "the page renders both the per-run and window panels, the first captioning the run named above and this one the last 4 runs on main", "layer": "request"}
     it "renders both panels, separately identifiable, each naming its own grain" do
       get repository_path(window_repository)
 
@@ -634,6 +663,7 @@ RSpec.describe "Repository window slowest tests", type: :request do
     # The per-run panel is ONE run's ranking and this one is the window's, so the same suite gives
     # them different totals. A page on which both printed the same figures would be a page with one
     # panel rendered twice.
+    # @intent: {"entity": "GET /repositories/:id", "action": "show window versus run totals", "behavior": "the same ledger test reads 3.00s on the per-run panel and 12.00s as its window total here", "layer": "request"}
     it "reports the window total here and the single-run duration there for the same test" do
       get repository_path(window_repository)
 
@@ -655,6 +685,7 @@ RSpec.describe "Repository window slowest tests", type: :request do
     # primes its points from, rather than on the shape of an ordered `test_runs` read: this page
     # makes several of those (the anchor, "Recent runs", the branch selector), so a loose pattern
     # would count them and could not tell a second window from a neighbour that already existed.
+    # @intent: {"entity": "GET /repositories/:id", "action": "reuse handed window", "behavior": "rendering the page makes exactly one shards_recorded statement against test_runs, so the panel never re-queries its own window", "layer": "request"}
     it "adds no query against test_runs for its own window" do
       repository = window_repository
 
@@ -667,6 +698,7 @@ RSpec.describe "Repository window slowest tests", type: :request do
     # suite: the gate over one run, the capped candidate step over that same run, and the
     # composition over those candidates only. A thirty-run window of a two-hundred-example suite
     # costs the same as a three-run window of three.
+    # @intent: {"entity": "GET /repositories/:id", "action": "cost flat reads", "behavior": "a 30-run 200-example window renders the capped panel on the same count of spec_identity_id reads as a 3-run 3-example one — exactly five", "layer": "request"}
     it "costs the same reads at 30 runs of 200 examples as at 3 runs of 3" do
       small = create_repository(user: @user, github_full_name: "acme/small-suite")
       3.times do |index|
@@ -703,6 +735,7 @@ RSpec.describe "Repository window slowest tests", type: :request do
 
     # A window whose newest run has nothing to rank asks ONE question and stops — the gate, and
     # neither of the two steps behind it.
+    # @intent: {"entity": "GET /repositories/:id", "action": "stop at gate", "behavior": "where the newest run recorded nothing the unrecorded section renders after exactly one spec_identity_id read", "layer": "request"}
     it "asks one question and stops where the newest run recorded nothing" do
       repository = create_repository(user: @user)
       ingest(repository, [], commit_sha: "empty000000001", at: 2.days.ago)

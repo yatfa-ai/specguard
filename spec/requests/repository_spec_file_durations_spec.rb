@@ -83,6 +83,7 @@ RSpec.describe "Repository heaviest spec files", type: :request do
     # The panel's whole claim: a file's wall clock is the SUM of its examples', so a file holding
     # two middling examples outranks one holding a single quicker one — a ranking of individual
     # examples orders these three files differently and is not this question.
+    # @intent: {"entity": "GET /repositories/:id", "action": "rank heaviest files", "behavior": "refund_spec.rb heads the list at 9.00s with order_spec.rb totalling 4.00s from two examples ahead of user_spec.rb at 0.50s", "layer": "request"}
     it "ranks the files by the wall clock the run spent in each, heaviest first" do
       get repository_path(timed_run)
 
@@ -92,6 +93,7 @@ RSpec.describe "Repository heaviest spec files", type: :request do
       expect(rows.map { |row| row[:duration] }).to eq(["9.00s", "4.00s", "0.50s"])
     end
 
+    # @intent: {"entity": "GET /repositories/:id", "action": "state full coverage", "behavior": "each row's coverage reads 1 of 1, 2 of 2 and 1 of 1 with the basis line saying every example in every file listed reported a duration", "layer": "request"}
     it "says every listed total covers the whole of its file, where every example was timed" do
       get repository_path(timed_run)
 
@@ -102,6 +104,7 @@ RSpec.describe "Repository heaviest spec files", type: :request do
 
     # Bounded by `SpecObservation::HEAVIEST_FILES_LIMIT`: a list of the heaviest files, not a
     # rendering of the suite's directory tree.
+    # @intent: {"entity": "GET /repositories/:id", "action": "cap heaviest files", "behavior": "a 25-file run lists exactly the ten heaviest files, from spec/models/f25_spec.rb at the head down to f16_spec.rb", "layer": "request"}
     it "lists no more than the heaviest ten, however many files the run touched" do
       get repository_path(twenty_five_file_run)
 
@@ -115,6 +118,7 @@ RSpec.describe "Repository heaviest spec files", type: :request do
     # three hundred files, ten rows captioned "the files this run spent the most wall clock in"
     # describe three per cent of it and say so nowhere. The caption has to name what the list is
     # the head OF — and `rows.size` cannot, because it is the truncated figure.
+    # @intent: {"entity": "GET /repositories/:id", "action": "state touched file count", "behavior": "the basis line reads The 10 heaviest of the 25 files the run named above recorded", "layer": "request"}
     it "says how many files the run touched, not just how many it lists" do
       get repository_path(twenty_five_file_run)
 
@@ -125,6 +129,7 @@ RSpec.describe "Repository heaviest spec files", type: :request do
     # And the other half of the disclosure: a run whose files all fit is not truncated, and saying
     # "the 3 heaviest of the 3 files" would make a complete list look like a sample. The count is
     # still stated — a reader should not have to count table rows to learn it.
+    # @intent: {"entity": "GET /repositories/:id", "action": "state complete list", "behavior": "an uncut 3-file run is captioned All 3 files the run named above recorded with no heaviest-of wording", "layer": "request"}
     it "says the list is all of them, where nothing was cut" do
       get repository_path(timed_run)
 
@@ -136,6 +141,7 @@ RSpec.describe "Repository heaviest spec files", type: :request do
     # the file that actually RAN it appears only as `spec_file_path`. Rolling up on `file_path`
     # would attribute every including file's time to a helper that ran nothing — the exact shape
     # spec/requests/api/v1/ingest_spec.rb pins at the ingest end.
+    # @intent: {"entity": "GET /repositories/:id", "action": "attribute shared group time", "behavior": "two shared-group examples roll up to spec/models/refund_spec.rb at 2.50s and spec/models/order_spec.rb at 1.50s, with spec/support/shared_examples.rb absent from the list", "layer": "request"}
     it "lands a shared example group's time on the file that included it, not on the helper" do
       repository = create_repository(user: @user)
       shared = "spec/support/shared_examples.rb"
@@ -170,6 +176,7 @@ RSpec.describe "Repository heaviest spec files", type: :request do
       repository
     end
 
+    # @intent: {"entity": "GET /repositories/:id", "action": "state partial coverage", "behavior": "the partly timed order_spec.rb row reads coverage 1 of 3 with its 4.00s total", "layer": "request"}
     it "states how much of a partly timed file its total was summed over" do
       get repository_path(mixed_run)
 
@@ -179,6 +186,7 @@ RSpec.describe "Repository heaviest spec files", type: :request do
     # Both halves fail differently. A cell rendering the aggregate's nil through
     # `group(...).sum(:duration_seconds)` prints "0.00s"; an ordering left at plain `DESC` is NULLS
     # FIRST in Postgres and names the file nothing was measured in the heaviest in the run.
+    # @intent: {"entity": "GET /repositories/:id", "action": "show unmeasured file", "behavior": "the wholly untimed never_ran_spec.rb row reads 0 of 2 and not reported, sits below order_spec.rb, and the panel never prints 0.00s", "layer": "request"}
     it "shows no total for a wholly untimed file, and does not rank it above a measured one" do
       get repository_path(mixed_run)
 
@@ -188,6 +196,7 @@ RSpec.describe "Repository heaviest spec files", type: :request do
       expect(panel).to have_no_text("0.00s")
     end
 
+    # @intent: {"entity": "GET /repositories/:id", "action": "explain coverage column", "behavior": "the basis line states that a file which reported none has no total to state rather than a zero", "layer": "request"}
     it "says what the coverage column is, where the totals do not all cover their files" do
       get repository_path(mixed_run)
 
@@ -198,6 +207,7 @@ RSpec.describe "Repository heaviest spec files", type: :request do
     # The denominator is the rows this run wrote here, never the Overview's suite size — that figure
     # is re-derived by SUM over shard reports and the two can legitimately differ. There is no
     # by-file counter anywhere else to borrow in any case.
+    # @intent: {"entity": "GET /repositories/:id", "action": "count own rows", "behavior": "with total_specs_count 4000 the coverage column reads 1 of 2 and the panel prints neither 4,000 nor 4000", "layer": "request"}
     it "counts each file's own rows rather than the run's suite size" do
       repository = create_repository(user: @user)
       ingest(repository, [example_spec(file_path: "spec/models/order_spec.rb", duration: 1.0, line_number: 1),
@@ -213,6 +223,7 @@ RSpec.describe "Repository heaviest spec files", type: :request do
   end
 
   describe "a run that recorded examples and timed none of them" do
+    # @intent: {"entity": "GET /repositories/:id", "action": "render no-timings empty state", "behavior": "an all-untimed run prints No timings on this run with no wall clock to attribute to any file, no table rows and no 0.00s", "layer": "request"}
     it "renders an empty state rather than a column of zeroes" do
       repository = create_repository(user: @user)
       ingest(repository, [example_spec(file_path: "spec/models/order_spec.rb", duration: nil, line_number: 1),
@@ -230,6 +241,7 @@ RSpec.describe "Repository heaviest spec files", type: :request do
     # figure the ranking panel above states for its own absence. In FILES, because that is the
     # count this read has exactly: an example count summed off the rows on hand would be summed
     # over a capped ten of them and understate a wider run while looking suite-wide.
+    # @intent: {"entity": "GET /repositories/:id", "action": "count unmeasured files", "behavior": "the empty state says This run recorded examples in 12 files even though the panel lists none", "layer": "request"}
     it "says how many files went unmeasured, counting past the limit" do
       repository = create_repository(user: @user)
       ingest(repository, (1..12).map do |i|
@@ -247,6 +259,7 @@ RSpec.describe "Repository heaviest spec files", type: :request do
   # panel on every such run would read as a finding about the suite when it is a fact about the
   # payload. The Overview's never-ingested empty state is this page's one statement of absence.
   describe "a run with nothing at this grain" do
+    # @intent: {"entity": "GET /repositories/:id", "action": "omit panel without rows", "behavior": "a run with total_specs_count 900 and no per-example rows returns 200 without rendering the #spec-file-durations panel", "layer": "request"}
     it "renders no panel for a run that recorded no examples" do
       repository = create_repository(user: @user)
       create_test_run(repository: repository, total_specs_count: 900)
@@ -257,6 +270,7 @@ RSpec.describe "Repository heaviest spec files", type: :request do
       expect(panel?).to be(false)
     end
 
+    # @intent: {"entity": "GET /repositories/:id", "action": "omit panel without runs", "behavior": "a repository CI has never reported for returns 200 without the #spec-file-durations panel", "layer": "request"}
     it "renders no panel for a repository CI has never reported for" do
       get repository_path(create_repository(user: @user))
 
@@ -271,6 +285,7 @@ RSpec.describe "Repository heaviest spec files", type: :request do
   describe "what the panel costs" do
     # `queries_against` comes from spec/support/query_capture.rb.
 
+    # @intent: {"entity": "GET /repositories/:id", "action": "hold rollup query budget", "behavior": "3-example and 200-example pages issue equal spec_observations query counts, pinned at exactly 10 with 4 GROUP BY statements", "layer": "request"}
     it "costs the same number of queries at 200 examples over 25 files as at 3 over 3" do
       small = create_repository(user: @user, github_full_name: "acme/small-suite")
       ingest(small, (1..3).map do |i|
@@ -343,6 +358,7 @@ RSpec.describe "Repository heaviest spec files", type: :request do
   # the by-directory one may not survive in the softened spelling either, since "rolls nothing up
   # by directory" is exactly the sentence a reader would take as a standing prohibition.
   describe "the carve-outs the panels above state" do
+    # @intent: {"entity": "GET /repositories/:id", "action": "retire stale carve-outs", "behavior": "the repositories view sources no longer contain the by-file, by-directory or migration-deferral carve-outs, while the slowest-tests partial carries the both-rollups sentence and the heaviest-files partial carries the predicate sentence and the basis id", "layer": "request"}
     it "no longer tells its authors the page rolls nothing up by file or by directory" do
       # SPGD-527 split `show.html.erb` into per-panel partials, so "the page's source" is no longer
       # one file. The NEGATIVES read the whole of it — the template plus every partial it renders —

@@ -8,6 +8,7 @@ require "rails_helper"
 RSpec.describe "GET /schemas/open-test-intent.v1.json", type: :request do
   let(:canonical_bytes) { Rails.root.join("vendor/schemas/open-test-intent.v1.json").binread }
 
+  # @intent: {"entity": "GET /schemas/open-test-intent.v1.json", "action": "serve without credentials", "behavior": "a GET with no credentials returns HTTP 200 ok from the platform's own domain", "layer": "request"}
   it "answers an unauthenticated request" do
     get "/schemas/open-test-intent.v1.json"
 
@@ -19,6 +20,7 @@ RSpec.describe "GET /schemas/open-test-intent.v1.json", type: :request do
   # whitespace — which is exactly the failure this endpoint must not have, since a consumer
   # comparing the mirror's digest against the canonical one would then see two different documents
   # carrying the same constraints.
+  # @intent: {"entity": "GET /schemas/open-test-intent.v1.json", "action": "mirror vendored schema bytes", "behavior": "the response body equals the vendored open-test-intent.v1.json file exactly, with matching SHA-256 digests rather than merely equal parsed JSON", "layer": "request"}
   it "returns the vendored schema byte-for-byte" do
     get "/schemas/open-test-intent.v1.json"
 
@@ -27,6 +29,7 @@ RSpec.describe "GET /schemas/open-test-intent.v1.json", type: :request do
       .to eq(Digest::SHA256.hexdigest(canonical_bytes))
   end
 
+  # @intent: {"entity": "GET /schemas/open-test-intent.v1.json", "action": "declare media type", "behavior": "the response is served with media type application/schema+json", "layer": "request"}
   it "serves it as JSON" do
     get "/schemas/open-test-intent.v1.json"
 
@@ -38,6 +41,7 @@ RSpec.describe "GET /schemas/open-test-intent.v1.json", type: :request do
   # old dead host would be a working endpoint publishing a broken contract. Pinned by equality
   # rather than by a `not_to include` of the dead host: equality rejects that string too, and every
   # other wrong one, which a negative assertion naming one known-bad value does not.
+  # @intent: {"entity": "GET /schemas/open-test-intent.v1.json", "action": "carry canonical identifier", "behavior": "the parsed document's $id equals https://raw.githubusercontent.com/yatfa-ai/open-test-intent/schema-v1.0/schemas/open-test-intent.v1.json", "layer": "request"}
   it "carries the canonical identifier, which names the protocol repository" do
     get "/schemas/open-test-intent.v1.json"
 
@@ -50,6 +54,7 @@ RSpec.describe "GET /schemas/open-test-intent.v1.json", type: :request do
   # returns — and a v2 could not later claim that address without silently changing what a pinned
   # URL hands back. The full path is fetched first in this same example so the 404 below is read as
   # "this address is not served" rather than "the app is not serving anything".
+  # @intent: {"entity": "GET /schemas/open-test-intent.v1.json", "action": "refuse extension-less path", "behavior": "the full .json path answers 200 while GET /schemas/open-test-intent.v1 returns 404, so only the versioned address is served", "layer": "request"}
   it "does not answer at the same path with the .json extension dropped" do
     get "/schemas/open-test-intent.v1.json"
     expect(response).to have_http_status(:ok)

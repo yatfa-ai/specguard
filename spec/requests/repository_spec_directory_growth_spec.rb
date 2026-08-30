@@ -117,6 +117,7 @@ RSpec.describe "Repository spec directory growth", type: :request do
       )
     end
 
+    # @intent: {"entity": "GET /repositories/:id", "action": "state both operands", "behavior": "the spec/models row reads then 2, now 5, change +3 while spec/legacy reads 6, 1 and a −5", "layer": "request"}
     it "names each area's count then, its count now, and the movement between them" do
       get repository_path(moved_suite)
 
@@ -126,6 +127,7 @@ RSpec.describe "Repository spec directory growth", type: :request do
 
     # THE assertion the panel exists for, and the one a `DESC`-only ranking on the signed change
     # fails: the largest movement in this suite is a loss of five, and it has to head the list.
+    # @intent: {"entity": "GET /repositories/:id", "action": "rank by movement", "behavior": "the list orders spec/legacy first for its five-example loss, ahead of spec/models at +3 and the unmoved spec/system", "layer": "request"}
     it "ranks by how far each area moved, in both directions" do
       get repository_path(moved_suite)
 
@@ -134,6 +136,7 @@ RSpec.describe "Repository spec directory growth", type: :request do
 
     # An area that did not move is a real answer and renders as one — `±0`, not a blank cell and
     # not `+0`, which claims a direction it does not have.
+    # @intent: {"entity": "GET /repositories/:id", "action": "mark unmoved area", "behavior": "the unmoved spec/system row reads then 1, now 1 and change ±0 rather than an empty cell or +0", "layer": "request"}
     it "says so of an area that did not move rather than leaving the cell empty" do
       get repository_path(moved_suite)
 
@@ -145,12 +148,14 @@ RSpec.describe "Repository spec directory growth", type: :request do
     # rows that moved by nothing. The caption says which, and says it ONLY where it is true of the
     # rows on the page: asserted in both directions, because a clause that is always printed is not
     # a description of anything.
+    # @intent: {"entity": "GET /repositories/:id", "action": "disclose unmoved rows", "behavior": "where the page shows the unmoved spec/system row the caption includes that areas that did not move are listed too, as ±0", "layer": "request"}
     it "says the movement ran out only where the list actually shows an unmoved area" do
       get repository_path(moved_suite)
 
       expect(basis_text).to include("areas that did not move are listed too, as ±0")
     end
 
+    # @intent: {"entity": "GET /repositories/:id", "action": "omit unmoved disclosure", "behavior": "a two-area page whose rows move −5 and +3 keeps the caption free of any did-not-move clause", "layer": "request"}
     it "does not claim the movement ran out where every listed area moved" do
       repository = two_runs(
         previous_specs: area_specs("spec/models", 2) + area_specs("spec/legacy", 6, offset: 100),
@@ -166,6 +171,7 @@ RSpec.describe "Repository spec directory growth", type: :request do
     # U+2212 and `±` are announced inconsistently across screen readers — from "minus" to nothing
     # at all — and three numbers in a row announce as three unattached numbers. So the direction
     # and what it was measured against are spelled out on the cell.
+    # @intent: {"entity": "GET /repositories/:id", "action": "announce movement", "behavior": "each change cell carries an aria-label reading 5 examples fewer, 3 examples more, or unchanged since the previous run on this branch", "layer": "request"}
     it "spells the movement out for a screen reader" do
       get repository_path(moved_suite)
 
@@ -179,6 +185,7 @@ RSpec.describe "Repository spec directory growth", type: :request do
     # An area the earlier run never recorded is NEW, and saying `+4` of it would read identically
     # to an existing area that gained four tests — the one distinction a reader scanning this
     # column most needs. Both operands stay visible beside it, so naming the state loses nothing.
+    # @intent: {"entity": "GET /repositories/:id", "action": "name new area", "behavior": "an area only the latest run has reads then 0, now 4, change New area, with the reading 4 examples, an area the previous run did not record", "layer": "request"}
     it "names an area the previous run did not have rather than differencing it from a zero" do
       repository = two_runs(
         previous_specs: area_specs("spec/models", 3),
@@ -192,6 +199,7 @@ RSpec.describe "Repository spec directory growth", type: :request do
         .to eq("4 examples, an area the previous run did not record")
     end
 
+    # @intent: {"entity": "GET /repositories/:id", "action": "name removed area", "behavior": "an area only the previous run has reads then 4, now 0, change Area removed, with the reading 4 examples in the previous run and none now", "layer": "request"}
     it "names an area that is gone rather than differencing it to a zero" do
       repository = two_runs(
         previous_specs: area_specs("spec/models", 3) + area_specs("spec/legacy", 4, offset: 100),
@@ -205,6 +213,7 @@ RSpec.describe "Repository spec directory growth", type: :request do
     end
 
     # The caption's three load-bearing claims, each asserted rather than assumed.
+    # @intent: {"entity": "GET /repositories/:id", "action": "state comparison basis", "behavior": "the caption states All 3 areas either run recorded, names the previous run on this branch, and quotes the prev000 sha", "layer": "request"}
     it "states how many areas the comparison covered, and what it was measured over" do
       get repository_path(moved_suite)
 
@@ -217,6 +226,7 @@ RSpec.describe "Repository spec directory growth", type: :request do
     # will act on wrongly: a MOVED test is the same test, so a rename reads here as one area
     # growing and another shrinking with nothing added and nothing deleted. The page cannot tell
     # the two apart, so it says so.
+    # @intent: {"entity": "GET /repositories/:id", "action": "disclose moved-test ambiguity", "behavior": "the caption matches moved-same-test wording and states that a move reads with nothing added and nothing deleted", "layer": "request"}
     it "discloses that a moved test reads as growth in one area and shrinkage in another" do
       get repository_path(moved_suite)
 
@@ -228,6 +238,7 @@ RSpec.describe "Repository spec directory growth", type: :request do
     # which is re-derived by SUM over shard reports and can legitimately differ. The caption has to
     # say which, or a reader reconciles it against the Overview panel and finds a discrepancy that
     # is not one.
+    # @intent: {"entity": "GET /repositories/:id", "action": "state count provenance", "behavior": "the caption says the counts are example rows the two runs recorded here and may legitimately differ from the suite size above", "layer": "request"}
     it "states that the counts are the runs' own rows and not the suite size above" do
       get repository_path(moved_suite)
 
@@ -237,6 +248,7 @@ RSpec.describe "Repository spec directory growth", type: :request do
 
     # The caption is a claim ABOUT the table, so it is carried to a screen-reader user landing on
     # the table by navigation — who otherwise meets the header row with none of it.
+    # @intent: {"entity": "GET /repositories/:id", "action": "link caption to table", "behavior": "the table element's aria-describedby names the spec-directory-growth-basis caption element", "layer": "request"}
     it "carries the caption to the table it describes" do
       get repository_path(moved_suite)
 
@@ -259,6 +271,7 @@ RSpec.describe "Repository spec directory growth", type: :request do
     # per-run totals from those rows instead of from the window and the panel does not merely
     # miscount: it reads the previous run as having recorded nothing and withholds the whole
     # comparison. Verified by mutation — this example is what turns red.
+    # @intent: {"entity": "GET /repositories/:id", "action": "state capped total", "behavior": "a 13-area comparison renders 10 rows captioned The 10 areas that moved most, of the 13 either run recorded", "layer": "request"}
     it "says the list is the head of a longer one, and how long" do
       repository = new_repository
       ingest(repository, commit_sha: "prev00000000001", specs: area_specs("spec/gone", 1))
@@ -275,6 +288,7 @@ RSpec.describe "Repository spec directory growth", type: :request do
     # Two comparable runs whose areas all hold the same number of examples. A real answer, and the
     # one a reader most wants confirmed — so it is said in words rather than rendered as a table of
     # `±0` under a heading promising areas that grew or shrank.
+    # @intent: {"entity": "GET /repositories/:id", "action": "render nothing-moved state", "behavior": "a run where no area moved renders no table rows and an empty state saying No area moved over every one of the 2 areas", "layer": "request"}
     it "says nothing moved rather than tabulating a column of zeroes" do
       repository = two_runs(
         previous_specs: area_specs("spec/models", 3) + area_specs("spec/system", 2, offset: 100),
@@ -294,6 +308,7 @@ RSpec.describe "Repository spec directory growth", type: :request do
   # per-example rows" produce the same empty panel and are two different things to go and fix, and
   # only the second is invisible everywhere else on this page.
   describe "when the two runs cannot be compared" do
+    # @intent: {"entity": "GET /repositories/:id", "action": "omit panel without previous run", "behavior": "a branch holding only one run renders no #spec-directory-growth panel at all", "layer": "request"}
     it "renders no panel at all where there is no earlier run on the branch" do
       repository = new_repository
       ingest(repository, commit_sha: "only00000000001", specs: area_specs("spec/models", 3))
@@ -303,6 +318,7 @@ RSpec.describe "Repository spec directory growth", type: :request do
       expect(panel?).to be(false)
     end
 
+    # @intent: {"entity": "GET /repositories/:id", "action": "state empty latest run", "behavior": "where the latest run has total_specs_count 0 the panel shows no rows and says This run reported no tests", "layer": "request"}
     it "says so where this run reported no tests" do
       repository = new_repository
       ingest(repository, commit_sha: "prev00000000001", specs: area_specs("spec/models", 3))
@@ -315,6 +331,7 @@ RSpec.describe "Repository spec directory growth", type: :request do
       expect(empty_state_text).to include("This run reported no tests")
     end
 
+    # @intent: {"entity": "GET /repositories/:id", "action": "state empty previous run", "behavior": "where the previous run has total_specs_count 0 the empty state names the previous run on this branch (prev000) as reporting no tests", "layer": "request"}
     it "says so where the previous run on the branch reported no tests" do
       repository = new_repository
       repository.test_runs.create!(commit_sha: "prev00000000001", branch: "main", total_specs_count: 0,
@@ -330,6 +347,7 @@ RSpec.describe "Repository spec directory growth", type: :request do
     # it would produce one per AREA. A run's rows arrive shard by shard, so a sharded build
     # differenced against a complete one reports every area shrinking. Both compositions are named,
     # through the same `TestRun#delivery_description` the Overview panel words this with.
+    # @intent: {"entity": "GET /repositories/:id", "action": "state shard mismatch", "behavior": "a one-shard latest run against a one-piece previous run renders no rows and names assembled from 1 shard report and reported in one piece", "layer": "request"}
     it "says so where the two runs were assembled from different numbers of parts" do
       repository = new_repository
       ingest(repository, commit_sha: "prev00000000001", specs: area_specs("spec/models", 4))
@@ -348,6 +366,7 @@ RSpec.describe "Repository spec directory growth", type: :request do
     # posts totals and no per-example detail is fully "measured" by both of them and has zero rows
     # here — so an ungated comparison renders the entire suite as deleted, area by area, on a page
     # that has just certified both runs as comparable.
+    # @intent: {"entity": "GET /repositories/:id", "action": "state missing previous detail", "behavior": "a totals-only previous run renders no rows, saying it recorded no per-example detail and that every area of this run would read as new", "layer": "request"}
     it "says so where the previous run recorded no per-example detail" do
       repository = new_repository
       ingest(repository, commit_sha: "prev00000000001", total: 40)
@@ -361,6 +380,7 @@ RSpec.describe "Repository spec directory growth", type: :request do
       expect(empty_state_text).to include("every area of this run would read as new")
     end
 
+    # @intent: {"entity": "GET /repositories/:id", "action": "state missing latest detail", "behavior": "a totals-only latest run says every area of the previous run would read as deleted", "layer": "request"}
     it "says so where this run recorded no per-example detail" do
       repository = new_repository
       ingest(repository, commit_sha: "prev00000000001", specs: area_specs("spec/models", 3))
@@ -372,6 +392,7 @@ RSpec.describe "Repository spec directory growth", type: :request do
       expect(empty_state_text).to include("every area of the previous run would read as deleted")
     end
 
+    # @intent: {"entity": "GET /repositories/:id", "action": "state missing both detail", "behavior": "two totals-only runs render an empty state beginning Neither this run nor the previous run", "layer": "request"}
     it "says so where neither run recorded per-example detail" do
       repository = new_repository
       ingest(repository, commit_sha: "prev00000000001", total: 40)
@@ -387,6 +408,7 @@ RSpec.describe "Repository spec directory growth", type: :request do
     # sentence for all of them would satisfy every example above that only checked the shared half.
     # This one pins that the two states nothing else on the page distinguishes are distinguished
     # here: "reported no tests" and "recorded no per-example detail" of the SAME side.
+    # @intent: {"entity": "GET /repositories/:id", "action": "distinguish absences", "behavior": "a run reporting no tests and a run recording no per-example detail render different empty-state sentences for the same side", "layer": "request"}
     it "keeps the two absences of the same run apart" do
       unmeasured = new_repository
       unmeasured.test_runs.create!(commit_sha: "prev00000000001", branch: "main", total_specs_count: 0,
@@ -434,6 +456,7 @@ RSpec.describe "Repository spec directory growth", type: :request do
     # difference against the same page rendering ten times the examples, so an implementation that
     # read a run's areas per row — or issued a second round trip to count them — shows up here
     # whatever the page's absolute query count happens to be.
+    # @intent: {"entity": "GET /repositories/:id", "action": "hold comparison query cost", "behavior": "pages over 30-example and 300-example run pairs issue equal total query counts while both render 2 rows", "layer": "request"}
     it "costs the same whether the two runs hold thirty examples or three hundred" do
       small = two_runs(previous_specs: area_specs("spec/models", 10) + area_specs("spec/system", 5, offset: 50),
                        latest_specs: area_specs("spec/models", 12, offset: 100) +
@@ -464,6 +487,7 @@ RSpec.describe "Repository spec directory growth", type: :request do
     # growth aggregate by its `COUNT(*) FILTER (WHERE test_run_id = ...)` — the per-run counting
     # that is this panel's alone, and which the by-directory duration rollup above does not use —
     # asserts the gate directly, and keeps asserting it however many neighbours arrive.
+    # @intent: {"entity": "GET /repositories/:id", "action": "gate aggregate before query", "behavior": "the comparable pair issues exactly 1 of this panel's per-run filtered count aggregates while the incomparable pair issues none and renders no rows", "layer": "request"}
     it "asks the observations table nothing where the runs are not comparable" do
       comparable = two_runs(previous_specs: area_specs("spec/models", 3),
                             latest_specs: area_specs("spec/models", 5, offset: 100))
@@ -484,6 +508,7 @@ RSpec.describe "Repository spec directory growth", type: :request do
 
   # Read-only suite telemetry, like every panel around it: a `view` member legitimately needs to
   # see what CI reported. Nothing here is credential metadata and nothing here actions anything.
+  # @intent: {"entity": "GET /repositories/:id", "action": "serve view-only member", "behavior": "a member holding only the view permission gets a 200 and sees the spec/models row with change +3", "layer": "request"}
   it "is visible to a member with only 'view'" do
     repository = two_runs(previous_specs: area_specs("spec/models", 2),
                           latest_specs: area_specs("spec/models", 5, offset: 100))

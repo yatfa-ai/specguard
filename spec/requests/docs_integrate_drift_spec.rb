@@ -40,6 +40,7 @@ RSpec.describe "docs/integrate drift against the client gem", type: :request do
     "require-validator" => "the flag was deleted together with the Ruby validation arm"
   }.freeze
 
+  # @intent: {"entity": "GET /docs/integrate", "action": "document gem env vars", "behavior": "the page returns ok and mentions every SPECGUARD_ environment variable the bundled gem's configuration constants read, with none missing", "layer": "request"}
   it "documents every SPECGUARD_ variable the bundled gem reads" do
     get integration_guide_path
     expect(response).to have_http_status(:ok)
@@ -50,6 +51,7 @@ RSpec.describe "docs/integrate drift against the client gem", type: :request do
           "the page has drifted behind the client"
   end
 
+  # @intent: {"entity": "GET /docs/integrate", "action": "name default sink files", "behavior": "the page names the replay queue and the no-key development record by the gem's own DEFAULT_OUTPUT_PATH and DEFAULT_LOCAL_OUTPUT_PATH defaults", "layer": "request"}
   it "names the sink files by the gem's own defaults" do
     configuration = SpecGuard::RSpec::Configuration
     get integration_guide_path
@@ -60,6 +62,7 @@ RSpec.describe "docs/integrate drift against the client gem", type: :request do
           "the no-key development record is #{configuration::DEFAULT_LOCAL_OUTPUT_PATH} in the gem"
   end
 
+  # @intent: {"entity": "GET /docs/integrate", "action": "omit removed gem strings", "behavior": "none of the banned strings the gem has removed \u2014 specguard-rspec, validated in Ruby, vendored Ruby, require-validator \u2014 appear anywhere on the page", "layer": "request"}
   it "carries nothing the gem has removed" do
     get integration_guide_path
 
@@ -68,6 +71,7 @@ RSpec.describe "docs/integrate drift against the client gem", type: :request do
           "stale on the page: #{present.map { |s| "#{s} (#{BANNED_STRINGS[s]})" }.join('; ')}"
   end
 
+  # @intent: {"entity": "GET /docs/integrate", "action": "name current client", "behavior": "the page includes the strings specguard-ruby and Minitest, documenting the renamed client for both Ruby frameworks", "layer": "request"}
   it "documents the client under its current name, for both Ruby frameworks" do
     get integration_guide_path
 

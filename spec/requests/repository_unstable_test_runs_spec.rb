@@ -157,6 +157,7 @@ RSpec.describe "Repository unstable test runs", type: :request do
   # Criterion 2 — the way IN. Until this link existed the ranking's rows dead-ended at the one
   # question the panel is read to answer.
   describe "opening a test from the ranking above" do
+    # @intent: {"entity": "SpecObservation", "action": "link ranking to drill-in", "behavior": "each ranked test's link carries unstable_test set to its escaped description and the #unstable-test-runs fragment", "layer": "request"}
     it "links each ranked test to its own run-by-run sequence" do
       repository = repository_with(%w[passed failed passed])
 
@@ -170,6 +171,7 @@ RSpec.describe "Repository unstable test runs", type: :request do
 
     # A list of choices with one of them taken. The drill-in sits below a long panel, so a reader
     # arriving back at this table has to be told which row they are already looking at.
+    # @intent: {"entity": "SpecObservation", "action": "mark open test", "behavior": "with unstable_test set the ranking's link for that description carries aria-current true", "layer": "request"}
     it "marks the open test in the panel it was opened from" do
       repository = repository_with(%w[passed failed passed])
 
@@ -180,6 +182,7 @@ RSpec.describe "Repository unstable test runs", type: :request do
 
     # And marks nothing when nothing is open — an `aria-current` on every row is the same as one on
     # none, and it is the state the page is in for every reader who has not clicked yet.
+    # @intent: {"entity": "SpecObservation", "action": "mark nothing unopened", "behavior": "without unstable_test the ranked test's link has no aria-current attribute", "layer": "request"}
     it "marks nothing when no test is open" do
       repository = repository_with(%w[passed failed passed])
 
@@ -193,6 +196,7 @@ RSpec.describe "Repository unstable test runs", type: :request do
     # `failed` and its `passed` are two different examples rather than one test that flipped, and a
     # sequence drawn under one heading would interleave two tests. The panel above says so in as
     # many words, and this is that sentence made falsifiable.
+    # @intent: {"entity": "SpecObservation", "action": "keep shared groups plain", "behavior": "the shared-description section prints the description as text with no anchor elements", "layer": "request"}
     it "leaves the shared-description groups unlinked" do
       repository = create_repository(user: @user)
       %w[passed failed].each_with_index do |outcome, index|
@@ -216,6 +220,7 @@ RSpec.describe "Repository unstable test runs", type: :request do
   # Criterion 1 — the whole point of the slice. The sequence, in the window's own order, each row
   # naming the run it belongs to.
   describe "a test opened out of the ranking" do
+    # @intent: {"entity": "SpecObservation", "action": "list rows run by run", "behavior": "the drill-in lists 3 rows \u2014 first commit 00c0ffe on branch main with an ago arrival \u2014 with outcome sequence passed failed passed", "layer": "request"}
     it "lists that description's rows run by run, naming the commit, branch, arrival and outcome" do
       repository = repository_with(%w[passed failed passed])
 
@@ -232,6 +237,7 @@ RSpec.describe "Repository unstable test runs", type: :request do
     # handed in is oldest-first, so the sequence is oldest-first, so the newest run is the LAST row
     # — and the caption says which end is which rather than leaving a reader to guess at the
     # direction of the evidence they are about to act on.
+    # @intent: {"entity": "SpecObservation", "action": "order oldest first", "behavior": "the commit column ascends 00c0ffe through 03c0ffe alongside the outcome sequence and the basis line states oldest run first", "layer": "request"}
     it "runs oldest first, in the order of the window the chart above is plotted along" do
       repository = repository_with(%w[passed passed failed failed])
 
@@ -246,6 +252,7 @@ RSpec.describe "Repository unstable test runs", type: :request do
     # separated by WHERE the failures sit. Both fixtures produce the same row in the ranking above —
     # same run count, same failure count, same outcome words — and different sequences here, which
     # is the claim the whole ticket rests on.
+    # @intent: {"entity": "SpecObservation", "action": "separate regression from flake", "behavior": "two windows whose ranking rows are byte-identical yield different sequences here \u2014 passed passed failed failed against failed passed failed passed", "layer": "request"}
     it "distinguishes a regression from a flake that the ranking above reports identically" do
       regression = repository_with(%w[passed passed failed failed], github_full_name: "acme/regressed")
       flake = repository_with(%w[failed passed failed passed], github_full_name: "acme/flaked")
@@ -267,6 +274,7 @@ RSpec.describe "Repository unstable test runs", type: :request do
     # How to read the column, on the panel rather than in the code. Worded by POSITION IN THIS LIST
     # and not by "latest", because this window runs oldest first and a sentence about the top of the
     # list would point at the opposite end of the evidence from the one it means.
+    # @intent: {"entity": "SpecObservation", "action": "state list direction rule", "behavior": "the basis line says failures bunched at the END of the list \u2014 its newest runs \u2014 are a regression while scattered ones are flakiness", "layer": "request"}
     it "states which end of the list is the newest run" do
       repository = repository_with(%w[passed failed])
 
@@ -279,6 +287,7 @@ RSpec.describe "Repository unstable test runs", type: :request do
 
     # The caption sizes the list in ROWS against a window stated in RUNS, and never mixes them:
     # `rows.length` is neither the window's length nor bounded below by it.
+    # @intent: {"entity": "SpecObservation", "action": "size rows and runs", "behavior": "the basis line reads All 3 rows the last 3 runs of this window recorded under it and names the description", "layer": "request"}
     it "sizes the list in rows and the window in runs" do
       repository = repository_with(%w[passed failed passed])
 
@@ -292,6 +301,7 @@ RSpec.describe "Repository unstable test runs", type: :request do
     # One row per run is what the data USUALLY is rather than a promise. A test added halfway through
     # the window has fewer rows than the window has runs, and the caption says so rather than leaving
     # a reader to subtract two numbers and conclude a run went missing.
+    # @intent: {"entity": "SpecObservation", "action": "skip silent runs", "behavior": "a description recorded in only 2 of 4 runs lists 2 rows, with the basis saying All 2 rows the last 4 runs and that a run recording nothing contributes no row", "layer": "request"}
     it "lists no row for a run that recorded nothing under the description" do
       repository = create_repository(user: @user)
       4.times do |index|
@@ -312,6 +322,7 @@ RSpec.describe "Repository unstable test runs", type: :request do
 
     # And it comes apart in the other direction too: a description carried by two examples in one run
     # contributes two rows to that run.
+    # @intent: {"entity": "SpecObservation", "action": "row per example", "behavior": "two runs each carrying the description twice list 4 rows and the basis says each run contributes one row per example", "layer": "request"}
     it "lists a row per example when one run carried the description twice" do
       repository = create_repository(user: @user)
       %w[passed failed].each_with_index do |outcome, index|
@@ -335,6 +346,7 @@ RSpec.describe "Repository unstable test runs", type: :request do
     # `LIMIT` sheds the NEWEST rows, where the same method under `GET /api/v1/repository` sheds the
     # oldest ones off a newest-first window. A caption that said "the most recent N" here would name
     # the rows that are not on the page.
+    # @intent: {"entity": "SpecObservation", "action": "disclose which end kept", "behavior": "202 rows capped to the limit keep the oldest end \u2014 the basis reads The 200 oldest of the 202 rows, the older run keeps all 101 of its rows and the newest loses 2", "layer": "request"}
     it "says which end of the sequence the cap kept when it bit" do
       repository = create_repository(user: @user, github_full_name: "acme/looped")
       %w[passed failed].each_with_index do |outcome, index|
@@ -382,6 +394,7 @@ RSpec.describe "Repository unstable test runs", type: :request do
       repository
     end
 
+    # @intent: {"entity": "SpecObservation", "action": "drop newest whole runs", "behavior": "capping 250 rows sheds runs 21 through 25 entirely \u2014 only commits 00c0ffe through 19c0ffe remain and the visible outcome column is all passed", "layer": "request"}
     it "drops whole runs off the newest end when the description is carried many times per run" do
       get repository_path(repository_with_loop_regression, unstable_test: flaky)
 
@@ -400,6 +413,7 @@ RSpec.describe "Repository unstable test runs", type: :request do
     # a truncated list is not a shorter answer, it is a missing one that renders like a negative
     # one — so it is asserted as its own element, with the figure, the commit the list stops at, and
     # the pointer to the window that keeps the other end.
+    # @intent: {"entity": "SpecObservation", "action": "alert on truncation", "behavior": "the cap alert above the table says the list stops short of the window's newest rows, that the 50 dropped rows are the newest ones, that it ends at 19c0ffe, and that its window runs newest first", "layer": "request"}
     it "says loudly, above the table, that the newest rows are the ones missing" do
       get repository_path(repository_with_loop_regression, unstable_test: flaky)
 
@@ -417,6 +431,7 @@ RSpec.describe "Repository unstable test runs", type: :request do
     # it is read from. Pinned from BOTH sides — the same sentence is asserted PRESENT on an
     # untruncated window by "states which end of the list is the newest run" above, so its absence
     # here is a branch that fired rather than a string that never renders.
+    # @intent: {"entity": "SpecObservation", "action": "withhold regression reading", "behavior": "the capped basis drops the failures-bunched-at-the-END sentence, says the list end is not the window's evidence and that no failures there is not evidence of passing, and keeps the flakiness branch", "layer": "request"}
     it "withholds the regression reading when the cap took the end it is read from" do
       get repository_path(repository_with_loop_regression, unstable_test: flaky)
 
@@ -437,6 +452,7 @@ RSpec.describe "Repository unstable test runs", type: :request do
     # The scope sentence, the alert and the reading rule all branch on one predicate, so the panel
     # cannot disclose the truncation in one sentence and deny it two clauses later — which is
     # exactly how it shipped the first time. Asserted as the three agreeing on one page.
+    # @intent: {"entity": "SpecObservation", "action": "agree on cap state", "behavior": "the basis line and the cap alert agree on one page \u2014 The 200 oldest of the 250 rows the last 25 runs recorded, alert present, and the not-the-end-of-evidence clause", "layer": "request"}
     it "does not contradict itself about whether the cap bit" do
       get repository_path(repository_with_loop_regression, unstable_test: flaky)
 
@@ -449,6 +465,7 @@ RSpec.describe "Repository unstable test runs", type: :request do
     # And the other side of the branch: an uncapped window gets no alert and keeps the regression
     # reading. Without this the two examples above would pass over a panel that showed the warning
     # unconditionally, which would be the same defect wearing the opposite sign.
+    # @intent: {"entity": "SpecObservation", "action": "keep reading when complete", "behavior": "an uncapped 4-row window renders no cap alert and keeps the failures-bunched-at-the-END regression sentence", "layer": "request"}
     it "shows no cap warning and keeps the regression reading when the list is complete" do
       repository = repository_with(%w[passed passed failed failed])
 
@@ -464,6 +481,7 @@ RSpec.describe "Repository unstable test runs", type: :request do
     # sending outcomes writes rows that are present and quiet — and a sequence that rendered those as
     # passes would manufacture a flip that looks like a DATE, which is the one wrong answer this
     # panel is read to produce.
+    # @intent: {"entity": "SpecObservation", "action": "render silence not pass", "behavior": "a nil outcome renders as not reported in the sequence and the basis counts 1 of the 3 rows said nothing, saying Silence is not a pass", "layer": "request"}
     it "renders a run that reported no outcome as silence rather than as a pass" do
       repository = repository_with(["failed", nil, "passed"])
 
@@ -479,6 +497,7 @@ RSpec.describe "Repository unstable test runs", type: :request do
     # everything there is no silence to count, and "0 of them said nothing" is a sentence about
     # nothing. Asserted absent as well as present, because a clause only ever asserted present is
     # how the vacuous one ships green.
+    # @intent: {"entity": "SpecObservation", "action": "omit silence clause", "behavior": "over a fully-reporting window the basis line omits the said-nothing clause entirely", "layer": "request"}
     it "says nothing about silence over a window that reported every row" do
       repository = repository_with(%w[failed passed])
 
@@ -490,6 +509,7 @@ RSpec.describe "Repository unstable test runs", type: :request do
     # An outcome word nobody recognises is echoed rather than folded into a verdict — nothing
     # platform-side validates this string, so quoting what arrived is the only reading that cannot
     # be wrong.
+    # @intent: {"entity": "SpecObservation", "action": "echo unknown outcome", "behavior": "the unrecognised outcome word flaked is echoed verbatim in the sequence beside failed", "layer": "request"}
     it "echoes an outcome word it does not recognise" do
       repository = repository_with(%w[failed flaked])
 
@@ -501,6 +521,7 @@ RSpec.describe "Repository unstable test runs", type: :request do
     # The window is the trajectory's window, branch and all — outcomes compared across branches are
     # outcomes of different code, and a sequence read down an interleaved window is the outcomes of
     # different code in run order.
+    # @intent: {"entity": "SpecObservation", "action": "filter to anchored branch", "behavior": "a feature-branch run is excluded \u2014 2 rows, commits 00c0ffe and 01c0ffe, and the branch column all main", "layer": "request"}
     it "reads only the runs on the branch the page is anchored to" do
       repository = repository_with(%w[passed failed])
       ingest(repository, [example_spec(name: flaky, outcome: "failed")],
@@ -518,6 +539,7 @@ RSpec.describe "Repository unstable test runs", type: :request do
   # the project's identity rule is semantic, so a renamed test starts a new history and every
   # bookmark to the old description goes stale BY DESIGN.
   describe "a description the window recorded nothing under" do
+    # @intent: {"entity": "SpecObservation", "action": "render empty ask state", "behavior": "an unmatched description renders an empty table whose none state names the asked description and says None of the last 3 runs of this window recorded an example described so", "layer": "request"}
     it "renders the empty state naming the description that was asked for" do
       repository = repository_with(%w[passed failed passed])
 
@@ -533,6 +555,7 @@ RSpec.describe "Repository unstable test runs", type: :request do
 
     # And it names the RULE that makes this the ordinary case rather than a lost history — a reader
     # who does not know tests are matched by description alone reads an empty panel as a bug.
+    # @intent: {"entity": "SpecObservation", "action": "name matching rule", "behavior": "the empty state explains that a test renamed or reworded since starts a new history", "layer": "request"}
     it "names the matching rule that makes a stale bookmark ordinary" do
       repository = repository_with(%w[passed failed])
 
@@ -544,6 +567,7 @@ RSpec.describe "Repository unstable test runs", type: :request do
 
     # No caption over an empty list. The scope sentence and the reading rule are both claims about
     # rows, and printed over none of them they would be claims about nothing.
+    # @intent: {"entity": "SpecObservation", "action": "omit scope and table", "behavior": "the empty state renders neither the basis element nor any table rows", "layer": "request"}
     it "prints no scope sentence and no table over it" do
       repository = repository_with(%w[passed failed])
 
@@ -560,6 +584,7 @@ RSpec.describe "Repository unstable test runs", type: :request do
   # questions, and gating the second on the first would withhold the grain exactly when the aggregate
   # went silent. `Api::V1::RepositoriesController` makes the same choice for the same reason.
   describe "a window the ranking above cannot rank" do
+    # @intent: {"entity": "SpecObservation", "action": "serve despite incomparable", "behavior": "over a window only one run of which reported, the ranking shows its incomparable state while the drill-in still lists the sequence not reported failed not reported", "layer": "request"}
     it "still serves the sequence over a window where only one run reported an outcome" do
       repository = repository_with([nil, "failed", nil])
 
@@ -573,6 +598,7 @@ RSpec.describe "Repository unstable test runs", type: :request do
     # A test that failed in EVERY run is broken rather than unstable and is not in the ranking at
     # all — so it is reachable here only by a typed or bookmarked URL, which is exactly the reader
     # this panel owes an answer to.
+    # @intent: {"entity": "SpecObservation", "action": "serve unranked test", "behavior": "an always-failing test the ranking omits with No test changed its outcome still gets its three failed rows here", "layer": "request"}
     it "serves the sequence for a test the ranking deliberately leaves out" do
       repository = repository_with(%w[failed failed failed])
 
@@ -587,6 +613,7 @@ RSpec.describe "Repository unstable test runs", type: :request do
   # Criterion 4 — the way back OUT, and the one control on this panel whose CORRECT value is an
   # absence.
   describe "closing the test" do
+    # @intent: {"entity": "SpecObservation", "action": "clear only own ask", "behavior": "the Close test link drops only unstable_test while repeated_description and branch ride through and the href targets the #unstable-tests fragment", "layer": "request"}
     it "clears only its own ask and leaves every other panel open" do
       repository = repository_with(%w[passed failed])
 
@@ -620,6 +647,7 @@ RSpec.describe "Repository unstable test runs", type: :request do
 
     # The positive path, beside the group it makes falsifiable: a guard that swallowed every value
     # would answer 200 on all three shapes above and render no panel here either.
+    # @intent: {"entity": "SpecObservation", "action": "honour description param", "behavior": "a well-formed unstable_test renders the panel with 2 rows", "layer": "request"}
     it "honours an unstable-test parameter that IS a description" do
       get repository_path(repository_with(%w[passed failed]), unstable_test: flaky)
 
@@ -631,6 +659,7 @@ RSpec.describe "Repository unstable test runs", type: :request do
     # unnamed rows separately and excludes them from the matching — so without `.presence` an empty
     # ask becomes `WHERE name = ''`, a query for a description no row can carry and therefore a
     # sequence guaranteed to be empty. That is a worse answer than not opening one.
+    # @intent: {"entity": "SpecObservation", "action": "treat blank as no ask", "behavior": "an empty unstable_test answers 200 with no drill-in panel rendered", "layer": "request"}
     it "treats a blank unstable-test parameter as no ask" do
       get repository_path(repository_with(%w[passed failed]), unstable_test: "")
 
@@ -649,6 +678,7 @@ RSpec.describe "Repository unstable test runs", type: :request do
     # sequence — the first row's, or the window's own `duration_seconds` — renders a plausible
     # column that is constant down the list, which is exactly the shape a fixture with one duration
     # cannot tell from the right answer.
+    # @intent: {"entity": "SpecObservation", "action": "carry per-run durations", "behavior": "the duration column reads 4.00s then 31.00s, each row carrying its own run's figure", "layer": "request"}
     it "carries each run's own duration rather than one figure repeated down the sequence" do
       repository = create_repository(user: @user)
       [["passed", 4.0], ["failed", 31.0]].each_with_index do |(outcome, duration), index|
@@ -670,6 +700,7 @@ RSpec.describe "Repository unstable test runs", type: :request do
     # On a column read for a timeout that is the one wrong answer it must not produce, so it is
     # pinned here rather than left to the model spec that owns the seam: what this asserts is that
     # the view goes THROUGH that seam.
+    # @intent: {"entity": "SpecObservation", "action": "render missing timing", "behavior": "a nil duration renders as not reported beside a 0.50s row, never as 0.00s", "layer": "request"}
     it "renders a run that reported no timing as not reported rather than as a zero" do
       repository = create_repository(user: @user)
       [0.5, nil].each_with_index do |duration, index|
@@ -685,6 +716,7 @@ RSpec.describe "Repository unstable test runs", type: :request do
     # And the caption says whose measurement it is, because "4.00s" on a dashboard reads as
     # something the dashboard measured. It is the client's own per-example figure, and a row may
     # carry none.
+    # @intent: {"entity": "SpecObservation", "action": "attribute durations to client", "behavior": "the basis line says durations are the client's own per-example timings and that a run reporting none says so rather than reading as a zero", "layer": "request"}
     it "says the durations are the client's own and that a row may carry none" do
       repository = repository_with(%w[passed failed])
 
@@ -706,6 +738,7 @@ RSpec.describe "Repository unstable test runs", type: :request do
     # renders the two byte-identical — so this reads TWO rows at TWO commits and asserts each href
     # carries its OWN row's sha. Borrowing `@latest_test_run.commit_sha` would send every row to the
     # newest commit and name the wrong culprit on every row but one.
+    # @intent: {"entity": "SpecObservation", "action": "link row's own commit", "behavior": "each row's commit href carries its own run's full sha \u2014 two rows, two distinct github.com commit URLs", "layer": "request"}
     it "links each row to the commit that ran it rather than to the page's newest" do
       repository = repository_with(%w[passed failed])
 
@@ -721,6 +754,7 @@ RSpec.describe "Repository unstable test runs", type: :request do
     # The FULL sha goes to GitHub even though seven characters are what the reader sees. The
     # abbreviation is a label for scanning; a link built from it would be a link built from the
     # label, which GitHub can often resolve and is not what this row knows.
+    # @intent: {"entity": "SpecObservation", "action": "link full sha", "behavior": "the visible commit text stays at 7 characters while the href ends with the full sha", "layer": "request"}
     it "links at the full sha while still printing the abbreviation" do
       repository = repository_with(%w[passed])
 
@@ -734,6 +768,7 @@ RSpec.describe "Repository unstable test runs", type: :request do
     # cell beside it both leave the product, so they carry the same classes, target and rel. The
     # `rel` is not cosmetic — `target="_blank"` without `noopener` hands the opened tab a handle
     # back to this one.
+    # @intent: {"entity": "SpecObservation", "action": "match external link treatment", "behavior": "the commit link carries target _blank, rel noopener noreferrer and the same class as the definition-site link beside it", "layer": "request"}
     it "carries the same external-link treatment as the definition site beside it" do
       repository = repository_with(%w[passed])
 
@@ -751,6 +786,7 @@ RSpec.describe "Repository unstable test runs", type: :request do
     # sha column to `?commit_sha=` and must keep doing so (SPGD-664); this cell answers the other
     # question. Asserted as an absence because the failure mode is silent — a `?commit_sha=` href
     # here renders an identical-looking seven characters.
+    # @intent: {"entity": "SpecObservation", "action": "link out to github", "behavior": "every commit href starts with https://github.com/ and includes /commit/, never a commit_sha= query back into this page", "layer": "request"}
     it "leaves the product rather than re-opening the run on this page" do
       repository = repository_with(%w[passed failed])
 
@@ -776,6 +812,7 @@ RSpec.describe "Repository unstable test runs", type: :request do
     # `count_queries` rather than a single-table `queries_against`, on the precedent the sibling
     # panels' guards set: the regression this forecloses is a per-ROW reach for `@repository`, which
     # would show up against `repositories` and be invisible to a count scoped to one other table.
+    # @intent: {"entity": "SpecObservation", "action": "constant link queries", "behavior": "a 9-row table of linked commits costs the same total query count as a 3-row one at the same run count", "layer": "request"}
     it "adds no query for a table of many linked rows over a table of one" do
       one_per_run = create_repository(user: @user, github_full_name: "acme/one-per-run")
       three_per_run = create_repository(user: @user, github_full_name: "acme/three-per-run")
@@ -808,6 +845,7 @@ RSpec.describe "Repository unstable test runs", type: :request do
     # from. Both render the same visible coordinate on every row; only the ref inside the href
     # differs, and a single-sha fixture makes the two byte-identical — so this reads TWO rows at TWO
     # commits and asserts each href carries its OWN row's sha.
+    # @intent: {"entity": "SpecObservation", "action": "pin coordinate per run", "behavior": "both rows print spec/models/invoice_spec.rb:1 while their blob hrefs are pinned to their own runs' full shas", "layer": "request"}
     it "pins each row's coordinate to the commit that ran it" do
       repository = repository_with(%w[passed failed])
 
@@ -825,6 +863,7 @@ RSpec.describe "Repository unstable test runs", type: :request do
     # it is the same test and keeps its history, so the two rows are one sequence — and each of them
     # links to the file it lived in at its own commit. A page-level sha would send the older row's
     # link to a path that did not exist yet at that ref.
+    # @intent: {"entity": "SpecObservation", "action": "follow moved test", "behavior": "a test that moved links each row to the file it lived in at its own commit \u2014 invoice_spec.rb#L1 at the older sha and billing/invoice_spec.rb#L44 at the newer", "layer": "request"}
     it "follows a test that moved, path and commit together" do
       repository = create_repository(user: @user)
       [["spec/models/invoice_spec.rb", 1], ["spec/models/billing/invoice_spec.rb", 44]]
@@ -850,6 +889,7 @@ RSpec.describe "Repository unstable test runs", type: :request do
     # the forbidden pairing prints a coordinate whose halves come from two files and links at
     # whatever happens to sit on that line of the including one. The two files here disagree in both
     # halves, so a view built from the wrong one cannot pass.
+    # @intent: {"entity": "SpecObservation", "action": "use definition site", "behavior": "a shared-example row prints the shared file's own path and line \u2014 behaves_like_lockable.rb:12 \u2014 and its href never mentions the including invoice_spec", "layer": "request"}
     it "builds the coordinate from the definition site and not from the including file" do
       repository = create_repository(user: @user)
       2.times do |index|
@@ -873,6 +913,7 @@ RSpec.describe "Repository unstable test runs", type: :request do
     # coordinate, and not `…/blob/<sha>/#L1`, which resolves to the repository root and so looks like
     # a link that worked. Asserted BESIDE a row that does have one, so this cannot pass over a
     # column that failed to render at all.
+    # @intent: {"entity": "SpecObservation", "action": "omit empty definition site", "behavior": "a row with no file path renders an empty cell with no anchor while the row beside it keeps its coordinate and link", "layer": "request"}
     it "renders no coordinate and no link for a row with no definition site" do
       repository = create_repository(user: @user)
       ["spec/models/invoice_spec.rb", ""].each_with_index do |file_path, index|
@@ -890,6 +931,7 @@ RSpec.describe "Repository unstable test runs", type: :request do
 
     # And the caption names the rule, because a path that changes down a list of ONE test's runs
     # reads as two tests to anyone who does not know identity here is semantic.
+    # @intent: {"entity": "SpecObservation", "action": "explain changing coordinate", "behavior": "the basis line says a definition site that changes down the list is the identity rule working, not two different tests sharing a description", "layer": "request"}
     it "says a coordinate that changes down the list is the identity rule working" do
       repository = repository_with(%w[passed failed])
 
@@ -928,6 +970,7 @@ RSpec.describe "Repository unstable test runs", type: :request do
     # — written for the API specs, and reusable here because the partition is over statements rather
     # than over endpoints). A bare total cannot tell "this drill-in read once" from "some other panel
     # read twice while this one read none", which is exactly the false accept a count is prone to.
+    # @intent: {"entity": "SpecObservation", "action": "budget one grain read", "behavior": "the drill-in's own grain read fires once for an ask \u2014 even one matching nothing \u2014 and not at all when unasked", "layer": "request"}
     it "issues exactly one read of its own grain when asked, and none when not" do
       repository = repository_with(%w[passed failed passed])
 
@@ -949,6 +992,7 @@ RSpec.describe "Repository unstable test runs", type: :request do
     # the panels above already printed, so a second fetch would put an off-by-one between the
     # sequence and the commits it is read against — and naming the wrong culprit commit is worse
     # than naming none. Pinned on `test_runs`, the table a re-fetched window would have to touch.
+    # @intent: {"entity": "SpecObservation", "action": "reuse window and ranking", "behavior": "opening a test leaves the test_runs query count and the ranking's flakiness-grain read count unchanged from the unopened page", "layer": "request"}
     it "re-reads neither the window nor the ranking it drills out of" do
       repository = repository_with(%w[passed failed passed])
 
@@ -968,6 +1012,7 @@ RSpec.describe "Repository unstable test runs", type: :request do
 
     # The whole drill-in is off the default page's budget: a reader who never opens a test pays
     # exactly what they paid before this panel existed.
+    # @intent: {"entity": "SpecObservation", "action": "add single observation read", "behavior": "the asked page costs exactly one more spec_observations read than the unasked one, which renders no panel though its rows exist", "layer": "request"}
     it "adds exactly one read when a test is asked for and none when it is not" do
       repository = repository_with(%w[passed failed passed])
 
@@ -988,6 +1033,7 @@ RSpec.describe "Repository unstable test runs", type: :request do
     # And that one read does not grow with the suite. A `select` over the window's rows filtered in
     # Ruby is exactly the shape that ships green on a three-row fixture and takes the page down on a
     # real one.
+    # @intent: {"entity": "SpecObservation", "action": "constant cost by suite", "behavior": "the drill-in's spec_observations read count is equal on a 60-example and a 3-example suite, both listing the same 3-row window", "layer": "request"}
     it "costs the same on a 60-example suite as on a 3-example one" do
       small = repository_with_suite(3, name: "acme/small-suite")
       large = repository_with_suite(60, name: "acme/large-suite")

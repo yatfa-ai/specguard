@@ -342,6 +342,7 @@ RSpec.describe "Repository drill-down carry-through", type: :request do
     # beside the one in the view — a matrix pinned by a second hand-written matrix is two places to
     # make the same mistake.
     gestures.each do |gesture|
+      # @intent: {"entity": "GET /repositories/:id", "action": "carry every ask", "behavior": "with all seven asks open at once, each drill-down gesture on the page carries every ask it does not own, sets exactly the ones its gesture names, and drops only the keys it clears, at each gesture", "layer": "request"}
       it "#{gesture[:name]} keeps every ask it does not own" do
         open_every_ask
         href = href_for(gesture)
@@ -395,6 +396,7 @@ RSpec.describe "Repository drill-down carry-through", type: :request do
       "Close test" => [[:unstable_test, :unstable_test_from], "#unstable-test-runs"],
       "Show the newest run" => [:commit_sha, "#overview"]
     }.each do |label, (ask, panel_id)|
+      # @intent: {"entity": "GET /repositories/:id", "action": "drop own ask", "behavior": "each closing control — Close file, Close directory, Close description, Close test and Show the newest run — emits an href whose own ask key is absent while every other ask rides through, at each value", "layer": "request"}
       it "#{label} still drops its own ask" do
         open_every_ask
 
@@ -410,6 +412,7 @@ RSpec.describe "Repository drill-down carry-through", type: :request do
     # as it did before any of this existed. The helper defaults every ask to its request ivar, so a
     # bug that turned "no ask" into `key=` — an EMPTY ask, which the param concerns read as no ask
     # but which changes every href on the page — would show up here and nowhere else.
+    # @intent: {"entity": "GET /repositories/:id", "action": "omit unmade ask params", "behavior": "on a page requested with no asks, the spec-directory rollup link carries only spec_directory=spec/models and no branch, commit_sha, spec_file, repeated_description or unstable_test parameter", "layer": "request"}
     it "writes no parameter for an ask that was not made" do
       get repository_path(drill_down_run)
 

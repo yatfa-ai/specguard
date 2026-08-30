@@ -26,6 +26,7 @@ RSpec.describe "Deleting a test run", type: :request do
   end
 
   describe "the delete itself" do
+    # @intent: {"entity": "TestRun", "action": "delete one run", "behavior": "the delete removes exactly the named run, redirects to the repository page, and the flash names Deleted run a1b2c3d (main)", "layer": "request"}
     it "removes exactly that run and redirects to the repository page, naming sha and branch" do
       run = create_test_run(repository: repository, commit_sha: "a1b2c3d4e5f6", branch: "main")
 
@@ -37,6 +38,7 @@ RSpec.describe "Deleting a test run", type: :request do
       expect(response.body).to include("Deleted run a1b2c3d (main)")
     end
 
+    # @intent: {"entity": "TestRun", "action": "word absent branch", "behavior": "deleting a run that reported no branch confirms with Deleted run a1b2c3d (branch not reported) rather than an empty paren", "layer": "request"}
     it "says 'branch not reported' rather than a blank when the run reported no branch" do
       run = create_test_run(repository: repository, commit_sha: "a1b2c3d4e5f6", branch: nil)
 
@@ -46,6 +48,7 @@ RSpec.describe "Deleting a test run", type: :request do
       expect(response.body).to include("Deleted run a1b2c3d (branch not reported)")
     end
 
+    # @intent: {"entity": "TestRun", "action": "nullify durable rows", "behavior": "the delete destroys the shard and the observation but leaves the spec intent and the last-seen identity alive with their run foreign keys nulled", "layer": "request"}
     it "deletes shards and observations but nullifies intents and last-seen identities" do
       run = create_test_run(repository: repository, ci_run_id: "ci-1")
       shard = run.test_run_shards.create!(shard_id: "1", total_specs_count: 5)
@@ -68,6 +71,7 @@ RSpec.describe "Deleting a test run", type: :request do
       expect(identity.reload.last_seen_test_run_id).to be_nil
     end
 
+    # @intent: {"entity": "TestRun", "action": "touch only that run", "behavior": "deleting one run leaves the repository's other run and another repository's run intact, the repository keeping exactly one run", "layer": "request"}
     it "touches no other run of the repository and no row of another repository" do
       other_repository = create_repository(user: @user, github_full_name: "acme/other")
       other_repo_run = create_test_run(repository: other_repository)
@@ -81,6 +85,7 @@ RSpec.describe "Deleting a test run", type: :request do
       expect(repository.test_runs.count).to eq(1)
     end
 
+    # @intent: {"entity": "TestRun", "action": "advance latest run", "behavior": "deleting the newest run moves latest_test_run to the remaining older run under the shared created_at ordering", "layer": "request"}
     it "advances latest_test_run to the next-newest run by the shared ordering, tie-break included" do
       oldest = create_test_run(repository: repository, created_at: 2.days.ago)
       newest = create_test_run(repository: repository, created_at: 1.day.ago)
@@ -90,6 +95,7 @@ RSpec.describe "Deleting a test run", type: :request do
       expect(repository.reload.latest_test_run.id).to eq(oldest.id)
     end
 
+    # @intent: {"entity": "TestRun", "action": "fall back to empty", "behavior": "deleting the only run leaves latest_test_run nil and the redirected page showing No runs yet", "layer": "request"}
     it "falls back to the no-run empty state when the deleted run was the only one" do
       run = create_test_run(repository: repository)
 
@@ -102,6 +108,7 @@ RSpec.describe "Deleting a test run", type: :request do
   end
 
   describe "who may fire it" do
+    # @intent: {"entity": "TestRun", "action": "refuse without permission", "behavior": "a member holding view and keys.manage but not repo.delete gets 403 and the run survives", "layer": "request"}
     it "refuses a member without repo.delete with 403, and the run survives" do
       member = create_user(github_uid: "2002", github_handle: "collaborator")
       create_membership(repository: repository, user: member,
@@ -115,6 +122,7 @@ RSpec.describe "Deleting a test run", type: :request do
       expect(TestRun.exists?(run.id)).to be true
     end
 
+    # @intent: {"entity": "TestRun", "action": "hide from non-member", "behavior": "a non-member gets 404 rather than 403 so the repository's existence stays hidden, and the run survives", "layer": "request"}
     it "404s a non-member rather than 403ing, so the repository's existence stays hidden" do
       stranger = create_user(github_uid: "3003", github_handle: "stranger")
       run = create_test_run(repository: repository)
@@ -128,6 +136,7 @@ RSpec.describe "Deleting a test run", type: :request do
   end
 
   describe "the run id is scoped through the repository" do
+    # @intent: {"entity": "TestRun", "action": "scope the run id", "behavior": "naming another repository's run in this route changes no TestRun count, answers 404, and leaves both runs surviving", "layer": "request"}
     it "cannot delete another repository's run through this route" do
       other_repository = create_repository(user: @user, github_full_name: "acme/other")
       foreign_run = create_test_run(repository: other_repository)
@@ -144,6 +153,7 @@ RSpec.describe "Deleting a test run", type: :request do
   end
 
   describe "the control" do
+    # @intent: {"entity": "TestRun", "action": "render delete control", "behavior": "a viewer with repo_delete sees a Delete button whose dialog names removing the run's shards and per-example observations and that it cannot be undone", "layer": "request"}
     it "renders a Delete button with a dialog naming the consequence, for a viewer with repo_delete" do
       create_test_run(repository: repository, commit_sha: "a1b2c3d4e5f6")
 
@@ -154,6 +164,7 @@ RSpec.describe "Deleting a test run", type: :request do
       expect(response.body).to include("cannot be undone")
     end
 
+    # @intent: {"entity": "TestRun", "action": "omit delete control", "behavior": "a viewer lacking repo_delete gets neither the Delete button nor the cannot-be-undone dialog text anywhere on the page", "layer": "request"}
     it "renders no Delete control at all for a viewer lacking repo_delete" do
       member = create_user(github_uid: "2002", github_handle: "collaborator")
       create_membership(repository: repository, user: member)

@@ -115,6 +115,7 @@ RSpec.describe "Repository repeated description examples", type: :request do
     # The panel this drills out of already rendered the description as plain text, so the way in
     # costs no query to offer — and until it existed, a reader who had found the heaviest repetition
     # in their suite had found the end of the road.
+    # @intent: {"entity": "GET /repositories/:id", "action": "link into drill-down", "behavior": "each description row in the repeated-descriptions ranking anchors to an href carrying the CGI-escaped repeated_description ask and the #repeated-description-examples fragment", "layer": "request"}
     it "links each ranked description to its own examples" do
       get repository_path(two_group_run)
 
@@ -126,6 +127,7 @@ RSpec.describe "Repository repeated description examples", type: :request do
 
     # A list of choices with one of them taken. The drill-down sits a long way down the page, so a
     # reader arriving back at this table has to be told which row they are already looking at.
+    # @intent: {"entity": "GET /repositories/:id", "action": "mark open description", "behavior": "with a description open its ranking link carries aria-current true while the other description's link carries none", "layer": "request"}
     it "marks the open description in the panel it was opened from" do
       get repository_path(two_group_run, repeated_description: looped)
 
@@ -135,6 +137,7 @@ RSpec.describe "Repository repeated description examples", type: :request do
 
     # `?branch=` anchors the "Suite growth" panel and nothing else. Opening a description must not
     # re-anchor a chart the reader did not touch.
+    # @intent: {"entity": "GET /repositories/:id", "action": "carry branch ask", "behavior": "the drill-down link opened from a branch=main page keeps branch=main in its href", "layer": "request"}
     it "carries a branch ask through the link rather than dropping it" do
       get repository_path(two_group_run, branch: "main")
 
@@ -143,6 +146,7 @@ RSpec.describe "Repository repeated description examples", type: :request do
 
     # The reciprocity every drill-down link on this page keeps: opening one panel is not a request to
     # close another the reader opened separately.
+    # @intent: {"entity": "GET /repositories/:id", "action": "carry sibling asks", "behavior": "the drill-down link preserves both the spec_file and spec_directory asks the reader already had open", "layer": "request"}
     it "carries an open file and an open area through the link" do
       get repository_path(two_group_run, spec_file: order_spec, spec_directory: "spec/models")
 
@@ -156,6 +160,7 @@ RSpec.describe "Repository repeated description examples", type: :request do
     # file drill-down's own links and its way out predate this parameter, so a reader who opened a
     # description and then a file would have had the description closed under them by a control that
     # says "Close file".
+    # @intent: {"entity": "GET /repositories/:id", "action": "carry description out", "behavior": "the file panel's own row link and its Close file control both keep the repeated_description ask in their hrefs", "layer": "request"}
     it "carries an open description through the file panel's links and its way out" do
       get repository_path(two_group_run, repeated_description: looped, spec_file: order_spec)
 
@@ -165,6 +170,7 @@ RSpec.describe "Repository repeated description examples", type: :request do
         .to include("repeated_description=#{CGI.escape(looped)}")
     end
 
+    # @intent: {"entity": "GET /repositories/:id", "action": "omit panel by default", "behavior": "a plain show request answers 200 and renders no repeated-description-examples panel at all", "layer": "request"}
     it "renders no panel at all when no description was asked for" do
       get repository_path(two_group_run)
 
@@ -177,6 +183,7 @@ RSpec.describe "Repository repeated description examples", type: :request do
     # THE question this slice exists for: which examples are in the group the ranking says is heavy.
     # Slowest first, and scoped to the description — the other group's nine-second example is the
     # run's slowest and belongs to nothing here.
+    # @intent: {"entity": "GET /repositories/:id", "action": "list group examples", "behavior": "the panel's three rows read 4.00s, 1.50s, 0.50s with defined_at order_spec:1, order_spec:2 and refund_spec:3, and nothing of the other description's nine-second example appears", "layer": "request"}
     it "lists that description's examples, slowest first, and no other description's" do
       get repository_path(two_group_run, repeated_description: looped)
 
@@ -186,12 +193,14 @@ RSpec.describe "Repository repeated description examples", type: :request do
       expect(panel).to have_no_text("#{order_spec}:4")
     end
 
+    # @intent: {"entity": "GET /repositories/:id", "action": "name listed description", "behavior": "the basis paragraph names the opened description itself, settles the balance", "layer": "request"}
     it "names the description it is listing" do
       get repository_path(two_group_run, repeated_description: looped)
 
       expect(basis_line).to have_text(looped, normalize_ws: true)
     end
 
+    # @intent: {"entity": "GET /repositories/:id", "action": "state full coverage", "behavior": "the basis line reads All 3 examples this run recorded under it, slowest first and adds that every one of them reported a duration", "layer": "request"}
     it "says the list is all of the group's examples, where nothing was cut" do
       get repository_path(two_group_run, repeated_description: looped)
 
@@ -202,6 +211,7 @@ RSpec.describe "Repository repeated description examples", type: :request do
 
     # What CI said happened, in the word CI sent. A group whose members ended differently is a
     # repetition doing different work under one sentence, and that is visible in no other column.
+    # @intent: {"entity": "GET /repositories/:id", "action": "report outcomes", "behavior": "a group mixing a failed example with an unreported one renders the outcome column as failed then not reported", "layer": "request"}
     it "reports each example's outcome" do
       repository = create_repository(user: @user)
       ingest(repository, [example_spec(name: looped, duration: 1.0, line_number: 1, outcome: "failed"),
@@ -215,6 +225,7 @@ RSpec.describe "Repository repeated description examples", type: :request do
     # Bounded by `SpecObservation::REPEATED_DESCRIPTION_EXAMPLES_LIMIT`, which is the group's own
     # constant and not a reuse of the ten the ranking above is capped at: a reader who opened a
     # description to get PAST a top ten is not served by another top ten.
+    # @intent: {"entity": "GET /repositories/:id", "action": "cap listed rows", "behavior": "a group of REPEATED_DESCRIPTION_EXAMPLES_LIMIT plus five examples lists exactly the limit's worth of rows, headed by the highest line number", "layer": "request"}
     it "lists no more than its own limit, however many examples the group holds" do
       repository = create_repository(user: @user)
       count = SpecObservation::REPEATED_DESCRIPTION_EXAMPLES_LIMIT + 5
@@ -231,6 +242,7 @@ RSpec.describe "Repository repeated description examples", type: :request do
     # A capped list that does not disclose its cap is read as the whole group — the same lie by
     # omission every panel on this page refuses. The count has to come from the GROUP and not from
     # the rows on hand, which are the truncated figure.
+    # @intent: {"entity": "GET /repositories/:id", "action": "disclose group size", "behavior": "the basis line names the limit's slowest of the run's full count of examples under the description, so a capped page cannot read as the whole group", "layer": "request"}
     it "says how many examples the group holds, not just how many it lists" do
       repository = create_repository(user: @user)
       count = SpecObservation::REPEATED_DESCRIPTION_EXAMPLES_LIMIT + 5
@@ -251,6 +263,7 @@ RSpec.describe "Repository repeated description examples", type: :request do
     # recorded here" it would deny the sentence directly before it, which has just said the page
     # holds 25 of 30. The branch the file drill-down was fixed to carry, pinned here before it can be
     # written the other way.
+    # @intent: {"entity": "GET /repositories/:id", "action": "scope coverage claim", "behavior": "the truncated page never says the list covers the whole of what this run recorded here, and instead scopes that claim to the ranking the capped rows were drawn from", "layer": "request"}
     it "does not call a truncated page the whole of what the run recorded" do
       repository = create_repository(user: @user)
       count = SpecObservation::REPEATED_DESCRIPTION_EXAMPLES_LIMIT + 5
@@ -272,6 +285,7 @@ RSpec.describe "Repository repeated description examples", type: :request do
   # The rung that CLOSES the chain the controller has always claimed: area → file → example, and now
   # description → example → file.
   describe "the file each listed example ran in" do
+    # @intent: {"entity": "GET /repositories/:id", "action": "link file drill-in", "behavior": "each row's ran-in anchor targets the spec_file ask with the #spec-file-examples fragment", "layer": "request"}
     it "links each row's file into the spec-file drill-down" do
       get repository_path(two_group_run, repeated_description: looped)
 
@@ -283,6 +297,7 @@ RSpec.describe "Repository repeated description examples", type: :request do
 
     # Following a member's file must not close the description it was followed FROM — otherwise the
     # reader loses the list they were reading the moment they act on one of its rows.
+    # @intent: {"entity": "GET /repositories/:id", "action": "carry open description", "behavior": "the ran-in link keeps repeated_description in its href, so following a member's file does not close the list it came from", "layer": "request"}
     it "carries the open description through that link" do
       get repository_path(two_group_run, repeated_description: looped)
 
@@ -290,6 +305,7 @@ RSpec.describe "Repository repeated description examples", type: :request do
         .to include("repeated_description=#{CGI.escape(looped)}")
     end
 
+    # @intent: {"entity": "GET /repositories/:id", "action": "mark open file", "behavior": "among the rows' anchors exactly the open file's link carries aria-current true, naming refund_spec", "layer": "request"}
     it "marks the open file among the rows" do
       get repository_path(two_group_run, repeated_description: looped, spec_file: refund_spec)
 
@@ -300,6 +316,7 @@ RSpec.describe "Repository repeated description examples", type: :request do
 
     # The way out, which no other control offers: the parameter is removable only by editing the URL
     # otherwise, and it must not take a file or an area the reader opened separately with it.
+    # @intent: {"entity": "GET /repositories/:id", "action": "offer way out", "behavior": "the Close description link drops only repeated_description, keeping branch, spec_file, spec_directory and the #repeated-descriptions fragment", "layer": "request"}
     it "offers a way out that keeps every other ask" do
       get repository_path(two_group_run, repeated_description: looped, branch: "main",
                                          spec_file: order_spec, spec_directory: "spec/models")
@@ -318,6 +335,7 @@ RSpec.describe "Repository repeated description examples", type: :request do
     # either — which is exactly why the column is set directly here. A defensive branch nothing
     # exercises is a branch that gets deleted as dead, and the cell it guards would otherwise render
     # a link to nowhere.
+    # @intent: {"entity": "GET /repositories/:id", "action": "say not reported", "behavior": "a row whose spec_file_path column was nulled renders not reported in the ran-in cell while keeping its refund_spec:3 definition coordinate", "layer": "request"}
     it "says so rather than linking nowhere when a row has no including file" do
       repository = two_group_run
       SpecObservation.where(name: looped, line_number: 3).update_all(spec_file_path: nil)
@@ -347,6 +365,7 @@ RSpec.describe "Repository repeated description examples", type: :request do
       repository
     end
 
+    # @intent: {"entity": "GET /repositories/:id", "action": "show both files", "behavior": "the two rows read order_spec then refund_spec in the ran-in column and spec/support/shared_examples.rb:7 for both definition sites", "layer": "request"}
     it "names both the file that ran it and the one place it is defined" do
       get repository_path(shared_group_run, repeated_description: looped)
 
@@ -358,6 +377,7 @@ RSpec.describe "Repository repeated description examples", type: :request do
     # The definition site is `file_path` + `line_number` — never `spec_file_path` + `line_number`,
     # which on these exact rows would pair two halves from different files and point at whatever sits
     # on line 7 of each including one.
+    # @intent: {"entity": "GET /repositories/:id", "action": "keep columns separate", "behavior": "neither including-file path appears paired with :7, so no cell mixes one file with the other file's line number", "layer": "request"}
     it "does not pair an including file with the other file's line number" do
       get repository_path(shared_group_run, repeated_description: looped)
 
@@ -365,6 +385,7 @@ RSpec.describe "Repository repeated description examples", type: :request do
       expect(panel).to have_no_text("#{refund_spec}:7")
     end
 
+    # @intent: {"entity": "GET /repositories/:id", "action": "explain columns", "behavior": "the basis line states that each row names both the file that ran it and the file and line where it is defined", "layer": "request"}
     it "says what the two columns are, so the shared-group reading is available" do
       get repository_path(shared_group_run, repeated_description: looped)
 
@@ -375,6 +396,7 @@ RSpec.describe "Repository repeated description examples", type: :request do
     # The link inherits the same constraint the column does: `file_path` is the one place the group
     # is defined, and both rows point there rather than at line 7 of the two different files that
     # ran them.
+    # @intent: {"entity": "GET /repositories/:id", "action": "link one definition", "behavior": "both rows' definition anchors point at the blob URL for spec/support/shared_examples.rb line 7 of the feedfacecafe0001 run, never at either including file", "layer": "request"}
     it "links both rows to the one place the group is defined" do
       get repository_path(shared_group_run, repeated_description: looped)
 
@@ -392,6 +414,7 @@ RSpec.describe "Repository repeated description examples", type: :request do
   # the row where the one beside it cannot, an unlinked coordinate leaves the reader a row they can
   # read and nothing they can do.
   describe "the definition site as a link" do
+    # @intent: {"entity": "GET /repositories/:id", "action": "link coordinates", "behavior": "the three definition anchors equal the blob URLs for order_spec lines 1 and 2 and refund_spec line 3, and their visible text is those same coordinates", "layer": "request"}
     it "links each listed row's coordinate to that line on GitHub" do
       get repository_path(two_group_run, repeated_description: looped)
 
@@ -407,6 +430,7 @@ RSpec.describe "Repository repeated description examples", type: :request do
     # the literal "not reported" and offers nothing to follow; the definition site is the row's only
     # identity AND now its only way out. Both halves of the cell are asserted together, because a
     # change that linked this coordinate by reaching for `spec_file_path` would satisfy neither.
+    # @intent: {"entity": "GET /repositories/:id", "action": "link file-less row", "behavior": "the row with no including file renders not reported beside it with no anchor in that cell, and still links its refund_spec:3 definition coordinate", "layer": "request"}
     it "still links the coordinate on a row that has no including file to name" do
       repository = two_group_run
       SpecObservation.where(name: looped, line_number: 3).update_all(spec_file_path: nil)
@@ -422,6 +446,7 @@ RSpec.describe "Repository repeated description examples", type: :request do
     # last known path rather than an identity (SPGD-114), so a page anchored on an older run via
     # `?commit_sha=` must link into THAT run's tree rather than at whatever has since drifted onto
     # the line.
+    # @intent: {"entity": "GET /repositories/:id", "action": "pin anchored run", "behavior": "with the page anchored on the older aaaa1111bbbb2222 run both definition links carry that sha and neither carries the newer cccc3333dddd4444", "layer": "request"}
     it "pins the link to the run the page is anchored on rather than the newest one" do
       repository = create_repository(user: @user)
       ingest(repository, [example_spec(name: looped, duration: 4.0, line_number: 1),
@@ -440,6 +465,7 @@ RSpec.describe "Repository repeated description examples", type: :request do
     end
 
     # The pairing that stops the assertion above from passing on a page that simply had one run.
+    # @intent: {"entity": "GET /repositories/:id", "action": "link newest run", "behavior": "without a commit_sha ask the definition links carry the newest run's cccc3333dddd4444 sha on both rows", "layer": "request"}
     it "links at the newest run's sha when no anchor was asked for" do
       repository = create_repository(user: @user)
       ingest(repository, [example_spec(name: looped, duration: 4.0, line_number: 1),
@@ -458,6 +484,7 @@ RSpec.describe "Repository repeated description examples", type: :request do
     # A NEW TAB, the convention the "Unannotated tests here" panel introduced deliberately for the
     # app's first link that leaves it. The drill-in in the column beside it stays in the tab, which
     # is why this reads the two apart rather than asserting over every anchor in the row.
+    # @intent: {"entity": "GET /repositories/:id", "action": "open in new tab", "behavior": "every definition anchor carries target _blank with rel noopener noreferrer, while the ran-in drill-in beside it carries neither", "layer": "request"}
     it "opens the file in a new tab, leaving the list where the reader had it" do
       get repository_path(two_group_run, repeated_description: looped)
 
@@ -482,6 +509,7 @@ RSpec.describe "Repository repeated description examples", type: :request do
 
     # `duration_seconds DESC` alone is NULLS FIRST in Postgres — the example that reported nothing at
     # the head of a list captioned "slowest first".
+    # @intent: {"entity": "GET /repositories/:id", "action": "sort untimed last", "behavior": "the mixed group renders 5.00s, 2.00s then not reported, so the untimed example never heads the slowest-first list", "layer": "request"}
     it "sorts the untimed example to the end rather than to the head" do
       get repository_path(mixed_run, repeated_description: looped)
 
@@ -490,12 +518,14 @@ RSpec.describe "Repository repeated description examples", type: :request do
 
     # Never "0.00s": that is this surface inventing the measurement it is missing, and it is the
     # whole reason an untimed row is allowed in this list at all.
+    # @intent: {"entity": "GET /repositories/:id", "action": "avoid invented zero", "behavior": "the untimed example's duration never reads 0.00s anywhere in the panel", "layer": "request"}
     it "says an untimed example reported nothing rather than that it took no time" do
       get repository_path(mixed_run, repeated_description: looped)
 
       expect(panel).to have_no_text("0.00s")
     end
 
+    # @intent: {"entity": "GET /repositories/:id", "action": "scope durations", "behavior": "the basis line says durations here cover 2 of 3 and that the other 1 reported none and sits at the end of the list", "layer": "request"}
     it "states what the durations cover and where the untimed rows are" do
       get repository_path(mixed_run, repeated_description: looped)
 
@@ -516,6 +546,7 @@ RSpec.describe "Repository repeated description examples", type: :request do
       repository
     end
 
+    # @intent: {"entity": "GET /repositories/:id", "action": "promise no order", "behavior": "the two untimed rows render under a basis reading All 2 examples in the order this run recorded them, with no slowest-first wording", "layer": "request"}
     it "lists the examples and promises no order it cannot deliver" do
       get repository_path(untimed_run, repeated_description: looped)
 
@@ -528,6 +559,7 @@ RSpec.describe "Repository repeated description examples", type: :request do
 
     # `id` ascending, so a group where every row ties has one stable order rather than one the
     # planner picks afresh per request.
+    # @intent: {"entity": "GET /repositories/:id", "action": "order stably", "behavior": "two loads of the same all-untimed group both render order_spec:1 before order_spec:2", "layer": "request"}
     it "orders an all-untimed group stably" do
       repository = untimed_run
 
@@ -543,6 +575,7 @@ RSpec.describe "Repository repeated description examples", type: :request do
   # `?repeated_description=` is a URL a reader types, edits and bookmarks, so a test renamed since, a
   # description reworded and a typo all arrive here.
   describe "a description this run recorded nothing under" do
+    # @intent: {"entity": "GET /repositories/:id", "action": "render empty state", "behavior": "an unknown description answers 200 with a No-examples-under-this-description panel that echoes the asked-for sentence", "layer": "request"}
     it "renders an empty state naming it rather than a 404" do
       get repository_path(two_group_run, repeated_description: "a sentence nobody wrote")
 
@@ -551,6 +584,7 @@ RSpec.describe "Repository repeated description examples", type: :request do
       expect(panel).to have_text("a sentence nobody wrote", normalize_ws: true)
     end
 
+    # @intent: {"entity": "GET /repositories/:id", "action": "point back to ranking", "behavior": "the empty state names the panel Descriptions this run recorded more than once so the reader can climb back up", "layer": "request"}
     it "points at the panel that lists what the run DID record twice" do
       get repository_path(two_group_run, repeated_description: "a sentence nobody wrote")
 
@@ -559,6 +593,7 @@ RSpec.describe "Repository repeated description examples", type: :request do
 
     # A repository whose latest run wrote no per-example rows at all has no ranking to open, so there
     # is nothing for this panel to be a rung below.
+    # @intent: {"entity": "GET /repositories/:id", "action": "omit without run", "behavior": "a repository with no ingested run answers 200 and renders no examples panel", "layer": "request"}
     it "renders no panel on a repository with no run" do
       get repository_path(create_repository(user: @user), repeated_description: looped)
 
@@ -570,6 +605,7 @@ RSpec.describe "Repository repeated description examples", type: :request do
   # The ranking was taken from `@latest_test_run`, so the drill-down must be too — anything else
   # answers about rows the reader did not click. `?branch=` follows the "Suite growth" panel alone.
   describe "which run the examples come from" do
+    # @intent: {"entity": "GET /repositories/:id", "action": "read latest run", "behavior": "with runs on feature and main, asking branch=feature still lists the main run's 7.00s rows for the description", "layer": "request"}
     it "answers about the latest run even when a branch was asked for" do
       repository = create_repository(user: @user)
       ingest(repository, [example_spec(name: looped, duration: 3.0, line_number: 1),
@@ -589,12 +625,14 @@ RSpec.describe "Repository repeated description examples", type: :request do
   # table-driven loop, a shared example group, or the same test written twice, and these rows decide
   # none of it — so the word that would decide it appears nowhere.
   describe "what the panel refuses to say" do
+    # @intent: {"entity": "GET /repositories/:id", "action": "avoid duplicate wording", "behavior": "the panel text never matches the word duplicate in any case", "layer": "request"}
     it "never calls a repetition a duplicate" do
       get repository_path(two_group_run, repeated_description: looped)
 
       expect(panel).to have_no_text(/duplicat/i)
     end
 
+    # @intent: {"entity": "GET /repositories/:id", "action": "avoid redundant wording", "behavior": "the panel text never matches the word redundant in any case", "layer": "request"}
     it "never calls a repetition redundant" do
       get repository_path(two_group_run, repeated_description: looped)
 
@@ -618,6 +656,7 @@ RSpec.describe "Repository repeated description examples", type: :request do
 
     # The positive path, beside the group it makes falsifiable: a guard that swallowed every value
     # would answer 200 on all three shapes above and render no panel here either.
+    # @intent: {"entity": "GET /repositories/:id", "action": "honour string ask", "behavior": "asking for a description that exists renders the panel with its three rows, beside the malformed-parameter shapes that render none", "layer": "request"}
     it "honours a repeated-description parameter that IS a description" do
       get repository_path(two_group_run, repeated_description: looped)
 
@@ -629,6 +668,7 @@ RSpec.describe "Repository repeated description examples", type: :request do
     # in SQL — so without `.presence` an empty ask becomes `WHERE name = ''`, a query for a
     # description no row can carry and therefore a panel guaranteed to be empty. That is a worse
     # answer than not opening one.
+    # @intent: {"entity": "GET /repositories/:id", "action": "treat blank as no ask", "behavior": "an empty-string repeated_description answers 200 with no panel rendered", "layer": "request"}
     it "treats a blank repeated-description parameter as no ask" do
       get repository_path(two_group_run, repeated_description: "")
 
@@ -651,6 +691,7 @@ RSpec.describe "Repository repeated description examples", type: :request do
       repository
     end
 
+    # @intent: {"entity": "GET /repositories/:id", "action": "cost flat queries", "behavior": "a 200-example group renders the capped list on the same number of spec_observations reads as a 3-example one, and the page takes exactly 11", "layer": "request"}
     it "costs the same number of queries on a 200-example group as on a 3-example one" do
       small = repository_with(3, name: "acme/small-suite")
       large = repository_with(200, name: "acme/large-suite")
@@ -702,6 +743,7 @@ RSpec.describe "Repository repeated description examples", type: :request do
 
     # The whole drill-down is off the default page's budget. A reader who never opens a description
     # pays exactly what they paid before this panel existed.
+    # @intent: {"entity": "GET /repositories/:id", "action": "cost nothing unopened", "behavior": "a page with no description open takes one fewer spec_observations read than an opened one — 10 against 11", "layer": "request"}
     it "asks nothing of the table when no description was asked for" do
       repository = repository_with(200, name: "acme/unopened-suite")
 

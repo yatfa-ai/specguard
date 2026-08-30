@@ -82,6 +82,7 @@ RSpec.describe "Repository suite-size trajectory", type: :request do
   # Criterion 1: a repository with two or more comparable runs on one branch renders a trajectory
   # that can be read without SQL.
   describe "a branch with a history" do
+    # @intent: {"entity": "Repository", "action": "draw suite size trajectory", "behavior": "a repository with three runs on main returns ok and the trajectory chart draws three svg circles labelled aaaaaaa, bbbbbbb and ccccccc for the runs of 1,000, 1,020 and 1,047 tests", "layer": "request"}
     it "draws the suite's size across the branch's runs" do
       repository = create_repository(user: @user)
       run(repository, "aaaaaaa1111", total: 1_000, at: 20.days.ago)
@@ -96,6 +97,7 @@ RSpec.describe "Repository suite-size trajectory", type: :request do
     end
 
     # Oldest first. A trajectory read right-to-left would show every growing suite shrinking.
+    # @intent: {"entity": "Repository", "action": "order trajectory oldest first", "behavior": "the text-alternative rows list the two runs oldest first, printing 1,000 before 1,500 so a growing suite reads as growth", "layer": "request"}
     it "runs oldest to newest, so growth reads as growth" do
       repository = create_repository(user: @user)
       run(repository, "oldest00000", total: 1_000, at: 20.days.ago)
@@ -109,6 +111,7 @@ RSpec.describe "Repository suite-size trajectory", type: :request do
     # Criterion 5's first half: the label carries its own denominator, on the rule
     # `TestRun#machine_seconds_coverage` states. "3 runs" over a line through 2 is an overclaim that
     # a caption further down does not undo.
+    # @intent: {"entity": "Repository", "action": "state chart coverage", "behavior": "the chart reads every one of the last 2 runs plotted beside the series title Tests in suite on main, so the label carries its own denominator rather than saying every unqualified", "layer": "request"}
     it "states its own coverage beside the label, and only says every when it means it" do
       repository = create_repository(user: @user)
       run(repository, "aaaaaaa1111", total: 1_000, at: 2.days.ago)
@@ -121,6 +124,7 @@ RSpec.describe "Repository suite-size trajectory", type: :request do
     end
 
     # Criterion 5's second half: which branch, how many plotted, and the window covered.
+    # @intent: {"entity": "Repository", "action": "name branch counts window", "behavior": "the basis line reads Drawn through 2 of the last 2 runs on main, covering 30 days, and says only runs on the same branch are plotted", "layer": "request"}
     it "names the branch, the counts and the window the line covers" do
       repository = create_repository(user: @user)
       run(repository, "aaaaaaa1111", total: 1_000, at: 30.days.ago)
@@ -136,6 +140,7 @@ RSpec.describe "Repository suite-size trajectory", type: :request do
     # The axis does not start at zero — a suite of 20,000 that grew by 47 would be a flat line if it
     # did, which is the change this panel exists to show rendered as no change. So both bounds are
     # printed and the summary says what the slope therefore is and is not.
+    # @intent: {"entity": "Repository", "action": "print scaled range", "behavior": "for runs of 20,000 and 20,047 tests the chart prints both bounds and the summary says the axis does not start at zero and the slope is the size of the change and not its share", "layer": "request"}
     it "prints the range it scaled to and disclaims the slope's meaning" do
       repository = create_repository(user: @user)
       run(repository, "aaaaaaa1111", total: 20_000, at: 2.days.ago)
@@ -152,6 +157,7 @@ RSpec.describe "Repository suite-size trajectory", type: :request do
 
     # A real flat line: measured repeatedly across comparable runs, and it did not move. Distinct
     # from the thin-history state below, which refuses to draw one.
+    # @intent: {"entity": "Repository", "action": "explain unmoved suite", "behavior": "two runs that both measured 1,000 tests get a basis line saying every one of them measured 1,000 tests, which is a measurement and not an absence of one", "layer": "request"}
     it "says a suite that did not move did not move, rather than leaving a flat line unexplained" do
       repository = create_repository(user: @user)
       run(repository, "steady00001", total: 1_000, at: 2.days.ago)
@@ -166,6 +172,7 @@ RSpec.describe "Repository suite-size trajectory", type: :request do
 
     # The panel below is one interleaved history across every branch and says so in its own words.
     # A line drawn through it would join a trunk run to a feature branch's and call the gap growth.
+    # @intent: {"entity": "Repository", "action": "stay on one branch", "behavior": "a feature/x run sitting between two main runs is not plotted \u2014 labels stay trunkaa and trunkcc, the basis still says 2 of the last 2 runs on main, and featureb appears nowhere in the chart", "layer": "request"}
     it "never reaches across branches" do
       repository = create_repository(user: @user)
       run(repository, "trunkaaaaaa", total: 1_000, at: 3.days.ago)
@@ -181,6 +188,7 @@ RSpec.describe "Repository suite-size trajectory", type: :request do
 
     # Bounded at thirty rows, so the panel costs the same on a repository CI has reported to for a
     # year as on one it reported to last week.
+    # @intent: {"entity": "Repository", "action": "bound plotted window", "behavior": "forty runs on main plot exactly 30 svg circles, the basis reads Drawn through 30 of the last 30 runs on main, and the labels run sha0010 through sha0039", "layer": "request"}
     it "bounds the window at the model's limit" do
       repository = create_repository(user: @user)
       40.times { |i| run(repository, "sha#{i.to_s.rjust(4, "0")}000", total: 1_000 + i, at: (40 - i).days.ago) }
@@ -200,6 +208,7 @@ RSpec.describe "Repository suite-size trajectory", type: :request do
   # in-flight or cancelled sharded run is a drop to a quarter of the suite and a recovery — a mass
   # test deletion and restoration, neither of which any commit made, both wearing real SHAs.
   describe "a history containing a run that was assembled differently" do
+    # @intent: {"entity": "Repository", "action": "withhold in-flight shard run", "behavior": "a run with one of four shards delivered is kept off both the line and the axis \u2014 labels stop at aaaaaaa and bbbbbbb, 5,020 appears nowhere, and the bounds stay 20,000 and 20,040", "layer": "request"}
     it "withholds an in-flight sharded run instead of drawing it as a deletion" do
       repository = create_repository(user: @user)
       sharded_run(repository, commit_sha: "aaaaaaa11111", per_shard: 5_000)
@@ -221,6 +230,7 @@ RSpec.describe "Repository suite-size trajectory", type: :request do
 
     # The permanent form. A job cancelled after two of four shards leaves the half-sized row in the
     # history forever — this is not a window that closes on its own.
+    # @intent: {"entity": "Repository", "action": "withhold cancelled shard run", "behavior": "a run cancelled after two of four shards is excluded permanently \u2014 labels stay aaaaaaa and bbbbbbb and 10,000 appears nowhere on the chart", "layer": "request"}
     it "withholds a job cancelled part-way through, permanently" do
       repository = create_repository(user: @user)
       sharded_run(repository, commit_sha: "aaaaaaa11111", per_shard: 5_000)
@@ -235,6 +245,7 @@ RSpec.describe "Repository suite-size trajectory", type: :request do
 
     # Counted in the caption and given its reason, not silently dropped. A line through 2 of 3 runs
     # that says nothing about the third is a chart claiming a completeness it does not have.
+    # @intent: {"entity": "Repository", "action": "count withheld run", "behavior": "the caption reads 2 of 3 runs plotted and the basis says the third is withheld for reporting only some of the parts the plotted runs reported, being the sum of the shards it has reported so far", "layer": "request"}
     it "counts the withheld run in the caption and says why it was withheld" do
       repository = create_repository(user: @user)
       sharded_run(repository, commit_sha: "aaaaaaa11111", per_shard: 5_000)
@@ -265,6 +276,7 @@ RSpec.describe "Repository suite-size trajectory", type: :request do
     # tell their reader they were builds "still arriving — or one cancelled part-way", sitting "at a
     # fraction of [their] own suite", which is false in every clause. The count was right and the
     # reason was invented, and no example rendered the sentence to catch it.
+    # @intent: {"entity": "Repository", "action": "word complete shard runs", "behavior": "three complete four-shard runs beside five one-piece runs are withheld as having arrived differently \u2014 assembled from 4 shard reports where the line runs through one-piece runs \u2014 and the page never says only some of the parts, cancelled part-way or a fraction of its own suite", "layer": "request"}
     it "does not call a complete sharded run a fragment when the cohort arrived whole" do
       repository = create_repository(user: @user)
       5.times { |i| run(repository, "plain#{i}000000", total: 1_000 + i, at: (30 - i).days.ago) }
@@ -291,6 +303,7 @@ RSpec.describe "Repository suite-size trajectory", type: :request do
     # Both directions at once, each getting the sentence that is true of it — and never one
     # combined figure, for the reason the two withholding *reasons* are never combined: a number
     # that merges two causes describes neither.
+    # @intent: {"entity": "Repository", "action": "separate mismatch directions", "behavior": "with an in-flight run and an eight-shard run both withheld the basis gives each its own sentence \u2014 one for reporting only some of the parts, one for being assembled from 8 shard reports where the line runs through 4 \u2014 and only the three whole runs plot", "layer": "request"}
     it "explains each direction of the mismatch separately when both are in the window" do
       repository = create_repository(user: @user)
       3.times { |i| sharded_run(repository, commit_sha: "whole#{i}0000000", per_shard: 5_000 + i) }
@@ -315,6 +328,7 @@ RSpec.describe "Repository suite-size trajectory", type: :request do
 
     # A phrase for a group is only available when the group shares one — generalising one member's
     # composition to a mixed set is this panel's own overclaim in miniature.
+    # @intent: {"entity": "Repository", "action": "name no mixed composition", "behavior": "a four-shard and an eight-shard run withheld together get the sentence 2 runs are withheld for having arrived differently from the runs the line is drawn through, with no clause naming which composition the line runs through", "layer": "request"}
     it "names no composition for a withheld group that did not all arrive the same way" do
       repository = create_repository(user: @user)
       4.times { |i| run(repository, "plain#{i}000000", total: 1_000 + i, at: (30 - i).days.ago) }
@@ -334,6 +348,7 @@ RSpec.describe "Repository suite-size trajectory", type: :request do
     # A growth chart's unstated premise is that its right-hand end is "now". During a shard-layout
     # migration it is not: the cohort is the older, larger group, so the line stops before the SHA
     # the Overview names directly above. The counts disclose it arithmetically; nothing said it.
+    # @intent: {"entity": "Repository", "action": "announce missing newest run", "behavior": "when the newest main run is withheld the basis says The most recent run on main is not on this line: newwy00 and that the line ends at oldwy30, with both SHAs rendered in the font-mono span class", "layer": "request"}
     it "says out loud when the most recent run is not on the line" do
       repository = create_repository(user: @user)
       4.times { |i| sharded_run(repository, commit_sha: "oldwy#{i}0000000", per_shard: 5_000 + i) }
@@ -354,6 +369,7 @@ RSpec.describe "Repository suite-size trajectory", type: :request do
 
     # The ordinary case must not carry the caveat — a sentence that appears every time is a sentence
     # nobody reads the one time it matters.
+    # @intent: {"entity": "Repository", "action": "stay silent on plotted newest", "behavior": "when the newest run is itself on the line the basis never says is not on this line", "layer": "request"}
     it "says nothing about a missing newest run when the newest run is plotted" do
       repository = create_repository(user: @user)
       run(repository, "aaaaaaa1111", total: 1_000, at: 2.days.ago)
@@ -367,6 +383,7 @@ RSpec.describe "Repository suite-size trajectory", type: :request do
     # The reading that first suggests itself — anchor on the latest run, as the Overview's delta
     # does — is wrong in exactly this state and wrong in the worst direction: it would withhold the
     # complete runs and plot the fragment alone.
+    # @intent: {"entity": "Repository", "action": "keep complete late runs", "behavior": "an in-flight fragment newer than three complete four-shard runs is the one withheld \u2014 the labels stay whole00 through whole20 and the chart reads 3 of 4 runs plotted", "layer": "request"}
     it "keeps the complete runs when the LATEST run is the one still arriving" do
       repository = create_repository(user: @user)
       3.times { |i| sharded_run(repository, commit_sha: "whole#{i}0000000", per_shard: 5_000 + i) }
@@ -382,6 +399,7 @@ RSpec.describe "Repository suite-size trajectory", type: :request do
     # The whole existing corpus — a laptop `bundle exec rspec`, an unrecognised CI provider. Those
     # rows record no shards, were written once and never re-derived, so they were always comparable
     # and the guard must not have quietly switched the panel off for them.
+    # @intent: {"entity": "Repository", "action": "plot unsharded corpus", "behavior": "runs recorded in one piece plot normally with the basis saying all reported in one piece and the words shard report appearing nowhere", "layer": "request"}
     it "plots the unsharded corpus and states how it arrived in the words that fit it" do
       repository = create_repository(user: @user)
       run(repository, "plainaaaaaa", total: 1_000, at: 2.days.ago)
@@ -401,6 +419,7 @@ RSpec.describe "Repository suite-size trajectory", type: :request do
   # The other half of the same question, asked of a count rather than of a composition: a run that
   # reported zero has a count but not a measurement.
   describe "a run that reported no tests" do
+    # @intent: {"entity": "Repository", "action": "withhold zero-test run", "behavior": "a run reporting total_specs_count 0 is left off the line while the basis says 1 run is withheld for having reported no tests at all and that a zero there describes the report, not the suite \u2014 never the composition wording", "layer": "request"}
     it "withholds it and says a zero describes the report, not the suite" do
       repository = create_repository(user: @user)
       run(repository, "aaaaaaa1111", total: 1_000, at: 3.days.ago)
@@ -419,6 +438,7 @@ RSpec.describe "Repository suite-size trajectory", type: :request do
       expect(basis_line).to have_no_text("only some of the parts", normalize_ws: true)
     end
 
+    # @intent: {"entity": "Repository", "action": "separate zero and partial reasons", "behavior": "with one zero-count run and one partially delivered run the basis gives two sentences, one for reporting no tests at all and one for reporting only some of the parts, and the chart says 2 of 4 runs plotted", "layer": "request"}
     it "keeps the two reasons apart when both occur" do
       repository = create_repository(user: @user)
       sharded_run(repository, commit_sha: "aaaaaaa11111", per_shard: 5_000)
@@ -444,6 +464,7 @@ RSpec.describe "Repository suite-size trajectory", type: :request do
   # Criterion 6: fewer than two comparable points is an honest sentence, never a flat line — which
   # would say the suite is stable, the one thing a history this thin cannot say.
   describe "when there is not enough to draw" do
+    # @intent: {"entity": "Repository", "action": "refuse single-run line", "behavior": "a branch holding one run renders no svg and says Not enough comparable runs yet, SpecGuard has 1 run on main so far, and a single measurement drawn as a line is a flat line", "layer": "request"}
     it "refuses to draw a line through a branch's first run" do
       repository = create_repository(user: @user)
       run(repository, "firstever01", total: 1_000)
@@ -459,6 +480,7 @@ RSpec.describe "Repository suite-size trajectory", type: :request do
 
     # "One run so far" and "three runs, none of them comparable" are different things to go and
     # look at, and they must not share a sentence.
+    # @intent: {"entity": "Repository", "action": "explain incomparable runs", "behavior": "with one sharded run and one zero-count run the panel renders no svg, says SpecGuard has 2 runs on main of which only 1 can be compared, and names that 1 reported no tests at all", "layer": "request"}
     it "says how many runs there were and why none of them could be compared" do
       repository = create_repository(user: @user)
       sharded_run(repository, commit_sha: "aaaaaaa11111", per_shard: 5_000)
@@ -478,6 +500,7 @@ RSpec.describe "Repository suite-size trajectory", type: :request do
     # which for a whole delivery means "0 shard reports" — the exact phrasing
     # `TestRun#delivery_description`'s comment exists to forbid — and its closing sentence called
     # every withheld run a "less complete report". Here the withheld run really is one.
+    # @intent: {"entity": "Repository", "action": "word partial in thin history", "behavior": "a half-delivered run beside a whole one draws no line and the panel says 1 had reported only some of its parts rather than the shard-reports-than-the-rest wording", "layer": "request"}
     it "says a run had reported only some of its parts when that is the direction it missed by" do
       repository = create_repository(user: @user)
       ingest_shard(repository, ci_run_id: "gha-inflight", shard_id: "0", total: 5_000,
@@ -493,6 +516,7 @@ RSpec.describe "Repository suite-size trajectory", type: :request do
 
     # ...and here it is the opposite: the withheld run arrived whole in a single POST, which is not
     # a partial delivery of anything and is not "0 shard reports" either.
+    # @intent: {"entity": "Repository", "action": "word whole odd run out", "behavior": "a single-piece run beside a four-shard run is described as assembled from more parts than the rest, or arrived whole where the rest were sharded \u2014 never only some of its parts or less complete reports \u2014 and the panel says none of those is a smaller suite", "layer": "request"}
     it "does not call a whole delivery a partial one when it is the odd run out" do
       repository = create_repository(user: @user)
       sharded_run(repository, commit_sha: "whole00000000", per_shard: 5_000)
@@ -512,6 +536,7 @@ RSpec.describe "Repository suite-size trajectory", type: :request do
     end
 
     # `0` gets its own wording. "only 0 of them are comparable" is a sentence about a number.
+    # @intent: {"entity": "Repository", "action": "say none not zero", "behavior": "two zero-count runs render the sentence none of them can be plotted and never only 0 of them", "layer": "request"}
     it "says none rather than zero when nothing could be plotted" do
       repository = create_repository(user: @user)
       run(repository, "zeroooo1111", total: 0, at: 2.days.ago)
@@ -525,6 +550,7 @@ RSpec.describe "Repository suite-size trajectory", type: :request do
 
     # A different fact from a young branch, and a different thing to fix: a CI client that is not
     # sending a branch will not start on its own. Same distinction the Overview's basis line draws.
+    # @intent: {"entity": "Repository", "action": "refuse branchless history", "behavior": "two runs with branch nil render No branch to plot a history on, no svg, and not the young-branch wording Not enough comparable runs yet", "layer": "request"}
     it "says a run that named no branch cannot be placed in a history" do
       repository = create_repository(user: @user)
       repository.test_runs.create!(commit_sha: "anonymous01", branch: nil, total_specs_count: 1_000,
@@ -544,6 +570,7 @@ RSpec.describe "Repository suite-size trajectory", type: :request do
 
     # The Overview's "No CI run has reported yet" is the page's one never-ingested empty state. A
     # second dashed box saying a quieter version of it would read as a different, milder fact.
+    # @intent: {"entity": "Repository", "action": "omit panel without runs", "behavior": "a repository with no test_runs returns ok with no #suite-trajectory element at all while the overview still says No CI run has reported yet", "layer": "request"}
     it "does not render at all when CI has never reported" do
       repository = create_repository(user: @user)
 
@@ -620,6 +647,7 @@ RSpec.describe "Repository suite-size trajectory", type: :request do
       ["main", *0.upto(9).map { |i| "feature/#{i}" }]
     end
 
+    # @intent: {"entity": "Repository", "action": "draw asked branch", "behavior": "the default anchor stays dark saying SpecGuard has 1 run on feature/x so far, but ?branch=main returns ok and draws two circles labelled trunkaa and trunkbb with the series titled Tests in suite on main and the basis reading Drawn through 2 of the last 2 runs on main", "layer": "request"}
     it "draws the branch that was asked for, where the default anchor has nothing to draw" do
       repository = repository_anchored_on_a_feature_branch
 
@@ -641,6 +669,7 @@ RSpec.describe "Repository suite-size trajectory", type: :request do
     # The selected branch anchors THIS panel and nothing else. `@latest_test_run` is untouched, so
     # the Overview's suite size and the Recent-runs panel go on naming the repository's latest run —
     # and a reader can never end up with a headline figure about one run above a chart about another.
+    # @intent: {"entity": "Repository", "action": "move panel only", "behavior": "asking ?branch=main leaves the overview reading Measured on feat111 (feature/x) and the recent-runs panel naming feat111, so only the trajectory re-anchors", "layer": "request"}
     it "moves this panel only, leaving the rest of the page naming the latest run" do
       repository = repository_anchored_on_a_feature_branch
 
@@ -654,6 +683,7 @@ RSpec.describe "Repository suite-size trajectory", type: :request do
     # Criterion 2: a dark panel discloses that another branch has history. Without this the reader
     # of a dark panel has no way to learn that `main` is one click away — nothing else on the page
     # mentions a branch they are not already looking at.
+    # @intent: {"entity": "Repository", "action": "list branch run counts", "behavior": "the selector reads main (2 runs) then feature/x (1 run), most history first, with the branch being drawn marked aria-current rather than moved to the front", "layer": "request"}
     it "names the branches that have runs and how many each has" do
       repository = repository_anchored_on_a_feature_branch
 
@@ -666,6 +696,7 @@ RSpec.describe "Repository suite-size trajectory", type: :request do
         .to eq(["feature/x (1 run)"])
     end
 
+    # @intent: {"entity": "Repository", "action": "mark drawn branch current", "behavior": "asking ?branch=main marks main (2 runs) as the sole aria-current entry of the selector", "layer": "request"}
     it "marks the branch it is drawing as the current one" do
       repository = repository_anchored_on_a_feature_branch
 
@@ -678,6 +709,7 @@ RSpec.describe "Repository suite-size trajectory", type: :request do
     # A count that STOPPED is not a count that finished. The query walks one row past the window and
     # no further, so a trunk with thousands of runs is never counted to answer a question the chart
     # does not ask — and the label says "30+" rather than publishing the row it stopped at.
+    # @intent: {"entity": "Repository", "action": "word over-window count", "behavior": "a branch holding more runs than the window is labelled main (30+ runs) with a basis explaining that means the branch holds more history than the chart reaches", "layer": "request"}
     it "words a history longer than the window it counts as 30+" do
       repository = create_repository(user: @user)
       (Repository::TRAJECTORY_LIMIT + 1).times do |i|
@@ -694,6 +726,7 @@ RSpec.describe "Repository suite-size trajectory", type: :request do
     # A truncated list of branches with nothing said about it reads as the complete set. The ones
     # shown are the ones with the most history, so `main` survives a cut that an alphabetical list
     # would have dropped it out of.
+    # @intent: {"entity": "Repository", "action": "cut and disclose branches", "behavior": "eleven branches render exactly the helper's row size led by main (2 runs) and feature/9 (1 run), and the basis says 3 further branches have runs and are not in the row above while the branch menu names all 11", "layer": "request"}
     it "lists the branches with the most history and says how many it left out" do
       repository = create_repository(user: @user)
       run(repository, "trunkaaaaaa", total: 1_000, at: 30.days.ago)
@@ -715,6 +748,7 @@ RSpec.describe "Repository suite-size trajectory", type: :request do
     # The one case the display order bends for. A reader can arrive by URL on a branch holding a
     # single run with a dozen busier branches ahead of it — and a selector that cannot show the
     # branch it is drawing is a selector that has lost the reader.
+    # @intent: {"entity": "Repository", "action": "pin drawn branch in row", "behavior": "arriving on feature/0, which the cut would drop, still lists feature/0 (1 run) first in the row, marks it aria-current, shows the 1-run-so-far sentence, and the basis says the branch being drawn is listed first, then the branches with the most history", "layer": "request"}
     it "shows the branch it is drawing even when the cut would have left it out" do
       repository = create_repository(user: @user)
       run(repository, "trunkaaaaaa", total: 1_000, at: 30.days.ago)
@@ -751,6 +785,7 @@ RSpec.describe "Repository suite-size trajectory", type: :request do
     # on the page only as the number 3.
     #
     # Asserted through `branch_menu_*` and never `branch_choices` — see that accessor's note.
+    # @intent: {"entity": "Repository", "action": "name every loaded branch", "behavior": "the overflow menu offers all eleven branches as links whose hrefs each carry branch= for that branch, including feature/0, feature/1 and feature/2 that the eight-item row leaves out", "layer": "request"}
     it "names every branch it loaded, not only the eight the row lists" do
       repository = repository_with_eleven_branches
 
@@ -775,6 +810,7 @@ RSpec.describe "Repository suite-size trajectory", type: :request do
     # Criterion 2. The URL is taken off the page rather than written here: a spec that composes
     # `repository_path(repository, branch: "feature/0")` itself would pass against the very page
     # this ticket describes, where the reader has no way to compose it.
+    # @intent: {"entity": "Repository", "action": "follow menu link", "behavior": "GETting the href the menu itself rendered for feature/0 returns ok, re-anchors the panel to that branch's 1-run sentence, and marks feature/0 (1 run) aria-current in the row", "layer": "request"}
     it "draws a branch from behind the cut by following a link the page itself rendered" do
       repository = repository_with_eleven_branches
 
@@ -797,6 +833,7 @@ RSpec.describe "Repository suite-size trajectory", type: :request do
     # Escape with no JavaScript — and its links are in the document whether it is open or not, which
     # is what makes the criterion-1 assertion above a statement about the page rather than about a
     # widget's default state.
+    # @intent: {"entity": "Repository", "action": "open menu without script", "behavior": "the branch menu is a details/summary disclosure summarised All 11 branches whose eleven links are present in the server-sent document with no JavaScript", "layer": "request"}
     it "opens from the keyboard, with no script and nothing hidden from a non-visual reader" do
       repository = repository_with_eleven_branches
 
@@ -812,6 +849,7 @@ RSpec.describe "Repository suite-size trajectory", type: :request do
     # by `trajectory_shown_branches` and listed in the menu, which omits nothing — so both have to
     # say it is the current one. A menu that marked none of its entries would tell a screen reader
     # the opposite of what the row says about the same branch.
+    # @intent: {"entity": "Repository", "action": "mark current twice", "behavior": "asking ?branch=feature/0 marks feature/0 (1 run) aria-current in both the row and the menu, and those two are the only aria-current entries in the whole selector", "layer": "request"}
     it "marks the branch it is drawing as current in the menu as well as in the row" do
       repository = repository_with_eleven_branches
 
@@ -831,6 +869,7 @@ RSpec.describe "Repository suite-size trajectory", type: :request do
     # out, and where it is — so neither may appear without the other. A menu on a page whose row
     # already names every branch is a control with nothing behind it, and the sentence with no menu
     # under it is the state this ticket exists to end.
+    # @intent: {"entity": "Repository", "action": "omit menu when row complete", "behavior": "with only main and feature/x holding runs the page renders no #suite-trajectory-branch-menu and the basis never says further branch", "layer": "request"}
     it "renders no menu on a page whose row already names every branch" do
       repository = repository_anchored_on_a_feature_branch
 
@@ -853,6 +892,7 @@ RSpec.describe "Repository suite-size trajectory", type: :request do
     # current. A dark panel that lists only branches with nothing behind them tells the reader the
     # opposite of the thing it is here to disclose. Sixty of them, deliberately: that is where a
     # bound set for a display list rather than for branch cardinality drops the trunk.
+    # @intent: {"entity": "Repository", "action": "name trunk on dark panel", "behavior": "with sixty feature branches and a first-run feature/999 newest the dark panel still lists main (5 runs) first in the row and marks feature/999 current, and ?branch=main then draws 5 of the last 5 runs with main marked current", "layer": "request"}
     it "names the branch that holds the history, on a dark panel drawn on another one" do
       repository = create_repository(user: @user)
       5.times { |i| run(repository, "trunk#{i}000000", total: 1_000 + i, at: (40 - i).days.ago) }
@@ -885,6 +925,7 @@ RSpec.describe "Repository suite-size trajectory", type: :request do
     #
     # The branch being drawn is in the list whatever the walk did: it is pinned, not walked to.
     # Here `main` sorts behind every `feature/*`, so the walk never reaches it.
+    # @intent: {"entity": "Repository", "action": "bound ordering claim", "behavior": "with BRANCH_HISTORY_LIMIT stubbed to 10 the basis says At least 3 further branches have runs, that the menu names these 11 and cannot offer one the walk never reached, and that SpecGuard stops after walking 10 branches \u2014 while the menu summary reads 11 branches, not All 11", "layer": "request"}
     it "stops claiming an ordering over every branch once the walk was cut, and still offers the one it drew" do
       stub_const("Repository::BRANCH_HISTORY_LIMIT", 10)
       repository = create_repository(user: @user)
@@ -923,6 +964,7 @@ RSpec.describe "Repository suite-size trajectory", type: :request do
     # Criterion 3, and the reason the fallback is disclosed rather than silent: a deleted branch, a
     # typo and a stale bookmark are ordinary ways to arrive here. The page renders what it would
     # have rendered anyway — and says which branch it drew instead of the one that was asked for.
+    # @intent: {"entity": "Repository", "action": "fall back with notice", "behavior": "asking for feature/deleted returns ok with the panel still dark on feature/x's 1-run sentence and a notice reading SpecGuard has no runs on feature/deleted, so this panel is drawn on feature/x", "layer": "request"}
     it "falls back to the default anchor for a branch it has no runs on, and says so" do
       repository = repository_anchored_on_a_feature_branch
 
@@ -954,6 +996,7 @@ RSpec.describe "Repository suite-size trajectory", type: :request do
     # the same page is `spec/requests/repository_run_anchor_spec.rb`, "echoes an unvalidated sha
     # escaped exactly once, and never as markup" — the two idioms are identical and are pinned
     # identically.
+    # @intent: {"entity": "Repository", "action": "echo branch escaped once", "behavior": "asking ?branch=a&b<script>x</script> returns ok, prints the name back exactly as typed in the fallback notice, and the raw response body contains no live script markup", "layer": "request"}
     it "echoes an unvalidated branch name escaped exactly once, and never as markup" do
       repository = repository_anchored_on_a_feature_branch
 
@@ -967,6 +1010,7 @@ RSpec.describe "Repository suite-size trajectory", type: :request do
       expect(response.body).not_to include("<script>x</script>")
     end
 
+    # @intent: {"entity": "Repository", "action": "treat blank branch as none", "behavior": "asking ?branch= leaves the panel anchored on feature/x with its 1-run sentence and renders no #suite-trajectory-branch-fallback notice", "layer": "request"}
     it "treats a blank branch as no ask at all, and says nothing about a fallback that did not happen" do
       repository = repository_anchored_on_a_feature_branch
 
@@ -976,6 +1020,7 @@ RSpec.describe "Repository suite-size trajectory", type: :request do
       expect(trajectory_panel).to have_no_css("#suite-trajectory-branch-fallback")
     end
 
+    # @intent: {"entity": "Repository", "action": "omit satisfied fallback notice", "behavior": "asking for main when the panel is drawn on main renders no #suite-trajectory-branch-fallback element", "layer": "request"}
     it "says nothing about a fallback when the branch asked for is the one it drew" do
       repository = repository_anchored_on_a_feature_branch
 
@@ -984,6 +1029,7 @@ RSpec.describe "Repository suite-size trajectory", type: :request do
       expect(trajectory_panel).to have_no_css("#suite-trajectory-branch-fallback")
     end
 
+    # @intent: {"entity": "Repository", "action": "omit satisfied fallback notice", "behavior": "asking for main when the panel is drawn on main renders no #suite-trajectory-branch-fallback element", "layer": "request"}
     it "says nothing about a fallback when the branch asked for is the one it drew" do
       repository = repository_anchored_on_a_feature_branch
 
@@ -1006,6 +1052,7 @@ RSpec.describe "Repository suite-size trajectory", type: :request do
     #
     # The ask values need no matching fixture rows: `drill_down_path` reads the RAW request ivars,
     # so the assertion is about what the link carries, not about what the panels render.
+    # @intent: {"entity": "Repository", "action": "mirror branch href", "behavior": "the row chip and the menu entry for main (2 runs) carry the identical href, and that href ends on the #suite-trajectory anchor", "layer": "request"}
     it "offers the same branch at the same href from the row and from the menu" do
       repository = repository_with_eleven_branches
 
@@ -1021,6 +1068,7 @@ RSpec.describe "Repository suite-size trajectory", type: :request do
       expect(row_href).to end_with("#suite-trajectory")
     end
 
+    # @intent: {"entity": "Repository", "action": "carry drill-down asks", "behavior": "a menu link for feature/3 keeps every open drill-down ask in its query \u2014 branch, commit_sha, spec_file, spec_directory, repeated_description, unstable_test and unstable_test_from \u2014 and lands on #suite-trajectory", "layer": "request"}
     it "carries every open drill-down ask through a branch gesture" do
       repository = repository_with_eleven_branches
 
@@ -1075,6 +1123,7 @@ RSpec.describe "Repository suite-size trajectory", type: :request do
     # The anonymous runs are not a branch and are not offered as one — pooling them is the failure
     # the "No branch to plot a history on" state exists to refuse. What the selector adds is the way
     # OUT of that state: the panel names the branch that does have a history.
+    # @intent: {"entity": "Repository", "action": "offer exit from branchless state", "behavior": "a branchless newest run shows No branch to plot a history on with only main (2 runs) offered, and asking ?branch=main then plots trunkaa and trunkbb", "layer": "request"}
     it "offers no way to select the runs that named no branch, and a way to leave that state" do
       repository = create_repository(user: @user)
       run(repository, "trunkaaaaaa", total: 1_000, at: 3.days.ago)
@@ -1092,6 +1141,7 @@ RSpec.describe "Repository suite-size trajectory", type: :request do
       expect(plotted_labels).to eq(%w[trunkaa trunkbb])
     end
 
+    # @intent: {"entity": "Repository", "action": "omit selector without branches", "behavior": "when no run has ever named a branch the panel says No branch to plot a history on and renders no #suite-trajectory-branches element", "layer": "request"}
     it "renders no selector at all when no run has ever named a branch" do
       repository = create_repository(user: @user)
       repository.test_runs.create!(commit_sha: "anonymous01", branch: nil, total_specs_count: 900,
@@ -1107,6 +1157,7 @@ RSpec.describe "Repository suite-size trajectory", type: :request do
     # where nothing else on the panel says anything about the ask. Whether there are CHOICES to
     # offer and whether an ASK was substituted are independent questions, and a notice rendered
     # inside the selector could answer the second only when the first happened to be yes.
+    # @intent: {"entity": "Repository", "action": "disclose fallback without selector", "behavior": "on a branchless page asking for feature/gone returns ok with no selector rendered and a fallback notice saying SpecGuard has no runs on feature/gone and that the latest run named no branch, so there is still no history to draw", "layer": "request"}
     it "discloses a substituted branch where there is no selector to hang the notice on" do
       repository = create_repository(user: @user)
       repository.test_runs.create!(commit_sha: "anonymous01", branch: nil, total_specs_count: 900,
@@ -1130,6 +1181,7 @@ RSpec.describe "Repository suite-size trajectory", type: :request do
   # satisfied by the panel agreeing with itself. The SQL selects the same window the model does —
   # branch-scoped, bounded, ordered by the same key — and the selection rule is re-derived in plain
   # Ruby from the rows it returns.
+  # @intent: {"entity": "Repository", "action": "agree with direct SQL", "behavior": "recomputed from raw SQL over the same thirty-row window the caption reads 3 of 5 runs plotted with 1 withheld for reporting no tests and 1 for reporting only some of the parts, and three circles are drawn", "layer": "request"}
   it "states counts that agree with direct SQL over the same window" do
     repository = create_repository(user: @user)
     3.times { |i| sharded_run(repository, commit_sha: "whole#{i}0000000", per_shard: 5_000 + i) }
@@ -1183,6 +1235,7 @@ RSpec.describe "Repository suite-size trajectory", type: :request do
   describe "what the panel costs the page" do
     # `count_queries` comes from spec/support/query_capture.rb.
 
+    # @intent: {"entity": "Repository", "action": "hold query budget over history", "behavior": "growing the branch from 3 to 23 plotted runs leaves the page query count unchanged while the chart draws 23 circles", "layer": "request"}
     it "costs the same however long the branch's history is" do
       repository = create_repository(user: @user)
       3.times { |i| run(repository, "early#{i}00000", total: 1_000 + i, at: (30 - i).days.ago) }
@@ -1203,6 +1256,7 @@ RSpec.describe "Repository suite-size trajectory", type: :request do
     # different directions — more runs on the branch (which the capped counts must not follow) and
     # more branches to choose from (which the index walk must not turn into a query each). Neither
     # moves the count.
+    # @intent: {"entity": "Repository", "action": "hold budget with branch ask", "behavior": "with ?branch=main asked, adding twenty more main runs and ten feature branches leaves the query count unchanged at 23 circles and a basis reading Drawn through 23 of the last 23 runs on main", "layer": "request"}
     it "costs the same with a branch asked for, however much history and however many branches" do
       repository = create_repository(user: @user)
       3.times { |i| run(repository, "early#{i}00000", total: 1_000 + i, at: (30 - i).days.ago) }
@@ -1229,6 +1283,7 @@ RSpec.describe "Repository suite-size trajectory", type: :request do
     # from `Repository#suite_size_trajectory` and letting each point ask for itself turns both
     # examples in this block red — this one by the eight sharded runs added below — and leaves
     # every other example in this file green.
+    # @intent: {"entity": "Repository", "action": "load assembly once", "behavior": "adding eight sharded runs behind ten plain ones leaves the query count unchanged \u2014 the chart still draws the ten plain circles while the basis reports 8 runs are withheld", "layer": "request"}
     it "asks how the runs were assembled once for the whole panel, not once per point" do
       repository = create_repository(user: @user)
       # The newest run is held fixed across both measurements, deliberately: the Overview above
@@ -1257,6 +1312,7 @@ RSpec.describe "Repository suite-size trajectory", type: :request do
   # Read-only suite telemetry, outside the `keys.manage` gate — the same class of information as
   # the Overview and the Recent-runs panel. Nothing here is credential metadata and nothing here
   # actions anything.
+  # @intent: {"entity": "Repository", "action": "stay viewable by member", "behavior": "a member holding only the view permission gets ok and sees the two plotted runs aaaaaaa and bbbbbbb", "layer": "request"}
   it "is visible to a member with only 'view'" do
     repository = create_repository(user: @user)
     run(repository, "aaaaaaa1111", total: 1_000, at: 2.days.ago)
@@ -1298,6 +1354,7 @@ RSpec.describe "Repository suite-size trajectory", type: :request do
 
     # Criterion 1: the line goes through the same runs as the size line, and every plotted figure is
     # the run's own `duration_seconds`.
+    # @intent: {"entity": "Repository", "action": "draw wall-clock line", "behavior": "the runtime chart draws three circles for the same runs the size line plots, with rows reading 40.2s, 1m 2s and 1m 14s beside their SHAs and relative times", "layer": "request"}
     it "draws each plotted run's wall clock beside the suite's size" do
       repository = create_repository(user: @user)
       timed_run(repository, "aaaaaaa1111", seconds: 40.2, total: 1_000, at: 20.days.ago)
@@ -1325,6 +1382,7 @@ RSpec.describe "Repository suite-size trajectory", type: :request do
     # Asserted on BOTH charts of one page, because the association is derived from the caller's
     # `id:`: two instances resolving to one summary would describe each chart with the other's
     # sentence, and a single-chart assertion cannot see that.
+    # @intent: {"entity": "Repository", "action": "describe each chart table", "behavior": "each chart's table carries aria-describedby pointing at that chart's own summary paragraph, both ids resolve, and the two summaries render different sentences", "layer": "request"}
     it "points each chart's table at that chart's own summary" do
       repository = create_repository(user: @user)
       timed_run(repository, "aaaaaaa1111", seconds: 40.2, total: 1_000, at: 2.days.ago)
@@ -1348,6 +1406,7 @@ RSpec.describe "Repository suite-size trajectory", type: :request do
 
     # Criterion 3: markers are durations and never "74 tests" — which is exactly what the component
     # announced before it stopped naming the unit.
+    # @intent: {"entity": "Repository", "action": "announce duration markers", "behavior": "runtime circle titles read aaaaaaa \u2014 40.2s \u2014 2 days ago and never contain the word test, while the size chart titles keep 1,000 tests and 1,047 tests", "layer": "request"}
     it "announces every marker as a duration and never as a count of tests" do
       repository = create_repository(user: @user)
       timed_run(repository, "aaaaaaa1111", seconds: 40.2, at: 2.days.ago)
@@ -1369,6 +1428,7 @@ RSpec.describe "Repository suite-size trajectory", type: :request do
     # chart words it through there like every other surface that shows it. `74.25` reaching the page
     # as `74.25s` or `74.3 s` would be a spelling this column does not have; it renders as `1m 14s`
     # because it went through the same method the Recent-runs cell does.
+    # @intent: {"entity": "Repository", "action": "reuse duration formatter", "behavior": "the newest run's duration_label of 1m 14s is the figure the runtime rows and chart text print, so one float renders a single way across the page", "layer": "request"}
     it "words its figures through the one formatter this column has" do
       repository = create_repository(user: @user)
       timed_run(repository, "aaaaaaa1111", seconds: 40.2, at: 2.days.ago)
@@ -1385,6 +1445,7 @@ RSpec.describe "Repository suite-size trajectory", type: :request do
     # Criterion 4: the defect the integer coercion produced. 74.25 → 74.80 is a real 0.55s
     # regression; coerced it is 74 → 74, drawn down the middle of the plot and described as a wait
     # that "has not moved".
+    # @intent: {"entity": "Repository", "action": "draw sub-second slope", "behavior": "runtimes of 74.25 and 74.80 seconds plot at two distinct circle heights, neither at the sparkline midline, and the runtime basis never says has not moved", "layer": "request"}
     it "draws a sub-second regression as a slope and does not call it unmoved" do
       repository = create_repository(user: @user)
       timed_run(repository, "aaaaaaa1111", seconds: 74.25, at: 2.days.ago)
@@ -1406,6 +1467,7 @@ RSpec.describe "Repository suite-size trajectory", type: :request do
     # The line separates them either way — that is the float preservation criterion 4 pins — and
     # before this the table did not, so a reader working from the numbers read "unmoved" off a line
     # that moved.
+    # @intent: {"entity": "Repository", "action": "distinguish colliding labels", "behavior": "74.25 and 74.30 seconds share the wording 1m 14s yet the two rows read differently as 1m 14s (74.25) and 1m 14s (74.3)", "layer": "request"}
     it "keeps two runtimes the line separates distinguishable on the text alternative" do
       repository = create_repository(user: @user)
       timed_run(repository, "aaaaaaa1111", seconds: 74.25, at: 2.days.ago)
@@ -1432,6 +1494,7 @@ RSpec.describe "Repository suite-size trajectory", type: :request do
     # waited the SAME 74.25s are not an ambiguity. The line draws them at one height on purpose, so
     # one figure printed twice is the truth about them, and a float disclosed beside it would be
     # noise printed to separate two things that are not different.
+    # @intent: {"entity": "Repository", "action": "word equal runtimes once", "behavior": "two runs that both waited 74.25 seconds print the same duration label twice with no bracketed float disclosed beside either", "layer": "request"}
     it "words two runs that waited the same time once, with nothing disclosed beside it" do
       repository = create_repository(user: @user)
       timed_run(repository, "aaaaaaa1111", seconds: 74.25, at: 2.days.ago)
@@ -1446,6 +1509,7 @@ RSpec.describe "Repository suite-size trajectory", type: :request do
 
     # Criterion 2. Nullable by design, so a run that measured its suite and sent no clock is an
     # ordinary state — off this line, counted here, and still on the size line above.
+    # @intent: {"entity": "Repository", "action": "withhold untimed run", "behavior": "a run with duration nil is named off the runtime line \u2014 the chart reads 2 of 3 plotted runs timed and the basis says 1 run is withheld for reporting no timing at all yet remains on the suite-size line above, where all three still plot", "layer": "request"}
     it "withholds an untimed run by name while leaving it on the size line" do
       repository = create_repository(user: @user)
       timed_run(repository, "aaaaaaa1111", seconds: 40.2, total: 1_000, at: 20.days.ago)
@@ -1474,6 +1538,7 @@ RSpec.describe "Repository suite-size trajectory", type: :request do
     # before the timing guard the wall-clock chart drew a 70% speed-up produced entirely by
     # telemetry loss, on the same page load where the Overview panel above it withheld its scalar
     # delta over the same pair.
+    # @intent: {"entity": "Repository", "action": "withhold partly timed run", "behavior": "a four-shard run whose 18.0-second duration is a max over only two timed shards stays on the size line but off the runtime line, with the chart reading 2 of 3 plotted runs timed the same number of shards and the basis naming a wall clock over a different number of shards \u2014 never reported no timing at all", "layer": "request"}
     it "withholds a run whose shards did not all report a clock, at equal shard count" do
       repository = create_repository(user: @user)
       sharded_run(repository, commit_sha: "aaaafull1111", per_shard: 5_000, seconds: 60.0)
@@ -1507,6 +1572,7 @@ RSpec.describe "Repository suite-size trajectory", type: :request do
     # The line's own basis, in this panel's register. A wall clock on a sharded run is its SLOWEST
     # SHARD and not what the suite cost in machine time, and a reader who takes it for the latter
     # under-reads a four-shard suite by 3.4×.
+    # @intent: {"entity": "Repository", "action": "disclaim machine time", "behavior": "the runtime basis reads Drawn through 2 of the 2 runs on main and states a point is the slowest single shard and not the machine time", "layer": "request"}
     it "states that a point is the run's wait and not the suite's machine time" do
       repository = create_repository(user: @user)
       timed_run(repository, "aaaaaaa1111", seconds: 40.2, at: 2.days.ago)
@@ -1522,6 +1588,7 @@ RSpec.describe "Repository suite-size trajectory", type: :request do
 
     # `plottable?` does not imply `runtime_plottable?`. The panel is not empty — the size line is
     # drawn — so this is one sentence about what was reported rather than an empty state.
+    # @intent: {"entity": "Repository", "action": "explain single-clock shortfall", "behavior": "with one timed and one untimed run the size chart draws, no runtime chart renders, and the basis reads 1 of the 2 plotted runs reported one, and a trajectory needs 2", "layer": "request"}
     it "says why there is no line rather than drawing a flat one through a single clock" do
       repository = create_repository(user: @user)
       timed_run(repository, "aaaaaaa1111", seconds: nil, total: 1_000, at: 2.days.ago)
@@ -1541,6 +1608,7 @@ RSpec.describe "Repository suite-size trajectory", type: :request do
     # this moves the threshold and asks the same sentence again. A hard-coded "1 … needs two" prints
     # a FALSE count here: two runs reported a clock, and the sentence explaining the shortfall would
     # say one did.
+    # @intent: {"entity": "Repository", "action": "count timed shortfall", "behavior": "with MINIMUM_POINTS stubbed to 3 and two of three runs timed no runtime chart renders, and the basis reads 2 of the 3 plotted runs reported one and a trajectory needs 3", "layer": "request"}
     it "counts the shortfall off the timed runs rather than assuming the threshold is two" do
       stub_const("SuiteTrajectory::MINIMUM_POINTS", 3)
       repository = create_repository(user: @user)
@@ -1568,6 +1636,7 @@ RSpec.describe "Repository suite-size trajectory", type: :request do
     # run is on the line and the other is held by `withheld_timing_mismatch`. Driven through the
     # recorder rather than hand-primed, for the reason the sharded examples above are: the partial
     # MAX is a shape the RECORDER produces.
+    # @intent: {"entity": "Repository", "action": "name denominator mismatch cause", "behavior": "two four-shard runs timed over four and two shards leave the size line drawn but no runtime chart, and the basis reads 1 of the 2 plotted runs timed the same number of shards and a trajectory needs 2 without ever saying reported one", "layer": "request"}
     it "names a denominator mismatch as the cause when it is why there is no line" do
       repository = create_repository(user: @user)
       full = sharded_run(repository, commit_sha: "aaaafull1111", per_shard: 5_000, seconds: 60.0)
@@ -1596,6 +1665,7 @@ RSpec.describe "Repository suite-size trajectory", type: :request do
       expect(runtime_basis).to have_no_text("reported one")
     end
 
+    # @intent: {"entity": "Repository", "action": "state no clocks at all", "behavior": "when neither plotted run reported a clock the runtime chart is absent and the basis reads none of the 2 plotted runs reported one", "layer": "request"}
     it "says so plainly when no plotted run reported a clock at all" do
       repository = create_repository(user: @user)
       run(repository, "aaaaaaa1111", total: 1_000, at: 2.days.ago)
@@ -1610,6 +1680,7 @@ RSpec.describe "Repository suite-size trajectory", type: :request do
 
     # Criterion 6. The rows were already loaded and already carried the column, so a second series
     # over them is free — which is the argument for reading it here rather than anywhere else.
+    # @intent: {"entity": "Repository", "action": "hold runtime query budget", "behavior": "growing the branch from 3 to 11 timed plotted points leaves the page query count unchanged", "layer": "request"}
     it "costs no query per plotted point" do
       # `count_queries` comes from spec/support/query_capture.rb — the same rule the block above
       # counts by. What a render-against-render budget can and cannot show is argued there; this

@@ -136,6 +136,7 @@ RSpec.describe "Repository spec directory runtime growth", type: :request do
       )
     end
 
+    # @intent: {"entity": "GET /repositories/:id", "action": "render area runtime rows", "behavior": "spec/models shows then 2.00s now 10.00s change +8.00s and spec/legacy 2.00s, 1.00s, −1.00s, with every area's example count unchanged between the two runs", "layer": "request"}
     it "names each area's time then, its time now, and the movement between them" do
       get repository_path(slowed_suite)
 
@@ -147,6 +148,7 @@ RSpec.describe "Repository spec directory runtime growth", type: :request do
     # rendered into two panels — and the area that got eight seconds slower is NAMED here while the
     # count panel beside it says, correctly, that no area moved. This is the example that fails if
     # this panel is ever collapsed into the count one.
+    # @intent: {"entity": "GET /repositories/:id", "action": "outname count panel", "behavior": "the same page shows spec/models at +8.00s here while the count panel beside it renders no tbody rows and says No area moved", "layer": "request"}
     it "names the slowed area on a page where the count panel says nothing moved" do
       get repository_path(slowed_suite)
 
@@ -157,6 +159,7 @@ RSpec.describe "Repository spec directory runtime growth", type: :request do
 
     # The ranking's whole claim, and the one a `DESC`-only ordering on the signed change fails: a
     # second SHED from an area answers "which areas changed pace" as much as eight seconds added.
+    # @intent: {"entity": "GET /repositories/:id", "action": "rank both directions", "behavior": "row order is spec/models, spec/legacy, spec/system, so a 1.00s shed ranks below an 8.00s gain but still above an unmoved area", "layer": "request"}
     it "ranks by how far each area's time moved, in both directions" do
       get repository_path(slowed_suite)
 
@@ -165,6 +168,7 @@ RSpec.describe "Repository spec directory runtime growth", type: :request do
 
     # An area whose time did not move is a real answer and renders as one — `±0`, not a blank cell
     # and not `+0.00s`, which claims a direction it does not have.
+    # @intent: {"entity": "GET /repositories/:id", "action": "print unmoved cell", "behavior": "spec/system, unchanged at 0.25s in both runs, renders ±0 rather than an empty cell or a +0.00s that claims a direction", "layer": "request"}
     it "says so of an area whose time did not move rather than leaving the cell empty" do
       get repository_path(slowed_suite)
 
@@ -173,6 +177,7 @@ RSpec.describe "Repository spec directory runtime growth", type: :request do
 
     # Every total states what it was summed over, on both sides. `SUM` skips NULLs silently, so a
     # figure covering a third of an area is otherwise indistinguishable from one covering all of it.
+    # @intent: {"entity": "GET /repositories/:id", "action": "state timed coverage", "behavior": "the spec/legacy row's timed cell reads 4 of 4 to 4 of 4, disclosing what each total was summed over on both sides", "layer": "request"}
     it "states how much of each side each total was summed over" do
       get repository_path(slowed_suite)
 
@@ -182,6 +187,7 @@ RSpec.describe "Repository spec directory runtime growth", type: :request do
     # U+2212 and `±` are announced inconsistently across screen readers — from "minus" to nothing at
     # all — and four figures in a row announce as four unattached numbers. So the direction and what
     # it was measured against are spelled out on the cell.
+    # @intent: {"entity": "GET /repositories/:id", "action": "spell movement aloud", "behavior": "the change cells announce as 8.00s slower, 1.00s faster, and took the same time as it did in the previous run on this branch for the three areas", "layer": "request"}
     it "spells the movement out for a screen reader" do
       get repository_path(slowed_suite)
 
@@ -200,6 +206,7 @@ RSpec.describe "Repository spec directory runtime growth", type: :request do
     #
     # Both halves asserted, because they fail independently: the cell says "not reported", and the
     # row sits BELOW the area that actually moved.
+    # @intent: {"entity": "GET /repositories/:id", "action": "mark untimed side", "behavior": "spec/quiet with no timings on the latest side renders now as not reported and change as Not timed with timed 3 of 3 to 0 of 3, and sits below spec/models which actually moved", "layer": "request"}
     it "says an untimed side is not reported, and never ranks it above an area that moved" do
       repository = two_runs(
         previous_specs: area_specs("spec/quiet", 3, each: 1.0) +
@@ -222,6 +229,7 @@ RSpec.describe "Repository spec directory runtime growth", type: :request do
     # Both fixtures keep ONE area timed on the quiet side, deliberately: a run that timed nothing at
     # all is a different state entirely (`:previous_untimed` / `:latest_untimed`, asserted below),
     # and this example is about a run that reported timings and skipped an area.
+    # @intent: {"entity": "GET /repositories/:id", "action": "name quiet run aloud", "behavior": "the spec/quiet aria-label says this run reported no timing for this area, so there is nothing to compare, and the caption notes such areas are listed last", "layer": "request"}
     it "tells a screen reader which run went quiet rather than implying a speedup" do
       repository = two_runs(
         previous_specs: area_specs("spec/quiet", 2, each: 4.0) +
@@ -237,6 +245,7 @@ RSpec.describe "Repository spec directory runtime growth", type: :request do
       expect(basis_text).to include("Areas one of the two runs reported no timing for are listed last")
     end
 
+    # @intent: {"entity": "GET /repositories/:id", "action": "name earlier quiet run", "behavior": "where the previous run went quiet the aria-label instead says the previous run on this branch reported no timing for this area, so there is nothing to compare", "layer": "request"}
     it "names the earlier run as the quiet one where it is the earlier run that went quiet" do
       repository = two_runs(
         previous_specs: area_specs("spec/quiet", 2, each: nil) +
@@ -255,6 +264,7 @@ RSpec.describe "Repository spec directory runtime growth", type: :request do
     # An area the earlier run never recorded is NEW, and saying `+4.00s` of it would read identically
     # to an existing area that got four seconds slower — the one distinction a reader scanning this
     # column most needs. Both totals stay visible beside it, so naming the state loses no magnitude.
+    # @intent: {"entity": "GET /repositories/:id", "action": "label new area", "behavior": "spec/system appearing only in the latest run renders then not reported, now 4.00s, change New area, read aloud as 4.00s of examples, an area the previous run did not record", "layer": "request"}
     it "names an area the previous run did not have rather than differencing it from a zero" do
       repository = two_runs(
         previous_specs: area_specs("spec/models", 2, each: 1.0),
@@ -272,6 +282,7 @@ RSpec.describe "Repository spec directory runtime growth", type: :request do
     # An area can be BOTH new and untimed, and the two facts are said as two facts: "not reported of
     # examples" is not a sentence, and a reader who met it would be reconciling a template rather
     # than reading a row.
+    # @intent: {"entity": "GET /repositories/:id", "action": "separate new from untimed", "behavior": "an area both new and untimed renders both totals as not reported with change New area and an aria-label naming the two facts separately, and the caption keeps its no-timing clause off the page", "layer": "request"}
     it "keeps 'new area' and 'no timing' apart on an area that is both" do
       repository = two_runs(
         previous_specs: area_specs("spec/models", 2, each: 1.0),
@@ -290,6 +301,7 @@ RSpec.describe "Repository spec directory runtime growth", type: :request do
       expect(basis_text).not_to include("reported no timing for are listed last")
     end
 
+    # @intent: {"entity": "GET /repositories/:id", "action": "label removed area", "behavior": "spec/legacy absent from the latest run renders then 4.00s, now not reported, change Area removed, read aloud as 4.00s of examples in the previous run and none now", "layer": "request"}
     it "names an area that is gone rather than differencing it to a zero" do
       repository = two_runs(
         previous_specs: area_specs("spec/models", 2, each: 1.0) +
@@ -306,6 +318,7 @@ RSpec.describe "Repository spec directory runtime growth", type: :request do
     # The caption's load-bearing claims, each asserted rather than assumed — including the one only
     # this grain has: how much of EACH run was timed, as a fraction, so a total summed over a
     # fraction of a run cannot read as a total summed over all of it.
+    # @intent: {"entity": "GET /repositories/:id", "action": "state caption window", "behavior": "the basis names All 3 areas either run recorded, the previous run on this branch (prev000), and Summed off the 7 of 7 and 7 of 7 example rows that reported a timing", "layer": "request"}
     it "states its window, its two runs, and how much of each run was timed" do
       get repository_path(slowed_suite)
 
@@ -319,6 +332,7 @@ RSpec.describe "Repository spec directory runtime growth", type: :request do
     # The other half of that sentence, and the one that stops a reader reconciling this panel
     # against the Overview delta and finding a discrepancy that is not one: the wall clock up there
     # is a MAX over shards, these figures are a SUM over rows, and they are not the same quantity.
+    # @intent: {"entity": "GET /repositories/:id", "action": "disclaim wall clock", "behavior": "the basis says the totals are never the run wall clock and explains the wall clock is a maximum over the run's shards", "layer": "request"}
     it "states that the totals are the runs' own rows and not the wall clock above" do
       get repository_path(slowed_suite)
 
@@ -329,6 +343,7 @@ RSpec.describe "Repository spec directory runtime growth", type: :request do
     # HAZARD 4, carried over from the panel above unchanged: a MOVED test is the same test, so a
     # rename reads here as one area gaining time and another losing the same, with nothing having
     # got slower. The page cannot tell the two apart, so it says so.
+    # @intent: {"entity": "GET /repositories/:id", "action": "disclose moved tests", "behavior": "the basis discloses that a moved test is the same test, reading as time gained in one area and lost in another with nothing having got slower and nothing faster", "layer": "request"}
     it "discloses that a moved test reads as time gained in one area and lost in another" do
       get repository_path(slowed_suite)
 
@@ -338,6 +353,7 @@ RSpec.describe "Repository spec directory runtime growth", type: :request do
 
     # The caption is a claim ABOUT the table, so it is carried to a screen-reader user landing on
     # the table by navigation — who otherwise meets the header row with none of it.
+    # @intent: {"entity": "GET /repositories/:id", "action": "describe table to readers", "behavior": "the table carries aria-describedby pointing at spec-directory-runtime-growth-basis, so a screen-reader user landing on it meets the caption", "layer": "request"}
     it "carries the caption to the table it describes" do
       get repository_path(slowed_suite)
 
@@ -346,6 +362,7 @@ RSpec.describe "Repository spec directory runtime growth", type: :request do
 
     # Two clauses that must appear only where they are TRUE of the rows on the page. A clause that
     # is always printed describes nothing, so both are asserted in both directions.
+    # @intent: {"entity": "GET /repositories/:id", "action": "omit unmoved clause", "behavior": "with every listed area moved (+7.00s and −3.00s) the caption prints neither the did-not-move-are-listed-too clause nor the reported-no-timing-listed-last clause", "layer": "request"}
     it "does not claim the movement ran out where every listed area moved" do
       repository = two_runs(
         previous_specs: area_specs("spec/models", 1, each: 1.0) +
@@ -361,6 +378,7 @@ RSpec.describe "Repository spec directory runtime growth", type: :request do
       expect(basis_text).not_to include("reported no timing for are listed last")
     end
 
+    # @intent: {"entity": "GET /repositories/:id", "action": "include unmoved clause", "behavior": "where the list does show an unmoved area the caption says areas whose time did not move are listed too, as ±0", "layer": "request"}
     it "says the movement ran out only where the list actually shows an unmoved area" do
       get repository_path(slowed_suite)
 
@@ -378,6 +396,7 @@ RSpec.describe "Repository spec directory runtime growth", type: :request do
     # The fixture carries a second property worth naming. `spec/gone` does not survive the cap, so
     # the previous run's rows for it sit outside the ten on hand — derive the per-run totals from
     # those rows instead of from the window and the panel miscounts what it was summed over.
+    # @intent: {"entity": "GET /repositories/:id", "action": "disclose cap size", "behavior": "a 13-area comparison lists SpecObservation RETIMED_DIRECTORIES_LIMIT rows while the basis says The 10 areas whose time moved most, of the 13 either run recorded, summed off 13 of 13 and 12 of 12 example rows", "layer": "request"}
     it "says the list is the head of a longer one, and how long" do
       repository = new_repository
       ingest(repository, commit_sha: "prev00000000001",
@@ -409,6 +428,7 @@ RSpec.describe "Repository spec directory runtime growth", type: :request do
     #
     # This is what stops a future edit "tidying" the gate by copying the fourth condition across:
     # adding it turns this example red, which is the whole point of writing it down.
+    # @intent: {"entity": "GET /repositories/:id", "action": "compare past shard guard", "behavior": "with 4 timed shards against a later run timing 3 of 4, the Overview renders no #runtime-delta while this panel still shows spec/models +6.00s and spec/system ±0", "layer": "request"}
     it "still compares where the Overview runtime delta withholds for unequal timed shards" do
       repository = new_repository
       ingest(repository, commit_sha: "prev00000000001", specs: area_specs("spec/models", 2, each: 1.0),
@@ -440,6 +460,7 @@ RSpec.describe "Repository spec directory runtime growth", type: :request do
     # nothing moved anywhere the rows on hand are areas that did not move while an untimed area sits
     # past the cap unseen. "Every one of the N areas took the same time" would then be a claim about
     # areas nobody measured.
+    # @intent: {"entity": "GET /repositories/:id", "action": "word unchanged suite", "behavior": "a run where nothing moved renders no rows but an empty state saying No area changed pace, that every area these two runs timed took the same time in both, summed off 3 of 3 and 3 of 3 rows, and never Every one of the N areas", "layer": "request"}
     it "says no area changed pace, over the coverage it can claim, rather than tabulating zeroes" do
       repository = two_runs(
         previous_specs: area_specs("spec/models", 2, each: 1.0) +
@@ -463,6 +484,7 @@ RSpec.describe "Repository spec directory runtime growth", type: :request do
   # are the same empty panel, two different things to go and fix, and NOTHING else on this page can
   # tell them apart.
   describe "when the two runs cannot be compared" do
+    # @intent: {"entity": "GET /repositories/:id", "action": "omit panel on first run", "behavior": "a branch with only one run renders no #spec-directory-runtime-growth panel at all", "layer": "request"}
     it "renders no panel at all where there is no earlier run on the branch" do
       repository = new_repository
       ingest(repository, commit_sha: "only00000000001", specs: area_specs("spec/models", 3))
@@ -472,6 +494,7 @@ RSpec.describe "Repository spec directory runtime growth", type: :request do
       expect(panel?).to be(false)
     end
 
+    # @intent: {"entity": "GET /repositories/:id", "action": "word empty latest run", "behavior": "a previous run with examples followed by a latest run reporting zero tests renders the empty state This run reported no tests", "layer": "request"}
     it "says so where this run reported no tests" do
       repository = new_repository
       ingest(repository, commit_sha: "prev00000000001", specs: area_specs("spec/models", 3))
@@ -484,6 +507,7 @@ RSpec.describe "Repository spec directory runtime growth", type: :request do
       expect(empty_state_text).to include("This run reported no tests")
     end
 
+    # @intent: {"entity": "GET /repositories/:id", "action": "word empty previous run", "behavior": "where the previous run on the branch reported no tests the empty state names it, reading previous run on this branch (prev000) reported no tests", "layer": "request"}
     it "says so where the previous run on the branch reported no tests" do
       repository = new_repository
       repository.test_runs.create!(commit_sha: "prev00000000001", branch: "main", total_specs_count: 0,
@@ -500,6 +524,7 @@ RSpec.describe "Repository spec directory runtime growth", type: :request do
     # does NOT take is the Overview runtime delta's `timed_shard_count` guard, which is the
     # denominator of a MAX — and the two examples in "what the panel costs the page" below are what
     # pin that this panel still renders where that guard would have withheld it.
+    # @intent: {"entity": "GET /repositories/:id", "action": "word ragged assembly", "behavior": "a 1-shard latest run against a single-piece previous one renders no rows and an empty state mentioning assembled from 1 shard report and reported in one piece", "layer": "request"}
     it "says so where the two runs were assembled from different numbers of parts" do
       repository = new_repository
       ingest(repository, commit_sha: "prev00000000001", specs: area_specs("spec/models", 4))
@@ -514,6 +539,7 @@ RSpec.describe "Repository spec directory runtime growth", type: :request do
       expect(empty_state_text).to include("reported in one piece")
     end
 
+    # @intent: {"entity": "GET /repositories/:id", "action": "word missing previous detail", "behavior": "a totals-only previous run yields an empty state saying the previous run recorded no per-example detail, else every area of this run would read as time newly appearing", "layer": "request"}
     it "says so where the previous run recorded no per-example detail" do
       repository = new_repository
       ingest(repository, commit_sha: "prev00000000001", total: 40)
@@ -527,6 +553,7 @@ RSpec.describe "Repository spec directory runtime growth", type: :request do
       expect(empty_state_text).to include("every area of this run would read as time newly appearing")
     end
 
+    # @intent: {"entity": "GET /repositories/:id", "action": "word missing latest detail", "behavior": "a totals-only latest run yields an empty state saying every area of the previous run would read as time disappearing", "layer": "request"}
     it "says so where this run recorded no per-example detail" do
       repository = new_repository
       ingest(repository, commit_sha: "prev00000000001", specs: area_specs("spec/models", 3))
@@ -542,6 +569,7 @@ RSpec.describe "Repository spec directory runtime growth", type: :request do
     # sent a duration with none of them — so it is fully "recorded", fully "measured", and has
     # nothing to sum. Ungated, every area of the other run reads as a slowdown, or a win, that no
     # commit caused.
+    # @intent: {"entity": "GET /repositories/:id", "action": "word untimed previous run", "behavior": "an empty state says the previous run reported no timings, records its 4 examples and a duration for none of them, and avoids reading the time as newly appearing", "layer": "request"}
     it "says the previous run reported no timings, and how many rows it did record" do
       repository = two_runs(
         previous_specs: area_specs("spec/models", 4, each: nil),
@@ -556,6 +584,7 @@ RSpec.describe "Repository spec directory runtime growth", type: :request do
       expect(empty_state_text).to include("time newly appearing")
     end
 
+    # @intent: {"entity": "GET /repositories/:id", "action": "word untimed latest run", "behavior": "an empty state says This run reported no timings, which is a reporting gap and not a speedup", "layer": "request"}
     it "says this run reported no timings rather than letting the suite read as a speedup" do
       repository = two_runs(
         previous_specs: area_specs("spec/models", 4, each: 2.0),
@@ -568,6 +597,7 @@ RSpec.describe "Repository spec directory runtime growth", type: :request do
       expect(empty_state_text).to include("which is a reporting gap and not a speedup")
     end
 
+    # @intent: {"entity": "GET /repositories/:id", "action": "word both untimed", "behavior": "an empty state says neither this run nor the previous run on this branch reported a duration", "layer": "request"}
     it "says so where neither run reported a timing" do
       repository = two_runs(
         previous_specs: area_specs("spec/models", 4, each: nil),
@@ -579,6 +609,7 @@ RSpec.describe "Repository spec directory runtime growth", type: :request do
       expect(empty_state_text).to include("Neither this run nor the previous run on this branch reported a duration")
     end
 
+    # @intent: {"entity": "GET /repositories/:id", "action": "word both undetailed", "behavior": "two totals-only runs yield an empty state saying neither recorded per-example detail and there are no areas to time", "layer": "request"}
     it "says so where neither run recorded per-example detail" do
       repository = new_repository
       ingest(repository, commit_sha: "prev00000000001", total: 40)
@@ -595,6 +626,7 @@ RSpec.describe "Repository spec directory runtime growth", type: :request do
     # sentence for all of them would satisfy every example above that checked only the shared half.
     # This pins the pair NOTHING ELSE on this page distinguishes: the same run, "recorded no
     # per-example rows" against "recorded them and timed none".
+    # @intent: {"entity": "GET /repositories/:id", "action": "separate two absences", "behavior": "the same page renders a different empty state for a run that recorded no per-example detail than for one that recorded rows and timed none, keeping the two fixes distinguishable", "layer": "request"}
     it "keeps a run's two absences apart" do
       unrecorded = new_repository
       ingest(unrecorded, commit_sha: "prev00000000001", total: 40)
@@ -631,6 +663,7 @@ RSpec.describe "Repository spec directory runtime growth", type: :request do
     # difference against the same page rendering ten times the examples, so an implementation that
     # read a run's areas per row — or issued a second round trip to count them — shows up here
     # whatever the page's absolute query count happens to be.
+    # @intent: {"entity": "GET /repositories/:id", "action": "scale query cost flatly", "behavior": "pages over a 300-example pair and a 30-example pair, both rendering 2 rows, issue the same total query count", "layer": "request"}
     it "costs the same whether the two runs hold thirty examples or three hundred" do
       small = two_runs(previous_specs: area_specs("spec/models", 10, each: 1.0) +
                                        area_specs("spec/system", 5, each: 0.5, offset: 50),
@@ -658,6 +691,7 @@ RSpec.describe "Repository spec directory runtime growth", type: :request do
     # Counted as THIS panel's own statement rather than as a page-wide difference of one: several
     # neighbours gate on the same two runs and shed their own reads on the incomparable side too, so
     # a page-wide subtraction would stop being a claim about this gate the moment another arrives.
+    # @intent: {"entity": "GET /repositories/:id", "action": "gate before querying", "behavior": "the comparable pair issues exactly one SUM(duration_seconds) FILTER statement while the incomparable pair issues none, so the gate runs before the query rather than filtering its results", "layer": "request"}
     it "asks the observations table nothing where the runs are not comparable" do
       comparable = two_runs(previous_specs: area_specs("spec/models", 3, each: 1.0),
                             latest_specs: area_specs("spec/models", 3, each: 2.0, offset: 100))
@@ -678,6 +712,7 @@ RSpec.describe "Repository spec directory runtime growth", type: :request do
 
   # Read-only suite telemetry, like every panel around it: a `view` member legitimately needs to see
   # what CI reported. Nothing here is credential metadata and nothing here actions anything.
+  # @intent: {"entity": "GET /repositories/:id", "action": "serve view member", "behavior": "a member whose only permission is view gets 200 and sees the spec/models row at change +4.00s", "layer": "request"}
   it "is visible to a member with only 'view'" do
     repository = two_runs(previous_specs: area_specs("spec/models", 2, each: 1.0),
                           latest_specs: area_specs("spec/models", 2, each: 3.0, offset: 100))

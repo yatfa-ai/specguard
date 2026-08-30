@@ -117,6 +117,7 @@ RSpec.describe "Repository unannotated directories", type: :request do
 
     # THE panel's claim: which AREAS the tests SpecGuard cannot see are in, most first — and both
     # operands on every row, because the count alone is the figure the Overview already had.
+    # @intent: {"entity": "GET /repositories/:id", "action": "rank unannotated areas", "behavior": "rows come back as spec/models 3 unannotated of 4 recorded, spec/requests 1 of 5 and spec/system 1 of 1, ordered most unannotated first", "layer": "request"}
     it "ranks the areas by how many of their examples carry no intent, most first" do
       get repository_path(debt_run)
 
@@ -128,6 +129,7 @@ RSpec.describe "Repository unannotated directories", type: :request do
     # The ordering is by DEBT and not by size, and the fixture is built so the two disagree:
     # `spec/requests` is the largest area on this run and sits below the smaller `spec/models`,
     # while `spec/system` — one example — is listed at all.
+    # @intent: {"entity": "GET /repositories/:id", "action": "rank by debt not size", "behavior": "the first row is spec/models with only 4 recorded while spec/requests holds 5, and the recorded column is not sorted descending, so the order follows debt rather than area size", "layer": "request"}
     it "does not rank the areas by how many examples they hold" do
       get repository_path(debt_run)
 
@@ -139,6 +141,7 @@ RSpec.describe "Repository unannotated directories", type: :request do
     # OPERANDS AND NEVER A FRACTION — `UnannotatedDirectories` states that boundary twice and it
     # governs the partial too. An area at 3 of 4 is equally a module nobody has annotated yet and a
     # module of generated specs nobody intends to, and the panel does not decide which.
+    # @intent: {"entity": "GET /repositories/:id", "action": "omit row verdicts", "behavior": "the panel prints no %, no 75 and no 3 of 4, and states the areas are shown never a percentage", "layer": "request"}
     it "shows no percentage, ratio or verdict on a row" do
       get repository_path(debt_run)
 
@@ -151,6 +154,7 @@ RSpec.describe "Repository unannotated directories", type: :request do
     # An area with no debt is a ROW here, by the model's stated decision — the read groups the run's
     # whole population and applies the status filter inside the aggregate. A panel that dropped those
     # rows would describe a different population from the API block of the same name.
+    # @intent: {"entity": "GET /repositories/:id", "action": "list debt-free area", "behavior": "an area whose single example carries an intent still renders as a row at unannotated 0 of 1 recorded beside spec/models 1 of 1, rather than being dropped", "layer": "request"}
     it "lists an area whose examples all carry an intent at zero rather than dropping it" do
       repository = create_repository(user: @user)
       ingest(repository, [unannotated_spec(file_path: "spec/models/order_spec.rb", line_number: 1),
@@ -165,6 +169,7 @@ RSpec.describe "Repository unannotated directories", type: :request do
     # Bounded by `SpecObservation::UNANNOTATED_DIRECTORIES_LIMIT` — its own constant, not the
     # by-duration panel's: the two rank different things and a suite wanting twenty areas ranked by
     # cost has no reason to want twenty ranked by debt.
+    # @intent: {"entity": "GET /repositories/:id", "action": "cap ranked areas", "behavior": "a run spanning 25 directories lists exactly SpecObservation UNANNOTATED_DIRECTORIES_LIMIT rows, from spec/d25 first down to spec/d16 last", "layer": "request"}
     it "lists no more than the ten carrying the most, however many areas the run touched" do
       get repository_path(twenty_five_directory_run)
 
@@ -176,6 +181,7 @@ RSpec.describe "Repository unannotated directories", type: :request do
     # A capped list that does not disclose its cap is read as the whole story. `rows.size` cannot
     # state the population — it IS the truncated figure — so the caption names what the list is the
     # head of, through `UnannotatedDirectories#truncated?`.
+    # @intent: {"entity": "GET /repositories/:id", "action": "disclose truncation", "behavior": "the basis line reads The 10 areas SpecGuard reads least of, of the 25 this run recorded examples in — most unreadable examples first, then most unannotated", "layer": "request"}
     it "says how many areas the run recorded examples in, not just how many it lists" do
       get repository_path(twenty_five_directory_run)
 
@@ -189,6 +195,7 @@ RSpec.describe "Repository unannotated directories", type: :request do
     # The other half of the same predicate, and the answer a `truncated?` hard-wired to `true` gets
     # wrong: a complete list captioned as a sample tells a reader there are areas it is not showing
     # them when there are none.
+    # @intent: {"entity": "GET /repositories/:id", "action": "state complete list", "behavior": "on an uncapped 3-directory run the basis says All 3 directories this run recorded examples in and never the areas-SpecGuard-reads-least-of wording", "layer": "request"}
     it "says the list is all of them, where nothing was cut" do
       get repository_path(debt_run)
 
@@ -203,6 +210,7 @@ RSpec.describe "Repository unannotated directories", type: :request do
     # is re-derived by SUM over shard reports and a client may report totals for more examples than
     # it sends detail for. The caption says so rather than leaving a reader to find it with a
     # calculator.
+    # @intent: {"entity": "GET /repositories/:id", "action": "count own rows", "behavior": "a run reporting total_specs_count 4000 but recording one example renders spec/models 1 unannotated of 1 recorded, never prints 4,000, and the basis says the panel counts a different population from the suite size on the Overview panel above", "layer": "request"}
     it "counts each area's own rows rather than the run's reported suite size" do
       repository = create_repository(user: @user)
       ingest(repository, [unannotated_spec(file_path: "spec/models/order_spec.rb", line_number: 1)],
@@ -220,6 +228,7 @@ RSpec.describe "Repository unannotated directories", type: :request do
     # debt lands on the area that included it rather than on `spec/support`, and a nested area is its
     # own row rather than counting inside its ancestor. The rollup the API serves obeys both rules;
     # this pins that the page renders the same rows.
+    # @intent: {"entity": "GET /repositories/:id", "action": "attribute shared group debt", "behavior": "shared example group debt lands on spec/models and spec/models/orders, the areas whose files included it, and no spec/support row appears", "layer": "request"}
     it "lands a shared example group's debt on the area that included it" do
       repository = create_repository(user: @user)
       shared = "spec/support/shared_examples.rb"
@@ -249,6 +258,7 @@ RSpec.describe "Repository unannotated directories", type: :request do
       repository
     end
 
+    # @intent: {"entity": "GET /repositories/:id", "action": "render no-debt panel", "behavior": "a run whose 2 recorded examples all carry an intent still shows the panel saying No unannotated tests in this run and Every example this run recorded carries an @intent, across all 2 directories, with an empty table body", "layer": "request"}
     it "renders the panel and says there is no debt, rather than disappearing" do
       get repository_path(annotated_run)
 
@@ -262,6 +272,7 @@ RSpec.describe "Repository unannotated directories", type: :request do
     # And it does not say the other empty state's sentence, which is the whole point of there being
     # two: this run sent its detail, and the reason there is nothing to list is a finding about the
     # suite rather than a gap in the payload.
+    # @intent: {"entity": "GET /repositories/:id", "action": "disclaim missing detail", "behavior": "that no-debt panel does not print the other empty state sentence No per-example detail on this run", "layer": "request"}
     it "does not claim the detail is missing" do
       get repository_path(annotated_run)
 
@@ -279,6 +290,7 @@ RSpec.describe "Repository unannotated directories", type: :request do
       repository
     end
 
+    # @intent: {"entity": "GET /repositories/:id", "action": "render no-detail panel", "behavior": "a totals-only run of 900 tests with 300 annotated and no per-example rows shows the panel saying No per-example detail on this run and not that it has none, with an empty table body", "layer": "request"}
     it "renders the panel and says the detail is missing, not that there is no debt" do
       get repository_path(totals_only_run)
 
@@ -288,6 +300,7 @@ RSpec.describe "Repository unannotated directories", type: :request do
       expect(panel).to have_no_css("tbody tr")
     end
 
+    # @intent: {"entity": "GET /repositories/:id", "action": "avoid false clean", "behavior": "the no-detail panel never prints No unannotated tests in this run, so a client's silence is not read as measured zero", "layer": "request"}
     it "does not claim the run is free of unannotated tests" do
       get repository_path(totals_only_run)
 
@@ -304,6 +317,7 @@ RSpec.describe "Repository unannotated directories", type: :request do
     # What it still prints, and must: the @intent share off the counters. That is the figure the
     # client did report, and the one question this correction was required to leave answering exactly
     # as it did before.
+    # @intent: {"entity": "GET /repositories/:id", "action": "agree with overview", "behavior": "the Overview still prints Carrying an @intent 300 and 33.3% — 300 of 900 tests carry an @intent while saying nothing here to say how much of the rest it can make out, neither surface says Not visible to SpecGuard or SpecGuard cannot see the other, and the panel notes any Overview count is taken from the run's own totals", "layer": "request"}
     it "coexists with an Overview that declines to report readings and still gives the @intent share" do
       get repository_path(totals_only_run)
 
@@ -322,6 +336,7 @@ RSpec.describe "Repository unannotated directories", type: :request do
   # page's one statement of that, and a second empty state here would invite exactly the reading that
   # branch exists to refuse: never-ingested is not measured-zero.
   describe "a repository with no run at all" do
+    # @intent: {"entity": "GET /repositories/:id", "action": "omit panel without run", "behavior": "a repository CI has never reported for renders 200 with no #unannotated-directories panel while the page says No CI run has reported yet", "layer": "request"}
     it "renders no panel" do
       get repository_path(create_repository(user: @user))
 
@@ -334,6 +349,7 @@ RSpec.describe "Repository unannotated directories", type: :request do
     # read of `spec_observations` at all. The page-wide budget in spec/requests/repositories_spec.rb
     # counts the query on the other side of that gate; this is the half an absolute count on a
     # fixture that HAS a run cannot see.
+    # @intent: {"entity": "GET /repositories/:id", "action": "skip per-example read", "behavior": "a GET for a never-reported repository issues zero queries against spec_observations", "layer": "request"}
     it "issues no per-example read for a repository that has never reported" do
       repository = create_repository(user: @user)
       get repository_path(repository)
@@ -357,6 +373,7 @@ RSpec.describe "Repository unannotated directories", type: :request do
       repository
     end
 
+    # @intent: {"entity": "GET /repositories/:id", "action": "scale reads flatly", "behavior": "the 20-directory page and the 2-directory page issue the same number of spec_observations queries, with the larger page rendering its full capped 10 rows", "layer": "request"}
     it "costs the same number of per-example reads at 20 areas as at 2" do
       small = run_with(directories: 2, examples_per_directory: 1, name: "two-areas")
       large = run_with(directories: 20, examples_per_directory: 5, name: "twenty-areas")
@@ -399,6 +416,7 @@ RSpec.describe "Repository unannotated directories", type: :request do
       repository
     end
 
+    # @intent: {"entity": "GET /repositories/:id", "action": "split reading columns", "behavior": "spec/workers renders 0 authored, 0 derived, 1 unreadable of 1 recorded while spec/models renders 1 authored, 3 derived, 0 unreadable of 4 recorded", "layer": "request"}
     it "splits each area into what is authored, what it read, and what it could not read" do
       get repository_path(reading_run)
 
@@ -410,6 +428,7 @@ RSpec.describe "Repository unannotated directories", type: :request do
     # ⭐ THE RANKING. `spec/models` carries THREE unannotated examples to `spec/workers`'s one, so the
     # old `unannotated_count DESC` order puts it first. It is second here, because SpecGuard reads
     # every one of its three and cannot read the other area's one.
+    # @intent: {"entity": "GET /repositories/:id", "action": "lead on unreadable", "behavior": "spec/workers with 1 unreadable outranks spec/models with 3 derived readings, and on an all-readable run the order flips back to most unannotated first, spec/models then spec/workers", "layer": "request"}
     it "leads on the areas it cannot read, not on the ones carrying the most debt" do
       get repository_path(reading_run)
 
@@ -432,6 +451,7 @@ RSpec.describe "Repository unannotated directories", type: :request do
 
     # The claim the column header used to make, made now about the one column that may make it — and
     # the caption saying what a derived reading is MISSING, which is the honest version of it.
+    # @intent: {"entity": "GET /repositories/:id", "action": "scope invisibility claim", "behavior": "Not visible to SpecGuard is gone, the columns read Carrying an @intent, Read from the description and Not readable, and the basis says only the third column counts tests SpecGuard can say nothing about and its layer is guessed from the directory", "layer": "request"}
     it "reserves the invisibility claim for the column that can carry it" do
       get repository_path(reading_run)
 
@@ -448,6 +468,7 @@ RSpec.describe "Repository unannotated directories", type: :request do
     # The three columns PARTITION each area's population, which is what makes them safe to render
     # side by side: a row whose parts did not sum to its total would be three columns of a four-way
     # split.
+    # @intent: {"entity": "GET /repositories/:id", "action": "partition area counts", "behavior": "for every row authored plus derived plus unreadable equals recorded, so the three columns sum to the population with nothing counted twice or left out", "layer": "request"}
     it "splits each area exactly, with nothing counted twice and nothing left out" do
       get repository_path(reading_run)
 
@@ -459,6 +480,7 @@ RSpec.describe "Repository unannotated directories", type: :request do
 
     # THE PANEL AND THE JSON BLOCK ARE TWO CONSUMERS OF ONE READ, and the split must not be able to
     # differ between them — the same guard the sibling panel keeps for its rows.
+    # @intent: {"entity": "GET /repositories/:id", "action": "match api split", "behavior": "the rows scraped from the web page equal, in content and order, the latest_run unannotated_directories rows served to a bearer token by GET /api/v1/repository with unannotated_examples=1", "layer": "request"}
     it "splits the areas the same way, in the same order, as the API's unannotated_directories block" do
       repository = reading_run
       key = repository.api_keys.create!

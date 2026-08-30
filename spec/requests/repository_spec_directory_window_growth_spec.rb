@@ -123,6 +123,7 @@ RSpec.describe "Repository spec directory window growth", type: :request do
   describe "a window with a comparable baseline" do
     # THE example this panel ships for. Both panels are on the page over the same fixture and they
     # print different numbers: the push moved each area by one, the window moved them by three.
+    # @intent: {"entity": "TestRun", "action": "compare window endpoints", "behavior": "Over four runs where spec/models creeps 2 to 5 and spec/legacy falls 6 to 3, the window rows read +3 and \u22123 while the last-push panel beside them prints only +1 and \u22121.", "layer": "request"}
     it "measures each area across the window rather than since the last push" do
       get repository_path(creeping_window)
 
@@ -133,6 +134,7 @@ RSpec.describe "Repository spec directory window growth", type: :request do
 
     # Ranked by ABSOLUTE movement across the window, in both directions — a `DESC`-only ranking on
     # the signed change puts every deletion below every addition and off the end of the cap.
+    # @intent: {"entity": "TestRun", "action": "rank absolute movement", "behavior": "Areas rank by absolute movement in both directions, spec/legacy at \u22128 above spec/models at +3 above an unmoved spec/system shown as \u00b10, so deletions do not sink below additions off the cap.", "layer": "request"}
     it "ranks by how far each area moved across the window, in both directions" do
       repository = new_repository
       ingest(repository, "one0000000001", minutes_ago: 120,
@@ -152,6 +154,7 @@ RSpec.describe "Repository spec directory window growth", type: :request do
     # WHICH run the figure was taken against — the sentence with no counterpart on the panel above,
     # where the comparand is "the previous run" and there is only one candidate. Commit, distance
     # and age, because "26 runs back" is a week on one branch and a quarter on another.
+    # @intent: {"entity": "TestRun", "action": "name comparison basis", "behavior": "The basis sentence names the comparand one0000, says it is 3 runs back and 4 hours old, and states the comparison spans all 4 runs of the window on main.", "layer": "request"}
     it "names the run it compared against, how far back it is, and how old it is" do
       get repository_path(creeping_window)
 
@@ -163,6 +166,7 @@ RSpec.describe "Repository spec directory window growth", type: :request do
 
     # The limitation a thirty-run heading would otherwise imply away, asserted as a sentence rather
     # than assumed from the code.
+    # @intent: {"entity": "TestRun", "action": "disclose endpoints-only", "behavior": "The basis states Only the two ends are compared and warns that an area may have grown and shrank back to where it started unseen in between.", "layer": "request"}
     it "states that what happened between the two ends is not shown" do
       get repository_path(creeping_window)
 
@@ -172,6 +176,7 @@ RSpec.describe "Repository spec directory window growth", type: :request do
 
     # The rename disclosure, which is STRONGER across a window than across one push: a reader can
     # remember last week's rename and cannot be expected to remember every rename in thirty runs.
+    # @intent: {"entity": "TestRun", "action": "disclose rename double-count", "behavior": "The basis says a test that MOVED counts as growth in one area and shrinkage in another with nothing added and nothing deleted, and that over a window the rename may be one nobody remembers.", "layer": "request"}
     it "discloses that a moved test reads as growth in one area and shrinkage in another" do
       get repository_path(creeping_window)
 
@@ -181,6 +186,7 @@ RSpec.describe "Repository spec directory window growth", type: :request do
     end
 
     # Every figure is counted off the rows the two ENDS wrote, never off `total_specs_count`.
+    # @intent: {"entity": "TestRun", "action": "state counted rows", "behavior": "The basis says the figures cover all 2 areas and the 8 and 8 example rows the two window ends recorded, counts that may legitimately differ from total_specs_count.", "layer": "request"}
     it "states what it was counted over" do
       get repository_path(creeping_window)
 
@@ -192,6 +198,7 @@ RSpec.describe "Repository spec directory window growth", type: :request do
     # U+2212 and `±` are announced inconsistently across screen readers, and the direction has to
     # name the BASELINE: a reader told this is a change since the last push has the wrong figure,
     # not a vaguer one.
+    # @intent: {"entity": "TestRun", "action": "spell out movement", "behavior": "Each row's aria-label reads 3 examples more, or fewer, than the baseline run of this window, naming the window baseline rather than the last push.", "layer": "request"}
     it "spells the movement out for a screen reader, against the baseline and not the last push" do
       get repository_path(creeping_window)
 
@@ -206,6 +213,7 @@ RSpec.describe "Repository spec directory window growth", type: :request do
     # rows that moved by nothing. The caption says which, and says it ONLY where it is true of the
     # rows on the page: asserted in both directions, because a clause that is always printed is not
     # a description of anything.
+    # @intent: {"entity": "TestRun", "action": "omit ran-out clause", "behavior": "Where both listed areas moved, \u22123 and +3, the caption does not say rows that did not move are listed too, a clause printed only when true of the rows on the page.", "layer": "request"}
     it "does not claim the movement ran out where every listed area moved" do
       get repository_path(creeping_window)
 
@@ -213,6 +221,7 @@ RSpec.describe "Repository spec directory window growth", type: :request do
       expect(basis_text).not_to include("did not move are listed too")
     end
 
+    # @intent: {"entity": "TestRun", "action": "link caption to table", "behavior": "The table's aria-describedby points at the spec-directory-window-growth-basis element, binding the caption sentence to the table it describes.", "layer": "request"}
     it "carries the caption to the table it describes" do
       get repository_path(creeping_window)
 
@@ -222,6 +231,7 @@ RSpec.describe "Repository spec directory window growth", type: :request do
     # An area only one END has says so rather than differencing against a zero that was never a
     # measurement of it — and over a window that reading matters more, because the area may have
     # existed in the middle of it.
+    # @intent: {"entity": "TestRun", "action": "mark new area", "behavior": "An area only the window's latest end recorded renders baseline 0, now 4, change New area, announced as 4 examples, an area the baseline run did not record instead of a difference from zero.", "layer": "request"}
     it "names an area the baseline did not record rather than differencing it from a zero" do
       repository = new_repository
       ingest(repository, "one0000000001", minutes_ago: 120, specs: area_specs("spec/models", 3))
@@ -239,6 +249,7 @@ RSpec.describe "Repository spec directory window growth", type: :request do
     # The list is capped, so its own length says nothing about how much of the comparison it covers.
     # The total is a count of GROUPS taken before the cap — thirteen here, a figure neither end
     # alone could produce.
+    # @intent: {"entity": "TestRun", "action": "disclose list cap", "behavior": "With 13 moved areas under a 10-row cap the table shows MOVED_DIRECTORIES_LIMIT rows and the basis reads The 10 areas that moved most across this window, of the 13.", "layer": "request"}
     it "says the list is the head of a longer one, and how long" do
       repository = new_repository
       ingest(repository, "one0000000001", minutes_ago: 120, specs: area_specs("spec/gone", 1))
@@ -255,6 +266,7 @@ RSpec.describe "Repository spec directory window growth", type: :request do
   # The property that separates this panel from a sum of pushes, and the one a reader is owed in
   # words: two endpoints are two measurements, not a trajectory.
   describe "when the movement happened inside the window" do
+    # @intent: {"entity": "TestRun", "action": "net out mid-window swing", "behavior": "An area that went 3 to 300 to 3 inside the window renders the panel's empty state saying no area moved and that it grew and shrank back in between, while the last-push panel still reports \u2212297.", "layer": "request"}
     it "reads an area that grew and shrank back as an area that did not move, and says so" do
       repository = new_repository
       ingest(repository, "one0000000001", minutes_ago: 180, specs: area_specs("spec/models", 3))
@@ -275,6 +287,7 @@ RSpec.describe "Repository spec directory window growth", type: :request do
     # numbers. Here the walk stepped over two of the four runs and landed on the run immediately
     # before this one, so an unqualified "no area moved across this window" would assert over four
     # runs a result taken across two.
+    # @intent: {"entity": "TestRun", "action": "qualify empty comparison", "behavior": "When nothing moved over a walk that stepped over two runs, the empty state names base000 as the run immediately before it, says it spans 2 of the last 4 runs on main, and counts 1 no-tests and 1 differently-assembled rejection.", "layer": "request"}
     it "names the baseline and the span it actually covered when nothing moved" do
       repository = new_repository
       unmeasured_run(repository, "zero0000000001", minutes_ago: 240)
@@ -317,6 +330,7 @@ RSpec.describe "Repository spec directory window growth", type: :request do
       repository
     end
 
+    # @intent: {"entity": "TestRun", "action": "walk to comparable baseline", "behavior": "With the oldest run empty and the next sharded, the walk lands on base000 and the change is +3 from 2 to 5, never the +4 reading the oldest row regardless would print.", "layer": "request"}
     it "walks past the runs it cannot compare and measures from the first one it can" do
       get repository_path(walked_window)
 
@@ -328,6 +342,7 @@ RSpec.describe "Repository spec directory window growth", type: :request do
     # A window is a promise about depth, so a comparison spanning less of it says by how much — and
     # names each reason separately, because a client that stopped reporting totals and a branch
     # whose sharding changed are two different things to go and fix.
+    # @intent: {"entity": "TestRun", "action": "state walk span", "behavior": "The basis says the comparison spans 3 of the last 5 runs on main and that the 2 older runs could not be compared, naming 1 as reporting no tests and 1 as assembled from a different number of parts.", "layer": "request"}
     it "says how much of the window the comparison spans, and why it is not all of it" do
       get repository_path(walked_window)
 
@@ -340,6 +355,7 @@ RSpec.describe "Repository spec directory window growth", type: :request do
     # A single stepped-over run says "it", because the sentence has already counted it: "the 1 older
     # run could not be compared — 1 reported no tests" counts one run twice in eleven words, and the
     # reader goes looking for the second one.
+    # @intent: {"entity": "TestRun", "action": "count rejection once", "behavior": "With a single stepped-over run the basis reads it spans 2 of the last 3 runs on main and blames the 1 older run \u2014 it reported no tests \u2014 counting that run once instead of twice.", "layer": "request"}
     it "says why one stepped-over run was stepped over without counting it twice" do
       repository = new_repository
       unmeasured_run(repository, "zero0000000000", minutes_ago: 240)
@@ -356,6 +372,7 @@ RSpec.describe "Repository spec directory window growth", type: :request do
   # Seven reasons there is no comparison, said APART rather than collapsed into one blank panel.
   # Four of them are this panel's own, because its comparand is CHOSEN rather than given.
   describe "when there is no comparison to draw" do
+    # @intent: {"entity": "TestRun", "action": "await second run", "behavior": "A branch holding a single run in the window renders No window to compare across yet with one run in the window so far, without calling youth a fault.", "layer": "request"}
     it "says the window has only one run yet, without calling it a fault" do
       repository = new_repository
       ingest(repository, "only0000000001", minutes_ago: 60, specs: area_specs("spec/models", 3))
@@ -366,6 +383,7 @@ RSpec.describe "Repository spec directory window growth", type: :request do
       expect(empty_state_text).to include("one run in the window so far")
     end
 
+    # @intent: {"entity": "TestRun", "action": "name empty head run", "behavior": "When the latest run reported no tests the panel says This run reported no tests rather than comparing against the earlier measured run.", "layer": "request"}
     it "says so where this run reported no tests" do
       repository = new_repository
       ingest(repository, "one0000000001", minutes_ago: 120, specs: area_specs("spec/models", 3))
@@ -376,6 +394,7 @@ RSpec.describe "Repository spec directory window growth", type: :request do
       expect(empty_state_text).to include("This run reported no tests")
     end
 
+    # @intent: {"entity": "TestRun", "action": "name empty earlier runs", "behavior": "Where both earlier runs in the window reported no tests, the empty state says every one of the 2 earlier runs on main reported no tests and has a count but not a measurement.", "layer": "request"}
     it "says so where every earlier run in the window reported no tests" do
       repository = new_repository
       unmeasured_run(repository, "one0000000001", minutes_ago: 180)
@@ -392,6 +411,7 @@ RSpec.describe "Repository spec directory window growth", type: :request do
     # The state that would otherwise produce a wrong NUMBER per AREA rather than an honest absence.
     # This run's own composition is named, so the reader is told what the earlier runs would have
     # had to match.
+    # @intent: {"entity": "TestRun", "action": "name composition mismatch", "behavior": "A sharded latest run with only an unsharded predecessor renders the state saying the 1 earlier run was not assembled the way this run was, which reported in one piece.", "layer": "request"}
     it "says so where no earlier run was assembled the way this one was" do
       repository = new_repository
       ingest(repository, "one0000000001", minutes_ago: 120, ci_run_id: "gha-1", shard_id: "0",
@@ -413,6 +433,7 @@ RSpec.describe "Repository spec directory window growth", type: :request do
     # like this unsharded anchor — and then counts that same run again in "a further 1", implying a
     # third run this window does not hold. A clause-level assertion is green under both spellings,
     # which is why this one pins the leading count and the qualifier too.
+    # @intent: {"entity": "TestRun", "action": "separate walk rejections", "behavior": "With one unmeasured and one sharded-mismatched earlier run, the empty state blames the assembly mismatch on the 1 run that reported tests and counts a further 1 as reporting no tests, never lumping them as 2 earlier runs.", "layer": "request"}
     it "blames each walk rejection only for the runs it applied to, and counts them once" do
       repository = new_repository
       unmeasured_run(repository, "zero0000000001", minutes_ago: 180)
@@ -436,6 +457,7 @@ RSpec.describe "Repository spec directory window growth", type: :request do
     # The walk does NOT step over it — that would cost a query per candidate — so the panel names
     # the run it landed on and says what it found there, rather than silently comparing against a
     # nearer run the reader was never told about.
+    # @intent: {"entity": "TestRun", "action": "name detail-less baseline", "behavior": "When the walk lands on a totals-only run the panel renders no rows and says the run it landed on, base000 2 back in this window, recorded no per-example detail so every area would read as new.", "layer": "request"}
     it "says so where the run it landed on recorded no per-example detail" do
       repository = new_repository
       ingest(repository, "base0000000001", minutes_ago: 180, total: 40)
@@ -450,6 +472,7 @@ RSpec.describe "Repository spec directory window growth", type: :request do
       expect(empty_state_text).to include("every area of this run would read as new")
     end
 
+    # @intent: {"entity": "TestRun", "action": "name detail-less head", "behavior": "A totals-only latest run over a detailed earlier one renders the state saying every area of the earlier run would read as deleted rather than printing those deletions.", "layer": "request"}
     it "says so where this run recorded no per-example detail" do
       repository = new_repository
       ingest(repository, "base0000000001", minutes_ago: 120, specs: area_specs("spec/models", 3))
@@ -460,6 +483,7 @@ RSpec.describe "Repository spec directory window growth", type: :request do
       expect(empty_state_text).to include("every area of the earlier run would read as deleted")
     end
 
+    # @intent: {"entity": "TestRun", "action": "name detail-less window", "behavior": "Where both window ends posted only totals the empty state names neither this run nor base000, the run at the far end of this window, as having recorded per-example detail.", "layer": "request"}
     it "says so where neither end recorded per-example detail" do
       repository = new_repository
       ingest(repository, "base0000000001", minutes_ago: 120, total: 40)
@@ -475,6 +499,7 @@ RSpec.describe "Repository spec directory window growth", type: :request do
     # sentence for all of them would satisfy every example above that only checked the shared half.
     # This pins that the two absences of the SAME window are kept apart: "every earlier run reported
     # no tests" and "the run it landed on recorded no per-example rows".
+    # @intent: {"entity": "TestRun", "action": "distinguish absence states", "behavior": "The every-earlier-run-reported-no-tests state and the landed-on-run-recorded-no-detail state render different empty-state sentences, keeping the panel's states apart where they share a title.", "layer": "request"}
     it "keeps the two absences of the same window apart" do
       unmeasured = new_repository
       unmeasured_run(unmeasured, "one0000000001", minutes_ago: 120)
@@ -509,6 +534,7 @@ RSpec.describe "Repository spec directory window growth", type: :request do
     # baseline walk itself reads nothing: the window is already loaded for the chart, and
     # `assembled_like?` reads the shard count `Repository#suite_size_trajectory` primed onto every
     # point of it.
+    # @intent: {"entity": "TestRun", "action": "budget window query", "behavior": "The window comparison issues exactly one aggregate query naming the baseline's id over both a five-run and a ten-run window, and the row still reads baseline 4, now 13.", "layer": "request"}
     it "costs one query over a five-run window, and no more over a ten-run one" do
       short = new_repository
       base = ingest(short, "base0000000001", minutes_ago: 300, specs: area_specs("spec/models", 4))
@@ -534,6 +560,7 @@ RSpec.describe "Repository spec directory window growth", type: :request do
     # Where the window IS one push long the two panels ask the identical question, and the page pays
     # for it once: the repeat is a query-cache hit and no round trip. `executed_sql` drops cached
     # statements for exactly that reason, so this counts what the page actually spent.
+    # @intent: {"entity": "TestRun", "action": "share push comparison", "behavior": "On a two-run window where the window and last-push comparisons ask the identical question, the page pays for the cross-run aggregate once, the repeat being a cache hit, and the row still shows +3.", "layer": "request"}
     it "adds no round trip where the window comparison is the last-push comparison" do
       repository = new_repository
       base = ingest(repository, "base0000000001", minutes_ago: 120, specs: area_specs("spec/models", 2))
@@ -551,6 +578,7 @@ RSpec.describe "Repository spec directory window growth", type: :request do
     # so this is a claim about this gate rather than about the page going quiet: the window is drawn
     # on `?branch=`, and the branch asked for holds runs that cannot be compared while the
     # repository's newest run sits on a branch whose pair can.
+    # @intent: {"entity": "TestRun", "action": "gate before querying", "behavior": "On a branch whose window has no comparable baseline the panel issues no aggregate query at all and says the stale run reported no tests, while the page's other cross-run panel still computes +2 on main.", "layer": "request"}
     it "asks the observations table nothing where the window has no baseline" do
       repository = new_repository
       stale = unmeasured_run(repository, "stale000000001", minutes_ago: 300, branch: "feature")
@@ -571,6 +599,7 @@ RSpec.describe "Repository spec directory window growth", type: :request do
 
   # Read-only suite telemetry, like every panel around it: a `view` member legitimately needs to see
   # what CI reported.
+  # @intent: {"entity": "TestRun", "action": "show to view member", "behavior": "A member whose only permission is view gets 200 on the repository page and sees the spec/models row with its +3 window change, the panel being read-only telemetry.", "layer": "request"}
   it "is visible to a member with only 'view'" do
     repository = creeping_window
     member = sign_in_via_github(uid: "9999")

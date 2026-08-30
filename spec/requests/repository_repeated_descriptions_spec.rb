@@ -87,6 +87,7 @@ RSpec.describe "Repository repeated descriptions", type: :request do
                       [["a test nobody wrote twice", 5.0]])
     end
 
+    # @intent: {"entity": "GET /repositories/:id", "action": "list repeated only", "behavior": "only the two descriptions carried by more than one example of the run appear, and the single-example description is excluded", "layer": "request"}
     it "lists only the descriptions more than one example of the run recorded" do
       get repository_path(mixed_run)
 
@@ -96,6 +97,7 @@ RSpec.describe "Repository repeated descriptions", type: :request do
     # THE assertion that fails if this were ranked by how many examples share the description — the
     # eight-example group would head the list. Item 5 of the roadmap is redundancy weighed against
     # duration, and the ordering is where that is decided.
+    # @intent: {"entity": "GET /repositories/:id", "action": "rank by cost", "behavior": "the three-example group totalling 1m 30s outranks the eight-example group at 2.00s, so the ordering follows summed duration and not group size", "layer": "request"}
     it "ranks the groups by what they cost rather than by how many examples share the name" do
       get repository_path(mixed_run)
 
@@ -106,6 +108,7 @@ RSpec.describe "Repository repeated descriptions", type: :request do
     # Every figure on the row, checked against direct SQL of the same grouping rather than against
     # the fixture's arithmetic — a panel that lost or double-counted a group's rows is still a
     # plausible-looking table, and only the database's own answer catches it.
+    # @intent: {"entity": "GET /repositories/:id", "action": "match direct sql", "behavior": "the rendered example counts and description names equal a direct SpecObservation group-by-name having count greater than one over the same run", "layer": "request"}
     it "matches direct SQL of the same query, figure for figure" do
       repository = mixed_run
       get repository_path(repository)
@@ -122,6 +125,7 @@ RSpec.describe "Repository repeated descriptions", type: :request do
 
     # The files are what let a reader go and look. Named rather than counted, because "spans 2
     # files" sends them looking without saying where.
+    # @intent: {"entity": "GET /repositories/:id", "action": "name group files", "behavior": "the row reads in spec/models/invoice_spec.rb and spec/models/ledger_spec.rb, naming both files the group's examples ran in", "layer": "request"}
     it "names the spec files the group's examples ran in" do
       repository = repository_with([["shared by two files", 1.0], ["shared by two files", 1.0]])
       SpecObservation.where(test_run_id: repository.latest_test_run.id).order(:line_number).last
@@ -137,6 +141,7 @@ RSpec.describe "Repository repeated descriptions", type: :request do
     # is equally a table-driven loop, a shared example group, or the same test written twice, and
     # nothing in these rows decides which — so the panel presents and does not judge, exactly as the
     # outcome column echoes rather than rewords.
+    # @intent: {"entity": "GET /repositories/:id", "action": "present without verdict", "behavior": "the basis line says presented for review and not as a finding of duplication, offers the loop-or-shared-group explanation, and the word duplicate appears nowhere", "layer": "request"}
     it "presents the groups for review rather than as a finding of duplication" do
       get repository_path(mixed_run)
 
@@ -149,6 +154,7 @@ RSpec.describe "Repository repeated descriptions", type: :request do
 
     # Bounded by `SpecObservation::REPEATED_DESCRIPTIONS_LIMIT` — its own constant, not a neighbour's:
     # the population it ranks is neither the run's files nor its examples.
+    # @intent: {"entity": "GET /repositories/:id", "action": "cap at costliest ten", "behavior": "a 25-group run lists exactly REPEATED_DESCRIPTIONS_LIMIT rows, from group 25 at the head down to group 16", "layer": "request"}
     it "lists no more than the costliest ten, however many the run repeated" do
       pairs = (1..25).flat_map { |i| [["group #{format('%02d', i)}", i.to_f]] * 2 }
 
@@ -161,6 +167,7 @@ RSpec.describe "Repository repeated descriptions", type: :request do
 
     # A capped list that does not disclose its cap is read as the whole story. `rows.size` cannot
     # say what the list is the head OF, because it is the truncated figure.
+    # @intent: {"entity": "GET /repositories/:id", "action": "disclose repeated count", "behavior": "the basis line reads The 10 costliest of the 25 descriptions, so a capped list cannot read as the whole story", "layer": "request"}
     it "says how many descriptions the run repeated, not just how many it lists" do
       pairs = (1..25).flat_map { |i| [["group #{format('%02d', i)}", i.to_f]] * 2 }
 
@@ -169,6 +176,7 @@ RSpec.describe "Repository repeated descriptions", type: :request do
       expect(basis_line).to have_text("The 10 costliest of the 25 descriptions", normalize_ws: true)
     end
 
+    # @intent: {"entity": "GET /repositories/:id", "action": "state completeness", "behavior": "with only two repeated descriptions the basis reads All 2 descriptions this run recorded under more than one example", "layer": "request"}
     it "says the list is complete when nothing was cut" do
       get repository_path(mixed_run)
 
@@ -178,6 +186,7 @@ RSpec.describe "Repository repeated descriptions", type: :request do
   end
 
   describe "what the totals were measured over" do
+    # @intent: {"entity": "GET /repositories/:id", "action": "state full coverage", "behavior": "the row's coverage cell reads 2 of 2 and the caption adds that every example under every description listed reported a duration", "layer": "request"}
     it "says every listed total covers the whole of its group, where every example was timed" do
       get repository_path(repository_with([["twice over", 1.0], ["twice over", 2.0]]))
 
@@ -189,6 +198,7 @@ RSpec.describe "Repository repeated descriptions", type: :request do
     # `SUM` skips NULLs silently, so a half-measured group is indistinguishable as a number from a
     # complete one. The per-row fraction is the answer, and the caption is what tells a reader the
     # column is a denominator rather than decoration.
+    # @intent: {"entity": "GET /repositories/:id", "action": "state partial coverage", "behavior": "the two rows read 2 of 3 and 1 of 2 while the caption totals 3 of 5 examples reporting a duration across every repeated description", "layer": "request"}
     it "states the coverage of each group and of the repeated population as a whole" do
       repository = repository_with([["partly timed", 4.0], ["partly timed", nil], ["partly timed", 2.0],
                                     ["also partly timed", 1.0], ["also partly timed", nil]])
@@ -203,6 +213,7 @@ RSpec.describe "Repository repeated descriptions", type: :request do
     # `SUM(...) DESC` is NULLS FIRST in Postgres, so the naive ordering would name the group nobody
     # measured the most expensive repetition on the page. And an unmeasured total says so in words
     # rather than wearing the spelling of a zero.
+    # @intent: {"entity": "GET /repositories/:id", "action": "sort untimed last", "behavior": "the group nothing timed sorts beneath the timed one and its duration cell reads not reported, never a zero", "layer": "request"}
     it "sorts a group nothing timed to the end and refuses to print it as a zero" do
       repository = repository_with([["never timed", nil], ["never timed", nil],
                                     ["timed", 0.5], ["timed", 0.5]])
@@ -222,6 +233,7 @@ RSpec.describe "Repository repeated descriptions", type: :request do
                        [nil, 9.0], [nil, 9.0], [nil, 9.0]])
     end
 
+    # @intent: {"entity": "GET /repositories/:id", "action": "exclude unnamed rows", "behavior": "only the named repetition is listed and the basis states that 3 of the 5 examples this run recorded carried no description", "layer": "request"}
     it "excludes them from the grouping and says how many rows it excluded" do
       get repository_path(partly_unnamed_run)
 
@@ -232,6 +244,7 @@ RSpec.describe "Repository repeated descriptions", type: :request do
 
     # Rendered only when there are any: "0 examples carried no description" is a sentence about
     # arithmetic rather than about this run.
+    # @intent: {"entity": "GET /repositories/:id", "action": "stay silent when named", "behavior": "where every row carried a description the basis carries no carried-no-description sentence", "layer": "request"}
     it "says nothing about unnamed rows when every row carried a description" do
       get repository_path(repository_with([["named", 1.0], ["named", 1.0]]))
 
@@ -241,6 +254,7 @@ RSpec.describe "Repository repeated descriptions", type: :request do
     # The Vacuous Green gate. A producer that sends no descriptions at all stores a nil on every row,
     # and such a run produces exactly the empty ranking a suite of entirely unique descriptions does
     # — "no repetition" would be "nobody told us" wearing the spelling of "there is no redundancy".
+    # @intent: {"entity": "GET /repositories/:id", "action": "refuse vacuous green", "behavior": "an all-unnamed run renders the unnamed section saying This run reported no test descriptions and that all 3 examples arrived without one, with no table rows", "layer": "request"}
     it "refuses to call a run with no descriptions at all a run with no repetition" do
       get repository_path(repository_with([[nil, 1.0], [nil, 2.0], [nil, 3.0]]))
 
@@ -254,6 +268,7 @@ RSpec.describe "Repository repeated descriptions", type: :request do
 
   describe "a run with nothing to report" do
     # The honest zero, and it is only reachable behind a run that DID describe its examples.
+    # @intent: {"entity": "GET /repositories/:id", "action": "state honest zero", "behavior": "three unique descriptions render the none section reading No description was recorded twice in this run, with the every-example-unique basis beside it", "layer": "request"}
     it "says no description was recorded twice, where every description is unique" do
       get repository_path(repository_with([["one", 1.0], ["two", 2.0], ["three", 3.0]]))
 
@@ -267,6 +282,7 @@ RSpec.describe "Repository repeated descriptions", type: :request do
     # Repetition exists and not one of its examples was timed. There is a list and no ranking, and a
     # column of "not reported" under a heading promising "costliest first" would be a ranking of
     # nothing. Stated in descriptions counted before the cap, never by summing the rows on hand.
+    # @intent: {"entity": "GET /repositories/:id", "action": "decline to rank untimed", "behavior": "a repeated description with no timed examples renders the untimed section naming the 1 description under more than one example, with no table rows", "layer": "request"}
     it "declines to rank the repetitions where the run timed none of them" do
       get repository_path(repository_with([["untimed twice", nil], ["untimed twice", nil]]))
 
@@ -282,6 +298,7 @@ RSpec.describe "Repository repeated descriptions", type: :request do
     # be ABSENT rather than reworded. A paragraph describing a table that is not on the page is the
     # one failure this panel's empty state exists to prevent, and it is invisible to any assertion
     # made on the table alone.
+    # @intent: {"entity": "GET /repositories/:id", "action": "make no ranking claim", "behavior": "the untimed state renders no basis paragraph at all, so neither costliest first nor the Examples-timed column appears", "layer": "request"}
     it "makes no claim about a ranking where there is nothing ranked" do
       get repository_path(repository_with([["untimed twice", nil], ["untimed twice", nil]]))
 
@@ -302,6 +319,7 @@ RSpec.describe "Repository repeated descriptions", type: :request do
     # this state no less than of the states that render a table. Asserted element-scoped on the id
     # this state owns, per the header rule — and paired with the absence of the ranking paragraph, so
     # a fix that restored the disclosure by restoring the false claims with it fails here.
+    # @intent: {"entity": "GET /repositories/:id", "action": "account for unnamed rows", "behavior": "the untimed section's own basis says 3 of the 5 examples carried no description at all while the ranking paragraph and its claims stay absent", "layer": "request"}
     it "still answers for the rows carrying no description where it timed nothing it grouped" do
       get repository_path(repository_with([["untimed twice", nil], ["untimed twice", nil],
                                            [nil, nil], [nil, nil], [nil, nil]]))
@@ -317,6 +335,7 @@ RSpec.describe "Repository repeated descriptions", type: :request do
 
     # Under the same condition the basis paragraph's clause is rendered under: "0 examples carried no
     # description" is a sentence about arithmetic rather than about this run.
+    # @intent: {"entity": "GET /repositories/:id", "action": "stay silent when named", "behavior": "the untimed state over an all-named run renders no untimed-basis element and no carried-no-description wording", "layer": "request"}
     it "says nothing about unnamed rows in that state when every row carried a description" do
       get repository_path(repository_with([["untimed twice", nil], ["untimed twice", nil]]))
 
@@ -330,6 +349,7 @@ RSpec.describe "Repository repeated descriptions", type: :request do
     # promises no ranking — it states the honest zero's own denominator and is the only place the
     # rows that carry no description are answered for. Deleting the `any?` half of the view's
     # condition passes every assertion above and fails this one.
+    # @intent: {"entity": "GET /repositories/:id", "action": "keep zero paragraph", "behavior": "a unique-description run that timed nothing renders the none section rather than the untimed one, and keeps its every-example-unique basis", "layer": "request"}
     it "keeps the honest zero's paragraph on a unique-description run that timed nothing" do
       get repository_path(repository_with([["one", nil], ["two", nil]]))
 
@@ -343,6 +363,7 @@ RSpec.describe "Repository repeated descriptions", type: :request do
     # No per-example rows at all — a run ingested before those rows existed, or a client that sends
     # no per-example detail. There is no description grain to discuss and the panel does not appear
     # to discuss it, which is the line every single-run panel on this page draws with `recorded?`.
+    # @intent: {"entity": "GET /repositories/:id", "action": "omit without rows", "behavior": "a run recorded with an empty specs array renders no repeated-descriptions panel", "layer": "request"}
     it "does not render at all for a run that wrote no per-example rows" do
       repository = create_repository(user: @user)
       Ingest::RunRecorder.record(
@@ -357,6 +378,7 @@ RSpec.describe "Repository repeated descriptions", type: :request do
       expect(panel?).to be(false)
     end
 
+    # @intent: {"entity": "GET /repositories/:id", "action": "omit without runs", "behavior": "a repository with no runs at all renders no repeated-descriptions panel", "layer": "request"}
     it "does not render at all for a repository with no runs" do
       get repository_path(create_repository(user: @user))
 
@@ -368,6 +390,7 @@ RSpec.describe "Repository repeated descriptions", type: :request do
     # Anchored on the LATEST run, exactly as every panel above it is, and specifically not on
     # `?branch=` — that ask re-anchors the "Suite growth" chart alone, and a reader who opened a
     # branch's trajectory did not ask this panel to describe a different run.
+    # @intent: {"entity": "GET /repositories/:id", "action": "ignore branch ask", "behavior": "with feature and main runs ingested, asking branch=feature/x still lists the main run's on-main description", "layer": "request"}
     it "reads the latest run and does not follow the branch ask" do
       repository = create_repository(user: @user)
       ingest(repository,
@@ -398,6 +421,7 @@ RSpec.describe "Repository repeated descriptions", type: :request do
     # figure and its Vacuous Green gate therefore need a second aggregate, which
     # `SpecObservation.description_presence_in` is. Both are single grouped passes over one run's
     # rows.
+    # @intent: {"entity": "GET /repositories/:id", "action": "cost two reads", "behavior": "a 400-example run costs the same spec_observations read count as a 4-example one, of which exactly one statement carries both GROUP BY and HAVING", "layer": "request"}
     it "costs the same two reads at 400 examples as at 4" do
       small = repository_with([["s", 1.0], ["s", 1.0], ["t", 1.0], ["t", 1.0]],
                               github_full_name: "acme/small-suite")

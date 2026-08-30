@@ -19,6 +19,7 @@ RSpec.describe "Repository API keys (web)", type: :request do
   before { sign_in_via_github(uid: "1001") }
 
   describe "minting (POST /repositories/:id/api_keys)" do
+    # @intent: {"entity": "POST /repositories/:id/api_keys", "action": "mint as owner", "behavior": "posting api_key name CI creates one key attributed to the owner through created_by_user and redirects to the repository page anchored at revealed-key", "layer": "request"}
     it "creates the key for the owner, with the minter attributed" do
       expect {
         post repository_api_keys_path(repository), params: { api_key: { name: "CI" } }
@@ -28,6 +29,7 @@ RSpec.describe "Repository API keys (web)", type: :request do
       expect(response).to redirect_to(repository_path(repository, anchor: "revealed-key"))
     end
 
+    # @intent: {"entity": "POST /repositories/:id/api_keys", "action": "refuse view-only member", "behavior": "a member with only view gets 403 and the ApiKey count is unchanged", "layer": "request"}
     it "answers 403 for a member with only view" do
       member = create_user(github_uid: "9999", github_handle: "hubot")
       create_membership(repository: repository, user: member, permissions: %w[view])
@@ -42,6 +44,7 @@ RSpec.describe "Repository API keys (web)", type: :request do
 
     # The hidden-existence half of the fork, which the 403 example cannot see: a NON-member is
     # answered 404, not 403, so the repository's existence stays hidden from them.
+    # @intent: {"entity": "POST /repositories/:id/api_keys", "action": "hide from non-member", "behavior": "a non-member gets 404 rather than 403, so the repository's existence stays hidden, and no key is created", "layer": "request"}
     it "answers 404 for a non-member, hiding the repository" do
       create_user(github_uid: "7777", github_handle: "locutus")
       sign_in_via_github(uid: "7777", info: { nickname: "locutus" })
@@ -57,6 +60,7 @@ RSpec.describe "Repository API keys (web)", type: :request do
   describe "revoking (DELETE /repositories/:id/api_keys/:key_id)" do
     let!(:ci_key) { repository.api_keys.create!(name: "CI") }
 
+    # @intent: {"entity": "DELETE /repositories/:id/api_keys/:key_id", "action": "revoke as owner", "behavior": "the owner's delete removes the key and redirects to the repository page", "layer": "request"}
     it "revokes the key for the owner" do
       expect {
         delete repository_api_key_path(repository, ci_key)
@@ -65,6 +69,7 @@ RSpec.describe "Repository API keys (web)", type: :request do
       expect(response).to redirect_to(repository_path(repository))
     end
 
+    # @intent: {"entity": "DELETE /repositories/:id/api_keys/:key_id", "action": "revoke with keys.manage", "behavior": "a member holding view and keys.manage removes the key, the count dropping by one", "layer": "request"}
     it "revokes the key for a member granted keys.manage" do
       member = create_user(github_uid: "9999", github_handle: "hubot")
       create_membership(repository: repository, user: member, permissions: %w[view keys.manage])
@@ -75,6 +80,7 @@ RSpec.describe "Repository API keys (web)", type: :request do
       }.to change(ApiKey, :count).by(-1)
     end
 
+    # @intent: {"entity": "DELETE /repositories/:id/api_keys/:key_id", "action": "refuse view-only member", "behavior": "a member with only view gets 403 and the key survives", "layer": "request"}
     it "answers 403 for a member with only view" do
       member = create_user(github_uid: "9999", github_handle: "hubot")
       create_membership(repository: repository, user: member, permissions: %w[view])
@@ -87,6 +93,7 @@ RSpec.describe "Repository API keys (web)", type: :request do
       expect(response).to have_http_status(:forbidden)
     end
 
+    # @intent: {"entity": "DELETE /repositories/:id/api_keys/:key_id", "action": "hide from non-member", "behavior": "a non-member gets 404 with the key surviving, so the repository's existence stays hidden", "layer": "request"}
     it "answers 404 for a non-member, hiding the repository" do
       create_user(github_uid: "7777", github_handle: "locutus")
       sign_in_via_github(uid: "7777", info: { nickname: "locutus" })
