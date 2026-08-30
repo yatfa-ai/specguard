@@ -86,6 +86,27 @@ class RepositoriesController < ApplicationController
   # reasoning in full.
   include RequestedLimitParam
 
+  # THE THREE NARROWING ASKS THE INDEX READS — `?q=`, `?role=` and `?sort=`, on the one surface
+  # that renders every repository an account holds side by side and, until them, offered no way
+  # to act on that comparison. Each is its own concern for the reason every sibling has one (the
+  # argument `RequestedSpecFileParam` makes in full): the parameters mean different things, are
+  # read only here, and one guard answering several would make "which shapes does each tolerate"
+  # a single question nobody asked. What they share is the hazard, and the guard against it is
+  # the same two lines in the same order everywhere.
+  #
+  # All three are read ONCE, in `#index`, and the URL is their only carrier: no session state, no
+  # form state, nothing a colleague receiving a pasted link does not also receive. `?q=` is a
+  # case-insensitive substring on `github_full_name` applied IN SQL inside
+  # `Repository.accessible_by` — never a post-load filter, so a repository the viewer cannot see
+  # never enters the relation and cannot become probeable for existence by name. `?role=` draws
+  # the same line the card badge already draws (`owns_repository?`); `?sort=stale` reorders by
+  # last-ingested recency over runs the grid already loads. None of the three may add a query:
+  # `?q=` and `?role=` only add predicates to the ONE relation the page was already going to
+  # load, and the stale ordering sorts the loaded set in memory (see `index`).
+  include RequestedSearchParam
+  include RequestedRoleParam
+  include RequestedSortParam
+
   # The repositories this user may pick from, straight off GitHub, and the four different things to
   # say when that list cannot be loaded. Shared with `BulkRegistrationsController`, which renders a
   # picker built from the same listing and has to answer the same questions the same way.
@@ -98,6 +119,13 @@ class RepositoriesController < ApplicationController
   helper_method :owns_repository?, :key_count_visible?, :api_key_count, :latest_run,
                 :rejection_verdict, :former_member?
 
+  # The seventh through tenth are the index's NARROWING state, handed to the view so it can echo
+  # the reader's own ask back at them — the search field's value, the selects' selected options,
+  # the "Clear" affordance — and so the empty state can name what was searched for. The readers
+  # are the guards themselves (memoised, malformed-shape-safe), not copies of the raw params: the
+  # view never sees a shape it has to defend against, only the ask the guards settled on.
+  helper_method :requested_search, :requested_role, :requested_sort, :narrowing_matched_nothing?
+
   # Everything the viewer can open, through the one seam that defines that set — see
   # `Repository.accessible_by`, which carries the union rule and the reason it stays a relation
   # rather than becoming `owned + shared`.
@@ -106,10 +134,56 @@ class RepositoriesController < ApplicationController
   # per shared card — the same footing `shared_permissions` puts its own per-card question on, so
   # the page costs the same whether the list has one shared card or fifty. It stays HERE and not on
   # the seam: it is this page's per-card concern, and the other reader of that set has no use for it.
+  #
+  # THE NARROWING ASKS compose onto that relation and onto nothing else, in this order:
+  #
+  #   accessible_by → ?q= → ?role= → includes/order → ?sort=stale
+  #
+  # `?q=` and `?role=` narrow INSIDE the relation, chained on `accessible_by` itself, which is the
+  # whole security claim of the search: the WHERE is applied by the database to rows the scope
+  # already admits, so a repository this viewer cannot see never enters the relation at all — not
+  # "enters and is filtered out after loading", and not "answers a probe by name". `accessible_by`
+  # hands back a relation precisely so callers can chain their own concerns onto it (its own
+  # comment says so); these are this page's.
+  #
+  # `?q=` is `ILIKE '%…%'` — case-insensitive substring, per the parameter's contract — with the
+  # WILDCARD CHARACTERS ESCAPED, and the escape is not pedantry: `_` is a legal and ordinary part
+  # of a repository name (`org/my_repo`), so an unescaped `_` would quietly widen "my_repo" to
+  # match `my-repo` and `myxrepo`, answering a substring ask with a pattern match.
+  # `sanitize_sql_like` backslash-escapes `%`, `_` and `\`, which is the escape character Postgres
+  # `LIKE` already reads by default — no `ESCAPE` clause to keep in step with the helper.
+  #
+  # `?role=owned` is `user_id = current_user.id`; `?role=shared` is its COMPLEMENT WITHIN the
+  # accessible set — `where.not(user_id: …)` chained on the relation, not a second reading of the
+  # membership table, so owned-but-also-shared is impossible by construction (the same
+  # no-overlap invariant `accessible_by` leans on) and the two asks partition exactly the set the
+  # unparameterised page renders.
+  #
+  # Neither adds a query: they are predicates on the ONE relation the page was already going to
+  # load, and everything downstream keys off `@repositories` (the grouped `latest_test_runs`,
+  # `last_rejection_times` and `api_key_counts` lookups scope to its ids, so a narrowed set
+  # narrows them for free; `shared_permissions` reads the viewer's whole membership set and is
+  # unaffected either way — one query before, one query after).
+  #
+  # `?sort=stale` is applied OVER THE LOADED SET rather than in SQL, deliberately: the cards
+  # already materialise every run the ordering needs (`latest_test_runs`, one query for the whole
+  # grid whatever it is sorted by), so a SQL spelling would have to re-derive per-repository
+  # recency in a join the page then throws away — work the page has already paid for, paid a
+  # second time to keep the ORDER BY company. Sorting the loaded Array costs no query and lets the
+  # view's iteration keep working unchanged. See `stale_first`.
   def index
-    @repositories = Repository.accessible_by(current_user)
-                              .includes(:user)
-                              .order(:github_full_name)
+    scope = Repository.accessible_by(current_user)
+    scope = scope.where("github_full_name ILIKE :pattern",
+                        pattern: "%#{ActiveRecord::Base.sanitize_sql_like(requested_search)}%") if requested_search
+    scope = if requested_role == "owned"
+              scope.where(user_id: current_user.id)
+            elsif requested_role == "shared"
+              scope.where.not(user_id: current_user.id)
+            else
+              scope
+            end
+    @repositories = scope.includes(:user).order(:github_full_name)
+    @repositories = stale_first(@repositories) if requested_sort == "stale"
     @registration_grant_story = registration_grant_story
   end
 
@@ -830,6 +904,63 @@ class RepositoriesController < ApplicationController
   # widening the reader declined. Read through `RequestedLimitParam` like both surfaces of the API,
   # never re-derived here.
   def rollup_limit(default) = @limit_request || default
+
+  # The `?sort=stale` ordering: never-ingested first, then least-recently-ingested first, newest
+  # last — the order a reader scanning for CI that has gone quiet wants, which is the only reason
+  # to reorder this page at all.
+  #
+  # APPLIED OVER THE LOADED SET, NOT IN SQL, and the ticket for it names that the worker's call
+  # provided the query count does not move. It does not: every `created_at` this reads is on a run
+  # `latest_test_runs` already resolved for the whole grid in one DISTINCT ON (the cards read the
+  # same rows for their size badges and their basis sentences), so a SQL spelling of the same
+  # ordering would re-derive per-repository recency in a join only to throw the join away after
+  # the sort. Sorting here loads the relation in the controller rather than in the view — the same
+  # single load either way — and `latest_test_runs` memoises, so the cards' own reads of the same
+  # runs cost nothing further.
+  #
+  # THE `nil` LIMB IS FIRST RATHER THAN SORTED AS ZERO, because "never ingested" is not "ingested
+  # at the epoch": the card renders it as its own state ("No runs yet"), and the stalest thing on
+  # the page is the repository CI has never reached at all. `github_full_name` breaks ties within
+  # a limb so the sequence is DETERMINISTIC — a `?sort=stale` URL is shareable, and two readers
+  # pasting the same link must see the same cards in the same order — which Ruby's `sort_by` does
+  # not promise on its own.
+  def stale_first(repositories)
+    repositories.sort_by do |repository|
+      run = latest_run(repository)
+      [run.nil? ? 0 : 1, run&.created_at || Time.zone.at(0), repository.github_full_name]
+    end
+  end
+
+  # Whether the reader asked to NARROW this page at all: `?q=` or `?role=`, either one. `?sort=`
+  # is deliberately excluded — it reorders and cannot empty the set, so an empty set under a
+  # bare `?sort=stale` is an empty ACCOUNT and must render the registration empty state, not the
+  # no-match one. Used by `narrowing_matched_nothing?` and nothing else.
+  def index_narrowing_asked?
+    requested_search.present? || requested_role.present?
+  end
+
+  # True when the reader narrowed, the narrowed set is EMPTY, and the account nonetheless holds
+  # repositories — the one state whose wording the page owes care to. It is what tells the two
+  # empty pages apart: this one must name the ask and offer the way back ("No repositories match
+  # “api”"), while the account that holds nothing at all keeps the registration invitation it has
+  # always had, a sentence that would be false for the reader of the first page.
+  #
+  # THE ONE QUERY IT MAY COST IS PAID ONLY ON THE PAGE THAT NEEDS IT. The order of the conjuncts
+  # is the whole budget: `index_narrowing_asked?` first costs nothing at all and settles the
+  # UNPARAMETERISED page — no narrowing, no second query, whatever the grid holds, so the empty
+  # account page pays exactly the one EXISTS it always paid. Only a page that narrowed AND came
+  # back empty reaches further: `@repositories.empty?` (a free check under `?sort=stale`, an
+  # EXISTS otherwise), and then the account-level EXISTS that asks whether anything was filtered
+  # OUT at all. A page of N cards never reaches any of it.
+  #
+  # Memoised with `defined?` because the view asks it from TWO branches (the controls gate and
+  # the empty-state gate) and it must cost its query once.
+  def narrowing_matched_nothing?
+    return @narrowing_matched_nothing if defined?(@narrowing_matched_nothing)
+
+    @narrowing_matched_nothing =
+      index_narrowing_asked? && @repositories.empty? && Repository.accessible_by(current_user).exists?
+  end
 
   # `user_id` is already loaded on the record, so this asks nothing of the database.
   def owns_repository?(repository)

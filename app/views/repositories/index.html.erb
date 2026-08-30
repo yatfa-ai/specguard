@@ -198,6 +198,64 @@
     <% end %>
   <% end %>
 
+  <% if @repositories.any? || narrowing_matched_nothing? %>
+    <%# THE NARROWING CONTROLS — search, ownership and order. Rendered whenever the account holds
+        at least one repository, INCLUDING the unparameterised page, which is a settled choice
+        rather than a default: gating them on a count threshold would put a number in the
+        interface that rots as the account grows past it, and gating them on a parameter being
+        present would make the controls unreachable without hand-typing the parameter they exist
+        to produce. `narrowing_matched_nothing?` keeps them on the page a filter EMPTIED too —
+        the reader who most needs the way back is the one holding a query that matched nothing.
+
+        THE URL IS THE ONLY CARRIER. A GET form against the bare path, no session state, no
+        hidden carry: a colleague receiving a pasted link sees the same cards in the same order,
+        and nothing on this page remembers a filter after the reader leaves it. The form's own
+        fields are the whole query string — submitting replaces it, so no stale ask can ride
+        through a gesture that did not restate it.
+
+        The defaults submit as EMPTY STRINGS (`?q=&role=&sort=`) rather than being omitted, which
+        the guards read as no ask on every spelling: the URL a default submit produces renders
+        exactly the unparameterised page. `Clear` exists for the same reader in one gesture
+        instead of three, and is offered only when there is something to clear. %>
+    <div class="mb-4">
+      <%= form_with url: repositories_path, method: :get, builder: Forms::FormBuilder,
+                    class: "flex flex-wrap items-end gap-3" do |form| %>
+        <%# The search ask, echoed back verbatim from the guard: what the reader typed is what
+            the field shows and what an empty result names — never re-spelled or downcased on
+            the way back out (see `RequestedSearchParam` for why the ask is not normalised). %>
+        <div class="min-w-52 max-w-md flex-1">
+          <%= form.field :q, as: :search_field, label: "Search",
+                         placeholder: "org/repo", value: requested_search,
+                         autocomplete: "off", autocapitalize: "none" %>
+        </div>
+        <%# The same distinction the card badge draws (`owns_repository?`) — one control, three
+            states, with the absent ask as the both-of-them default. The words come from the
+            guard's vocabulary (`RequestedRoleParam::ROLES`); the blank spelling of "both" is
+            the one an absent parameter already means. %>
+        <div class="w-48">
+          <%= form.field :role, as: :select, label: "Ownership",
+                         choices: [["All", ""], ["Owned by you", "owned"], ["Shared with you", "shared"]],
+                         selected: requested_role %>
+        </div>
+        <%# Two orderings: the page's name default and the one recency ordering the grid has a
+            reason to offer. The default submits as a blank for the same reason `?role=`'s does
+            — `nil` already means "name order", and `RequestedSortParam` records why admitting a
+            second word for it would invite a third the page does not offer. %>
+        <div class="w-44">
+          <%= form.field :sort, as: :select, label: "Sort",
+                         choices: [["Name", ""], ["Stale first", "stale"]],
+                         selected: requested_sort %>
+        </div>
+        <div class="flex items-center gap-2">
+          <%= form.submit_button "Apply" %>
+          <% if requested_search || requested_role || requested_sort %>
+            <%= render UI::ButtonComponent.new(variant: :ghost, href: repositories_path) { "Clear" } %>
+          <% end %>
+        </div>
+      <% end %>
+    </div>
+  <% end %>
+
   <% if @repositories.any? %>
     <div class="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
       <% @repositories.each do |repository| %>
@@ -373,18 +431,40 @@
       <% end %>
     </div>
   <% else %>
-    <%= render UI::EmptyStateComponent.new(
-          title: "No repositories yet",
-          description: "Register a GitHub repository to start collecting spec intents from CI."
-        ) do |empty| %>
-      <% empty.with_action do %>
-        <%# Both entry points here too — a first-time visitor who has just installed the App across
-            an account is exactly the reader with twenty repositories to register, and this empty
-            state is the one place they are guaranteed to see. %>
-        <div class="flex flex-wrap items-center justify-center gap-2">
-          <%= render UI::ButtonComponent.new(variant: :primary, href: new_repository_path) { "Register a repository" } %>
-          <%= render UI::ButtonComponent.new(variant: :secondary, href: bulk_repositories_path) { "Register several" } %>
-        </div>
+    <%# A FILTER THAT MATCHED NOTHING, not an account with nothing in it — the distinction
+        `narrowing_matched_nothing?` exists to draw. This state names the reader's own ask
+        (searched text, ownership filter — whatever the controls carry) and offers the way back
+        to the full list, because the sentence the truly-empty account reads below would be a
+        FALSEHOOD here: "Register a GitHub repository to start collecting spec intents" tells a
+        reader holding ninety repositories that they have none. %>
+    <% if narrowing_matched_nothing? %>
+      <%= render UI::EmptyStateComponent.new(
+            title: no_repositories_match_title,
+            description: "Clear the search and filters to see every repository you can open."
+          ) do |empty| %>
+        <% empty.with_action do %>
+          <%# The way back, in one gesture — the bare path, the same destination `Clear` above
+              offers and the one "Back to repositories" after bulk registration lands on. %>
+          <%= render UI::ButtonComponent.new(variant: :secondary, href: repositories_path) { "Show all repositories" } %>
+        <% end %>
+      <% end %>
+    <% else %>
+      <%# The account genuinely holds nothing — the original empty state, unchanged, because the
+          reader it addresses (somebody registering their FIRST repository) is not the reader any
+          narrowing parameter can produce. %>
+      <%= render UI::EmptyStateComponent.new(
+            title: "No repositories yet",
+            description: "Register a GitHub repository to start collecting spec intents from CI."
+          ) do |empty| %>
+        <% empty.with_action do %>
+          <%# Both entry points here too — a first-time visitor who has just installed the App across
+              an account is exactly the reader with twenty repositories to register, and this empty
+              state is the one place they are guaranteed to see. %>
+          <div class="flex flex-wrap items-center justify-center gap-2">
+            <%= render UI::ButtonComponent.new(variant: :primary, href: new_repository_path) { "Register a repository" } %>
+            <%= render UI::ButtonComponent.new(variant: :secondary, href: bulk_repositories_path) { "Register several" } %>
+          </div>
+        <% end %>
       <% end %>
     <% end %>
   <% end %>

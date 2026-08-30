@@ -335,6 +335,22 @@ RSpec.describe "Bulk organization registration", type: :request do
       expect(@user.repositories.pluck(:github_full_name)).to match_array(%w[acme/api acme/web])
     end
 
+    # The way OUT of this page, held to the narrow reading SPGD-802 settled: "Back to repositories"
+    # lands on the UNFILTERED list. The index now reads narrowing parameters off the URL, which
+    # makes this link a place a filter could plausibly leak through — carried from a referrer or
+    # reconstructed from session state — and this pins that it does not: the bare path, no query
+    # string, the whole list. (Today the link is a static `repositories_path` and cannot carry
+    # anything; the guard exists so a future edit that changes that has to read this first.)
+    it "links back to the unfiltered repositories list" do
+      stub_github(repos: [github_repo("acme/api")])
+
+      submit(%w[acme/api])
+
+      expect(response).to have_http_status(:ok)
+      link = Capybara.string(response.body).find_link("Back to repositories")
+      expect(link[:href]).to eq(repositories_path)
+    end
+
     # Criterion 1's final half, and the whole point of the ticket: the batch actually REGISTERS a
     # personal namespace's repositories. The pipeline could always do this — all three of
     # `BulkRegistration`'s passes gate on `admin?` and read no owner type — so this example is here
