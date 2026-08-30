@@ -51,12 +51,14 @@ RSpec.describe RepositoriesHelper, type: :helper do
 
     # The placement this file exists to pin, in the tooling's own vocabulary: the method is a
     # public instance method of RepositoriesHelper, and nothing defined it onto Object.
+    # @intent: { entity: "RepositoriesHelper", action: "define the empty-index title method in the module", behavior: "the title method is a public instance method of the helper module and never a private patch on Object, the placement the request suite is blind to", layer: "unit" }
     it "is defined on RepositoriesHelper and not on Object" do
       expect(RepositoriesHelper.instance_methods).to include(:no_repositories_match_title)
       expect(Object.private_method_defined?(:no_repositories_match_title)).to be(false)
     end
 
     context "with a search ask" do
+      # @intent: { entity: "RepositoriesHelper", action: "compose the empty-index title", behavior: "a search ask with the owned limb renders the you-registered wording carrying the search in the reader own verbatim spelling", layer: "unit" }
       it "names the search in the reader's own spelling, ownership limb included (owned)" do
         given_asks(search: "Ledger", role: "owned")
 
@@ -66,6 +68,7 @@ RSpec.describe RepositoriesHelper, type: :helper do
           .to eq(%(No repositories you registered match “Ledger”))
       end
 
+      # @intent: { entity: "RepositoriesHelper", action: "compose the empty-index title", behavior: "a search ask with the shared limb renders the shared-repositories wording carrying the search as asked", layer: "unit" }
       it "names the search with the shared limb" do
         given_asks(search: "billing", role: "shared")
 
@@ -73,6 +76,7 @@ RSpec.describe RepositoriesHelper, type: :helper do
           .to eq(%(No shared repositories match “billing”))
       end
 
+      # @intent: { entity: "RepositoriesHelper", action: "compose the empty-index title", behavior: "a search ask with no live role renders the bare no-repositories-match wording with the search alone", layer: "unit" }
       it "names the search alone when no role ask is live" do
         given_asks(search: "ledger", role: nil)
 
@@ -81,12 +85,14 @@ RSpec.describe RepositoriesHelper, type: :helper do
     end
 
     context "with a role ask and no search" do
+      # @intent: { entity: "RepositoriesHelper", action: "compose the empty-index title", behavior: "an owned role ask with no search renders the you-have-registered wording alone", layer: "unit" }
       it "names the ownership ask alone (owned)" do
         given_asks(search: nil, role: "owned")
 
         expect(helper.no_repositories_match_title).to eq("No repositories you have registered")
       end
 
+      # @intent: { entity: "RepositoriesHelper", action: "compose the empty-index title", behavior: "a shared role ask with no search renders the shared-with-you wording alone", layer: "unit" }
       it "names the shared ask alone" do
         given_asks(search: nil, role: "shared")
 
