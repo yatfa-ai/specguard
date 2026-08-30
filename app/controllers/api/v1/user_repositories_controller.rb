@@ -50,6 +50,16 @@ class Api::V1::UserRepositoriesController < Api::BaseController
   # all, and the module for why the grid's shard priming did not come with it.
   include DeliveryHealthLookups
 
+  # THE THREE SHARD SCALARS `latest_run.shards` serves on every entry, primed for the whole list in
+  # ONE grouped aggregate — the same include the card grid and the `history` block already reach
+  # for (`ShardCountPreloading`'s "ONE MODULE, TWO BASES" precedent). Without it, every entry that
+  # asks `TestRun#shard_count`, `#timed_shard_count` or `#machine_seconds` pays one memoized `pick`
+  # per row, and an unpaginated list is exactly the window that N+1 ships green on: a fixture with
+  # one repository cannot see it at all. Primed in `#index` right after the runs are resolved, so
+  # the aggregate is taken only when the runs were, and an account with no repositories pays
+  # nothing for either.
+  include ShardCountPreloading
+
   # THIS ENDPOINT NEEDS A PERSON. A `sgk_` repository key resolves no user and gets 401 — which is
   # the direction of the seam that is easy to get wrong, because a repository key IS a valid
   # credential and this list would otherwise have to invent an answer for one. See
@@ -70,16 +80,36 @@ class Api::V1::UserRepositoriesController < Api::BaseController
   # above is about this endpoint's contract, and the alias is where a reader of this file looks.
   FIRST_KEY_NAME = ApiKey::DEFAULT_NAME
 
+  # The omission marker for `#serialize`'s third argument — see that method for why an omitted
+  # `latest_run` must leave the key ABSENT rather than present-and-null. A one-off frozen object
+  # compared by `equal?`, so no serialized value can ever collide with it; not a Symbol, which a
+  # future key could echo, and not `nil`, which is a REAL answer here ("CI has never reported").
+  NO_LATEST_RUN_BLOCK = Object.new.freeze
+
   # The delivery verdicts are resolved ONCE for the whole response and threaded into `#serialize`,
   # which takes one repository and has no access to the collection. Resolving them per entry would
   # be the N+1 `RejectedIngests.verdict` exists to avoid — two aggregates per listed repository
   # instead of two for the list.
+  #
+  # `latest_run` is threaded for the same reason, and its two reads are grouped the same way: the
+  # newest run per repository comes back from `#delivery_verdicts`' own `latest_test_runs_for`
+  # call (ONE `DISTINCT ON` for the whole list, on `Repository#latest_test_run`'s exact tie-break,
+  # so a list entry and the detail page it links to cannot name different runs), and the shard
+  # scalars each entry serves are primed from ONE grouped aggregate. Adding a repository to the
+  # account therefore adds no query to this endpoint — the property the budget example in
+  # `user_repositories_spec.rb` pins at one row and at several.
   def index
     repositories = Repository.accessible_by(current_api_user).order(:github_full_name).to_a
-    verdicts = delivery_verdicts(repositories)
+    latest_runs = latest_test_runs_for(repositories.map(&:id))
+    preload_shard_counts(latest_runs.values)
+    verdicts = delivery_verdicts(repositories, latest_runs: latest_runs)
 
     render json: {
-      repositories: repositories.map { |repository| serialize(repository, verdicts[repository.id]) }
+      repositories: repositories.map do |repository|
+        serialize(repository, verdicts[repository.id],
+                  LatestRunSerializer.new(latest_runs[repository.id],
+                                          depth: LatestRunSerializer::LIST_DEPTH).body)
+      end
     }
   end
 
@@ -429,9 +459,10 @@ class Api::V1::UserRepositoriesController < Api::BaseController
     }
   end
 
-  # Deliberately the same four fields, under the same names, that `Api::V1::RepositoriesController`
-  # serves in its own `repository` block. A client that has read one of them knows how to read the
-  # other, and the two cannot drift into naming the same facts differently.
+  # Deliberately the same identity fields, under the same names, that
+  # `Api::V1::RepositoriesController` serves in its own `repository` block. A client that has read
+  # one of them knows how to read the other, and the two cannot drift into naming the same facts
+  # differently.
   #
   # `role` is the one field this surface adds, and it earns its place: the list mixes repositories
   # the person owns with repositories somebody shared with them, and no other field distinguishes
@@ -439,15 +470,27 @@ class Api::V1::UserRepositoriesController < Api::BaseController
   # mutating endpoints land, and would have to guess.
   #
   # `delivery_health` is handed IN rather than looked up, because this method has one repository and
-  # the reads behind that block are grouped over the whole list — see `#delivery_verdicts`.
-  def serialize(repository, delivery_health)
+  # the reads behind that block are grouped over the whole list — see `#delivery_verdicts`. So is
+  # `latest_run`: the block is `LatestRunSerializer`'s at LIST depth, and both its inputs — which
+  # run, and the primed shard scalars — are resolved once for the whole list in `#index`.
+  #
+  # ⭐ `latest_run` IS AN INSERTION AT A POSITION, NOT A FLAG — the same shape
+  # `RepositoryOverview#body` gives `api_key_block:`. `#index` hands it in and the key is served on
+  # every entry, `nil` for a repository CI has never reported to (a different fact from a zeroed
+  # block, and the serializer's own rule). `#update` omits it and the key is genuinely ABSENT from
+  # that response rather than present-and-null: a rename receipt saying `latest_run: null` about a
+  # repository that HAS runs would assert "CI has never reported" about the one thing the endpoint
+  # knows was untouched by the rename. A real `nil` and an omitted block cannot share a default, so
+  # the marker is a distinct object compared by identity, never a value a run could serialize to.
+  def serialize(repository, delivery_health, latest_run = NO_LATEST_RUN_BLOCK)
     {
       id: repository.id,
       full_name: repository.github_full_name,
       name: repository.name,
       registered_at: repository.created_at.iso8601,
       role: repository.user_id == current_api_user.id ? "owner" : "member",
-      delivery_health: delivery_health
+      delivery_health: delivery_health,
+      **(latest_run.equal?(NO_LATEST_RUN_BLOCK) ? {} : { latest_run: latest_run })
     }
   end
 
@@ -492,10 +535,17 @@ class Api::V1::UserRepositoriesController < Api::BaseController
   # Key names are borrowed verbatim from `serialized_delivery_health`, on the rule `#serialize`
   # states above — the two surfaces do not get to name the same facts differently — and the
   # timestamp is serialized `&.iso8601` to match, `nil` when there has never been a rejection.
-  def delivery_verdicts(repositories)
+  #
+  # `latest_runs:` hands in the newest-run-per-repository read a caller has ALREADY taken. `#index`
+  # resolves it once because the `latest_run` block needs the RUN and not only its timestamp; a
+  # second resolution inside here would be the same `DISTINCT ON` issued twice per request. The
+  # keyword is optional rather than required because `#update` wants only the verdict — its
+  # response carries no run block — and resolving one repository's newest run is exactly what this
+  # method did before the block existed on any list.
+  def delivery_verdicts(repositories, latest_runs: nil)
     repository_ids = repositories.map(&:id)
     last_rejections = last_rejection_times_for(repository_ids)
-    latest_runs = latest_test_runs_for(repository_ids)
+    latest_runs ||= latest_test_runs_for(repository_ids)
 
     repository_ids.index_with do |repository_id|
       verdict = RejectedIngests.verdict(last_rejection_at: last_rejections[repository_id],
