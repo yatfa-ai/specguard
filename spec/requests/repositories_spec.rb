@@ -3358,6 +3358,417 @@ RSpec.describe "Repository registration and API keys", type: :request do
     end
   end
 
+  # SPGD-802 — narrowing controls on the repositories index: `?q=`, `?role=`, `?sort=stale`.
+  #
+  # One "Register several" gesture can put a hundred repositories on an account
+  # (`BulkRegistration::MAX_BATCH`), and until these parameters the page that received them read NO
+  # parameter at all — a card grid whose only two header controls both made the list longer. The
+  # three asks compose (`?q=api&role=shared&sort=stale`), and the URL is their only carrier: no
+  # session state, no form state, nothing a colleague receiving a pasted link does not also receive.
+  #
+  # ## The guards, and why the malformed coverage lives in shared examples
+  #
+  # Each parameter is read through its own `Requested*Param` concern — `requested_search_param.rb`,
+  # `requested_role_param.rb`, `requested_sort_param.rb` — on the same two-line shape every sibling
+  # uses (`is_a?(String)` first, `.presence` second, memoised with `defined?`). The non-String
+  # shapes are pinned once per parameter in `spec/support/shared_examples/malformed_{search,role,sort}_param.rb`
+  # and hosted below, rather than re-listed here: that is the idiom the sibling parameters already
+  # follow, and a second idiom for the same hazard is a place for the two to drift.
+  #
+  # ## What the guards are FOR here
+  #
+  # `?q[]=` reaches an `ILIKE`, and an Array would not raise — it would answer a question nobody
+  # asked, under a search box echoing an ask nobody made. The hosts below assert the NO-ASK answer
+  # specifically (every card, default order), never a bare 200, for the reason each shared example's
+  # own doc comment carries: a guard that swallowed every value would also answer 200 on every
+  # shape, and only the positive-path example beside the host separates the two.
+  describe "narrowing the repositories index" do
+    # Cards are links, so the SEQUENCE the page renders is read straight off their hrefs — which
+    # is what the ordering examples are about, not merely which cards are present. The repository
+    # links are the only `a[href]` on the page matching `/repositories/<digits>`, so the nav and
+    # the header buttons cannot perturb the order this reads.
+    def rendered_card_paths
+      Capybara.string(response.body).find_all("a").map { |a| a[:href] }
+             .select { |href| href.match?(%r{/repositories/\d+\z}) }
+    end
+
+    describe "?q= — finding one repository by part of its name" do
+      it "matches a case-insensitive substring of the full name" do
+        create_repository(user: @user, github_full_name: "acme/billing-service")
+        create_repository(user: @user, github_full_name: "acme/ledger")
+
+        get repositories_path, params: { q: "BILLING" }
+
+        expect(response).to have_http_status(:ok)
+        expect(page_text).to include("acme/billing-service")
+        expect(page_text).not_to include("acme/ledger")
+      end
+
+      # The `_` and `%` a reader can legitimately type are TEXT in a repository name (`org/my_repo`
+      # is an ordinary slug), so an unescaped `ILIKE` would widen "my_repo" to match `myxrepo` —
+      # answering a substring ask with a pattern match. `sanitize_sql_like` escapes them, and this
+      # is the example that keeps it true: drop the escape and this goes red without anything
+      # raising anywhere else in the suite.
+      it "treats a typed underscore as text, not as a single-character wildcard" do
+        create_repository(user: @user, github_full_name: "acme/my_repo")
+        create_repository(user: @user, github_full_name: "acme/myxrepo")
+
+        get repositories_path, params: { q: "my_repo" }
+
+        expect(page_text).to include("acme/my_repo")
+        expect(page_text).not_to include("acme/myxrepo")
+      end
+
+      # The narrowing must happen IN SQL INSIDE `Repository.accessible_by`, never as a post-load
+      # filter — this is the security claim of the parameter, and it is a property of the
+      # STATEMENT. Captured off the wire (`captured_sql`, the shared subscriber) rather than
+      # re-spelled here, so a read that stopped being in-scope cannot pass by agreeing with a
+      # hand-written duplicate: the accessibility union and the `ILIKE` must be predicates of ONE
+      # WHERE on ONE read of `repositories`.
+      #
+      # The first statement captured is the view's `any?` EXISTS, and that is fine for the claim:
+      # the EXISTS carries the accessibility union AND the `ILIKE` in the same WHERE, which is
+      # exactly the property being pinned — the database, not Ruby, is doing the narrowing.
+      it "narrows inside the accessible scope in SQL, not as a post-load filter" do
+        create_repository(user: @user, github_full_name: "acme/billing-service")
+
+        sql = captured_sql('FROM "repositories"') { get repositories_path, params: { q: "billing" } }
+
+        expect(page_text).to include("acme/billing-service")
+        expect(sql).to match(/ILIKE/)
+        # ...and the accessibility union is still in the SAME statement: the search did not become
+        # a second pass over a set that had already been resolved, which is where a post-load
+        # filter would show up as two friendly-looking queries.
+        expect(sql).to match(/"user_id" = /)
+        expect(sql).to match(/IN \(SELECT "repository_memberships"/)
+      end
+
+      # The other half of being in-scope: a repository the viewer cannot see must never ENTER the
+      # relation, so a name search cannot be turned into an existence probe. `page_text` rather
+      # than `response.body`, deliberately — the search field legitimately echoes the ask as an
+      # input VALUE, and an attribute is not a disclosure; a rendered NAME would be.
+      it "cannot be used to probe for a repository the viewer cannot see" do
+        stranger = create_user(github_uid: "7777", github_handle: "stranger")
+        create_repository(user: stranger, github_full_name: "other/secret-api")
+        create_repository(user: @user, github_full_name: "acme/billing-service")
+
+        get repositories_path, params: { q: "secret-api" }
+
+        expect(response).to have_http_status(:ok)
+        # A filtered-empty answer, worded for this reader — never the stranger's repository, and
+        # never an error that would distinguish "matched nothing" from "does not exist".
+        expect(page_text).not_to include("other/secret-api")
+        expect(page_text).not_to include("stranger")
+        expect(page_text).to include("No repositories match")
+      end
+
+      # The positive path beside the malformed host below: `?q=<text>` IS honoured, which is what
+      # separates a working guard from one that swallows every shape — including the shapes the
+      # host asserts are no-asks.
+      it "is honoured as a narrowing ask, not merely tolerated" do
+        create_repository(user: @user, github_full_name: "acme/billing-service")
+        create_repository(user: @user, github_full_name: "acme/ledger")
+
+        get repositories_path, params: { q: "ledger" }
+
+        expect(rendered_card_paths).to eq([repository_path(Repository.find_by(github_full_name: "acme/ledger"))])
+      end
+
+      describe "a search parameter that is not a search string" do
+        def expect_search_param_treated_as_no_ask(query)
+          create_repository(user: @user, github_full_name: "acme/one")
+          create_repository(user: @user, github_full_name: "acme/two")
+
+          get repositories_path, params: query
+
+          expect(response).to have_http_status(:ok)
+          # The no-ask answer specifically: every card, in the default order.
+          expect(rendered_card_paths).to eq(
+            [repository_path(Repository.find_by(github_full_name: "acme/one")),
+             repository_path(Repository.find_by(github_full_name: "acme/two"))]
+          )
+        end
+
+        it_behaves_like "a surface that treats a malformed search parameter as no ask"
+      end
+    end
+
+    describe "?role= — what you own versus what was shared" do
+      # One of each population, so every example below proves the LINE rather than a presence:
+      # an ask honoured shows its side and hides the other, an ask ignored shows both. `let!`
+      # because the read happens in the request, not in an expression that would force the `let`.
+      let!(:owned) { create_repository(user: @user, github_full_name: "acmine/owned") }
+      let!(:shared) do
+        colleague = create_user(github_uid: "8888", github_handle: "colleague")
+        repository = create_repository(user: colleague, github_full_name: "other/shared")
+        create_membership(repository: repository, user: @user)
+        repository
+      end
+
+      it "narrows to what was shared with the viewer" do
+        get repositories_path, params: { role: "shared" }
+
+        expect(rendered_card_paths).to eq([repository_path(shared)])
+      end
+
+      it "narrows to what the viewer owns" do
+        get repositories_path, params: { role: "owned" }
+
+        expect(rendered_card_paths).to eq([repository_path(owned)])
+      end
+
+      # `shared` is the COMPLEMENT WITHIN the accessible set — not a second reading of the
+      # membership table — so the two asks must partition the unparameterised page exactly, with
+      # no repository on both sides and none dropped between them. That partition is what makes
+      # the badge's distinction safe to hand a filter on.
+      it "partitions the page exactly between the two asks" do
+        get repositories_path, params: { role: "shared" }
+        shared_side = rendered_card_paths
+
+        get repositories_path, params: { role: "owned" }
+        owned_side = rendered_card_paths
+
+        get repositories_path
+        whole_page = rendered_card_paths
+
+        expect((shared_side + owned_side).sort).to eq(whole_page.sort)
+        expect(shared_side & owned_side).to be_empty
+      end
+
+      describe "a role parameter that names no ownership state" do
+        def expect_role_param_treated_as_no_ask(query)
+          get repositories_path, params: query
+
+          expect(response).to have_http_status(:ok)
+          # The no-ask answer specifically: BOTH populations, which is what distinguishes a
+          # clamped read from one that silently narrowed to either side.
+          expect(rendered_card_paths).to contain_exactly(repository_path(owned), repository_path(shared))
+        end
+
+        it_behaves_like "a surface that treats a non-owned-or-shared role parameter as no ask"
+      end
+    end
+
+    describe "?sort=stale — ordering by last-ingested recency" do
+      it "puts never-ingested first and the most recently ingested last" do
+        never = create_repository(user: @user, github_full_name: "acme/never-wired")
+        oldest = create_repository(user: @user, github_full_name: "acme/oldest")
+        newest = create_repository(user: @user, github_full_name: "acme/newest")
+        create_test_run(repository: oldest, commit_sha: "cafe0301", total_specs_count: 10,
+                        created_at: 3.months.ago)
+        create_test_run(repository: newest, commit_sha: "cafe0302", total_specs_count: 10,
+                        created_at: 1.hour.ago)
+
+        get repositories_path, params: { sort: "stale" }
+
+        expect(rendered_card_paths).to eq(
+          [repository_path(never), repository_path(oldest), repository_path(newest)]
+        )
+      end
+
+      # A shareable URL is a deterministic one: two readers pasting the same link must see the
+      # same cards in the same order, and `sort_by` does not promise stability on its own — the
+      # name tie-break does. Same-input ties here, so the order this asserts is entirely the
+      # tie-break's.
+      it "breaks equal-recency ties on the name so the sequence is deterministic" do
+        create_repository(user: @user, github_full_name: "acme/zebra")
+        create_repository(user: @user, github_full_name: "acme/alpha")
+
+        get repositories_path, params: { sort: "stale" }
+
+        expect(rendered_card_paths).to eq(
+          [repository_path(Repository.find_by(github_full_name: "acme/alpha")),
+           repository_path(Repository.find_by(github_full_name: "acme/zebra"))]
+        )
+      end
+
+      describe "a sort parameter that names no ordering" do
+        # Recency and name DISAGREE about the order here, so a clamped read and an honoured one
+        # render different sequences: this is what lets the no-ask assertion say "name order" and
+        # mean it.
+        def expect_sort_param_treated_as_no_ask(query)
+          stale = create_repository(user: @user, github_full_name: "acme/stale")
+          fresh = create_repository(user: @user, github_full_name: "acme/fresh")
+          create_test_run(repository: fresh, commit_sha: "cafe0401", total_specs_count: 10,
+                          created_at: 1.hour.ago)
+
+          get repositories_path, params: query
+
+          expect(response).to have_http_status(:ok)
+          expect(rendered_card_paths).to eq([repository_path(fresh), repository_path(stale)])
+        end
+
+        it_behaves_like "a surface that treats a non-stale sort parameter as no ask"
+      end
+    end
+
+    describe "the three asks together" do
+      it "compose — search, ownership and order in one URL" do
+        colleague = create_user(github_uid: "8888", github_handle: "colleague")
+        fresh_shared = create_repository(user: colleague, github_full_name: "acme/api-shared")
+        create_membership(repository: fresh_shared, user: @user)
+        stale_shared = create_repository(user: colleague, github_full_name: "acme/api-legacy")
+        create_membership(repository: stale_shared, user: @user)
+        other_shared = create_repository(user: colleague, github_full_name: "acme/web-shop")
+        create_membership(repository: other_shared, user: @user)
+        create_repository(user: @user, github_full_name: "acme/api-owned")
+        create_test_run(repository: fresh_shared, commit_sha: "cafe0501", total_specs_count: 10,
+                        created_at: 1.hour.ago)
+
+        get repositories_path, params: { q: "api", role: "shared", sort: "stale" }
+
+        # The never-ingested shared api match first, the ingested one last; the owned api match
+        # and the shared non-match are both gone.
+        expect(rendered_card_paths).to eq(
+          [repository_path(stale_shared), repository_path(fresh_shared)]
+        )
+      end
+
+      # The URL is the only carrier, so a pasted link must open the same way for a colleague who
+      # holds access to what it matches — the filter carries no state of the first reader's
+      # session. Signed in as the second identity through the same callback a browser would use.
+      it "opens the same way for a colleague the match was shared with" do
+        repository = create_repository(user: @user, github_full_name: "acme/api-service")
+        create_repository(user: @user, github_full_name: "acme/web-shop")
+        colleague = sign_in_via_github(uid: "9999", info: { nickname: "hubot" })
+        create_membership(repository: repository, user: colleague)
+
+        get repositories_path, params: { q: "api" }
+
+        expect(rendered_card_paths).to eq([repository_path(repository)])
+      end
+    end
+
+    describe "what the unparameterised page renders" do
+      it "keeps every card in name order, exactly as before" do
+        create_repository(user: @user, github_full_name: "acme/zebra")
+        create_repository(user: @user, github_full_name: "acme/alpha")
+        create_repository(user: @user, github_full_name: "acme/midway")
+
+        get repositories_path
+
+        expect(rendered_card_paths).to eq(
+          [repository_path(Repository.find_by(github_full_name: "acme/alpha")),
+           repository_path(Repository.find_by(github_full_name: "acme/midway")),
+           repository_path(Repository.find_by(github_full_name: "acme/zebra"))]
+        )
+      end
+
+      # The narrowing controls render whenever the account holds at least one repository, ON THE
+      # UNPARAMETERISED PAGE INCLUDED — a settled choice this pins from the empty side: an account
+      # with nothing to narrow must not be offered the controls, which is the boundary that makes
+      # "whenever it holds one" a claim rather than a decoration.
+      it "offers the controls to an account that holds a repository, unfiltered page included" do
+        create_repository(user: @user, github_full_name: "acme/billing-service")
+
+        get repositories_path
+
+        expect(response).to have_http_status(:ok)
+        expect(page_text).to include("acme/billing-service")
+        expect(response.body).to include(%(name="q"))
+        expect(response.body).to include(%(name="role"))
+        expect(response.body).to include(%(name="sort"))
+      end
+
+      it "offers no controls to an account that holds nothing" do
+        get repositories_path
+
+        expect(response.body).not_to include(%(name="q"))
+        expect(response.body).not_to include(%(name="role"))
+        expect(response.body).not_to include(%(name="sort"))
+      end
+    end
+
+    describe "narrowing to nothing" do
+      it "names the ask and offers the way back, rather than the registration invitation" do
+        create_repository(user: @user, github_full_name: "acme/billing-service")
+
+        get repositories_path, params: { q: "ledger" }
+
+        expect(page_text).to include(%(No repositories match “ledger”))
+        # The sentence that is true of an empty account is FALSE for this reader — they hold a
+        # repository; the search matched none of them.
+        expect(page_text).not_to include("No repositories yet")
+        expect(page_text).not_to include("Register a GitHub repository to start collecting")
+        # The way back, in one gesture — and the controls stay on the page, because the reader
+        # holding a query that matched nothing is the one who most needs them.
+        expect(page_text).to include("Show all repositories")
+        expect(response.body).to include(%(name="q"))
+      end
+
+      it "names the ownership ask when the search is empty" do
+        create_repository(user: @user, github_full_name: "acmine/only-registered")
+
+        get repositories_path, params: { role: "shared" }
+
+        expect(page_text).to include("No repositories have been shared with you")
+        expect(page_text).not_to include("No repositories yet")
+      end
+
+      # `?sort=` cannot empty the set — it reorders — so an empty page under a bare sort is an
+      # empty ACCOUNT and must keep the registration invitation. This is the boundary
+      # `index_narrowing_asked?` draws by excluding `?sort=`, and the reason it is drawn there.
+      it "keeps the registration invitation for an empty account under a bare sort ask" do
+        get repositories_path, params: { sort: "stale" }
+
+        expect(page_text).to include("No repositories yet")
+        expect(page_text).not_to include("No repositories match")
+      end
+    end
+
+    describe "its cost" do
+      # `count_queries` from spec/support/query_capture.rb — the same instrument the SHOW budgets
+      # in this file use. The claim is the ticket's own: a filtered grid of N cards costs the SAME
+      # number of queries as an unfiltered grid of N cards. Every repository here matches the
+      # search, so both pages render the same N cards and the comparison is N against N — the
+      # narrowing is the only difference between the two reads.
+      #
+      # The stale sort is compared with `<=` and not `==`, and the reason is worth keeping: sorting
+      # the loaded set in the controller RETIRES the view's `any?` EXISTS (the Array answers it in
+      # memory), so a stale-sorted page can honestly cost one FEWER round trip. "Never more" is
+      # the budget the narrowing owes; equality is what the pure narrowing (`?q=` + `?role=`,
+      # relation untouched) owes.
+      it "costs a filtered grid the same as the unfiltered grid" do
+        %w[acme/one acme/two acme/three].each_with_index do |full_name, index|
+          create_test_run(repository: create_repository(user: @user, github_full_name: full_name),
+                          commit_sha: "cafe060#{index}", total_specs_count: 10 + index,
+                          created_at: (index + 1).days.ago)
+        end
+
+        unfiltered = count_queries { get repositories_path }
+        expect(page_text).to include("acme/three")
+
+        narrowed = count_queries { get repositories_path, params: { q: "acme", role: "owned" } }
+        reordered = count_queries { get repositories_path, params: { q: "acme", role: "owned", sort: "stale" } }
+
+        # Same N cards — the narrowed set is the whole set here, so the counts differ by the
+        # narrowing alone and nothing else.
+        expect(page_text).to include("acme/one")
+        expect(page_text).to include("acme/three")
+        expect(narrowed).to eq(unfiltered)
+        expect(reordered).to be <= unfiltered
+      end
+
+      # The per-table half, on the same instrument the sibling index guards use
+      # (`queries_against`): one DISTINCT ON for the whole grid stays one under narrowing, and
+      # under the stale sort too — wherever in the request the load happens.
+      it "keeps the grid's run read at one query, narrowed and reordered" do
+        %w[acme/one acme/two acme/three].each_with_index do |full_name, index|
+          create_test_run(repository: create_repository(user: @user, github_full_name: full_name),
+                          commit_sha: "cafe070#{index}", total_specs_count: 10,
+                          created_at: (index + 1).days.ago)
+        end
+
+        narrowed = queries_against("test_runs") { get repositories_path, params: { q: "acme" } }
+        reordered = queries_against("test_runs") { get repositories_path, params: { sort: "stale" } }
+
+        expect(page_text.scan(/10 tests/).size).to eq(3)
+        expect(narrowed.size).to eq(1)
+        expect(reordered.size).to eq(1)
+      end
+    end
+  end
+
   describe "renaming a repository" do
     it "updates the name without touching keys, runs or intents" do
       repository = create_repository(user: @user, github_full_name: "acme/billing-servce")

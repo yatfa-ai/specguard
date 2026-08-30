@@ -1705,3 +1705,34 @@ module RepositoriesHelper
       "through it."
   end
 end
+
+  # The title of the index's FILTERED-empty state — the page a `?q=` or `?role=` ask narrowed to
+  # nothing on an account that holds repositories (`RepositoriesController#narrowing_matched_nothing?`
+  # is the gate; this is its words).
+  #
+  # IT NAMES THE READER'S OWN ASK, in the reader's own spelling, and that is the whole
+  # requirement: an empty result that says only "No repositories" is indistinguishable from an
+  # account with none, and the registration invitation the truly-empty page carries would be a
+  # falsehood here. The search text is echoed VERBATIM from `requested_search` — not downcased,
+  # not trimmed again — for the reason `RequestedSearchParam` records: the match is
+  # case-insensitive in SQL, so altering the spelling could not change which rows matched, only
+  # what the page claims the reader searched for. The role limb folds into the same sentence when
+  # both asks are live, so the title stays one claim a reader can check against the controls
+  # directly above it.
+  #
+  # SORT HAS NO LIMB HERE, deliberately: `?sort=` cannot empty the set (it reorders), so a page
+  # this state renders was emptied by `?q=` or `?role=` alone, and naming an ordering would be
+  # narrating a control that did nothing.
+  def no_repositories_match_title
+    if requested_search
+      case requested_role
+      when "owned" then %(No repositories you registered match “#{requested_search}”)
+      when "shared" then %(No shared repositories match “#{requested_search}”)
+      else %(No repositories match “#{requested_search}”)
+      end
+    elsif requested_role == "owned"
+      "No repositories you have registered"
+    else
+      "No repositories have been shared with you"
+    end
+  end
