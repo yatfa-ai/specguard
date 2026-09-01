@@ -1,3 +1,31 @@
 #!/usr/bin/env ruby
+# Pre-boot sibling of config/ci.rb's named step "Style: Stylesheet was built"
+# (test -s app/assets/builds/application.css). That step earns its place by failing in CI,
+# HERE, named, before 3000 examples explode inside a view; this guard gives the path every
+# seat runs directly -- bin/rspec -- the same protection. app/assets/builds/ is generated
+# and gitignored, so a fresh checkout has no stylesheet until npm builds one, and without
+# it layout-rendering specs (spec/requests, spec/system, spec/components) mass-fail with
+# Propshaft::MissingAssetError at stylesheet_link_tag -- which reads unmistakably like the
+# seat's own regression. Fail HERE instead, named, with the fix.
+stylesheet = "app/assets/builds/application.css"
+
+# This run will render the layout if no spec path was named (bare bin/rspec, or options
+# only, means the full suite, which includes the rendering dirs) or if a named path falls
+# under one of them. Rspec's own options (--format, -fd, --tag, ...) never look like spec
+# paths, so no option parsing is needed.
+renders_layout =
+  ARGV.none? { |arg| arg.match?(%r{(^|/)spec/}) } ||
+  ARGV.any? { |arg| arg.match?(%r{(^|/)spec/(requests|system|components)(/|\z)}) }
+
+if renders_layout && !(File.exist?(stylesheet) && File.size(stylesheet).positive?)
+  warn "Stylesheet was not built: #{stylesheet} is missing or empty. Aborting before RSpec " \
+       "boots, because this run renders the layout (spec/requests, spec/system, " \
+       "spec/components, or the full suite) and those specs would mass-fail with " \
+       "Propshaft::MissingAssetError pointing at the layout -- a phantom regression, not " \
+       "your change. Build it first: npm install && npm run build:css (or bin/setup), " \
+       "then re-run."
+  exit 1
+end
+
 require "bundler/setup"
 load Gem.bin_path("rspec-core", "rspec")
