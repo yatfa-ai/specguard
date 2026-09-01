@@ -23,6 +23,12 @@ require "rails_helper"
 RSpec.describe "GET /api/v1/repository — near_duplicates", type: :request do
   include_context "with lexical embeddings"
 
+  # SPGD-922: this file's failures must carry their own evidence. The wrapper stashes the pair read
+  # off the wire passively, and only a FAILED census assertion pays for the EXPLAIN/stats/version
+  # collection — see spec/support/near_duplicate_failure_evidence.rb for why the rescue has to sit
+  # inside the example body, and why the cost assertions below are deliberately NOT wrapped.
+  include NearDuplicateFailureEvidence
+
   # The model spec's calibrated near-duplicate pair (0.89) and an unrelated text (near-orthogonal).
   let(:expired) { "Checkout rejects an expired card" }
   let(:outright) { "Checkout rejects an expired card outright" }
@@ -88,43 +94,47 @@ RSpec.describe "GET /api/v1/repository — near_duplicates", type: :request do
   describe "a repository whose near duplicates were asked about" do
     # @intent: { entity: "near_duplicates", action: "serve a cluster", behavior: "the one cluster serves two members but four examples through the table-driven loop shared identity, with summed wall clock and per-member example counts intact at the wire", layer: "request" }
     it "serves the cluster with its member count, example count and summed wall clock" do
-      served = block(query: ask)
+      evidencing_near_duplicate_failure do
+        served = block(query: ask)
 
-      expect(served["cluster_count"]).to eq(1)
-      cluster = served["clusters"].sole
-      # The pair is TWO members and FOUR examples — one member is the three-example loop, and the
-      # figure a naive serializer counting identity rows would flatten is exactly this one.
-      expect(cluster["member_count"]).to eq(2)
-      expect(cluster["example_count"]).to eq(4)
-      expect(cluster["total_seconds"]).to eq(1.0)
-      expect(cluster["timed_count"]).to eq(4)
-      expect(cluster["signal_source"]).to eq("name")
-      # The three examples the loop contributes, served through the endpoint rather than collapsed.
-      expired_member = cluster["members"].find { it["text"] == expired }
-      expect(expired_member["example_count"]).to eq(3)
-      expect(expired_member["total_seconds"]).to be_within(0.0001).of(0.6)
-      expect(cluster["similarity_range"]).to eq([0.89, 0.89])
+        expect(served["cluster_count"]).to eq(1)
+        cluster = served["clusters"].sole
+        # The pair is TWO members and FOUR examples — one member is the three-example loop, and the
+        # figure a naive serializer counting identity rows would flatten is exactly this one.
+        expect(cluster["member_count"]).to eq(2)
+        expect(cluster["example_count"]).to eq(4)
+        expect(cluster["total_seconds"]).to eq(1.0)
+        expect(cluster["timed_count"]).to eq(4)
+        expect(cluster["signal_source"]).to eq("name")
+        # The three examples the loop contributes, served through the endpoint rather than collapsed.
+        expired_member = cluster["members"].find { it["text"] == expired }
+        expect(expired_member["example_count"]).to eq(3)
+        expect(expired_member["total_seconds"]).to be_within(0.0001).of(0.6)
+        expect(cluster["similarity_range"]).to eq([0.89, 0.89])
+      end
     end
 
     # @intent: { entity: "near_duplicates", action: "pin the key set", behavior: "the block serves only machine fields at every level - floor, basis, run id, counts and rows - and no prose label such as a duration or coverage sentence appears anywhere in the JSON", layer: "request" }
     it "serves exactly the keys this contract pins, and never the object's prose" do
-      served = block(query: ask)
+      evidencing_near_duplicate_failure do
+        served = block(query: ask)
 
-      expect(served.keys)
-        .to contain_exactly("similarity_floor", "similarity_basis", "weighed_run_id",
-                            "cluster_count", "truncated", "saturated_identity_count",
-                            "unresolved_count", "recorded_count", "identity_count",
-                            "clustered_identity_count", "clustered_timed_count",
-                            "clustered_example_count", "clusters")
-      expect(served["clusters"].sole.keys)
-        .to contain_exactly("signal_source", "member_count", "example_count", "total_seconds",
-                            "timed_count", "similarity_range", "unobserved_members", "members")
-      expect(served["clusters"].sole["members"].first.keys)
-        .to contain_exactly("text", "file_path", "line_number", "example_count", "total_seconds")
-      # `duration_label`, `coverage_label` and `identity_coverage_label` are each one call away on
-      # the object and none is served: human sentences a machine client cannot act on.
-      expect(served.to_json).not_to match(/\d\.\d+s|not reported|of \d/)
-      expect(served["weighed_run_id"]).to eq(test_run.id)
+        expect(served.keys)
+          .to contain_exactly("similarity_floor", "similarity_basis", "weighed_run_id",
+                              "cluster_count", "truncated", "saturated_identity_count",
+                              "unresolved_count", "recorded_count", "identity_count",
+                              "clustered_identity_count", "clustered_timed_count",
+                              "clustered_example_count", "clusters")
+        expect(served["clusters"].sole.keys)
+          .to contain_exactly("signal_source", "member_count", "example_count", "total_seconds",
+                              "timed_count", "similarity_range", "unobserved_members", "members")
+        expect(served["clusters"].sole["members"].first.keys)
+          .to contain_exactly("text", "file_path", "line_number", "example_count", "total_seconds")
+        # `duration_label`, `coverage_label` and `identity_coverage_label` are each one call away on
+        # the object and none is served: human sentences a machine client cannot act on.
+        expect(served.to_json).not_to match(/\d\.\d+s|not reported|of \d/)
+        expect(served["weighed_run_id"]).to eq(test_run.id)
+      end
     end
 
     # ⭐ THE DISCLOSURE RIDES THE COUNT, sourced from the object rather than restated — and pinned
@@ -141,16 +151,30 @@ RSpec.describe "GET /api/v1/repository — near_duplicates", type: :request do
 
     # @intent: { entity: "near_duplicates", action: "report populations", behavior: "recorded, identity, clustered and timed counts plus truncated false let an empty ranking be read as a finding about a known population rather than a silence", layer: "request" }
     it "reports the population figures that make an empty ranking a finding rather than a silence" do
-      served = block(query: ask)
+      evidencing_near_duplicate_failure do
+        served = block(query: ask)
 
-      expect(served["recorded_count"]).to eq(5)
-      expect(served["unresolved_count"]).to eq(0)
-      expect(served["identity_count"]).to eq(3)
-      expect(served["clustered_identity_count"]).to eq(2)
-      expect(served["clustered_example_count"]).to eq(4)
-      expect(served["clustered_timed_count"]).to eq(4)
-      expect(served["truncated"]).to be(false)
-      expect(served["saturated_identity_count"]).to eq(0)
+        expect(served["recorded_count"]).to eq(5)
+        expect(served["unresolved_count"]).to eq(0)
+        expect(served["identity_count"]).to eq(3)
+        expect(served["clustered_identity_count"]).to eq(2)
+        expect(served["clustered_example_count"]).to eq(4)
+        expect(served["clustered_timed_count"]).to eq(4)
+        expect(served["truncated"]).to be(false)
+        expect(served["saturated_identity_count"]).to eq(0)
+      end
+    end
+
+    # THE EVIDENCE COST, pinned green (SPGD-922): the failure-evidence capture is a passive wire
+    # stash — a subscriber that records the pair read and nothing else — and every query it needs
+    # to answer WHY a census assertion failed (the EXPLAIN, the pg_class stats read, the
+    # pg_extension version read, the GUC probes) fires only from inside the rescue a failure
+    # opens. This is the executable form of that claim: a green census ask pays not one of them.
+    # Deliberately NOT wrapped in `evidencing_near_duplicate_failure` — this example's subject is
+    # the collector itself.
+    # @intent: { entity: "near_duplicates", action: "charge evidence only to failure", behavior: "a green census read issues no EXPLAIN, pg_class or pg_extension statement because the failure-evidence capture is a passive wire stash until an assertion fails", layer: "request" }
+    it "pays nothing for failure evidence while the assertions pass" do
+      expect(queries_against(/EXPLAIN|pg_class|pg_extension/) { block(query: ask) }).to be_empty
     end
 
     # @intent: { entity: "near_duplicates", action: "disclose truncation", behavior: "one more cluster than the ranking limit is served as a capped list with the true cluster_count and truncated true, so the page cannot pass itself off as the census", layer: "request" }
@@ -175,12 +199,14 @@ RSpec.describe "GET /api/v1/repository — near_duplicates", type: :request do
                             id: "./spec/models/pair_#{index}_spec.rb[2:1]")],
                commit_sha: format("pairfeed%06x", index))
       end
-      served = block(key: many.api_keys.create!, query: ask)
+      evidencing_near_duplicate_failure do
+        served = block(key: many.api_keys.create!, query: ask)
 
-      expect(served["clusters"].length).to eq(NearDuplicateClusters::LIMIT)
-      expect(served["cluster_count"]).to eq(NearDuplicateClusters::LIMIT + 1)
-      expect(served["truncated"]).to be(true)
-      expect(served["clustered_identity_count"]).to eq(2 * (NearDuplicateClusters::LIMIT + 1))
+        expect(served["clusters"].length).to eq(NearDuplicateClusters::LIMIT)
+        expect(served["cluster_count"]).to eq(NearDuplicateClusters::LIMIT + 1)
+        expect(served["truncated"]).to be(true)
+        expect(served["clustered_identity_count"]).to eq(2 * (NearDuplicateClusters::LIMIT + 1))
+      end
     end
 
     # THE THREE SILENCES STAY DISTINGUISHABLE AT THE WIRE. This is the never-ingested one: no run
@@ -190,21 +216,23 @@ RSpec.describe "GET /api/v1/repository — near_duplicates", type: :request do
     # @intent: { entity: "near_duplicates", action: "distinguish two silences", behavior: "a never-ingested repository serves null weighed_run_id with zero populations while an all-unique suite reaches the same empty list with a live population behind it", layer: "request" }
     it "serves the block for a repository that never ingested, distinguishably from an all-unique suite" do
       bare = separate_repository("acme/never-ingested")
-      served = block(key: bare.api_keys.create!, query: ask)
+      evidencing_near_duplicate_failure do
+        served = block(key: bare.api_keys.create!, query: ask)
 
-      expect(served).to include("weighed_run_id" => nil, "cluster_count" => 0,
-                                "recorded_count" => 0, "identity_count" => 0,
-                                "clusters" => [])
-      # And a suite whose every test is unique reaches the same empty list with a POPULATION
-      # behind it — the discriminator the two silences need and a bare `[]` would spend.
-      unique = separate_repository("acme/all-unique")
-      ingest(unique, [unannotated(file_path: "spec/models/only_spec.rb", line_number: 3,
-                                  name: shipping, duration: 0.1,
-                                  id: "./spec/models/only_spec.rb[1:1]")])
-      served = block(key: unique.api_keys.create!, query: ask)
+        expect(served).to include("weighed_run_id" => nil, "cluster_count" => 0,
+                                  "recorded_count" => 0, "identity_count" => 0,
+                                  "clusters" => [])
+        # And a suite whose every test is unique reaches the same empty list with a POPULATION
+        # behind it — the discriminator the two silences need and a bare `[]` would spend.
+        unique = separate_repository("acme/all-unique")
+        ingest(unique, [unannotated(file_path: "spec/models/only_spec.rb", line_number: 3,
+                                    name: shipping, duration: 0.1,
+                                    id: "./spec/models/only_spec.rb[1:1]")])
+        served = block(key: unique.api_keys.create!, query: ask)
 
-      expect(served).to include("cluster_count" => 0, "recorded_count" => 1,
-                                "identity_count" => 1, "clusters" => [])
+        expect(served).to include("cluster_count" => 0, "recorded_count" => 1,
+                                  "identity_count" => 1, "clusters" => [])
+      end
     end
   end
 
@@ -248,7 +276,9 @@ RSpec.describe "GET /api/v1/repository — near_duplicates", type: :request do
     # an endpoint that ignores the parameter entirely.
     # @intent: { entity: "near_duplicates", action: "honour a string parameter", behavior: "a string-valued parameter runs the census and returns cluster_count one, the positive control beside the shared malformed-parameter group", layer: "request" }
     it "honours a near_duplicates that IS a string" do
-      expect(block(query: ask)["cluster_count"]).to eq(1)
+      evidencing_near_duplicate_failure do
+        expect(block(query: ask)["cluster_count"]).to eq(1)
+      end
     end
 
     # @intent: { entity: "near_duplicates", action: "treat empty as no ask", behavior: "an empty near_duplicates value is treated as no ask and the block stays null with a 200 response", layer: "request" }
