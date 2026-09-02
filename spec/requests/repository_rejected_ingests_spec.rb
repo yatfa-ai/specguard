@@ -18,13 +18,18 @@ RSpec.describe "Repository rejected deliveries", type: :request do
   let(:repository) { create_repository(user: @user) }
   let(:api_key) { repository.api_keys.create! }
 
-  # A delivery that authenticates and is refused for its payload: no `commit_sha`.
+  # A delivery that authenticates and is refused for its payload: no `commit_sha`. A `nil`
+  # `user_agent` sends NO header at all — the fixture for the "Not reported" bucket, which the
+  # stored NULL is the only honest way to produce (an empty string is folded to NULL by the
+  # recorder's `.presence`, so no real request can land one).
   def refuse_a_delivery(user_agent: "specguard-rspec/0.3.1")
+    headers = { "Content-Type" => "application/json",
+                "Authorization" => "Bearer #{api_key.raw_token}" }
+    headers["User-Agent"] = user_agent if user_agent
+
     post "/api/v1/ingest",
          params: { specs: [] }.to_json,
-         headers: { "Content-Type" => "application/json",
-                    "User-Agent" => user_agent,
-                    "Authorization" => "Bearer #{api_key.raw_token}" }
+         headers: headers
   end
 
   def accept_a_delivery
@@ -193,23 +198,41 @@ RSpec.describe "Repository rejected deliveries", type: :request do
   # and the states they protected are asserted structurally somewhere better.
 
   # The claim the page's query budget in spec/requests/repositories_spec.rb makes on this panel's
-  # behalf: it is ONE read, and it stays one read as the list fills up. An absolute count there
-  # cannot tell a structural N+1 from an ordinary widening, so the guard is the equality across two
-  # very different row counts — the shape the sibling panels' guards use.
+  # behalf: it is TWO reads — the capped list's peek and the retained window's one grouped
+  # `GROUP BY` — and they stay two however full the window is and however many distinct clients it
+  # holds. An absolute count there cannot tell a structural N+1 from an ordinary widening, so the
+  # guard is the equality across two very different row counts — the shape the sibling panels'
+  # guards use. (The absolute number moved from one read to two when the window summary arrived,
+  # SPGD-822: the retention constant's range-of-`user_agent` reading, previously performed by
+  # nobody. The equalities are the part that was and remains load-bearing.)
   #
   # `queries_against` rather than a page budget, so this counts reads of THIS table and is
   # unaffected by any panel added beside it later.
   describe "what the panel costs" do
-    # @intent: {"entity": "IngestRejection", "action": "read table once", "behavior": "the panel reads ingest_rejections exactly once whether one refusal or a full window beyond the panel limit is recorded", "layer": "request"}
-    it "reads the table once, whether there is one refusal or a full window of them" do
+    # @intent: {"entity": "IngestRejection", "action": "read table twice", "behavior": "the panel reads ingest_rejections exactly twice whether one refusal or a full window beyond the panel limit is recorded", "layer": "request"}
+    it "reads the table twice — list and window — whether there is one refusal or a full window" do
       refuse_a_delivery
       one = queries_against("ingest_rejections") { visit_repository }
 
       (IngestRejection::PANEL_LIMIT + 2).times { refuse_a_delivery }
       many = queries_against("ingest_rejections") { visit_repository }
 
-      expect(one.size).to eq(1)
+      expect(one.size).to eq(2)
       expect(many.size).to eq(one.size)
+    end
+
+    # The second read is ONE grouped query, not one per distinct client — the shape a
+    # per-client loop would take on exactly the fleet the range reading exists for.
+    # @intent: {"entity": "IngestRejection", "action": "group clients once", "behavior": "a full retained window of fifty refusals each from a different client still reads ingest_rejections exactly twice", "layer": "request"}
+    it "reads the table the same two times however many distinct clients the window holds" do
+      IngestRejection::REPOSITORY_RETENTION_ROWS.times do |i|
+        refuse_a_delivery(user_agent: "specguard-rspec/0.#{i}")
+      end
+      visit_repository
+
+      expect(queries_against("ingest_rejections") { visit_repository }.size).to eq(2)
+      expect(RejectedIngests::RetainedWindow.for(repository).entries.size)
+        .to eq(IngestRejection::REPOSITORY_RETENTION_ROWS)
     end
 
     # And the page really did render the rows being counted — an equality above is satisfied by a
@@ -249,6 +272,79 @@ RSpec.describe "Repository rejected deliveries", type: :request do
 
       expect(panel.all("tbody tr").size).to eq(IngestRejection::PANEL_LIMIT)
       expect(panel_text).not_to match(/recent window rather than the whole history/i)
+    end
+  end
+
+  # The retained-window summary above the table — the reading
+  # `IngestRejection::REPOSITORY_RETENTION_ROWS` has argued its own size from since it was written
+  # ("the RANGE of `user_agent` across them, which is what turns 'we are being refused' into 'the
+  # old gem is being refused'") and that nothing performed: the panel listed ten rows one at a
+  # time, so forty of the fifty retained were reachable from no surface, and both questions the
+  # constant exists to answer — WHICH client, HOW MANY refusals — went to the reader's eye over one
+  # page in five.
+  #
+  # Every fixture here goes through the real POST path, as everywhere in this file: the summary is
+  # a claim about the STORED `user_agent` values, and the stored value is the recorder's
+  # `presence&.truncate`, not the header as sent.
+  describe "the retained-window summary above the table" do
+    def window_text = panel.find("#rejected-ingests-window").text.squish
+
+    # The assertion that fails on a summary computed off the capped list: eleven refusals
+    # retained, ten rendered, and the population is eleven — not `rows.size`.
+    # @intent: {"entity": "IngestRejection", "action": "state retained population", "behavior": "eleven retained refusals with only ten rows rendered leaves the summary reading holds 11 refused deliveries", "layer": "request"}
+    it "states the retained population, not the capped list's length" do
+      (IngestRejection::PANEL_LIMIT + 1).times { refuse_a_delivery }
+      visit_repository
+
+      expect(panel.all("tbody tr").size).to eq(IngestRejection::PANEL_LIMIT)
+      expect(window_text).to include("holds 11 refused deliveries")
+    end
+
+    # Two halves of the same fact. Different populations render different totals — a repository
+    # refused eleven times and one refused fifty must not read identically — and the total is the
+    # RETAINED population: fifty-five refusals still read fifty, because the pruner has kept
+    # exactly `REPOSITORY_RETENTION_ROWS`. A lifetime count would say fifty-five; `rows.size`
+    # would have said ten.
+    # @intent: {"entity": "IngestRejection", "action": "bound summary at retention", "behavior": "fifty retained refusals read holds 50 and five more refusals still read holds 50, so the total tracks retention and neither the list length nor the lifetime count", "layer": "request"}
+    it "moves with the retained population and holds at the retention cap" do
+      IngestRejection::REPOSITORY_RETENTION_ROWS.times { refuse_a_delivery }
+      visit_repository
+      expect(window_text).to include("holds 50 refused deliveries")
+
+      (IngestRejection::REPOSITORY_RETENTION_ROWS + 5).times { refuse_a_delivery }
+      visit_repository
+      expect(window_text).to include("holds 50 refused deliveries")
+    end
+
+    # Success criterion 2's exact shape — the pin on the actual defect. A summary computed off the
+    # rendered rows would name one client here: the old gem sits entirely in rows eleven-to-
+    # thirteen, behind a page of the new one, and the summary is the only surface that can name it.
+    # @intent: {"entity": "IngestRejection", "action": "name unrendered client", "behavior": "three refusals from an old client pushed behind a full page of the new one are absent from every rendered row yet named in the summary with their count", "layer": "request"}
+    it "names a client that appears in no rendered row" do
+      3.times { refuse_a_delivery(user_agent: "specguard-rspec/0.2.9") }
+      IngestRejection::PANEL_LIMIT.times { refuse_a_delivery }
+      visit_repository
+
+      expect(panel.all("tbody tr").size).to eq(IngestRejection::PANEL_LIMIT)
+      # The TABLE names it nowhere — the summary is the only surface that can.
+      expect(panel.find("table").text.squish).not_to include("specguard-rspec/0.2.9")
+      expect(window_text).to include("3 from specguard-rspec/0.2.9")
+      expect(window_text).to include("holds 13 refused deliveries")
+    end
+
+    # The bucket and the sum. "Not reported" is the rows' own wording one panel down, and the
+    # buckets summing to the total is by construction — `total` IS the sum — so this example
+    # asserts the rendered arithmetic rather than policing two aggregates into agreement.
+    # @intent: {"entity": "IngestRejection", "action": "bucket missing client", "behavior": "two refusals sent without a User-Agent render a stored NULL row and a summary reading holds 5 with 3 from the reporting client and 2 Not reported", "layer": "request"}
+    it "buckets deliveries with no User-Agent under Not reported, summing to the total" do
+      3.times { refuse_a_delivery }
+      2.times { refuse_a_delivery(user_agent: nil) }
+      visit_repository
+
+      expect(IngestRejection.last.user_agent).to be_nil
+      expect(window_text).to include("holds 5 refused deliveries")
+      expect(window_text).to include("3 from specguard-rspec/0.3.1")
+      expect(window_text).to include("2 Not reported")
     end
   end
 
