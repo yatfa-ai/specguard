@@ -29,22 +29,19 @@ class UserApiKeysController < ApplicationController
   def create
     user_api_key = current_user.user_api_keys.create!(name: user_api_key_name)
 
-    # The same two flash keys `ApiKeysController#reveal` writes, deliberately — see
-    # `AccountsController#show`. `revealed_api_key` stays a BARE token because the copy-text
-    # Stimulus controller copies that element's text verbatim, which is why the name travels
-    # separately.
-    #
-    # The consequence of SHARING those keys with the repository surface, written down rather than
-    # discovered later: a flash is consumed by whatever request arrives NEXT, not specifically by
-    # the redirect target. If anything intervenes — a Turbo hover-prefetch, a second tab — this
-    # `sgu_` token can be consumed by `repositories#show` and rendered in a panel that describes it
-    # as that repository's CI key, beside a curl pointed at an endpoint it will 401 against. That
-    # is a MISLABELLING risk and not a leak: the only person who can see it is the one who just
-    # minted it. It is inherited from the existing mechanism rather than introduced here, and the
-    # ticket asked for that mechanism specifically. If a later slice gives the two panels distinct
-    # flash keys, this is the reason.
-    flash[:revealed_api_key] = user_api_key.raw_token
-    flash[:revealed_api_key_name] = user_api_key.name
+    # This surface's OWN pair of flash keys — deliberately NAMED APART from the pair
+    # `ApiKeysController#reveal` writes, while staying one mechanism (see `AccountsController#show`).
+    # Two mailboxes, one postal service: a flash is delivered to whatever request arrives NEXT,
+    # and while the two surfaces shared one namespace, an intervening `repositories#show` read this
+    # surface's mint off the flash and rendered a fresh `sgu_` token in a panel that labelled it
+    # that repository's CI key, beside curls it would 401 against. Distinct names confine each
+    # surface's reveal to its own reader. What they cannot confine is the transport itself: an
+    # intervening request still consumes the flash and leaves the token rendering nowhere (revoke
+    # and re-mint) — the reveal-once mechanism's own cost, unchanged here. `revealed_user_api_key`
+    # stays a BARE token because the copy-text Stimulus controller copies that element's text
+    # verbatim, which is why the name travels separately.
+    flash[:revealed_user_api_key] = user_api_key.raw_token
+    flash[:revealed_user_api_key_name] = user_api_key.name
 
     redirect_to account_path(anchor: REVEAL_ANCHOR),
                 notice: "API key created. Copy it now — it is shown only once."

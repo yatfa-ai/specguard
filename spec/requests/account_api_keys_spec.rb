@@ -180,4 +180,42 @@ RSpec.describe "Account API keys", type: :request do
       expect(response.body).not_to include("turbo-cache-control")
     end
   end
+
+  # SPGD-924: the mint's flash keys are THIS surface's own. A flash is delivered to whatever
+  # request arrives next, and while the two credential surfaces shared one namespace, an
+  # intervening `repositories#show` read a freshly minted `sgu_` token off it and rendered it in
+  # the panel above's repository sibling — labelled as that repository's CI key, beside curls the
+  # `sgu_` token would 401 against. The mint below deliberately does NOT follow its redirect: the
+  # flash stays armed across the intervening visit, which is the state a browser is in between
+  # the POST's 302 and its landing page.
+  #
+  # The other half of that hazard, stated so the example below is not misread as failing to fix
+  # it: an intervening request CONSUMES the flash whether or not it reads the key — Rails
+  # discards every session-borne flash entry at the end of each request that touches the flash,
+  # so the token renders NOWHERE afterwards. Distinct key names stop the wrong surface from
+  # RENDERING the token; no naming could make it SURVIVE an intervening request. That remainder
+  # is the reveal-once mechanism's own cost, out of this slice's scope; the recovery stays the
+  # one the panel prints — revoke and re-mint.
+  describe "an intervening request on the other credential surface" do
+    # @intent: {"entity": "UserApiKey", "action": "confine reveal to own surface", "behavior": "a repository page loaded between the mint POST and the account landing renders no sgu_ token and no reveal panel, and the account page afterwards shows none either.", "layer": "request"}
+    it "renders the fresh token in no repository panel" do
+      repository = create_repository(user: person)
+
+      post account_api_keys_path, params: { user_api_key: { name: "Laptop" } }
+      expect(response).to redirect_to(account_path(anchor: "revealed-key"))
+
+      # The mis-route itself. This page renders its reveal panel whenever the flash it reads
+      # carries anything, so before the key split BOTH assertions below failed here — the token
+      # in the body, the panel's heading with it. The heading is asserted beside the scrape so
+      # the example keeps failing if a future change renders the panel around an empty payload.
+      get repository_path(repository)
+      expect(response.body).not_to match(/sgu_[A-Za-z0-9_-]{20,}/)
+      expect(response.body).not_to include("Your new API key")
+
+      # The flash was consumed by the intervening visit, read or not — the landing page shows
+      # nothing either, by the mechanism's design rather than by any residue of the split.
+      get account_path
+      expect(response.body).not_to match(/sgu_[A-Za-z0-9_-]{20,}/)
+    end
+  end
 end

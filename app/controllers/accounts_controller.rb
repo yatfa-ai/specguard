@@ -16,12 +16,14 @@ class AccountsController < ApplicationController
     # rule `Repository#latest_test_run` follows.
     @user_api_keys = current_user.user_api_keys.order(created_at: :desc, id: :desc)
 
-    # Set by UserApiKeysController#create, readable exactly once — the SAME flash keys
-    # `ApiKeysController` writes and `RepositoriesController#show` reads. One reveal-once mechanism
-    # for both credentials, not two: a second implementation is a second chance to get "shown
-    # exactly once" wrong, and the two pages can never be reached by one redirect.
-    @revealed_token = flash[:revealed_api_key]
-    @revealed_token_name = flash[:revealed_api_key_name]
+    # Set by UserApiKeysController#create, readable exactly once. One reveal-once mechanism for
+    # both credentials, not two: a second implementation is a second chance to get "shown exactly
+    # once" wrong, and the two pages can never be reached by one redirect. The KEY NAMES, however,
+    # are this surface's own — `ApiKeysController` writes, and `RepositoriesController#show` reads,
+    # a distinct pair — because a flash is delivered to whatever request arrives next, and one
+    # shared namespace let an intervening repository page read (and mislabel) this surface's token.
+    @revealed_token = flash[:revealed_user_api_key]
+    @revealed_token_name = flash[:revealed_user_api_key_name]
 
     # REGISTRATION ACCESS, which is the one credential on this page that EXPIRES and the only one
     # whose age was reported nowhere. The keys above are revoked or they work; a
