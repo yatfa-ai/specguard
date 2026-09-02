@@ -263,6 +263,13 @@ class RepositoriesController < ApplicationController
     # the difference between the two is what tells "nothing has ever connected" apart from
     # "something did, with a token that is gone".
     @last_live_api_request_at = (@api_keys - @rotated_unused_api_keys).filter_map(&:last_used_at).max
+    # THE RETIRED KEYS THE PLATFORM HAS SEEN BEING PRESENTED — a revoked token arriving and being
+    # refused stamps `last_refused_at` on the row it names (`Api::BaseController`'s failure path),
+    # and this is the set the connection indicator's revoked state is derived from. Restricted to
+    # rows that carry the stamp: a key revoked and never presented again is not a finding, and
+    # synthesizing one for it is exactly what the honest-bound rule forbids. The recency of the
+    # stamp travels with the row (`last_refused_at`), so the rendered state can date the last
+    # observed presentation rather than claim a present tense the data does not carry.
     @presented_revoked_api_keys = @revoked_api_keys.select(&:revoked_and_still_presented?)
     # The minted-key count behind the Leave dialog beside the "Your access" row (SPGD-838). The
     # count is the VIEWER'S OWN — the dialog warns them what their departure leaves running — and
@@ -1197,7 +1204,7 @@ class RepositoriesController < ApplicationController
   #
   # LIVE keys only (SPGD-804): the badge deep-links to `#api-keys`, and the panel it lands on
   # renders the live partition — a count that included retained revoked rows would advertise "4
-  # keys" over a table showing one, the same misreading `MembershipsController#keys_minted_by`
+  # keys" over a table showing one, the same misreading `MintedKeyCounts#keys_minted_by`
   # was corrected for.
   #
   # Counted for the whole page even though `key_count_visible?` withholds the badge from a
